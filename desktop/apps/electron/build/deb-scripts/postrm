@@ -1,0 +1,25 @@
+#!/bin/sh
+# deb postrm — runs as root during uninstall.
+#
+# Reverses postinst: stop + disable systemd unit, remove PATH symlink.
+
+set -e
+
+UNIT_NAME="amphi-daemon.service"
+UNIT_DST="/usr/lib/systemd/user/${UNIT_NAME}"
+SYMLINK="/usr/local/bin/amphi"
+
+case "$1" in
+  remove|purge)
+    if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+      SUDO_UID=$(id -u "$SUDO_USER")
+      sudo -u "$SUDO_USER" XDG_RUNTIME_DIR="/run/user/$SUDO_UID" \
+        systemctl --user disable --now "$UNIT_NAME" 2>/dev/null || true
+    fi
+    rm -f "$UNIT_DST"
+    systemctl daemon-reload || true
+    rm -f "$SYMLINK"
+    ;;
+esac
+
+exit 0

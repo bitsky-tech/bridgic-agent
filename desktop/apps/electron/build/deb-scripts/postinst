@@ -1,0 +1,57 @@
+#!/bin/sh
+# deb postinst — runs as root after files are unpacked into
+# `/opt/Bridgic Agent/`.
+#
+# Two jobs:
+#   1. Symlink the bundled amphi binary into /usr/local/bin so it's on PATH.
+#   2. Install + enable the systemd --user unit so the daemon starts at
+#      user login and survives session changes (with linger).
+#
+# We can't `systemctl --user start` as root cleanly across all init setups,
+# so we drop the unit + enable it once and let the next user login pick it up.
+# Users can `mycli daemon start` manually after install for instant gratification.
+#
+# IMPORTANT — naming constants must match apps/electron/src/shared/app-meta.ts.
+
+set -e
+
+# electron-builder unpacks a deb into `/opt/${productFilename}`, i.e. it tracks
+# `productName` in electron-builder.yml. The space is load-bearing — every
+# derived path below is quoted for it. NOT verified on a real Linux box.
+APP_BUNDLE_DIR="/opt/Bridgic Agent"
+RES_BIN="${APP_BUNDLE_DIR}/resources/bin"
+CLI_BIN="${RES_BIN}/amphi"
+SYMLINK="/usr/local/bin/amphi"
+SYSTEMD_USER_DIR="/usr/lib/systemd/user"
+UNIT_NAME="amphi-daemon.service"
+UNIT_SRC="${APP_BUNDLE_DIR}/resources/systemd/${UNIT_NAME}"
+UNIT_DST="${SYSTEMD_USER_DIR}/${UNIT_NAME}"
+
+case "$1" in
+  configure)
+    # 1. PATH symlink.
+    ln -sf "$CLI_BIN" "$SYMLINK"
+    echo "[postinst] symlink installed: $SYMLINK -> $CLI_BIN"
+
+    # 2. systemd user unit.
+    if [ -f "$UNIT_SRC" ]; then
+      mkdir -p "$SYSTEMD_USER_DIR"
+      cp "$UNIT_SRC" "$UNIT_DST"
+      systemctl daemon-reload || true
+      echo "[postinst] installed systemd user unit: $UNIT_DST"
+
+      # If invoked via `sudo apt install`, enable for the invoking user.
+      if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+        SUDO_UID=$(id -u "$SUDO_USER")
+        sudo -u "$SUDO_USER" XDG_RUNTIME_DIR="/run/user/$SUDO_UID" \
+          systemctl --user daemon-reload || true
+        sudo -u "$SUDO_USER" XDG_RUNTIME_DIR="/run/user/$SUDO_UID" \
+          systemctl --user enable --now "$UNIT_NAME" || true
+        # Linger so it keeps running after the user logs out.
+        loginctl enable-linger "$SUDO_USER" || true
+      fi
+    fi
+    ;;
+esac
+
+exit 0

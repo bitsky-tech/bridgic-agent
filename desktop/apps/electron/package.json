@@ -1,0 +1,45 @@
+{
+  "name": "amphi",
+  "version": "0.1.0",
+  "description": "Bridgic Agent desktop app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bitsky-tech/bridgic-agent.git"
+  },
+  "homepage": "https://github.com/bitsky-tech/bridgic-agent",
+  "bugs": {
+    "url": "https://github.com/bitsky-tech/bridgic-agent/issues"
+  },
+  "main": "dist/main.cjs",
+  "private": true,
+  "license": "SEE LICENSE IN ../../../LICENSE",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "vite dev",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.8.0"
+  },
+  "devDependencies": {
+    "@app/shared": "workspace:*",
+    "@app/ui": "workspace:*",
+    "katex": "^0.17.0",
+    "marked": "^16.4.2",
+    "mermaid": "^11.15.0",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "posthog-node": "^5.48.1",
+    "remark-math": "^6.0.0",
+    "shiki": "^4.1.0",
+    "yet-another-react-lightbox": "^3.32.1"
+  }
+}

@@ -1,0 +1,81 @@
+#!/bin/bash
+# pkg preinstall — runs as root BEFORE files are unpacked.
+#
+# One job: ask the installed CLI to stop the daemon and remove its canonical
+# launchd definition before its binary is replaced. Direct launchctl cleanup is
+# retained only for upgrades from versions without the autostart CLI.
+#
+# Failures are non-fatal: a fresh install has nothing to stop, and an
+# upgrade with a missing plist should still proceed.
+#
+# IMPORTANT — naming constants:
+#   These values MUST match apps/electron/src/shared/app-meta.ts. If
+#   you rename the product, update both. CI script
+#   `scripts/check-naming.sh` (Phase 8) enforces it.
+
+set -e
+
+APP_PRODUCT_NAME="Bridgic Agent"
+APP_BUNDLE_DIR="/Applications/${APP_PRODUCT_NAME}.app"
+APP_BUNDLE_ID="ai.bridgic.agent"
+DAEMON_LABEL="${APP_BUNDLE_ID}.daemon"
+CLI_BIN="${APP_BUNDLE_DIR}/Contents/Resources/bin/amphi"
+
+# Pre-2026-08 bundle name. The first install after the `Amphi` -> `Bridgic Agent`
+# rename runs against a machine where only the OLD bundle exists, so the path
+# above is missing and the graceful `server autostart disable` / `server stop`
+# below would be skipped entirely — the daemon would then be killed mid-turn by
+# the raw launchctl fallback instead of shut down cleanly.
+#
+# Only the CLI lookup falls back. The stale `/Applications/Amphi.app` itself is
+# deliberately NOT removed here: a pkg payload only adds files, and deleting an
+# app bundle as root on a user's behalf is not something an installer should do
+# silently. Nightly users remove it by hand.
+LEGACY_CLI_BIN="/Applications/Amphi.app/Contents/Resources/bin/amphi"
+if [ ! -x "$CLI_BIN" ] && [ -x "$LEGACY_CLI_BIN" ]; then
+  echo "[preinstall] new bundle absent; using pre-rename CLI at $LEGACY_CLI_BIN"
+  CLI_BIN="$LEGACY_CLI_BIN"
+fi
+
+CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+case "$CONSOLE_USER" in
+  ""|root|loginwindow|_mbsetupuser)
+    echo "[preinstall] WARN: no logged-in console user; skipping user-level daemon cleanup"
+    exit 0
+    ;;
+esac
+
+USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null \
+  | sed 's/^NFSHomeDirectory: //')"
+USER_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+if [ -z "$USER_HOME" ] || [ -z "$USER_UID" ]; then
+  echo "[preinstall] WARN: could not resolve console user home/uid; skipping cleanup"
+  exit 0
+fi
+PLIST="$USER_HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+
+run_as_console_user() {
+  sudo -u "$CONSOLE_USER" env \
+    HOME="$USER_HOME" USER="$CONSOLE_USER" LOGNAME="$CONSOLE_USER" \
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$@"
+}
+
+CANONICAL_DISABLED=false
+if [ -x "$CLI_BIN" ]; then
+  echo "[preinstall] disabling autostart via existing CLI"
+  if run_as_console_user "$CLI_BIN" server autostart disable --timeout 8; then
+    CANONICAL_DISABLED=true
+  else
+    echo "[preinstall] WARN: canonical disable failed; trying legacy plist cleanup"
+    run_as_console_user "$CLI_BIN" server stop || true
+  fi
+fi
+
+if [ "$CANONICAL_DISABLED" != true ] && [ -f "$PLIST" ]; then
+  run_as_console_user launchctl bootout "gui/$USER_UID" "$PLIST" 2>/dev/null \
+    || run_as_console_user launchctl unload "$PLIST" 2>/dev/null \
+    || true
+  rm -f "$PLIST"
+fi
+
+exit 0

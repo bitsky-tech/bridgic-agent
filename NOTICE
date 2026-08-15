@@ -1,0 +1,250 @@
+Bridgic Agent
+Copyright (c) 2026 BitSky-Tech Inc.
+
+Bridgic Agent is licensed under the GNU Affero General Public License v3.0.
+See LICENSE for the full terms.
+
+================================================================================
+Third-party software
+================================================================================
+
+Bridgic Agent is distributed with third-party software. The complete list of
+those components, together with the full text of their licenses, is generated
+at build time into THIRD-PARTY-LICENSES.txt, which ships inside the installed
+application (macOS: `Bridgic Agent.app/Contents/Resources/`; Windows and Linux:
+the `resources/` directory beside the executable).
+
+This file carries only the statements that cannot be derived from package
+metadata — license elections, source-availability offers, linking exceptions,
+and corrections to metadata that is absent or wrong.
+
+Section 8 covers something different in kind: third-party material vendored
+directly into the source tree, which no package manager knows about and which
+therefore never reaches THIRD-PARTY-LICENSES.txt. Read it before assuming the
+repository's own license applies to everything in the repository.
+
+
+--------------------------------------------------------------------------------
+1. Dual-licensed dependencies — licenses elected by BitSky-Tech
+--------------------------------------------------------------------------------
+
+The following dependencies are offered under a choice of licenses. BitSky-Tech
+hereby elects, and distributes them under, the license named below. No other
+license in the offered set applies to this distribution.
+
+  dulwich        offered as "Apache-2.0 OR GPL-2.0-or-later"
+                 --> ELECTED: Apache License 2.0
+                 https://github.com/jelmer/dulwich
+
+  dompurify      offered as "MPL-2.0 OR Apache-2.0"
+                 --> ELECTED: Apache License 2.0
+                 https://github.com/cure53/DOMPurify
+
+  cryptography   offered as "Apache-2.0 OR BSD-3-Clause"
+                 --> ELECTED: Apache License 2.0
+                 https://github.com/pyca/cryptography
+
+  packaging      offered as "Apache-2.0 OR BSD-2-Clause"
+                 --> ELECTED: Apache License 2.0
+                 https://github.com/pypa/packaging
+
+  uv             offered as "Apache-2.0 OR MIT"
+                 --> ELECTED: Apache License 2.0
+                 https://github.com/astral-sh/uv
+
+
+--------------------------------------------------------------------------------
+2. Mozilla Public License 2.0 components — source availability
+--------------------------------------------------------------------------------
+
+The following components are covered by the Mozilla Public License, Version
+2.0. They are distributed in unmodified form. The full license text is
+reproduced in THIRD-PARTY-LICENSES.txt.
+
+Under MPL-2.0 section 3.2, the Source Code Form for these components is
+available from the URLs below at no charge.
+
+  certifi        MPL-2.0
+                 https://github.com/certifi/python-certifi
+
+  tqdm           MPL-2.0 AND MIT
+                 https://github.com/tqdm/tqdm
+
+
+--------------------------------------------------------------------------------
+3. PyInstaller bootloader — GPL linking exception
+--------------------------------------------------------------------------------
+
+The `amphi` executable distributed with this product is built with PyInstaller
+and therefore embeds PyInstaller's bootloader and files from PyInstaller/loader.
+
+PyInstaller is licensed under GPL version 2 or later, WITH an exception that
+grants unlimited permission to link or embed the compiled bootloader and
+related files into combinations with other programs, and to distribute those
+combinations without restriction.
+
+BitSky-Tech distributes those files under that exception. PyInstaller has not
+been modified. The remainder of PyInstaller is a build-time tool only and is
+NOT distributed with this product; the GPL therefore does not extend to
+Bridgic Agent or to the Python code inside the `amphi` bundle.
+
+  PyInstaller    https://github.com/pyinstaller/pyinstaller
+                 See its COPYING.txt for the exception in full.
+
+
+--------------------------------------------------------------------------------
+4. Bundled third-party runtimes
+--------------------------------------------------------------------------------
+
+The installers ship complete third-party runtimes. Each carries its own license
+and its own embedded third-party notices, reproduced in THIRD-PARTY-LICENSES.txt
+where the runtime provides them.
+
+  CPython                  Python Software Foundation License
+                           Built by astral-sh/python-build-standalone.
+                           Embeds OpenSSL, SQLite, libffi, and others.
+                           https://github.com/astral-sh/python-build-standalone
+
+  Node.js                  MIT. Embeds V8, libuv, OpenSSL, and others.
+                           https://github.com/nodejs/node
+
+  uv                       Apache-2.0 OR MIT — elected Apache-2.0 (section 1).
+                           https://github.com/astral-sh/uv
+
+  Electron                 MIT. Embeds Chromium (BSD-3-Clause and others)
+                           and FFmpeg. Electron's MIT license text is
+                           reproduced in THIRD-PARTY-LICENSES.txt.
+                           https://github.com/electron/electron
+
+The complete per-component credits for the Chromium build embedded in Electron
+are published by the Electron project as LICENSES.chromium.html, a 15 MB
+document. It is not redistributed with this product; the copy corresponding to
+the Electron version bundled here is available at no charge from that version's
+release page:
+
+  https://github.com/electron/electron/releases
+
+Chromium for browser automation is a separate matter and is NOT bundled at all.
+It is resolved at runtime: an already-installed Chrome or Edge is used when
+present, otherwise Chromium is downloaded on first use. It is therefore not
+distributed by this product.
+
+FFmpeg, as embedded in Electron, is covered by the GNU Lesser General Public
+License version 2.1 or later. In accordance with LGPL-2.1 section 6, FFmpeg is
+dynamically linked within Electron and may be replaced by the user with a
+compatible build — on macOS the application is signed with the
+`com.apple.security.cs.disable-library-validation` entitlement, so a
+user-supplied libffmpeg still loads. FFmpeg source corresponding to the version
+shipped is available from https://github.com/FFmpeg/FFmpeg and from the Electron
+release that this product bundles.
+
+
+--------------------------------------------------------------------------------
+5. Attribution corrections
+--------------------------------------------------------------------------------
+
+The metadata of the following components is absent or misleading, which causes
+automated scanners to report the wrong result. The licenses stated here are the
+ones that actually apply, taken from the license files and font sources inside
+the distributed packages.
+
+  khroma         Declares no license field in package.json, so scanners report
+                 it as "unknown". Its bundled license file states:
+                 MIT License, Copyright (c) 2019-present Fabio Spampinato,
+                 Andrew Maney.
+                 https://github.com/fabiospampinato/khroma
+
+  KaTeX fonts    The `katex` package declares MIT, and that covers its CODE.
+                 The 59 font files bundled in the renderer are NOT MIT: they
+                 are generated from metafont sources carrying
+                 "This Font Software is licensed under the SIL Open Font
+                 License, Version 1.1", with three copyright holders —
+                 American Mathematical Society (1995, 2009),
+                 Design Science, Inc. (2009-2010), and Khan Academy (2014-2018).
+                 The OFL-1.1 text and all three notices are reproduced in
+                 THIRD-PARTY-LICENSES.txt.
+                 https://github.com/KaTeX/KaTeX
+
+
+--------------------------------------------------------------------------------
+6. Bundled installer components
+--------------------------------------------------------------------------------
+
+  EnVar NSIS plugin        zlib License
+                           Windows installer only. Compiled into the NSIS
+                           installer executable at package time.
+
+
+--------------------------------------------------------------------------------
+7. Components distributed without upstream license text
+--------------------------------------------------------------------------------
+
+The components below declare a license in their metadata but ship no license
+file of their own, so THIRD-PARTY-LICENSES.txt records them as such rather than
+substituting a text their authors did not provide. The declared license and the
+canonical text apply:
+
+  @posthog/core            MIT      https://github.com/PostHog/posthog-js
+  html-parse-stringify     MIT      https://github.com/rayrutjes/html-parse-stringify
+  lazy-val                 MIT      https://github.com/develar/lazy-val
+  rehype-katex             MIT      https://github.com/remarkjs/remark-math
+  remark-math              MIT      https://github.com/remarkjs/remark-math
+  fastmcp-slim             Apache-2.0
+  py-key-value-aio         Apache-2.0
+
+The two bundled runtimes below are redistributed from upstream archives that do
+not include a license file at their root:
+
+  CPython                  PSF-2.0    https://docs.python.org/3/license.html
+  uv                       Apache-2.0 (elected — section 1)
+
+
+--------------------------------------------------------------------------------
+8. Vendored Skill packages — the license in each directory governs it
+--------------------------------------------------------------------------------
+
+`src/amphi_agent/builtin_skills/` holds Skill packages that are checked into
+this repository rather than resolved by a package manager. Nothing in the
+dependency metadata describes them, so they are recorded here.
+
+THE `LICENSE.txt` INSIDE A SKILL DIRECTORY GOVERNS THAT DIRECTORY AND TAKES
+PRECEDENCE OVER THE REPOSITORY-WIDE LICENSE. The GNU Affero General Public
+License v3.0 in /LICENSE covers this project's own work. It does not extend to,
+and does not relicense, third-party material vendored below. Where a directory
+carries its own LICENSE.txt, that file — not /LICENSE — states the terms for
+everything inside it.
+
+  builtin_skills/docx/       © 2025 Anthropic, PBC. All rights reserved.
+  builtin_skills/pdf/
+  builtin_skills/pptx/       These are NOT open source and are NOT under the
+  builtin_skills/xlsx/       AGPL. Use is governed by the reader's own
+                             agreement with Anthropic, and the terms carry
+                             ADDITIONAL RESTRICTIONS beyond that agreement —
+                             on copying, on derivative works, on retaining
+                             copies outside Anthropic's Services, and on
+                             distribution to third parties.
+
+                             The four directories carry identical terms. Each
+                             reproduces them in full in its own LICENSE.txt;
+                             read that file before doing anything with these
+                             materials. Nothing in this NOTICE, and nothing in
+                             /LICENSE, grants any right to them.
+
+                             https://www.anthropic.com/legal/consumer-terms
+                             https://www.anthropic.com/legal/commercial-terms
+
+  builtin_skills/hyperframes/
+                             Apache License 2.0.
+                             Copyright 2026 HeyGen, Inc.
+                             Full text in the directory's LICENSE.txt.
+
+  builtin_skills/remotion-best-practices/
+                             Terms are published per-skill by the upstream
+                             project; the directory's LICENSE.txt points at
+                             them rather than restating them.
+                             https://github.com/remotion-dev/skills
+
+  builtin_skills/how-to/     BitSky-Tech's own work, under this repository's
+                             AGPL-3.0. Its LICENSE.txt carries the license
+                             text, so the directory states its own terms the
+                             way its neighbours do.

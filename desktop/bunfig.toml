@@ -1,0 +1,6 @@
+# Use the hoisted linker so transitive deps resolve at top-level node_modules.
+# Vite + esbuild bundling expects this layout; Bun's default isolated linker
+# leaves only declared deps at the workspace root, which breaks renderer
+# imports of packages pulled in transitively.
+[install]
+linker = "hoisted"

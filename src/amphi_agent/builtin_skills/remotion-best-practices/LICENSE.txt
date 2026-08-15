@@ -1,0 +1,1 @@
+For the licenses of the individual skills under remotion-best-practices, please refer to https://github.com/remotion-dev/skills/tree/main/skills/remotion-best-practices.

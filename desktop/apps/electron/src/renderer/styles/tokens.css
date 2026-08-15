@@ -1,0 +1,216 @@
+/* Amphi Design Tokens — ported from the design handoff.
+   Plus Jakarta Sans is loaded via <link> in index.html so tokens.css declares
+   only CSS variables. Tailwind v4 rejects @import that isn't the very first
+   statement in the bundled stylesheet. */
+
+:root {
+  /* Brand */
+  --brand-blue: #0099FF;
+  --brand-cyan: #00D4FF;
+  --brand-purple: #B370E0;
+  --brand-lavender: #C89FEF;
+  --brand-gradient: linear-gradient(135deg, #0099FF 0%, #B370E0 100%);
+  --brand-gradient-h: linear-gradient(90deg, #0099FF 0%, #B370E0 100%);
+
+  /* Typography */
+  --font-sans: 'Plus Jakarta Sans', -apple-system, 'PingFang SC', 'Noto Sans SC', sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 28px;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* Radius */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-2xl: 20px;
+  --r-full: 9999px;
+}
+
+/* ─── Dark Theme (default) ─── */
+/* Warm neutral grey (R=G, B=R-2). This was a cool blue-grey (#0C0E14, blue 14
+   above red); users reported it as "tiring to look at" — at equal luminance a
+   cool tone reads heavier than a warm one. The baseline is a warm dark ramp
+   (top bar #20201E → main area #2A2A28 → selected #414041, R≈G≥B throughout),
+   and luminance is aligned to it too: the main background went from L 0.0044
+   (first version) to 0.0175, a 4x increase.
+   When editing: (1) keep R=G with B two lower — any blue tint reverts to the
+   "cool and heavy" look; (2) recompute text contrast (body ≥4.5:1), since a
+   brighter background falls out of compliance more easily; (3) --bg-app must
+   stay in sync with backgroundColor in main/window-manager.ts. */
+[data-theme="dark"] {
+  --bg-app: #242422;
+  --bg-surface: #2A2A28;
+  --bg-elevated: #31312F;
+  --bg-hover: #383836;
+  --bg-active: #424240;
+  --bg-input: #2C2C2A;
+  --bg-modal: #2A2A28;
+  --bg-tooltip: #454543;
+
+  --border-subtle: #333331;
+  --border-default: #3D3D3B;
+  --border-strong: #4E4E4C;
+
+  --text-primary: #EDEBE7;
+  --text-secondary: #A8A5A0;
+  --text-tertiary: #918E89;
+  --text-inverse: #242422;
+  --text-on-brand: #FFFFFF;
+
+  --status-success: #34D399;
+  --status-success-bg: rgba(52, 211, 153, 0.12);
+  --status-error: #F87171;
+  --status-error-bg: rgba(248, 113, 113, 0.12);
+  --status-warning: #FBBF24;
+  --status-warning-bg: rgba(251, 191, 36, 0.12);
+  --status-info: #60A5FA;
+  --status-info-bg: rgba(96, 165, 250, 0.12);
+  --status-pending: #8B90A5;
+  --status-pending-bg: rgba(139, 144, 165, 0.12);
+
+  --accent-blue-subtle: rgba(0, 153, 255, 0.12);
+  --accent-purple-subtle: rgba(179, 112, 224, 0.12);
+
+  /* Entity types — slash commands / echoes colored per entity (design handoff: slash-command palette) */
+  --entity-command: #0099FF;
+  --entity-command-bg: rgba(0, 153, 255, 0.12);
+  --entity-schedule: #F5A623;
+  --entity-schedule-bg: rgba(245, 166, 35, 0.12);
+  --entity-skill: #B370E0;
+  --entity-skill-bg: rgba(179, 112, 224, 0.12);
+  --entity-workflow: #2DD4BF;
+  --entity-workflow-bg: rgba(45, 212, 191, 0.12);
+  --entity-workflow-run: #93A4C7;
+  --entity-workflow-run-bg: rgba(147, 164, 199, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+  --shadow-modal: 0 16px 48px rgba(0,0,0,0.6);
+
+  /* The user bubble keeps a blue tint (brand recognition), but on the warm-gray
+     background its saturation must be dialed down — a highly saturated blue
+     patch in a field of neutral gray would jump out. */
+  --msg-user-bg: #333648;
+  --msg-ai-bg: transparent;
+  --stage-track: #333331;
+  --stage-done: var(--brand-blue);
+  --stage-active-glow: rgba(0, 153, 255, 0.25);
+}
+
+/* ─── Light Theme (option A — pure white + thin borders) ─── */
+[data-theme="light"] {
+  --bg-app: #FFFFFF;
+  --bg-surface: #FFFFFF;
+  --bg-elevated: #FFFFFF;
+  --bg-hover: #F5F6F9;
+  --bg-active: #ECEDF2;
+  --bg-input: #F2F3F7;
+  --bg-modal: #FFFFFF;
+  --bg-tooltip: #1A1D28;
+
+  --border-subtle: #E8E9EE;
+  --border-default: #E0E1E8;
+  --border-strong: #C5C7D0;
+
+  --text-primary: #1A1D28;
+  --text-secondary: #6B7084;
+  --text-tertiary: #9CA0B0;
+  --text-inverse: #FFFFFF;
+  --text-on-brand: #FFFFFF;
+
+  --status-success: #059669;
+  --status-success-bg: rgba(5, 150, 105, 0.08);
+  --status-error: #DC2626;
+  --status-error-bg: rgba(220, 38, 38, 0.08);
+  --status-warning: #D97706;
+  --status-warning-bg: rgba(217, 119, 6, 0.08);
+  --status-info: #2563EB;
+  --status-info-bg: rgba(37, 99, 235, 0.08);
+  --status-pending: #9CA0B0;
+  --status-pending-bg: rgba(156, 160, 176, 0.08);
+
+  --accent-blue-subtle: rgba(0, 153, 255, 0.08);
+  --accent-purple-subtle: rgba(179, 112, 224, 0.08);
+
+  /* Entity types — light theme (blue/purple stay brand; schedule/workflow darkened to keep contrast) */
+  --entity-command: #0099FF;
+  --entity-command-bg: rgba(0, 153, 255, 0.12);
+  --entity-schedule: #C9791A;
+  --entity-schedule-bg: rgba(201, 121, 26, 0.10);
+  --entity-skill: #B370E0;
+  --entity-skill-bg: rgba(179, 112, 224, 0.12);
+  --entity-workflow: #0F9E8B;
+  --entity-workflow-bg: rgba(15, 158, 139, 0.10);
+  --entity-workflow-run: #5E7199;
+  --entity-workflow-run-bg: rgba(94, 113, 153, 0.10);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.1);
+  --shadow-modal: 0 16px 48px rgba(0,0,0,0.15);
+
+  --msg-user-bg: #EBF0FF;
+  --msg-ai-bg: transparent;
+  --stage-track: #ECEDF0;
+  --stage-done: var(--brand-blue);
+  --stage-active-glow: rgba(0, 153, 255, 0.15);
+}
+
+@keyframes amphi-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.4 } }
+@keyframes amphi-surface-attention {
+  0%, 100% {
+    background-color: var(--status-warning-bg);
+    border-color: color-mix(in srgb, var(--status-warning) 40%, transparent);
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--status-warning) 24%, transparent);
+    border-color: var(--status-warning);
+  }
+}
+@keyframes amphi-activity-wave {
+  0%, 55%, 100% { background-color: color-mix(in srgb, var(--activity-color) 32%, transparent); opacity: 0.45 }
+  18% { background-color: var(--activity-color); opacity: 1; box-shadow: 0 0 6px color-mix(in srgb, var(--activity-color) 55%, transparent) }
+  36% { background-color: color-mix(in srgb, var(--activity-color) 58%, transparent); opacity: 0.7; box-shadow: none }
+}
+
+/* Animation keyframes (the utilities are registered in index.css).
+   All paint-only (opacity / transform), so they never trigger layout shift (§LS1). */
+@keyframes amphi-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes amphi-enter { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes amphi-pop { from { opacity: 0; transform: scale(0.96) } to { opacity: 1; transform: scale(1) } }
+@keyframes amphi-focus-enter { from { opacity: 0.2; transform: translateY(-6px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes amphi-focus-exit { from { opacity: 1; transform: translateY(0) } to { opacity: 0; transform: translateY(-4px) } }
+@keyframes amphi-focus-item-enter { from { opacity: 0.35; transform: translateY(-3px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes amphi-stage-activate { from { opacity: 0.55; transform: translateX(-2px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes amphi-mode-surface-enter { from { opacity: 0.35; transform: translateX(10px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes amphi-mode-rail-enter { from { opacity: 0; transform: translateX(7px) scale(0.94) } to { opacity: 1; transform: translateX(0) scale(1) } }
+@keyframes amphi-workbench-tool-enter { from { opacity: 0.35; transform: translateX(12px) scale(0.992) } to { opacity: 1; transform: translateX(0) scale(1) } }
+@keyframes amphi-mode-dock-enter { from { opacity: 0.55; transform: translateX(14px) } to { opacity: 1; transform: translateX(0) } }
+/* Wheel-style switch for the input box's rotating tips: both lines move at once
+   — the old one slides up and out (leave), the new one fills in from the bottom
+   edge (rise). The offset uses 100% (the line's own height) rather than a fixed
+   px, so start and end land exactly outside the overflow-hidden edge — that is
+   what makes it a "roll" instead of a "twitch". The two durations MUST match,
+   otherwise they come apart mid-animation. */
+@keyframes amphi-tip-rise { from { opacity: 0; transform: translateY(100%) } to { opacity: 1; transform: translateY(0) } }
+@keyframes amphi-tip-leave { from { opacity: 1; transform: translateY(0) } to { opacity: 0; transform: translateY(-100%) } }

@@ -1,0 +1,2374 @@
+{
+  "approval": {
+    "center": {
+      "desc": "Every action that a scheduled task triggered unattended and that needs your confirmation is collected here",
+      "empty": "Nothing pending",
+      "handle": "Handle it",
+      "itemCount": "{{n}} items",
+      "pendingCount": "{{n}} pending",
+      "title": "Approval center"
+    }
+  },
+  "asset": {
+    "common": {
+      "addToChat": "Add {{name}} to chat",
+      "copyPath": "Copy path",
+      "emptyFolder": "Empty folder",
+      "loading": "Loading…",
+      "revealInFileManager": "Reveal in file manager"
+    },
+    "empty": {
+      "hint": "Use Add to mount a local file or folder that the agent can read and write",
+      "title": "No mounted files yet"
+    },
+    "mount": {
+      "actions": "Actions for {{name}}",
+      "itemCount": "{{n}} items",
+      "pathStale": "Path is no longer available",
+      "pathWithStale": "{{path}} (path is no longer available)",
+      "remove": "Remove",
+      "removeHint": "This does not delete the local file or folder"
+    },
+    "search": {
+      "capped": "{{shown}} of {{total}} matches shown",
+      "contentScope": "Content",
+      "fileScope": "Files",
+      "folder": "Folder",
+      "noMatch": "No {{scope}} matching “{{query}}”",
+      "partial": "This directory is large; only results from this search are shown",
+      "searching": "Searching…"
+    },
+    "session": {
+      "add": "Add",
+      "pickFile": "Choose file…",
+      "pickFolder": "Choose folder…",
+      "title": "Session files"
+    },
+    "toast": {
+      "copyFailed": "Copy failed",
+      "pathCopied": "Path copied"
+    },
+    "tree": {
+      "denied": "Access denied · allow it in System Settings",
+      "deniedTooltip": "macOS has not authorized {{product}} to access this folder. Go to System Settings › Privacy & Security › Files and Folders, enable the corresponding permission for {{product}}, then try again.",
+      "mention": "Reference {{name}} in the input",
+      "noPermission": "No permission",
+      "readFailed": "Failed to read",
+      "rowActions": "Actions for {{name}}"
+    }
+  },
+  "build": {
+    "commentBatch": {
+      "head": "I have {{count}} revision notes for the task specification:",
+      "item": "{{index}}. For “{{quote}}”\n{{text}}"
+    },
+    "specEditedMessage": "I manually edited the task specification `{{path}}`. Please continue using the updated specification."
+  },
+  "center": {
+    "assets": {
+      "files": {
+        "col": {
+          "addedAt": "Date added",
+          "name": "Name",
+          "session": "Session",
+          "size": "Size"
+        },
+        "empty": "No user files yet. Files added in a session will appear here.",
+        "invalid": "Unavailable",
+        "subtitle": "Files currently mounted in sessions · {{n}}",
+        "title": "User files"
+      },
+      "loading": "Loading assets...",
+      "runs": {
+        "col": {
+          "name": "Workflow / run result",
+          "status": "Status",
+          "time": "Time"
+        },
+        "deleteRunAria": "Delete run result {{id}}",
+        "empty": "No workflow outputs yet. Run a workflow to see its outputs grouped here by name.",
+        "runCount": "{{n}} runs",
+        "subtitle": "Grouped by workflow · {{n}}",
+        "title": "Workflow outputs",
+        "useInNewSession": "Use in new session",
+        "useInNewSessionAria": "Use result {{id}} in a new session"
+      },
+      "searchPlaceholder": "Search files, sessions, or workflows...",
+      "subtitle": "Browse session files and final workflow outputs"
+    },
+    "common": {
+      "all": "All",
+      "cancel": "Cancel",
+      "collapse": "Collapse",
+      "delete": "Delete",
+      "details": "Details",
+      "expandFull": "Show full text",
+      "export": "Export",
+      "import": "Import",
+      "loading": "Loading…",
+      "myAssets": "My assets",
+      "refresh": "Refresh",
+      "retry": "Retry",
+      "save": "Save",
+      "saving": "Saving",
+      "status": {
+        "cancelled": "Cancelled",
+        "completed": "Completed",
+        "failed": "Failed",
+        "paused": "Paused",
+        "running": "Running",
+        "waiting": "Awaiting input"
+      },
+      "workflows": "Workflows"
+    },
+    "skills": {
+      "disableAria": "Disable {{name}}",
+      "empty": "No skills yet",
+      "enableAria": "Enable {{name}}",
+      "group": {
+        "builtin": "Built-in",
+        "imported": "Imported",
+        "selfCreated": "Created by me"
+      },
+      "loadFailed": "Failed to load skills. Please try again.",
+      "manualImport": "Import manually",
+      "searchPlaceholder": "Search skills...",
+      "subtitle": "Manage system capability extensions"
+    },
+    "workflows": {
+      "empty": {
+        "desc": "Run /build and confirm saving to see workflows here.",
+        "noMatchDesc": "Try a different search term.",
+        "noMatchTitle": "No matching workflows",
+        "title": "No workflows yet"
+      },
+      "noDesc": "No description",
+      "rename": {
+        "action": "Rename",
+        "emptyName": "Enter a workflow name.",
+        "failedCheckName": "Rename failed. Check the name and try again.",
+        "failedRetry": "Rename failed. Try again later."
+      },
+      "renameAria": "Rename {{name}}",
+      "runInNewSession": "Run in new session",
+      "saved": "Saved",
+      "schedule": "Schedule",
+      "searchPlaceholder": "Search workflows...",
+      "subtitle": "Manage saved workflow build artifacts"
+    }
+  },
+  "centerView": {
+    "aiNotice": "Content is generated by AI; verify important information",
+    "deleteWorkflow": {
+      "confirm": "Delete",
+      "message": "Delete “{{name}}”? Its definition will be removed, while existing run results remain in My Assets.",
+      "title": "Delete workflow"
+    }
+  },
+  "commentFeedback": {
+    "cancelEsc": "Cancel (Esc)",
+    "collapse": "Collapse",
+    "continueBuild": "Continue building",
+    "escCancel": "Esc to cancel",
+    "expandAll": "Expand all",
+    "instructionPlaceholder": "Or tell it directly what to do…",
+    "myComment": "My comment",
+    "remove": "Remove this comment",
+    "selectedSource": "Selected source",
+    "sendAndContinue": "Send feedback and continue building",
+    "sendFailed": "Failed to send comments",
+    "sending": "Sending…",
+    "summary": "Send {{count}} comments together as feedback",
+    "title": "Comments ({{count}})"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "deleteSchedule": "Delete scheduled task",
+    "deleteScheduleMessage": "Delete “{{name}}”? The scheduled task will stop and be removed.",
+    "deleteWorkflowRun": "Delete run result",
+    "deleteWorkflowRunMessage": "Delete this run result for “{{name}}”? Related output files will be permanently deleted and cannot be recovered.",
+    "exportWorkflow": "Export workflow",
+    "inUse": "In use",
+    "none": "None",
+    "off": "Off",
+    "on": "On",
+    "open": "Open",
+    "stop": "Stop",
+    "workflowResultInputPlaceholder": "Continue from this workflow result…",
+    "workflowRunInputPlaceholder": "Continue from this workflow run…"
+  },
+  "composer": {
+    "action": {
+      "send": "Send",
+      "stop": "Stop"
+    },
+    "command": {
+      "build": {
+        "description": "Trigger the complete five-stage workflow",
+        "label": "Build"
+      },
+      "help": {
+        "description": "View system capabilities and available commands",
+        "label": "Help"
+      },
+      "schedule": {
+        "description": "Insert the scheduled-task template in the current input",
+        "label": "New schedule"
+      }
+    },
+    "emptySession": "Create or select a session first",
+    "model": {
+      "clearSearch": "Clear search",
+      "current": "Current",
+      "emptyNoMatch": "No matching models",
+      "emptyNoModels": "No models configured yet",
+      "modalTitle": "Select model",
+      "searchPlaceholder": "Search models…",
+      "selectPlaceholder": "Select model",
+      "switchAria": "Switch model"
+    },
+    "noModel": {
+      "configure": "Configure a model",
+      "configureAria": "Configure a model",
+      "ctaPrefix": "To start building a workflow, first",
+      "loadFailed": "Failed to load model configuration",
+      "retry": "Retry",
+      "retrying": "Retrying…"
+    },
+    "pendingPermissionHint": "Handle the permission request above first",
+    "quote": {
+      "agentSource": "Quoting agent reply",
+      "remove": "Remove quote",
+      "userSource": "Quoting your message"
+    },
+    "slash": {
+      "empty": "No matching commands or capabilities",
+      "group": {
+        "command": "Commands",
+        "schedule": "Schedules",
+        "skill": "Skills",
+        "workflow": "Workflows"
+      },
+      "overflow": "{{n}} more · Type to filter",
+      "scheduleDescription": "Run once{{suffix}}"
+    },
+    "slot": {
+      "genericPlaceholder": "Fill in…",
+      "scheduleNamePlaceholder": "Task name"
+    },
+    "tips": {
+      "build": "Try /build — start the full build flow",
+      "dropFile": "Dropping a file mounts it as a session file; pasting a path does not",
+      "help": "/help shows all available capabilities and commands",
+      "input": "Type a message, or use / for commands…",
+      "longPaste": "Pasting very long text automatically creates a .txt attachment",
+      "mention": "Type @ to reference session files or workflow results",
+      "schedule": "Try /schedule — create a scheduled task",
+      "sendKey": "Enter sends; Shift + Enter adds a line break",
+      "slash": "The / menu can run installed Skills and workflows directly",
+      "trigger": "@ and / open menus only at the start of a line or after a space",
+      "zoom": "Text too small? Use ⌘/Ctrl + or - to zoom, and 0 to reset"
+    },
+    "toolbar": {
+      "add": "Add",
+      "addAria": "Add input",
+      "noRuns": "No run results are available to reference yet",
+      "pickFile": "Choose file…",
+      "pickFolder": "Choose folder…",
+      "pickRun": "Choose run result",
+      "workflowRuns": "Run results…"
+    }
+  },
+  "cron": {
+    "dailyAt": "Daily at {{time}}",
+    "everyHour": "Every hour",
+    "everyHourAtMinute": "At minute {{minute}} of every hour",
+    "everyMinute": "Every minute",
+    "everyMinuteAtSecond": "At second {{second}} of every minute",
+    "everyNHours": "Every {{n}} hours",
+    "everyNMinutes": "Every {{n}} minutes",
+    "everyNSeconds": "Every {{n}} seconds",
+    "everySecond": "Every second",
+    "month": {
+      "april": "April",
+      "august": "August",
+      "december": "December",
+      "february": "February",
+      "january": "January",
+      "july": "July",
+      "june": "June",
+      "march": "March",
+      "may": "May",
+      "november": "November",
+      "october": "October",
+      "september": "September"
+    },
+    "monthSeparator": ", ",
+    "monthlyAt": "Every month on day {{day}} at {{time}}",
+    "quarterlyAt": "Every quarter ({{months}}) on day {{day}} at {{time}}",
+    "weekday": {
+      "friday": "Friday",
+      "monday": "Monday",
+      "saturday": "Saturday",
+      "sunday": "Sunday",
+      "thursday": "Thursday",
+      "tuesday": "Tuesday",
+      "wednesday": "Wednesday"
+    },
+    "weeklyAt": "Every {{day}} at {{time}}",
+    "yearlyAt": "Every year on {{month}} {{day}} at {{time}}"
+  },
+  "error": {
+    "actionFailedRetry": "Action failed. Please try again.",
+    "assetUserFiles": "User files: {{msg}}",
+    "assetWorkflowOutputs": "Workflow output: {{msg}}",
+    "assetsPartialLoadFailed": "Some assets failed to load ({{detail}})",
+    "backendNotReady": "Backend is not ready",
+    "backendNotReadyAssets": "Backend is not ready; assets cannot be loaded",
+    "backendNotReadyModels": "Backend is not ready; model configuration cannot be loaded",
+    "backendNotReadySkills": "Backend is not ready; Skills cannot be loaded",
+    "cannotOpenFile": "Cannot open file",
+    "codexAuthFailed": "Codex authorization failed: {{msg}}",
+    "codexAuthTimeout": "Codex authorization timed out. Please try again.",
+    "codexModelSaveFailed": "Failed to save Codex models: {{msg}}",
+    "commandFailed": "Command execution failed",
+    "connectionClosed": "Connection closed (code {{code}})",
+    "connectionTestFailed": "Connection test failed: {{msg}}",
+    "daemonNotReadyExecutionMode": "Daemon is not ready; execution mode was not changed",
+    "daemonShuttingDown": "The daemon is shutting down",
+    "deleteFailedRetry": "Delete failed. Please try again.",
+    "endpointChangedReconnect": "Backend endpoint changed; reconnecting",
+    "executionModeSwitchFailed": "Failed to change execution mode; the previous setting remains active",
+    "gatewayNotReady": "Backend gateway is not ready",
+    "gatewayUnavailableForChat": "The backend gateway is temporarily unavailable. Please try again shortly.",
+    "modelListFetchFailed": "Failed to fetch model list: {{msg}}",
+    "modelSwitchFailed": "Failed to switch model: {{msg}}",
+    "providerAddFailed": "Failed to add provider: {{msg}}",
+    "providerDeleteFailed": "Failed to delete provider: {{msg}}",
+    "providerDisableFailed": "Failed to disable provider: {{msg}}",
+    "providerEnableFailed": "Failed to enable provider: {{msg}}",
+    "requestTimeout": "Request timed out ({{seconds}}s): {{path}}",
+    "responseShapeInvalid": "Invalid {{label}} response shape: {{detail}}",
+    "responseStillGenerating": "The current response is still generating. Wait for it to finish or stop it before sending another message.",
+    "sessionCopyFailedRetry": "Failed to copy session. Please try again.",
+    "sessionCreateFailed": "Failed to create conversation",
+    "skillDeleteFailed": "Failed to delete Skill: {{msg}}",
+    "skillToggleFailed": "Failed to change Skill status: {{msg}}",
+    "skillsLoadFailed": "Failed to load Skills: {{msg}}",
+    "stopFailedRetry": "Failed to stop. Please try again.",
+    "triggerFailedRetry": "Failed to trigger. Please try again.",
+    "workflowDeleteFailed": "Failed to delete workflow: {{msg}}",
+    "workflowExportFailed": "Failed to export workflow: {{msg}}",
+    "workflowImportFailed": "Failed to import workflow",
+    "workflowNameRequired": "Enter a workflow name",
+    "workflowRenameFailed": "Failed to rename workflow: {{msg}}",
+    "workflowRunDeleteFailed": "Failed to delete run result: {{msg}}",
+    "workflowRunExportFailed": "Failed to export run result: {{msg}}"
+  },
+  "externalLink": {
+    "description": "You are about to leave the app and visit this external link:",
+    "dontAskAgain": "Do not ask again in this session",
+    "open": "Open link",
+    "title": "Open external link"
+  },
+  "fileOpen": {
+    "message": "Open {{name}} with the system default application?",
+    "rememberExtension": "Remember {{extension}} and open it directly next time",
+    "rememberName": "Remember {{name}} and open it directly next time",
+    "title": "Open file"
+  },
+  "focusMode": {
+    "building": "Building",
+    "closeTaskSpec": "Close task specification",
+    "collapse": "Collapse",
+    "completed": "Completed",
+    "inProgress": "In progress",
+    "preparing": "Preparing",
+    "preparingDescription": "Preparing the workflow build environment",
+    "progress": "Build progress",
+    "stageDescriptions": {
+      "clarify": "Align requirements and finalize the specification",
+      "explore": "Explore the target environment structure",
+      "generate": "Write and organize workflow code",
+      "verify": "Validate outputs and acceptance criteria"
+    },
+    "stages": {
+      "clarify": "Task creation",
+      "explore": "Exploration",
+      "generate": "Generate",
+      "verify": "Validate"
+    },
+    "taskSpec": "Task specification",
+    "title": "Workflow build",
+    "viewTaskSpec": "View task specification",
+    "waitingToContinue": "Waiting to continue"
+  },
+  "gatewayBoot": {
+    "connecting": "Connecting to gateway…",
+    "incompatible": {
+      "actual": "Currently running",
+      "clientsWarningUnknown": "Restarting briefly disconnects everything attached to the gateway, including tasks running outside this window.",
+      "clientsWarning_one": "Restarting briefly disconnects everything attached to the gateway — {{count}} client is connected right now.",
+      "clientsWarning_other": "Restarting briefly disconnects everything attached to the gateway — {{count}} clients are connected right now.",
+      "description": "The gateway still running on this machine is a different version from {{product}}. Restart it so the newly installed gateway takes over.",
+      "exit": "Quit and restart later",
+      "exiting": "Quitting…",
+      "expected": "This app expects",
+      "restart": "Restart gateway now",
+      "restarting": "Restarting gateway…",
+      "title": "Update not finished"
+    },
+    "installingUpdate": "Installing update…",
+    "loading": "Loading",
+    "manifestUnavailable": {
+      "description": "{{product}} cannot read the file that records which gateway version it needs, so it will not connect to one. Restarting the gateway cannot fix this — reinstall {{product}}.",
+      "title": "This installation is damaged"
+    },
+    "notRunning": {
+      "description": "{{product}} requires a running gateway to work. Click Start, or run",
+      "title": "Gateway is not running"
+    },
+    "start": "Start gateway",
+    "starting": "Starting gateway…",
+    "unknownVersion": {
+      "description": "The gateway running on this machine did not report a version, so {{product}} cannot tell whether it is safe to use. It predates the version check — restart the gateway, or reinstall {{product}} if that does not help.",
+      "title": "Gateway version unknown"
+    }
+  },
+  "humanRequest": {
+    "acceptance": {
+      "accept": "Adopt",
+      "acceptDesc": "Keep this as a completion criterion for the run result.",
+      "criteriaConfirmed": "Completion criteria aligned",
+      "desc": "Accept or reject each item, or write an alternative completion criterion under “Other”.",
+      "executionOnly": "No completion criteria",
+      "executionOnlyConfirmed": "No completion criteria selected",
+      "executionOnlyHint": "Run the workflow only",
+      "executionOnlySummary": "This workflow has no completion criteria, so it will run the steps without validating the result. Execution errors will still fail normally.",
+      "executionOnlyTitle": "The generated workflow has no completion criteria, so no result validation is needed at run time",
+      "finalOutcome": "Final outcome",
+      "multiDone": "All completion criteria handled",
+      "multiPending": "{{n}} completion criteria pending",
+      "next": "Next item",
+      "otherPlaceholder": "Enter an alternative completion criterion…",
+      "position": "Item {{current}} of {{total}}",
+      "reject": "Do not adopt",
+      "rejectDesc": "Remove this and do not use it to judge the run result.",
+      "singleDone": "Completion criterion handled",
+      "singlePending": "Final result pending",
+      "standardN": "Criterion {{n}}",
+      "submit": "Confirm and continue",
+      "suggestionCount": "{{n}} suggestions",
+      "title": "How do we call this done"
+    },
+    "answerRemaining": "Answer the remaining {{n}} →",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "expandAria": "Expand the interaction panel",
+    "framework": {
+      "buildSummary": "Whether to build the current task into a repeatable workflow",
+      "buildTitle": "Your choice is needed",
+      "permissionSummary": "{{n}} operations awaiting confirmation",
+      "permissionTitle": "Your authorization is needed",
+      "taskSummary": "Confirming moves on to the exploration stage; you can also preview it first or request changes",
+      "taskTitle": "Please confirm the task specification",
+      "workflowSummary": "Decide whether to save the result of this build",
+      "workflowTitle": "Please confirm the workflow"
+    },
+    "needAnswer": "Your answer is needed",
+    "none": "None of these",
+    "other": "Other",
+    "otherPlaceholder": "Enter a custom answer…",
+    "processedCount": "Handled {{done}}/{{total}}",
+    "promptAria": "Question background",
+    "questionN": "Question {{n}}",
+    "selectAll": "Select all",
+    "selectedCount": "Selected {{picked}}/{{max}}",
+    "submit": "Submit",
+    "viewDetail": "View details",
+    "viewedCount": "Viewed {{done}}/{{total}}",
+    "waitingSummary": "The agent is waiting for your answer",
+    "waitingTitle": "Waiting for your answer"
+  },
+  "issueReport": {
+    "advanced": {
+      "assistantMessage": "Agent reply and execution process",
+      "assistantMessageDescription": "Includes the agent reply, displayed reasoning, tool calls, and their results",
+      "conversationTitle": "Conversation content (optional, not included by default)",
+      "description": "Choose whether to include related information",
+      "environmentTitle": "Runtime environment",
+      "errorDetails": "Error details",
+      "errorDetailsDescription": "Includes the error shown in the interface and may contain local paths",
+      "errorSensitiveNotice": "Error details may contain local paths or other sensitive information. Review and remove it before submitting on GitHub.",
+      "errorSensitiveTitle": "Review the error details",
+      "filePrivacyNotice": "The exported file contains only content you selected and is not uploaded automatically.",
+      "fileSensitiveNotice": "The exported conversation may contain passwords, API keys, access tokens, or other sensitive information. We do not automatically detect or redact it. Review the file and remove sensitive information before uploading.",
+      "fileSensitiveTitle": "Review the exported file",
+      "privacyNotice": "Only selected content is included, and you can still review or edit it on GitHub after opening.",
+      "problemTitle": "Problem information",
+      "runContext": "Model and run mode",
+      "runContextDescription": "Includes the model and run mode used for this turn",
+      "sensitiveNotice": "Conversation content may contain passwords, API keys, access tokens, or other sensitive information. Remove them when reviewing the issue before final submission.",
+      "sensitiveTitle": "Check for sensitive information",
+      "systemEnvironment": "System environment",
+      "systemEnvironmentDescription": "Includes app, operating system, and desktop runtime versions",
+      "title": "Advanced options",
+      "userMessage": "User message",
+      "userMessageDescription": "Include the user message from this turn"
+    },
+    "agentTurn": {
+      "displayedReasoning": "Displayed reasoning",
+      "duration": "Duration",
+      "empty": "(none)",
+      "error": "Error",
+      "event": "Event",
+      "finalReply": "Agent final reply",
+      "processMessage": "Agent process message",
+      "status": "Status",
+      "stopped": "Stopped",
+      "toolCall": "Tool call",
+      "toolFailure": "Failed",
+      "toolInput": "Input",
+      "toolPending": "Pending",
+      "toolResult": "Result",
+      "toolSuccess": "Succeeded"
+    },
+    "close": "Close",
+    "copied": "Copied",
+    "copyLink": "Copy address",
+    "description": "Feedback is completed on the project's GitHub Issue page. We’ll open the address below in your browser.",
+    "destination": "Opening",
+    "errors": {
+      "copyFailed": "Could not copy the address. Please try again.",
+      "exportFailed": "Could not export the feedback file. Choose another location and try again.",
+      "openAfterExportFailed": "The feedback file was exported, but GitHub could not be opened. Your file is safe; try opening GitHub again.",
+      "openFailed": "Could not open GitHub. Check your connection and try again.",
+      "revealFailed": "Could not reveal the feedback file. Use the path shown below to find it."
+    },
+    "fields": {
+      "appVersion": "App version",
+      "arch": "System architecture",
+      "chromeVersion": "Chromium version",
+      "electronVersion": "Electron version",
+      "executionMode": "Execution mode",
+      "model": "Model",
+      "osRelease": "Operating system version",
+      "platform": "Operating system",
+      "thinkingMode": "Agent mode",
+      "thinkingStage": "Agent stage"
+    },
+    "fileMode": {
+      "action": "Export feedback file and open GitHub",
+      "description": "Continuing will export {{filename}} and open GitHub. Add the file to the issue page.",
+      "exportedTitle": "Feedback file exported",
+      "exporting": "Exporting…",
+      "githubNotice": "The file is not uploaded automatically. Add it on the GitHub issue page.",
+      "openingGitHub": "Opening GitHub…",
+      "retryOpen": "Open GitHub again",
+      "saveDialogTitle": "Export feedback file",
+      "showInFolder": "Show in folder",
+      "title": "The selected content will be attached as a file"
+    },
+    "githubNotice": "Nothing is submitted automatically. You can review and edit everything after opening.",
+    "openGitHub": "Go to the project to give feedback",
+    "preparing": "Preparing…",
+    "sections": {
+      "assistantMessage": "Agent reply and execution process",
+      "errorDetails": "Error details",
+      "runContext": "Model and run mode",
+      "systemEnvironment": "System environment",
+      "userMessage": "User message"
+    },
+    "title": "Report a problem you encountered"
+  },
+  "landing": {
+    "inputHint": {
+      "after": "...",
+      "before": "Describe the task you want to automate, or use "
+    },
+    "market": {
+      "officialRecommended": "Official picks",
+      "preview": "Preview",
+      "title": "Workflow tutorials",
+      "verified": "Reviewed"
+    },
+    "modelConfig": {
+      "configure": "Configure model",
+      "description": "{{product}} needs a large language model connection to work. Complete model setup first; OpenAI, Anthropic, DeepSeek, and other major providers are supported.",
+      "title": "Configure an AI model before you begin"
+    },
+    "tagline": "Describe what you want to automate, and AI will build a runnable workflow."
+  },
+  "main": {
+    "browser": {
+      "newTab": "New Tab"
+    },
+    "menu": {
+      "actualSize": "Actual Size",
+      "view": "View",
+      "zoomIn": "Zoom In",
+      "zoomOut": "Zoom Out"
+    },
+    "quit": {
+      "buttonCancel": "Cancel",
+      "buttonKeep": "Keep Gateway and Quit",
+      "buttonStop": "Stop Gateway Anyway",
+      "detailCount": "{{count}} client(s) are still using the gateway: {{kinds}}.",
+      "detailHint": "“Keep Gateway and Quit” closes only this window; the gateway keeps running in the background. “Cancel” does nothing at all.",
+      "detailUnknown": "Unable to confirm whether other clients are still connected (the gateway did not respond).",
+      "kind": {
+        "cli": "CLI",
+        "gui": "Desktop",
+        "tray": "Tray",
+        "unknown": "Unknown"
+      },
+      "message": "Stopping the gateway will interrupt these connections.",
+      "title": "Quit {{product}}"
+    },
+    "tray": {
+      "cancelStart": "Cancel Start",
+      "discovering": "Discovering…",
+      "openWindow": "Open Main Window",
+      "quitApp": "Quit Completely",
+      "restartForUpdate": "Restart Gateway to Finish Updating",
+      "restartGateway": "Restart Gateway",
+      "startGateway": "Start Gateway",
+      "starting": "Starting…",
+      "status": {
+        "discovering": "… Discovering gateway",
+        "incompatible": "⚠ Gateway version mismatch · v{{version}}",
+        "incompatibleNoVersion": "⚠ Gateway version mismatch",
+        "offline": "○ Gateway not running",
+        "ready": "● Gateway running · v{{version}}",
+        "readyNoVersion": "● Gateway running",
+        "spawning": "… Starting gateway",
+        "unhealthy": "⚠ Gateway unhealthy, reconnecting…"
+      },
+      "stopGateway": "Stop Gateway"
+    }
+  },
+  "markdown": {
+    "code": {
+      "copied": "Copied",
+      "copy": "Copy code"
+    },
+    "fileLink": {
+      "copied": "Path copied",
+      "copyFailed": "Copy failed",
+      "copyPath": "Copy path",
+      "copyPathAria": "Copy path {{name}}",
+      "reveal": "Show in file manager",
+      "revealAria": "Show {{name}} in file manager"
+    },
+    "mermaid": {
+      "zoomHint": "Scroll to zoom; drag to pan"
+    }
+  },
+  "mention": {
+    "badge": {
+      "schedule": "Schedule",
+      "workflow": "Workflow",
+      "workflowRun": "Run result"
+    },
+    "empty": {
+      "default": "No session files, workflows, run results, or schedules are available to reference yet",
+      "noMatch": "No reference content matches “{{query}}”",
+      "schedules": "No schedules are available to reference yet",
+      "sessionFiles": "This session has no files to reference yet",
+      "sessionFilesHint": "Use Add in the Session files panel on the right to mount a local file or folder",
+      "workflowRuns": "No run results are available to reference yet",
+      "workflows": "No workflows are available to reference yet"
+    },
+    "footer": {
+      "reference": "Reference",
+      "select": "Select",
+      "switchScope": "Switch category"
+    },
+    "loading": {
+      "browse": "Loading reference content…",
+      "search": "Searching reference content…"
+    },
+    "more": "Load more ({{remaining}} remaining)",
+    "partialWarning": "This directory is large; only results from this search are shown",
+    "previewRunAria": "Preview this run of {{name}}",
+    "previewWorkflowAria": "Preview workflow {{name}}",
+    "runStatus": {
+      "cancelled": "Cancelled",
+      "completed": "Completed",
+      "failed": "Failed",
+      "paused": "Paused",
+      "running": "Running",
+      "waiting": "Awaiting input"
+    },
+    "schedule": {
+      "defaultDesc": "Reference this schedule to view, edit, pause, or delete it"
+    },
+    "scope": {
+      "all": "All",
+      "schedules": "Schedules",
+      "sessionFiles": "Session files",
+      "workflowRuns": "Run results",
+      "workflows": "Workflows"
+    },
+    "searchingFor": "Searching “{{query}}”",
+    "section": {
+      "schedules": "Schedules",
+      "sessionFiles": "Session files",
+      "workflowRuns": "Run results",
+      "workflows": "Workflows"
+    },
+    "subtitle": "Choose a session file, workflow, run result, or schedule",
+    "tablistLabel": "Reference type",
+    "title": "Reference content",
+    "tree": {
+      "loading": "Loading…",
+      "referenceAria": "Reference {{name}}",
+      "unreadable": "No permission"
+    },
+    "viewAllRuns": "View all {{total}} run results",
+    "workflow": {
+      "defaultDesc": "Reference the workflow definition to modify, explain, or compare it",
+      "editable": "Editable"
+    }
+  },
+  "message": {
+    "thinking": "Thinking"
+  },
+  "messageToolCall": {
+    "calling": "Calling…",
+    "completed": "Completed · {{durationMs}}ms",
+    "error": "Error",
+    "parameters": "Parameters",
+    "result": "Result"
+  },
+  "modals": {
+    "about": {
+      "checkForUpdates": "Check for updates",
+      "contact": "Contact us",
+      "contactBusiness": "Business & licensing",
+      "contactCopied": "Copied",
+      "contactCopy": "Copy",
+      "contactFeedback": "Privacy & other feedback",
+      "contactIssue": "Report an issue",
+      "contactIssueAction": "GitHub Issues",
+      "contactSecurity": "Security vulnerabilities",
+      "license": "Licence",
+      "licenseDescription": "Open-sourced under AGPL v3.0. For commercial licensing, contact {{contact}}",
+      "repository": "Repository",
+      "softwareUpdate": "Software update",
+      "updateChecking": "Checking…",
+      "updateDisabled": "Updates are not enabled in this build",
+      "updateDownloading": "Downloading… {{percent}}%",
+      "updateFailed": "Check failed",
+      "updateNoBuildForArch": "No update is available for this architecture — download a matching build from the project page",
+      "updateNow": "Update now",
+      "updateStaged": "Version {{version}} is ready",
+      "updateUpToDate": "Up to date",
+      "version": "Version"
+    },
+    "common": {
+      "cancel": "Cancel",
+      "clearError": "Clear error",
+      "close": "Close",
+      "confirmDelete": "Confirm deletion",
+      "delete": "Delete",
+      "next": "Next"
+    },
+    "deleteConfirm": {
+      "message": "Delete {{name}}? This action cannot be undone.",
+      "relatedHint": "This workflow is referenced by {{n}} sessions. Choose how to proceed:",
+      "sessionTitle": "Delete session",
+      "withSessions": "Delete related sessions too",
+      "withSessionsDesc": "This will also delete {{n}} related sessions",
+      "workflowOnly": "Delete workflow only",
+      "workflowOnlyDesc": "Keep related sessions; their workflow reference will be marked deleted.",
+      "workflowTitle": "Delete workflow"
+    },
+    "dependency": {
+      "allGood": "All dependencies are met",
+      "allGoodDesc": "This workflow can be used immediately with no additional configuration.",
+      "confirmImport": "Confirm import",
+      "environment": "Environment dependency",
+      "feishuApp": "Feishu app configuration",
+      "feishuCli": "Feishu CLI",
+      "importAfterConfig": "Import after configuration",
+      "importLater": "Import now, configure later",
+      "installGuide": "Installation guide",
+      "installed": "Installed",
+      "laterHint": "You can import the workflow now and configure dependencies later, but it cannot run until they are met.",
+      "missing": "Some dependencies are missing",
+      "missingDesc": "This workflow needs the following configuration to run normally.",
+      "openSettings": "Open settings",
+      "title": "Import workflow"
+    },
+    "editField": {
+      "changeDetected": "Content change detected",
+      "confirmRerun": "Confirm changes and rerun",
+      "currentContent": "Current content (editable)",
+      "demo": {
+        "edited": "Automatically collect the first 100 posts under Xiaohongshu topic \"Beauty Reviews\", extract titles, likes, comments, and saves, and save them as CSV.",
+        "original": "Automatically collect the first 50 posts under Xiaohongshu topic \"Beauty Reviews\", extract titles, likes, and comments, and save them as CSV.",
+        "stage": "Stage 1 (Task creation)"
+      },
+      "noChange": "Content is unchanged; closing will not trigger a rerun",
+      "rematchDomain": "Domain matching will also run again.",
+      "restartFrom": "After confirmation, the build will restart from {{stage}}.",
+      "title": "Edit {{title}}"
+    },
+    "gateway": {
+      "address": "Gateway address",
+      "autostart": {
+        "approvalRequired": "Allow {{product}} under system Login Items so the tray can start automatically, then select Enable again if needed.",
+        "daemonRepairNeeded": "The tray login item is enabled, but the background gateway is not. Select Repair to synchronize them, or Disable all.",
+        "disable": "Disable auto-start",
+        "disableAll": "Disable all",
+        "disabledHint": "Disabled. Neither the background gateway nor the tray starts automatically at login.",
+        "enable": "Enable auto-start",
+        "enabledHint": "Configured. The system will start the background gateway and {{product}} tray at login; they keep running after the main window closes.",
+        "processing": "Processing…",
+        "readFailed": "Failed to read auto-start status: {{error}}",
+        "reading": "Loading…",
+        "repair": "Repair",
+        "title": "Start {{product}} at login",
+        "trayRepairNeeded": "The background gateway is enabled, but the tray login item is missing or disabled. Select Repair to synchronize them, or Disable all."
+      },
+      "connectionRefused": "Connection refused: port {{port}} is in use or the gateway process exited unexpectedly",
+      "copied": "Copied",
+      "copy": "Copy",
+      "copyToken": "Copy full token",
+      "description": "Manage the {{product}} gateway service that proxies and routes AI model requests.",
+      "errorInfo": "Error information",
+      "justNow": "Just now",
+      "retry": "Retry connection",
+      "retrying": "Retrying…",
+      "rotateTokenUnavailable": "Token rotation will be available in M3",
+      "start": "Start",
+      "starting": "Starting…",
+      "status": {
+        "error": "Connection error",
+        "running": "Running",
+        "stopped": "Stopped"
+      },
+      "stop": "Stop",
+      "stopping": "Stopping…",
+      "uptime": "Uptime",
+      "uptimeDays": "{{days}}d {{hours}}h",
+      "uptimeHours": "{{hours}}h {{minutes}}m",
+      "uptimeMinutes": "{{minutes}}m",
+      "version": "Version"
+    },
+    "market": {
+      "browserAutomation": "Browser automation",
+      "defaultName": "Xiaohongshu Content Scraper",
+      "description": "Automatically collect post content and engagement data for a chosen Xiaohongshu topic. Supports custom topic keywords and collection counts, with structured CSV output. Suitable for content analysis and competitor monitoring.",
+      "domainLabel": "Domain:",
+      "goal": "Automatically collect Xiaohongshu post data",
+      "goalLabel": "Goal:",
+      "import": "Import",
+      "loading": "Loading the workflow page…",
+      "output": "CSV file (title / likes / comments)",
+      "outputLabel": "Output:",
+      "previewTitle": "Workflow preview",
+      "recreate": "Create a similar workflow",
+      "requirement": "Handle lazy loading and support pagination",
+      "requirementLabel": "Requirements:",
+      "reviewed": "Reviewed",
+      "taskPreview": "Task brief preview",
+      "viewOnline": "View in browser"
+    },
+    "model": {
+      "authMode": {
+        "oauth": "Subscription"
+      },
+      "custom": "Custom",
+      "delete": {
+        "message": "Delete credentials for {{name}}?",
+        "messageWithModels": "Deleting credentials for {{name}} will also remove {{n}} models under this provider. Continue?",
+        "title": "Delete provider"
+      },
+      "edit": {
+        "back": "Back to model settings",
+        "loading": "Loading credentials…",
+        "notFound": "Credentials were deleted or not found",
+        "titlePrefix": "Edit: "
+      },
+      "fetch": {
+        "candidates": "{{n}} · Click to add to available models above",
+        "failed": "Failed to fetch model list",
+        "fetch": "Fetch from provider",
+        "fetching": "Fetching…",
+        "filterPlaceholder": "Filter models…",
+        "missingApiKeyHint": "Enter the API key first (re-enter it when editing).",
+        "noMatches": "No matching models (enabled models are not listed here).",
+        "optional": "Optional models",
+        "providerHint": "Request the available model list from the provider",
+        "subscriptionHint": "Load models available for this subscription"
+      },
+      "form": {
+        "apiKeyDescription": "Enter an API key manually and manage it yourself",
+        "apiKeyMissing": "API Key not configured",
+        "apiKeyMode": "API Key mode",
+        "apiKeyPlaceholder": "Enter API Key",
+        "apiKeySet": "API Key configured",
+        "authentication": "Authentication",
+        "connecting": "Connecting to provider…",
+        "customSubline": "{{protocol}} · {{n}} models",
+        "editSubline": "{{apiKey}} · {{n}} models",
+        "hideApiKey": "Hide API Key",
+        "newProvider": "New provider",
+        "oauthDescription": "Sign in through OAuth without manually managing an API key",
+        "preview": "Preview:",
+        "pristine": "Not tested · Click “Test connection” first",
+        "protocol": "Provider protocol",
+        "providerName": "Provider name",
+        "providerNamePlaceholder": "Give this provider a name",
+        "save": "Save",
+        "saveDisabled": {
+          "subscription": "Subscription mode is activated with the authorization button above and does not need saving.",
+          "test": "Test the connection successfully before saving."
+        },
+        "saveFailed": "Save failed: {{error}}",
+        "saved": "Saved",
+        "saving": "Saving…",
+        "showApiKey": "Show API Key",
+        "testConnection": "Test connection",
+        "testDisabled": {
+          "apiKey": "Enter an API key before testing.",
+          "models": "The available-model list is empty — add at least one model ID before testing.",
+          "name": "Enter a provider name first.",
+          "subscription": "Subscription mode does not need testing; use the authorization button above."
+        },
+        "testHint": "Test whether the current credentials can reach the provider",
+        "testPassed": "Test passed · {{latencyMs}} ms",
+        "testing": "Testing…",
+        "unknownError": "Unknown error"
+      },
+      "list": {
+        "add": "Add configuration",
+        "desc": "Manage AI provider connections, API keys, and available models. Disabled providers will not appear in the model selector.",
+        "empty": "No providers configured yet. Click “Add configuration” to get started."
+      },
+      "loading": "Loading model configuration…",
+      "modelCount": "{{n}} models",
+      "models": {
+        "add": "Add",
+        "empty": "No models — this provider will not appear in the picker. Add at least one model ID.",
+        "loaded": "Loaded {{n}} models",
+        "placeholder": "Enter a model ID and press Enter to add, e.g. gpt-4o-mini",
+        "remove": "Remove",
+        "removeAria": "Remove {{model}}",
+        "summary": "{{n}} · This is the model selector’s only display source",
+        "title": "Available models"
+      },
+      "oauth": {
+        "account": "(account {{accountId}}…)",
+        "authorize": "Sign in through ChatGPT",
+        "authorizeFailed": "Codex authorization failed. Please try again.",
+        "authorized": "Authorized through a ChatGPT subscription",
+        "cancel": "Cancel authorization",
+        "checkingLocal": "Checking for a local Codex login…",
+        "enableLocal": "Enable now (reuse local login)",
+        "enabling": "Enabling…",
+        "localDetected": "Local Codex login detected",
+        "noLocalHint": "No local Codex login was found. Your browser will open for ChatGPT sign-in and activate automatically afterward.",
+        "reauthorize": "Reauthorize (switch account / renew)",
+        "reuseLocalFailed": "Failed to reuse the local Codex login",
+        "saveModels": "Save models",
+        "unavailable": "OAuth authorization is not available yet. Please use API Key mode.",
+        "useDifferentAccount": "Use a different account? Sign in through ChatGPT",
+        "waitingBrowser": "Waiting for browser authorization…"
+      },
+      "official": "Official built-in",
+      "protocol": {
+        "anthropic": "Anthropic protocol",
+        "anthropicCompat": "Anthropic-compatible",
+        "openai": "OpenAI protocol",
+        "openaiCompat": "OpenAI-compatible"
+      },
+      "row": {
+        "sub": "{{left}} · {{n}} models enabled",
+        "toggleOff": "Click to disable this provider",
+        "toggleOn": "Click to enable this provider"
+      },
+      "step1": {
+        "anthropicAdapt": "Supports /v1/messages",
+        "back": "Back to model list",
+        "builtin": "Built-in providers",
+        "catalogEmpty": "No provider catalog found. Make sure the backend service is running.",
+        "customProtocol": "Custom protocol",
+        "customProtocolDesc": "Connect to any service compatible with the protocols below (company gateways, self-hosted services, or third-party proxies). Base URL, key, and model are fully customizable.",
+        "desc": "Choose a provider or protocol, then configure it. All settings can be customized.",
+        "openaiAdapt": "Supports /v1/chat/completions",
+        "supportsSubscription": "Supports subscription",
+        "title": "Choose a provider or protocol"
+      },
+      "step2": {
+        "back": "Back to provider selection"
+      },
+      "tag": {
+        "domestic": "Domestic",
+        "recommended": "Recommended"
+      }
+    },
+    "preview": {
+      "command": "python main.py --topic \"Beauty Reviews\" --limit 50",
+      "exploreReport": "## Exploration Report\n\n### 1. Page Structure Analysis\n- Target URL: https://www.xiaohongshu.com/explore\n- The page is rendered with React and loads content dynamically\n- Post-list container: `.note-list` uses a waterfall layout\n\n### 2. Data Node Location\n- Post card: `.note-item`\n- Title: `.note-item .title`\n- Likes: `.note-item .like-count`\n- Comments: `.note-item .comment-count\n\n### 3. Pagination Mechanism\n- The page uses Intersection Observer for infinite scrolling\n- About 20 posts load each time\n\n### 4. Anti-crawling Strategy\n> ⚠️ Request-rate limiting was detected; use 2–5 second intervals\n- Simulate real user behavior\n- Cookie lifetime is about 30 minutes",
+      "exploreTitle": "Exploration report (read-only)",
+      "fileTree": "Project file tree",
+      "install": "1. Install dependencies:",
+      "output": "3. Output: output/xiaohongshu_data.csv",
+      "programTitle": "Runnable program (read-only)",
+      "readmeTitle": "Usage (README.md)",
+      "run": "2. Run:",
+      "usage": "Usage:"
+    },
+    "remote": {
+      "connected": "Connected",
+      "feishu": "Feishu",
+      "feishuDesc": "For message triggers and notification delivery",
+      "moreComing": "More connection methods (DingTalk, Slack, and email) will be available in a future release.",
+      "revalidate": "Revalidate",
+      "title": "Remote connections"
+    },
+    "sessionDelete": {
+      "defaultName": "Feishu Daily Report Generator",
+      "message": "Delete session {{name}}?",
+      "title": "Delete session",
+      "warning": "Deleted session content cannot be recovered. Its related workflows are unaffected."
+    },
+    "settings": {
+      "tabs": {
+        "about": "About",
+        "appearance": "Appearance",
+        "gateway": "Gateway",
+        "mode": "Execution mode",
+        "model": "Model settings",
+        "privacy": "Privacy"
+      },
+      "title": "Settings",
+      "unsaved": {
+        "leave": "Leave anyway",
+        "message": "This form has unsaved changes. Anything not saved will be lost. Leave anyway?",
+        "title": "Unsaved changes"
+      }
+    },
+    "skillDelete": {
+      "message": "Delete Skill {{name}}?",
+      "title": "Delete skill",
+      "warning": "This action cannot be undone. The Skill’s local files will also be removed."
+    }
+  },
+  "permission": {
+    "action": {
+      "allow": "Allow",
+      "allowAll": "Allow all ({{n}} items)",
+      "allowWithInstruction": "Allow with instruction",
+      "deny": "Deny",
+      "denyAll": "Deny all",
+      "denyWithInstruction": "Deny with explanation"
+    },
+    "clamp": {
+      "collapse": "Collapse",
+      "expand": "Expand"
+    },
+    "command": {
+      "collapse": "Hide command ▴",
+      "expand": "View command ▾"
+    },
+    "decided": {
+      "allowed": "Allowed",
+      "denied": "Denied"
+    },
+    "empty": {
+      "desc": "No details of the operations awaiting approval were received, so this request is void. Please start the task again.",
+      "title": "Approval request is no longer valid"
+    },
+    "head": {
+      "decidedMulti": "Authorization completed for {{n}} operations",
+      "decidedSingle": "Authorization completed",
+      "pendingHigh": "This step will delete files — please confirm",
+      "pendingMulti": "{{n}} operations awaiting confirmation",
+      "pendingSingle": "Your confirmation is needed"
+    },
+    "highNotice": {
+      "bold": "{{n}} items involve deletion",
+      "rest": " and are not included in “Allow all” — please confirm them one by one."
+    },
+    "instruction": {
+      "echoLabel": "Custom instruction: ",
+      "label": "Custom instruction (optional · constrains execution when allowing / explains the reason when denying)",
+      "onceOnly": "Applies to this time only",
+      "placeholder": "Add one constraint, e.g. delete only node_modules, do not touch src / .git"
+    },
+    "mode": {
+      "auto": {
+        "desc": "Risky operations go to an AI review: it allows what is fine and only asks you about the questionable ones",
+        "freq": "Rarely interrupts · recommended",
+        "label": "Review on my behalf"
+      },
+      "full": {
+        "desc": "Risky operations run directly without AI review; system-level destruction is still blocked, and deleting credentials still asks for confirmation",
+        "freq": "Almost never interrupts · use with care on sensitive tasks",
+        "label": "Full access"
+      },
+      "request": {
+        "desc": "Anything beyond read-only asks you first (network access, running commands, editing external files…)",
+        "freq": "Interrupts more often · safest",
+        "label": "Request approval"
+      }
+    },
+    "note": {
+      "allow": "· Execution continued",
+      "allowWithInstruction": "· Continued according to your instruction",
+      "deny": "· The agent will take a different approach",
+      "denyWithInstruction": "· Switched approach according to your explanation"
+    },
+    "pill": {
+      "globalNote": "Applies globally · to all sessions"
+    },
+    "progress": {
+      "allDone": "All {{n}} items handled",
+      "pendingLabel": "Pending"
+    },
+    "risk": {
+      "high": "Deletes",
+      "low": "Needs confirmation",
+      "med": "Take note"
+    },
+    "settings": {
+      "defaultBadge": "System default",
+      "desc": "Decides when the agent needs your approval. Applies globally to all sessions; you can also switch it quickly at the top right of the input box."
+    },
+    "sub": {
+      "decided": "This authorization decision and its execution constraints have been recorded",
+      "high": "This will overwrite or delete existing files — confirm before continuing",
+      "multi": "From this round's plan · confirm item by item, or handle them all at once",
+      "single": "The system cannot fully determine the blast radius of this step — please check it"
+    }
+  },
+  "providers": {
+    "glm": "GLM (Zhipu)"
+  },
+  "resizeHandle": {
+    "dragToResize": "Drag to resize"
+  },
+  "rightPanel": {
+    "buildSucceeded": "Build succeeded",
+    "building": {
+      "fields": {
+        "explore": "Exploration report",
+        "program": "Runnable program",
+        "task": "Task description"
+      },
+      "inProgress": "In progress",
+      "title": "Building"
+    },
+    "clearSearchAria": "Clear search",
+    "empty": {
+      "description": "Workflows, run results, and session files are collected here",
+      "title": "No session resources yet"
+    },
+    "filters": {
+      "all": "All",
+      "files": "Conversation files",
+      "runs": "Run results",
+      "workflows": "Workflows"
+    },
+    "groupEmpty": "No content in this category",
+    "noMatch": "No content matches “{{query}}”",
+    "run": "Run",
+    "runCompleted": "Execution complete",
+    "runDetail": "Run result details",
+    "runFailed": "Execution failed",
+    "runWorkflowAria": "Run workflow {{name}}",
+    "searchPlaceholder": "Search workflows, run results, and files...",
+    "title": "Session resources",
+    "workflowDetail": "Workflow details"
+  },
+  "run": {
+    "agentStatus": {
+      "failed": "Agent failed",
+      "queued": "Agent queued",
+      "stopped": "Agent stopped"
+    },
+    "aiDisclaimer": "Content is AI-generated — please verify important information",
+    "build": {
+      "building": "Building",
+      "done": "Done",
+      "headerTitle": "Workflow build",
+      "inProgress": "In progress",
+      "preparing": "Preparing",
+      "preparingDesc": "Preparing the workflow build environment",
+      "progressTitle": "Build progress",
+      "specClose": "Close the task specification",
+      "specCollapse": "Collapse",
+      "specLabel": "Task specification",
+      "specOpen": "View the task specification",
+      "waiting": "Waiting to continue"
+    },
+    "buildStage": {
+      "clarify": "Align on requirements and lock down the specification",
+      "explore": "Probe the structure of the target environment",
+      "generate": "Write and organize the workflow code",
+      "verify": "Run validation of the output and acceptance"
+    },
+    "check": {
+      "nth": "Check {{n}}"
+    },
+    "childStatus": {
+      "awaitingHuman": "Sub-agent: waiting for your answer",
+      "awaitingPermission": "Sub-agent: waiting for tool approval",
+      "awaitingSubagents": "Sub-agent is waiting for sub-tasks",
+      "completed": "Sub-agent has new completed content",
+      "failed": "Sub-agent failed",
+      "queued": "Sub-agent queued",
+      "running": "Sub-agent running",
+      "stopped": "Sub-agent stopped",
+      "unknown": "Sub-agent status unknown"
+    },
+    "defaultName": "Workflow run",
+    "deleteWorkflow": {
+      "confirm": "Delete",
+      "message": "Delete “{{name}}”? The workflow definition will be removed; existing run results are still kept in “My assets”.",
+      "title": "Delete workflow"
+    },
+    "detailsButton": "Run details",
+    "executeDoneWaitEnd": "Execution stage finished, waiting to end",
+    "executeDoneWaitValidate": "Execution stage finished, waiting for validation",
+    "headerTitle": "Workflow run",
+    "initializing": "Initializing",
+    "phase": {
+      "execute": {
+        "desc": "Complete the task following the workflow steps",
+        "label": "Execute"
+      },
+      "validate": {
+        "desc": "Check whether the run result matches expectations",
+        "label": "Validate"
+      }
+    },
+    "progress": {
+      "complete": "{{total}}/{{total}} {{unit}} done",
+      "current": "Currently {{unit}} {{current}}/{{total}}",
+      "pending": "0/{{total}} {{unit}} · waiting to run"
+    },
+    "status": {
+      "awaiting": "Awaiting confirmation",
+      "running": "Running",
+      "stopped": "Stopped"
+    },
+    "step": {
+      "current": "Current {{unit}}",
+      "done": "Done",
+      "empty": "Stage steps not loaded yet",
+      "failed": "Failed",
+      "nth": "Step {{n}}",
+      "pending": "Waiting to run"
+    },
+    "summary": "{{steps}} steps done · {{calls}} calls",
+    "tab": {
+      "execute": "Execute workflow",
+      "validate": "Validate result"
+    },
+    "tablistAria": "Workflow run stages",
+    "unit": {
+      "check": "check",
+      "step": "step"
+    },
+    "validateDoneWaitEnd": "Validation stage finished, waiting to end"
+  },
+  "schedule": {
+    "action": {
+      "continue": "Continue the conversation",
+      "create": "Create scheduled task",
+      "delete": "Delete",
+      "edit": "Edit",
+      "handle": "Handle it",
+      "pause": "Pause",
+      "refresh": "Refresh",
+      "resume": "Resume",
+      "runNow": "Run now",
+      "stop": "Stop",
+      "stopAll": "Stop all runs",
+      "stopRun": "Stop this run",
+      "viewRun": "View run record"
+    },
+    "approval": {
+      "empty": "Nothing pending",
+      "itemCount": "{{n}} items",
+      "pendingCount": "{{n}} pending",
+      "subtitle": "Actions from unattended scheduled runs that need your confirmation are collected here",
+      "title": "Approval center"
+    },
+    "detail": {
+      "back": "Back to schedules",
+      "config": {
+        "createdAt": "Created at",
+        "description": "Task description",
+        "lastRun": "Last run",
+        "nextRun": "Next run",
+        "skills": "Referenced capabilities",
+        "title": "Configuration summary",
+        "trigger": "Trigger rule"
+      },
+      "configTitle": "Configuration summary",
+      "createdLabel": "Created at",
+      "cronLabel": "Trigger rule",
+      "descLabel": "Task description",
+      "history": {
+        "description": "Click a run to view its session record",
+        "empty": "No run history",
+        "title": "Run history"
+      },
+      "historyEmpty": "No run records yet",
+      "historyHint": "Click any run to see its session record",
+      "historyTitle": "Run history",
+      "lastRunLabel": "Last run",
+      "needsAction": {
+        "description": "One step is waiting for your confirmation. The run will continue after it is handled.",
+        "handle": "Handle it",
+        "title": "This run needs your attention"
+      },
+      "needsActionDesc": "One step is waiting for your confirmation; the run continues once it is handled.",
+      "needsActionTitle": "This run needs your attention",
+      "nextRunLabel": "Next run",
+      "none": "None",
+      "pausedHint": "This task is paused and will not run automatically. Click “Run now” to trigger it manually, or “Resume” to restore the schedule.",
+      "skillsLabel": "Referenced capabilities"
+    },
+    "drawer": {
+      "defaultName": "Scheduled task",
+      "emptyMain": "This run produced no message records.",
+      "emptySub": "This sub-agent has no message records.",
+      "loading": "Loading run records…",
+      "metaSession": "Session ID",
+      "metaTime": "Time",
+      "metaTrigger": "Trigger",
+      "metaTriggerValue": "Scheduled",
+      "title": "Run record"
+    },
+    "empty": {
+      "desc": "Create a scheduled task to run a workflow or skill automatically at a given time.",
+      "title": "No scheduled tasks yet"
+    },
+    "field": {
+      "lastRun": "Last run: ",
+      "nextRun": "Next run: "
+    },
+    "filter": {
+      "active": "Active",
+      "all": "All",
+      "paused": "Paused"
+    },
+    "nav": {
+      "mainAgent": "Main agent",
+      "subAgentFallback": "Sub-agent",
+      "subAgents": "Sub-agents · {{n}}",
+      "title": "This run · session hierarchy"
+    },
+    "row": {
+      "bindings": "{{skillCount}} references",
+      "bindingsWithWorkflows": "{{skillCount}} references · {{wfCount}} workflows",
+      "lastRun": "Last run: ",
+      "nextRun": "Next run: ",
+      "refs": "{{n}} references",
+      "workflows": " · {{n}} workflows"
+    },
+    "run": {
+      "continueConversation": "Continue conversation",
+      "defaultName": "Scheduled task",
+      "emptyMain": "This run produced no message records.",
+      "emptySubagent": "This subagent has no message records yet.",
+      "loadingMessages": "Loading run messages…",
+      "scheduledTrigger": "Scheduled trigger",
+      "sessionId": "Session ID",
+      "status": {
+        "failed": "Failed",
+        "finished": "Finished",
+        "needsAction": "Needs attention",
+        "running": "Running",
+        "success": "Succeeded"
+      },
+      "time": "Time",
+      "title": "Run record",
+      "trigger": "Trigger"
+    },
+    "runStatus": {
+      "failed": "Failed",
+      "finished": "Finished",
+      "needsAction": "Needs action",
+      "running": "Running",
+      "success": "Succeeded"
+    },
+    "status": {
+      "active": "Active",
+      "needsAction": "Needs action",
+      "needsActionWithCount": "Needs action · {{n}}",
+      "paused": "Paused",
+      "running": "Running"
+    },
+    "subtitle": "Create and manage scheduled tasks that run workflows or skills automatically at a given time",
+    "template": {
+      "createLead": "Help me create a scheduled task. Task: ",
+      "descPlaceholder": "Describe the task to run on a schedule; use @ to reference a workflow…",
+      "ending": ".",
+      "frequencyLead": ", schedule: ",
+      "nameLead": ", name it: ",
+      "namePlaceholder": "Task name",
+      "runWorkflow": "Run workflow “{{name}}”",
+      "updateLead": "Help me update scheduled task (ID {{id}}). Task: "
+    },
+    "title": "Schedules"
+  },
+  "scrollControls": {
+    "toBottom": "Back to bottom",
+    "toTop": "Back to top"
+  },
+  "session": {
+    "browser": {
+      "addressAria": "Browser address",
+      "addressPlaceholder": "Enter a URL or search term",
+      "back": "Back",
+      "closeSession": "Close browser and all tabs",
+      "closeTabAria": "Close tab {{title}}",
+      "crashedDetail": "Reload the page to continue.",
+      "crashedTitle": "Page stopped unexpectedly",
+      "emptyDetail": "Create a new tab to continue browsing.",
+      "emptyTitle": "No tabs open",
+      "expand": "Expand browser",
+      "forward": "Forward",
+      "launchButton": {
+        "creating": "Opening…",
+        "open": "Open browser",
+        "ready": "Browser is open",
+        "retry": "Open again"
+      },
+      "launchDetail": "You and the agent can both use the browser tabs. Sign-in state is retained.",
+      "launchFailed": "Failed to open: {{message}}",
+      "launchTitle": "Open browser",
+      "newTab": "New tab",
+      "overflowReminder": "Wide page",
+      "overflowReminderAction": "Expand",
+      "overflowReminderAnnouncement": "This page is wider than the current view. Expand the browser to see more",
+      "overflowReminderDismiss": "Dismiss page display suggestion",
+      "overflowReminderTooltip": "This page is wider; expand the browser to see more",
+      "reload": "Reload",
+      "restoreSidebar": "Restore sidebar",
+      "retry": "Please try again later",
+      "syncCreating": "Creating browser tab…",
+      "syncReady": "Browser is open; syncing tabs…",
+      "tabsAria": "Browser tabs"
+    },
+    "common": {
+      "cancelled": "Cancelled",
+      "confirmed": "Confirmed",
+      "saved": "Saved"
+    },
+    "defaultTitle": "New conversation",
+    "interaction": {
+      "card": {
+        "acceptRuleDeferredTitle": "Completion criteria will be aligned later",
+        "acceptanceCount": "{{n}} criteria",
+        "acceptanceDesc": "The workflow result will be checked against these criteria",
+        "acceptanceTitle": "Aligned completion criteria",
+        "answerLabel": "Your answer",
+        "buildConfirmedBadge": "Build confirmed",
+        "buildDesc": "Whether to turn this task into a reusable workflow",
+        "buildOnceBadge": "Run once",
+        "buildTitle": "Workflow build confirmation",
+        "contextLabel": "Context",
+        "feedbackLabel": "Your revision notes: ",
+        "newMessageDesc": "You sent a new message. The agent will continue adjusting with this context.",
+        "newMessageLabel": "Your new message",
+        "noAcceptanceDesc": "The workflow will only execute steps, with no result validation; execution errors will still fail clearly.",
+        "noAcceptanceTitle": "No completion criteria",
+        "qaDesc": "Information confirmed with you for this task",
+        "qaListLabel": "Confirmed questions and answers",
+        "qaTitle": "Requirements confirmation",
+        "questionLabel": "Agent asked you",
+        "ruleBadge": "Criterion {{n}}",
+        "taskRevisedBadge": "Revision requested",
+        "taskTitle": "Task specification confirmation",
+        "workflowTitle": "Workflow save confirmation"
+      },
+      "hideRecord": "Hide record",
+      "label": {
+        "acceptRuleDeferred": "Completion criteria will be aligned later; new message received",
+        "acceptanceAligned": "{{n}} workflow completion criteria aligned",
+        "buildConfirmed": "Workflow build confirmed",
+        "buildOnce": "Run once selected",
+        "confirmed": "Confirmed with you",
+        "noAcceptanceRule": "No completion criteria selected",
+        "permissionDone": "Tool permission confirmation complete",
+        "replied": "Replied to {{question}}",
+        "taskConfirmed": "Task specification confirmed",
+        "taskRevision": "Task specification revision submitted",
+        "workflowSaveCancelled": "Workflow save cancelled",
+        "workflowSaved": "Workflow saved"
+      },
+      "permissionDetail": "Allowed {{allowed}} · denied {{denied}}",
+      "ruleItem": "Criterion {{index}}: {{text}}",
+      "showRecord": "View record"
+    },
+    "menu": {
+      "delete": "Delete session",
+      "rename": "Rename"
+    },
+    "pipeline": {
+      "action": {
+        "copied": "Copied",
+        "copy": "Copy",
+        "copyFailed": "Copy failed",
+        "groupAria": "Message actions",
+        "quote": "Quote",
+        "report": "Feedback"
+      },
+      "activeElapsedAria": "Running for {{seconds}} seconds",
+      "activity": {
+        "awaitingAnswer": "Awaiting your answer",
+        "awaitingSubagent": "Waiting for subagents",
+        "callingTool": "Calling a tool",
+        "generating": "Generating response",
+        "runningWorkflow": "Running workflow",
+        "thinking": "Thinking",
+        "usingBrowser": "Using Browser",
+        "validatingWorkflow": "Validating workflow"
+      },
+      "defaultEmpty": "Start a conversation with AI in this session…",
+      "duration": "Took {{duration}}",
+      "durationTitle": "Generation took {{milliseconds}} milliseconds",
+      "generationInfoAria": "Message generation information",
+      "loadEarlier": "Loading earlier messages…",
+      "loadEarlierWithCount": "Loading earlier messages… {{n}} remaining",
+      "messagesAria": "Session messages",
+      "reconnecting": "Reconnecting {{attempt}}/{{max}}",
+      "reconnectingAria": "Reconnecting {{attempt}}/{{max}}",
+      "stopped": "This generation was stopped. You can continue sending messages."
+    },
+    "resourcePanel": {
+      "agent": "Bridgic",
+      "browser": "Browser",
+      "browserActiveShort": "In use",
+      "browserAgentActive": "Bridgic is operating the browser",
+      "browserLoading": "Browser is loading",
+      "browserLoadingShort": "Loading",
+      "browserNeedsAttention": "Browser has new activity; open it to review",
+      "browserOpened": "Browser is open",
+      "files": "Files",
+      "filesNeedsAttention": "New files were added; open Files to review",
+      "modeRun": "Run",
+      "modeTask": "Task",
+      "output": "Session resources",
+      "preparingMode": "Switching view…",
+      "resources": "Resources",
+      "results": "Run records",
+      "schedules": "Schedules",
+      "surfaceRailAria": "Session side panel",
+      "title": "Session resources",
+      "typeTabsAria": "Session resource types",
+      "viewBrowser": "View",
+      "workflows": "Workflows"
+    },
+    "row": {
+      "agentRunning": "Agent is running",
+      "awaitingAnswer": "Awaiting answer",
+      "collapseChildren": "Collapse child sessions",
+      "expandChildren": "Expand child sessions",
+      "newCompletedContent": "New completed content"
+    },
+    "timeline": {
+      "eyebrow": {
+        "build": "Build {{index}}/{{count}}",
+        "workflow": "{{phase}} {{index}}/{{count}}"
+      },
+      "phase": {
+        "execute": "Execute",
+        "verify": "Verify"
+      },
+      "summary": {
+        "calls": "{{n}} calls",
+        "confirmations": "{{n}} confirmations",
+        "messages": "{{n}} messages",
+        "steps": "{{n}} steps"
+      },
+      "title": "Execution"
+    },
+    "tool": {
+      "error": "Error",
+      "noDiff": "(No changes to display)",
+      "noOutput": "(No output)",
+      "overflow": {
+        "bytes": "{{size}} ({{count}} bytes)",
+        "chars": "{{count}} characters",
+        "limit": "Inline limit",
+        "path": "Path",
+        "size": "Size",
+        "title": "Tool result written to file"
+      },
+      "parameters": "Parameters",
+      "preview": "Preview",
+      "result": "Result"
+    },
+    "workbench": {
+      "files": {
+        "searchPlaceholder": "Search files in this session…",
+        "title": "Files"
+      },
+      "results": {
+        "empty": "No run records yet",
+        "filterNoMatch": "No run records match this filter",
+        "loadFailed": "Couldn't load run records",
+        "noMatch": "No run records match “{{query}}”",
+        "reference": "Reference",
+        "referenceAria": "Reference the result from {{name}} in this session",
+        "scopeAll": "All",
+        "scopeAria": "Run record scope",
+        "scopeSession": "This session",
+        "searchPlaceholder": "Search run records…",
+        "statusAll": "All statuses",
+        "statusAria": "Run status",
+        "statusCompleted": "Completed",
+        "statusFailed": "Failed",
+        "title": "Run records",
+        "viewAria": "View the result for {{name}}"
+      },
+      "schedules": {
+        "filterAria": "Schedule status filter",
+        "noMatch": "No schedules match “{{query}}”",
+        "searchPlaceholder": "Search schedule names or descriptions…",
+        "title": "Schedules"
+      },
+      "workflows": {
+        "built": "Ready",
+        "empty": "No workflows yet",
+        "run": "Run",
+        "runAria": "Use workflow {{name}} in this session",
+        "scopeAll": "All",
+        "scopeAria": "Workflow scope",
+        "scopeSession": "This session",
+        "searchPlaceholder": "Search workflows…",
+        "title": "Workflows",
+        "view": "View",
+        "viewAria": "View workflow {{name}}"
+      }
+    }
+  },
+  "settings": {
+    "appearance": {
+      "language": {
+        "chinese": "Simplified Chinese",
+        "chineseDesc": "Simplified Chinese",
+        "current": "Currently using: {{name}}",
+        "desc": "Choose the display language of the interface.",
+        "english": "English",
+        "system": "Follow system",
+        "systemDesc": "Use the language your operating system is set to",
+        "title": "Language"
+      },
+      "theme": {
+        "current": "Currently active: {{name}}",
+        "dark": "Dark",
+        "darkDesc": "Always use the dark theme",
+        "desc": "Choose the appearance theme of the application.",
+        "light": "Light",
+        "lightDesc": "Always use the light theme",
+        "system": "Follow system",
+        "systemDesc": "Switch automatically with the system appearance",
+        "title": "Theme"
+      },
+      "zoom": {
+        "decrease": "Zoom out",
+        "desc": "Font size, icons and spacing scale together. Shortcuts: ⌘/Ctrl + plus / minus, ⌘/Ctrl + 0 to reset.",
+        "increase": "Zoom in",
+        "reset": "Reset",
+        "size": "Overall size",
+        "title": "Interface zoom"
+      }
+    },
+    "privacy": {
+      "localFirst": {
+        "description": "Your conversations, prompts, code, files, and credentials stay on this device by default and are not included in usage data.",
+        "title": "Your work stays on this device"
+      },
+      "notice": {
+        "label": "Read the full Privacy Notice",
+        "updated": "Updated August 11, 2026"
+      },
+      "telemetry": {
+        "dataScopeTitle": "Usage data scope",
+        "excludedSummary": "Prompts and conversations, model content, code and files, commands and tool content, credentials, logs, screenshots, or recordings",
+        "excludedTitle": "Not included",
+        "sectionDescription": "Understanding basic app usage helps us improve the product experience and reliability. This usage data never includes your work content.",
+        "sectionTitle": "Help us improve {{product}}",
+        "sharedSummary": "Usage statistics not linked to an account or personal identity, app and window opens, foreground active time, app version, and operating-system family",
+        "sharedTitle": "Included",
+        "statusOff": "Off",
+        "statusOn": "On",
+        "switchDescriptionOff": "Usage data is not currently collected, and all core features remain available.",
+        "switchDescriptionOn": "Only the basic usage information listed below is collected.",
+        "switchTitle": "Allow usage data collection"
+      },
+      "use": {
+        "description": "Used to understand whether features work well and improve the product experience and reliability. Never sold or used for advertising or individual profiling. Events are retained for no more than 90 days."
+      }
+    }
+  },
+  "sidebar": {
+    "approvalCenter": "Approval center",
+    "feedback": "Report issue",
+    "gateway": {
+      "clientsOnline": " · {{n}} clients online",
+      "restart": "Restart gateway",
+      "start": "Start gateway",
+      "status": {
+        "discovering": "Discovering…",
+        "incompatible": "Version mismatch",
+        "running": "Running",
+        "starting": "Starting…",
+        "stopped": "Stopped",
+        "unavailable": "Stopped (start manually)",
+        "unhealthy": "Connection error"
+      },
+      "stop": "Stop gateway",
+      "tooltip": "Gateway {{status}}",
+      "tooltipWithEndpoint": "Gateway {{status}} · {{endpoint}}{{clients}}"
+    },
+    "nav": {
+      "assets": "My assets",
+      "schedules": "Schedules",
+      "skills": "Skills",
+      "workflows": "Workflows"
+    },
+    "newSession": "New session",
+    "sessions": "Sessions",
+    "settings": "Settings"
+  },
+  "skill": {
+    "common": {
+      "collapse": "Collapse",
+      "expand": "Show full text",
+      "new": "New"
+    },
+    "conflict": {
+      "descChanged": "Description changed",
+      "existing": "To be overwritten",
+      "existingSub": "Existing in system",
+      "incoming": "To import",
+      "incomingSub": "From import source",
+      "newer": "Newer",
+      "overwrite": "Overwrite"
+    },
+    "import": {
+      "modal": {
+        "confirmImport": "Confirm import ({{n}})",
+        "directoryPickerFailed": "Failed to open the folder picker",
+        "done": "Done",
+        "importing": "Importing…",
+        "newerSkipped": "<b>{{n}}</b> item(s) already have a newer version and were not overwritten (the existing older version is kept).",
+        "parsing": "Parsing…",
+        "summary": "Importing <b>{{total}}</b> item(s) · {{new}} new",
+        "summaryConflicts": " + {{replaced}} overwritten · <muted>{{kept}} kept</muted>",
+        "title": "Import Skills"
+      },
+      "pick": {
+        "chooseDirectory": "Choose folder…",
+        "comingSoon": "Coming soon",
+        "local": {
+          "description": "Only a <b> single folder </b> can be selected; its Skill definitions will be scanned.",
+          "title": "Choose a local folder containing Skills"
+        },
+        "recognized": "Recognized as <b>{{source}}</b>",
+        "remoteAddress": "Remote URL",
+        "remoteHint": "One Git repository may contain several Skills. Importing parses the repository first, then lets you <b>confirm</b> which items to import from a list.",
+        "scanning": "Scanning…",
+        "source": {
+          "clawhub": "ClawHub",
+          "github": "GitHub repository",
+          "skillsSh": "skills.sh page"
+        },
+        "sourceList": {
+          "skillsSh": "Skills marketplace"
+        },
+        "supportedSources": "Supported sources",
+        "tab": {
+          "local": "Local folder",
+          "remote": "Remote URL"
+        },
+        "unrecognized": "This source is not recognized. GitHub and skills.sh are currently supported.",
+        "unsupported": "Recognized as {{source}}, but imports are not supported yet."
+      },
+      "result": {
+        "failure": ", {{n}} failed",
+        "overwritten": "Overwritten",
+        "success": "Successfully imported <b>{{n}}</b> items"
+      },
+      "review": {
+        "conflictBadge": "{{n}} name conflicts",
+        "conflictHint": " · Select items to overwrite existing system versions",
+        "conflictTitle": "Name conflicts · {{n}} items",
+        "emptyLocal": "No skills found in this folder",
+        "emptyRemote": "No skills found in this repository",
+        "keepAll": "Keep all",
+        "newBadge": "{{n}} new",
+        "newTitle": "New Skills · {{n}} items",
+        "replaceAll": "Overwrite all",
+        "scanned": "Scanned <b>{{n}}</b> skills",
+        "skip": "Do not import"
+      }
+    }
+  },
+  "spec": {
+    "action": {
+      "cancel": "Cancel",
+      "closeTooltip": "Close preview",
+      "collapse": "Collapse",
+      "editTooltip": "Edit the raw markdown",
+      "expandAll": "Expand full text",
+      "save": "Save"
+    },
+    "badge": {
+      "original": "Original version",
+      "pending": "Awaiting confirmation",
+      "saved": "Saved"
+    },
+    "comment": {
+      "add": "Add",
+      "addTooltip": "Add to this round of comments ({{key}})",
+      "ariaLabel": "Comment on the selected content",
+      "button": "Comment",
+      "placeholder": "Write your comment or suggested change…",
+      "title": "Comment on the selected content"
+    },
+    "diff": {
+      "noChange": "task.md is identical to the last confirmed version — no content changes"
+    },
+    "empty": "The specification has not been generated yet",
+    "feedback": {
+      "cancelTooltip": "Cancel (Esc)",
+      "continueDesc": "Sends {{n}} comments along as feedback",
+      "continueTitle": "Continue building",
+      "escHint": "Esc to cancel",
+      "instructionPlaceholder": "Or just tell it what to do…",
+      "myComment": "My comment",
+      "quoteLabel": "Selected text",
+      "removeTooltip": "Remove this one",
+      "send": "Send feedback and continue building",
+      "sendFailed": "Failed to send the comments",
+      "sending": "Sending…",
+      "title": "Comments ({{n}})"
+    },
+    "file": {
+      "current": "specification.md",
+      "original": "original-task-specification.md"
+    },
+    "hint": {
+      "archived": "The build is complete; this is the read-only snapshot taken at confirmation time, and the specification was saved with the workflow",
+      "baseline": "This is the original task definition saved when the edit flow started; it switches to the change comparison once Clarify finishes",
+      "default": "Select any text in the document to comment on it repeatedly, then merge them into one message on the left",
+      "diff": "Comparing the last confirmed version with this change — green is added, red is removed; select text to comment",
+      "editing": "Edit the raw markdown; saving writes straight to the file and notifies the agent"
+    },
+    "pendingCount": "{{n}} to send",
+    "toast": {
+      "noSession": "Cannot save: this session is not ready yet",
+      "notReady": "The backend is not ready or is still producing output — cannot save right now",
+      "saved": "Specification saved, and the agent has been notified",
+      "writeFailed": "Save failed, please try again"
+    },
+    "view": {
+      "diff": "Changes",
+      "document": "Latest"
+    }
+  },
+  "specPreview": {
+    "add": "Add",
+    "addCommentTooltip": "Add to this comment batch ({{shortcut}})",
+    "badge": {
+      "awaitingConfirmation": "Awaiting confirmation",
+      "original": "Original version",
+      "saved": "Saved"
+    },
+    "cancel": "Cancel",
+    "closePreview": "Close preview",
+    "collapse": "Collapse",
+    "comment": "Comment",
+    "commentPlaceholder": "Write your comment or revision notes…",
+    "commentSelection": "Comment on selected content",
+    "commentSelectionAria": "Comment on selected content",
+    "diff": "Changes",
+    "editSource": "Edit Markdown source",
+    "empty": "Task specification has not been generated",
+    "expandAll": "Expand all",
+    "fileName": "task-specification.md",
+    "instructions": {
+      "archived": "Build complete. This read-only confirmation snapshot was saved with the workflow.",
+      "comment": "Select any document text to leave multiple comments, then send them together as one message from the left.",
+      "diff": "Comparing the previous confirmed version with this revision: green is added, red is removed. Select text to comment.",
+      "editing": "Edit the Markdown source. Saving writes it directly to the file and notifies the agent.",
+      "original": "This is the original task definition saved when editing began. It switches to a diff after Clarify completes."
+    },
+    "latest": "Latest",
+    "noChanges": "task.md matches the previous confirmed version; there are no changes.",
+    "originalFileName": "original-task-specification.md",
+    "pendingCount": "{{count}} pending",
+    "save": "Save",
+    "toast": {
+      "notReady": "Backend is not ready or is still generating; cannot save yet",
+      "saveFailed": "Save failed, please retry",
+      "saved": "Task specification saved and agent notified",
+      "sessionNotReady": "Cannot save: current conversation is not ready"
+    }
+  },
+  "status": {
+    "subagent": {
+      "awaitingHuman": "Awaiting your answer",
+      "awaitingHumanShort": "Awaiting answer",
+      "awaitingPermission": "Awaiting tool approval",
+      "awaitingPermissionShort": "Awaiting approval",
+      "awaitingSubagents": "Waiting for subagents",
+      "awaitingSubagentsShort": "Waiting for subtasks",
+      "completed": "Completed",
+      "completedShort": "Completed",
+      "failed": "Execution failed",
+      "failedShort": "Failed",
+      "queued": "Queued",
+      "queuedShort": "Queued",
+      "running": "Running",
+      "runningShort": "Running",
+      "stopped": "Stopped",
+      "stoppedShort": "Stopped",
+      "unknown": "Unknown status",
+      "unknownShort": "Unknown"
+    }
+  },
+  "subagent": {
+    "cardTitle": "Subagent",
+    "group": {
+      "count": "{{label}} {{n}}",
+      "summary": "Subagent tasks · {{n}} started",
+      "untitled": "Subagent task"
+    },
+    "modal": {
+      "preparing": "Subagent is preparing…",
+      "stop": "Stop",
+      "stopping": "Stopping…",
+      "title": "Subagent"
+    }
+  },
+  "theme": {
+    "dark": "Dark",
+    "light": "Light",
+    "system": "Follow system"
+  },
+  "timeline": {
+    "collapse": "Collapse",
+    "expand": "Expand"
+  },
+  "toast": {
+    "scheduleAllRunsStopRequested": "Requested all runs of “{{name}}” to stop",
+    "scheduleDeleted": "Deleted “{{name}}”",
+    "schedulePaused": "Paused “{{name}}”",
+    "scheduleResumed": "Resumed “{{name}}”",
+    "scheduleRunStopRequested": "Requested this run to stop",
+    "scheduleRunTriggered": "Triggered “{{name}}” to run once",
+    "sessionCopiedForContinue": "Copied to a new session; you can continue the conversation",
+    "workflowDeleted": "Deleted “{{name}}”; historical run results remain in My Assets",
+    "workflowExported": "Exported “{{name}}”",
+    "workflowImported": "Imported “{{name}}”",
+    "workflowRenamed": "Renamed workflow to “{{name}}”",
+    "workflowRunDeleted": "Run result deleted",
+    "workflowRunExported": "Exported the run result for “{{name}}”"
+  },
+  "tool": {
+    "direction": {
+      "down": "Down",
+      "left": "Left",
+      "right": "Right",
+      "up": "Up"
+    },
+    "meta": {
+      "addedLines": "+{{n}} lines",
+      "fileCount": "{{n}} files",
+      "hitCount": "{{n}} matches",
+      "matchedCount": "{{n}} matched",
+      "replacedCount": "Replaced {{n}}",
+      "resultCount": "{{n}} results"
+    },
+    "range": {
+      "between": "Lines {{start}}–{{end}}",
+      "first": "First {{n}} lines",
+      "from": "From line {{start}}",
+      "full": "Full text"
+    },
+    "verb": {
+      "bash": "Run",
+      "browserBack": "Back",
+      "browserCheck": "Check",
+      "browserClick": "Click",
+      "browserClose": "Close browser",
+      "browserCloseTab": "Close tab",
+      "browserFocus": "Focus",
+      "browserForward": "Forward",
+      "browserHover": "Hover",
+      "browserInput": "Enter text",
+      "browserKey": "Press key",
+      "browserNewTab": "New tab",
+      "browserOpen": "Open page",
+      "browserPageInfo": "Page info",
+      "browserReload": "Reload",
+      "browserScreenshot": "Screenshot",
+      "browserScroll": "Scroll",
+      "browserScrollToText": "Scroll to text",
+      "browserSearch": "Search browser",
+      "browserSelect": "Select",
+      "browserSnapshot": "Page snapshot",
+      "browserSwitchTab": "Switch tab",
+      "browserTabs": "List tabs",
+      "browserUncheck": "Uncheck",
+      "browserVerifyText": "Verify text",
+      "browserVerifyTitle": "Verify title",
+      "browserVerifyUrl": "Verify URL",
+      "browserVerifyVisible": "Verify visible",
+      "browserWait": "Wait",
+      "browserWaitForNetworkIdle": "Wait for network idle",
+      "call": "Call",
+      "callNamed": "Call {{name}}",
+      "createSchedule": "Create scheduled task",
+      "deleteSchedule": "Delete scheduled task",
+      "edit": "Edit",
+      "editWorkflow": "Edit workflow",
+      "getSchedule": "View scheduled task",
+      "glob": "Find",
+      "grep": "Search",
+      "importSkills": "Import Skills",
+      "listSchedules": "List scheduled tasks",
+      "listSkills": "List Skills",
+      "listWorkflowRuns": "List run records",
+      "loadBrowserTools": "Load browser tools",
+      "loadWorkspaceTools": "Load workspace tools",
+      "manageSkills": "Manage Skills",
+      "read": "Read",
+      "readWorkflowRun": "Read run record",
+      "removeWorkflow": "Remove workflow",
+      "reportWorkflowStep": "Report step",
+      "runSubagent": "Run subagent",
+      "runWorkflow": "Run workflow",
+      "setSkillEnabled": "Enable or disable Skill",
+      "startSubagent": "Start subagent in background",
+      "uninstallSkill": "Uninstall Skill",
+      "updateSchedule": "Update scheduled task",
+      "viewSkill": "View Skill",
+      "webFetch": "Fetch page",
+      "webSearch": "Web search",
+      "workspaceCheckpoint": "Create checkpoint",
+      "workspaceDiff": "View changes",
+      "workspaceHistory": "View checkpoint history",
+      "workspaceRestore": "Restore workspace",
+      "workspaceRestoreFile": "Restore file",
+      "workspaceStatus": "View workspace status",
+      "write": "Write"
+    }
+  },
+  "topBar": {
+    "collapseOutputs": "Collapse session resources",
+    "collapseSidebar": "Collapse sidebar",
+    "expandOutputs": "Expand session resources",
+    "expandSidebar": "Expand sidebar"
+  },
+  "update": {
+    "busyDescription": "An agent task is in flight. Restarting now interrupts it — updating once it finishes is safer.",
+    "busyTitle": "An agent task is still running",
+    "cancel": "Cancel",
+    "cancelledHint": "You can update manually any time from Settings → About.",
+    "cancelledTitle": "Update cancelled",
+    "daemonBusy": "The gateway did not shut down in time, so the update was not installed. Stop it from Settings and try again — the download is kept.",
+    "disabled": "Updates are not enabled in this build.",
+    "errorTitle": "Update failed",
+    "gotIt": "Got it",
+    "gotItIn": "Got it ({{seconds}})",
+    "installFailed": "The update could not be installed and the gateway was stopped. Restart the app and try again.",
+    "installing": "Preparing to install…",
+    "noneStaged": "No downloaded update is waiting to be installed.",
+    "readyDescription": "Version {{version}} has been downloaded. {{product}} will stop the gateway, install the update, and reopen.",
+    "readyTitle": "Update ready to install",
+    "restartAnyway": "Restart anyway",
+    "restartNow": "Restart and update",
+    "scheduledDescription": "Restarts and installs {{version}} once every agent task has finished.",
+    "scheduledTitle": "Update scheduled",
+    "updateWhenIdle": "Update when idle"
+  },
+  "widget": {
+    "schedFreq": {
+      "cronExpr": "Cron expression",
+      "every": "Every",
+      "mode": "Mode",
+      "period": {
+        "custom": "Custom cron",
+        "day": "day",
+        "hour": "hour",
+        "minute": "minute",
+        "month": "month",
+        "quarter": "quarter",
+        "week": "week",
+        "year": "year"
+      },
+      "preview": "Preview",
+      "quarterStartMonth": "Month {{n}}",
+      "word": {
+        "at": "At",
+        "atNth": "At",
+        "day": "day",
+        "minute": "minute",
+        "on": "On",
+        "onNth": "On day",
+        "second": "second",
+        "startMonth": "Starting month"
+      }
+    }
+  },
+  "windowedList": {
+    "loadingMore": "Loading more… {{count}} items total"
+  },
+  "workflow": {
+    "build": {
+      "desc": "Once built, this process can be reused reliably and will complete future runs through its defined steps.",
+      "entering": "Starting…",
+      "processing": "Processing…",
+      "ready": "Ready to build",
+      "runOnce": "Run only this time",
+      "start": "Build workflow",
+      "title": "Build a reusable workflow?"
+    },
+    "common": {
+      "actionFailed": "Action failed",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "useResult": "Use result"
+    },
+    "confirm": {
+      "back": "Back",
+      "confirmUpdate": "Confirm update",
+      "continueEditing": "Continue editing",
+      "copyName": "{{name}} copy",
+      "createNew": "Create new workflow",
+      "desc": {
+        "confirmed": "Workflow saved. You can manage it from the right panel or Workflow Center.",
+        "confirmedEdit": "Workflow updated; existing references and historical runs remain unchanged.",
+        "continued": "Confirmed. Saving workflow…",
+        "continuedEdit": "Update confirmed. Saving workflow…",
+        "editPending": "Edits are complete. You can overwrite the original workflow while preserving its historical runs, or save a new workflow.",
+        "notSaved": "This was not saved as a workflow.",
+        "pending": "Name this workflow so you can manage and reuse it later:",
+        "saveAsNew": "Name the new workflow. The original workflow will not be changed."
+      },
+      "nameRequired": "Enter a workflow name",
+      "newWorkflowName": "New workflow name",
+      "originalWorkflow": "Original workflow",
+      "overwriteOriginal": "Overwrite original workflow",
+      "reusable": "Reusable",
+      "runNow": "Run now",
+      "saveAsNew": "Save as new workflow",
+      "status": {
+        "buildDone": "Build complete",
+        "buildSuccess": "Build succeeded",
+        "cancelled": "Cancelled",
+        "editDone": "Edit complete",
+        "saving": "Saving…",
+        "updating": "Updating…"
+      },
+      "successDesc": {
+        "create": "“{{name}}” is saved. You can run it now, or manage it later in Workflow Center.",
+        "edit": "“{{name}}” was updated; existing references and historical runs remain unchanged."
+      },
+      "successTitle": {
+        "create": "Workflow built successfully",
+        "edit": "Workflow updated successfully"
+      },
+      "viewWorkflow": "View workflow"
+    },
+    "detail": {
+      "build": {
+        "explore": "Exploration report",
+        "task": "Task definition",
+        "verify": "Verification report"
+      },
+      "buildDocumentsLabel": "Build documents · {{count}}",
+      "close": "Close",
+      "closeAria": "Close workflow details",
+      "collapseScriptsAria": "Collapse script files",
+      "counts": {
+        "buildDocuments": "{{count}} build documents",
+        "implementationFiles": "{{count}} implementation files",
+        "instructions": "{{count}} execution instructions",
+        "scriptFiles": "{{count}} script files",
+        "sections": "{{count}} sections"
+      },
+      "expandScriptsAria": "Expand script files",
+      "export": "Export",
+      "loadError": "Failed to load workflow details",
+      "loading": "Loading workflow details...",
+      "metrics": {
+        "characters": "{{count}} characters",
+        "lines": "{{count}} lines"
+      },
+      "noPreview": "This workflow has no previewable content yet",
+      "openOutlineAria": "Open document outline",
+      "outline": "Document outline",
+      "retry": "Retry",
+      "run": "Run",
+      "runAria": "Run workflow {{name}}",
+      "runInNewSession": "Run in new conversation",
+      "runtimeEmpty": {
+        "description": "This workflow has no separate runtime parameters.",
+        "title": "No runtime configuration"
+      },
+      "saved": "Saved",
+      "savedWorkflow": "Saved workflow",
+      "scriptFiles": "Script files",
+      "selectWorkflow": "Select a workflow",
+      "source": {
+        "taskFlow": "Task flow",
+        "validation": "Validation method"
+      },
+      "sourceFilesLabel": "Execution source files · {{count}}",
+      "tabs": {
+        "info": "Workflow information",
+        "runtime": "Runtime configuration"
+      },
+      "thisDocumentOutline": "This document's outline",
+      "title": "Workflow details"
+    },
+    "result": {
+      "citeResult": "Cite result",
+      "description": {
+        "completed": "All execution steps are complete. This run has ended and needs no further action.",
+        "completedVerified": "All execution and validation steps are complete. This run has ended and needs no further action.",
+        "failed": "This run has ended. You can review the failure details if needed."
+      },
+      "resultFiles": "{{count}} result files",
+      "status": {
+        "completed": "Execution complete",
+        "completedVerified": "Execution and validation complete",
+        "failed": "Execution failed"
+      },
+      "title": {
+        "completed": "Workflow run completed",
+        "failed": "Workflow run failed"
+      },
+      "viewFailure": "View failure details",
+      "viewResult": "View result"
+    },
+    "runDetail": {
+      "close": "Close",
+      "closeAria": "Close run result details",
+      "exportResult": "Export run result",
+      "exportingResult": "Exporting...",
+      "fileLoadError": "Failed to load run file",
+      "finishedAt": "Finished {{time}}",
+      "loadError": "Failed to load run details",
+      "loading": "Loading run result...",
+      "loadingFile": "Loading run file...",
+      "loadingRawPreview": "Loading original-file preview...",
+      "noResultFiles": "This run did not save viewable files.",
+      "openSourceFile": "Open source file",
+      "openSourceFileError": "Cannot open source file",
+      "openSourceFileFailed": "Failed to open source file: {{error}}",
+      "openingSourceFile": "Opening...",
+      "otherFilesLabel": "Other files · {{count}}",
+      "rawPreviewFailed": "Failed to load original-file preview: {{error}}",
+      "rawPreviewLoadError": "Failed to load original-file preview",
+      "refreshError": "Failed to refresh run details",
+      "resultFilesLabel": "Result files · {{count}}",
+      "retry": "Retry",
+      "retryDetail": "{{error}}, retry",
+      "selectFile": "Select a file on the left to view it",
+      "sourceSession": "Source conversation {{id}}",
+      "status": {
+        "cancelled": "Cancelled",
+        "completed": "Execution complete",
+        "failed": "Failed",
+        "paused": "Paused",
+        "running": "Running",
+        "waiting": "Waiting for interaction"
+      },
+      "textPreviewUnavailable": "This file does not support text preview.",
+      "title": "Workflow run result",
+      "truncatedPreview": "This file is large; only the first {{count}} characters are previewed. Open the source file to view all content.",
+      "truncatedPreviewFooter": "Preview ends here; the remaining content is not displayed. Open the source file to view all content.",
+      "useInNewSession": "Use in new conversation",
+      "workFilesLabel": "Intermediate files · {{count}}",
+      "workflowInput": "Workflow input:"
+    },
+    "task": {
+      "comment": "Comment",
+      "commentPlaceholder": "Describe what you want changed…",
+      "confirming": "Confirming…",
+      "desc": {
+        "confirmed": "The task flow has been confirmed and entered the next build stage.",
+        "pending": "The task flow is ready. Preview it first, then confirm to enter exploration.",
+        "revisionSubmitted": "Your revision notes were submitted. The agent will update the task specification."
+      },
+      "feedbackLabel": "Revision notes: {{feedback}}",
+      "pendingComments": "{{n}} comments awaiting submission",
+      "preview": "Preview",
+      "status": {
+        "confirmed": "Confirmed",
+        "pending": "Awaiting confirmation",
+        "revising": "Revising"
+      },
+      "submitComment": "Submit comment",
+      "submitting": "Submitting…",
+      "title": "Task specification"
+    }
+  },
+  "workflowRunHeader": {
+    "closeDetails": "Close run details",
+    "collapse": "Collapse",
+    "detail": {
+      "awaiting": "Awaiting execution",
+      "completed": "Completed",
+      "current": "Current {{unit}}",
+      "failed": "Execution failed"
+    },
+    "detailsTitle": "Execution progress",
+    "executionCompleteAwaitingEnd": "Execution complete, awaiting finish",
+    "executionCompleteAwaitingValidation": "Execution complete, awaiting validation",
+    "executionCompleted": "Execution complete",
+    "executionWorkflow": "Execute workflow",
+    "fallbackExecutionStep": "Step {{index}}",
+    "fallbackValidationStep": "Check {{index}}",
+    "initializing": "Initializing",
+    "noSteps": "Phase steps have not loaded yet.",
+    "overallProgress": "Overall progress",
+    "phase": {
+      "execute": "Execute",
+      "executeDescription": "Complete the task by following workflow steps",
+      "validate": "Validate",
+      "validateDescription": "Check whether run results meet expectations"
+    },
+    "phaseAria": "Workflow run phases",
+    "progress": {
+      "awaiting": "0/{{total}} {{unit}} · Awaiting execution",
+      "complete": "{{total}}/{{total}} {{unit}} complete",
+      "current": "Current {{current}}/{{total}} {{unit}}"
+    },
+    "runDetails": "Run details",
+    "status": {
+      "awaitingConfirmation": "Awaiting confirmation",
+      "running": "Running",
+      "stopped": "Stopped"
+    },
+    "summary": "{{completed}} steps complete · {{calls}} calls",
+    "title": "Workflow run",
+    "toolCalls": "Tool calls",
+    "unit": {
+      "check": "checks",
+      "step": "steps"
+    },
+    "validationCompleteAwaitingEnd": "Validation complete, awaiting finish",
+    "validationCompleted": "Validation complete",
+    "validationResults": "Validation results"
+  }
+}

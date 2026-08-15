@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "bun"],
+    // baseUrl REQUIRED for paths to resolve relative to this tsconfig
+    // (the root tsconfig has baseUrl: "." which would put us at repo root).
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/renderer/*"],
+      "@shared/*": ["src/shared/*"]
+    }
+    // NOTE: We deliberately do NOT declare @main/* or @preload/*.
+    // esbuild (which builds the main + preload bundles via scripts/electron-build-*.ts)
+    // has no alias-resolution plugin configured. Declaring those paths would invite
+    // someone to write `import x from '@main/...'` which would crash at build time.
+    // Main and preload code uses RELATIVE imports — the trees are shallow enough.
+    // (The renderer is the exception: it resolves `@/` and `@shared/` through
+    // Vite, which does have alias resolution configured.)
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "release"]
+}

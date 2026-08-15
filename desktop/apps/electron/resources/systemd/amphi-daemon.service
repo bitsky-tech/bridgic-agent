@@ -1,0 +1,29 @@
+# systemd user service for the Bridgic Agent daemon.
+#
+# Installed to /usr/lib/systemd/user/amphi-daemon.service by the
+# deb postinst hook, then `systemctl --user enable --now`-ed for the
+# invoking user. `loginctl enable-linger` is also set so the daemon
+# survives logout (matching macOS/launchd behavior).
+#
+# Manual ops:
+#   systemctl --user status amphi-daemon
+#   systemctl --user restart amphi-daemon
+#   journalctl --user -u amphi-daemon -f
+
+[Unit]
+Description=Bridgic Agent Backend Daemon (bridgic-agent)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/amphi server serve
+Restart=on-failure
+RestartSec=30s
+# Stop with SIGTERM; honor amphi's 8s graceful shutdown window.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Logs land in journald by default; use `journalctl --user -u amphi-daemon`.
+
+[Install]
+WantedBy=default.target

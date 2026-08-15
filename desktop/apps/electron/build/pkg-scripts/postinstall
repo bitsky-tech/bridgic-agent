@@ -1,0 +1,79 @@
+#!/bin/bash
+# pkg postinstall — runs as root AFTER files are unpacked into /Applications.
+#
+# Three jobs:
+#   1. Install a /usr/local/bin/amphi symlink so users can run `amphi`
+#      in any terminal without modifying PATH manually.
+#   2. Hand ownership of the installed bundle to the console user, without which
+#      Squirrel.Mac cannot apply an auto-update.
+#   3. As the logged-in console user, ask the installed CLI to create and
+#      activate the canonical launchd definition.
+#
+# IMPORTANT — naming constants:
+#   These values MUST match apps/electron/src/shared/app-meta.ts.
+
+set -e
+
+APP_PRODUCT_NAME="Bridgic Agent"
+APP_BUNDLE_DIR="/Applications/${APP_PRODUCT_NAME}.app"
+CLI_BIN="${APP_BUNDLE_DIR}/Contents/Resources/bin/amphi"
+SYMLINK="/usr/local/bin/amphi"
+
+# 1. PATH symlink: /usr/local/bin is on PATH by default on macOS.
+mkdir -p "$(dirname "$SYMLINK")"
+ln -sf "$CLI_BIN" "$SYMLINK"
+echo "[postinstall] symlink installed: $SYMLINK -> $CLI_BIN"
+
+# Never use the installer process's USER: pkg scripts run as root. A user-level
+# LaunchAgent must target the active console user and that user's HOME.
+CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+case "$CONSOLE_USER" in
+  ""|root|loginwindow|_mbsetupuser)
+    echo "[postinstall] WARN: no logged-in console user; skipping autostart setup"
+    exit 0
+    ;;
+esac
+
+# 2. Hand the bundle to the user who will run it.
+#
+# A pkg payload always lands as root:wheel, but Squirrel.Mac applies auto-updates
+# as the logged-in user and replaces the bundle in place — against a root-owned
+# .app that is EACCES, so automatic updates can never work on an install that
+# skips this. Only ownership changes; the mode bits stay as the package declared
+# them, and the group stays wheel (owner rwx is what Squirrel needs).
+#
+# Non-fatal: a failure here costs auto-update, not the installation itself, and
+# `set -e` would otherwise abort before autostart is registered below.
+if chown -R "$CONSOLE_USER" "$APP_BUNDLE_DIR"; then
+  echo "[postinstall] bundle ownership handed to $CONSOLE_USER"
+else
+  echo "[postinstall] WARN: chown $APP_BUNDLE_DIR failed; auto-update will not be able to apply"
+fi
+
+USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null \
+  | sed 's/^NFSHomeDirectory: //')"
+USER_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+if [ -z "$USER_HOME" ] || [ -z "$USER_UID" ]; then
+  echo "[postinstall] WARN: could not resolve console user home/uid; skipping autostart setup"
+  exit 0
+fi
+
+run_as_console_user() {
+  sudo -u "$CONSOLE_USER" env \
+    HOME="$USER_HOME" USER="$CONSOLE_USER" LOGNAME="$CONSOLE_USER" \
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$@"
+}
+
+echo "[postinstall] enabling autostart via CLI (user=$CONSOLE_USER uid=$USER_UID)"
+if run_as_console_user "$CLI_BIN" server autostart enable --timeout 8; then
+  echo "[postinstall] canonical launchd autostart is ready"
+else
+  EXIT_CODE=$?
+  echo "[postinstall] WARN: autostart CLI exited $EXIT_CODE; install continues"
+  echo "[postinstall] the definition may still be active while the daemon finishes its cold start"
+fi
+
+# Readiness timeout is advisory during package installation. The CLI installs
+# the supervisor definition before it waits, and GatewayBootGate checks the
+# daemon again when the app opens.
+exit 0

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
+    <title>Bridgic Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" />
+    <!--
+      CSP is intentionally permissive enough to support Vite HMR in dev:
+        - 'unsafe-inline' for the small inline bootstrap script Vite injects
+        - 'unsafe-eval' for source-map / module dispatch
+        - ws://localhost:* for HMR websocket
+        - http(s)://127.0.0.1:* and ws://127.0.0.1:* for Bridgic Agent daemon
+          (the renderer fetches it directly from the daemon)
+      For a stricter production policy, override these in the main process via
+      session.defaultSession.webRequest.onHeadersReceived when NODE_ENV is set
+      and you ship from file://.
+    -->
+    <!-- frame-src names showcase.bridgic.ai explicitly rather than widening to
+         `https:`: the workflow preview embeds that one site, and without a
+         frame-src directive the policy falls back to `default-src 'self'`, which
+         blocks the iframe outright. -->
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https: bridgic-local:; media-src 'self' data: blob: https: bridgic-local:; font-src 'self' data: https: https://fonts.gstatic.com; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:* http://127.0.0.1:* ws://127.0.0.1:* https:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src https://showcase.bridgic.ai;" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

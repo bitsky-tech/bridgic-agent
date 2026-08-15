@@ -1,0 +1,2374 @@
+{
+  "approval": {
+    "center": {
+      "desc": "定时任务在无人值守时触发、需你确认的操作都收拢在这里",
+      "empty": "暂无待处理",
+      "handle": "去处理",
+      "itemCount": "{{n}} 项",
+      "pendingCount": "{{n}} 待处理",
+      "title": "待审批中心"
+    }
+  },
+  "asset": {
+    "common": {
+      "addToChat": "添加到聊天 {{name}}",
+      "copyPath": "复制路径",
+      "emptyFolder": "空文件夹",
+      "loading": "读取中…",
+      "revealInFileManager": "在文件管理器打开"
+    },
+    "empty": {
+      "hint": "点击「添加」挂载本地文件或文件夹，Agent 可直接读写",
+      "title": "还没有挂载文件"
+    },
+    "mount": {
+      "actions": "挂载操作 {{name}}",
+      "itemCount": "{{n}} 项",
+      "pathStale": "路径已失效",
+      "pathWithStale": "{{path}}（路径已失效）",
+      "remove": "移除",
+      "removeHint": "不会删除本地文件/文件夹"
+    },
+    "search": {
+      "capped": "共 {{total}} 个匹配，已显示前 {{shown}} 个",
+      "contentScope": "内容",
+      "fileScope": "文件",
+      "folder": "文件夹",
+      "noMatch": "未找到与「{{query}}」匹配的{{scope}}",
+      "partial": "目录较大，仅显示本次搜索到的结果",
+      "searching": "正在搜索…"
+    },
+    "session": {
+      "add": "添加",
+      "pickFile": "选择文件…",
+      "pickFolder": "选择文件夹…",
+      "title": "会话文件"
+    },
+    "toast": {
+      "copyFailed": "复制失败",
+      "pathCopied": "已复制路径"
+    },
+    "tree": {
+      "denied": "无访问权限 · 需在系统设置中授权",
+      "deniedTooltip": "macOS 未授权 {{product}} 访问该目录。前往「系统设置 › 隐私与安全性 › 文件与文件夹」为 {{product}} 打开对应权限后重试。",
+      "mention": "引用到输入框 {{name}}",
+      "noPermission": "无权限",
+      "readFailed": "读取失败",
+      "rowActions": "操作 {{name}}"
+    }
+  },
+  "build": {
+    "commentBatch": {
+      "head": "我对任务说明书有 {{count}} 条修改意见：",
+      "item": "{{index}}. 针对「{{quote}}」\n{{text}}"
+    },
+    "specEditedMessage": "我手动编辑了任务说明书 `{{path}}`，请按更新后的说明书继续。"
+  },
+  "center": {
+    "assets": {
+      "files": {
+        "col": {
+          "addedAt": "添加日期",
+          "name": "名称",
+          "session": "关联会话",
+          "size": "大小"
+        },
+        "empty": "暂无用户文件；在会话中添加文件后会出现在这里。",
+        "invalid": "已失效",
+        "subtitle": "来自各会话当前挂载的文件 · {{n}}",
+        "title": "用户文件"
+      },
+      "loading": "正在加载资产...",
+      "runs": {
+        "col": {
+          "name": "工作流 / 运行结果",
+          "status": "状态",
+          "time": "时间"
+        },
+        "deleteRunAria": "删除运行结果 {{id}}",
+        "empty": "暂无工作流产出；运行工作流后会按名称归档在这里。",
+        "runCount": "{{n}} 次运行",
+        "subtitle": "按工作流归档 · {{n}}",
+        "title": "工作流产出",
+        "useInNewSession": "新会话使用",
+        "useInNewSessionAria": "在新会话中使用结果 {{id}}"
+      },
+      "searchPlaceholder": "搜索文件、会话或工作流...",
+      "subtitle": "浏览会话文件和工作流最终产出"
+    },
+    "common": {
+      "all": "全部",
+      "cancel": "取消",
+      "collapse": "收起",
+      "delete": "删除",
+      "details": "详情",
+      "expandFull": "展开全文",
+      "export": "导出",
+      "import": "导入",
+      "loading": "加载中…",
+      "myAssets": "我的资产",
+      "refresh": "刷新",
+      "retry": "重试",
+      "save": "保存",
+      "saving": "保存中",
+      "status": {
+        "cancelled": "已取消",
+        "completed": "执行完毕",
+        "failed": "失败",
+        "paused": "已暂停",
+        "running": "运行中",
+        "waiting": "等待交互"
+      },
+      "workflows": "工作流"
+    },
+    "skills": {
+      "disableAria": "停用 {{name}}",
+      "empty": "暂无 Skills",
+      "enableAria": "启用 {{name}}",
+      "group": {
+        "builtin": "系统内置",
+        "imported": "外部导入",
+        "selfCreated": "我创建的"
+      },
+      "loadFailed": "加载 Skills 失败，请重试",
+      "manualImport": "手动导入",
+      "searchPlaceholder": "搜索 Skills...",
+      "subtitle": "管理系统能力扩展包"
+    },
+    "workflows": {
+      "empty": {
+        "desc": "完成一次 /build 并确认保存后会出现在这里",
+        "noMatchDesc": "换个关键词试试",
+        "noMatchTitle": "没有匹配的工作流",
+        "title": "暂无工作流"
+      },
+      "noDesc": "暂无描述",
+      "rename": {
+        "action": "改名",
+        "emptyName": "请输入工作流名称",
+        "failedCheckName": "重命名失败，请检查名称后重试",
+        "failedRetry": "重命名失败，请稍后重试"
+      },
+      "renameAria": "重命名 {{name}}",
+      "runInNewSession": "新会话运行",
+      "saved": "已保存",
+      "schedule": "调度",
+      "searchPlaceholder": "搜索工作流...",
+      "subtitle": "管理已保存的工作流构建产物"
+    }
+  },
+  "centerView": {
+    "aiNotice": "内容由 AI 生成，请核实重要信息",
+    "deleteWorkflow": {
+      "confirm": "删除",
+      "message": "确定删除「{{name}}」吗？工作流定义将被移除，已有运行结果仍会保留在“我的资产”中。",
+      "title": "删除工作流"
+    }
+  },
+  "commentFeedback": {
+    "cancelEsc": "取消（Esc）",
+    "collapse": "收起",
+    "continueBuild": "继续构建",
+    "escCancel": "Esc 取消",
+    "expandAll": "展开全文",
+    "instructionPlaceholder": "或者，直接告诉它该怎么做…",
+    "myComment": "我的评论",
+    "remove": "移除这条",
+    "selectedSource": "选中原文",
+    "sendAndContinue": "发送反馈并继续构建",
+    "sendFailed": "评论发送失败",
+    "sending": "发送中…",
+    "summary": "将携带 {{count}} 条评论作为反馈一并发送",
+    "title": "评论（{{count}}）"
+  },
+  "common": {
+    "cancel": "取消",
+    "confirm": "确定",
+    "delete": "删除",
+    "deleteSchedule": "删除调度任务",
+    "deleteScheduleMessage": "确定删除「{{name}}」？该定时任务将停止并移除。",
+    "deleteWorkflowRun": "删除运行结果",
+    "deleteWorkflowRunMessage": "确定删除「{{name}}」的这次运行结果吗？相关产出文件也会永久删除，且无法恢复。",
+    "exportWorkflow": "导出工作流",
+    "inUse": "使用中",
+    "none": "无",
+    "off": "关",
+    "on": "开",
+    "open": "打开",
+    "stop": "停止",
+    "workflowResultInputPlaceholder": "请基于这个工作流结果继续…",
+    "workflowRunInputPlaceholder": "请基于这个工作流运行继续…"
+  },
+  "composer": {
+    "action": {
+      "send": "发送",
+      "stop": "停止"
+    },
+    "command": {
+      "build": {
+        "description": "触发完整 5-stage 流程",
+        "label": "构建"
+      },
+      "help": {
+        "description": "查看系统能力与可用指令",
+        "label": "帮助"
+      },
+      "schedule": {
+        "description": "在当前输入框填充调度任务模板",
+        "label": "新建调度"
+      }
+    },
+    "emptySession": "请先创建或选择一个会话",
+    "model": {
+      "clearSearch": "清除搜索",
+      "current": "当前",
+      "emptyNoMatch": "没有匹配的模型",
+      "emptyNoModels": "还没有配置任何模型",
+      "modalTitle": "选择模型",
+      "searchPlaceholder": "搜索模型…",
+      "selectPlaceholder": "选择模型",
+      "switchAria": "切换模型"
+    },
+    "noModel": {
+      "configure": "配置模型",
+      "configureAria": "配置模型",
+      "ctaPrefix": "开始构建工作流，请先",
+      "loadFailed": "加载模型配置失败",
+      "retry": "重试",
+      "retrying": "重试中…"
+    },
+    "pendingPermissionHint": "请先处理上方的权限请求",
+    "quote": {
+      "agentSource": "引用 Agent 回复",
+      "remove": "移除引用",
+      "userSource": "引用你的消息"
+    },
+    "slash": {
+      "empty": "没有匹配的指令或能力",
+      "group": {
+        "command": "命令",
+        "schedule": "调度",
+        "skill": "技能",
+        "workflow": "工作流"
+      },
+      "overflow": "还有 {{n}} 个 · 输入关键字筛选",
+      "scheduleDescription": "立即执行一次{{suffix}}"
+    },
+    "slot": {
+      "genericPlaceholder": "填写…",
+      "scheduleNamePlaceholder": "任务名称"
+    },
+    "tips": {
+      "build": "试试 /build —— 触发完整构建流程",
+      "dropFile": "拖入文件即挂载为会话文件，粘贴路径文字不会",
+      "help": "/help 可查看系统能力与全部指令",
+      "input": "输入消息，使用 / 触发指令…",
+      "longPaste": "粘贴超长文本会自动转成 .txt 附件",
+      "mention": "输入 @ 可引用会话文件或工作流结果",
+      "schedule": "试试 /schedule —— 创建定时任务",
+      "sendKey": "Enter 发送，Shift + Enter 才是换行",
+      "slash": "/ 菜单里能直接调用已安装的 Skills 与工作流",
+      "trigger": "@ 与 / 需在行首或空格后，才会弹出菜单",
+      "zoom": "字号偏小？⌘/Ctrl 加减号缩放界面，加 0 复位"
+    },
+    "toolbar": {
+      "add": "添加",
+      "addAria": "添加输入",
+      "noRuns": "还没有可引用的运行结果",
+      "pickFile": "选择文件…",
+      "pickFolder": "选择文件夹…",
+      "pickRun": "选择运行结果",
+      "workflowRuns": "运行结果…"
+    }
+  },
+  "cron": {
+    "dailyAt": "每天 {{time}}",
+    "everyHour": "每小时",
+    "everyHourAtMinute": "每小时的第 {{minute}} 分",
+    "everyMinute": "每分钟",
+    "everyMinuteAtSecond": "每分钟的第 {{second}} 秒",
+    "everyNHours": "每 {{n}} 小时",
+    "everyNMinutes": "每 {{n}} 分钟",
+    "everyNSeconds": "每 {{n}} 秒",
+    "everySecond": "每秒",
+    "month": {
+      "april": "4月",
+      "august": "8月",
+      "december": "12月",
+      "february": "2月",
+      "january": "1月",
+      "july": "7月",
+      "june": "6月",
+      "march": "3月",
+      "may": "5月",
+      "november": "11月",
+      "october": "10月",
+      "september": "9月"
+    },
+    "monthSeparator": "、",
+    "monthlyAt": "每月 {{day}} 日 {{time}}",
+    "quarterlyAt": "每季度（{{months}}）{{day}} 日 {{time}}",
+    "weekday": {
+      "friday": "周五",
+      "monday": "周一",
+      "saturday": "周六",
+      "sunday": "周日",
+      "thursday": "周四",
+      "tuesday": "周二",
+      "wednesday": "周三"
+    },
+    "weeklyAt": "每{{day}} {{time}}",
+    "yearlyAt": "每年 {{month}}{{day}} 日 {{time}}"
+  },
+  "error": {
+    "actionFailedRetry": "操作失败，请重试",
+    "assetUserFiles": "用户文件：{{msg}}",
+    "assetWorkflowOutputs": "工作流产出：{{msg}}",
+    "assetsPartialLoadFailed": "部分资产加载失败（{{detail}}）",
+    "backendNotReady": "后端未就绪",
+    "backendNotReadyAssets": "后端未就绪，无法加载资产",
+    "backendNotReadyModels": "后端未就绪，无法加载模型配置",
+    "backendNotReadySkills": "后端未就绪，无法加载 Skills",
+    "cannotOpenFile": "无法打开文件",
+    "codexAuthFailed": "Codex 授权失败：{{msg}}",
+    "codexAuthTimeout": "Codex 授权超时，请重试",
+    "codexModelSaveFailed": "保存 Codex 模型失败：{{msg}}",
+    "commandFailed": "命令执行失败",
+    "connectionClosed": "连接断开（代码 {{code}}）",
+    "connectionTestFailed": "测试连接异常：{{msg}}",
+    "daemonNotReadyExecutionMode": "daemon 未就绪，执行模式未切换",
+    "daemonShuttingDown": "daemon 正在关停",
+    "deleteFailedRetry": "删除失败，请重试",
+    "endpointChangedReconnect": "后端端点变更，连接重建",
+    "executionModeSwitchFailed": "执行模式切换失败，仍为原设置",
+    "gatewayNotReady": "后端网关未就绪",
+    "gatewayUnavailableForChat": "后端网关暂时不可用，请稍后重试。",
+    "modelListFetchFailed": "获取模型列表异常：{{msg}}",
+    "modelSwitchFailed": "切换模型失败：{{msg}}",
+    "providerAddFailed": "添加渠道失败：{{msg}}",
+    "providerDeleteFailed": "删除渠道失败：{{msg}}",
+    "providerDisableFailed": "停用渠道失败：{{msg}}",
+    "providerEnableFailed": "启用渠道失败：{{msg}}",
+    "requestTimeout": "请求超时（{{seconds}}s）：{{path}}",
+    "responseShapeInvalid": "{{label}} 响应结构异常：{{detail}}",
+    "responseStillGenerating": "当前回复仍在生成，请等待完成或先停止，再发送新消息。",
+    "sessionCopyFailedRetry": "复制会话失败，请重试",
+    "sessionCreateFailed": "创建会话失败",
+    "skillDeleteFailed": "删除 Skill 失败：{{msg}}",
+    "skillToggleFailed": "切换 Skill 开关失败：{{msg}}",
+    "skillsLoadFailed": "加载 Skills 失败：{{msg}}",
+    "stopFailedRetry": "停止失败，请重试",
+    "triggerFailedRetry": "触发失败，请重试",
+    "workflowDeleteFailed": "删除工作流失败：{{msg}}",
+    "workflowExportFailed": "导出工作流失败：{{msg}}",
+    "workflowImportFailed": "导入工作流失败",
+    "workflowNameRequired": "请输入工作流名称",
+    "workflowRenameFailed": "重命名工作流失败：{{msg}}",
+    "workflowRunDeleteFailed": "删除运行结果失败：{{msg}}",
+    "workflowRunExportFailed": "导出执行结果失败：{{msg}}"
+  },
+  "externalLink": {
+    "description": "即将离开应用，访问外部链接：",
+    "dontAskAgain": "本会话不再询问",
+    "open": "打开链接",
+    "title": "打开外部链接"
+  },
+  "fileOpen": {
+    "message": "用系统默认程序打开 {{name}}?",
+    "rememberExtension": "记住 {{extension}},以后直接打开",
+    "rememberName": "记住 {{name}},以后直接打开",
+    "title": "打开文件"
+  },
+  "focusMode": {
+    "building": "构建中",
+    "closeTaskSpec": "关闭任务说明书",
+    "collapse": "收起",
+    "completed": "已完成",
+    "inProgress": "进行中",
+    "preparing": "准备中",
+    "preparingDescription": "正在准备工作流构建环境",
+    "progress": "构建进度",
+    "stageDescriptions": {
+      "clarify": "对齐需求，锁定说明书",
+      "explore": "实地探查目标环境结构",
+      "generate": "编写并组织工作流代码",
+      "verify": "运行校验产出与验收"
+    },
+    "stages": {
+      "clarify": "任务创建",
+      "explore": "探路",
+      "generate": "生成",
+      "verify": "验证"
+    },
+    "taskSpec": "任务说明书",
+    "title": "工作流构建",
+    "viewTaskSpec": "查看任务说明书",
+    "waitingToContinue": "等待继续"
+  },
+  "gatewayBoot": {
+    "connecting": "正在连接网关…",
+    "incompatible": {
+      "actual": "正在运行",
+      "clientsWarningUnknown": "重启会短暂断开所有连接到网关的客户端，包括在本窗口之外运行的任务。",
+      "clientsWarning_one": "重启会短暂断开所有连接到网关的客户端 —— 当前有 {{count}} 个客户端连接。",
+      "clientsWarning_other": "重启会短暂断开所有连接到网关的客户端 —— 当前有 {{count}} 个客户端连接。",
+      "description": "本机仍在运行的网关与 {{product}} 版本不一致。请重启网关，让新安装的网关接管。",
+      "exit": "退出，稍后再启动",
+      "exiting": "正在退出…",
+      "expected": "当前应用需要",
+      "restart": "立即重启网关",
+      "restarting": "正在重启网关…",
+      "title": "更新尚未完成"
+    },
+    "installingUpdate": "正在安装更新…",
+    "loading": "加载中",
+    "manifestUnavailable": {
+      "description": "{{product}} 读取不到记录「需要哪个网关版本」的文件，因此不会连接任何网关。重启网关无法解决 —— 请重新安装 {{product}}。",
+      "title": "本次安装已损坏"
+    },
+    "notRunning": {
+      "description": "{{product}} 需要网关正在运行才能工作。点击启动，或在终端运行",
+      "title": "网关未运行"
+    },
+    "start": "启动网关",
+    "starting": "正在启动网关…",
+    "unknownVersion": {
+      "description": "本机运行的网关没有上报版本，{{product}} 无法判断它是否可以安全使用。它早于版本校验机制 —— 请重启网关；若仍无效，请重新安装 {{product}}。",
+      "title": "无法确定网关版本"
+    }
+  },
+  "humanRequest": {
+    "acceptance": {
+      "accept": "采用",
+      "acceptDesc": "保留这条，作为运行结果的完成标准。",
+      "criteriaConfirmed": "完成标准已对齐",
+      "desc": "逐条选择采用、不采用，或者在“其他”中填写替代的完成标准。",
+      "executionOnly": "不设置完成标准",
+      "executionOnlyConfirmed": "已选择不设置完成标准",
+      "executionOnlyHint": "仅执行工作流",
+      "executionOnlySummary": "该工作流未设置完成标准，运行时只执行步骤，无需结果校验；执行报错仍会正常失败。",
+      "executionOnlyTitle": "生成的工作流不设置完成标准，因此运行时无需结果校验",
+      "finalOutcome": "最终结果",
+      "multiDone": "完成标准已全部处理",
+      "multiPending": "{{n}} 项完成标准待处理",
+      "next": "下一条",
+      "otherPlaceholder": "输入替代的完成标准…",
+      "position": "第 {{current}} 项，共 {{total}} 项",
+      "reject": "不采用",
+      "rejectDesc": "删除这条，不用它判断运行结果。",
+      "singleDone": "完成标准已处理",
+      "singlePending": "最终结果待处理",
+      "standardN": "标准 {{n}}",
+      "submit": "确认并继续",
+      "suggestionCount": "{{n}} 项建议",
+      "title": "最后怎么算完成"
+    },
+    "answerRemaining": "去回答剩余 {{n}} 题 →",
+    "collapse": "收起",
+    "expand": "展开",
+    "expandAria": "展开交互窗口",
+    "framework": {
+      "buildSummary": "是否把当前任务构建为可重复运行的工作流",
+      "buildTitle": "需要你的选择",
+      "permissionSummary": "{{n}} 项操作等待确认",
+      "permissionTitle": "需要你的授权",
+      "taskSummary": "确认后进入探索阶段，也可以先预览或提出修改",
+      "taskTitle": "需要你确认任务说明书",
+      "workflowSummary": "决定是否保存本次构建结果",
+      "workflowTitle": "需要你确认工作流"
+    },
+    "needAnswer": "需要你的回答",
+    "none": "都不选择",
+    "other": "其他",
+    "otherPlaceholder": "输入自定义回答…",
+    "processedCount": "已处理 {{done}}/{{total}}",
+    "promptAria": "问题背景",
+    "questionN": "问题 {{n}}",
+    "selectAll": "全选",
+    "selectedCount": "已选择 {{picked}}/{{max}}",
+    "submit": "提交",
+    "viewDetail": "查看详情",
+    "viewedCount": "已看 {{done}}/{{total}}",
+    "waitingSummary": "Agent 正在等待你的回答",
+    "waitingTitle": "等待你的回答"
+  },
+  "issueReport": {
+    "advanced": {
+      "assistantMessage": "Agent 回复与执行过程",
+      "assistantMessageDescription": "包括 Agent 回复、已展示的推理过程、工具调用及其结果",
+      "conversationTitle": "对话内容（可选，默认不附带）",
+      "description": "选择是否附带相关信息",
+      "environmentTitle": "运行环境",
+      "errorDetails": "错误详情",
+      "errorDetailsDescription": "包含界面显示的错误信息，可能包含本地路径",
+      "errorSensitiveNotice": "错误详情可能包含本地路径或其他敏感信息，请在 GitHub 页面提交前检查并删除。",
+      "errorSensitiveTitle": "请检查错误详情",
+      "filePrivacyNotice": "导出的文件只包含你主动勾选的内容，文件不会自动上传。",
+      "fileSensitiveNotice": "导出的对话内容可能包含密码、API 密钥、访问令牌等敏感信息。我们不会自动识别或脱敏，请在上传前打开文件检查并删除。",
+      "fileSensitiveTitle": "请检查导出内容",
+      "privacyNotice": "仅会附带你主动勾选的内容，打开后仍可在 GitHub 页面检查和修改。",
+      "problemTitle": "问题信息",
+      "runContext": "模型与运行模式",
+      "runContextDescription": "包含本轮使用的模型与运行模式",
+      "sensitiveNotice": "对话内容可能包含密码、API 密钥、访问令牌等敏感信息。在最后确认提交 issue 的时候，请删除他们。",
+      "sensitiveTitle": "请检查敏感信息",
+      "systemEnvironment": "系统环境",
+      "systemEnvironmentDescription": "包含 App、操作系统和桌面运行环境版本",
+      "title": "高级选项",
+      "userMessage": "用户消息",
+      "userMessageDescription": "附带本轮中的用户消息"
+    },
+    "agentTurn": {
+      "displayedReasoning": "已展示的推理过程",
+      "duration": "耗时",
+      "empty": "（无）",
+      "error": "错误",
+      "event": "事件",
+      "finalReply": "Agent 最终回复",
+      "processMessage": "Agent 过程消息",
+      "status": "状态",
+      "stopped": "已停止",
+      "toolCall": "工具调用",
+      "toolFailure": "失败",
+      "toolInput": "参数",
+      "toolPending": "未完成",
+      "toolResult": "结果",
+      "toolSuccess": "成功"
+    },
+    "close": "关闭",
+    "copied": "已复制",
+    "copyLink": "复制地址",
+    "description": "反馈将在项目的 GitHub Issue 页面中完成，我们会在浏览器中打开以下地址。",
+    "destination": "即将前往",
+    "errors": {
+      "copyFailed": "复制地址失败，请稍后重试。",
+      "exportFailed": "反馈文件导出失败，请选择其他位置后重试。",
+      "openAfterExportFailed": "反馈文件已导出，但无法打开 GitHub。文件不会丢失，请重试打开。",
+      "openFailed": "无法打开 GitHub，请检查网络连接后重试。",
+      "revealFailed": "无法在文件夹中显示反馈文件，请根据下方路径查找。"
+    },
+    "fields": {
+      "appVersion": "App 版本",
+      "arch": "系统架构",
+      "chromeVersion": "Chromium 版本",
+      "electronVersion": "Electron 版本",
+      "executionMode": "执行模式",
+      "model": "模型",
+      "osRelease": "操作系统版本",
+      "platform": "操作系统",
+      "thinkingMode": "Agent 模式",
+      "thinkingStage": "Agent 阶段"
+    },
+    "fileMode": {
+      "action": "导出反馈文件并前往 GitHub",
+      "description": "继续后会导出 {{filename}}，并打开 GitHub。请在问题页面添加该文件。",
+      "exportedTitle": "反馈文件已导出",
+      "exporting": "正在导出…",
+      "githubNotice": "文件不会自动上传，请在 GitHub 问题页面手动添加",
+      "openingGitHub": "正在打开 GitHub…",
+      "retryOpen": "重新打开 GitHub",
+      "saveDialogTitle": "导出反馈文件",
+      "showInFolder": "在文件夹中显示",
+      "title": "所选内容较多，将通过文件附带"
+    },
+    "githubNotice": "不会自动提交，打开后仍可检查和修改",
+    "openGitHub": "前往项目地址进行反馈",
+    "preparing": "准备中…",
+    "sections": {
+      "assistantMessage": "Agent 回复与执行过程",
+      "errorDetails": "错误详情",
+      "runContext": "模型与运行模式",
+      "systemEnvironment": "系统环境",
+      "userMessage": "用户消息"
+    },
+    "title": "反馈使用遇到的问题"
+  },
+  "landing": {
+    "inputHint": {
+      "after": " 指令...",
+      "before": "描述你想要自动化的任务，或使用 "
+    },
+    "market": {
+      "officialRecommended": "官方推荐",
+      "preview": "预览",
+      "title": "工作流教程",
+      "verified": "已审核"
+    },
+    "modelConfig": {
+      "configure": "配置模型",
+      "description": "{{product}} 需要连接大语言模型才能工作。请先完成模型配置，支持 OpenAI、Anthropic、DeepSeek 等主流厂商。",
+      "title": "开始前，先配置 AI 模型"
+    },
+    "tagline": "描述你的自动化需求，AI 帮你构建可运行的工作流"
+  },
+  "main": {
+    "browser": {
+      "newTab": "新标签页"
+    },
+    "menu": {
+      "actualSize": "实际大小",
+      "view": "视图",
+      "zoomIn": "放大",
+      "zoomOut": "缩小"
+    },
+    "quit": {
+      "buttonCancel": "取消",
+      "buttonKeep": "保留网关并退出",
+      "buttonStop": "仍然停止网关",
+      "detailCount": "还有 {{count}} 个客户端正在使用网关:{{kinds}}。",
+      "detailHint": "「保留网关并退出」只关闭本界面,网关继续在后台运行;「取消」则什么都不做。",
+      "detailUnknown": "无法确认当前是否还有其他客户端连接(网关未响应)。",
+      "kind": {
+        "cli": "命令行",
+        "gui": "桌面端",
+        "tray": "托盘",
+        "unknown": "未知"
+      },
+      "message": "停止网关会中断这些连接。",
+      "title": "退出 {{product}}"
+    },
+    "tray": {
+      "cancelStart": "取消启动",
+      "discovering": "正在探测…",
+      "openWindow": "打开主界面",
+      "quitApp": "完全退出",
+      "restartForUpdate": "重启网关以完成更新",
+      "restartGateway": "重启网关",
+      "startGateway": "启动网关",
+      "starting": "正在启动…",
+      "status": {
+        "discovering": "… 探测网关",
+        "incompatible": "⚠ 网关版本不匹配 · v{{version}}",
+        "incompatibleNoVersion": "⚠ 网关版本不匹配",
+        "offline": "○ 网关未运行",
+        "ready": "● 网关运行中 · v{{version}}",
+        "readyNoVersion": "● 网关运行中",
+        "spawning": "… 启动网关中",
+        "unhealthy": "⚠ 网关不健康，正在重连…"
+      },
+      "stopGateway": "停止网关"
+    }
+  },
+  "markdown": {
+    "code": {
+      "copied": "已复制",
+      "copy": "复制代码"
+    },
+    "fileLink": {
+      "copied": "已复制路径",
+      "copyFailed": "复制失败",
+      "copyPath": "复制路径",
+      "copyPathAria": "复制路径 {{name}}",
+      "reveal": "在文件管理器中显示",
+      "revealAria": "在文件管理器中显示 {{name}}"
+    },
+    "mermaid": {
+      "zoomHint": "滚轮缩放，拖拽平移"
+    }
+  },
+  "mention": {
+    "badge": {
+      "schedule": "调度",
+      "workflow": "工作流",
+      "workflowRun": "运行结果"
+    },
+    "empty": {
+      "default": "还没有可引用的会话文件、工作流、运行结果或调度",
+      "noMatch": "未找到与「{{query}}」匹配的引用内容",
+      "schedules": "还没有可引用的调度",
+      "sessionFiles": "当前会话还没有可引用的文件",
+      "sessionFilesHint": "在右栏「会话文件」点击「添加」挂载本地文件或文件夹",
+      "workflowRuns": "还没有可引用的运行结果",
+      "workflows": "还没有可引用的工作流"
+    },
+    "footer": {
+      "reference": "引用",
+      "select": "选择",
+      "switchScope": "切换分类"
+    },
+    "loading": {
+      "browse": "正在读取引用内容…",
+      "search": "正在搜索引用内容…"
+    },
+    "more": "加载更多（剩余 {{remaining}} 项）",
+    "partialWarning": "目录较大，仅显示本次搜索到的结果",
+    "previewRunAria": "预览 {{name}} 的本次运行",
+    "previewWorkflowAria": "预览工作流 {{name}}",
+    "runStatus": {
+      "cancelled": "已取消",
+      "completed": "执行完毕",
+      "failed": "运行失败",
+      "paused": "已暂停",
+      "running": "运行中",
+      "waiting": "等待交互"
+    },
+    "schedule": {
+      "defaultDesc": "引用调度，用于查看、修改、暂停或删除"
+    },
+    "scope": {
+      "all": "全部",
+      "schedules": "调度",
+      "sessionFiles": "会话文件",
+      "workflowRuns": "运行结果",
+      "workflows": "工作流"
+    },
+    "searchingFor": "搜索「{{query}}」",
+    "section": {
+      "schedules": "调度",
+      "sessionFiles": "会话文件",
+      "workflowRuns": "运行结果",
+      "workflows": "工作流"
+    },
+    "subtitle": "选择会话文件、工作流、运行结果或调度",
+    "tablistLabel": "引用类型",
+    "title": "引用内容",
+    "tree": {
+      "loading": "读取中…",
+      "referenceAria": "引用 {{name}}",
+      "unreadable": "无权限"
+    },
+    "viewAllRuns": "查看全部 {{total}} 个运行结果",
+    "workflow": {
+      "defaultDesc": "引用工作流定义，用于修改、解释或比较",
+      "editable": "可编辑"
+    }
+  },
+  "message": {
+    "thinking": "思考"
+  },
+  "messageToolCall": {
+    "calling": "调用中…",
+    "completed": "完成 · {{durationMs}}ms",
+    "error": "出错",
+    "parameters": "参数",
+    "result": "结果"
+  },
+  "modals": {
+    "about": {
+      "checkForUpdates": "检查更新",
+      "contact": "联系我们",
+      "contactBusiness": "商务合作与授权",
+      "contactCopied": "已复制",
+      "contactCopy": "复制",
+      "contactFeedback": "隐私与其他反馈",
+      "contactIssue": "问题反馈",
+      "contactIssueAction": "GitHub Issues",
+      "contactSecurity": "安全漏洞报告",
+      "license": "开源协议",
+      "licenseDescription": "基于 AGPL v3.0 开源,商业授权请联系 {{contact}}",
+      "repository": "项目地址",
+      "softwareUpdate": "软件更新",
+      "updateChecking": "正在检查…",
+      "updateDisabled": "此版本未启用自动更新",
+      "updateDownloading": "正在下载… {{percent}}%",
+      "updateFailed": "检查失败",
+      "updateNoBuildForArch": "当前架构没有可用更新,请前往项目页面下载对应版本",
+      "updateNow": "立即更新",
+      "updateStaged": "新版本 {{version}} 已就绪",
+      "updateUpToDate": "已是最新版本",
+      "version": "版本"
+    },
+    "common": {
+      "cancel": "取消",
+      "clearError": "清除错误",
+      "close": "关闭",
+      "confirmDelete": "确认删除",
+      "delete": "删除",
+      "next": "下一步"
+    },
+    "deleteConfirm": {
+      "message": "确定要删除 {{name}} 吗？此操作不可撤销。",
+      "relatedHint": "该工作流被 {{n}} 个会话引用，请选择处理方式：",
+      "sessionTitle": "删除会话",
+      "withSessions": "同时删除关联会话",
+      "withSessionsDesc": "将一并删除 {{n}} 个关联会话",
+      "workflowOnly": "仅删除工作流",
+      "workflowOnlyDesc": "保留关联会话，工作流引用变为已删除状态",
+      "workflowTitle": "删除工作流"
+    },
+    "dependency": {
+      "allGood": "所有依赖已满足",
+      "allGoodDesc": "该工作流可以直接使用，无需额外配置",
+      "confirmImport": "确认导入",
+      "environment": "环境依赖",
+      "feishuApp": "飞书 App 配置",
+      "feishuCli": "飞书 CLI",
+      "importAfterConfig": "配置完成后导入",
+      "importLater": "先导入，稍后配置",
+      "installGuide": "安装指引",
+      "installed": "已安装",
+      "laterHint": "你可以先导入工作流，稍后再配置依赖。但在依赖满足前，工作流无法正常运行。",
+      "missing": "部分依赖未满足",
+      "missingDesc": "该工作流需要以下配置才能正常运行",
+      "openSettings": "前往设置",
+      "title": "导入工作流"
+    },
+    "editField": {
+      "changeDetected": "检测到内容变化",
+      "confirmRerun": "确认修改并重跑",
+      "currentContent": "当前内容（可直接修改）",
+      "demo": {
+        "edited": "自动抓取小红书\"美妆测评\"话题下的前 100 条笔记，提取标题、点赞数、评论数、收藏数，保存为 CSV",
+        "original": "自动抓取小红书\"美妆测评\"话题下的前 50 条笔记，提取标题、点赞数、评论数，保存为 CSV",
+        "stage": "Stage 1（任务创建）"
+      },
+      "noChange": "内容未修改，关闭不会触发重跑",
+      "rematchDomain": "领域匹配也将重新检测。",
+      "restartFrom": "确认修改后将从 {{stage}} 重新开始构建。",
+      "title": "编辑{{title}}"
+    },
+    "gateway": {
+      "address": "网关地址",
+      "autostart": {
+        "approvalRequired": "请在系统的登录项设置中允许 {{product}}，托盘才能自动启动；如仍未完成，请再点击开启。",
+        "daemonRepairNeeded": "托盘登录项已启用，但后台网关未设置为自启动。可选择修复使其同步，或全部关闭。",
+        "disable": "关闭自启",
+        "disableAll": "全部关闭",
+        "disabledHint": "已关闭。登录后不会自动启动后台网关或托盘。",
+        "enable": "开启自启",
+        "enabledHint": "已完成系统自启配置。登录时将启动后台网关和 {{product}} 托盘；关闭主窗口后仍继续运行。",
+        "processing": "处理中…",
+        "readFailed": "读取自启状态失败:{{error}}",
+        "reading": "正在读取…",
+        "repair": "修复",
+        "title": "登录时启动 {{product}}",
+        "trayRepairNeeded": "后台网关已启用，但托盘登录项缺失或被系统禁用。可选择修复使其同步，或全部关闭。"
+      },
+      "connectionRefused": "Connection refused: 端口 {{port}} 被占用或网关进程异常退出",
+      "copied": "已复制",
+      "copy": "复制",
+      "copyToken": "复制完整 token",
+      "description": "管理 {{product}} 网关服务,用于代理和路由 AI 模型请求。",
+      "errorInfo": "错误信息",
+      "justNow": "刚刚",
+      "retry": "重试连接",
+      "retrying": "重试中…",
+      "rotateTokenUnavailable": "Token 轮换将在 M3 实现",
+      "start": "启动",
+      "starting": "启动中…",
+      "status": {
+        "error": "连接错误",
+        "running": "运行中",
+        "stopped": "已停止"
+      },
+      "stop": "停止",
+      "stopping": "停止中…",
+      "uptime": "运行时长",
+      "uptimeDays": "{{days}} 天 {{hours}} 小时",
+      "uptimeHours": "{{hours}} 小时 {{minutes}} 分钟",
+      "uptimeMinutes": "{{minutes}} 分钟",
+      "version": "版本"
+    },
+    "market": {
+      "browserAutomation": "浏览器自动化",
+      "defaultName": "小红书内容爬虫",
+      "description": "自动抓取小红书指定话题下的笔记内容和互动数据。支持自定义话题关键词和抓取数量，输出为结构化 CSV 文件。适用于内容分析、竞品监控等场景。",
+      "domainLabel": "领域：",
+      "goal": "自动抓取小红书笔记数据",
+      "goalLabel": "目标：",
+      "import": "导入",
+      "loading": "正在加载工作流页面…",
+      "output": "CSV 文件（title / likes / comments）",
+      "outputLabel": "输出：",
+      "previewTitle": "工作流预览",
+      "recreate": "做同款",
+      "requirement": "处理懒加载，支持翻页",
+      "requirementLabel": "要求：",
+      "reviewed": "已审核",
+      "taskPreview": "任务说明书预览",
+      "viewOnline": "在浏览器中查看"
+    },
+    "model": {
+      "authMode": {
+        "oauth": "订阅模式"
+      },
+      "custom": "自定义",
+      "delete": {
+        "message": "删除 {{name}} 的凭据？",
+        "messageWithModels": "删除 {{name}} 的凭据将同时移除该渠道下的 {{n}} 个模型。确认继续？",
+        "title": "删除渠道"
+      },
+      "edit": {
+        "back": "返回模型配置",
+        "loading": "正在载入凭据…",
+        "notFound": "凭据已被删除或未找到",
+        "titlePrefix": "编辑："
+      },
+      "fetch": {
+        "candidates": "{{n}} 个 · 点击加入上方可用模型",
+        "failed": "获取模型列表失败",
+        "fetch": "从供应商获取",
+        "fetching": "获取中…",
+        "filterPlaceholder": "过滤模型…",
+        "missingApiKeyHint": "请先填写 API Key（编辑时需重新输入）",
+        "noMatches": "没有匹配的模型（已启用的不在此列）。",
+        "optional": "可选模型",
+        "providerHint": "向供应商请求可用模型列表",
+        "subscriptionHint": "加载该订阅可用的模型"
+      },
+      "form": {
+        "apiKeyDescription": "手动输入 API Key，需自行管理密钥",
+        "apiKeyMissing": "尚未设置 API Key",
+        "apiKeyMode": "API Key 模式",
+        "apiKeyPlaceholder": "输入 API Key",
+        "apiKeySet": "API Key 已设置",
+        "authentication": "认证方式",
+        "connecting": "正在连接供应商…",
+        "customSubline": "{{protocol}} · {{n}} 个模型",
+        "editSubline": "{{apiKey}} · {{n}} 个模型",
+        "hideApiKey": "隐藏 API Key",
+        "newProvider": "新渠道",
+        "oauthDescription": "通过 OAuth 授权登录，无需手动管理 API Key",
+        "preview": "预览：",
+        "pristine": "未测试 · 请先点击「测试连接」",
+        "protocol": "供应商协议",
+        "providerName": "渠道名称",
+        "providerNamePlaceholder": "为这个渠道起个名字",
+        "save": "保存",
+        "saveDisabled": {
+          "subscription": "订阅模式通过上方授权按钮激活，无需保存",
+          "test": "请先点击「测试连接」验证凭据通过后再保存"
+        },
+        "saveFailed": "保存失败：{{error}}",
+        "saved": "已保存",
+        "saving": "保存中…",
+        "showApiKey": "显示 API Key",
+        "testConnection": "测试连接",
+        "testDisabled": {
+          "apiKey": "请填写 API Key 再测试",
+          "models": "可用模型列表为空 —— 至少添加一个 model id 才能测试",
+          "name": "请先填写渠道名称",
+          "subscription": "订阅模式无需测试，请点上方授权按钮"
+        },
+        "testHint": "测试当前凭据能否连通供应商",
+        "testPassed": "测试通过 · {{latencyMs}} ms",
+        "testing": "测试中…",
+        "unknownError": "未知错误"
+      },
+      "list": {
+        "add": "添加配置",
+        "desc": "管理 AI 供应商连接，配置 API Key 和可用模型。关闭后该配置不会在模型选择中出现。",
+        "empty": "还没有配置任何渠道。点击“添加配置”开始。"
+      },
+      "loading": "加载模型配置…",
+      "modelCount": "{{n}} 个模型",
+      "models": {
+        "add": "添加",
+        "empty": "暂无模型 —— picker 将不显示该渠道。请添加至少一个 model id。",
+        "loaded": "已加载 {{n}} 个模型",
+        "placeholder": "输入 model id 后按 Enter 添加，例如 gpt-4o-mini",
+        "remove": "移除",
+        "removeAria": "移除 {{model}}",
+        "summary": "{{n}} 个 · 这里是模型选择器唯一显示源",
+        "title": "可用模型"
+      },
+      "oauth": {
+        "account": "（账号 {{accountId}}…）",
+        "authorize": "通过 ChatGPT 授权登录",
+        "authorizeFailed": "Codex 授权失败，请重试",
+        "authorized": "已通过 ChatGPT 订阅授权",
+        "cancel": "取消授权",
+        "checkingLocal": "正在检测本机 Codex 登录…",
+        "enableLocal": "直接启用（复用本机登录）",
+        "enabling": "启用中…",
+        "localDetected": "检测到本机 Codex 登录",
+        "noLocalHint": "本机未检测到 Codex 登录；将打开浏览器完成 ChatGPT 登录，授权后自动激活。",
+        "reauthorize": "重新授权（换号 / 续期）",
+        "reuseLocalFailed": "复用本机 Codex 失败",
+        "saveModels": "保存模型",
+        "unavailable": "OAuth 授权流程暂未上线，请改用 API Key 模式",
+        "useDifferentAccount": "换个账号？改用 ChatGPT 授权登录",
+        "waitingBrowser": "正在等待浏览器授权…"
+      },
+      "official": "官方内置",
+      "protocol": {
+        "anthropic": "Anthropic 协议",
+        "anthropicCompat": "Anthropic 兼容",
+        "openai": "OpenAI 协议",
+        "openaiCompat": "OpenAI 兼容"
+      },
+      "row": {
+        "sub": "{{left}} · {{n}} 个模型已启用",
+        "toggleOff": "点击停用此渠道",
+        "toggleOn": "点击启用此渠道"
+      },
+      "step1": {
+        "anthropicAdapt": "适配 /v1/messages",
+        "back": "返回模型列表",
+        "builtin": "内置厂商",
+        "catalogEmpty": "未拉取到厂商目录，请确认后端服务已启动。",
+        "customProtocol": "自定义协议",
+        "customProtocolDesc": "连接任意兼容以下协议的服务（公司网关、自托管、第三方代理），Base URL / 密钥 / 模型全部自定义",
+        "desc": "选择后进入配置表单，所有信息均可自定义修改",
+        "openaiAdapt": "适配 /v1/chat/completions",
+        "supportsSubscription": "支持订阅",
+        "title": "选择厂商或协议"
+      },
+      "step2": {
+        "back": "返回选择厂商"
+      },
+      "tag": {
+        "domestic": "国内",
+        "recommended": "推荐"
+      }
+    },
+    "preview": {
+      "command": "python main.py --topic \"美妆测评\" --limit 50",
+      "exploreReport": "## 探路报告\n\n### 1. 页面结构分析\n- 目标 URL: https://www.xiaohongshu.com/explore\n- 页面使用 React 框架渲染，内容为动态加载\n- 笔记列表容器: `.note-list` 使用瀑布流布局\n\n### 2. 数据节点定位\n- 笔记卡片: `.note-item`\n- 标题: `.note-item .title`\n- 点赞数: `.note-item .like-count`\n- 评论数: `.note-item .comment-count`\n\n### 3. 翻页机制\n- 页面使用 Intersection Observer 触发无限滚动\n- 每次加载约 20 条笔记\n\n### 4. 反爬策略识别\n> ⚠️ 检测到请求频率限制，建议间隔 2-5 秒\n- 需要模拟真实用户行为\n- Cookie 有效期约 30 分钟",
+      "exploreTitle": "探路报告（只读）",
+      "fileTree": "项目文件树",
+      "install": "1. 安装依赖:",
+      "output": "3. 输出: output/xiaohongshu_data.csv",
+      "programTitle": "可运行程序（只读）",
+      "readmeTitle": "运行说明 (README.md)",
+      "run": "2. 运行:",
+      "usage": "使用方法："
+    },
+    "remote": {
+      "connected": "已连接",
+      "feishu": "飞书",
+      "feishuDesc": "用于消息触发和通知推送",
+      "moreComing": "更多连接方式（钉钉、Slack、邮件）将在后续版本支持",
+      "revalidate": "重新验证",
+      "title": "远程连接"
+    },
+    "sessionDelete": {
+      "defaultName": "飞书日报自动生成器",
+      "message": "确定要删除会话 {{name}} 吗？",
+      "title": "删除会话",
+      "warning": "删除后会话内容将不可恢复。该会话关联的工作流不受影响。"
+    },
+    "settings": {
+      "tabs": {
+        "about": "关于",
+        "appearance": "外观",
+        "gateway": "网关",
+        "mode": "执行模式",
+        "model": "模型配置",
+        "privacy": "隐私"
+      },
+      "title": "设置",
+      "unsaved": {
+        "leave": "仍然离开",
+        "message": "当前表单有未保存的更改，未点「保存」的内容将丢失。确定离开吗？",
+        "title": "未保存的修改"
+      }
+    },
+    "skillDelete": {
+      "message": "确定要删除 Skill {{name}} 吗？",
+      "title": "删除 Skill",
+      "warning": "此操作不可撤销，该 Skill 的本地文件将一并移除。"
+    }
+  },
+  "permission": {
+    "action": {
+      "allow": "允许",
+      "allowAll": "全部允许({{n}} 项)",
+      "allowWithInstruction": "按指令允许",
+      "deny": "拒绝",
+      "denyAll": "全部拒绝",
+      "denyWithInstruction": "按说明拒绝"
+    },
+    "clamp": {
+      "collapse": "收起",
+      "expand": "展开"
+    },
+    "command": {
+      "collapse": "收起命令 ▴",
+      "expand": "查看命令 ▾"
+    },
+    "decided": {
+      "allowed": "已允许",
+      "denied": "已拒绝"
+    },
+    "empty": {
+      "desc": "未收到待批准的操作明细,本次请求已作废。请重新发起该任务。",
+      "title": "审批请求已失效"
+    },
+    "head": {
+      "decidedMulti": "{{n}} 项操作授权已完成",
+      "decidedSingle": "操作授权已完成",
+      "pendingHigh": "这步会删除文件,请确认",
+      "pendingMulti": "{{n}} 项操作待确认",
+      "pendingSingle": "需要你确认一下"
+    },
+    "highNotice": {
+      "bold": "{{n}} 项涉及删除",
+      "rest": "不包含在「全部允许」里,请逐项确认。"
+    },
+    "instruction": {
+      "echoLabel": "自定义指令： ",
+      "label": "自定义指令（可选 · 允许时约束执行 / 拒绝时说明理由）",
+      "onceOnly": "仅本次生效",
+      "placeholder": "补充一句约束,如:只删 node_modules,不要碰 src / .git"
+    },
+    "mode": {
+      "auto": {
+        "desc": "有风险操作交 AI 复核,该放的放、可疑的才问你",
+        "freq": "打断很少 · 推荐",
+        "label": "替我审批"
+      },
+      "full": {
+        "desc": "有风险操作免 AI 复核直接执行;仍拦系统级破坏、删凭证仍确认",
+        "freq": "几乎不打断 · 涉敏任务慎用",
+        "label": "完全访问"
+      },
+      "request": {
+        "desc": "只读之外都先问你(联网、执行命令、改外部文件…)",
+        "freq": "打断较多 · 最稳妥",
+        "label": "请求批准"
+      }
+    },
+    "note": {
+      "allow": "· 已继续执行",
+      "allowWithInstruction": "· 已按你的指令继续",
+      "deny": "· Agent 将换一种方案",
+      "denyWithInstruction": "· 已按你的说明换方案"
+    },
+    "pill": {
+      "globalNote": "全局生效 · 应用于所有会话"
+    },
+    "progress": {
+      "allDone": "已处理全部 {{n}} 项",
+      "pendingLabel": "待决"
+    },
+    "risk": {
+      "high": "删除",
+      "low": "需确认",
+      "med": "留意"
+    },
+    "settings": {
+      "defaultBadge": "系统默认",
+      "desc": "决定 Agent 何时需要你批准。全局生效,应用于所有会话;也可在输入框右上角快速切换。"
+    },
+    "sub": {
+      "decided": "本次授权决定及执行约束已记录",
+      "high": "会覆盖或删除已有文件,确认后再继续",
+      "multi": "来自本轮计划 · 可逐项确认,或一键处理",
+      "single": "系统无法完全确认这步的影响范围,请你把个关"
+    }
+  },
+  "providers": {
+    "glm": "GLM（智谱）"
+  },
+  "resizeHandle": {
+    "dragToResize": "拖拽调整宽度"
+  },
+  "rightPanel": {
+    "buildSucceeded": "构建成功",
+    "building": {
+      "fields": {
+        "explore": "探索报告",
+        "program": "可运行程序",
+        "task": "任务描述"
+      },
+      "inProgress": "进行中",
+      "title": "构建中"
+    },
+    "clearSearchAria": "清除搜索",
+    "empty": {
+      "description": "工作流、运行结果和会话文件将在此汇总",
+      "title": "当前会话暂无资源"
+    },
+    "filters": {
+      "all": "全部",
+      "files": "会话文件",
+      "runs": "运行结果",
+      "workflows": "工作流"
+    },
+    "groupEmpty": "该分类暂无内容",
+    "noMatch": "未找到与「{{query}}」匹配的内容",
+    "run": "运行",
+    "runCompleted": "执行完毕",
+    "runDetail": "运行结果详情",
+    "runFailed": "执行失败",
+    "runWorkflowAria": "运行工作流 {{name}}",
+    "searchPlaceholder": "搜索工作流、运行结果与文件...",
+    "title": "会话资源",
+    "workflowDetail": "工作流详情"
+  },
+  "run": {
+    "agentStatus": {
+      "failed": "Agent 执行失败",
+      "queued": "Agent 排队中",
+      "stopped": "Agent 已停止"
+    },
+    "aiDisclaimer": "内容由 AI 生成，请核实重要信息",
+    "build": {
+      "building": "构建中",
+      "done": "已完成",
+      "headerTitle": "工作流构建",
+      "inProgress": "进行中",
+      "preparing": "准备中",
+      "preparingDesc": "正在准备工作流构建环境",
+      "progressTitle": "构建进度",
+      "specClose": "关闭任务说明书",
+      "specCollapse": "收起",
+      "specLabel": "任务说明书",
+      "specOpen": "查看任务说明书",
+      "waiting": "等待继续"
+    },
+    "buildStage": {
+      "clarify": "对齐需求，锁定说明书",
+      "explore": "实地探查目标环境结构",
+      "generate": "编写并组织工作流代码",
+      "verify": "运行校验产出与验收"
+    },
+    "check": {
+      "nth": "第 {{n}} 项检查"
+    },
+    "childStatus": {
+      "awaitingHuman": "子 Agent：等待你的回答",
+      "awaitingPermission": "子 Agent：等待工具审批",
+      "awaitingSubagents": "子 Agent 正在等待子任务",
+      "completed": "子 Agent 有新完成内容",
+      "failed": "子 Agent 执行失败",
+      "queued": "子 Agent 排队中",
+      "running": "子 Agent 正在运行",
+      "stopped": "子 Agent 已停止",
+      "unknown": "子 Agent 状态未知"
+    },
+    "defaultName": "工作流运行",
+    "deleteWorkflow": {
+      "confirm": "删除",
+      "message": "确定删除「{{name}}」吗？工作流定义将被移除，已有运行结果仍会保留在“我的资产”中。",
+      "title": "删除工作流"
+    },
+    "detailsButton": "运行详情",
+    "executeDoneWaitEnd": "执行阶段已完成，等待结束",
+    "executeDoneWaitValidate": "执行阶段已完成，等待验证",
+    "headerTitle": "工作流运行",
+    "initializing": "正在初始化",
+    "phase": {
+      "execute": {
+        "desc": "按工作流步骤完成任务",
+        "label": "执行"
+      },
+      "validate": {
+        "desc": "检查运行结果是否符合预期",
+        "label": "验证"
+      }
+    },
+    "progress": {
+      "complete": "{{total}}/{{total}} {{unit}}完成",
+      "current": "当前第 {{current}}/{{total}} {{unit}}",
+      "pending": "0/{{total}} {{unit}} · 等待执行"
+    },
+    "status": {
+      "awaiting": "等待确认",
+      "running": "运行中",
+      "stopped": "已停止"
+    },
+    "step": {
+      "current": "当前{{unit}}",
+      "done": "已完成",
+      "empty": "尚未加载阶段步骤",
+      "failed": "执行失败",
+      "nth": "第 {{n}} 步",
+      "pending": "等待执行"
+    },
+    "summary": "{{steps}} 步完成 · {{calls}} 次调用",
+    "tab": {
+      "execute": "执行工作流",
+      "validate": "验证结果"
+    },
+    "tablistAria": "工作流运行阶段",
+    "unit": {
+      "check": "项",
+      "step": "步"
+    },
+    "validateDoneWaitEnd": "验证阶段已完成，等待结束"
+  },
+  "schedule": {
+    "action": {
+      "continue": "继续对话",
+      "create": "创建调度任务",
+      "delete": "删除",
+      "edit": "编辑",
+      "handle": "去处理",
+      "pause": "暂停",
+      "refresh": "刷新",
+      "resume": "恢复",
+      "runNow": "立即执行",
+      "stop": "停止",
+      "stopAll": "停止全部运行",
+      "stopRun": "停止本次运行",
+      "viewRun": "查看运行记录"
+    },
+    "approval": {
+      "empty": "暂无待处理",
+      "itemCount": "{{n}} 项",
+      "pendingCount": "{{n}} 待处理",
+      "subtitle": "定时任务在无人值守时触发、需你确认的操作都收拢在这里",
+      "title": "待审批中心"
+    },
+    "detail": {
+      "back": "返回调度",
+      "config": {
+        "createdAt": "创建时间",
+        "description": "任务描述",
+        "lastRun": "上次运行",
+        "nextRun": "下次运行",
+        "skills": "引用能力",
+        "title": "配置概要",
+        "trigger": "触发规则"
+      },
+      "configTitle": "配置概要",
+      "createdLabel": "创建时间",
+      "cronLabel": "触发规则",
+      "descLabel": "任务描述",
+      "history": {
+        "description": "点击任意一次运行查看会话记录",
+        "empty": "暂无运行记录",
+        "title": "运行历史"
+      },
+      "historyEmpty": "暂无运行记录",
+      "historyHint": "点击任意一次运行查看会话记录",
+      "historyTitle": "运行历史",
+      "lastRunLabel": "上次运行",
+      "needsAction": {
+        "description": "有一步操作等待你的确认,处理后将继续运行。",
+        "handle": "去处理",
+        "title": "本次运行需要你处理"
+      },
+      "needsActionDesc": "有一步操作等待你的确认,处理后将继续运行。",
+      "needsActionTitle": "本次运行需要你处理",
+      "nextRunLabel": "下次运行",
+      "none": "无",
+      "pausedHint": "该任务已暂停，不会自动运行。可点「立即执行」手动触发，或「恢复」以继续定时。",
+      "skillsLabel": "引用能力"
+    },
+    "drawer": {
+      "defaultName": "定时任务",
+      "emptyMain": "本次运行没有产生消息记录。",
+      "emptySub": "该子 Agent 暂无消息记录。",
+      "loading": "正在载入运行记录…",
+      "metaSession": "会话 ID",
+      "metaTime": "时间",
+      "metaTrigger": "触发方式",
+      "metaTriggerValue": "定时触发",
+      "title": "运行记录"
+    },
+    "empty": {
+      "desc": "创建一个定时任务，让工作流或技能在指定时间自动运行。",
+      "title": "还没有调度任务"
+    },
+    "field": {
+      "lastRun": "上次运行：",
+      "nextRun": "下次运行："
+    },
+    "filter": {
+      "active": "启用中",
+      "all": "全部",
+      "paused": "已暂停"
+    },
+    "nav": {
+      "mainAgent": "主 Agent",
+      "subAgentFallback": "子 Agent",
+      "subAgents": "子 Agent · {{n}}",
+      "title": "本次运行 · 会话层级"
+    },
+    "row": {
+      "bindings": "{{skillCount}} 个引用",
+      "bindingsWithWorkflows": "{{skillCount}} 个引用 · {{wfCount}} 个工作流",
+      "lastRun": "上次运行：",
+      "nextRun": "下次运行：",
+      "refs": "{{n}} 个引用",
+      "workflows": " · {{n}} 个工作流"
+    },
+    "run": {
+      "continueConversation": "继续对话",
+      "defaultName": "定时任务",
+      "emptyMain": "本次运行没有产生消息记录。",
+      "emptySubagent": "该子 Agent 暂无消息记录。",
+      "loadingMessages": "正在载入运行记录…",
+      "scheduledTrigger": "定时触发",
+      "sessionId": "会话 ID",
+      "status": {
+        "failed": "失败",
+        "finished": "已结束",
+        "needsAction": "需处理",
+        "running": "运行中",
+        "success": "成功"
+      },
+      "time": "时间",
+      "title": "运行记录",
+      "trigger": "触发方式"
+    },
+    "runStatus": {
+      "failed": "失败",
+      "finished": "已结束",
+      "needsAction": "需处理",
+      "running": "运行中",
+      "success": "成功"
+    },
+    "status": {
+      "active": "启用中",
+      "needsAction": "需处理",
+      "needsActionWithCount": "需处理 · {{n}}",
+      "paused": "已暂停",
+      "running": "运行中"
+    },
+    "subtitle": "创建和管理定时任务，在指定时间自动运行工作流或技能",
+    "template": {
+      "createLead": "帮我创建一个定时任务，内容: ",
+      "descPlaceholder": "描述你要定时执行的任务，可 @ 引用工作流…",
+      "ending": "。",
+      "frequencyLead": "，调度频率 ",
+      "nameLead": "，命名为: ",
+      "namePlaceholder": "任务名称",
+      "runWorkflow": "运行工作流「{{name}}」",
+      "updateLead": "帮我更新这个定时任务(编号 {{id}}),内容: "
+    },
+    "title": "调度"
+  },
+  "scrollControls": {
+    "toBottom": "回到底部",
+    "toTop": "回到顶部"
+  },
+  "session": {
+    "browser": {
+      "addressAria": "浏览器地址",
+      "addressPlaceholder": "输入网址或搜索内容",
+      "back": "后退",
+      "closeSession": "关闭浏览器及全部标签页",
+      "closeTabAria": "关闭标签页 {{title}}",
+      "crashedDetail": "重新加载页面即可继续。",
+      "crashedTitle": "页面意外停止",
+      "emptyDetail": "新建一个标签页继续浏览。",
+      "emptyTitle": "没有打开的标签页",
+      "expand": "展开浏览器",
+      "forward": "前进",
+      "launchButton": {
+        "creating": "正在打开…",
+        "open": "打开浏览器",
+        "ready": "浏览器已打开",
+        "retry": "重新打开"
+      },
+      "launchDetail": "你和 Agent 都可以操作浏览器中的标签页，登录状态会保留。",
+      "launchFailed": "打开失败：{{message}}",
+      "launchTitle": "打开浏览器",
+      "newTab": "新建标签页",
+      "overflowReminder": "页面较宽",
+      "overflowReminderAction": "展开",
+      "overflowReminderAnnouncement": "当前页面较宽，可以展开浏览器查看得更完整",
+      "overflowReminderDismiss": "关闭页面显示提示",
+      "overflowReminderTooltip": "当前页面较宽，展开后显示更完整",
+      "reload": "重新加载",
+      "restoreSidebar": "恢复侧栏",
+      "retry": "请稍后重试",
+      "syncCreating": "正在创建浏览器标签页…",
+      "syncReady": "浏览器已打开，正在同步标签页…",
+      "tabsAria": "浏览器标签页"
+    },
+    "common": {
+      "cancelled": "已取消",
+      "confirmed": "已确认",
+      "saved": "已保存"
+    },
+    "defaultTitle": "新对话",
+    "interaction": {
+      "card": {
+        "acceptRuleDeferredTitle": "完成标准稍后再对齐",
+        "acceptanceCount": "共 {{n}} 项",
+        "acceptanceDesc": "工作流完成后会按这些标准检查结果",
+        "acceptanceTitle": "已对齐的完成标准",
+        "answerLabel": "您的回答",
+        "buildConfirmedBadge": "已确认构建",
+        "buildDesc": "是否将当前任务沉淀为可重复运行的工作流",
+        "buildOnceBadge": "仅执行一次",
+        "buildTitle": "工作流构建确认",
+        "contextLabel": "确认背景",
+        "feedbackLabel": "您的修改意见：",
+        "newMessageDesc": "你发来了新消息，Agent 会结合新内容继续调整",
+        "newMessageLabel": "你的新消息",
+        "noAcceptanceDesc": "工作流运行时只执行步骤，无需结果校验；执行报错仍会明确失败",
+        "noAcceptanceTitle": "未设置完成标准",
+        "qaDesc": "本次任务中与您确认的信息",
+        "qaListLabel": "已确认的问答",
+        "qaTitle": "需求确认",
+        "questionLabel": "Agent 向您确认",
+        "ruleBadge": "标准 {{n}}",
+        "taskRevisedBadge": "已要求修改",
+        "taskTitle": "任务说明书确认",
+        "workflowTitle": "工作流保存确认"
+      },
+      "hideRecord": "收起记录",
+      "label": {
+        "acceptRuleDeferred": "完成标准稍后再对齐，已收到新消息",
+        "acceptanceAligned": "已对齐 {{n}} 项工作流完成标准",
+        "buildConfirmed": "已确认开始构建工作流",
+        "buildOnce": "已选择仅执行一次",
+        "confirmed": "已与您确认",
+        "noAcceptanceRule": "已选择不设置完成标准",
+        "permissionDone": "已完成工具权限确认",
+        "replied": "已回复{{question}}",
+        "taskConfirmed": "已确认任务说明书",
+        "taskRevision": "已提交任务说明书修改意见",
+        "workflowSaveCancelled": "已取消保存工作流",
+        "workflowSaved": "已确认并保存工作流"
+      },
+      "permissionDetail": "允许 {{allowed}} 项 · 拒绝 {{denied}} 项",
+      "ruleItem": "标准 {{index}} {{text}}",
+      "showRecord": "查看记录"
+    },
+    "menu": {
+      "delete": "删除会话",
+      "rename": "重命名"
+    },
+    "pipeline": {
+      "action": {
+        "copied": "已复制",
+        "copy": "复制",
+        "copyFailed": "复制失败",
+        "groupAria": "消息操作",
+        "quote": "引用",
+        "report": "反馈"
+      },
+      "activeElapsedAria": "已运行 {{seconds}} 秒",
+      "activity": {
+        "awaitingAnswer": "等待你的回答",
+        "awaitingSubagent": "正在等待子 Agent",
+        "callingTool": "正在调用工具",
+        "generating": "正在生成回复",
+        "runningWorkflow": "正在执行工作流",
+        "thinking": "正在思考",
+        "usingBrowser": "正在操作浏览器",
+        "validatingWorkflow": "正在验证工作流"
+      },
+      "defaultEmpty": "向 AI 发起对话，开始这个会话…",
+      "duration": "用时 {{duration}}",
+      "durationTitle": "生成耗时 {{milliseconds}} 毫秒",
+      "generationInfoAria": "消息生成信息",
+      "loadEarlier": "正在载入更早的消息…",
+      "loadEarlierWithCount": "正在载入更早的消息… 还有 {{n}} 条",
+      "messagesAria": "会话消息",
+      "reconnecting": "正在重新连接 {{attempt}}/{{max}}",
+      "reconnectingAria": "正在重新连接 {{attempt}}/{{max}}",
+      "stopped": "本次生成已停止，您可以继续发送消息。"
+    },
+    "resourcePanel": {
+      "agent": "Bridgic",
+      "browser": "浏览器",
+      "browserActiveShort": "操作中",
+      "browserAgentActive": "Bridgic 正在操作浏览器",
+      "browserLoading": "浏览器正在加载",
+      "browserLoadingShort": "加载中",
+      "browserNeedsAttention": "浏览器有新动态，点击查看",
+      "browserOpened": "浏览器已打开",
+      "files": "文件",
+      "filesNeedsAttention": "已添加新文件，点击查看",
+      "modeRun": "执行",
+      "modeTask": "任务",
+      "output": "会话资源",
+      "preparingMode": "正在切换界面…",
+      "resources": "会话资源",
+      "results": "运行记录",
+      "schedules": "调度",
+      "surfaceRailAria": "会话侧栏页面",
+      "title": "会话资源",
+      "typeTabsAria": "会话资源类型",
+      "viewBrowser": "查看",
+      "workflows": "工作流"
+    },
+    "row": {
+      "agentRunning": "Agent 正在运行",
+      "awaitingAnswer": "待回答",
+      "collapseChildren": "收起子会话",
+      "expandChildren": "展开子会话",
+      "newCompletedContent": "有新完成内容"
+    },
+    "timeline": {
+      "eyebrow": {
+        "build": "构建 {{index}}/{{count}}",
+        "workflow": "{{phase}} {{index}}/{{count}}"
+      },
+      "phase": {
+        "execute": "执行",
+        "verify": "验证"
+      },
+      "summary": {
+        "calls": "{{n}} 次调用",
+        "confirmations": "{{n}} 次与您确认",
+        "messages": "{{n}} 条消息",
+        "steps": "{{n}} 个步骤"
+      },
+      "title": "执行过程"
+    },
+    "tool": {
+      "error": "错误",
+      "noDiff": "（无可显示的改动）",
+      "noOutput": "（无输出）",
+      "overflow": {
+        "bytes": "{{size}}（{{count}} 字节）",
+        "chars": "{{count}} 字符",
+        "limit": "内联上限",
+        "path": "路径",
+        "size": "大小",
+        "title": "工具结果已写入文件"
+      },
+      "parameters": "参数",
+      "preview": "预览",
+      "result": "结果"
+    },
+    "workbench": {
+      "files": {
+        "searchPlaceholder": "搜索当前会话文件…",
+        "title": "文件"
+      },
+      "results": {
+        "empty": "暂无运行记录",
+        "filterNoMatch": "没有符合当前筛选条件的运行记录",
+        "loadFailed": "运行记录加载失败",
+        "noMatch": "没有找到与“{{query}}”匹配的运行记录",
+        "reference": "引用",
+        "referenceAria": "在当前会话中引用 {{name}} 的运行结果",
+        "scopeAll": "全部",
+        "scopeAria": "运行记录范围",
+        "scopeSession": "本会话",
+        "searchPlaceholder": "搜索运行记录…",
+        "statusAll": "全部状态",
+        "statusAria": "运行状态",
+        "statusCompleted": "已完成",
+        "statusFailed": "失败",
+        "title": "运行记录",
+        "viewAria": "查看 {{name}} 的运行结果"
+      },
+      "schedules": {
+        "filterAria": "调度状态筛选",
+        "noMatch": "没有找到与“{{query}}”匹配的调度",
+        "searchPlaceholder": "搜索调度名称或描述…",
+        "title": "调度"
+      },
+      "workflows": {
+        "built": "可使用",
+        "empty": "暂无工作流",
+        "run": "运行",
+        "runAria": "在当前会话中使用工作流 {{name}}",
+        "scopeAll": "全部",
+        "scopeAria": "工作流范围",
+        "scopeSession": "本会话",
+        "searchPlaceholder": "搜索工作流…",
+        "title": "工作流",
+        "view": "查看",
+        "viewAria": "查看工作流 {{name}}"
+      }
+    }
+  },
+  "settings": {
+    "appearance": {
+      "language": {
+        "chinese": "简体中文",
+        "chineseDesc": "Simplified Chinese",
+        "current": "当前使用：{{name}}",
+        "desc": "选择界面显示语言。",
+        "english": "English",
+        "system": "跟随系统",
+        "systemDesc": "使用操作系统设置的语言",
+        "title": "语言"
+      },
+      "theme": {
+        "current": "当前生效：{{name}}",
+        "dark": "深色",
+        "darkDesc": "始终使用深色主题",
+        "desc": "选择应用外观主题。",
+        "light": "浅色",
+        "lightDesc": "始终使用浅色主题",
+        "system": "跟随系统",
+        "systemDesc": "根据系统外观自动切换",
+        "title": "主题"
+      },
+      "zoom": {
+        "decrease": "缩小",
+        "desc": "字号、图标、间距一起等比缩放。快捷键 ⌘/Ctrl + 加号 / 减号，⌘/Ctrl + 0 复位。",
+        "increase": "放大",
+        "reset": "重置",
+        "size": "整体大小",
+        "title": "界面缩放"
+      }
+    },
+    "privacy": {
+      "localFirst": {
+        "description": "你的对话、提示词、代码、文件和凭据默认留在设备上，不会纳入使用数据。",
+        "title": "你的工作内容默认留在本地"
+      },
+      "notice": {
+        "label": "查看完整隐私声明",
+        "updated": "更新于 2026 年 8 月 11 日"
+      },
+      "telemetry": {
+        "dataScopeTitle": "使用数据范围",
+        "excludedSummary": "提示词与对话、模型内容、代码与文件、命令及工具内容、凭据、日志、截图或录屏",
+        "excludedTitle": "不包含",
+        "sectionDescription": "了解软件的基本使用情况，可以帮助我们持续改进功能体验与稳定性。这些使用数据不包含你的工作内容。",
+        "sectionTitle": "帮助我们改进 {{product}}",
+        "sharedSummary": "不关联账号或个人身份的使用统计、软件启动与窗口打开、前台活跃时长、软件版本和操作系统类型",
+        "sharedTitle": "包含",
+        "statusOff": "已关闭",
+        "statusOn": "已开启",
+        "switchDescriptionOff": "当前未收集使用数据，所有核心功能均可正常使用。",
+        "switchDescriptionOn": "仅收集下方列出的基本使用信息。",
+        "switchTitle": "允许我们收集使用数据"
+      },
+      "use": {
+        "description": "用于了解功能是否好用、优化产品体验与稳定性；不会出售，也不用于广告或个人画像。事件最多保留 90 天。"
+      }
+    }
+  },
+  "sidebar": {
+    "approvalCenter": "待审批中心",
+    "feedback": "反馈问题",
+    "gateway": {
+      "clientsOnline": " · {{n}} 个客户端在线",
+      "restart": "重启网关",
+      "start": "启动网关",
+      "status": {
+        "discovering": "探测中…",
+        "incompatible": "版本不匹配",
+        "running": "运行中",
+        "starting": "启动中…",
+        "stopped": "已停止",
+        "unavailable": "已停止（需手动启动）",
+        "unhealthy": "连接异常"
+      },
+      "stop": "停止网关",
+      "tooltip": "网关 {{status}}",
+      "tooltipWithEndpoint": "网关 {{status}} · {{endpoint}}{{clients}}"
+    },
+    "nav": {
+      "assets": "我的资产",
+      "schedules": "调度",
+      "skills": "Skills",
+      "workflows": "工作流"
+    },
+    "newSession": "新会话",
+    "sessions": "会话",
+    "settings": "设置"
+  },
+  "skill": {
+    "common": {
+      "collapse": "收起",
+      "expand": "展开全文",
+      "new": "新增"
+    },
+    "conflict": {
+      "descChanged": "描述有改动",
+      "existing": "被覆盖",
+      "existingSub": "系统现有",
+      "incoming": "待导入",
+      "incomingSub": "来自导入目录",
+      "newer": "较新",
+      "overwrite": "覆盖"
+    },
+    "import": {
+      "modal": {
+        "confirmImport": "确认导入（{{n}}）",
+        "directoryPickerFailed": "打开目录选择器失败",
+        "done": "完成",
+        "importing": "导入中…",
+        "newerSkipped": "<b>{{n}}</b> 项有较新版本未覆盖（将保留现有较旧版本）。",
+        "parsing": "解析中…",
+        "summary": "将导入 <b>{{total}}</b> 项 · {{new}} 新增",
+        "summaryConflicts": " + {{replaced}} 覆盖 · <muted>{{kept}} 不覆盖</muted>",
+        "title": "导入 Skills"
+      },
+      "pick": {
+        "chooseDirectory": "选择目录…",
+        "comingSoon": "即将支持",
+        "local": {
+          "description": "仅支持选择<b> 单个目录 </b>，系统将扫描其中的 Skill 定义",
+          "title": "选择包含 Skills 的本地目录"
+        },
+        "recognized": "已识别为 <b>{{source}}</b>",
+        "remoteAddress": "远程地址",
+        "remoteHint": "单个 Git 仓库可能包含多个 Skill。点击导入后将解析仓库，并进入列表<b>二次确认</b>需要导入的项。",
+        "scanning": "扫描中…",
+        "source": {
+          "clawhub": "ClawHub",
+          "github": "GitHub 仓库",
+          "skillsSh": "skills.sh 页面"
+        },
+        "sourceList": {
+          "skillsSh": "Skills 共享市场"
+        },
+        "supportedSources": "支持的来源",
+        "tab": {
+          "local": "本地目录",
+          "remote": "远程地址"
+        },
+        "unrecognized": "无法识别该来源，当前支持 GitHub 与 skills.sh",
+        "unsupported": "已识别为 {{source}}，暂未支持导入"
+      },
+      "result": {
+        "failure": "，失败 {{n}} 个",
+        "overwritten": "已覆盖",
+        "success": "成功导入 <b>{{n}}</b> 个"
+      },
+      "review": {
+        "conflictBadge": "{{n}} 同名冲突",
+        "conflictHint": " · 勾选要覆盖系统现有的项",
+        "conflictTitle": "同名冲突 · {{n}} 项",
+        "emptyLocal": "该目录下未发现 Skill",
+        "emptyRemote": "该仓库中未发现 Skill",
+        "keepAll": "全部不覆盖",
+        "newBadge": "{{n}} 新增",
+        "newTitle": "新增 Skill · {{n}} 项",
+        "replaceAll": "全部覆盖",
+        "scanned": "共扫描到 <b>{{n}}</b> 个",
+        "skip": "不导入"
+      }
+    }
+  },
+  "spec": {
+    "action": {
+      "cancel": "取消",
+      "closeTooltip": "关闭预览",
+      "collapse": "收起",
+      "editTooltip": "编辑 markdown 原文",
+      "expandAll": "展开全文",
+      "save": "保存"
+    },
+    "badge": {
+      "original": "原始版本",
+      "pending": "待确认",
+      "saved": "已保存"
+    },
+    "comment": {
+      "add": "加入",
+      "addTooltip": "加入本次评论（{{key}}）",
+      "ariaLabel": "评论选中内容",
+      "button": "评论",
+      "placeholder": "写下你的评论或修改意见…",
+      "title": "评论选中内容"
+    },
+    "diff": {
+      "noChange": "task.md 与上一确认版本一致，没有内容变更"
+    },
+    "empty": "尚未生成任务说明书",
+    "feedback": {
+      "cancelTooltip": "取消（Esc）",
+      "continueDesc": "将携带 {{n}} 条评论作为反馈一并发送",
+      "continueTitle": "继续构建",
+      "escHint": "Esc 取消",
+      "instructionPlaceholder": "或者，直接告诉它该怎么做…",
+      "myComment": "我的评论",
+      "quoteLabel": "选中原文",
+      "removeTooltip": "移除这条",
+      "send": "发送反馈并继续构建",
+      "sendFailed": "评论发送失败",
+      "sending": "发送中…",
+      "title": "评论（{{n}}）"
+    },
+    "file": {
+      "current": "任务说明书.md",
+      "original": "原始任务说明书.md"
+    },
+    "hint": {
+      "archived": "构建已完成；这里保留确认时的只读快照，说明书已随工作流保存",
+      "baseline": "这是进入编辑流程时保存的原始任务定义；Clarify 完成后将自动切换为变更对比",
+      "default": "选中文档任意文字可多次评论，攒齐后到左侧合并为一条消息发送",
+      "diff": "正在对比上一确认版本与本次修改，绿色为新增、红色为删除；选中文字可评论",
+      "editing": "编辑 markdown 原文，保存将直接写入文件并通知 Agent"
+    },
+    "pendingCount": "{{n}} 待发",
+    "toast": {
+      "noSession": "无法保存:当前会话尚未就绪",
+      "notReady": "后端未就绪或正在输出,暂时无法保存",
+      "saved": "任务说明书已保存,并已通知 Agent",
+      "writeFailed": "保存失败,请重试"
+    },
+    "view": {
+      "diff": "变更",
+      "document": "最新版"
+    }
+  },
+  "specPreview": {
+    "add": "加入",
+    "addCommentTooltip": "加入本次评论（{{shortcut}}）",
+    "badge": {
+      "awaitingConfirmation": "待确认",
+      "original": "原始版本",
+      "saved": "已保存"
+    },
+    "cancel": "取消",
+    "closePreview": "关闭预览",
+    "collapse": "收起",
+    "comment": "评论",
+    "commentPlaceholder": "写下你的评论或修改意见…",
+    "commentSelection": "评论选中内容",
+    "commentSelectionAria": "评论选中内容",
+    "diff": "变更",
+    "editSource": "编辑 markdown 原文",
+    "empty": "尚未生成任务说明书",
+    "expandAll": "展开全文",
+    "fileName": "任务说明书.md",
+    "instructions": {
+      "archived": "构建已完成；这里保留确认时的只读快照，说明书已随工作流保存",
+      "comment": "选中文档任意文字可多次评论，攒齐后到左侧合并为一条消息发送",
+      "diff": "正在对比上一确认版本与本次修改，绿色为新增、红色为删除；选中文字可评论",
+      "editing": "编辑 markdown 原文，保存将直接写入文件并通知 Agent",
+      "original": "这是进入编辑流程时保存的原始任务定义；Clarify 完成后将自动切换为变更对比"
+    },
+    "latest": "最新版",
+    "noChanges": "task.md 与上一确认版本一致，没有内容变更。",
+    "originalFileName": "原始任务说明书.md",
+    "pendingCount": "{{count}} 待发",
+    "save": "保存",
+    "toast": {
+      "notReady": "后端未就绪或正在输出,暂时无法保存",
+      "saveFailed": "保存失败,请重试",
+      "saved": "任务说明书已保存,并已通知 Agent",
+      "sessionNotReady": "无法保存:当前会话尚未就绪"
+    }
+  },
+  "status": {
+    "subagent": {
+      "awaitingHuman": "等待你的回答",
+      "awaitingHumanShort": "等待回答",
+      "awaitingPermission": "等待工具审批",
+      "awaitingPermissionShort": "等待审批",
+      "awaitingSubagents": "等待子 Agent",
+      "awaitingSubagentsShort": "等待子任务",
+      "completed": "已完成",
+      "completedShort": "已完成",
+      "failed": "执行失败",
+      "failedShort": "失败",
+      "queued": "排队中",
+      "queuedShort": "排队",
+      "running": "执行中",
+      "runningShort": "运行中",
+      "stopped": "已停止",
+      "stoppedShort": "已停止",
+      "unknown": "未知状态",
+      "unknownShort": "未知"
+    }
+  },
+  "subagent": {
+    "cardTitle": "子 Agent",
+    "group": {
+      "count": "{{label}} {{n}}",
+      "summary": "Agent 子任务 · 已启动 {{n}} 个",
+      "untitled": "Agent 子任务"
+    },
+    "modal": {
+      "preparing": "子 Agent 正在准备…",
+      "stop": "停止",
+      "stopping": "停止中…",
+      "title": "子 Agent"
+    }
+  },
+  "theme": {
+    "dark": "深色",
+    "light": "浅色",
+    "system": "跟随系统"
+  },
+  "timeline": {
+    "collapse": "收起",
+    "expand": "展开"
+  },
+  "toast": {
+    "scheduleAllRunsStopRequested": "已请求停止「{{name}}」的全部运行",
+    "scheduleDeleted": "已删除「{{name}}」",
+    "schedulePaused": "已暂停「{{name}}」",
+    "scheduleResumed": "已恢复「{{name}}」",
+    "scheduleRunStopRequested": "已请求停止本次运行",
+    "scheduleRunTriggered": "已触发「{{name}}」运行一次",
+    "sessionCopiedForContinue": "已复制为新会话，可继续对话",
+    "workflowDeleted": "已删除「{{name}}」；历史运行结果仍保留在我的资产中",
+    "workflowExported": "已导出「{{name}}」",
+    "workflowImported": "已导入「{{name}}」",
+    "workflowRenamed": "已将工作流重命名为「{{name}}」",
+    "workflowRunDeleted": "运行结果已删除",
+    "workflowRunExported": "已导出「{{name}}」的执行结果"
+  },
+  "tool": {
+    "direction": {
+      "down": "向下",
+      "left": "向左",
+      "right": "向右",
+      "up": "向上"
+    },
+    "meta": {
+      "addedLines": "+{{n}}行",
+      "fileCount": "{{n}} 文件",
+      "hitCount": "{{n}} 处",
+      "matchedCount": "命中 {{n}} 个",
+      "replacedCount": "替换 {{n}} 处",
+      "resultCount": "{{n}} 条"
+    },
+    "range": {
+      "between": "第 {{start}}–{{end}} 行",
+      "first": "前 {{n}} 行",
+      "from": "第 {{start}} 行起",
+      "full": "全文"
+    },
+    "verb": {
+      "bash": "执行",
+      "browserBack": "后退",
+      "browserCheck": "勾选",
+      "browserClick": "点击",
+      "browserClose": "关闭浏览器",
+      "browserCloseTab": "关闭标签页",
+      "browserFocus": "聚焦",
+      "browserForward": "前进",
+      "browserHover": "悬停",
+      "browserInput": "输入",
+      "browserKey": "按键",
+      "browserNewTab": "新建标签页",
+      "browserOpen": "打开网页",
+      "browserPageInfo": "页面信息",
+      "browserReload": "刷新页面",
+      "browserScreenshot": "截图",
+      "browserScroll": "滚动",
+      "browserScrollToText": "滚动到文本",
+      "browserSearch": "浏览器搜索",
+      "browserSelect": "下拉选择",
+      "browserSnapshot": "页面快照",
+      "browserSwitchTab": "切换标签页",
+      "browserTabs": "列出标签页",
+      "browserUncheck": "取消勾选",
+      "browserVerifyText": "校验文本",
+      "browserVerifyTitle": "校验标题",
+      "browserVerifyUrl": "校验网址",
+      "browserVerifyVisible": "校验可见",
+      "browserWait": "等待",
+      "browserWaitForNetworkIdle": "等待网络空闲",
+      "call": "调用",
+      "callNamed": "调用 {{name}}",
+      "createSchedule": "创建定时任务",
+      "deleteSchedule": "删除定时任务",
+      "edit": "编辑",
+      "editWorkflow": "编辑工作流",
+      "getSchedule": "查看定时任务",
+      "glob": "查找",
+      "grep": "搜索",
+      "importSkills": "导入技能",
+      "listSchedules": "列出定时任务",
+      "listSkills": "列出技能",
+      "listWorkflowRuns": "列出运行记录",
+      "loadBrowserTools": "加载浏览器工具",
+      "loadWorkspaceTools": "加载工作区工具",
+      "manageSkills": "管理技能",
+      "read": "读取",
+      "readWorkflowRun": "读取运行记录",
+      "removeWorkflow": "删除工作流",
+      "reportWorkflowStep": "汇报步骤",
+      "runSubagent": "运行子智能体",
+      "runWorkflow": "运行工作流",
+      "setSkillEnabled": "启停技能",
+      "startSubagent": "后台子智能体",
+      "uninstallSkill": "卸载技能",
+      "updateSchedule": "更新定时任务",
+      "viewSkill": "查看技能",
+      "webFetch": "抓取网页",
+      "webSearch": "联网搜索",
+      "workspaceCheckpoint": "创建检查点",
+      "workspaceDiff": "查看改动",
+      "workspaceHistory": "查看检查点历史",
+      "workspaceRestore": "恢复工作区",
+      "workspaceRestoreFile": "恢复文件",
+      "workspaceStatus": "查看工作区状态",
+      "write": "写入"
+    }
+  },
+  "topBar": {
+    "collapseOutputs": "收起会话资源",
+    "collapseSidebar": "收起侧边栏",
+    "expandOutputs": "展开会话资源",
+    "expandSidebar": "展开侧边栏"
+  },
+  "update": {
+    "busyDescription": "有 Agent 任务正在执行,立即重启会中断它们。建议等任务结束后再更新。",
+    "busyTitle": "当前有 Agent 任务在运行",
+    "cancel": "取消",
+    "cancelledHint": "你可以随时在「设置 → 关于」里手动更新。",
+    "cancelledTitle": "已取消更新",
+    "daemonBusy": "网关未能在限定时间内停止，更新未安装。请在设置中停止网关后重试 —— 已下载的更新会保留。",
+    "disabled": "此版本未启用自动更新。",
+    "errorTitle": "更新失败",
+    "gotIt": "知道了",
+    "gotItIn": "知道了 ({{seconds}})",
+    "installFailed": "更新未能完成安装,网关已经停止。请重启应用后重试。",
+    "installing": "正在准备安装…",
+    "noneStaged": "没有已下载、等待安装的更新。",
+    "readyDescription": "已下载版本 {{version}}。{{product}} 将先停止网关，安装更新后自动重新打开。",
+    "readyTitle": "更新已就绪",
+    "restartAnyway": "立即重启更新",
+    "restartNow": "重启更新",
+    "scheduledDescription": "所有 Agent 任务结束后自动重启并安装 {{version}}。",
+    "scheduledTitle": "已安排更新",
+    "updateWhenIdle": "空闲时更新"
+  },
+  "widget": {
+    "schedFreq": {
+      "cronExpr": "Cron 表达式",
+      "every": "每",
+      "mode": "模式",
+      "period": {
+        "custom": "自定义 cron",
+        "day": "日",
+        "hour": "时",
+        "minute": "分",
+        "month": "月",
+        "quarter": "季度",
+        "week": "周",
+        "year": "年"
+      },
+      "preview": "预览",
+      "quarterStartMonth": "{{n}}月",
+      "word": {
+        "at": "在",
+        "atNth": "在第",
+        "day": "日",
+        "minute": "分",
+        "on": "于",
+        "onNth": "于第",
+        "second": "秒",
+        "startMonth": "起始月"
+      }
+    }
+  },
+  "windowedList": {
+    "loadingMore": "正在载入更多… 共 {{count}} 项"
+  },
+  "workflow": {
+    "build": {
+      "desc": "构建后可以稳定复用这套流程，并在后续运行时按既定步骤完成任务。",
+      "entering": "正在进入",
+      "processing": "处理中",
+      "ready": "准备构建",
+      "runOnce": "仅执行这一次",
+      "start": "开始构建",
+      "title": "构建为可重复运行的工作流？"
+    },
+    "common": {
+      "actionFailed": "操作失败",
+      "cancel": "取消",
+      "confirm": "确认",
+      "useResult": "使用结果"
+    },
+    "confirm": {
+      "back": "返回",
+      "confirmUpdate": "确认更新",
+      "continueEditing": "继续修改",
+      "copyName": "{{name}} 副本",
+      "createNew": "创建新工作流",
+      "desc": {
+        "confirmed": "工作流已保存，可以在右侧栏或工作流中心继续管理。",
+        "confirmedEdit": "工作流已更新，原有引用和历史运行结果保持不变。",
+        "continued": "已确认，正在保存工作流。",
+        "continuedEdit": "已确认更新，正在保存工作流。",
+        "editPending": "修改已完成。你可以覆盖原工作流并保留它的历史运行结果，或另存为新工作流。",
+        "notSaved": "本次暂未保存为工作流。",
+        "pending": "为这个工作流命名以便后续管理和复用：",
+        "saveAsNew": "为新工作流命名。原工作流不会被修改。"
+      },
+      "nameRequired": "请输入工作流名称",
+      "newWorkflowName": "新工作流名称",
+      "originalWorkflow": "原工作流",
+      "overwriteOriginal": "覆盖原工作流",
+      "reusable": "可重复运行",
+      "runNow": "立即运行",
+      "saveAsNew": "另存为新工作流",
+      "status": {
+        "buildDone": "构建完成",
+        "buildSuccess": "构建成功",
+        "cancelled": "已取消",
+        "editDone": "修改完成",
+        "saving": "保存中",
+        "updating": "更新中"
+      },
+      "successDesc": {
+        "create": "“{{name}}”已保存，可立即运行，也可以稍后在工作流中心管理。",
+        "edit": "“{{name}}”已更新，原有引用和历史运行结果保持不变。"
+      },
+      "successTitle": {
+        "create": "工作流构建成功",
+        "edit": "工作流更新成功"
+      },
+      "viewWorkflow": "查看工作流"
+    },
+    "detail": {
+      "build": {
+        "explore": "探索报告",
+        "task": "任务定义",
+        "verify": "验证报告"
+      },
+      "buildDocumentsLabel": "构建文档 · {{count}}",
+      "close": "关闭",
+      "closeAria": "关闭工作流详情",
+      "collapseScriptsAria": "收起脚本文件",
+      "counts": {
+        "buildDocuments": "{{count}} 份构建文档",
+        "implementationFiles": "{{count}} 个实现文件",
+        "instructions": "{{count}} 份执行说明",
+        "scriptFiles": "{{count}} 个脚本文件",
+        "sections": "共 {{count}} 个章节"
+      },
+      "expandScriptsAria": "展开脚本文件",
+      "export": "导出",
+      "loadError": "工作流详情加载失败",
+      "loading": "正在加载工作流详情...",
+      "metrics": {
+        "characters": "{{count}} 字符",
+        "lines": "{{count}} 行"
+      },
+      "noPreview": "这个工作流暂时没有可预览的内容",
+      "openOutlineAria": "打开文档大纲",
+      "outline": "文档大纲",
+      "retry": "重试",
+      "run": "运行",
+      "runAria": "运行工作流 {{name}}",
+      "runInNewSession": "新会话运行",
+      "runtimeEmpty": {
+        "description": "当前工作流没有独立的运行参数。",
+        "title": "尚未配置运行方式"
+      },
+      "saved": "已保存",
+      "savedWorkflow": "已保存的工作流",
+      "scriptFiles": "脚本文件",
+      "selectWorkflow": "请选择一个工作流",
+      "source": {
+        "taskFlow": "任务流程",
+        "validation": "验证方法"
+      },
+      "sourceFilesLabel": "执行源文件 · {{count}}",
+      "tabs": {
+        "info": "工作流信息",
+        "runtime": "运行配置"
+      },
+      "thisDocumentOutline": "本文大纲",
+      "title": "工作流详情"
+    },
+    "result": {
+      "citeResult": "引用结果",
+      "description": {
+        "completed": "所有执行步骤均已完成。本次运行已结束，无需继续处理。",
+        "completedVerified": "所有执行和验证步骤均已完成。本次运行已结束，无需继续处理。",
+        "failed": "本次运行已结束。需要时可查看失败详情。"
+      },
+      "resultFiles": "{{count}} 个结果文件",
+      "status": {
+        "completed": "执行已完成",
+        "completedVerified": "执行与验证已完成",
+        "failed": "执行失败"
+      },
+      "title": {
+        "completed": "工作流执行完成",
+        "failed": "工作流执行失败"
+      },
+      "viewFailure": "查看失败详情",
+      "viewResult": "查看结果"
+    },
+    "runDetail": {
+      "close": "关闭",
+      "closeAria": "关闭运行结果详情",
+      "exportResult": "导出执行结果",
+      "exportingResult": "正在导出...",
+      "fileLoadError": "运行文件加载失败",
+      "finishedAt": "完成于 {{time}}",
+      "loadError": "运行详情加载失败",
+      "loading": "正在加载运行结果...",
+      "loadingFile": "正在加载运行文件...",
+      "loadingRawPreview": "正在加载原文件预览...",
+      "noResultFiles": "这次运行没有保存可查看的文件。",
+      "openSourceFile": "打开源文件",
+      "openSourceFileError": "无法打开源文件",
+      "openSourceFileFailed": "打开源文件失败：{{error}}",
+      "openingSourceFile": "正在打开...",
+      "otherFilesLabel": "其他文件 · {{count}}",
+      "rawPreviewFailed": "原文件预览加载失败：{{error}}",
+      "rawPreviewLoadError": "原文件预览加载失败",
+      "refreshError": "运行详情刷新失败",
+      "resultFilesLabel": "结果文件 · {{count}}",
+      "retry": "重试",
+      "retryDetail": "{{error}}，重试",
+      "selectFile": "选择左侧文件查看内容",
+      "sourceSession": "来源会话 {{id}}",
+      "status": {
+        "cancelled": "已取消",
+        "completed": "执行完毕",
+        "failed": "失败",
+        "paused": "已暂停",
+        "running": "运行中",
+        "waiting": "等待交互"
+      },
+      "textPreviewUnavailable": "这个文件暂不支持文本预览",
+      "title": "工作流运行结果",
+      "truncatedPreview": "文件较大，当前仅预览前 {{count}} 个字符；请打开源文件查看完整内容。",
+      "truncatedPreviewFooter": "预览到此结束，后续内容未显示；请打开源文件查看完整内容。",
+      "useInNewSession": "在新会话中使用",
+      "workFilesLabel": "中间文件 · {{count}}",
+      "workflowInput": "工作流输入："
+    },
+    "task": {
+      "comment": "评论",
+      "commentPlaceholder": "说明希望修改的地方…",
+      "confirming": "确认中",
+      "desc": {
+        "confirmed": "任务流程已经确认并进入后续构建阶段。",
+        "pending": "任务流程已经整理完成。你可以先预览完整内容，再确认进入探索阶段。",
+        "revisionSubmitted": "修改意见已经提交，Agent 将更新任务说明书。"
+      },
+      "feedbackLabel": "修改意见：{{feedback}}",
+      "pendingComments": "{{n}} 条评论待提交",
+      "preview": "预览",
+      "status": {
+        "confirmed": "已确认",
+        "pending": "待确认",
+        "revising": "修改中"
+      },
+      "submitComment": "提交评论",
+      "submitting": "提交中",
+      "title": "任务说明书"
+    }
+  },
+  "workflowRunHeader": {
+    "closeDetails": "关闭运行详情",
+    "collapse": "收起",
+    "detail": {
+      "awaiting": "等待执行",
+      "completed": "已完成",
+      "current": "当前{{unit}}",
+      "failed": "执行失败"
+    },
+    "detailsTitle": "执行过程",
+    "executionCompleteAwaitingEnd": "执行阶段已完成，等待结束",
+    "executionCompleteAwaitingValidation": "执行阶段已完成，等待验证",
+    "executionCompleted": "执行完成",
+    "executionWorkflow": "执行工作流",
+    "fallbackExecutionStep": "第 {{index}} 步",
+    "fallbackValidationStep": "第 {{index}} 项检查",
+    "initializing": "正在初始化",
+    "noSteps": "尚未加载阶段步骤",
+    "overallProgress": "总进度",
+    "phase": {
+      "execute": "执行",
+      "executeDescription": "按工作流步骤完成任务",
+      "validate": "验证",
+      "validateDescription": "检查运行结果是否符合预期"
+    },
+    "phaseAria": "工作流运行阶段",
+    "progress": {
+      "awaiting": "0/{{total}} {{unit}} · 等待执行",
+      "complete": "{{total}}/{{total}} {{unit}}完成",
+      "current": "当前第 {{current}}/{{total}} {{unit}}"
+    },
+    "runDetails": "运行详情",
+    "status": {
+      "awaitingConfirmation": "等待确认",
+      "running": "运行中",
+      "stopped": "已停止"
+    },
+    "summary": "{{completed}} 步完成 · {{calls}} 次调用",
+    "title": "工作流运行",
+    "toolCalls": "工具调用",
+    "unit": {
+      "check": "项",
+      "step": "步"
+    },
+    "validationCompleteAwaitingEnd": "验证阶段已完成，等待结束",
+    "validationCompleted": "验证完成",
+    "validationResults": "验证结果"
+  }
+}

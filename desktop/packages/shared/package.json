@@ -1,0 +1,17 @@
+{
+  "name": "@app/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "SEE LICENSE IN ../../../LICENSE",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types/index.ts",
+    "./utils": "./src/utils/index.ts",
+    "./i18n": "./src/i18n/index.ts",
+    "./i18n/locales/*.json": "./src/i18n/locales/*.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

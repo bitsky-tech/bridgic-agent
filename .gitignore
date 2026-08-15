@@ -1,0 +1,125 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+# Keep generated build contents ignored while allowing this source entry script.
+!build/
+build/*
+!build/amphi_autostart_entry.py
+!build/build-desktop-mac.sh
+dist/
+*.egg-info/
+*.egg
+wheels/
+.eggs/
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.tox/
+.nox/
+.cache/
+.pnpm-store/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+nosetests.xml
+
+# =============================================================================
+# Virtual environment / package manager
+# =============================================================================
+.venv/
+venv/
+env/
+ENV/
+__pypackages__/
+
+# =============================================================================
+# Secrets / local config
+# =============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+.secrets/
+
+# =============================================================================
+# Runtime data (service writes these at $HOME by default; defensive guard
+# if anyone ever writes to cwd instead)
+# =============================================================================
+.bridgic-agent/
+.bridgic/
+runtime.json
+server.log
+sessions/
+
+# =============================================================================
+# Generated diagrams (whiteboard rendering intermediates — source of truth
+# lives in Feishu boards / re-generatable from CLI any time)
+# =============================================================================
+diagrams/
+
+# =============================================================================
+# Editor / IDE
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.spyderproject
+.spyproject
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Logs / temporary
+# =============================================================================
+*.log
+logs/
+*.tmp
+*.bak
+*.orig
+*.rej
+amphi_web_fetch_debug/
+_msg_debug/
+
+# =============================================================================
+# Jupyter
+# =============================================================================
+.ipynb_checkpoints/
+
+# =============================================================================
+# Other
+# =============================================================================
+*.pid
+*.seed
+.history/
+.AGENTS.md
+AGENTS.md

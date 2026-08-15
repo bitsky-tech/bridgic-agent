@@ -1,0 +1,174 @@
+name: Validate
+
+# The gate every change has to pass. Deliberately separate from `package.yml`:
+# packaging takes tens of minutes and produces ~700 MB of installers, so it must
+# NOT run per pull request — this workflow is what runs there instead.
+#
+# Why it exists at all: until now lint/typecheck/test lived only in the local
+# husky pre-commit hook. That is enough while the only committers are people who
+# have the hook installed, and stops being enough the moment the repository is
+# public and pull requests arrive from forks — `--no-verify` is one flag away,
+# and a fork has no hook at all.
+#
+# Scope mirrors the two halves of the repo:
+#   desktop/  → bun lint + typecheck + test
+#   src/      → pytest
+#
+# Fork pull requests get no secrets, and nothing here needs any: no signing, no
+# notarization, no PostHog token. A fork's run is therefore just as meaningful
+# as ours, which is the point.
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  # Cancel superseded runs on the same ref — a force-push while CI is running
+  # otherwise burns a full matrix on a commit nobody will look at.
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: desktop (lint · typecheck · test)
+    runs-on: ubuntu-latest
+    # Every job here needs a ceiling. Without one a hang runs to the 6-hour
+    # default and burns the whole allowance on a commit nobody is waiting for —
+    # which is exactly what the backend job below did the first time this
+    # workflow was enabled. The full desktop leg finishes in ~90s.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned, and pinned to the SAME version as package.yml. `latest`
+          # silently re-resolves on every run, so the gate and the thing it
+          # gates drift apart without a commit: the first enabled run here
+          # took bun 1.3.14 while releases were built with 1.3.10. A gate that
+          # tests a different toolchain than the one that ships is not a gate.
+          bun-version: "1.3.10"
+
+      - name: Install
+        working-directory: desktop
+        # --frozen-lockfile: a PR that quietly changes the dependency tree should
+        # fail here rather than resolve to something nobody reviewed.
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        working-directory: desktop
+        run: bun run lint
+
+      - name: Typecheck
+        working-directory: desktop
+        run: bun run typecheck
+
+      - name: Test
+        working-directory: desktop
+        # `bun run test` (NOT bare `bun test`) — the script scopes the run to
+        # apps/packages/scripts. The bare form picks up files it cannot execute.
+        run: bun run test
+
+      # The four drift checks below are cheap (< 2s each) and catch classes of
+      # mistake the compiler cannot. Every one of the scripts existed before
+      # this workflow did; check-naming.sh had said "Run as part of CI" in its
+      # header since the day it was written, and no CI ever ran it — which is
+      # why the product name it guards drifted into a locale string unnoticed.
+      # Wiring them here is what makes them real.
+      - name: Naming drift
+        working-directory: desktop
+        run: bun run check:naming
+
+      - name: Doc links
+        working-directory: desktop
+        # Resolves every relative reference against its referring file. Catches
+        # the wrong-depth `../` that no filename grep can see.
+        run: bun run check:doc-links
+
+      # Two more drift checks that existed as scripts but ran nowhere.
+      #
+      # check:locales was reachable only from the Windows PACKAGING job, i.e.
+      # after a release build had already started — long past the point where
+      # a pull request could be told about it. A key present in en and missing
+      # from zh does not throw: react-i18next renders the raw key path, so
+      # lint, typecheck and the test suite all stay green while the Chinese UI
+      # shows `gatewayBoot.incompatible.title` where a sentence belongs.
+      #
+      # check:chinese had no caller at all. It enforces the repository's
+      # English-comment contract, which matters a great deal more now that the
+      # source is public than it did when every reader was on the team.
+      - name: Locale key parity
+        working-directory: desktop
+        run: bun run check:locales
+
+      - name: Comment language
+        working-directory: desktop
+        run: bun run check:chinese
+
+  backend:
+    name: backend (pytest)
+    runs-on: ubuntu-latest
+    # Finite, and that is the whole point: the first run of this job sat in
+    # `pytest` for over an hour with no output and would have kept going until
+    # the 6-hour default killed it.
+    #
+    # 45 rather than something tighter because this is the LAST resort, not the
+    # working mechanism: `--timeout=300` below is what a hang is supposed to hit
+    # first, and it reports in five minutes. The job ceiling only catches what
+    # the per-test timeout cannot see — a stall in collection, in `uv sync`, or
+    # a suite that is merely slow because the runner is loaded. Setting it near
+    # the suite's real runtime would convert those into red builds that say
+    # nothing but "cancelled".
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # Kept in step with package.yml on purpose: validating against one
+          # toolchain and shipping with another is how "green CI, broken build"
+          # happens.
+          version: "0.9.5"
+          python-version: "3.13.6"
+
+      - name: Install backend deps
+        # --frozen: fail on a stale uv.lock instead of silently updating it.
+        run: uv sync --frozen
+
+      - name: Test
+        # --timeout is not a substitute for the job timeout above, it is the
+        # other half: the job timeout stops the bill, this one says WHICH test
+        # hung. A job killed at its ceiling reports nothing but "cancelled".
+        #
+        # `thread`, not the default `signal`, and the choice was measured
+        # rather than assumed. This suite currently contains a real hang, and
+        # against that hang the two methods behave very differently:
+        #
+        #   signal  raises inside the test and lets the run continue — which
+        #           is what you want, except that it never fires here. The
+        #           hang does not return to the interpreter in a way SIGALRM
+        #           can unwind, so the run just sits there exactly as it did
+        #           with no timeout at all.
+        #   thread  fires every time, dumps the stack of every thread, and
+        #           then takes the process down with os._exit.
+        #
+        # Losing the tests after the hang is a real cost. It is much smaller
+        # than the alternative: `thread` turns a silent multi-hour stall into
+        # a two-minute failure that names the code it stalled in, and a stack
+        # trace is the only thing that will get the hang fixed. Once it is
+        # fixed, drop this flag — `signal` is the better default for a suite
+        # that does not hang.
+        #
+        # 300s per test is far above anything healthy here (the slowest
+        # legitimate test is a few seconds) — it is a hang detector, not a
+        # performance budget, so it must not start failing tests that are
+        # merely slow on a loaded runner.
+        run: uv run pytest -q --timeout=300 --timeout-method=thread

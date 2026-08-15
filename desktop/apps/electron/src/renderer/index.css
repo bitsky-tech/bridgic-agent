@@ -1,0 +1,449 @@
+@import "tailwindcss";
+@import "./styles/tokens.css";
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Token bridge — expose tokens.css CSS variables as Tailwind v4 @theme
+   names so utility classes (bg-bg-app, text-text-primary, rounded-md,
+   text-xs, …) resolve to the same RUNTIME var() expression as the
+   inline `style={{ background: 'var(--bg-app)' }}` form does.
+
+   `@theme inline` means: don't define a new var, splice the value directly
+   into the generated utility. So `class="bg-bg-app"` produces
+   `background-color: var(--bg-app)` and honors [data-theme="dark|light"]
+   theme switching automatically — no `dark:` variant needed for colors.
+
+   Keep this block in sync with `styles/tokens.css`.
+   ───────────────────────────────────────────────────────────────────────── */
+@theme inline {
+  /* Typography — overrides Tailwind defaults (12/14/16) with our 11/12/13 scale */
+  --text-xs: var(--text-xs);
+  --text-sm: var(--text-sm);
+  --text-base: var(--text-base);
+  --text-md: var(--text-md);
+  --text-lg: var(--text-lg);
+  --text-xl: var(--text-xl);
+  --text-2xl: var(--text-2xl);
+  --text-3xl: var(--text-3xl);
+
+  /* Font family */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  /* Brand */
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-cyan: var(--brand-cyan);
+  --color-brand-purple: var(--brand-purple);
+  --color-brand-lavender: var(--brand-lavender);
+
+  /* Backgrounds */
+  --color-bg-app: var(--bg-app);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-active: var(--bg-active);
+  --color-bg-input: var(--bg-input);
+  --color-bg-modal: var(--bg-modal);
+  --color-bg-tooltip: var(--bg-tooltip);
+
+  /* Borders */
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  /* Text */
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-on-brand: var(--text-on-brand);
+
+  /* Status — paired color + tint background */
+  --color-status-success: var(--status-success);
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-error: var(--status-error);
+  --color-status-error-bg: var(--status-error-bg);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-info: var(--status-info);
+  --color-status-info-bg: var(--status-info-bg);
+  --color-status-pending: var(--status-pending);
+  --color-status-pending-bg: var(--status-pending-bg);
+
+  /* Accent tints */
+  --color-accent-blue-subtle: var(--accent-blue-subtle);
+  --color-accent-purple-subtle: var(--accent-purple-subtle);
+
+  /* Entity types — color coding for slash commands / echoes */
+  --color-entity-command: var(--entity-command);
+  --color-entity-command-bg: var(--entity-command-bg);
+  --color-entity-schedule: var(--entity-schedule);
+  --color-entity-schedule-bg: var(--entity-schedule-bg);
+  --color-entity-skill: var(--entity-skill);
+  --color-entity-skill-bg: var(--entity-skill-bg);
+  --color-entity-workflow: var(--entity-workflow);
+  --color-entity-workflow-bg: var(--entity-workflow-bg);
+  --color-entity-workflow-run: var(--entity-workflow-run);
+  --color-entity-workflow-run-bg: var(--entity-workflow-run-bg);
+
+  /* Stage/message backgrounds */
+  --color-msg-user-bg: var(--msg-user-bg);
+  --color-msg-ai-bg: var(--msg-ai-bg);
+  --color-stage-track: var(--stage-track);
+  --color-stage-done: var(--stage-done);
+
+  /* Radius — overrides Tailwind defaults; produces rounded-{sm,md,lg,xl,2xl,full} */
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-2xl: var(--r-2xl);
+  --radius-full: var(--r-full);
+
+  /* Shadows — theme-dependent values */
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-modal: var(--shadow-modal);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Entrance and running-state animation utilities.
+   The keyframes are defined in styles/tokens.css (alongside amphi-pulse). All are paint-only
+   (opacity / transform) and never trigger a layout shift (§LS1).
+   - fade : pure opacity — for overlays already positioned with transform (e.g. Tooltip), so
+            the animation's transform doesn't override their positioning translate.
+   - enter: opacity + a 6px upward move — entrance for list items / panels / docked editors.
+   - pop  : opacity + a slight scale-up — for small overlays near the touch point (e.g. the
+            "comment" button on a text selection).
+   ───────────────────────────────────────────────────────────────────────── */
+@theme {
+  --animate-fade: amphi-fade 150ms ease-out;
+  --animate-enter: amphi-enter 220ms ease-out;
+  --animate-pop: amphi-pop 160ms ease-out;
+  --animate-focus-enter: amphi-focus-enter 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-focus-exit: amphi-focus-exit 240ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+  --animate-focus-item-enter: amphi-focus-item-enter 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-stage-activate: amphi-stage-activate 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-mode-surface-enter: amphi-mode-surface-enter 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-mode-rail-enter: amphi-mode-rail-enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-workbench-tool-enter: amphi-workbench-tool-enter 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-mode-dock-enter: amphi-mode-dock-enter 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-breathe: amphi-breathe 1.8s ease-in-out infinite;
+  --animate-surface-attention: amphi-surface-attention 900ms ease-in-out 3;
+  /* The two durations MUST be identical — the upper and lower halves of the wheel are one
+     single motion.
+     leave MUST carry forwards: fill-mode defaults to none, so the instant the animation ends
+     the element snaps back to its original style (opacity:1 / translateY(0)) — i.e. the old
+     text fully reappears in place for one frame and only vanishes on the next frame when
+     onAnimationEnd unmounts it — which reads as "a flash after the switch completes".
+     forwards parks it at the end state (transparent and already moved out) until React
+     unmounts it.
+     rise doesn't need it: its end state matches the element's original style, so snapping
+     back makes no difference. */
+  --animate-tip-rise: amphi-tip-rise 320ms ease-out;
+  --animate-tip-leave: amphi-tip-leave 320ms ease-out forwards;
+}
+
+/* Agent running state: three fixed-size capsules change only color and brightness, pulsing
+   left to right by delay. No scale, to avoid the visual noise of the message bottom growing
+   and shrinking. */
+.agent-activity-wave {
+  display: inline-flex;
+  height: 10px;
+  align-items: center;
+  gap: 2px;
+}
+
+.agent-activity-wave > span {
+  width: 3px;
+  border-radius: 9999px;
+  animation: amphi-activity-wave 1.2s ease-in-out infinite both;
+}
+
+/* Boot gate: reveal the spinner late so a fast startup never shows it at all.
+   The daemon is usually already running and PythonClient claims it straight from
+   runtime.json, which takes far less time than this delay — on the happy path the user sees
+   only a plain background. CSS rather than a timer + state: no extra render, and
+   `react-hooks/set-state-in-effect` forbids the latter anyway. */
+.boot-spinner-delayed {
+  opacity: 0;
+  animation: amphi-boot-spinner-in 150ms ease-out 400ms forwards;
+}
+
+@keyframes amphi-boot-spinner-in {
+  to {
+    opacity: 1;
+  }
+}
+
+.agent-activity-wave > span:nth-child(1) {
+  --activity-color: var(--brand-blue);
+  height: 6px;
+}
+
+.agent-activity-wave > span:nth-child(2) {
+  --activity-color: var(--brand-cyan);
+  height: 10px;
+  animation-delay: 140ms;
+}
+
+.agent-activity-wave > span:nth-child(3) {
+  --activity-color: var(--brand-purple);
+  height: 7px;
+  animation-delay: 280ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-focus-enter,
+  .animate-focus-exit,
+  .animate-focus-item-enter,
+  .animate-mode-surface-enter,
+  .animate-mode-rail-enter,
+  .animate-workbench-tool-enter,
+  .animate-mode-dock-enter,
+  .animate-stage-activate {
+    animation: none;
+  }
+
+  .agent-activity-wave > span {
+    animation: none;
+    background-color: var(--activity-color);
+    opacity: 0.85;
+  }
+
+  /* Drop the fade-in transition but keep the delay — its job is flicker prevention, not decoration. */
+  .boot-spinner-delayed {
+    animation: amphi-boot-spinner-in 0s linear 400ms forwards;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Electron window-chrome utilities
+   - app-drag / app-no-drag: -webkit-app-region control
+     replaces the inline style={{ WebkitAppRegion: 'drag' }} form (removing
+     the renderer's only @ts-expect-error)
+   - pt/pb/pl/pr-safe-*: env(safe-area-inset-*) with a 0px fallback
+   ───────────────────────────────────────────────────────────────────────── */
+@utility app-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+@utility app-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+@utility pt-safe-top    { padding-top:    env(safe-area-inset-top, 0px); }
+@utility pb-safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+@utility pl-safe-left   { padding-left:   env(safe-area-inset-left, 0px); }
+@utility pr-safe-right  { padding-right:  env(safe-area-inset-right, 0px); }
+
+/* The space each platform's native window buttons occupy on the TopBar — the TopBar leaves
+   room for them. The platform marker is written by preload onto <html data-platform="...">
+   (see preload/bootstrap.ts).
+
+   mac (hidden-inset): the traffic lights sit in the **left** top corner. 86px = 18 (x offset)
+   + the three buttons' diameters + spacing + slack; the TopBar uses it as left padding, so
+   the collapse button lands to the right of the traffic lights. Native full screen retracts
+   those buttons, and useWindowFullScreenMarker mirrors that state to the root attribute so
+   the inset becomes 0px and the collapse button reclaims the top-left corner.
+
+   Windows (Control Overlay): minimize/maximize/close sit in the **right** top corner, drawn
+   by the system inside the TopBar (see main/titlebar-overlay.ts). Two kinds of clearance:
+
+   - Horizontal `--titlebar-win-inset` (the caption buttons' width): every element **in the
+     same row as the caption** must absorb it, otherwise the control ends up buried under the
+     close button and can't be clicked — currently only the TopBar.
+     (RunLogDrawer's header used to absorb it too, but only because it hugged the top; once
+     the vertical clearance below solved that at the root it was removed — dodging
+     horizontally only makes the button clickable, it can't dodge the look of "crammed into
+     one row with the system's − □ ×, two × next to each other".)
+   - Vertical `--titlebar-win-inset-top` (the height of that caption strip): **every overlay's
+     container** starts drawing from its lower edge, not just the dim background layer. WCO is
+     composited by the system above the WebContents, z-index can't cover it, and both leaks
+     must be guarded: a background reaching the top leaves an isolated undimmed rectangle in
+     the top right corner; content hugging the top (a drawer's `h-full`) sends its own buttons
+     underneath the system's three buttons. The consumers are ModalBackdrop (container level,
+     covering every modal/drawer that goes through it) and ImageLightbox (the third-party YARL
+     can't be wrapped in ModalBackdrop, so it injects the same variable itself).
+
+   (The horizontal one lacking a `-right` suffix is historical naming; both are non-zero only
+   on win32.)
+
+   `--titlebar-height` is **the top bar's own height**, a different quantity from the two
+   above: the top bar's height used to be hardcoded in TopBar's `h-11` while the overlay
+   height was computed by the main process — two sources of truth kept equal by arithmetic,
+   where rounding at either one drifts (symptom: the white strip in the top right corner is
+   taller than the top bar on the left, and on a zoom press "the right side changes first, the
+   left side after"). It now takes **the geometry the system actually draws** as the single
+   source, with the top bar following it.
+
+   ⚠️ Its value is **deliberately different** from `--titlebar-win-inset-top` in fullscreen: in
+   fullscreen the system retracts the caption buttons so the overlay should cover everything
+   (top=0), but the top bar is still there and still needs 44px. Don't merge the two into one
+   variable.
+
+   **This value is NOT computed in CSS**: 0px is only a fallback; the real value is measured at
+   runtime by `useWindowControlsInset()` and written onto documentElement (see that hook's
+   header comment: in fullscreen the overlay hides, and the values of CSS
+   `env(titlebar-area-*)` in that state are guesswork — the branch that guesses wrong computes
+   a 100vw padding and squeezes the whole bar's content away). On non-Windows that hook
+   returns immediately and the variable stays 0px — so consumers need no platform check. */
+:root {
+  --titlebar-mac-inset: 0px;
+  --titlebar-win-inset: 0px;
+  --titlebar-win-inset-top: 0px;
+  /* Fallback = TITLEBAR_HEIGHT from main/titlebar-metrics.ts. It stays this value on
+     non-Windows and in fullscreen; on Windows outside fullscreen useWindowControlsInset
+     overwrites it with the measured height. */
+  --titlebar-height: 44px;
+}
+html[data-platform="darwin"] {
+  --titlebar-mac-inset: 86px;
+}
+html[data-platform="darwin"][data-window-full-screen="true"] {
+  --titlebar-mac-inset: 0px;
+}
+
+/* Chromium uses permanently visible classic scrollbars on Windows. These opt-in
+   containers keep a narrow, layout-stable gutter but reveal the thumb only while
+   useAutoHideScrollbar marks recent interaction. The platform selector is deliberate:
+   macOS keeps its native overlay scrollbar and is not restyled here. */
+html[data-platform="win32"] .auto-hide-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html[data-platform="win32"] .auto-hide-scrollbar::-webkit-scrollbar-track,
+html[data-platform="win32"] .auto-hide-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html[data-platform="win32"] .auto-hide-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: padding-box;
+  background-color: transparent;
+  transition: background-color 180ms ease-out;
+}
+
+html[data-platform="win32"] .auto-hide-scrollbar.auto-hide-scrollbar-active::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--text-tertiary) 60%, transparent);
+}
+
+html[data-platform="win32"] .auto-hide-scrollbar.auto-hide-scrollbar-active::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text-secondary) 75%, transparent);
+}
+
+html[data-platform="win32"] .auto-hide-scrollbar::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Dark variant binding to our [data-theme] attribute switching.
+   Most colors auto-flip via CSS var values — this is only for cases
+   where you specifically need a `dark:` prefixed override (e.g. font-bold). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    font-family: var(--font-sans);
+    background: var(--bg-app);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  input[type="text"], input[type="password"], textarea, button {
+    font-family: var(--font-sans);
+  }
+
+  /* Interactive affordance (§1.23): every clickable button gets the hand cursor. Tailwind
+     v4 preflight resets the button cursor to default, so a bare <button> gives no
+     hand-cursor feedback on hover; the base layer puts it back uniformly. The disabled
+     state is excluded (it stays default; a disabled button kept visually present can be
+     reinforced with disabled:cursor-not-allowed). Non-button clickable elements
+     (div/span onClick) MUST add cursor-pointer explicitly. */
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* The composer is a "plain text + token chips" editor and must not carry any rich-text
+     formatting. A rich-text paste (copied from a rendered markdown page / code block) or the
+     browser's native Cmd+B/I/U can leave inline style nodes such as <b>/<strong>/font-weight
+     inside the contenteditable, and once the caret lands in one, subsequent typing inherits
+     bold/italic (measured by the user: after typing a path the text turns bold by itself).
+     Neutralize every inline format on non-token descendants inside the editor; token chips
+     ([data-token-type]) keep their own bg/color classes. The submitted content is plain text
+     anyway (parse only takes textContent) — this only fixes the display. On the typing side,
+     RichTextInput separately blocks Cmd/Ctrl+B/I/U so those nodes are never produced. */
+  .composer-editor *:not([data-token-type]):not(.composer-field) {
+    font-weight: inherit !important;
+    font-style: normal !important;
+    text-decoration: none !important;
+    color: inherit !important;
+    background: transparent !important;
+  }
+
+  /* Show/hide for the rotating placeholder. Emptiness is decided by CSS `:empty` rather than
+     React-side state: the contenteditable's real DOM is the only truth (React's segments can
+     briefly lag on paths like IME composition, paste and undo). The placeholder layer is a
+     sibling node of the editor, so a general sibling selector hides it in reverse. */
+  .composer-editor:not(:empty) ~ .composer-placeholder {
+    display: none;
+  }
+
+  /* The @-capable description slot (the field segment): an editable area that shows a
+     placeholder via :empty::before when empty and drops it as soon as anything is typed. It
+     is deliberately excluded from the rich-text neutralization above — it needs its own
+     background color.
+     Use inline-block (not plain inline): a plain-inline empty element can't hold the caret,
+     so on seed the caret gets bounced to an adjacent position and typing ends up outside the
+     field (the placeholder never disappearing); an inline-block empty box holds the caret
+     reliably. Long content wraps via pre-wrap inside the box and grows taller. */
+  .composer-field {
+    display: inline-block;
+    min-width: 3ch;
+    max-width: 100%;
+    white-space: pre-wrap;
+    word-break: break-word;
+    vertical-align: bottom;
+    background: var(--accent-blue-subtle);
+    border-radius: var(--r-sm);
+    padding: 0 4px;
+  }
+  .composer-field:empty::before {
+    content: attr(data-field-placeholder);
+    color: var(--text-tertiary);
+    pointer-events: none;
+  }
+}
+
+/* yet-another-react-lightbox: the toolbar sits in the top right corner by default (corners
+   are sometimes unclickable), so move it into a rounded control bar centered at the bottom.
+   The descendant selector (.yarl__container .yarl__toolbar, specificity 0,2,0) beats YARL's
+   own .yarl__toolbar (0,1,0) regardless of stylesheet load order, avoiding !important. */
+.yarl__container .yarl__toolbar {
+  top: auto;
+  right: auto;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.5);
+}

@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# Monorepo pre-commit hook, run from the repository root.
+#
+# Activated by `bun install` in desktop/, whose `prepare` script runs husky from
+# the repository root (`cd .. && husky`) — husky looks for `.git` in its cwd, so
+# running it from desktop/ silently no-ops with exit 0 and leaves the gate dead.
+# husky points core.hooksPath at `.husky/_`, whose generated wrapper sources this
+# file. It still needs the shebang + the executable bit.
+#
+# The lint/typecheck gate lives in the `desktop/` sub-project (Bun), so we
+# cd in before running. Add backend (uv/ruff/pytest) checks here too if the
+# Python side later wants a pre-commit gate.
+cd desktop && bun run lint && bun run typecheck

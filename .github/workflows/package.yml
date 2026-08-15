@@ -1,0 +1,850 @@
+name: Package
+
+# Produce installable desktop artifacts (macOS arm64 + Windows x64).
+#
+# Two stages on ONE runner per target, mirroring the local `bun run dist:*`
+# path developers already use — CI introduces no new packaging logic:
+#   1. Backend  — build the `amphi` PyInstaller binary into dist/
+#   2. Frontend — `bun run dist:<os>` prepares the daemon, uv, the pinned
+#                 Python runtime, and the pinned Node runtime before running
+#                 electron-builder.
+#
+# Installers are published as GitHub Release assets, NOT as run artifacts.
+# Release assets bill against repo storage, which is unmetered; upload-artifact
+# bills against the 0.5 GB Actions-and-Packages quota this free-plan repo shares
+# across every repo, and one build (~711 MB: 483 mac + 228 win) exceeds it
+# outright — every run failed with "Artifact storage quota has been hit" once
+# 2026-07-24 filled the month's allowance. Visibility is unchanged: the repo is
+# private, so downloading a Release asset still requires repo access.
+#
+# A tag push publishes a normal Release under that tag. workflow_dispatch
+# publishes a prerelease under `nightly-<UTC yyyymmdd-hhmm>` by default, so every
+# manual build keeps its own Release instead of overwriting the previous one —
+# unless `release_tag` is given, which produces a normal Release under that tag
+# instead. That input exists because auto-update cannot be exercised against a
+# prerelease at all: electron-updater resolves `/releases/latest`, and GitHub
+# excludes prereleases from it, so the client never learns the build exists.
+# Releases accumulate either way — prune by hand when the list gets long
+# (`gh release delete <tag> --cleanup-tag`); nothing expires them automatically.
+#
+# A manual run also picks its platforms via the `platform` input (all by
+# default) — handy for iterating on one OS without burning the other's minutes.
+# Narrowing it means the Release carries only that platform's assets.
+#
+# macOS: signing & notarization run when the Apple secrets are present (see
+# below); otherwise electron-builder falls back to an unsigned build (Gatekeeper
+# trips on first open). Windows: always unsigned — no Authenticode cert in CI,
+# so SmartScreen trips on first open. Either way forks and secret-less runs
+# still produce artifacts.
+#
+# PyInstaller cannot cross-compile, so each OS/arch needs its own runner and its
+# own invocation: build-pyinstaller.sh is POSIX-only, build-pyinstaller.ps1 is
+# its Windows counterpart. The macOS and Windows jobs are independent — a
+# Windows failure does not block the macOS artifact.
+#
+# macOS arm64 uses macos-14. macOS x64 uses macos-15-intel — GitHub retired the
+# macos-13 Intel runner (a `runs-on: macos-13` job queues forever: the label
+# parses but no runner serves it), and macos-15-intel is its replacement, a
+# standard runner needing no allowlist. It is the LAST x86_64 image GitHub will
+# offer; it retires in autumn 2027, after which no Intel macOS build is possible
+# here. Linux remains out of scope.
+#
+# x64 runs on `all` and on tag pushes, alongside arm64: a release has to carry
+# both architectures, and `merge-mac-manifest` needs both jobs to succeed before
+# it can publish a feed covering the two of them. `platform: macos` still means
+# arm64 only, so a quick nightly stays quick.
+#
+# Standard GitHub-hosted runners are free and unlimited on public repositories,
+# so the second macOS job costs wall-clock time, not money.
+#
+# Required secrets for a signed+notarized macOS build (repo Settings → Secrets):
+#   CSC_LINK                    — base64 of the Developer ID Application .p12
+#                                 (base64 -i cert.p12 | pbcopy). NOT CSC_NAME:
+#                                 CI runners start with an empty keychain, so the
+#                                 keychain-name path build-dmg.sh uses locally
+#                                 can't work — electron-builder imports the .p12
+#                                 into a temp keychain from CSC_LINK instead.
+#                                 Note that electron-builder only does that once
+#                                 it reaches its signing phase, which is AFTER
+#                                 the afterPack hook — so the "Import signing
+#                                 certificate" step below imports the same .p12
+#                                 earlier, purely so afterPack can sign the
+#                                 embedded binaries with a real identity instead
+#                                 of silently falling back to ad-hoc.
+#   CSC_KEY_PASSWORD            — the .p12 export password
+#   CSC_INSTALLER_LINK          — base64 of the Developer ID Installer .p12
+#                                 (pkg signing uses a different cert than .app)
+#   CSC_INSTALLER_KEY_PASSWORD  — the installer .p12 export password
+#   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD — notarization
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platforms to package"
+        type: choice
+        default: all
+        options:
+          - all
+          - macos
+          - windows
+          # Intel macOS on its own. `all` already includes it alongside arm64.
+          - macos-intel
+      smoke:
+        description: "Run the Windows installer E2E smoke (~25 min of the ~40 min
+          Windows job). REQUIRED when installer.nsh / test-installer.ps1 /
+          electron-builder.yml changed. Tag pushes always run it regardless."
+        type: boolean
+        default: false
+      release_tag:
+        description: "Publish a REAL release under this tag (bare semver, e.g.
+          0.1.14) instead of a nightly prerelease. Use this to rehearse the
+          public release shape without pushing a tag — a tag push additionally
+          forces the smoke suite. Tags created here by GITHUB_TOKEN do not
+          re-trigger this workflow."
+        type: string
+        default: ""
+  push:
+    # Project tags are bare semver, no `v` prefix (see desktop §G.2).
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Publishing Release assets needs write access; the default token is read-only.
+permissions:
+  contents: write
+
+jobs:
+  # Computes the Release tag ONCE for both build jobs. Doing it per-job would
+  # split the platforms apart: they finish ~2 minutes apart, so two `date` calls
+  # mint two different timestamps, and mac and Windows would land in separate
+  # Releases. Cheap enough to be free in practice — ubuntu bills at 1x and this
+  # runs for seconds.
+  meta:
+    runs-on: ubuntu-latest
+    name: resolve release tag
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      # Needed only to read the version out of package.json for the guard below.
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          set -euo pipefail
+
+          # Step 1 — decide WHAT is being published. Nothing is validated here;
+          # the guards below run against the result, so that every path into a
+          # real Release passes through the same checks.
+          #
+          # A pre-release tag must NOT become `/releases/latest`. GitHub excludes
+          # prereleases from that endpoint, and electron-updater resolves exactly
+          # it — so marking an `-rc` build as a normal release silently pushes it
+          # to every installed user within one check interval. That is the whole
+          # difference between shipping a library and shipping an app that
+          # updates itself: here, tagging IS delivery.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+            case "$tag" in
+              *-*) prerelease=true ;;
+              *)   prerelease=false ;;
+            esac
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            tag="${{ inputs.release_tag }}"
+            prerelease=false
+          else
+            tag="nightly-$(date -u +%Y%m%d-%H%M)"
+            prerelease=true
+          fi
+
+          # Step 2 — guard every real Release, however it was requested.
+          #
+          # Both guards below used to live inside the tag-push branch only, so
+          # `release_tag` — the input whose entire purpose is "rehearse the
+          # public release shape" — reached the build with neither. On
+          # 2026-08-14 that produced release `0.1.1`: a normal, non-prerelease
+          # Release whose assets were `Bridgic-Agent-0.1.0-arm64.*` and which
+          # carried no update manifest at all. It was `/releases/latest` for
+          # every installed client and deliverable to none of them.
+          case "$tag" in
+            nightly-*)
+              ;;
+            *)
+              # The tag and the artifacts are two independent sources of the
+              # version: `artifactName` and the update manifest both interpolate
+              # desktop/package.json's `version`, while the Release is named
+              # after the tag. When they disagree nothing fails — CI is green,
+              # the Release page looks right — but the manifest advertises the
+              # OLD version, so every client concludes it is already up to date
+              # and NOBODY gets the update.
+              pkg_version=$(node -p "require('./desktop/package.json').version")
+              tag_version="${tag%%-*}"
+              if [ "$tag_version" != "$pkg_version" ]; then
+                echo "::error::tag '$tag' disagrees with desktop/package.json ('$pkg_version'). The artifacts would be built as $pkg_version and no client would see an update. Bump the version in the same commit being released."
+                exit 1
+              fi
+
+              # A narrowed `platform` is fine for a nightly and wrong for a
+              # release. `merge-mac-manifest` only runs when BOTH macOS jobs
+              # succeed, so `platform: macos` publishes a normal Release with no
+              # latest-mac.yml — the updater 404s and never learns the version
+              # exists. Windows has the same shape: no windows job, no
+              # latest.yml. Releasing part of a platform matrix is not a
+              # partial release, it is an undeliverable one.
+              platform="${{ inputs.platform }}"
+              if [ -n "$platform" ] && [ "$platform" != all ]; then
+                echo "::error::release '$tag' requested with platform '$platform'. A real Release needs the full matrix: the per-arch update manifests are merged only when every platform job succeeds, so a narrowed run publishes a Release that no installed client can consume. Re-run with platform 'all', or drop release_tag to publish a nightly."
+                exit 1
+              fi
+              ;;
+          esac
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  macos-arm64:
+    needs: meta
+    # `inputs` is empty outside workflow_dispatch, so a tag push still builds
+    # both default platforms — only a manual run can narrow the build to one OS.
+    # Listed positively rather than as `!= 'windows'`: with macos-intel in the
+    # choice list, a negative test would drag arm64 into an Intel-only run.
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'macos' }}
+    runs-on: macos-14
+    name: package (macOS arm64)
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # --- Backend: build dist/amphi/ (launcher + _internal/ payload) ---
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          # Pin to the toolchain the working local builds use (repo is
+          # requires-python >=3.10; keep this aligned with the Python runtime
+          # bundled by desktop/scripts/prebuild-fetch-python.ts.
+          version: "0.9.5"
+          python-version: "3.13.6"
+          enable-cache: true
+
+      - name: Install backend deps (uv sync)
+        # --frozen: fail if uv.lock is stale rather than silently updating it.
+        # pyinstaller lives in [dependency-groups].dev, installed by default.
+        run: uv sync --frozen
+
+      - name: Build amphi binary (PyInstaller)
+        run: bash build/build-pyinstaller.sh
+
+      # --- Frontend: flatten dist/amphi/ into the app's Resources/bin/ ---
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      # Import the Developer ID Application cert BEFORE packaging so the
+      # afterPack hook can sign the embedded binaries with it.
+      #
+      # Why this step is needed at all: electron-builder imports CSC_LINK into a
+      # temp keychain as part of its *signing* phase, which runs AFTER the
+      # afterPack hook. So at afterPack time the runner's keychains are empty,
+      # `build/after-pack.cjs` finds no identity, and it falls back to ad-hoc
+      # signing every embedded binary (the whole bundled Node runtime and all
+      # ~40 Python extension modules). Those ad-hoc signatures are NOT replaced
+      # later — electron-builder does not re-sign extraResources when it signs
+      # the .app — so they shipped in every Release. Locally this never showed
+      # up, because there the cert already sits in the developer's login
+      # keychain and afterPack finds it.
+      #
+      # APPLE_SIGNING_IDENTITY is derived from the imported cert rather than
+      # read from a secret: the value is just the cert's common name, so
+      # deriving it keeps the secret list unchanged and cannot drift from the
+      # cert actually in use.
+      #
+      # No-op without CSC_LINK, which keeps forks and PR builds working (they
+      # then take the ad-hoc path exactly as before).
+      - name: Import signing certificate
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        # The skip is tested in-shell, not via `if:` — the `secrets` context is
+        # not available to a step-level `if`, so a condition there would read as
+        # empty and silently never run this step.
+        run: |
+          set -euo pipefail
+          if [ -z "${CSC_LINK:-}" ]; then
+            echo "CSC_LINK not set — skipping import; afterPack will ad-hoc sign"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/afterpack-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/afterpack-cert.p12"
+
+          printf '%s' "$CSC_LINK" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          # Without this, codesign's access to the private key prompts for UI
+          # authorization and simply hangs on a headless runner.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Prepend to the SEARCH LIST rather than replacing it: a bare
+          # `-s "$KEYCHAIN"` would drop the runner's login keychain, and
+          # electron-builder later re-sets the list from whatever it reads here.
+          # Unquoted on purpose — the list must expand to separate arguments.
+          # Safe because runner keychain paths contain no spaces
+          # (/Users/runner/Library/Keychains/login.keychain-db).
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | tr -d '"')
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::no 'Developer ID Application' identity in CSC_LINK" >&2
+            security find-identity -v "$KEYCHAIN" >&2
+            exit 1
+          fi
+          echo "resolved signing identity: $IDENTITY"
+          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+          rm -f "$CERT_PATH"
+
+      - name: Package macOS app (arm64)
+        working-directory: desktop
+        env:
+          # Signing runs only when CSC_LINK is present. Without it,
+          # electron-builder makes an unsigned build (keeps forks working).
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_INSTALLER_LINK: ${{ secrets.CSC_INSTALLER_LINK }}
+          CSC_INSTALLER_KEY_PASSWORD: ${{ secrets.CSC_INSTALLER_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # Public write-only ingestion token. Secret injection keeps forks and
+          # source builds from sending events into the official project.
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          # Derived, not hardcoded: `?private` makes electron-updater use the
+          # authenticated provider (needs GH_TOKEN at runtime). Once the repo is
+          # public this expression drops the suffix on its own, so there is no
+          # switch to remember to flip at open-source time.
+          APP_UPDATE_URL: github:${{ github.repository }}${{ github.event.repository.private && '?private' || '' }}
+        # Same command developers run locally:
+        #   prebuild-fetch-amphi (copies ../dist/amphi/* → resources/bin) +
+        #   fetch-uv / fetch-python / fetch-node arm64 (bundled runtimes) +
+        #   build-dmg.sh arm64 (bun build + electron-builder --mac --arm64).
+        # fetch-node probes several CDNs and lets nodejs.org compete, so a US
+        # runner simply picks upstream — no CI-specific configuration needed.
+        run: bun run dist:mac
+
+      # No *.dmg pattern: electron-builder.yml builds pkg + zip only (dmg was
+      # dropped). Under upload-artifact an unmatched pattern was silently fine;
+      # fail_on_unmatched_files makes it fatal, so listing dmg would break CI.
+      #
+      # latest-mac.yml is NOT published from here — see the `merge-mac-manifest`
+      # job. Each arch's manifest lists only its own zip, so publishing both to
+      # the same Release would let whichever finished last overwrite the other,
+      # leaving one architecture with a feed that never matches it.
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          files: |
+            desktop/apps/electron/release/*.pkg
+            desktop/apps/electron/release/*.zip
+            desktop/apps/electron/release/*.zip.blockmap
+          fail_on_unmatched_files: true
+
+      - name: Upload update manifest (arm64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-manifest-arm64
+          path: desktop/apps/electron/release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  # Identical to macos-arm64 apart from the runner and the arch argument. Kept as
+  # a separate job rather than a matrix over arch: the two run on different runner
+  # labels, so a matrix would need per-entry configuration anyway and would only
+  # obscure that asymmetry.
+  #
+  # Runs on every tag push, because Intel is a first-class target: the merged
+  # update feed must carry an x64 entry or Intel installs get
+  # ERR_UPDATER_ZIP_FILE_NOT_FOUND on every check — silently, since background
+  # updater errors are not surfaced. Still skipped for `platform: macos` runs so
+  # a quick arm64-only nightly stays quick. Standard GitHub-hosted runners
+  # (macos-15-intel included) are free and unlimited on public repositories, so
+  # the extra job costs wall-clock time, not money.
+  macos-x64:
+    needs: meta
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'macos-intel' }}
+    runs-on: macos-15-intel
+    name: package (macOS x64 / Intel)
+    # Longer than arm64's 30: Intel runners are markedly slower at PyInstaller
+    # and electron-builder, and notarization queues are the same either way.
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # --- Backend: build dist/amphi/ (launcher + _internal/ payload) ---
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.9.5"
+          python-version: "3.13.6"
+          enable-cache: true
+
+      - name: Install backend deps (uv sync)
+        run: uv sync --frozen
+
+      # Native x86_64 build — PyInstaller cannot cross-compile, which is the
+      # whole reason this job needs an Intel runner rather than an --x64 flag.
+      - name: Build amphi binary (PyInstaller)
+        run: bash build/build-pyinstaller.sh
+
+      # --- Frontend: flatten dist/amphi/ into the app's Resources/bin/ ---
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - name: Package macOS app (x64)
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_INSTALLER_LINK: ${{ secrets.CSC_INSTALLER_LINK }}
+          CSC_INSTALLER_KEY_PASSWORD: ${{ secrets.CSC_INSTALLER_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          # Derived, not hardcoded: `?private` makes electron-updater use the
+          # authenticated provider (needs GH_TOKEN at runtime). Once the repo is
+          # public this expression drops the suffix on its own, so there is no
+          # switch to remember to flip at open-source time.
+          APP_UPDATE_URL: github:${{ github.repository }}${{ github.event.repository.private && '?private' || '' }}
+        # fetch-uv / fetch-python / fetch-node all take x64 here, then
+        # build-dmg.sh x64 runs electron-builder --mac --x64.
+        run: bun run dist:mac:x64
+
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          files: |
+            desktop/apps/electron/release/*.pkg
+            desktop/apps/electron/release/*.zip
+            desktop/apps/electron/release/*.zip.blockmap
+          fail_on_unmatched_files: true
+
+      - name: Upload update manifest (x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-manifest-x64
+          path: desktop/apps/electron/release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  # Publish ONE macOS feed covering both architectures.
+  #
+  # electron-updater picks a build by looking for the substring `arm64` in each
+  # entry's URL (MacUpdater.js, doDownloadUpdate): Apple Silicon keeps only the
+  # matches, Intel keeps only the non-matches. So a single `files:` list with both
+  # zips lets each machine download just its own ~222 MB — the reason this is a
+  # merge step and not a universal build, which would make every user carry both.
+  #
+  # Only runs when both arch jobs succeeded: a feed missing either entry silently
+  # strands that architecture, which is worse than publishing no feed at all.
+  merge-mac-manifest:
+    needs: [meta, macos-arm64, macos-x64]
+    if: ${{ needs.macos-arm64.result == 'success' && needs.macos-x64.result == 'success' }}
+    runs-on: ubuntu-latest
+    name: publish macOS update feed
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Download per-arch manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-manifest-*
+          path: manifests
+
+      # Fails loudly on a version mismatch between the two jobs, and on a feed
+      # that ended up without an arm64 entry. Unit-tested in
+      # desktop/scripts/__tests__/merge-mac-manifests.test.ts.
+      - name: Merge manifests
+        working-directory: desktop
+        run: |
+          bun run scripts/merge-mac-manifests.ts \
+            ../latest-mac.yml \
+            ../manifests/mac-manifest-arm64/latest-mac.yml \
+            ../manifests/mac-manifest-x64/latest-mac.yml
+          echo "--- merged feed ---"
+          cat ../latest-mac.yml
+
+      - name: Publish feed to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          files: latest-mac.yml
+          fail_on_unmatched_files: true
+
+  windows-x64:
+    needs: meta
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    name: package (Windows x64)
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # --- Backend: build dist/amphi/ (CLI + windowless login shim + payload) ---
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.9.5"
+          python-version: "3.13.6"
+          enable-cache: true
+
+      - name: Install backend deps (uv sync)
+        run: uv sync --frozen
+
+      - name: Test Windows backend compatibility
+        shell: pwsh
+        run: >
+          uv run pytest -q
+          tests/test_windows_shell_smoke.py
+          tests/test_subprocess_flags.py
+          tests/test_classifier_context.py
+          tests/test_notify.py
+          tests/test_amphi_autostart_entry.py
+          tests/test_server_manager.py::test_registration_uses_the_native_windows_pid_probe
+          tests/test_server_manager.py::test_manager_uses_taskkill_for_the_windows_hard_fallback
+          tests/test_server_manager.py::test_manager_selects_the_native_autostart_supervisor
+          tests/test_server_supervisors.py::test_detached_supervisor_uses_platform_process_isolation
+          tests/test_server_supervisors.py::test_run_key_supervisor_registers_a_login_launcher
+          tests/test_server_supervisors.py::test_run_key_supervisor_rejects_a_missing_launcher
+          tests/test_tools_bash.py::test_bash_uses_windows_powershell_argv
+          tests/test_tools_bash.py::test_bash_windows_timeout_terminates_process_tree
+          tests/test_context.py::test_shell_environment_summary_switches_to_powershell
+          tests/test_classify.py::test_windows_shell_classifies_common_powershell_commands
+          tests/test_agent_runtime.py::test_node_runtime_resolves_windows_layout
+          tests/test_agent_runtime.py::test_an_exclusive_handle_does_not_even_make_the_base_unreadable
+          tests/test_agent_runtime.py::test_a_stripped_dacl_is_exactly_what_the_probe_calls_unreadable
+          tests/test_agent_runtime.py::test_a_base_nobody_can_read_can_still_be_moved_aside
+          tests/test_agent_runtime.py::test_an_open_handle_makes_the_move_impossible
+          tests/test_agent_runtime.py::test_a_really_poisoned_base_heals_itself
+          tests/test_agent_runtime.py::test_a_base_that_never_becomes_readable_is_moved_aside_and_rebuilt
+          tests/test_agent_runtime.py::test_a_base_whose_handle_clears_keeps_everything_installed_in_it
+          tests/test_agent_runtime.py::test_a_base_that_cannot_be_moved_aside_stays_retryable
+          tests/test_agent_runtime.py::test_node_base_that_never_becomes_readable_is_moved_aside_and_rebuilt
+          tests/test_agent_runtime.py::test_node_base_heals_when_only_its_support_files_are_unreadable
+          tests/test_agent_runtime.py::test_ensure_pip_replaces_a_pip_that_cannot_be_used
+          tests/test_agent_runtime.py::test_ensure_pip_leaves_a_healthy_pip_alone_when_the_probe_misfires
+
+      - name: Build amphi binary (PyInstaller)
+        # PowerShell counterpart of build-pyinstaller.sh — PyInstaller cannot
+        # cross-compile, so both Windows launchers must be produced here.
+        shell: pwsh
+        run: .\build\build-pyinstaller.ps1
+
+      # Bun is pulled ahead of the smoke test: the smoke test starts a real
+      # daemon, and the daemon's AppCommandEnvironment.prepare() is strict:
+      # the process-wide singleton (_environment.py, `app_command_environment =
+      # AppCommandEnvironment()`) takes the constructor's `strict: bool = True`
+      # default and nothing in the daemon ever passes `strict=False`,
+      # so a missing uv/Python/Node throws `App runtime resources are incomplete`
+      # outright and fails startup.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      # Stage all three bundled runtimes: uv / Python / Node. ensure-runtime-resources
+      # only fills in the ones that are missing or stale, so the later fetch-* steps
+      # inside dist:win degrade to no-ops instead of downloading twice.
+      - name: Ensure bundled runtimes for the smoke test
+        working-directory: desktop
+        run: bun run dev:resources
+
+      # amphi-autostart.exe is the windowless login shim, and by design it throws
+      # the child's stdout/stderr into DEVNULL (a login context has no console to
+      # write to, see build/amphi_autostart_entry.py:65-67). The cost is that CI
+      # gets nothing but an exit code when it fails. The real reason lands on disk
+      # in two places:
+      #   - the ServerError the CLI itself raises goes to stderr — swallowed by
+      #     DEVNULL, recoverable only by fishing it out again with a direct retry;
+      #   - the daemon's own output is redirected by DetachedSupervisor into
+      #     ~/.bridgic/AmphiAgent/server.log
+      #     (supervisor/_detached.py:44-46 + _manager.py:29).
+      # The direct retry also bisects the scope: the direct call fails too → daemon
+      # side; only the launcher path fails → shim side. Note that the script body
+      # stays pure ASCII — the run: block is written out as a .ps1 and executed from
+      # disk, and every other run: block in the repo is ASCII too; don't set a
+      # non-ASCII precedent here.
+      #
+      # AMPHI_BUNDLED_RESOURCES_DIR is required, not a tuning knob: a frozen
+      # process takes its resource root from `sys.executable.parent.parent`
+      # (_resources.py:38-39). In the installed app that is `Resources/` (bin/
+      # sitting alongside uv_runtime/ etc., see electron-builder.yml
+      # extraResources), but at this point the binary is still in dist\amphi\, so
+      # parent.parent is the empty dist\ — that layout inherently fails validation.
+      # Use the first-class override to point at the real resource directory. It
+      # must be an absolute path: the daemon's cwd is dist\amphi
+      # (spec.working_directory), so a relative path would be resolved by
+      # Path.resolve() to the wrong place.
+      - name: Smoke windowless server launcher
+        shell: pwsh
+        # Backstop: this step normally finishes within a minute. Hanging means we
+        # stepped on process-wait semantics again — don't let it burn the job's
+        # 6-hour default allowance.
+        timeout-minutes: 5
+        run: |
+          $bundle = (Resolve-Path "dist\amphi").Path
+          $cli = Join-Path $bundle "amphi.exe"
+          $launcher = Join-Path $bundle "amphi-autostart.exe"
+          $runtimeDir = Join-Path $env:USERPROFILE ".bridgic\AmphiAgent"
+          $env:AMPHI_BUNDLED_RESOURCES_DIR = (Resolve-Path "desktop\apps\electron\resources").Path
+          Write-Host "AMPHI_BUNDLED_RESOURCES_DIR = $env:AMPHI_BUNDLED_RESOURCES_DIR"
+          $arguments = @(
+            "server", "start",
+            "--host", "127.0.0.1",
+            "--port", "17421",
+            "--timeout", "40"
+          )
+
+          # See the YAML comment above this step for why this exists.
+          function Show-ServerDiagnostics {
+            Write-Host "--- runtime dir: $runtimeDir ---"
+            if (Test-Path $runtimeDir) {
+              Get-ChildItem $runtimeDir | Format-Table -AutoSize | Out-String | Write-Host
+            } else {
+              Write-Host "(runtime dir does not exist)"
+            }
+            foreach ($name in @("server.log", "runtime.json")) {
+              $file = Join-Path $runtimeDir $name
+              Write-Host "--- $name ---"
+              if (Test-Path $file) {
+                Get-Content $file -Tail 200 | Write-Host
+              } else {
+                Write-Host "(missing)"
+              }
+            }
+            # Direct retry: recovers the stderr the launcher discarded.
+            Write-Host "--- direct: amphi.exe $($arguments -join ' ') ---"
+            & $cli @arguments 2>&1 | Write-Host
+            Write-Host "(direct exit code: $LASTEXITCODE)"
+          }
+
+          try {
+            # NOT -Wait: PowerShell implements it with a job object and waits for
+            # the job to drain, not just this process. The detached daemon stays
+            # in that job (DETACHED_PROCESS does not imply CREATE_BREAKAWAY_FROM_JOB),
+            # so -Wait blocks forever once the daemon actually starts. WaitForExit
+            # waits on this handle only, and the timeout keeps CI from hanging.
+            $process = Start-Process `
+              -FilePath $launcher `
+              -ArgumentList $arguments `
+              -WorkingDirectory $bundle `
+              -PassThru
+            if (-not $process.WaitForExit(120000)) {
+              Show-ServerDiagnostics
+              throw "amphi-autostart.exe did not exit within 120s"
+            }
+            if ($process.ExitCode -ne 0) {
+              Show-ServerDiagnostics
+              throw "amphi-autostart.exe exited with code $($process.ExitCode)"
+            }
+            $statusOutput = & $cli server status
+            if ($LASTEXITCODE -ne 0) {
+              Show-ServerDiagnostics
+              throw "amphi.exe server status exited with code $LASTEXITCODE"
+            }
+            $status = $statusOutput | ConvertFrom-Json
+            if ($status.status -ne "running") {
+              Write-Host "--- server status ---"
+              $statusOutput | Write-Host
+              Show-ServerDiagnostics
+              throw "windowless launcher did not publish a running service"
+            }
+          } finally {
+            & $cli server stop --timeout 10 --force
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "server smoke cleanup exited with code $LASTEXITCODE"
+            }
+          }
+
+      # --- Frontend: package Electron, flattening dist/amphi/ into resources/bin/ ---
+      - name: Package Windows installer (x64)
+        working-directory: desktop
+        env:
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          # Derived, not hardcoded: `?private` makes electron-updater use the
+          # authenticated provider (needs GH_TOKEN at runtime). Once the repo is
+          # public this expression drops the suffix on its own, so there is no
+          # switch to remember to flip at open-source time.
+          APP_UPDATE_URL: github:${{ github.repository }}${{ github.event.repository.private && '?private' || '' }}
+        # Same command developers run locally:
+        #   prebuild-fetch-amphi (copies ..\dist\amphi\* → resources/bin) +
+        #   fetch-uv / fetch-python / fetch-node x64 (bundled runtimes) +
+        #   build-win.ps1 (bun build + electron-builder --win → NSIS).
+        # Browser tools use Electron's embedded Chromium; no standalone browser
+        # is fetched, bundled, or downloaded at runtime.
+        run: bun run dist:win
+
+      # Static assertions first: they need no install and fail in seconds, so a
+      # config regression does not burn a full install/uninstall cycle.
+      # Nothing else runs this: a locale key present in en but missing from zh does
+      # not throw — react-i18next renders the raw key path — so lint, typecheck
+      # and the test suite all stay green while the Chinese UI shows
+      # `gatewayBoot.incompatible.title` where a sentence belongs.
+      - name: Check locale key parity
+        shell: pwsh
+        working-directory: desktop
+        run: bun run check:locales
+
+      - name: Check installer configuration
+        shell: pwsh
+        working-directory: desktop
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File apps/electron/scripts/test-installer.ps1 -ConfigOnly
+
+      - name: Check release artifacts
+        shell: pwsh
+        working-directory: desktop
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File apps/electron/scripts/test-installer.ps1 -Scenario ReleaseArtifacts
+
+      # Everything below actually installs, updates and uninstalls Amphi on the
+      # runner. Each scenario guards a failure that is silent on Windows: an
+      # update relocating an existing installation, an autostart opt-out coming
+      # back by itself, a user's --port reset to the default, or the daemon being
+      # TerminateProcess'd instead of asked to stop.
+      #
+      # Gated behind the `smoke` input because the nine scenarios dominate the
+      # job (~25 min of real installs on a 2x-billed runner). A tag push is a
+      # real Release, so it always smokes — `inputs` is empty outside
+      # workflow_dispatch and the event check short-circuits first. The static
+      # checks above stay unconditional: they cost seconds.
+      - name: Smoke the Windows installer
+        if: ${{ github.event_name == 'push' || inputs.smoke }}
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $installer = Get-ChildItem apps/electron/release/*.exe |
+            Select-Object -First 1 -ExpandProperty FullName
+          $scenarios = @(
+            'Fresh',
+            'Repair',
+            'NoRelocateOnReinstall',
+            'RejectsTooLongPath',
+            'GracefulStop',
+            'PathIdempotence',
+            'AutostartOptOutSurvives',
+            'AutostartArgsSurvive',
+            'UninstallRetainsData'
+          )
+          foreach ($scenario in $scenarios) {
+            Write-Host "::group::$scenario"
+            pwsh -NoProfile -ExecutionPolicy Bypass `
+              -File apps/electron/scripts/test-installer.ps1 `
+              -Installer $installer -Scenario $scenario
+            if ($LASTEXITCODE -ne 0) { throw "installer scenario $scenario failed" }
+            Write-Host '::endgroup::'
+          }
+
+      # Collect into the workspace first. Two reasons the previous shape could
+      # never work: `${{ env.LOCALAPPDATA }}` resolves to an EMPTY string (the
+      # `env` context holds only workflow-declared variables, not the runner's
+      # process environment), and $env:TEMP is not guaranteed to equal
+      # ${{ runner.temp }}. Doing the gather inside pwsh sidesteps both.
+      - name: Collect installer diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'installer-diagnostics'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          Get-ChildItem "$env:LOCALAPPDATA\Amphi" -Filter '*.log' -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $out -ErrorAction SilentlyContinue
+
+          # The scenario script keeps its sandbox on failure precisely so this can
+          # read it. COPY BY ALLOWLIST, not wholesale: the sandbox home holds the
+          # entire ~/.bridgic tree (session databases, workflow artifacts), and
+          # this artifact is downloadable by anyone with read access to the run.
+          # An extension-based redaction pass over a wholesale copy would leave
+          # every .db / .jsonl / extensionless file untouched.
+          foreach ($dir in Get-ChildItem $env:TEMP -Directory -Filter 'amphi-e2e-*' -ErrorAction SilentlyContinue) {
+            $dest = Join-Path $out $dir.Name
+            New-Item -ItemType Directory -Path $dest -Force | Out-Null
+            Get-ChildItem $dir.FullName -Recurse -File -Include '*.log', 'runtime.json' -ErrorAction SilentlyContinue |
+              ForEach-Object { Copy-Item $_.FullName -Destination $dest -ErrorAction SilentlyContinue }
+            # A file listing keeps the "what was on disk" signal without the contents.
+            Get-ChildItem $dir.FullName -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName |
+              Set-Content (Join-Path $dest 'tree.txt')
+          }
+
+          # runtime.json holds the daemon's bearer token and server.log can echo
+          # an Authorization header. Scrub everything we collected.
+          Get-ChildItem $out -Recurse -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $text = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+              if ($null -eq $text) { return }
+              $text = $text -replace '("token"\s*:\s*")[^"]*', '$1***'
+              $text = $text -replace '(?i)(Bearer\s+)[A-Za-z0-9._\-]+', '$1***'
+              Set-Content -Path $_.FullName -Value $text
+            }
+
+      - name: Upload installer diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-e2e
+          if-no-files-found: ignore
+          path: installer-diagnostics/**
+
+      # Shares the Release with the macOS job — both write the same tag, each
+      # contributing its own assets.
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          # latest.yml is electron-updater's entry point and *.exe.blockmap is
+          # what lets it fetch only the changed blocks of a ~300 MB payload.
+          # Publishing the .exe alone produces a feed no client can consume — the
+          # updater 404s on latest.yml and never even learns a version exists.
+          files: |
+            desktop/apps/electron/release/*.exe
+            desktop/apps/electron/release/*.exe.blockmap
+            desktop/apps/electron/release/latest.yml
+          fail_on_unmatched_files: true
