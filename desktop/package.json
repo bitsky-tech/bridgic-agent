@@ -1,6 +1,6 @@
 {
   "name": "bridgic-agent-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "SEE LICENSE IN ../LICENSE",
   "description": "Bridgic Agent — Electron GUI client for the Bridgic Agent backend daemon",
