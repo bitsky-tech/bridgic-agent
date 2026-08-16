@@ -1,60 +1,45 @@
 # Bridgic Agent
 
-Bridgic Agent is a general-purpose, local-first desktop agent for carrying work
-from an initial request to a durable result. It can work with local files and
-commands, use the web and an embedded browser, delegate to child agents, turn a
-successful process into a reusable Workflow, and run that Workflow on a
-schedule.
+Bridgic Agent is a general-purpose, local-first desktop agent and an intelligent automation workflow builder. Designed around the principle of “Agent-Led, Not Human-Driven,” its unique `/build` command turns what you want into workflows that actually work—and keep working.
 
-It is powered by the Bridgic Amphibious runtime and adds its own durable
-execution, Workspace, Workflow, scheduling, permission, local gateway, and
-desktop experience. The product is designed around tasks and outcomes rather
-than a single problem domain.
+Build It. Run It. Evolve It!
 
-This repository contains the Python backend and the Electron desktop client:
+![Bridgic Agent](header_bridgic_agent.png)
 
-```text
-Bridgic Agent Desktop
-        │
-        ├── local REST + multiplexed WebSocket
-        │
-Python gateway and Agent runtime
-        │
-        └── SQLite records + Session-owned artifacts
-```
+## Core Features
 
-> Bridgic Agent is under active development. The current release line is
-> pre-1.0, so internal contracts may still evolve.
+### `/build` — Turn What You Want Into a Working Workflow
 
-## What Bridgic Agent can do
+Tell Bridgic Agent what you want. It explores, builds, and verifies the workflow. **No automation expertise needed.**
 
-- **Handle general tasks with real tools.** Work with files, directories,
-  shell commands, web search, web pages, and structured human input.
-- **Keep work durable.** Sessions, completed or parked turn traces,
-  attachments, approvals, Workflows, schedules, and results survive client and
-  daemon restarts. The live event stream itself is process-local.
-- **Work in a managed Workspace.** Each root Session gets a managed working area
-  with mounted resources, change inspection, and private Git checkpoints for
-  the tracked Workspace content.
-- **Share a browser with the user.** The Agent operates the same embedded
-  Chromium tabs the user can see. Tabs belong to a Session, while cookies,
-  storage, and sign-in state use one persisted browser profile shared across
-  the application.
-- **Delegate work.** A root Session can run child agents concurrently while
-  keeping their histories and results visible in the parent experience.
-- **Build reusable Workflows.** Bridgic Agent can clarify a task, explore the
-  real execution path, generate a Workflow, verify it, and ask the user to
-  accept it.
-- **Run and validate Workflows.** Every run uses a fixed source snapshot,
-  persists its Workflow cursor, applies its validation policy, and publishes
-  reusable result artifacts.
-- **Automate recurring work.** Six-field cron schedules can start independent
-  runs, retain history, and surface runs that still need human attention.
-- **Extend the Agent.** Skills can be installed and enabled on demand, while
-  model Providers and compatible custom channels are configured in the UI.
-- **Keep the user in control.** Three execution modes, inline permission cards,
-  and hard safety rules govern tool execution; decisions are recorded in a
-  per-Session audit trail.
+### Agent-Led, Not Human-Driven
+
+You set the goal. Bridgic Agent figures out the path, drives the task forward. It can keep progressing toward a successful result for **200+ rounds of exploration**.
+
+### Ask for the Outcome, Not the Process
+
+No need to manage the process — **no need to worry about skills and plugins**. Describe the goal, step in when needed, and review the result.
+
+### Built to Run for the Long Term
+
+**Build, run, modify, optimize, repair, and schedule** your workflows. Turn one successful automation into something that keeps running and evolving.
+
+### Multi-Agent for Complex, Long-Running Work
+
+Automatically break down complex tasks and run subagents in parallel. Launch them **from agents or scripts**, with high concurrency, long-running execution, and persistent interaction.
+
+### Make It Truly Yours
+
+Build around your needs instead of adapting to someone else's templates. Keep evolving your workflows into **private assets you own and control**.
+
+## Install
+
+Bridgic Agent currently supports macOS and Windows. Download the appropriate
+installer from the [Releases](https://github.com/bitsky-tech/bridgic-agent/releases)
+page: a `.pkg` file for macOS or an `.exe` file for Windows.
+
+> **Note:** The Windows installer is not currently code-signed. If Windows
+> blocks it, you may need to adjust the relevant settings in Smart App Control.
 
 ## Product model
 
@@ -82,6 +67,23 @@ The composer is also context-aware:
 The desktop client is localized in English and Chinese.
 
 ## Architecture
+
+Bridgic Agent is powered by the Bridgic Amphibious runtime and adds its own durable
+execution, Workspace, Workflow, scheduling, permission, local gateway, and
+desktop experience. The product is designed around tasks and outcomes rather
+than a single problem domain.
+
+This repository contains the Python backend and the Electron desktop client:
+
+```text
+Bridgic Agent Desktop
+        │
+        ├── local REST + multiplexed WebSocket
+        │
+Python gateway and Agent runtime
+        │
+        └── SQLite records + Session-owned artifacts
+```
 
 ```mermaid
 flowchart LR
@@ -282,7 +284,7 @@ bun run dev
 The desktop client will reuse the foreground daemon.
 
 > **Naming note.** The product is **Bridgic Agent**, on both the desktop and
-> the backend side. Several identifiers still spell an earlier name, and they
+> backend side. Several identifiers still spell an earlier name, and they
 > are kept deliberately: each one is a contract held by something outside this
 > repository — an installed copy, the operating system, or the packaging
 > toolchain — so renaming it would orphan existing data rather than relabel it.
@@ -496,8 +498,7 @@ The source is licensed under the
 network clause applies, running a modified version as a network service
 obliges you to offer that version's source to its users.
 
-A commercial license is available as the alternative to those copyleft terms.
-Ask at <bd@bitsky-tech.com>.
+A commercial license is available as the alternative to those copyleft terms. Contact <bd@bitsky-tech.com>.
 
 Third-party components retain their own license terms. [NOTICE](NOTICE)
 records the elections, source offers, and corrections that cannot be derived
