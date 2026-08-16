@@ -599,7 +599,7 @@
       "description": "{{product}} 需要连接大语言模型才能工作。请先完成模型配置，支持 OpenAI、Anthropic、DeepSeek 等主流厂商。",
       "title": "开始前，先配置 AI 模型"
     },
-    "tagline": "描述你的自动化需求，AI 帮你构建可运行的工作流"
+    "tagline": "<code>/build</code>：把需求变成真正可运行的工作流。一次构建，持续演进"
   },
   "main": {
     "browser": {
@@ -1104,17 +1104,17 @@
     },
     "mode": {
       "auto": {
-        "desc": "有风险操作交 AI 复核,该放的放、可疑的才问你",
+        "desc": "仅当检测到风险操作才会问你",
         "freq": "打断很少 · 推荐",
         "label": "替我审批"
       },
       "full": {
-        "desc": "有风险操作免 AI 复核直接执行;仍拦系统级破坏、删凭证仍确认",
+        "desc": "仅拦截少数高风险操作，其他都放行",
         "freq": "几乎不打断 · 涉敏任务慎用",
         "label": "完全访问"
       },
       "request": {
-        "desc": "只读之外都先问你(联网、执行命令、改外部文件…)",
+        "desc": "除了只读操作，都先问你（联网、执行命令、改外部文件…）",
         "freq": "打断较多 · 最稳妥",
         "label": "请求批准"
       }
@@ -1689,29 +1689,29 @@
     },
     "privacy": {
       "localFirst": {
-        "description": "你的对话、提示词、代码、文件和凭据默认留在设备上，不会纳入使用数据。",
-        "title": "你的工作内容默认留在本地"
+        "description": "你的对话、提示词、工作流、文件和凭据永远留在本地设备上，不属于匿名使用数据。",
+        "title": "你的工作内容永远留在本地"
       },
       "notice": {
         "label": "查看完整隐私声明",
         "updated": "更新于 2026 年 8 月 11 日"
       },
       "telemetry": {
-        "dataScopeTitle": "使用数据范围",
-        "excludedSummary": "提示词与对话、模型内容、代码与文件、命令及工具内容、凭据、日志、截图或录屏",
+        "dataScopeTitle": "匿名使用数据的范围",
+        "excludedSummary": "提示词与对话、模型内容、代码与文件、工作流、命令及工具内容、凭据、日志、截图或录屏",
         "excludedTitle": "不包含",
-        "sectionDescription": "了解软件的基本使用情况，可以帮助我们持续改进功能体验与稳定性。这些使用数据不包含你的工作内容。",
+        "sectionDescription": "匿名使用数据不与你的账号关联，也不包含你的任何工作内容。它可以帮助我们持续改进功能体验与稳定性。",
         "sectionTitle": "帮助我们改进 {{product}}",
         "sharedSummary": "不关联账号或个人身份的使用统计、软件启动与窗口打开、前台活跃时长、软件版本和操作系统类型",
         "sharedTitle": "包含",
         "statusOff": "已关闭",
         "statusOn": "已开启",
-        "switchDescriptionOff": "当前未收集使用数据，所有核心功能均可正常使用。",
-        "switchDescriptionOn": "仅收集下方列出的基本使用信息。",
-        "switchTitle": "允许我们收集使用数据"
+        "switchDescriptionOff": "当前未收集匿名使用数据，所有核心功能均可正常使用。",
+        "switchDescriptionOn": "匿名使用数据的包含范围见下方详情。",
+        "switchTitle": "允许我们收集匿名使用数据"
       },
       "use": {
-        "description": "用于了解功能是否好用、优化产品体验与稳定性；不会出售，也不用于广告或个人画像。事件最多保留 90 天。"
+        "description": "匿名使用数据仅用于统计产品使用概况、优化产品体验与稳定性；不会出售，也不用于广告或个人画像。事件最多保留 90 天。"
       }
     }
   },

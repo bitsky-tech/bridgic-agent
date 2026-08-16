@@ -22,7 +22,7 @@
  */
 
 import type { ReactNode } from 'react'
-import { useTranslation } from 'react-i18next'
+import { Trans, useTranslation } from 'react-i18next'
 import { APP_PRODUCT_NAME } from '@shared/app-meta'
 import { cn } from '@/lib/cn'
 import { Icons } from './Icons'
@@ -110,7 +110,6 @@ function LandingInput({ needsModelConfig, onConfigureModel, inputSlot }: Landing
 }
 
 export function Landing({ needsModelConfig = false, onConfigureModel, marketCards, onPickMarket, inputSlot }: LandingProps) {
-  const { t } = useTranslation()
   // No built-in fallback list: with nothing fetched the market simply is not
   // there. A placeholder would promise cards that may never arrive.
   const cards = marketCards ?? []
@@ -148,7 +147,12 @@ export function Landing({ needsModelConfig = false, onConfigureModel, marketCard
         <span className="text-2xl font-bold text-text-primary">{APP_PRODUCT_NAME}</span>
       </div>
       <p className="text-md text-text-secondary mb-8 text-center max-w-[420px] leading-[1.6]">
-        {t('landing.tagline')}
+        <Trans
+          i18nKey="landing.tagline"
+          components={{
+            code: <code className="px-1 py-0.5 rounded bg-bg-hover font-mono text-[0.85em]" />,
+          }}
+        />
       </p>
 
       {/* Input box / config prompt / external composer slot. The gap towards the
