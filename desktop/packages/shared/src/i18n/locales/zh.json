@@ -599,7 +599,7 @@
       "description": "{{product}} 需要连接大语言模型才能工作。请先完成模型配置，支持 OpenAI、Anthropic、DeepSeek 等主流厂商。",
       "title": "开始前，先配置 AI 模型"
     },
-    "tagline": "描述你的自动化需求，AI 帮你构建可运行的工作流"
+    "tagline": "<code>/build</code>：把需求变成真正可运行的工作流。一次构建，持续演进"
   },
   "main": {
     "browser": {

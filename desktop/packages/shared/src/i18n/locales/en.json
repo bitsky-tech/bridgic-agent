@@ -599,7 +599,7 @@
       "description": "{{product}} needs a large language model connection to work. Complete model setup first; OpenAI, Anthropic, DeepSeek, and other major providers are supported.",
       "title": "Configure an AI model before you begin"
     },
-    "tagline": "Describe what you want to automate, and AI will build a runnable workflow."
+    "tagline": "<code>/build</code>: You Set the Goal. Let the Agent Lead."
   },
   "main": {
     "browser": {
