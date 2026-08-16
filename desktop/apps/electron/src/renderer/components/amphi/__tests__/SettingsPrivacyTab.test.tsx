@@ -51,17 +51,17 @@ describe('SettingsPrivacyTab', () => {
     const telemetrySwitch = host.querySelector<HTMLButtonElement>('[data-testid="telemetry-opt-in"]')
     if (!telemetrySwitch) throw new Error('telemetry switch not rendered')
     expect(host.textContent).toContain('帮助我们改进 Bridgic Agent')
-    expect(host.textContent).toContain('你的工作内容默认留在本地')
-    expect(host.textContent).toContain('使用数据范围')
+    expect(host.textContent).toContain('你的工作内容永远留在本地')
+    expect(host.textContent).toContain('匿名使用数据的范围')
     expect(host.textContent).not.toContain('随机安装 ID')
-    expect(host.textContent).toContain('仅收集下方列出的基本使用信息')
+    expect(host.textContent).toContain('匿名使用数据的包含范围见下方详情')
     expect(telemetrySwitch.getAttribute('role')).toBe('switch')
     expect(telemetrySwitch.getAttribute('aria-checked')).toBe('true')
 
     await act(async () => { telemetrySwitch.click() })
 
     expect(telemetrySwitch.getAttribute('aria-checked')).toBe('false')
-    expect(host.textContent).toContain('当前未收集使用数据，所有核心功能均可正常使用')
+    expect(host.textContent).toContain('当前未收集匿名使用数据，所有核心功能均可正常使用')
     expect(store.get(settingsAtom).ui.telemetryOptIn).toBe(false)
     expect(persistedSettings.at(-1)?.ui.telemetryOptIn).toBe(false)
 
