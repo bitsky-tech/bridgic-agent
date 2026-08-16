@@ -39,7 +39,7 @@ installer from the [Releases](https://github.com/bitsky-tech/bridgic-agent/relea
 page: a `.pkg` file for macOS or an `.exe` file for Windows.
 
 > **Note:** The Windows installer is not currently code-signed. If Windows
-> blocks it, you may need to adjust the relevant settings in Smart App Control.
+> blocks it, you may need to adjust the relevant settings in Windows Security and Smart App Control.
 
 ## Product model
 
