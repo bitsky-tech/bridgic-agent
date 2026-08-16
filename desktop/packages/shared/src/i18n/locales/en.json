@@ -1689,29 +1689,29 @@
     },
     "privacy": {
       "localFirst": {
-        "description": "Your conversations, prompts, code, files, and credentials stay on this device by default and are not included in usage data.",
-        "title": "Your work stays on this device"
+        "description": "Your conversations, prompts, workflows, files, and credentials always stay on this device and are not included in usage telemetry.",
+        "title": "Your work content stays on this device"
       },
       "notice": {
         "label": "Read the full Privacy Notice",
         "updated": "Updated August 11, 2026"
       },
       "telemetry": {
-        "dataScopeTitle": "Usage data scope",
-        "excludedSummary": "Prompts and conversations, model content, code and files, commands and tool content, credentials, logs, screenshots, or recordings",
+        "dataScopeTitle": "Scope of usage telemetry",
+        "excludedSummary": "Prompts and conversations, model content, workflows, code and files, commands and tool content, credentials, logs, screenshots, or recordings",
         "excludedTitle": "Not included",
-        "sectionDescription": "Understanding basic app usage helps us improve the product experience and reliability. This usage data never includes your work content.",
+        "sectionDescription": "Usage telemetry is not linked to your account and does not include any of your work content. It helps us continuously improve the product experience and reliability!",
         "sectionTitle": "Help us improve {{product}}",
-        "sharedSummary": "Usage statistics not linked to an account or personal identity, app and window opens, foreground active time, app version, and operating-system family",
+        "sharedSummary": "Usage statistics not linked to your account or personal identity, app launches and window opens, foreground active time, app version, and operating system type.",
         "sharedTitle": "Included",
         "statusOff": "Off",
         "statusOn": "On",
-        "switchDescriptionOff": "Usage data is not currently collected, and all core features remain available.",
-        "switchDescriptionOn": "Only the basic usage information listed below is collected.",
-        "switchTitle": "Allow usage data collection"
+        "switchDescriptionOff": "Usage telemetry is currently disabled, and all core features remain available.",
+        "switchDescriptionOn": "See the details below for the scope of usage telemetry.",
+        "switchTitle": "Enable usage telemetry"
       },
       "use": {
-        "description": "Used to understand whether features work well and improve the product experience and reliability. Never sold or used for advertising or individual profiling. Events are retained for no more than 90 days."
+        "description": "Usage telemetry is used only to understand overall product usage and improve the product experience and reliability. It is never sold or used for advertising or personal profiling. Event-level data is retained for no more than 90 days."
       }
     }
   },
