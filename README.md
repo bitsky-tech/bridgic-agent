@@ -34,6 +34,8 @@ Build around your needs instead of adapting to someone else's templates. Keep ev
 
 ## Install
 
+### Install a release
+
 Bridgic Agent currently supports macOS and Windows. Download the appropriate
 installer from the [Releases](https://github.com/bitsky-tech/bridgic-agent/releases)
 page: a `.pkg` file for macOS or an `.exe` file for Windows.
@@ -41,30 +43,43 @@ page: a `.pkg` file for macOS or an `.exe` file for Windows.
 > **Note:** The Windows installer is not currently code-signed. If Windows
 > blocks it, you may need to adjust the relevant settings in Windows Security and Smart App Control.
 
-## Product model
+### Install from source
 
-| Concept | Role |
-| --- | --- |
-| **Session** | A durable conversation and execution history. Root Sessions can own child-agent Sessions. |
-| **Workspace** | The Session's managed files, mounts, private checkpoints, Workflow authoring area, and run artifacts. |
-| **Workflow** | A reusable package containing execution instructions, a validation policy, and supporting files. |
-| **Workflow Run** | A Session-local execution of a fixed Workflow snapshot, with a resumable cursor and published results. |
-| **Schedule** | A persistent cron definition that creates independent scheduled Sessions and keeps their run history. |
-| **Skill** | An installable capability package loaded only when relevant to the current task. |
+To run Bridgic Agent from source, install these prerequisites:
 
-The desktop client exposes these concepts directly. Its left navigation covers
-Home, Workflows, Skills, Schedules, Assets, the Session tree, gateway state, and
-scheduled runs that need attention. A Session's right-hand workbench brings
-together Files, Workflows, Results, Schedules, and Browser tabs.
+- Python `>=3.10,<3.14`
+- [uv](https://docs.astral.sh/uv/)
+- Bun 1.3.x
+- Internet access the first time the managed Agent runtimes are prepared
 
-The composer is also context-aware:
+Then install the Python and desktop dependencies once from the repository root:
 
-- `/` starts commands, Skills, Workflows, and schedules.
-- `@` references Session files, Workflows, run results, and schedules as input.
-- Permission decisions, task specifications, child-agent activity, Workflow
-  build progress, and run results stay inline with the Session timeline.
+```bash
+uv sync
+bun --cwd=desktop install
+```
 
-The desktop client is localized in English and Chinese.
+Run these setup commands again only when the corresponding dependencies change.
+
+## Quick Start
+
+### Start a release
+
+Open Bridgic Agent from the Applications folder on macOS or the Start menu on
+Windows. In Settings, configure a Model Provider and its credentials, then
+begin your Bridgic Agent journey.
+
+### Start from source
+
+Run this command from the repository root:
+
+```bash
+bun --cwd=desktop run dev
+```
+
+The first launch may take a little longer while the required runtimes are
+downloaded. When the app opens, configure a Model Provider and its credentials
+in Settings, then begin your Bridgic Agent journey.
 
 ## Architecture
 
@@ -78,41 +93,30 @@ This repository contains the Python backend and the Electron desktop client:
 ```text
 Bridgic Agent Desktop
         │
-        ├── local REST + multiplexed WebSocket
+        ├── Electron desktop client + CLI interface
         │
-Python gateway and Agent runtime
+Bridgic Agent Harness
         │
-        └── SQLite records + Session-owned artifacts
+        └── bridgic-amphibious runtime + local database
 ```
 
-```mermaid
-flowchart LR
-    Client["Desktop / CLI"] --> Gateway["Local gateway<br/>REST + multiplexed WebSocket"]
-    Gateway --> Invocation["AgentInvocation<br/>durable execution boundary"]
-    Scheduler["Scheduler"] --> Invocation
-    Invocation --> State["SQLite + Session artifacts"]
-    Invocation --> Loop["Stage-aware Agent loops"]
-    Loop --> Permission["Permission engine"]
-    Permission --> Tools["Stage-specific tool surface"]
-    Tools --> Workspace["Workspace + checkpoints"]
-    Tools --> Browser["Electron embedded browser"]
-    Loop --> Children["Child agents"]
-    Loop --> Workflow["Workflow build / run / validate"]
-    Client --> Browser
+Repository layout:
+
+```text
+src/
+├── amphi_cli/       CLI and headless Agent client
+├── amphi_service/   FastAPI/WebSocket gateway, scheduler, and runtime coordination
+├── amphi_agent/     Agent loops, context, tools, Workflows, browser, and permissions
+└── amphi_store/     Async SQLModel/SQLite records and repositories
+
+desktop/
+├── apps/electron/   Electron main, preload, renderer, and shared contracts
+├── packages/        Shared UI and TypeScript workspace packages
+└── scripts/         Development, runtime preparation, and packaging orchestration
+
+build/               PyInstaller entry points and target-native build scripts
+tests/               Python test suite
 ```
-
-### A durable execution boundary
-
-`AgentInvocation` is the lifecycle boundary for a run. It restores the durable
-Session, prepares its Workspace and current catalogs, starts the appropriate
-Agent stage, streams events to connected clients, and persists completed,
-parked, failed, or cancelled turn state. Live WebSocket event buffers do not
-survive a daemon restart; a Workflow Run additionally persists its own cursor.
-
-When execution must pause for permission, clarification, task acceptance,
-Workflow confirmation, or child-agent input, the parked interaction is stored.
-The next response resumes the same logical turn instead of constructing an
-unrelated request.
 
 ### Stage-aware Agent loops
 
@@ -233,220 +237,6 @@ web access, and browser activity can still transmit data to the third parties
 the user chooses. Optional pseudonymous telemetry is controlled from Settings.
 See [PRIVACY.md](PRIVACY.md) for the data boundaries.
 
-## Quick start
-
-### Prerequisites
-
-- Python `>=3.10,<3.14`
-- [uv](https://docs.astral.sh/uv/)
-- Bun 1.3.x
-- Internet access the first time the managed Agent runtimes are prepared
-
-From the repository root:
-
-```bash
-uv sync
-
-cd desktop
-bun install
-bun run dev
-```
-
-`bun run dev` prepares the pinned uv, Python, and Node resources, builds the
-Electron main and preload processes, starts the renderer development server,
-and launches Electron. Electron discovers and adopts an existing compatible
-daemon or starts one through the backend CLI.
-
-Model Providers, credentials, the active model, and the execution mode are
-configured in the desktop Settings UI. Root `.env` values are for Python
-process configuration; `desktop/.env` values are for desktop development and
-packaging.
-
-### Debug the backend in the foreground
-
-Prepare the managed runtimes, then start the daemon from the repository root:
-
-```bash
-cd desktop
-bun run dev:resources
-
-cd ..
-uv run amphi server serve --log-level debug
-```
-
-In another terminal:
-
-```bash
-cd desktop
-bun run dev
-```
-
-The desktop client will reuse the foreground daemon.
-
-> **Naming note.** The product is **Bridgic Agent**, on both the desktop and
-> backend side. Several identifiers still spell an earlier name, and they
-> are kept deliberately: each one is a contract held by something outside this
-> repository — an installed copy, the operating system, or the packaging
-> toolchain — so renaming it would orphan existing data rather than relabel it.
->
-> | Identifier | What it is |
-> | --- | --- |
-> | `amphi` | the backend CLI, and the `amphi://` deep-link scheme |
-> | `AMPHI_*` | environment variables read by the backend process |
-> | `~/.bridgic/AmphiAgent/`, `~/.bridgic/amphi/` | on-disk data roots |
-> | `src/amphi_agent/`, `src/amphi_cli/`, … | Python package names |
-> | `dist/amphi/` | the PyInstaller output directory |
->
-> The Python distribution is `bridgic-agent`, matching the product, and its
-> environment variables use the matching `BRIDGIC_AGENT_*` prefix.
->
-> `desktop/apps/electron/src/shared/app-meta.ts` is the single source of truth
-> for the names the desktop uses, and `desktop/scripts/check-naming.sh` fails
-> the build if one of them is re-declared as a bare literal elsewhere.
-
-## Backend CLI
-
-Use `uv run amphi` in a source checkout unless the virtual environment is
-already activated.
-
-```bash
-uv run amphi server start
-uv run amphi server status
-uv run amphi server stop
-uv run amphi server restart
-
-# Supported on macOS and Windows
-uv run amphi server autostart enable
-uv run amphi server autostart status
-uv run amphi server autostart disable
-
-# Runs a self-contained task in a new Session; requires a running daemon
-uv run amphi agent run "Summarize the key tradeoffs of local-first software"
-```
-
-`server serve --reload` is available for low-level Uvicorn development, but it
-does not register a managed gateway in `runtime.json` and cannot be adopted by
-the desktop client. Linux autostart registration is not currently supported.
-
-The default endpoint is `127.0.0.1:7421`, but clients should discover the
-actual endpoint and token from `runtime.json` rather than hard-code either
-value. Do not expose the gateway as a remote multi-user service.
-
-When the daemon is running, REST OpenAPI documentation is available at
-`/docs`. The API covers user and Provider settings, Sessions, messages, files,
-mounts, gateway state, Agent runs, child agents, browser control, Skills,
-Workflows, Workflow Runs, and schedules. Real-time tokens, reasoning, tools,
-stage progress, human interactions, results, and system events share one
-authenticated multiplexed WebSocket connection.
-
-## Development commands
-
-From the repository root:
-
-```bash
-uv run pytest
-```
-
-From `desktop/`:
-
-```bash
-bun run dev
-bun run typecheck
-bun run lint
-bun run test
-bun run check:naming
-bun run check:locales
-```
-
-## Packaging
-
-Desktop packaging is a two-stage, target-native process. First build the Python
-backend for the target operating system **and architecture**:
-
-```bash
-# macOS or Linux
-bash build/build-pyinstaller.sh
-```
-
-```powershell
-# Windows PowerShell
-.\build\build-pyinstaller.ps1
-```
-
-This produces the onedir backend bundle in `dist/amphi/`. PyInstaller does not
-cross-compile across operating systems or convert architectures. For example,
-a macOS x64 desktop package must contain an x64 backend built with a matching
-toolchain; an arm64 backend built on Apple Silicon cannot be reused for it.
-
-Then build the desktop package from `desktop/`:
-
-```bash
-bun run dist:mac       # macOS arm64: .pkg + updater .zip
-bun run dist:mac:x64   # macOS x64: .pkg + updater .zip
-bun run dist:linux     # Linux x64: .deb
-bun run dist:win       # Windows x64: NSIS .exe
-```
-
-The `dist:*` commands copy the already-built backend and prepare the matching
-managed runtimes; they do not run PyInstaller for you. Desktop artifacts are
-written to `desktop/apps/electron/release/`.
-
-Local macOS packaging requires Xcode Command Line Tools. Production macOS
-distribution also requires signing and notarization. The update source is
-disabled unless `APP_UPDATE_URL` is configured in `desktop/.env` or CI before
-the desktop bundle is built. Current Windows packages are unsigned and may
-trigger a SmartScreen warning.
-
-## Releasing
-
-Release builds come from the `Package` workflow
-([`.github/workflows/package.yml`](.github/workflows/package.yml)). It has two
-entry points and nothing else triggers it — ordinary pushes and pull requests
-do not.
-
-### Pushing a version tag
-
-A tag matching bare semver starts a full release build:
-
-```
-0.1.14        builds every platform, publishes a normal release
-0.1.14-rc1    builds every platform, publishes a PRERELEASE
-v0.1.14       does not match the trigger; nothing runs
-```
-
-A tag push always builds macOS arm64, macOS x64, and Windows x64, and always
-runs the Windows installer smoke suite.
-
-### Running the workflow manually
-
-`workflow_dispatch` takes three inputs:
-
-| Input | Default | Effect |
-| --- | --- | --- |
-| `platform` | `all` | `all` (arm64 + Intel + Windows), or one of `macos` (arm64 only), `macos-intel`, `windows`. |
-| `smoke` | `false` | Runs the Windows installer end-to-end suite. Required when `installer.nsh`, `test-installer.ps1`, or `electron-builder.yml` changed. |
-| `release_tag` | empty | Publishes a normal release under this tag instead of a nightly prerelease. |
-
-Without `release_tag`, a manual run publishes a prerelease tagged
-`nightly-<UTC timestamp>`, so repeated runs accumulate instead of overwriting
-each other.
-
-### Which builds reach existing users
-
-**A normal release is a delivery.** Installed clients resolve updates through
-`/releases/latest`, so publishing one hands that build to every user on their
-next check — there is no staged rollout. Tagging is shipping.
-
-**A prerelease is not.** GitHub excludes prereleases from `/releases/latest`,
-so `-rc` tags and nightly builds are downloadable from the Releases page but
-invisible to the updater. Use them to rehearse a release without delivering it.
-
-Auto-update is off entirely unless `APP_UPDATE_URL` is set at build time; CI
-sets it, local builds do not.
-
-Releases are never pruned automatically. Remove old nightlies by hand with
-`gh release delete <tag> --cleanup-tag`.
-
 ## Local data
 
 The current product name and user-facing surfaces are Bridgic Agent. Some local
@@ -460,24 +250,6 @@ find existing data.
 
 The current Memory store is an API and persistence foundation; automatic
 long-term recall is not yet part of normal Agent execution.
-
-## Repository layout
-
-```text
-src/
-├── amphi_cli/       CLI and headless Agent client
-├── amphi_service/   FastAPI/WebSocket gateway, scheduler, and runtime coordination
-├── amphi_agent/     Agent loops, context, tools, Workflows, browser, and permissions
-└── amphi_store/     Async SQLModel/SQLite records and repositories
-
-desktop/
-├── apps/electron/   Electron main, preload, renderer, and shared contracts
-├── packages/        Shared UI and TypeScript workspace packages
-└── scripts/         Development, runtime preparation, and packaging orchestration
-
-build/               PyInstaller entry points and target-native build scripts
-tests/               Python test suite
-```
 
 ## Current operating boundaries
 
