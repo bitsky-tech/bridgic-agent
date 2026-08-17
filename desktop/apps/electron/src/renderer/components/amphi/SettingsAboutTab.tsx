@@ -51,6 +51,8 @@ type UpdateRowState =
   | { kind: 'unknown' }
   | { kind: 'disabled' }
   | { kind: 'checking' }
+  /** Rebuilding the differential source; only ever seen once per machine. */
+  | { kind: 'preparing' }
   | { kind: 'up-to-date' }
   | { kind: 'downloading'; percent: number }
   | { kind: 'staged'; version: string }
@@ -92,6 +94,9 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
       switch (event.type) {
         case 'checking':
           setUpdateState({ kind: 'checking' })
+          break
+        case 'preparing':
+          setUpdateState({ kind: 'preparing' })
           break
         case 'not-available':
           setUpdateState({ kind: 'up-to-date' })
@@ -449,6 +454,8 @@ function UpdateStateLabel({ state }: { state: UpdateRowState }) {
     text = t('modals.about.updateDisabled')
   } else if (state.kind === 'checking') {
     text = t('modals.about.updateChecking')
+  } else if (state.kind === 'preparing') {
+    text = t('modals.about.updatePreparing')
   } else if (state.kind === 'downloading') {
     text = t('modals.about.updateDownloading', { percent: state.percent })
   } else if (state.kind === 'staged') {

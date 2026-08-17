@@ -175,6 +175,25 @@ mac:
   artifactName: "Bridgic-Agent-${version}-${arch}.${ext}"
   # Code signing & notarization — set CSC_LINK, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
   # APPLE_TEAM_ID env vars to enable. Unsigned builds work for local development.
+  # Staged by scripts/prebuild-updater-tools.ts, which only the `dist:mac*`
+  # scripts run — hence a platform-level `extraResources` rather than a
+  # top-level one. Platform entries are APPENDED to the global list
+  # (fileMatcher.js: addPatterns(config[name]) then
+  # addPatterns(customBuildOptions[name])), so this does not replace anything
+  # above.
+  #
+  # macOS-only on purpose. These two binaries let the app rebuild the
+  # `<cacheDir>/update.zip` that electron-updater needs as a differential
+  # source but that a .pkg install never produces — without them the first
+  # update after a fresh install downloads 222 MB instead of 24 MB. Windows
+  # needs no equivalent: its NSIS installer already copies itself to
+  # `%LOCALAPPDATA%\amphi-updater\installer.exe` at install time, verified on a
+  # real machine (0.1.1→0.1.2 pulled 8,120 KB, 4%).
+  extraResources:
+    - from: resources/updater_tools
+      to: updater_tools
+      filter:
+        - "**/*"
 
 pkg:
   # Path is resolved against `directories.buildResources` (i.e. resources/), NOT

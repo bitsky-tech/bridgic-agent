@@ -165,6 +165,17 @@ describe('SettingsAboutTab update row', () => {
     expect(host.textContent).toContain(i18n.t('modals.about.updateFailed'))
     await cleanup()
   })
+
+  it('explains the wait while the smaller download is being prepared', async () => {
+    const { host, emit, cleanup } = await mountAbout()
+
+    await emit({ type: 'preparing' })
+
+    // 重建差分源约 44 秒,且只在装机后的首次更新出现。这段时间不给反馈,
+    // 点过「检查更新」的人看到的就是一行不动的字 —— 与卡死无法区分。
+    expect(host.textContent).toContain(i18n.t('modals.about.updatePreparing'))
+    await cleanup()
+  })
 })
 
 /**

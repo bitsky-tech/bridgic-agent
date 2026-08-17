@@ -23,10 +23,13 @@ import { app, BrowserWindow, autoUpdater as squirrel } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { APP_BUNDLE_ID } from '../shared/app-meta'
 import { updateLog } from './logger'
+import { createRebuildDeps, prepareDifferentialSource } from './rebuild-update-zip'
 
 export type AutoUpdateEvent =
   | { type: 'checking' }
   | { type: 'available'; info: UpdateInfo }
+  /** Rebuilding the differential source; can hold the download for ~a minute. */
+  | { type: 'preparing' }
   | { type: 'not-available' }
   | { type: 'error'; message: string; code?: string }
   | { type: 'progress'; percent: number; bytesPerSecond: number }
@@ -171,6 +174,41 @@ export function requestManualCheck(): UpdateCheckOutcome {
 }
 
 /**
+ * Make the download as small as it can be, then start it.
+ *
+ * Called from `update-available` because `autoDownload` is off. The rebuild has
+ * to happen here rather than at launch: it is only worth ~44 s of CPU once we
+ * know an update actually exists, and on the overwhelmingly common path
+ * (`needsRebuild` false, because a previous download already left an
+ * `update.zip`) it costs nothing at all.
+ *
+ * Deliberately does NOT touch `checkInFlight`. That flag is set by `runCheck`
+ * and cleared only by the three terminal events; a rebuild happening in between
+ * just makes the in-flight window longer, which is exactly what should keep the
+ * 4-hourly timer from starting a second round on top of this one.
+ */
+async function beginDownload(): Promise<void> {
+  try {
+    // Never throws — a failed rebuild is reported by returning false and only
+    // means this download is a full one.
+    await prepareDifferentialSource(
+      createRebuildDeps(
+        (message) => updateLog.info(`[update] ${message}`),
+        (message, error) => updateLog.warn(`[update] ${message}`, error),
+      ),
+      () => emit({ type: 'preparing' }),
+    )
+    await autoUpdater.downloadUpdate()
+  } catch (error) {
+    // `downloadUpdate()` both rejects AND dispatches `error` (AppUpdater.js),
+    // and our own `error` handler is what clears `checkInFlight` and notifies
+    // the renderer. Emitting here too would report one failure twice; this
+    // catch exists to keep the rejection from surfacing as an unhandled one.
+    updateLog.warn('[update] download did not start', error)
+  }
+}
+
+/**
  * Configure the updater, check once, then keep checking every
  * {@link CHECK_INTERVAL_MS}. No-op in dev builds and when no feed is configured.
  */
@@ -186,7 +224,16 @@ export function startUpdateChecks(): void {
   }
 
   autoUpdater.logger = updateLog
-  autoUpdater.autoDownload = true
+  // Off so `update-available` can run the differential-source rebuild BEFORE
+  // any bytes are fetched (see the handler below). With `true`, electron-updater
+  // starts downloading straight out of the check, and on a machine installed
+  // from the .pkg that download is the full 222 MB — the rebuild would finish
+  // long after the thing it was meant to shrink.
+  //
+  // `checkInFlight` still spans check + download: nothing clears it between the
+  // two, and the only paths that do clear it (`update-not-available`, `error`,
+  // `update-downloaded`) are unchanged. The rebuild simply widens the window.
+  autoUpdater.autoDownload = false
 
   // MUST stay false on every platform. Installing is a decision, and quitting is
   // not a decision to install.
@@ -293,6 +340,8 @@ export function startUpdateChecks(): void {
     // the previous one finished at.
     loggedDecile = -1
     emit({ type: 'available', info })
+    // `autoDownload` is off, so nothing downloads until this is called.
+    void beginDownload()
   })
   autoUpdater.on('update-not-available', () => {
     checkInFlight = false
