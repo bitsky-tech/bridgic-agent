@@ -28,18 +28,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, ExternalLink } from 'lucide-react'
+import { Check, ChevronDown, Copy, ExternalLink } from 'lucide-react'
 import { requestUpdateCardAtom } from '@/atoms/update'
 import {
   APP_NEW_ISSUE_URL,
   COMMERCIAL_LICENSE_CONTACT,
   COPYRIGHT_HOLDER,
   COPYRIGHT_YEAR,
+  DISCORD_INVITE_URL,
   FEEDBACK_CONTACT,
   PUBLIC_REPO_URL,
   SECURITY_CONTACT,
+  SOCIAL_X_HANDLE,
+  SOCIAL_X_URL,
 } from '@shared/app-meta'
 import { rlog } from '@/lib/logger'
+import wechatQrUrl from '@/assets/wechat-group-qr.png'
 import { Btn, Card } from './Primitives'
 
 /** What the update row is currently saying. */
@@ -58,7 +62,11 @@ export interface SettingsAboutTabProps {
 }
 
 export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  // `resolvedLanguage` and not `language`: during the window before
+  // `useApplyLocale` runs, the detector can leave `language` at a regional tag
+  // (`zh-CN`), and `supportedLngs` only constrains the resolved one.
+  const locale = (i18n.resolvedLanguage ?? i18n.language) === 'zh' ? 'zh' : 'en'
   const [appVersion, setAppVersion] = useState<string | null>(null)
   const [updateState, setUpdateState] = useState<UpdateRowState>({ kind: 'unknown' })
   const requestUpdateCard = useSetAtom(requestUpdateCardAtom)
@@ -223,6 +231,24 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
           href={`mailto:${FEEDBACK_CONTACT}`}
           copyValue={FEEDBACK_CONTACT}
         />
+
+        {/* The community rows below split by UI language, because the channels
+            themselves do. English gets the English Discord server; Chinese gets
+            the Chinese one plus the WeChat group, which has no English-speaking
+            counterpart to offer. X is one account for everyone. */}
+        <LinkRow
+          testId="x"
+          label={t('modals.about.contactX')}
+          text={SOCIAL_X_HANDLE}
+          href={SOCIAL_X_URL}
+        />
+        <LinkRow
+          testId="discord"
+          label={t('modals.about.contactDiscord')}
+          text={t('modals.about.contactDiscordAction')}
+          href={DISCORD_INVITE_URL[locale]}
+        />
+        {locale === 'zh' && <WechatRow />}
       </Card>
 
       {/* AGPL §5(a) requires modified versions to carry appropriate legal notices,
@@ -345,6 +371,58 @@ function LinkRow({ testId, label, text, href, copyValue }: LinkRowProps) {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * WeChat group QR code, behind a disclosure.
+ *
+ * Not a `LinkRow` with an image bolted on: there is no URL here at all. Joining
+ * is a scan from a phone, so nothing about this row can be handed to
+ * `openExternal` or put on the clipboard, and teaching `LinkRow` a third mode
+ * would make its name describe only two thirds of it.
+ *
+ * Collapsed by default because the code is a ~160px square and About is
+ * otherwise a page of single-line rows — expanded by default it would push the
+ * copyright notice below the fold for the one language that shows it.
+ *
+ * The image needs no backing plate: it is opaque white and already carries the
+ * quiet zone a scanner wants, so it stays legible on the dark theme as-is.
+ */
+function WechatRow() {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 text-sm text-text-primary">{t('modals.about.contactWechat')}</div>
+        <button
+          type="button"
+          data-testid="about-wechat-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((prev) => !prev)}
+          className="inline-flex flex-shrink-0 cursor-pointer items-center gap-1.5 text-xs font-medium text-brand-blue hover:underline focus-visible:underline focus-visible:outline-none"
+        >
+          {open ? t('modals.about.contactWechatHide') : t('modals.about.contactWechatShow')}
+          <ChevronDown
+            className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+      {open && (
+        <div className="mt-3 flex flex-col items-center gap-2">
+          <img
+            data-testid="about-wechat-qr"
+            src={wechatQrUrl}
+            alt={t('modals.about.contactWechatAlt')}
+            className="h-40 w-40 rounded"
+          />
+          <span className="text-xs text-text-tertiary">{t('modals.about.contactWechatHint')}</span>
+        </div>
+      )}
     </div>
   )
 }

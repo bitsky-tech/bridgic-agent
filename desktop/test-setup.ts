@@ -22,7 +22,7 @@
 import { mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-// Stub the four SVG assets the renderer imports for their URL.
+// Stub the image assets the renderer imports for their URL.
 //
 // Vite resolves `import url from '@/assets/logo.svg'` to a string; bun:test has
 // no such loader and parses the file as JSX, dying on the `?` of `<?xml`. Only
@@ -36,10 +36,16 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 // Done with `mock.module` rather than a `Bun.plugin` loader on purpose:
 // registering an onLoad plugin changes the module pipeline for EVERY file, and
 // measurably did — a Mermaid rendering test started failing with a plugin whose
-// filter could not even match the files it loads. Four explicit stubs cannot
-// reach anything they were not aimed at.
-for (const asset of ['icon-light', 'icon-dark', 'logo', 'logo-dark']) {
-  const path = `./apps/electron/src/renderer/assets/${asset}.svg`
+// filter could not even match the files it loads. Explicit stubs cannot reach
+// anything they were not aimed at.
+for (const asset of [
+  'icon-light.svg',
+  'icon-dark.svg',
+  'logo.svg',
+  'logo-dark.svg',
+  'wechat-group-qr.png',
+]) {
+  const path = `./apps/electron/src/renderer/assets/${asset}`
   mock.module(path, () => ({ default: path }))
 }
 import { i18n } from './apps/electron/src/renderer/lib/i18n'

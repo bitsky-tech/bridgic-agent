@@ -33,6 +33,7 @@
  * Mirror these constants in any non-TypeScript location that needs
  * them (installer scripts, build config). Never re-declare values.
  */
+import type { ResolvedLocale } from './locale'
 
 // ─── Frontend (Electron app) identity ──────────────────────────────────────
 
@@ -202,6 +203,33 @@ export const COPYRIGHT_YEAR = '2026'
  * derives from the repository the workflow runs in.
  */
 export const PUBLIC_REPO_URL = 'https://github.com/bitsky-tech/bridgic-agent'
+
+// ─── Community ─────────────────────────────────────────────────────────────
+//
+// Same rule as the addresses above: these live here rather than in the i18n
+// catalogs because they are identical in every language, and a translator
+// editing one would silently repoint a link instead of rewording it. Only the
+// row labels are translated.
+
+/** X account. One account for the whole product, so it is not per-language. */
+export const SOCIAL_X_URL = 'https://x.com/bridgic'
+
+/** Link text for the row above — the handle, not the bare URL. */
+export const SOCIAL_X_HANDLE = '@bridgic'
+
+/**
+ * Discord invite, per UI language. The server runs a Chinese channel alongside
+ * the English one, and dropping someone into the half they cannot read is worse
+ * than offering no link at all.
+ *
+ * Keyed by `ResolvedLocale` rather than written as two constants plus a ternary
+ * at the call site: a third UI language then fails to compile here until its
+ * channel is decided, instead of silently landing in English.
+ */
+export const DISCORD_INVITE_URL: Record<ResolvedLocale, string> = {
+  en: 'https://discord.gg/yFYVSm9tPC',
+  zh: 'https://discord.gg/XcEqrwKUXN',
+}
 
 // ─── Backend discovery ─────────────────────────────────────────────────────
 

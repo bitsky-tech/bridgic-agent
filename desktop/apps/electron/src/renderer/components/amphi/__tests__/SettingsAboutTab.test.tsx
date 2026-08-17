@@ -11,7 +11,7 @@
  * 不断言具体措辞:文案走 i18n,绑措辞会让每次改文案都红(见 agent.test.ts
  * 里同样的教训)。第一条改为比较点击前后的整行文本是否**没变**。
  */
-import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
 GlobalRegistrator.register()
@@ -28,6 +28,7 @@ mock.module('@/atoms/update', () => ({
 }))
 
 const { i18n } = await import('@/lib/i18n')
+const { I18nextProvider } = await import('react-i18next')
 const { SettingsAboutTab } = await import('../SettingsAboutTab')
 const {
   APP_NEW_ISSUE_URL,
@@ -35,6 +36,7 @@ const {
   FEEDBACK_CONTACT,
   PUBLIC_REPO_URL,
   SECURITY_CONTACT,
+  SOCIAL_X_URL,
 } = await import('@shared/app-meta')
 
 type UpdateListener = (event: unknown) => void
@@ -79,12 +81,27 @@ afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
+/**
+ * The `I18nextProvider` mirrors `main.tsx`, which wraps the whole app in one.
+ * Without it `useTranslation()` binds to react-i18next's global default
+ * instance, which in a FULL suite run is not the instance imported here: a
+ * `mock.module` registered by some earlier file re-evaluates `lib/i18n.ts` and
+ * a second i18next is constructed. Both land on Chinese via the cached detector,
+ * so the split stayed invisible until a test switched language — then this file
+ * flipped its own instance to English while the component kept rendering the
+ * global one's Chinese. Passing the instance explicitly removes the guesswork
+ * and makes the mount match production wiring.
+ */
 async function mountAbout() {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => {
-    root.render(<SettingsAboutTab onRequestClose={() => {}} />)
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <SettingsAboutTab onRequestClose={() => {}} />
+      </I18nextProvider>,
+    )
   })
   return {
     host,
@@ -101,6 +118,11 @@ async function mountAbout() {
         host.querySelector<HTMLElement>(`[data-testid="${testId}"]`)?.click()
       })
     },
+    // Counts rather than the node itself: a rendered element carries React's
+    // `__reactFiber$…` back-pointer, so handing one to `expect` makes a failure
+    // serialize the entire fiber tree — 70+ seconds and thousands of lines for
+    // what should read "expected 1, got 0".
+    count: (testId: string) => host.querySelectorAll(`[data-testid="${testId}"]`).length,
     cleanup: async () => {
       await act(async () => root.unmount())
       host.remove()
@@ -214,6 +236,79 @@ describe('SettingsAboutTab licence + contacts', () => {
 
     expect(openExternal).toHaveBeenCalledWith(APP_NEW_ISSUE_URL)
     expect(openExternal).not.toHaveBeenCalledWith(expect.stringContaining('mailto:'))
+
+    await cleanup()
+  })
+})
+
+/**
+ * 社区入口按界面语言分流。两个方向都会真的伤到人:把英文用户送进中文频道,他打开
+ * 是一屏读不懂的消息;把微信二维码留在英文界面上,他连扫码的 App 都没装。
+ *
+ * Discord 的两个邀请链接在这里**写死字面量**,不引用常量 —— 这一组要钉的恰恰是
+ * 「哪种语言对应哪个频道」,若引用常量,断言就退化成 `X === X`,把两个链接对调也
+ * 照样是绿的。上面那组盯的是「地址不能写错」,所以引用常量是对的;这里盯的是
+ * 「路由不能接反」,必须各自独立地写出期望值。
+ */
+const DISCORD_INVITE_ZH = 'https://discord.gg/XcEqrwKUXN'
+const DISCORD_INVITE_EN = 'https://discord.gg/yFYVSm9tPC'
+
+describe('SettingsAboutTab community links', () => {
+  afterEach(async () => {
+    // test-setup 把整轮测试钉在中文上,借走了就得还,否则后面的文件拿到英文。
+    await i18n.changeLanguage('zh')
+  })
+
+  it('opens the X account', async () => {
+    const { clickTestId, cleanup } = await mountAbout()
+
+    await clickTestId('about-link-x')
+
+    expect(openExternal).toHaveBeenCalledWith(SOCIAL_X_URL)
+
+    await cleanup()
+  })
+
+  it('sends a Chinese UI to the Chinese Discord channel', async () => {
+    const { clickTestId, cleanup } = await mountAbout()
+
+    await clickTestId('about-link-discord')
+
+    expect(openExternal).toHaveBeenCalledWith(DISCORD_INVITE_ZH)
+
+    await cleanup()
+  })
+
+  it('sends an English UI to the English Discord channel', async () => {
+    await i18n.changeLanguage('en')
+    const { clickTestId, cleanup } = await mountAbout()
+
+    await clickTestId('about-link-discord')
+
+    expect(openExternal).toHaveBeenCalledWith(DISCORD_INVITE_EN)
+
+    await cleanup()
+  })
+
+  it('keeps the WeChat QR code out of an English UI entirely', async () => {
+    await i18n.changeLanguage('en')
+    const { count, cleanup } = await mountAbout()
+
+    // 不是隐藏,是整行不存在 —— 折叠起来的入口对英文用户依然是噪音。
+    expect(count('about-wechat-toggle')).toBe(0)
+
+    await cleanup()
+  })
+
+  it('reveals the WeChat QR code only after the row is clicked', async () => {
+    const { count, clickTestId, cleanup } = await mountAbout()
+
+    expect(count('about-wechat-qr')).toBe(0)
+    await clickTestId('about-wechat-toggle')
+    expect(count('about-wechat-qr')).toBe(1)
+    // 再点一次要能收回去,否则「关于」页会被一张二维码永久撑高。
+    await clickTestId('about-wechat-toggle')
+    expect(count('about-wechat-qr')).toBe(0)
 
     await cleanup()
   })
