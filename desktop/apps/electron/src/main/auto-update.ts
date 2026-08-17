@@ -24,6 +24,7 @@ import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { APP_BUNDLE_ID } from '../shared/app-meta'
 import { updateLog } from './logger'
 import { createRebuildDeps, prepareDifferentialSource } from './rebuild-update-zip'
+import { isRetriableUpdateError, retryDelayMs } from './update-retry'
 
 export type AutoUpdateEvent =
   | { type: 'checking' }
@@ -138,7 +139,7 @@ export function onQuitForUpdate(teardown: () => void): void {
  * re-checking once something is staged would re-download an update the user has
  * already been offered but not yet chosen to install.
  */
-function runCheck(reason: 'launch' | 'timer' | 'manual'): UpdateCheckOutcome {
+function runCheck(reason: 'launch' | 'timer' | 'manual' | 'retry'): UpdateCheckOutcome {
   if (!updaterEnabled) {
     updateLog.info(`[update] ${reason} check skipped: updater is disabled in this build`)
     return 'disabled'
@@ -161,6 +162,63 @@ function runCheck(reason: 'launch' | 'timer' | 'manual'): UpdateCheckOutcome {
     updateLog.warn('[update] checkForUpdates failed', err)
   })
   return 'started'
+}
+
+/** Pending backoff retry, if any. At most one is ever queued. */
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Retries already scheduled since the last check that reached a good end. */
+let retryAttempt = 0
+
+/**
+ * Forget the backoff ladder.
+ *
+ * Called from both terminal successes. Without it a single bad afternoon would
+ * leave the counter high for the rest of the process's life, so the next
+ * unrelated failure would start its ladder near the top — and a tray-resident
+ * app lives for weeks.
+ */
+function resetRetries(): void {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+  retryAttempt = 0
+}
+
+/**
+ * Queue one more attempt after a failure, if that failure looks transient.
+ *
+ * The point is the gap this closes: `error` clears `checkInFlight`, and without
+ * a retry nothing else happens until the next {@link CHECK_INTERVAL_MS} tick.
+ * A laptop that slept mid-download therefore stays on the old version for hours
+ * while being online the entire time.
+ */
+function scheduleRetry(code: string | undefined): void {
+  // One at a time. `error` can fire more than once for a single round (a failed
+  // check and its failed download), and each queuing its own timer would turn
+  // the ladder into a burst.
+  if (retryTimer !== null) return
+
+  if (!isRetriableUpdateError(code)) {
+    updateLog.info(`[update] not retrying: ${code} will fail the same way`)
+    return
+  }
+
+  const delay = retryDelayMs(retryAttempt)
+  if (delay === null) {
+    updateLog.info('[update] retry ladder exhausted; waiting for the next scheduled check')
+    return
+  }
+
+  retryAttempt += 1
+  updateLog.info(
+    `[update] retry ${retryAttempt} scheduled in ${Math.round(delay / 1000)}s`,
+  )
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    runCheck('retry')
+  }, delay)
 }
 
 /**
@@ -345,10 +403,12 @@ export function startUpdateChecks(): void {
   })
   autoUpdater.on('update-not-available', () => {
     checkInFlight = false
+    resetRetries()
     emit({ type: 'not-available' })
   })
   autoUpdater.on('error', (err) => {
     checkInFlight = false
+    scheduleRetry((err as { code?: string }).code)
     // Clear the staged flag: a post-download failure (evicted cache, checksum
     // mismatch) otherwise leaves the banner offering an install that would stop
     // the daemon and then find nothing to install.
@@ -375,6 +435,7 @@ export function startUpdateChecks(): void {
   })
   autoUpdater.on('update-downloaded', (info) => {
     checkInFlight = false
+    resetRetries()
     stagedUpdate = info
     emit({ type: 'downloaded', info })
   })
