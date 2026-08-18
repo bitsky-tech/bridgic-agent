@@ -15,7 +15,8 @@
    Keep this block in sync with `styles/tokens.css`.
    ───────────────────────────────────────────────────────────────────────── */
 @theme inline {
-  /* Typography — overrides Tailwind defaults (12/14/16) with our 11/12/13 scale */
+  /* Typography — overrides Tailwind defaults (12/14/16) with our 12/13/14 scale */
+  --text-2xs: var(--text-2xs);
   --text-xs: var(--text-xs);
   --text-sm: var(--text-sm);
   --text-base: var(--text-base);
@@ -41,6 +42,9 @@
   --color-bg-elevated: var(--bg-elevated);
   --color-bg-hover: var(--bg-hover);
   --color-bg-active: var(--bg-active);
+  /* The persistent "this one is selected" fill — see tokens.css. Use it for
+     selected state; --bg-hover / --bg-active stay for pointer feedback. */
+  --color-bg-selected: var(--bg-selected);
   --color-bg-input: var(--bg-input);
   --color-bg-modal: var(--bg-modal);
   --color-bg-tooltip: var(--bg-tooltip);
@@ -56,6 +60,10 @@
   --color-text-tertiary: var(--text-tertiary);
   --color-text-inverse: var(--text-inverse);
   --color-text-on-brand: var(--text-on-brand);
+  /* Text-only blue/purple. Use these for `text-*`; --color-brand-* stays for
+     fills and borders. */
+  --color-text-accent: var(--text-accent);
+  --color-text-accent-purple: var(--text-accent-purple);
 
   /* Status — paired color + tint background */
   --color-status-success: var(--status-success);

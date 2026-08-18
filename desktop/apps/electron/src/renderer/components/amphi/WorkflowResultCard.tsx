@@ -51,9 +51,9 @@ export function WorkflowResultCard({ block }: { block: WorkflowResultBlock }) {
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-          <p className="mt-0.5 text-[13px] leading-5 text-text-secondary">{description}</p>
+          <p className="mt-0.5 text-sm leading-5 text-text-secondary">{description}</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-tertiary">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-tertiary">
               <span className="font-medium text-text-secondary">{block.workflowName}</span>
               <span aria-hidden="true">·</span>
               <span>{formatWorkflowRunShortTimestamp(block.createdAt)}</span>

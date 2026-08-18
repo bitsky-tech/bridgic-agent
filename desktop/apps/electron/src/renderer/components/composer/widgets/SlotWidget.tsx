@@ -37,7 +37,7 @@ export function makeSlotWidget(placeholderKey: string): FC<WidgetViewProps> {
           if (e.key === 'Enter') e.preventDefault()
           e.stopPropagation()
         }}
-        className="inline-block align-bottom resize-none overflow-hidden [field-sizing:content] max-w-full bg-accent-blue-subtle text-brand-blue rounded-sm px-1.5 py-0.5 text-xs outline-none border-0 placeholder:text-brand-blue/50"
+        className="inline-block align-bottom resize-none overflow-hidden [field-sizing:content] max-w-full bg-accent-blue-subtle text-text-accent rounded-sm px-1.5 py-0.5 text-xs outline-none border-0 placeholder:text-text-accent/50"
       />
     )
   }

@@ -146,7 +146,7 @@ export function WorkflowRunDetailModal({
       contentStyle={{ overflow: 'hidden' }}
       customHeader={
         <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-5 py-4">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
             {Icons.workflow(20)}
           </div>
           <div className="min-w-0 flex-1">
@@ -428,14 +428,14 @@ function WorkflowRunReader({
                   className={cn(
                     'mb-1 flex w-full items-center gap-2 rounded-md px-2 py-2 text-left',
                     selectedFile?.path === file.path
-                      ? 'bg-accent-blue-subtle text-brand-blue'
+                      ? 'bg-accent-blue-subtle text-text-accent'
                       : 'text-text-secondary hover:bg-bg-hover',
                   )}
                 >
                   <FileOutput size={14} className="shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-semibold">{file.name}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] text-text-tertiary">
+                    <span className="mt-0.5 block truncate font-mono text-2xs text-text-tertiary">
                       {file.path}
                     </span>
                   </span>
@@ -472,7 +472,7 @@ function WorkflowRunReader({
             </div>
           ) : null}
           {selectedFileContent?.truncated ? (
-            <div className="shrink-0 bg-accent-blue-subtle px-5 py-2 text-xs text-brand-blue">
+            <div className="shrink-0 bg-accent-blue-subtle px-5 py-2 text-xs text-text-accent">
               {t('workflow.runDetail.truncatedPreview', { count: (200_000).toLocaleString(i18n.language) })}
             </div>
           ) : null}
@@ -499,7 +499,7 @@ function WorkflowRunReader({
             {selectedFileContent?.truncated ? (
               <div
                 data-testid="workflow-run-truncated-footer"
-                className="mx-auto mt-6 max-w-[760px] rounded-md border border-border-subtle bg-accent-blue-subtle px-4 py-3 text-center text-xs leading-5 text-brand-blue"
+                className="mx-auto mt-6 max-w-[760px] rounded-md border border-border-subtle bg-accent-blue-subtle px-4 py-3 text-center text-xs leading-5 text-text-accent"
               >
                 {t('workflow.runDetail.truncatedPreviewFooter')}
               </div>
@@ -610,7 +610,7 @@ function WorkflowRunFilePreview({
     return (
       <MarkdownMessage
         content={content.content}
-        className="mx-auto max-w-[760px] text-[14px] leading-7"
+        className="mx-auto max-w-[760px] text-base leading-7"
       />
     )
   }
@@ -635,7 +635,7 @@ export function WorkflowRunStatus({
   else if (run.status === 'cancelled') label = t('workflow.runDetail.status.cancelled')
   else if (run.status === 'waiting') label = t('workflow.runDetail.status.waiting')
 
-  let tone = 'bg-accent-blue-subtle text-brand-blue'
+  let tone = 'bg-accent-blue-subtle text-text-accent'
   if (completed) tone = 'bg-status-success-bg text-status-success'
   else if (failed) tone = 'bg-status-error-bg text-status-error'
   else if (inactive) tone = 'bg-bg-hover text-text-tertiary'
@@ -643,7 +643,7 @@ export function WorkflowRunStatus({
     <span
       className={cn(
         'inline-flex shrink-0 items-center rounded-full px-2 py-0.5 font-semibold',
-        compact ? 'text-[10px]' : 'text-xs',
+        compact ? 'text-2xs' : 'text-xs',
         tone,
       )}
     >

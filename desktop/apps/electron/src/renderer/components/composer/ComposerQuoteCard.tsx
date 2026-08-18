@@ -20,7 +20,7 @@ export function ComposerQuoteCard({ quote, onRemove }: ComposerQuoteCardProps) {
         <Quote size={14} strokeWidth={1.5} />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="mb-0.5 text-[11px] font-medium text-text-secondary">{source}</div>
+        <div className="mb-0.5 text-xs font-medium text-text-secondary">{source}</div>
         <div className="line-clamp-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-text-tertiary">
           {quote.text}
         </div>

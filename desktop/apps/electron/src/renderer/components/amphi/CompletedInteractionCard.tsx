@@ -54,7 +54,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
             </div>
           </div>
           <div className="px-3.5 py-3.5">
-            <div className="mb-1 text-[11px] font-semibold text-text-tertiary">{t('session.interaction.card.newMessageLabel')}</div>
+            <div className="mb-1 text-xs font-semibold text-text-tertiary">{t('session.interaction.card.newMessageLabel')}</div>
             <MarkdownMessage content={block.response} className="text-sm leading-6 text-text-primary" />
           </div>
         </div>
@@ -65,7 +65,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
         return (
           <div className="max-w-xl overflow-hidden rounded-lg border border-brand-blue/30 bg-bg-elevated shadow-sm">
             <div className="flex items-center gap-2.5 px-3.5 py-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
                 {Icons.workflowResult(16)}
               </span>
               <div>
@@ -92,7 +92,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
         <div className="max-w-xl overflow-hidden rounded-lg border border-brand-blue/30 bg-bg-elevated shadow-sm">
           <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-3.5 py-3">
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
                 {Icons.workflowResult(16)}
               </span>
               <div>
@@ -100,14 +100,14 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
                 <div className="text-xs text-text-tertiary">{t('session.interaction.card.acceptanceDesc')}</div>
               </div>
             </div>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-success-bg px-2 py-1 text-[11px] font-semibold text-status-success">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-success-bg px-2 py-1 text-xs font-semibold text-status-success">
               {Icons.check(11)} {t('session.interaction.card.acceptanceCount', { n: rules.length })}
             </span>
           </div>
           <ol aria-label={t('session.interaction.card.acceptanceTitle')} className="max-h-[420px] divide-y divide-border-subtle overflow-y-auto">
             {rules.map((rule, index) => (
               <li key={rule.id} className="grid grid-cols-[64px_minmax(0,1fr)] gap-3 px-3.5 py-3.5">
-                <span className="mt-0.5 inline-flex h-6 items-center justify-center rounded-md bg-accent-blue-subtle px-2 text-[11px] font-semibold text-brand-blue">
+                <span className="mt-0.5 inline-flex h-6 items-center justify-center rounded-md bg-accent-blue-subtle px-2 text-xs font-semibold text-text-accent">
                   {t('session.interaction.card.ruleBadge', { n: index + 1 })}
                 </span>
                 <MarkdownMessage
@@ -165,7 +165,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
     return (
       <div className="max-w-xl overflow-hidden rounded-lg border border-border-subtle bg-bg-elevated shadow-sm">
         <div className="flex items-center gap-2.5 border-b border-border-subtle px-3.5 py-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
             {Icons.chat(15)}
           </span>
           <div>
@@ -182,14 +182,14 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
           <ol aria-label={t('session.interaction.card.qaListLabel')} className="divide-y divide-border-subtle">
             {pairs.map((pair, index) => (
               <li key={`${index}:${pair.question}`} className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 px-3.5 py-3.5">
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-bg-hover text-[10px] font-semibold text-text-secondary">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-bg-hover text-2xs font-semibold text-text-secondary">
                   {index + 1}
                 </span>
                 <div className="min-w-0">
-                  <div className="mb-1 text-[11px] font-semibold text-text-tertiary">{t('session.interaction.card.questionLabel')}</div>
+                  <div className="mb-1 text-xs font-semibold text-text-tertiary">{t('session.interaction.card.questionLabel')}</div>
                   <MarkdownMessage content={pair.question} className="text-sm leading-6 text-text-primary" />
                   <div className="mt-2.5 border-l-2 border-status-success pl-3">
-                    <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-status-success">
+                    <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-status-success">
                       {Icons.check(11)} {t('session.interaction.card.answerLabel')}
                     </div>
                     <MarkdownMessage content={pair.answer} className="text-sm leading-6 text-text-primary" />
@@ -209,7 +209,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
       <div className="max-w-xl overflow-hidden rounded-lg border border-border-subtle bg-bg-elevated shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-3.5 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-purple-subtle text-brand-purple">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-purple-subtle text-text-accent-purple">
               {Icons.workflow(15)}
             </span>
             <div className="min-w-0">
@@ -218,7 +218,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
             </div>
           </div>
           <span className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold',
+            'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold',
             cancelled ? 'bg-bg-hover text-text-tertiary' : 'bg-status-success-bg text-status-success',
           )}>
             {cancelled ? Icons.x(11) : Icons.check(11)}
@@ -241,7 +241,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
       <div className="max-w-xl overflow-hidden rounded-lg border border-border-subtle bg-bg-elevated shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-3.5 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
               {Icons.file(15)}
             </span>
             <div className="min-w-0">
@@ -250,7 +250,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
             </div>
           </div>
           <span className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold',
+            'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold',
             revised
               ? 'bg-status-warning-bg text-status-warning'
               : 'bg-status-success-bg text-status-success',
@@ -277,7 +277,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
     <div className="max-w-xl overflow-hidden rounded-lg border border-border-subtle bg-bg-elevated shadow-sm">
       <div className="flex items-center justify-between gap-3 px-3.5 py-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-purple-subtle text-brand-purple">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-purple-subtle text-text-accent-purple">
             {Icons.workflow(15)}
           </span>
           <div className="min-w-0">
@@ -286,7 +286,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
           </div>
         </div>
         <span className={cn(
-          'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold',
+          'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold',
           cancelled ? 'bg-bg-hover text-text-tertiary' : 'bg-status-success-bg text-status-success',
         )}>
           {cancelled ? Icons.x(11) : Icons.check(11)}

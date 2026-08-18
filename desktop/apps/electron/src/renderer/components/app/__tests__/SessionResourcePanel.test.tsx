@@ -214,7 +214,7 @@ describe('SessionResourcePanel', () => {
     const filesStatus = files.querySelector<HTMLElement>(
       '[data-testid="session-workbench-files-status-indicator"]',
     )
-    expect(files.className).toContain('bg-bg-active')
+    expect(files.className).toContain('bg-bg-selected')
     expect(filesStatus?.dataset.state).toBe('active')
     expect(filesStatus?.className).toContain('-right-[3px]')
     expect(filesStatus?.className).toContain('h-5')
@@ -230,7 +230,7 @@ describe('SessionResourcePanel', () => {
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Workflows)
-    expect(workflows.className).toContain('bg-bg-active')
+    expect(workflows.className).toContain('bg-bg-selected')
     expect(workflows.querySelector('[data-testid="session-workbench-workflows-status-indicator"]')?.getAttribute('data-state')).toBe('active')
     expect(files.querySelector('[data-testid="session-workbench-files-status-indicator"]')).toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('false')
@@ -622,7 +622,7 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="session-mode-surface"]')).not.toBeNull()
     expect(host.textContent).toContain('保留静态 Bridgic 标识')
     expect(launcher.textContent).toContain('Bridgic')
-    expect(launcher.className).toContain('bg-bg-active')
+    expect(launcher.className).toContain('bg-bg-selected')
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('active')
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.className).toContain('bg-text-secondary/65')
     expect(launcher.querySelector('.left-0')).toBeNull()
@@ -891,7 +891,7 @@ describe('SessionResourcePanel', () => {
       await Promise.resolve()
     })
     expect(browserButton?.getAttribute('aria-selected')).toBe('true')
-    expect(browserButton?.className).toContain('bg-bg-active')
+    expect(browserButton?.className).toContain('bg-bg-selected')
     expect(browserButton?.querySelector('.left-0')).toBeNull()
     const activeIndicator = browserButton?.querySelector<HTMLElement>(
       '[data-testid="session-workbench-browser-status-indicator"]',
@@ -1182,7 +1182,7 @@ describe('SessionResourcePanel', () => {
         await Promise.resolve()
       })
       expect(browserButton.getAttribute('data-attention')).toBeNull()
-      expect(browserButton.className).toContain('bg-bg-active')
+      expect(browserButton.className).toContain('bg-bg-selected')
     } finally {
       await act(async () => root.unmount())
       jest.useRealTimers()

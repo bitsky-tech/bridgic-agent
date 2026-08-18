@@ -149,7 +149,7 @@ export function WorkflowConfirmCard({ block, floating = false }: { block: Workfl
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="text-sm font-semibold text-text-primary">{successTitle}</h3>
-            <p className="mt-0.5 text-[13px] leading-5 text-text-secondary">{successDescription}</p>
+            <p className="mt-0.5 text-sm leading-5 text-text-secondary">{successDescription}</p>
             {block.summary ? (
               <MarkdownMessage
                 content={block.summary}
@@ -158,7 +158,7 @@ export function WorkflowConfirmCard({ block, floating = false }: { block: Workfl
               />
             ) : null}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-status-success">
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-status-success">
                 {Icons.workflow(12)} {t('workflow.confirm.reusable')}
               </span>
               {block.workflowId ? (
@@ -178,7 +178,7 @@ export function WorkflowConfirmCard({ block, floating = false }: { block: Workfl
                   <button
                     type="button"
                     onClick={runWorkflow}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-brand-blue hover:bg-bg-hover"
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold text-text-accent hover:bg-bg-hover"
                   >
                     {Icons.play(11)} {t('workflow.confirm.runNow')}
                   </button>

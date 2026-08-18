@@ -169,10 +169,10 @@ function TreeNodeRow({
           </span>
         </Tooltip>
         {node.unreadable && (
-          <span className="text-[10px] text-text-tertiary flex-shrink-0">{t('asset.tree.noPermission')}</span>
+          <span className="text-2xs text-text-tertiary flex-shrink-0">{t('asset.tree.noPermission')}</span>
         )}
         {node.sizeBytes !== null && (
-          <span className="text-[10px] text-text-tertiary flex-shrink-0">
+          <span className="text-2xs text-text-tertiary flex-shrink-0">
             {formatSize(node.sizeBytes)}
           </span>
         )}
@@ -206,7 +206,7 @@ function TreeNodeRow({
             }}
             aria-label={t('asset.tree.mention', { name: node.name })}
             // Always rendered, shown/hidden via opacity: it appears on hover without causing row-width jitter (§LS1).
-            className="w-4 text-center text-[11px] font-semibold text-brand-blue flex-shrink-0 opacity-0 group-hover/tree-row:opacity-100 transition-opacity"
+            className="w-4 text-center text-xs font-semibold text-text-accent flex-shrink-0 opacity-0 group-hover/tree-row:opacity-100 transition-opacity"
           >
             @
           </button>
@@ -284,14 +284,14 @@ function ExpandedBody({
   if (node.children === undefined) {
     return (
       <div className={shell}>
-        <div className="px-2 py-[5px] text-[10px] text-text-tertiary">{t('asset.common.loading')}</div>
+        <div className="px-2 py-[5px] text-2xs text-text-tertiary">{t('asset.common.loading')}</div>
       </div>
     )
   }
   if (node.children.length === 0) {
     return (
       <div className={shell}>
-        <div className="px-2 py-[5px] text-[10px] text-text-tertiary">{t('asset.common.emptyFolder')}</div>
+        <div className="px-2 py-[5px] text-2xs text-text-tertiary">{t('asset.common.emptyFolder')}</div>
       </div>
     )
   }

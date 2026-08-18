@@ -120,13 +120,13 @@ export function SessionAssetsSearch({
                   <Highlighted text={h.name} ranges={h.nameRanges} />
                 </div>
                 {h.crumb.length > 0 && (
-                  <div className="text-[10px] text-text-tertiary truncate">
+                  <div className="text-2xs text-text-tertiary truncate">
                     <Highlighted text={h.crumb.join(' / ')} ranges={hitCrumbRanges(h)} />
                   </div>
                 )}
               </div>
             </Tooltip>
-            <span className="text-[10px] text-text-tertiary flex-shrink-0">{hitSizeLabel(h)}</span>
+            <span className="text-2xs text-text-tertiary flex-shrink-0">{hitSizeLabel(h)}</span>
             {abs && (
               <button
                 type="button"
@@ -169,7 +169,7 @@ export function SessionAssetsSearch({
                 })
               }}
               aria-label={t('asset.common.addToChat', { name: h.name })}
-              className="w-4 text-center text-[11px] font-semibold text-brand-blue flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="w-4 text-center text-xs font-semibold text-text-accent flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
             >
               @
             </button>
@@ -249,7 +249,7 @@ function SearchResultFooter({ hitCount, total, partial }: SearchResultFooterProp
   const capped = total > hitCount
   if (!partial && !capped) return null
   return (
-    <div className="px-2 pt-2 flex flex-col gap-0.5 text-[10px]">
+    <div className="px-2 pt-2 flex flex-col gap-0.5 text-2xs">
       {capped && (
         <span className="text-text-tertiary">
           {t('asset.search.capped', { total, shown: hitCount })}

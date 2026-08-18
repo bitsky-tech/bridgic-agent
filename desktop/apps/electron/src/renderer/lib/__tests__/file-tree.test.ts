@@ -121,6 +121,6 @@ describe('extColor', () => {
     expect(extColor('c.zip', 'file')).toBe('text-[#E0A33A]')
     expect(extColor('d.docx', 'file')).toBe('text-[#3B82C4]')
     expect(extColor('e.weird', 'file')).toBe('text-text-tertiary')
-    expect(extColor('any', 'folder')).toBe('text-brand-blue')
+    expect(extColor('any', 'folder')).toBe('text-text-accent')
   })
 })

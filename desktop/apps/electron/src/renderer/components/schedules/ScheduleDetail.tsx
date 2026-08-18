@@ -75,7 +75,7 @@ export function ScheduleDetail({ s }: ScheduleDetailProps) {
         </button>
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3.5 min-w-0">
-            <div className="w-11 h-11 rounded-md flex-shrink-0 flex items-center justify-center bg-accent-purple-subtle text-brand-purple">
+            <div className="w-11 h-11 rounded-md flex-shrink-0 flex items-center justify-center bg-accent-purple-subtle text-text-accent-purple">
               {Icons.clock(20)}
             </div>
             <div className="min-w-0">
@@ -164,7 +164,7 @@ export function ScheduleDetail({ s }: ScheduleDetailProps) {
         <Card className="px-[18px] mb-7">
           <ConfigRow label={t('schedule.detail.config.trigger')}>
             <span>{describeCron(s.cron, t)}</span>
-            <span className="ml-2.5 text-[11px] text-text-tertiary font-mono bg-bg-hover px-2 py-0.5 rounded-md">
+            <span className="ml-2.5 text-xs text-text-tertiary font-mono bg-bg-hover px-2 py-0.5 rounded-md">
               {s.cron}
             </span>
           </ConfigRow>
@@ -177,7 +177,7 @@ export function ScheduleDetail({ s }: ScheduleDetailProps) {
                 s.skills.map((n) => (
                   <span
                     key={n}
-                    className="inline-flex items-center gap-1.5 text-xs font-mono text-brand-purple bg-accent-purple-subtle px-2.5 py-0.5 rounded-full"
+                    className="inline-flex items-center gap-1.5 text-xs font-mono text-text-accent-purple bg-accent-purple-subtle px-2.5 py-0.5 rounded-full"
                   >
                     {Icons.terminal(11)} {n}
                   </span>
@@ -190,7 +190,7 @@ export function ScheduleDetail({ s }: ScheduleDetailProps) {
           <ConfigRow label={t('schedule.detail.config.nextRun')}>
             <SchedTime
               value={s.nextRun}
-              className={cn(st === ScheduleStatus.Active ? 'text-brand-blue' : 'text-text-secondary')}
+              className={cn(st === ScheduleStatus.Active ? 'text-text-accent' : 'text-text-secondary')}
             />
           </ConfigRow>
           <ConfigRow label={t('schedule.detail.config.lastRun')}>

@@ -16,6 +16,7 @@ import {
   setExecutionModeAtom,
 } from '@/atoms/permissions'
 import { cn } from '@/lib/cn'
+import { SettingsTabLayout } from '../amphi/SettingsTabLayout'
 import { MODE_META } from './modeMeta'
 import { modeIcon, modeTint } from './icons'
 
@@ -32,8 +33,8 @@ export function SettingsModeTab() {
   }, [load])
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="text-xs text-text-secondary leading-relaxed">
+    <SettingsTabLayout>
+      <div className="text-sm text-text-secondary leading-relaxed">
         {t('permission.settings.desc')}
       </div>
       <div className="flex flex-col gap-2">
@@ -44,18 +45,18 @@ export function SettingsModeTab() {
               <span className={cn('mt-0.5 shrink-0', modeTint(m.id))}>{modeIcon(m.id)(18)}</span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-text-primary">{t(m.labelKey)}</span>
+                  <span className="text-sm font-semibold text-text-primary">{t(m.labelKey)}</span>
                   {m.id === 'auto' && (
-                    <span className="text-[9px] font-bold text-brand-blue border border-brand-blue rounded-full px-1.5 py-px">
+                    <span className="text-2xs font-bold text-text-accent border border-brand-blue rounded-full px-1.5 py-px">
                       {t('permission.settings.defaultBadge')}
                     </span>
                   )}
                   <span className="flex-1" />
-                  <span className={cn('text-[11px]', m.id === 'full' ? 'text-status-warning' : 'text-text-tertiary')}>
+                  <span className={cn('text-xs', m.id === 'full' ? 'text-status-warning' : 'text-text-tertiary')}>
                     {t(m.freqKey)}
                   </span>
                 </div>
-                <div className="text-xs text-text-secondary mt-0.5 leading-snug">{t(m.descKey)}</div>
+                <div className="text-sm text-text-secondary mt-0.5 leading-snug">{t(m.descKey)}</div>
               </div>
               <span
                 className={cn(
@@ -69,6 +70,6 @@ export function SettingsModeTab() {
           )
         })}
       </div>
-    </div>
+    </SettingsTabLayout>
   )
 }

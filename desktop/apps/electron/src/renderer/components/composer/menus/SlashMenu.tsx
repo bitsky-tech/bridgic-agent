@@ -63,7 +63,7 @@ export function SlashMenu({ rows, selectedIndex, style, onPick }: SlashMenuProps
       onMouseDown={(e) => e.preventDefault()}
     >
       {rows.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-text-tertiary">{t('composer.slash.empty')}</div>
+        <div className="px-3 py-2 text-sm text-text-tertiary">{t('composer.slash.empty')}</div>
       ) : (
         rows.map((row, idx) => {
           const showGroup = !renderedGroups.has(row.group)
@@ -73,7 +73,7 @@ export function SlashMenu({ rows, selectedIndex, style, onPick }: SlashMenuProps
           return (
             <div key={`${row.kind}-${row.id}`}>
               {showGroup && (
-                <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[10px] text-text-tertiary">
+                <div className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-xs text-text-tertiary">
                   {/* The entity-colored dot before the group heading (design handoff). */}
                   <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', color.dot)} />
                   <span>{t(slashGroupTranslationKey(row.group))}</span>
@@ -103,7 +103,7 @@ export function SlashMenu({ rows, selectedIndex, style, onPick }: SlashMenuProps
                   only clue that "there is more, type a keyword", so de-emphasizing it is the same as not having it.
                   Not a button and with no onClick — it does not enter the rows index and does not affect ↑↓ navigation (§1.28). */}
               {row.kind !== SlashRowKind.Command && row.overflow ? (
-                <div className={cn('px-3 pb-1.5 text-[11px] font-medium', color.text)}>
+                <div className={cn('px-3 pb-1.5 text-xs font-medium', color.text)}>
                   {t('composer.slash.overflow', { n: row.overflow })}
                 </div>
               ) : null}

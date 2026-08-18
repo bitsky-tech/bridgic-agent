@@ -43,7 +43,7 @@ export function Highlighted({ text, ranges }: HighlightedProps) {
   ranges.forEach(([s, e], i) => {
     if (s > cursor) parts.push(text.slice(cursor, s))
     parts.push(
-      <mark key={i} className="bg-accent-blue-subtle text-brand-blue rounded-[3px] px-px">
+      <mark key={i} className="bg-accent-blue-subtle text-text-accent rounded-[3px] px-px">
         {text.slice(s, e)}
       </mark>,
     )

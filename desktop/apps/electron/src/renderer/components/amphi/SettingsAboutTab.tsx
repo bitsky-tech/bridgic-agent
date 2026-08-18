@@ -45,6 +45,7 @@ import {
 import { rlog } from '@/lib/logger'
 import wechatQrUrl from '@/assets/wechat-group-qr.png'
 import { Btn, Card } from './Primitives'
+import { SettingsTabLayout } from './SettingsTabLayout'
 
 /** What the update row is currently saying. */
 type UpdateRowState =
@@ -140,7 +141,7 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
   }
 
   return (
-    <div className="p-5 flex flex-col gap-3">
+    <SettingsTabLayout>
       <Card className="p-0 divide-y divide-border-subtle">
         {/* One version, not two. `scripts/release-manifest.ts` refuses to build
             when the desktop and backend versions differ, so a separate "core
@@ -256,7 +257,7 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
       <div className="text-xs text-text-tertiary px-1">
         © {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}
       </div>
-    </div>
+    </SettingsTabLayout>
   )
 }
 
@@ -273,7 +274,7 @@ function AboutRow({ label, description, children }: AboutRowProps) {
       <div className="min-w-0">
         <div className="text-sm text-text-primary">{label}</div>
         {description && (
-          <div className="text-xs text-text-secondary mt-0.5 leading-relaxed">{description}</div>
+          <div className="text-sm text-text-secondary mt-0.5 leading-relaxed">{description}</div>
         )}
       </div>
       {children && <div className="flex-shrink-0">{children}</div>}
@@ -349,7 +350,7 @@ function LinkRow({ testId, label, text, href, copyValue }: LinkRowProps) {
           type="button"
           data-testid={`about-link-${testId}`}
           onClick={open}
-          className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-brand-blue hover:underline focus-visible:underline focus-visible:outline-none"
+          className="inline-flex cursor-pointer items-center gap-1.5 text-sm font-medium text-text-accent hover:underline focus-visible:underline focus-visible:outline-none"
         >
           {text}
           {copyValue === undefined && <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -403,7 +404,7 @@ function WechatRow() {
           data-testid="about-wechat-toggle"
           aria-expanded={open}
           onClick={() => setOpen((prev) => !prev)}
-          className="inline-flex flex-shrink-0 cursor-pointer items-center gap-1.5 text-xs font-medium text-brand-blue hover:underline focus-visible:underline focus-visible:outline-none"
+          className="inline-flex flex-shrink-0 cursor-pointer items-center gap-1.5 text-sm font-medium text-text-accent hover:underline focus-visible:underline focus-visible:outline-none"
         >
           {open ? t('modals.about.contactWechatHide') : t('modals.about.contactWechatShow')}
           <ChevronDown

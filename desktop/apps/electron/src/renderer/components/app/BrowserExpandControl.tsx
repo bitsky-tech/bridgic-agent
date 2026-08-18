@@ -62,7 +62,7 @@ export function BrowserExpandControl({
             type="button"
             data-testid="browser-overflow-reminder-action"
             onClick={() => onExpandedChange(true)}
-            className="rounded px-0.5 text-xs font-semibold text-brand-blue hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40"
+            className="rounded px-0.5 text-xs font-semibold text-text-accent hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40"
           >
             {reminderAction}
           </button>
@@ -96,7 +96,7 @@ export function BrowserExpandControl({
           onClick={() => onExpandedChange(!expanded)}
           className={cn(
             'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary',
-            reminderId && 'bg-accent-blue-subtle text-brand-blue ring-1 ring-inset ring-brand-blue/20',
+            reminderId && 'bg-accent-blue-subtle text-text-accent ring-1 ring-inset ring-brand-blue/20',
           )}
         >
           <ExpandIcon expanded={expanded} size={15} />

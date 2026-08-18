@@ -66,7 +66,7 @@ export function ApprovalCenter() {
                   <div className="text-sm font-semibold text-text-primary">{s.name}</div>
                   <div className="text-xs text-text-secondary mt-0.5 truncate">{s.desc}</div>
                 </div>
-                <span className="text-[10px] text-status-warning font-semibold flex-shrink-0">
+                <span className="text-2xs text-status-warning font-semibold flex-shrink-0">
                   {t('schedule.approval.itemCount', { n: s.needsAction ?? 0 })}
                 </span>
                 <Btn

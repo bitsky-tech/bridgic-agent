@@ -159,7 +159,7 @@ export function SessionRow({
       onClick={onSelect}
       className={cn(
         'group flex items-center gap-2 px-2 py-[9px] rounded-md cursor-pointer relative',
-        active ? 'bg-bg-hover' : 'bg-transparent',
+        active ? 'bg-bg-selected' : 'bg-transparent',
       )}
     >
       {depth > 0 && (
@@ -193,7 +193,7 @@ export function SessionRow({
         >
           {session.title}
         </div>
-        {session.stage && <div className="text-xs text-brand-blue mt-0.5">{session.stage}</div>}
+        {session.stage && <div className="text-xs text-text-accent mt-0.5">{session.stage}</div>}
       </div>
       {childCount > 0 && (
         <button
@@ -203,7 +203,7 @@ export function SessionRow({
             event.stopPropagation()
             onToggleChildren?.()
           }}
-          className="flex shrink-0 items-center gap-0.5 text-[10px] text-text-tertiary hover:text-text-secondary"
+          className="flex shrink-0 items-center gap-0.5 text-2xs text-text-tertiary hover:text-text-secondary"
         >
           {!expanded && backgroundChildStatus && (
             <AgentStatusIndicator {...backgroundChildStatus} />

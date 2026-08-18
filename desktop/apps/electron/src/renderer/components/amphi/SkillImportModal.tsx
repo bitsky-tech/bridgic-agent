@@ -196,7 +196,7 @@ export function SkillImportModal({ onClose }: { onClose?: () => void }) {
       {error && <div className="px-6 text-xs text-status-error">{error}</div>}
 
       {step === Step.Review && newerSkipped > 0 && (
-        <div className="px-6 pt-2 flex items-center gap-2 text-[11px] text-text-secondary">
+        <div className="px-6 pt-2 flex items-center gap-2 text-xs text-text-secondary">
           <span className="flex shrink-0 text-text-tertiary">{Icons.clock(13)}</span>
           <Trans
             i18nKey="skill.import.modal.newerSkipped"
@@ -205,7 +205,7 @@ export function SkillImportModal({ onClose }: { onClose?: () => void }) {
           />
           <button
             type="button"
-            className="font-semibold text-brand-blue"
+            className="font-semibold text-text-accent"
             onClick={() => batchConflicts(true)}
           >
             {t('skill.import.review.replaceAll')}

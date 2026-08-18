@@ -200,7 +200,7 @@ export function MountRow({
             {m.name}
           </span>
         </Tooltip>
-        <span className="text-[10px] text-text-tertiary flex-shrink-0">{mountMeta(m, tree, t)}</span>
+        <span className="text-2xs text-text-tertiary flex-shrink-0">{mountMeta(m, tree, t)}</span>
         <button
           type="button"
           onClick={(e) => {
@@ -260,7 +260,7 @@ export function MountRow({
                     className="w-full text-left px-2.5 py-1.5 text-xs text-status-error hover:bg-bg-hover"
                   >
                     {t('asset.mount.remove')}
-                    <span className="block text-[10px] text-text-tertiary">
+                    <span className="block text-2xs text-text-tertiary">
                       {t('asset.mount.removeHint')}
                     </span>
                   </button>
@@ -278,7 +278,7 @@ export function MountRow({
             onMentionRoot()
           }}
           aria-label={t('asset.common.addToChat', { name: m.name })}
-          className="w-4 text-center text-[11px] font-semibold text-brand-blue flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="w-4 text-center text-xs font-semibold text-text-accent flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
         >
           @
         </button>
@@ -317,7 +317,7 @@ export interface MountSubtreeProps {
   menu: TreeRowMenu
 }
 
-const SUBTREE_MSG_CLS = 'ml-[13px] pl-[3px] px-2 py-[5px] text-[10px]'
+const SUBTREE_MSG_CLS = 'ml-[13px] pl-[3px] px-2 py-[5px] text-2xs'
 
 /** Why a folder level couldn't be read. `denied` is the only one the user can
  *  act on, so it carries the fix instead of a generic failure line: on macOS a
@@ -351,7 +351,7 @@ function MountSubtree({ tree, expanded, onToggle, onMention, onOpen, absPathOf, 
   return (
     <div className="ml-[13px] pl-[3px] border-l border-border-subtle">
       {tree.nodes.length === 0 ? (
-        <div className="px-2 py-[5px] text-[10px] text-text-tertiary">{t('asset.common.emptyFolder')}</div>
+        <div className="px-2 py-[5px] text-2xs text-text-tertiary">{t('asset.common.emptyFolder')}</div>
       ) : (
         <FileTreeView
           nodes={tree.nodes}

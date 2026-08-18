@@ -114,12 +114,12 @@ export function FrameworkInteractionOverlay() {
           className="flex h-10 w-full items-center gap-2 rounded-xl border border-border-default bg-bg-elevated px-3 shadow-lg animate-focus-enter"
           aria-label={t('humanRequest.expandAria')}
         >
-          <span className="flex shrink-0 text-brand-blue">{presentation.icon}</span>
+          <span className="flex shrink-0 text-text-accent">{presentation.icon}</span>
           <span className="shrink-0 text-xs font-semibold text-text-primary">{presentation.title}</span>
           <span className="min-w-0 flex-1 truncate text-left text-xs text-text-secondary">
             {presentation.summary}
           </span>
-          <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-brand-blue">
+          <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-text-accent">
             {t('humanRequest.expand')} {Icons.chevronDown(12)}
           </span>
         </button>
@@ -131,10 +131,10 @@ export function FrameworkInteractionOverlay() {
         )}
       >
         <header className="mb-3 flex items-center gap-2 border-b border-border-subtle pb-2.5">
-          <span className="flex text-brand-blue">{presentation.icon}</span>
+          <span className="flex text-text-accent">{presentation.icon}</span>
           <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold text-text-primary">{presentation.title}</div>
-            <div className="mt-0.5 truncate text-[11px] text-text-secondary">{presentation.summary}</div>
+            <div className="mt-0.5 truncate text-xs text-text-secondary">{presentation.summary}</div>
           </div>
           <button
             type="button"

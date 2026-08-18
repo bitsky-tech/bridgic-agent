@@ -157,7 +157,7 @@ export function getMentionBadgeClass(group: string): string {
     case MentionGroup.WorkflowRun:
       return 'bg-entity-workflow-run-bg text-entity-workflow-run'
     default:
-      return 'bg-accent-purple-subtle text-brand-purple'
+      return 'bg-accent-purple-subtle text-text-accent-purple'
   }
 }
 

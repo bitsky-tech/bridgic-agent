@@ -123,17 +123,17 @@ function MentionMenuHeader({ state, q }: MentionMenuHeaderProps) {
     <div className="border-b border-border-subtle px-3 pb-2.5 pt-3">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
             {Icons.at(14)}
           </span>
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-text-primary">{t('mention.title')}</div>
-            <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
+            <div className="text-sm font-semibold text-text-primary">{t('mention.title')}</div>
+            <div className="mt-0.5 truncate text-xs text-text-tertiary">
               {q ? t('mention.searchingFor', { query: q }) : t('mention.subtitle')}
             </div>
           </div>
         </div>
-        <kbd className="shrink-0 rounded border border-border-subtle bg-bg-hover px-1.5 py-0.5 text-[9px] text-text-tertiary">
+        <kbd className="shrink-0 rounded border border-border-subtle bg-bg-hover px-1.5 py-0.5 text-2xs text-text-tertiary">
           Esc
         </kbd>
       </div>
@@ -146,17 +146,17 @@ function MentionMenuHeader({ state, q }: MentionMenuHeaderProps) {
             aria-selected={state.scope === scope}
             onClick={() => state.setScope(scope)}
             className={cn(
-              'flex h-7 min-w-0 items-center justify-center gap-1 rounded px-2 text-[10px] font-medium text-text-tertiary transition-colors',
+              'flex h-7 min-w-0 items-center justify-center gap-1 rounded px-2 text-xs font-medium text-text-tertiary transition-colors',
               state.scope === scope && 'bg-bg-elevated text-text-primary shadow-sm',
             )}
           >
             <span className="truncate">{t(SCOPE_LABEL_KEYS[scope])}</span>
-            <span className="shrink-0 tabular-nums text-[9px] text-text-tertiary">{scopeCount(state, scope)}</span>
+            <span className="shrink-0 tabular-nums text-xs text-text-tertiary">{scopeCount(state, scope)}</span>
           </button>
         ))}
       </div>
       {state.searchPartial && (state.scope === 'all' || state.scope === 'session-files') && (
-        <div className="mt-2 text-[10px] text-status-warning">{t('mention.partialWarning')}</div>
+        <div className="mt-2 text-xs text-status-warning">{t('mention.partialWarning')}</div>
       )}
     </div>
   )
@@ -193,7 +193,7 @@ function MenuBody({
     else if (state.scope === 'workflows') message = t('mention.empty.workflows')
     else if (state.scope === 'schedules') message = t('mention.empty.schedules')
     return (
-      <div className="px-2.5 py-6 text-center text-xs text-text-tertiary leading-[1.6]">
+      <div className="px-2.5 py-6 text-center text-sm text-text-tertiary leading-[1.6]">
         {message}
         {state.scope === 'session-files' && (
           <>
@@ -228,7 +228,7 @@ function MenuBody({
   return (
     <>
       {state.loading && (
-        <div className="px-2.5 py-1 text-[10px] text-text-tertiary">
+        <div className="px-2.5 py-1 text-xs text-text-tertiary">
           {state.mode === 'search' ? t('mention.loading.search') : t('mention.loading.browse')}
         </div>
       )}
@@ -301,7 +301,7 @@ function WorkflowRow({ row, selected, rowRef, onPick, onPreview }: WorkflowRowPr
       onClick={() => onPick(row)}
       className={cn(
         'group/workflow flex cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2.5 py-2 hover:bg-bg-hover',
-        selected && 'border-brand-blue bg-bg-hover',
+        selected && 'border-brand-blue bg-bg-selected',
       )}
     >
       <span data-resource-kind="workflow" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-entity-workflow-bg text-entity-workflow">
@@ -309,10 +309,10 @@ function WorkflowRow({ row, selected, rowRef, onPick, onPreview }: WorkflowRowPr
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <div className="min-w-0 flex-1 truncate text-xs font-semibold text-text-primary">{workflow.name}</div>
-          <span className="shrink-0 rounded-full bg-entity-workflow-bg px-1.5 py-0.5 text-[9px] font-medium text-entity-workflow">{t('mention.badge.workflow')}</span>
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">{workflow.name}</div>
+          <span className="shrink-0 rounded-full bg-entity-workflow-bg px-1.5 py-0.5 text-2xs font-medium text-entity-workflow">{t('mention.badge.workflow')}</span>
         </div>
-        <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
+        <div className="mt-0.5 truncate text-xs text-text-tertiary">
           {t('mention.workflow.editable')} · {workflow.desc || t('mention.workflow.defaultDesc')}
         </div>
       </div>
@@ -324,7 +324,7 @@ function WorkflowRow({ row, selected, rowRef, onPick, onPreview }: WorkflowRowPr
           onPreview(workflow)
         }}
         className={cn(
-          'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-surface hover:text-brand-blue',
+          'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-surface hover:text-text-accent',
           selected ? 'opacity-100' : 'opacity-0 group-hover/workflow:opacity-100',
         )}
       >
@@ -343,7 +343,7 @@ function ScheduleRow({ row, selected, rowRef, onPick }: RowProps<Extract<Mention
       onClick={() => onPick(row)}
       className={cn(
         'flex cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2.5 py-2 hover:bg-bg-hover',
-        selected && 'border-brand-blue bg-bg-hover',
+        selected && 'border-brand-blue bg-bg-selected',
       )}
     >
       <span data-resource-kind="schedule" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-entity-schedule-bg text-entity-schedule">
@@ -351,10 +351,10 @@ function ScheduleRow({ row, selected, rowRef, onPick }: RowProps<Extract<Mention
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <div className="min-w-0 flex-1 truncate text-xs font-semibold text-text-primary">{schedule.name}</div>
-          <span className="shrink-0 rounded-full bg-entity-schedule-bg px-1.5 py-0.5 text-[9px] font-medium text-entity-schedule">{t('mention.badge.schedule')}</span>
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">{schedule.name}</div>
+          <span className="shrink-0 rounded-full bg-entity-schedule-bg px-1.5 py-0.5 text-2xs font-medium text-entity-schedule">{t('mention.badge.schedule')}</span>
         </div>
-        <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
+        <div className="mt-0.5 truncate text-xs text-text-tertiary">
           {schedule.desc || t('mention.schedule.defaultDesc')}
         </div>
       </div>
@@ -376,13 +376,13 @@ function ScopeLinkRow({
       onClick={() => onPick(row)}
       className={cn(
         'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-entity-workflow-run hover:bg-bg-hover',
-        selected && 'bg-bg-hover',
+        selected && 'bg-bg-selected',
       )}
     >
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-entity-workflow-run-bg">
         {Icons.workflowResult(14)}
       </span>
-      <span className="min-w-0 flex-1 truncate text-xs font-medium">
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">
         {t('mention.viewAllRuns', { total: row.total })}
       </span>
       <span className="shrink-0">{Icons.chevronRight(13)}</span>
@@ -394,7 +394,7 @@ function MentionSectionLabel({ label }: { label: string }) {
   return (
     <div
       data-mention-section={label}
-      className="px-2 pb-1 pt-1.5 text-[9px] font-semibold uppercase text-text-tertiary"
+      className="px-2 pb-1 pt-1.5 text-xs font-semibold uppercase text-text-tertiary"
     >
       {label}
     </div>
@@ -404,7 +404,7 @@ function MentionSectionLabel({ label }: { label: string }) {
 function MentionMenuFooter() {
   const { t } = useTranslation()
   return (
-    <div className="flex h-8 items-center gap-3 border-t border-border-subtle px-3 text-[9px] text-text-tertiary">
+    <div className="flex h-8 items-center gap-3 border-t border-border-subtle px-3 text-xs text-text-tertiary">
       <span><kbd>↑↓</kbd> {t('mention.footer.select')}</span>
       <span><kbd>←→</kbd> {t('mention.footer.switchScope')}</span>
       <span><kbd>Enter</kbd> {t('mention.footer.reference')}</span>
@@ -444,7 +444,7 @@ function WorkflowRunRow({ row, selected, rowRef, onPick, onPreview }: WorkflowRu
       onClick={() => onPick(row)}
       className={cn(
         'group/workflow-run flex cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2.5 py-2 hover:bg-bg-hover',
-        selected && 'border-brand-blue bg-bg-hover',
+        selected && 'border-brand-blue bg-bg-selected',
       )}
     >
       <span data-resource-kind="workflow-run" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-entity-workflow-run-bg text-entity-workflow-run">
@@ -452,16 +452,16 @@ function WorkflowRunRow({ row, selected, rowRef, onPick, onPreview }: WorkflowRu
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <div className="min-w-0 flex-1 truncate text-xs font-semibold text-text-primary">{run.workflow_name}</div>
-          <span className="shrink-0 rounded-full bg-entity-workflow-run-bg px-1.5 py-0.5 text-[9px] font-medium text-entity-workflow-run">
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">{run.workflow_name}</div>
+          <span className="shrink-0 rounded-full bg-entity-workflow-run-bg px-1.5 py-0.5 text-2xs font-medium text-entity-workflow-run">
             {t('mention.badge.workflowRun')}
           </span>
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-          <div className="min-w-0 flex-1 truncate text-[10px] text-text-tertiary">
+          <div className="min-w-0 flex-1 truncate text-xs text-text-tertiary">
             {formatWorkflowRunTimestamp(run.created_at)}{input ? ` · ${input}` : ''}
           </div>
-          <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium', statusTone)}>{status}</span>
+          <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-2xs font-medium', statusTone)}>{status}</span>
         </div>
       </div>
       <button
@@ -472,7 +472,7 @@ function WorkflowRunRow({ row, selected, rowRef, onPick, onPreview }: WorkflowRu
           onPreview(run)
         }}
         className={cn(
-          'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-surface hover:text-brand-blue',
+          'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-surface hover:text-text-accent',
           selected ? 'opacity-100' : 'opacity-0 group-hover/workflow-run:opacity-100',
         )}
       >
@@ -511,7 +511,7 @@ function TreeRow({
       onClick={handleClick}
       className={cn(
         'group/mention-tree flex items-center gap-1.5 px-2 py-[5px] rounded-md cursor-pointer hover:bg-bg-hover',
-        selected && 'bg-bg-hover',
+        selected && 'bg-bg-selected',
       )}
     >
       {/* Indent guides: one 13px left border segment per level, visually continuous across rows (same as the right-panel tree). */}
@@ -527,17 +527,17 @@ function TreeRow({
       <span className={cn('flex flex-shrink-0', extColor(row.name, row.nodeKind))}>
         {isFolder ? Icons.folder(15) : Icons.file(14)}
       </span>
-      <span className="flex-1 min-w-0 text-xs font-medium font-mono text-text-primary truncate">
+      <span className="flex-1 min-w-0 text-sm font-medium font-mono text-text-primary truncate">
         {row.name}
       </span>
       {row.loadingChildren && (
-        <span className="text-[10px] text-text-tertiary flex-shrink-0">{t('mention.tree.loading')}</span>
+        <span className="text-xs text-text-tertiary flex-shrink-0">{t('mention.tree.loading')}</span>
       )}
       {row.unreadable && (
-        <span className="text-[10px] text-text-tertiary flex-shrink-0">{t('mention.tree.unreadable')}</span>
+        <span className="text-xs text-text-tertiary flex-shrink-0">{t('mention.tree.unreadable')}</span>
       )}
       {row.sizeBytes !== null && (
-        <span className="text-[10px] text-text-tertiary flex-shrink-0">
+        <span className="text-xs text-text-tertiary flex-shrink-0">
           {formatSize(row.sizeBytes)}
         </span>
       )}
@@ -549,7 +549,7 @@ function TreeRow({
         }}
         aria-label={t('mention.tree.referenceAria', { name: row.name })}
         // Always rendered, shown/hidden via opacity (§LS1): folders can be referenced with the mouse too, not only via Enter.
-        className="w-4 text-center text-[11px] font-semibold text-brand-blue flex-shrink-0 opacity-0 group-hover/mention-tree:opacity-100 transition-opacity"
+        className="w-4 text-center text-xs font-semibold text-text-accent flex-shrink-0 opacity-0 group-hover/mention-tree:opacity-100 transition-opacity"
       >
         @
       </button>
@@ -565,11 +565,11 @@ function MoreRow({ row, selected, rowRef, onPick }: RowProps<Extract<MentionRow,
       onClick={() => onPick(row)}
       className={cn(
         'flex items-center gap-1.5 px-2 py-[5px] rounded-md cursor-pointer hover:bg-bg-hover',
-        selected && 'bg-bg-hover',
+        selected && 'bg-bg-selected',
       )}
     >
       <span className="w-3.5 flex-shrink-0" />
-      <span className="text-[10px] text-brand-blue">{t('mention.more', { remaining: row.remaining })}</span>
+      <span className="text-xs text-text-accent">{t('mention.more', { remaining: row.remaining })}</span>
     </div>
   )
 }
@@ -587,7 +587,7 @@ function SearchRow({
       onClick={() => onPick(row)}
       className={cn(
         'flex items-center gap-2 px-2.5 py-[7px] rounded-md cursor-pointer hover:bg-bg-hover',
-        selected && 'bg-bg-hover',
+        selected && 'bg-bg-selected',
       )}
     >
       <span className={cn('flex flex-shrink-0', extColor(h.name, h.kind))}>
@@ -598,7 +598,7 @@ function SearchRow({
           <Highlighted text={h.name} ranges={h.nameRanges} />
         </div>
         {h.crumb.length > 0 && (
-          <div className="flex items-center gap-1 mt-px text-[10px] text-text-tertiary truncate">
+          <div className="flex items-center gap-1 mt-px text-xs text-text-tertiary truncate">
             <span className="flex flex-shrink-0">{Icons.folder(10)}</span>
             <span className="truncate">
               <Highlighted text={h.crumb.join(' / ')} ranges={hitCrumbRanges(h)} />
@@ -606,7 +606,7 @@ function SearchRow({
           </div>
         )}
       </div>
-      <span className="text-[10px] text-text-tertiary flex-shrink-0">
+      <span className="text-xs text-text-tertiary flex-shrink-0">
         {hitSizeLabel(h)}
       </span>
     </div>

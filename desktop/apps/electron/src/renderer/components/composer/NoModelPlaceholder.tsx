@@ -92,7 +92,7 @@ export function NoModelPlaceholder({
     >
       <span>{t('composer.noModel.ctaPrefix')}</span>
       {/* The inline blue "configure model" — visual emphasis, with an underline on hover to signal explicitly that it is clickable. */}
-      <span className="ml-1 font-semibold text-brand-blue group-hover:underline underline-offset-2">
+      <span className="ml-1 font-semibold text-text-accent group-hover:underline underline-offset-2">
         {t('composer.noModel.configure')}
       </span>
     </button>

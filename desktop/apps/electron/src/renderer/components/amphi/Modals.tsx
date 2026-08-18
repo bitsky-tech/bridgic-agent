@@ -75,6 +75,7 @@ import type { ShowcaseWorkflow } from '@/lib/showcaseClient'
 import { rlog } from '@/lib/logger'
 import { EmbeddedShowcasePage } from './EmbeddedShowcasePage'
 import { Icons } from './Icons'
+import { NavItem } from './NavItem'
 import { Tooltip } from './Tooltip'
 import { Modal } from './Modal'
 import { ModalBackdrop } from './ModalBackdrop'
@@ -184,25 +185,18 @@ export function SettingsModal({
             <span className="text-lg font-bold text-text-primary">{t('modals.settings.title')}</span>
           </div>
           <div className="flex-1 px-2 flex flex-col gap-0.5">
-            {tabs.map((tab) => {
-              const active = activeTabId === tab.id
-              return (
-                <div
-                  key={tab.id}
-                  data-testid={`tab-${tab.label}`}
-                  onClick={() => handleTabSwitch(tab.id)}
-                  className={cn(
-                    'flex items-center gap-2.5 px-3 py-2.5 rounded-md cursor-pointer',
-                    active
-                      ? 'bg-bg-hover text-text-primary'
-                      : 'text-text-secondary hover:text-text-primary',
-                  )}
-                >
-                  <span className={cn('flex', active ? 'opacity-100' : 'opacity-60')}>{tab.icon(16)}</span>
-                  <span className={cn('text-sm', active && 'font-semibold')}>{tab.label}</span>
-                </div>
-              )
-            })}
+            {tabs.map((tab) => (
+              <NavItem
+                key={tab.id}
+                testId={`tab-${tab.label}`}
+                icon={tab.icon}
+                label={tab.label}
+                active={activeTabId === tab.id}
+                onClick={() => {
+                  void handleTabSwitch(tab.id)
+                }}
+              />
+            ))}
           </div>
         </div>
 
@@ -512,7 +506,7 @@ function OfficialShield() {
   const { t } = useTranslation()
   return (
     <Tooltip content={t('modals.model.official')}>
-      <span className="flex text-brand-blue">
+      <span className="flex text-text-accent">
       <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
         <path
           d="M8 1.5l5 2v4c0 3-2.2 5.2-5 6.5-2.8-1.3-5-3.5-5-6.5v-4l5-2z"
@@ -617,7 +611,7 @@ function ModelAddStep1({
                     <span
                       className={cn(
                         'text-sm font-semibold',
-                        selected ? 'text-brand-blue' : 'text-text-primary',
+                        selected ? 'text-text-accent' : 'text-text-primary',
                       )}
                     >
                       {getProviderCatalogDisplayName(p, t)}
@@ -633,7 +627,7 @@ function ModelAddStep1({
                   </div>
                 </div>
                 {hasOAuth && (
-                  <span className="text-[10px] text-text-tertiary whitespace-nowrap">
+                  <span className="text-2xs text-text-tertiary whitespace-nowrap">
                     {t('modals.model.step1.supportsSubscription')}
                   </span>
                 )}
@@ -646,7 +640,7 @@ function ModelAddStep1({
       {/* Custom protocols — Phase 2: the backend no longer requires provider_id to be in the catalog, so
           these two cards are clickable and lead to a form with an empty slug + empty base_url + empty models for the user to fill in. */}
       <SectionLabel>{t('modals.model.step1.customProtocol')}</SectionLabel>
-      <div className="text-[11px] text-text-tertiary mb-2">
+      <div className="text-xs text-text-tertiary mb-2">
         {t('modals.model.step1.customProtocolDesc')}
       </div>
       <div className="grid grid-cols-2 gap-2.5">
@@ -686,7 +680,7 @@ function ModelAddStep1({
                 <span
                   className={cn(
                     'text-sm font-semibold',
-                    selected ? 'text-brand-blue' : 'text-text-primary',
+                    selected ? 'text-text-accent' : 'text-text-primary',
                   )}
                 >
                   {p.name}
@@ -718,7 +712,7 @@ function ModelAddStep1({
 /** Small grey uppercase heading, used for the sections of Step1 / Step2. A uniform spec from the design. */
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[11px] font-semibold text-text-tertiary uppercase tracking-[0.3px] mb-2">
+    <div className="text-xs font-semibold text-text-tertiary uppercase tracking-[0.3px] mb-2">
       {children}
     </div>
   )
@@ -995,7 +989,7 @@ function CodexOAuthBody({
         <button
           type="button"
           onClick={handleAuthorize}
-          className="text-[11px] text-text-tertiary hover:text-text-secondary cursor-pointer self-start"
+          className="text-xs text-text-tertiary hover:text-text-secondary cursor-pointer self-start"
         >
           {t('modals.model.oauth.useDifferentAccount')}
         </button>
@@ -1441,7 +1435,7 @@ function ChannelCredentialForm({
           <label className="text-xs font-semibold text-text-secondary block mb-1.5">Base URL</label>
           {/* Preview row: the normalised host + the SDK's own suffix, rendered only when non-empty. */}
           {normalizedBaseUrl && (
-            <div className="text-[11px] text-text-tertiary mb-1.5 break-all">
+            <div className="text-xs text-text-tertiary mb-1.5 break-all">
               {t('modals.model.form.preview')}
               <span className="font-mono text-text-secondary">
                 {normalizedBaseUrl}
@@ -1482,7 +1476,7 @@ function ChannelCredentialForm({
       {/* Test-result feedback row — right above the footer, with a fixed height to avoid layout jumps.
           Positionally it hugs the "test connection" button so the user's eye lands on the result right after clicking. */}
       <div
-        className="mt-4 text-[11px] leading-[1.5] min-h-[16px] text-right"
+        className="mt-4 text-xs leading-[1.5] min-h-[16px] text-right"
         data-testid="test-result"
       >
         {testState.kind === 'pristine' && (
@@ -1568,7 +1562,7 @@ function ProtocolRadio({
         <div
           className={cn(
             'text-sm font-semibold',
-            selected ? 'text-brand-blue' : 'text-text-primary',
+            selected ? 'text-text-accent' : 'text-text-primary',
           )}
         >
           {title}
@@ -2059,7 +2053,7 @@ function SettingsGatewayTab() {
   }
 
   return (
-    <div className="p-5">
+    <div>
       <div className="text-sm text-text-secondary mb-4">
         {t('modals.gateway.description', { product: APP_PRODUCT_NAME })}
       </div>
@@ -2409,7 +2403,7 @@ function SettingsAppearanceTab() {
             >
               <div>
                 <div className="text-sm font-medium text-text-primary">{opt.label}</div>
-                <div className="text-xs text-text-secondary mt-0.5">{opt.desc}</div>
+                <div className="text-sm text-text-secondary mt-0.5">{opt.desc}</div>
               </div>
               {active && <Badge color="brand">{t('common.inUse')}</Badge>}
             </div>
@@ -2539,7 +2533,7 @@ function SettingsZoomRow() {
             type="button"
             disabled={level === 0}
             onClick={() => setLevel(0)}
-            className="ml-1 rounded-md px-2 py-1 text-xs font-medium text-brand-blue disabled:cursor-not-allowed disabled:opacity-40"
+            className="ml-1 rounded-md px-2 py-1 text-xs font-medium text-text-accent disabled:cursor-not-allowed disabled:opacity-40"
           >
             {t('settings.appearance.zoom.reset')}
           </button>
@@ -2723,7 +2717,7 @@ export function EditFieldModal({ field, title, hasChange = false, onClose }: Edi
                 {field === EditFieldKind.Task && t('modals.editField.rematchDomain')}
               </div>
               <div className="mt-2.5 text-xs font-mono leading-[1.8]">
-                <div className="text-status-error line-through opacity-70">- {data.original.split('\n')[0]}</div>
+                <div className="text-status-error line-through">- {data.original.split('\n')[0]}</div>
                 <div className="text-status-success">+ {data.edited.split('\n')[0]}</div>
               </div>
             </div>

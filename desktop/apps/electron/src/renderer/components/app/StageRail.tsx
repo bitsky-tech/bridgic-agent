@@ -40,7 +40,7 @@ export interface StageRailProps {
 /** Three-state colors for the numbered circle (done / active / pending). */
 function getStageDotClass(isDone: boolean, isActive: boolean): string {
   if (isDone) return 'bg-brand-blue text-white'
-  if (isActive) return 'bg-bg-elevated text-brand-blue border-[1.5px] border-brand-blue'
+  if (isActive) return 'bg-bg-elevated text-text-accent border-[1.5px] border-brand-blue'
   return 'bg-stage-track text-text-tertiary'
 }
 
@@ -77,7 +77,7 @@ export function StageRail({ items, current, isRunning = false }: StageRailProps)
               >
                 <span
                   className={cn(
-                    'flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold transition-colors duration-300 ease-out',
+                    'flex h-4 w-4 items-center justify-center rounded-full text-2xs font-bold transition-colors duration-300 ease-out',
                     getStageDotClass(isDone, isActive),
                   )}
                 >

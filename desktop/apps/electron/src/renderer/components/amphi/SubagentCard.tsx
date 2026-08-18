@@ -30,14 +30,14 @@ export function SubagentCard({ block }: SubagentCardProps) {
       })}
       className="group relative flex w-full items-center gap-3 rounded-md border border-border-default bg-bg-surface px-3 py-2.5 text-left transition-colors hover:border-brand-blue hover:bg-bg-hover"
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
         <Bot size={17} strokeWidth={1.7} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className="text-xs font-semibold text-text-primary">{t('subagent.cardTitle')}</span>
           <span className={cn(
-            'inline-flex items-center gap-1 text-[11px]',
+            'inline-flex items-center gap-1 text-xs',
             lifecycle.tone === 'attention' && 'text-status-warning',
             lifecycle.tone === 'error' && 'text-status-error',
             lifecycle.tone === 'success' && 'text-status-success',
