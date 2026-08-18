@@ -337,3 +337,32 @@ describe('SettingsAboutTab update row honesty', () => {
     await cleanup()
   })
 })
+
+describe('SettingsAboutTab check button feedback', () => {
+  it('says something when a check is already running and the row is blank', async () => {
+    // 后台检查发现更新后要重建差分源(约 44 秒),整个窗口内没有任何事件到达
+    // 面板。此时打开 Settings 的用户看到的是空白一行,点「检查更新」拿到 busy,
+    // 若不落任何状态,按钮就像坏的一样。
+    checkNow.mockImplementation(async () => 'busy')
+    const { host, click, cleanup } = await mountAbout()
+
+    await click()
+
+    expect(host.textContent).toContain(i18n.t('modals.about.updateChecking'))
+    await cleanup()
+  })
+
+  it('does not overwrite a more informative state with "checking"', async () => {
+    // 已知在下载 45% 时,「检查中」是信息量更低的说法 —— 这正是当初 busy
+    // 不动那一行的原因,不能因为上面那条把它退回去。
+    checkNow.mockImplementation(async () => 'busy')
+    const { host, emit, click, cleanup } = await mountAbout()
+
+    await emit({ type: 'progress', percent: 45, bytesPerSecond: 1024 })
+    const during = host.textContent
+    await click()
+
+    expect(host.textContent).toBe(during)
+    await cleanup()
+  })
+})

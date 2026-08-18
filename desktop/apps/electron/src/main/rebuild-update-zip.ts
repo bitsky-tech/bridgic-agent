@@ -236,6 +236,15 @@ export function createRebuildDeps(
     cacheDir: path.join(os.homedir(), 'Library', 'Caches', cacheDirName),
     toolsDir: path.join(resources, 'updater_tools'),
     run: async (file, args, cwd) => {
+      // Known limitation: quitting the app mid-rebuild orphans this child.
+      // `execFile` does not kill it on parent exit, and the timeout above is
+      // enforced by the parent, so it dies with it — leaving 7za to finish
+      // compressing into a `.rebuild.zip` nobody reclaims until the next
+      // rebuild calls `discardScratch()`. Accepted rather than fixed: the
+      // process exits on its own in well under a minute, the leftover is a
+      // single file in a cache directory, and tying a child's lifetime to app
+      // quit means owning an AbortController across calls for a failure mode
+      // that costs one stale file.
       await execFileAsync(file, args, {
         cwd,
         maxBuffer: 8 * 1024 * 1024,

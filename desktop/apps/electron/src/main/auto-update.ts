@@ -24,6 +24,7 @@ import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { APP_BUNDLE_ID } from '../shared/app-meta'
 import { updateLog } from './logger'
 import { createRebuildDeps, prepareDifferentialSource } from './rebuild-update-zip'
+import { updateCheckBlockedBy } from './update-guards'
 import { advanceRetry, isRetriableUpdateError } from './update-retry'
 
 export type AutoUpdateEvent =
@@ -139,25 +140,24 @@ export function onQuitForUpdate(teardown: () => void): void {
 }
 
 /**
- * Ask the feed for a newer version, unless a previous round is still open.
+ * Ask the feed for a newer version, unless something says not to.
  *
- * Both guards matter on the timer path. Re-checking while a download is in
- * flight makes electron-updater fetch the same payload a second time, and
- * re-checking once something is staged would re-download an update the user has
- * already been offered but not yet chosen to install.
+ * Every guard matters on the timer path: re-checking during a download makes
+ * electron-updater fetch the same payload twice, re-checking once something is
+ * staged re-downloads what the user was already offered, and re-checking during
+ * the installer handover tears down the proxy Squirrel is reading from. See
+ * `updateCheckBlockedBy` for the reasoning behind each.
  */
 function runCheck(reason: 'launch' | 'timer' | 'manual' | 'retry'): UpdateCheckOutcome {
-  if (!updaterEnabled) {
-    updateLog.info(`[update] ${reason} check skipped: updater is disabled in this build`)
-    return 'disabled'
-  }
-  if (checkInFlight) {
-    updateLog.info(`[update] ${reason} check skipped: a check or download is still in flight`)
-    return 'busy'
-  }
-  if (hasStagedUpdate()) {
-    updateLog.info(`[update] ${reason} check skipped: an update is already staged`)
-    return 'staged'
+  const blocked = updateCheckBlockedBy({
+    updaterEnabled,
+    checkInFlight,
+    hasStagedUpdate: hasStagedUpdate(),
+    handoverStarted,
+  })
+  if (blocked !== null) {
+    updateLog.info(`[update] ${reason} check skipped: ${blocked}`)
+    return blocked
   }
 
   checkInFlight = true
@@ -254,15 +254,21 @@ export function requestManualCheck(): UpdateCheckOutcome {
  */
 async function beginDownload(): Promise<void> {
   try {
+    // Skip the rebuild when nothing will read its output. `MacUpdater`'s
+    // `canDifferentialDownload()` returns false whenever this flag is set
+    // (MacUpdater.js:89-95) and its `done` handler then never refreshes
+    // `update.zip` either — so on a private feed we would burn ~44 s and leave
+    // 237 MB in the user's cache forever, to produce a file no code path opens.
+    // Worse, `needsRebuild` is false from then on, so it looks like it worked.
+    const deps = autoUpdater.disableDifferentialDownload
+      ? null
+      : createRebuildDeps(
+          (message) => updateLog.info(`[update] ${message}`),
+          (message, error) => updateLog.warn(`[update] ${message}`, error),
+        )
     // Never throws — a failed rebuild is reported by returning false and only
     // means this download is a full one.
-    await prepareDifferentialSource(
-      createRebuildDeps(
-        (message) => updateLog.info(`[update] ${message}`),
-        (message, error) => updateLog.warn(`[update] ${message}`, error),
-      ),
-      () => emit({ type: 'preparing' }),
-    )
+    await prepareDifferentialSource(deps, () => emit({ type: 'preparing' }))
     await autoUpdater.downloadUpdate()
   } catch (error) {
     // Clearing the flag here is what keeps a failure from wedging the updater
@@ -273,8 +279,14 @@ async function beginDownload(): Promise<void> {
     // `checkInFlight` stays true forever, every later check returns 'busy',
     // and the retry ladder never arms because it only fires from `error`.
     checkInFlight = false
-    // Deliberately no `emit`: the `error` path already told the renderer, and a
-    // second report would show one failure twice.
+    // No `emit` here, and the two paths through this catch differ in whether
+    // that is right. When `downloadUpdate()` threw, its own dispatch already
+    // told the renderer and a second report would show one failure twice. When
+    // something threw earlier, nobody told the renderer at all — that round is
+    // silently lost until the next scheduled check, since the retry ladder also
+    // only arms from `error`. No such throw is reachable today (the sink is
+    // guarded by `win?.`, and `resourcesPath` always resolves in a packaged
+    // build), which is why this stays a log rather than a second error path.
     updateLog.warn('[update] download did not start', error)
   }
 }
