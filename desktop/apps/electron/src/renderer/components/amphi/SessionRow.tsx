@@ -159,7 +159,11 @@ export function SessionRow({
       onClick={onSelect}
       className={cn(
         'group flex items-center gap-2 px-2 py-[9px] rounded-md cursor-pointer relative',
-        active ? 'bg-bg-selected' : 'bg-transparent',
+        /* Same pair as NavItem above the divider — the sidebar is one list, so a
+           session row answers the pointer the way a nav row does. Only the
+           three-dot button used to react on hover, which made the row itself
+           read as static text rather than something clickable. */
+        active ? 'bg-bg-selected' : 'bg-transparent hover:bg-bg-hover',
       )}
     >
       {depth > 0 && (
