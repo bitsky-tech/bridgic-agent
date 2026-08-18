@@ -11,7 +11,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from .._manager import RUNTIME_DIR_PARTS
+from .._manager import RUNTIME_DIR_PARTS, STDERR_LOG_FILE, STDOUT_LOG_FILE
 from ._base import (
     AutostartStatus,
     AutostartSupervisor,
@@ -104,8 +104,8 @@ class LaunchdSupervisor(AutostartSupervisor):
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 30,
-            "StandardOutPath": str(self.log_directory / "daemon.stdout.log"),
-            "StandardErrorPath": str(self.log_directory / "daemon.stderr.log"),
+            "StandardOutPath": str(self.log_directory / STDOUT_LOG_FILE.name),
+            "StandardErrorPath": str(self.log_directory / STDERR_LOG_FILE.name),
         }
         if spec.environment:
             definition["EnvironmentVariables"] = dict(spec.environment)
@@ -132,16 +132,30 @@ class LaunchdSupervisor(AutostartSupervisor):
             raise SupervisorError(
                 f"could not create launchd directories under {self.home}"
             ) from exc
-        # Crash-net files append across daemon lifetimes; trim here because
-        # launchd holds them open for as long as the job runs.
-        trim_oversized_log(self.log_directory / "daemon.stdout.log")
-        trim_oversized_log(self.log_directory / "daemon.stderr.log")
         self._write_definition(self.render_plist(spec))
+
+    def _trim_crash_net(self) -> None:
+        """Trim the raw stdout/stderr files this supervisor points launchd at.
+
+        Callers MUST have booted the job out first: launchd holds these files
+        open for the life of the job, and truncating one underneath a live
+        descriptor that is not ``O_APPEND`` leaves the next write at its old
+        offset, producing a multi-megabyte hole of NULs.
+
+        This is a bound on ordinary growth, not a rotation: a daemon that
+        crash-loops under ``KeepAlive`` restarts without passing through any
+        of this module's entry points, and its appended tracebacks are not
+        trimmed until the next explicit start.
+        """
+        trim_oversized_log(self.log_directory / STDOUT_LOG_FILE.name)
+        trim_oversized_log(self.log_directory / STDERR_LOG_FILE.name)
 
     def enable(self, spec: ServerLaunchSpec) -> AutostartStatus:
         """Atomically install, reload, and start the LaunchAgent."""
         self._install_definition(spec)
         self._bootout()
+        # After bootout: the job no longer holds the crash-net files open.
+        self._trim_crash_net()
         result = self._run(
             ("launchctl", "bootstrap", self.domain, str(self.plist_path))
         )

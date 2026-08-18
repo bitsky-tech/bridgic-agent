@@ -50,6 +50,7 @@ class _Manager:
         self.serve_result = True
         self.runtime_path = runtime_path
         self.autostart_definition = autostart_definition
+        self.stderr_log_path = runtime_path.parent / "daemon.stderr.log"
 
     def start(self, options: ServerOptions, *, timeout: float) -> Any:
         self.calls.append(("start", (options, timeout)))
@@ -140,7 +141,14 @@ def test_start_passes_all_options_to_the_manager(capsys) -> None:
             ),
         )
     ]
-    assert "Service started" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "Service started" in printed
+    # 托管方与日志路径是排障第一屏要的两件事，desktop 会把这行原样记进自己的日志。
+    assert "supervisor: detached" in printed
+    # 这个替身的 instance 没有 log_file（模拟旧 daemon / 日志降级），此时更要
+    # 给出崩溃兜底文件的位置，而不是什么都不说。
+    assert "file logging unavailable" in printed
+    assert "daemon.stderr.log" in printed
 
 
 def test_stop_passes_timeout_and_force_to_the_manager(capsys) -> None:

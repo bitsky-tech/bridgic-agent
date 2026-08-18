@@ -10,7 +10,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Sequence
 
-from ..amphi_service.server import ServerError, ServerManager, ServerOptions
+from ..amphi_service.server import (
+    ServerError,
+    ServerInstance,
+    ServerManager,
+    ServerOptions,
+)
 from ..amphi_service.server.supervisor import SupervisorError
 
 
@@ -71,9 +76,22 @@ class ServerCLI:
                 f"Service already running at {instance.base_url()} "
                 f"(pid {instance.pid}). Use `server restart` to restart it."
             )
+        self._print_log_location(instance)
+        return 0
+
+    def _print_log_location(self, instance: ServerInstance) -> None:
+        """Name the file that will hold this daemon's output.
+
+        A daemon without ``log_file`` is not a daemon without logs: it either
+        predates the field or could not open its log file and fell back to the
+        console, which a supervisor redirects into the crash-net file. Staying
+        silent there withholds the path in exactly the case where the user
+        most needs it.
+        """
         if instance.log_file:
             print(f"Log: {instance.log_file}")
-        return 0
+            return
+        print(f"Log: file logging unavailable; check {self.manager.stderr_log_path}")
 
     def _stop(self, args: argparse.Namespace) -> int:
         result = self.manager.stop(timeout=args.timeout, force=args.force)
@@ -94,6 +112,7 @@ class ServerCLI:
         )
         instance = result.instance
         print(f"Service restarted at {instance.base_url()} (pid {instance.pid}).")
+        self._print_log_location(instance)
         return 0
 
     def _status(self, _args: argparse.Namespace) -> int:

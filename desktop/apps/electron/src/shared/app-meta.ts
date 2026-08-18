@@ -260,11 +260,15 @@ export const BACKEND_RUNTIME_FILE_NAME = 'runtime.json'
  *  location travels in runtime.json / status as `log_file`. */
 export const BACKEND_LOG_FILE_NAME = 'server.log'
 
-/** Crash-net file name (relative to runtime dir): the supervisors' raw
- *  stdout/stderr redirect target, catching output from before or outside the
- *  daemon's logging system (import-failure tracebacks). Mirrors the backend's
- *  `STDERR_LOG_FILE` (src/amphi_service/server/_manager.py). */
+/** Crash-net file names (relative to runtime dir): the supervisors' raw
+ *  stdout/stderr redirect targets, catching output from before or outside the
+ *  daemon's logging system (import-failure tracebacks, stray prints). Mirror
+ *  the backend's `STDERR_LOG_FILE` / `STDOUT_LOG_FILE`
+ *  (src/amphi_service/server/_manager.py). launchd configures both streams,
+ *  so a crash whose output went to stdout is only findable through the
+ *  second name. */
 export const BACKEND_STDERR_LOG_FILE_NAME = 'daemon.stderr.log'
+export const BACKEND_STDOUT_LOG_FILE_NAME = 'daemon.stdout.log'
 
 /** Single-daemon-instance file lock name (relative to runtime dir).
  *  M1+ daemons acquire this on startup; the file may persist after a

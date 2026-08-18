@@ -378,6 +378,39 @@ def test_detached_launch_ignores_the_spec_environment_snapshot(
     assert captured["env"] is None
 
 
+def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
+    tmp_path: Path,
+) -> None:
+    """launchd 在 job 存活期间一直持有这两个文件的描述符。
+
+    若在 bootout 之前截断，而该描述符不是 O_APPEND，下一次写入会落在原来的
+    偏移量上，写出一大片 NUL 空洞，文件反而彻底读不了。
+    """
+    sizes_at_bootout: dict[str, int] = {}
+    runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
+    runtime_dir.mkdir(parents=True)
+    stderr_log = runtime_dir / "daemon.stderr.log"
+    stderr_log.write_bytes(b"x" * (6 * 1024 * 1024))
+
+    def runner(arguments, **_options):
+        if arguments[1] == "bootout":
+            sizes_at_bootout["stderr"] = stderr_log.stat().st_size
+        return completed(arguments, 0)
+
+    supervisor = LaunchdSupervisor(
+        runner=runner,
+        platform="darwin",
+        home=tmp_path,
+        uid=502,
+    )
+    spec = ServeCommand(executable=tmp_path / "amphi", frozen=True).serve("127.0.0.1", 7421)
+
+    supervisor.enable(spec)
+
+    assert sizes_at_bootout["stderr"] == 6 * 1024 * 1024
+    assert stderr_log.stat().st_size == 0
+
+
 def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 

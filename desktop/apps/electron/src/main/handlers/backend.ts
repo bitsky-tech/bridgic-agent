@@ -14,7 +14,7 @@
  * `IPC.events.backendState`. Atoms in the renderer absorb this stream.
  */
 import { app, BrowserWindow, shell } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { IPC } from '../../shared/ipc-channels'
 import {
   APP_SLUG,
@@ -24,7 +24,7 @@ import {
   CLIENT_TYPE_HEADER,
   GATEWAY_API_PATHS,
 } from '../../shared/app-meta'
-import { daemonLogCandidates } from '../daemon-log-path'
+import { daemonLogCandidates, selectDaemonLog } from '../daemon-log-path'
 import { mainLog } from '../logger'
 import { pythonClient } from '../python-client'
 import {
@@ -157,20 +157,44 @@ export async function openDaemonLogs(): Promise<
   { ok: true; path: string } | { ok: false; reason: string }
 > {
   // Prefer the log path the daemon itself reported (runtime.json/status
-  // `log_file`), then fall through guesses that cover older daemons, a
-  // stopped daemon, and the crash-net files — see daemon-log-path.ts. The
-  // old single hard guess failed on every launchd-supervised install.
+  // `log_file`); among the guessed fallbacks take the most recently written,
+  // so a stale server.log from an earlier good run cannot hide today's crash
+  // in daemon.stderr.log. See daemon-log-path.ts.
   const endpoint = pythonClient.snapshot().endpoint
   const candidates = daemonLogCandidates({
     logFile: endpoint?.logFile,
     runtimeFile: endpoint?.runtimeFile,
   })
-  const logPath = candidates.find((candidate) => existsSync(candidate))
+  const logPath = selectDaemonLog(
+    candidates,
+    {
+      exists: existsSync,
+      modifiedAt: (candidate) => {
+        try {
+          return statSync(candidate).mtimeMs
+        } catch {
+          return 0
+        }
+      },
+    },
+    endpoint?.logFile,
+  )
   if (!logPath) {
-    // List everything we tried so a bug report shows where looking failed.
-    return { ok: false as const, reason: `no daemon log found; tried: ${candidates.join(', ')}` }
+    // Name everything we tried: this is the only signal a user gets when the
+    // button appears to do nothing, and the tray discards the return value.
+    const reason = `no daemon log found; tried: ${candidates.join(', ')}`
+    mainLog.warn(`[backend] ${reason}`)
+    return { ok: false as const, reason }
   }
-  await shell.openPath(logPath)
+  // openPath resolves to an error string (not a rejection) when the OS
+  // refuses — no handler registered for .log, a sandbox denial. Reporting
+  // ok:true there is how "nothing happened, nothing was said" is produced.
+  const failure = await shell.openPath(logPath)
+  if (failure) {
+    const reason = `could not open ${logPath}: ${failure}`
+    mainLog.warn(`[backend] ${reason}`)
+    return { ok: false as const, reason }
+  }
   return { ok: true as const, path: logPath }
 }
 

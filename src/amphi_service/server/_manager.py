@@ -38,6 +38,10 @@ LOG_FILE = RUNTIME_DIR / "server.log"
 #: own stderr keeping that file open would make the rotating handler's rename
 #: fail on Windows.
 STDERR_LOG_FILE = RUNTIME_DIR / "daemon.stderr.log"
+#: The stdout half of the same crash net. Only a process-owning supervisor
+#: (launchd) splits the two streams; the detached path merges stdout into
+#: ``STDERR_LOG_FILE``.
+STDOUT_LOG_FILE = RUNTIME_DIR / "daemon.stdout.log"
 LOCK_FILE = RUNTIME_DIR / "gateway.lock"
 CONTROL_LOCK_FILE = RUNTIME_DIR / "control.lock"
 DEFAULT_WS_PATH = "/ws"
@@ -1252,6 +1256,7 @@ __all__ = [
     "RUNTIME_DIR_PARTS",
     "RUNTIME_FILE",
     "STDERR_LOG_FILE",
+    "STDOUT_LOG_FILE",
     "ServerError",
     "ServerControlLock",
     "ServerInstance",
