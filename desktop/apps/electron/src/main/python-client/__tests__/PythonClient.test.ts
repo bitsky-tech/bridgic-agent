@@ -30,6 +30,7 @@ function runtime(overrides: Partial<RuntimeFile> = {}): RuntimeFile {
     lockFile: 'C:\\test\\gateway.lock',
     wsPath: '/ws',
     version: '0.1.0',
+    logFile: null,
     ...overrides,
   }
 }

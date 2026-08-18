@@ -240,9 +240,11 @@ export const DISCORD_INVITE_URL: Record<ResolvedLocale, string> = {
 export const BACKEND_CLI_NAME = 'amphi'
 
 /** Runtime directory, relative to the user's home. Backend writes
- *  `runtime.json`, `server.log`, `gateway.lock`, and `control.lock` under
- *  `~/<BACKEND_RUNTIME_DIR_REL>/`. Mirrors the backend's hard-coded
- *  `~/.bridgic/AmphiAgent/` (src/amphi_service/server/_manager.py `RUNTIME_FILE`).
+ *  `runtime.json`, `server.log` (+ rotated `.1`/`.2`), the crash-net
+ *  `daemon.stderr.log`/`daemon.stdout.log`, `gateway.lock`, and
+ *  `control.lock` under `~/<BACKEND_RUNTIME_DIR_REL>/`. Mirrors the backend's
+ *  hard-coded `~/.bridgic/AmphiAgent/` (src/amphi_service/server/_manager.py
+ *  `RUNTIME_FILE`).
  *
  *  FALLBACK ONLY: when a daemon is live, prefer the path it reports
  *  (`runtime_file` / `lock_file` on the endpoint) — the daemon owns its
@@ -253,8 +255,16 @@ export const BACKEND_RUNTIME_DIR_REL = '.bridgic/AmphiAgent'
 /** Discovery file name — written by daemon at startup, read by clients. */
 export const BACKEND_RUNTIME_FILE_NAME = 'runtime.json'
 
-/** Daemon log file name (relative to runtime dir). */
+/** Daemon structured log file name (relative to runtime dir). Written by the
+ *  daemon's own rotating handler on every supervisor path; the authoritative
+ *  location travels in runtime.json / status as `log_file`. */
 export const BACKEND_LOG_FILE_NAME = 'server.log'
+
+/** Crash-net file name (relative to runtime dir): the supervisors' raw
+ *  stdout/stderr redirect target, catching output from before or outside the
+ *  daemon's logging system (import-failure tracebacks). Mirrors the backend's
+ *  `STDERR_LOG_FILE` (src/amphi_service/server/_manager.py). */
+export const BACKEND_STDERR_LOG_FILE_NAME = 'daemon.stderr.log'
 
 /** Single-daemon-instance file lock name (relative to runtime dir).
  *  M1+ daemons acquire this on startup; the file may persist after a

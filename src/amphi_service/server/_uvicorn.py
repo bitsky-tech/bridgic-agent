@@ -6,6 +6,7 @@ import copy
 import inspect
 import os
 import sys
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 
 import uvicorn
@@ -129,9 +130,12 @@ class UvicornRunner:
             # dir) degrades to console-only logging instead of failing start.
             from ._manager import LOG_FILE
 
-            configure_daemon_logging(
-                self.registration.path.parent / LOG_FILE.name,
-                log_level=options.log_level,
+            log_path = self.registration.path.parent / LOG_FILE.name
+            log_file: Optional[Path] = (
+                log_path
+                if configure_daemon_logging(log_path, log_level=options.log_level)
+                is not None
+                else None
             )
 
             from .._app import ServiceApp
@@ -154,6 +158,7 @@ class UvicornRunner:
                     lock_file=self.instance_lock.path,
                     ws_path=gateway.ws_path,
                     version=gateway.version,
+                    log_file=log_file,
                 )
 
             config = uvicorn.Config(

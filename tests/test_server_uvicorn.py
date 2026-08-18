@@ -91,7 +91,8 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     monkeypatch.setattr(
         uvicorn_module,
         "configure_daemon_logging",
-        lambda log_path, **options: events.append(("logging", log_path, options)),
+        # 返回真值模拟 handler 创建成功：随后 write 必须回报同一个日志路径。
+        lambda log_path, **options: (events.append(("logging", log_path, options)), object())[1],
     )
 
     UvicornRunner(
@@ -129,6 +130,7 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
         "lock_file": tmp_path / "gateway.lock",
         "ws_path": "/ws",
         "version": "1.2.3",
+        "log_file": tmp_path / "server.log",
     }
     assert any(
         isinstance(event, tuple) and event[0] == "bind_shutdown"

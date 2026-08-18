@@ -63,6 +63,7 @@ describe('readRuntimeFile', () => {
         lock_file: '/Users/foo/.bridgic/AmphiAgent/gateway.lock',
         ws_path: '/ws',
         version: '0.1.0',
+        log_file: '/Users/foo/.bridgic/AmphiAgent/server.log',
       }),
     )
     const info = readRuntimeFile(file)
@@ -76,6 +77,7 @@ describe('readRuntimeFile', () => {
     expect(info.lockFile).toBe('/Users/foo/.bridgic/AmphiAgent/gateway.lock')
     expect(info.wsPath).toBe('/ws')
     expect(info.version).toBe('0.1.0')
+    expect(info.logFile).toBe('/Users/foo/.bridgic/AmphiAgent/server.log')
   })
 
   it('parses a v1 file (no M1 fields) with all M1 fields null', () => {
@@ -97,13 +99,14 @@ describe('readRuntimeFile', () => {
     expect(info.lockFile).toBeNull()
     expect(info.wsPath).toBeNull()
     expect(info.version).toBeNull()
+    expect(info.logFile).toBeNull()
   })
 
   it('exports RuntimeFile type', () => {
     // Compile-time-only assertion that the shape is importable.
     const _shape: RuntimeFile = {
       host: 'x', port: 1, pid: 1, startedAt: 'x',
-      token: null, lockFile: null, wsPath: null, version: null,
+      token: null, lockFile: null, wsPath: null, version: null, logFile: null,
     }
     expect(_shape.host).toBe('x')
   })
@@ -129,6 +132,7 @@ describe('readRuntimeFile', () => {
     expect(info.lockFile).toBeNull()
     expect(info.wsPath).toBeNull()
     expect(info.version).toBeNull()
+    expect(info.logFile).toBeNull()
   })
 })
 
@@ -159,6 +163,7 @@ function mkRuntime(overrides: Partial<RuntimeFile> = {}): RuntimeFile {
     lockFile: '/tmp/gateway.lock',
     wsPath: '/ws',
     version: '0.1.0',
+    logFile: null,
     ...overrides,
   }
 }
@@ -171,6 +176,19 @@ describe('buildEndpoint', () => {
     expect(ep.wsPath).toBe('/ws')
     expect(ep.version).toBe('0.1.0')
     expect(ep.startedAt).toBe('2026-05-28T12:00:00')
+  })
+
+  it('logFile 优先取 runtime.json，其次 status，再退到 null', () => {
+    const ep = buildEndpoint(mkStatus(), mkRuntime({ logFile: '/from/runtime/server.log' }))
+    expect(ep.logFile).toBe('/from/runtime/server.log')
+
+    const statusOnly = buildEndpoint(
+      { ...mkStatus(), log_file: '/from/status/server.log' },
+      null,
+    )
+    expect(statusOnly.logFile).toBe('/from/status/server.log')
+
+    expect(buildEndpoint(mkStatus(), null).logFile).toBeNull()
   })
 
   it('discards runtime fields when daemon identity mismatches (pid race)', () => {

@@ -109,6 +109,10 @@ class ServerInstance:
     lock_file: Optional[str] = None
     ws_path: str = DEFAULT_WS_PATH
     version: Optional[str] = None
+    #: Where this daemon actually writes its structured log. ``None`` means
+    #: file logging could not be set up (or a pre-log_file daemon wrote the
+    #: registration) — clients then fall back to guessing, exactly as before.
+    log_file: Optional[str] = None
 
     def base_url(self) -> str:
         """Return a loopback-safe HTTP base URL for this instance."""
@@ -165,6 +169,10 @@ class ServerStatus:
                 "pid": self.instance.pid,
                 "started_at": self.instance.started_at,
                 "runtime_file": str(self.runtime_file),
+                # The daemon's own answer to "where are the logs?". None when
+                # file logging is degraded or the daemon predates the field —
+                # clients fall back to guessing beside runtime_file.
+                "log_file": self.instance.log_file,
             }
         return {
             "status": "stale",
@@ -229,6 +237,7 @@ class ServerRegistration:
                 lock_file=self._optional_str(data.get("lock_file")),
                 ws_path=str(data.get("ws_path", DEFAULT_WS_PATH)),
                 version=self._optional_str(data.get("version")),
+                log_file=self._optional_str(data.get("log_file")),
             )
         except (
             KeyError,
@@ -252,6 +261,7 @@ class ServerRegistration:
         lock_file: Optional[Path] = None,
         ws_path: str = DEFAULT_WS_PATH,
         version: Optional[str] = None,
+        log_file: Optional[Path] = None,
     ) -> ServerInstance:
         """Atomically publish a service instance with private file permissions."""
         self._require_instance_lock(instance_lock, operation="publishing")
@@ -269,6 +279,7 @@ class ServerRegistration:
             lock_file=str(lock_file) if lock_file is not None else None,
             ws_path=ws_path,
             version=version,
+            log_file=str(log_file) if log_file is not None else None,
         )
         temporary = self.path.with_name(
             f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"

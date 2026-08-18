@@ -58,12 +58,21 @@ class ServerCLI:
         )
         instance = result.instance
         if result.started:
-            print(f"Service started at {instance.base_url()} (pid {instance.pid}).")
+            # Owner and log path are the two facts every "why is the daemon
+            # misbehaving" report needs first: whether launchd or a detached
+            # child runs it, and which file to read. Desktop copies this line
+            # verbatim into its own log.
+            print(
+                f"Service started at {instance.base_url()} "
+                f"(pid {instance.pid}, supervisor: {result.owner})."
+            )
         else:
             print(
                 f"Service already running at {instance.base_url()} "
                 f"(pid {instance.pid}). Use `server restart` to restart it."
             )
+        if instance.log_file:
+            print(f"Log: {instance.log_file}")
         return 0
 
     def _stop(self, args: argparse.Namespace) -> int:

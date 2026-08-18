@@ -5,7 +5,8 @@
  *
  *   - `backend:snapshot`  → returns current PythonClient snapshot
  *   - `backend:restart`   → user-initiated restart
- *   - `backend:openLogs`  → reveal ~/.bridgic/AmphiAgent/server.log via shell
+ *   - `backend:openLogs`  → reveal the daemon log via shell (path reported
+ *     by the daemon, with guessed fallbacks — see daemon-log-path.ts)
  *   - `backend:autostartStatus` / `backend:setAutostart` → login autostart
  *
  * State broadcast happens at module load time: we subscribe to
@@ -14,19 +15,16 @@
  */
 import { app, BrowserWindow, shell } from 'electron'
 import { existsSync } from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
 import { IPC } from '../../shared/ipc-channels'
 import {
   APP_SLUG,
   APP_VERSION,
   AUTH_HEADER_NAME,
-  BACKEND_LOG_FILE_NAME,
-  BACKEND_RUNTIME_DIR_REL,
   CLIENT_ID_HEADER,
   CLIENT_TYPE_HEADER,
   GATEWAY_API_PATHS,
 } from '../../shared/app-meta'
+import { daemonLogCandidates } from '../daemon-log-path'
 import { mainLog } from '../logger'
 import { pythonClient } from '../python-client'
 import {
@@ -158,16 +156,19 @@ export function registerBackendHandlers(): void {
 export async function openDaemonLogs(): Promise<
   { ok: true; path: string } | { ok: false; reason: string }
 > {
-  // `server.log` lives in the same dir as runtime.json. Prefer the exact
-  // path the daemon reported (`endpoint.runtimeFile` → its dirname) — the
-  // daemon owns its layout (e.g. ~/.bridgic/AmphiAgent/). Fall back to the
-  // legacy basename guess only when we have no live endpoint (daemon down).
-  const runtimeFile = pythonClient.snapshot().endpoint?.runtimeFile
-  const logPath = runtimeFile
-    ? path.join(path.dirname(runtimeFile), BACKEND_LOG_FILE_NAME)
-    : path.join(os.homedir(), BACKEND_RUNTIME_DIR_REL, BACKEND_LOG_FILE_NAME)
-  if (!existsSync(logPath)) {
-    return { ok: false as const, reason: `log file does not exist yet: ${logPath}` }
+  // Prefer the log path the daemon itself reported (runtime.json/status
+  // `log_file`), then fall through guesses that cover older daemons, a
+  // stopped daemon, and the crash-net files — see daemon-log-path.ts. The
+  // old single hard guess failed on every launchd-supervised install.
+  const endpoint = pythonClient.snapshot().endpoint
+  const candidates = daemonLogCandidates({
+    logFile: endpoint?.logFile,
+    runtimeFile: endpoint?.runtimeFile,
+  })
+  const logPath = candidates.find((candidate) => existsSync(candidate))
+  if (!logPath) {
+    // List everything we tried so a bug report shows where looking failed.
+    return { ok: false as const, reason: `no daemon log found; tried: ${candidates.join(', ')}` }
   }
   await shell.openPath(logPath)
   return { ok: true as const, path: logPath }
