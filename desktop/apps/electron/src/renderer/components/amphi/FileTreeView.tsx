@@ -230,8 +230,14 @@ interface TreeRowMenuDropdownProps {
 /** Child-row ⋯ dropdown: copy path / reveal in file manager (no "remove" — see the props comment). */
 function TreeRowMenuDropdown({ node, menu }: TreeRowMenuDropdownProps) {
   const { t } = useTranslation()
+  /* hover is --bg-active, one step stronger than the --bg-hover used by list
+     rows: a dropdown is a point-and-click decision, so the row under the
+     cursor has to be unmistakable. The container is --bg-elevated, not
+     --bg-input — in the light theme bg-input (#F2F3F7) is *darker* than
+     bg-hover (#F5F6F9), so hovering used to lighten the row instead of
+     darkening it, at 1.03:1. That is why the highlight was invisible. */
   const itemCls =
-    'w-full text-left px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+    'w-full text-left px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-active'
   return (
     <>
       <div
@@ -241,7 +247,7 @@ function TreeRowMenuDropdown({ node, menu }: TreeRowMenuDropdownProps) {
           menu.onToggle(node.relPath)
         }}
       />
-      <div className="absolute right-1 top-full -mt-1 z-50 min-w-[168px] rounded-md border border-border-default bg-bg-input shadow-md py-1">
+      <div className="absolute right-1 top-full -mt-1 z-50 min-w-[168px] rounded-md border border-border-default bg-bg-elevated shadow-md py-1">
         <button
           type="button"
           onClick={(e) => {
