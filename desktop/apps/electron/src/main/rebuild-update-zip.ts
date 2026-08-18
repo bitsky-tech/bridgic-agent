@@ -83,15 +83,6 @@ export interface RebuildUpdateZipDeps {
  */
 const SEVEN_ZIP_FLAGS = ['a', '-bd', '-mx=7', '-mtc=off', '-mm=Deflate', '-mcu']
 
-/**
- * Bytecode caches CPython writes into the bundle after the app has run once.
- *
- * They are absent from the published zip — 190 such entries were found on a
- * real install — so packing them adds files the release never had. Excluding
- * them brought a rebuild from 1.87 MB of drift down to ~10 KB.
- */
-const EXCLUDE_PYCACHE = '-xr!__pycache__'
-
 /** Whether this machine still lacks a differential source. */
 function needsRebuild(deps: RebuildUpdateZipDeps): boolean {
   return !deps.exists(path.join(deps.cacheDir, 'update.zip'))
@@ -136,14 +127,17 @@ export async function rebuildUpdateZip(
   try {
     discardScratch()
 
+    // Nothing is excluded, deliberately. An earlier version dropped
+    // `__pycache__` because the bundled interpreter used to litter the signed
+    // app with bytecode on every run, which made the rebuild drift by 1.87 MB.
+    // That leak is fixed at the source now (see `_python_env.py`), so the
+    // bundle holds exactly the three .pyc files CPython ships with — and
+    // excluding them would itself be the drift: measured, a rebuild WITH them
+    // is byte-identical to the published artifact, while one without them
+    // differs by 10,649 bytes and costs an extra 0.4 MB of range requests.
     await deps.run(
       path.join(deps.toolsDir, '7za'),
-      [
-        ...SEVEN_ZIP_FLAGS,
-        scratchZip,
-        path.basename(deps.appBundle),
-        EXCLUDE_PYCACHE,
-      ],
+      [...SEVEN_ZIP_FLAGS, scratchZip, path.basename(deps.appBundle)],
       path.dirname(deps.appBundle),
     )
     await deps.run(path.join(deps.toolsDir, 'app-builder'), [

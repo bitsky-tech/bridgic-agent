@@ -91,9 +91,11 @@ describe('rebuilding the updater differential source', () => {
     expect(zip?.args).toContain('-mtc=off')
     expect(zip?.args).toContain('-mm=Deflate')
     expect(zip?.args).toContain('-mcu')
-    // Python writes bytecode caches into the installed bundle after first run;
-    // they are absent from the published zip and must not be packed.
-    expect(zip?.args).toContain('-xr!__pycache__')
+    // Nothing may be excluded. The bundle now holds exactly the .pyc files
+    // CPython ships with (the interpreter no longer writes more -- see
+    // _python_env.py), so dropping them is what would break byte-for-byte
+    // equality with the published artifact, not preserve it.
+    expect(zip?.args.filter((a) => a.startsWith('-x'))).toEqual([])
     // 7za is invoked from the bundle's parent so the archive root is the .app.
     expect(zip?.cwd).toBe('/Applications')
     expect(zip?.args).toContain('Bridgic Agent.app')
