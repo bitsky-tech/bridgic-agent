@@ -147,3 +147,23 @@ def test_ensurepip_is_not_isolated_because_isolation_propagates(
     assert "-I" not in command, "isolation would propagate to the pip subprocess"
     assert "-B" in command
     assert (environment or {}).get("PYTHONDONTWRITEBYTECODE") == "1"
+    # `-m` puts the CWD on sys.path[0], and the CWD here is the writable shared
+    # base. `-I` used to close that; `-P` closes it without also discarding the
+    # environment we need PYTHONDONTWRITEBYTECODE to travel through.
+    assert "-P" in command, "dropping -I without -P reopens CWD injection"
+
+
+def test_probe_environment_strips_interpreter_hooks() -> None:
+    """The env is the only isolation left for ensurepip, so it must be scrubbed.
+
+    Without `-E` (which `-I` implied) the caller's PYTHON* variables reach both
+    ensurepip and the pip subprocess it spawns. PYTHONBREAKPOINT is the sharp
+    one: it names an importable callable that the interpreter will run.
+    """
+    scrubbed = no_bytecode_environment(
+        {"PATH": "/usr/bin", "PYTHONBREAKPOINT": "evil.module:run"}
+    )
+
+    assert scrubbed["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "PYTHONBREAKPOINT" not in scrubbed
+    assert scrubbed["PATH"] == "/usr/bin", "must not disturb the rest of the env"

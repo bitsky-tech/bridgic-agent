@@ -13,15 +13,22 @@
  * afterwards the updater keeps `update.zip` current on every download — and it
  * is cheap next to what it saves: ~44 s of CPU against ~198 MB of transfer.
  *
- * Why the rebuilt zip does not need to equal the published one
- * -----------------------------------------------------------
- * It cannot: three attempts (7za extract, unzip extract, ditto copy) all
- * produced a byte-different archive, and Python writes `__pycache__` into the
- * installed bundle after first run, so the file set drifts too. It does not
- * matter. Block matching is content-addressed (`downloadPlanBuilder.js` maps
- * checksum -> offset), so a locally built zip yields the same differential
- * payload as the real artifact — verified end to end: 197 range requests,
- * 24.1 MB transferred, output sha512 equal to the published release.
+ * How close the rebuilt zip gets to the published one
+ * ---------------------------------------------------
+ * Byte-identical, measured: rebuilding from a freshly installed bundle
+ * reproduced the electron-builder artifact exactly (237,139,464 bytes, sha512
+ * `5790556b053d7230...`), blockmap included. That holds because the flags below
+ * are the ones electron-builder used, the installer preserves mtimes, and the
+ * interpreter no longer litters the bundle (see `_python_env.py`).
+ *
+ * It is NOT relied upon, though. Earlier attempts against a bundle that had
+ * already been polluted came out byte-different, and correctness never depended
+ * on the difference: block matching is content-addressed
+ * (`downloadPlanBuilder.js` maps checksum -> offset), so even a drifting local
+ * zip yields the same differential payload — verified end to end at 197 range
+ * requests, 24.1 MB transferred, output sha512 equal to the published release.
+ * Equality is a bonus that removes ~0.4 MB of range requests, not a load-bearing
+ * assumption.
  *
  * What DOES matter is that `current.blockmap` describes THIS zip. `AppUpdater.js`
  * reads it first and only falls back to downloading the previous release's
@@ -82,6 +89,19 @@ export interface RebuildUpdateZipDeps {
  * module exists for.
  */
 const SEVEN_ZIP_FLAGS = ['a', '-bd', '-mx=7', '-mtc=off', '-mm=Deflate', '-mcu']
+
+/**
+ * Ceiling on either bundled tool, generous enough to be a hang detector rather
+ * than a performance cap.
+ *
+ * Repacking measured ~44 s on an M-series machine, so this leaves 13x headroom
+ * for a slow or contended disk. It exists because the alternative is worse than
+ * a wrong guess: this runs inside the updater's in-flight window, and a process
+ * that never exits — an FS lock, a stalled network volume — would leave that
+ * window open forever, silently ending updates for the life of the process.
+ * Overshooting the cap merely costs one full download.
+ */
+const REBUILD_TIMEOUT_MS = 10 * 60 * 1000
 
 /** Whether this machine still lacks a differential source. */
 function needsRebuild(deps: RebuildUpdateZipDeps): boolean {
@@ -216,10 +236,12 @@ export function createRebuildDeps(
     cacheDir: path.join(os.homedir(), 'Library', 'Caches', cacheDirName),
     toolsDir: path.join(resources, 'updater_tools'),
     run: async (file, args, cwd) => {
-      // No timeout on purpose: repacking the bundle took ~44 s on an M-series
-      // machine and scales with disk speed, so any cap we picked would be a
-      // coin flip that turns a slow disk into a permanently full download.
-      await execFileAsync(file, args, { cwd, maxBuffer: 8 * 1024 * 1024 })
+      await execFileAsync(file, args, {
+        cwd,
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: REBUILD_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      })
     },
     exists: (target) => existsSync(target),
     rename: (from, to) => renameSync(from, to),

@@ -63,6 +63,8 @@
     "prepare": "cd .. && husky"
   },
   "devDependencies": {
+    "7zip-bin": "5.2.0",
+    "app-builder-bin": "5.0.0-alpha.12",
     "@happy-dom/global-registrator": "^20.10.6",
     "@tailwindcss/vite": "^4.1.18",
     "@types/bun": "latest",

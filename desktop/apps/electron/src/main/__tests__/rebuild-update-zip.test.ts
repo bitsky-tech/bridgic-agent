@@ -159,6 +159,10 @@ describe('rebuilding the updater differential source', () => {
 
     await rebuildUpdateZip(h.deps)
 
+    // Assert the count first: the loop below is vacuous on an empty set, so
+    // without this the test would keep passing if the failure path stopped
+    // producing anything at all -- including the scratch zip it must clean up.
+    expect(h.files.size).toBe(0)
     for (const leftover of h.files) {
       expect(leftover.startsWith(CACHE_DIR)).toBe(true)
       expect(leftover).not.toContain('rebuild')

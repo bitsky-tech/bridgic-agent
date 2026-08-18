@@ -58,3 +58,24 @@ export function isRetriableUpdateError(code: string | undefined): boolean {
 export function retryDelayMs(attempt: number): number | null {
   return RETRY_LADDER_MS[attempt] ?? null
 }
+
+/**
+ * Take one step down the ladder: what to wait, and what counter to keep.
+ *
+ * Exhausting the ladder rewinds the counter to zero. Leaving it at the top
+ * would arm the backoff exactly once for the lifetime of the process — a feed
+ * that is down long enough to burn all four rungs would then give every later
+ * transient failure no retry at all, which is the behaviour this module exists
+ * to replace. Rewinding does not make the retries unbounded: a spent ladder
+ * still returns a null delay, so this round stops and the regular interval
+ * takes over; only a *later* round gets the rungs back.
+ */
+export function advanceRetry(attempt: number): {
+  delayMs: number | null
+  nextAttempt: number
+} {
+  const delayMs = retryDelayMs(attempt)
+  return delayMs === null
+    ? { delayMs: null, nextAttempt: 0 }
+    : { delayMs, nextAttempt: attempt + 1 }
+}

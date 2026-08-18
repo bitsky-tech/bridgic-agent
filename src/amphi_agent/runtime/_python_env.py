@@ -50,13 +50,20 @@ def isolated_python_command(executable: Path, *args: str) -> list[str]:
 
 
 def no_bytecode_environment(base: Mapping[str, str]) -> dict[str, str]:
-    """Copy ``base`` with bytecode writing disabled.
+    """Copy ``base`` with bytecode writing disabled and interpreter hooks removed.
 
-    For interpreters whose argv we never see — uv spawns its own while
-    creating the base — the environment is the only lever left. Returns a copy
-    so a caller reusing one env mapping does not inherit this silently.
+    For interpreters whose argv we never see — uv spawns its own while creating
+    the base, and ensurepip spawns one to run pip — the environment is the only
+    lever left. Returns a copy so a caller reusing one env mapping does not
+    inherit this silently.
+
+    ``PYTHONBREAKPOINT`` is dropped rather than merely ignored: it names an
+    importable callable the interpreter will run, and the ensurepip call below
+    cannot use ``-I`` (which would imply ``-E``) without also discarding the
+    variable this function exists to set.
     """
     environment = dict(base)
+    environment.pop("PYTHONBREAKPOINT", None)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     return environment
 
@@ -394,8 +401,9 @@ class BundledUPythonRuntime:
             result = subprocess.run(
                 # `-B` for the same reason as the isolated probes below: this
                 # starts a real interpreter, and whatever it compiles would land
-                # inside the signed bundle. Not `isolated_python_command` --
-                # `-I` would change what the probe reports about its own env.
+                # inside the signed bundle. `--version` prints before any user
+                # code or sys.path lookup happens, so it needs none of the rest
+                # of the isolation the probes below carry.
                 [str(executable), "-B", "--version"],
                 capture_output=True,
                 text=True,
@@ -663,12 +671,19 @@ class BundledUPythonRuntime:
                 # ensurepip -- while giving that subprocess no `-B` of its own.
                 # It then compiles pip's whole dependency tree (importlib, email,
                 # urllib, http, zipfile, ...) into the signed bundle: 164 files
-                # measured. Dropping `-I` lets PYTHONDONTWRITEBYTECODE reach the
-                # grandchild, and isolation is preserved by `environment` above,
-                # which already strips PYTHONHOME/PYTHONPATH/PYTHONUSERBASE and
-                # pins PYTHONNOUSERSITE.
+                # measured. Dropping `-I` is what lets PYTHONDONTWRITEBYTECODE
+                # reach the grandchild.
+                #
+                # `-P` replaces the half of `-I` that still matters here. `-m`
+                # puts the CWD on sys.path[0], and the CWD is the writable shared
+                # base -- a .py dropped there shadowing anything ensurepip
+                # imports would execute during the pip bootstrap. `-P` closes
+                # that without implying `-E`. The rest of the isolation is the
+                # environment: it strips PYTHONHOME/PYTHONPATH/PYTHONUSERBASE
+                # and PYTHONBREAKPOINT, and pins PYTHONNOUSERSITE.
                 [
                     str(self.python_executable),
+                    "-P",
                     "-B",
                     "-m",
                     "ensurepip",

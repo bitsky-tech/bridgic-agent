@@ -24,7 +24,7 @@ import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { APP_BUNDLE_ID } from '../shared/app-meta'
 import { updateLog } from './logger'
 import { createRebuildDeps, prepareDifferentialSource } from './rebuild-update-zip'
-import { isRetriableUpdateError, retryDelayMs } from './update-retry'
+import { advanceRetry, isRetriableUpdateError } from './update-retry'
 
 export type AutoUpdateEvent =
   | { type: 'checking' }
@@ -74,9 +74,16 @@ let handoverStarted = false
 /**
  * True from the moment a check is dispatched until it reaches a terminal event.
  *
- * NOT the same as "a check is running": `autoDownload` is on, so a successful
- * check flows straight into a download that can outlive the next tick of the
- * timer. Only `update-not-available`, `update-downloaded` and `error` end it.
+ * NOT the same as "a check is running": a successful check flows straight into
+ * `beginDownload()`, which can outlive the next tick of the timer — and on
+ * macOS that now includes a rebuild of the differential source. Only
+ * `update-not-available`, `update-downloaded` and `error` end it, plus
+ * `beginDownload`'s own catch for failures that reach no event at all.
+ *
+ * `autoDownload` is off (see `startUpdateChecks`), so the download is started by
+ * our `update-available` handler rather than by electron-updater. That makes
+ * this flag's lifetime our responsibility: every path out of `beginDownload`
+ * must clear it, or the updater is wedged until the process restarts.
  */
 let checkInFlight = false
 
@@ -205,20 +212,20 @@ function scheduleRetry(code: string | undefined): void {
     return
   }
 
-  const delay = retryDelayMs(retryAttempt)
-  if (delay === null) {
+  const { delayMs, nextAttempt } = advanceRetry(retryAttempt)
+  retryAttempt = nextAttempt
+  if (delayMs === null) {
     updateLog.info('[update] retry ladder exhausted; waiting for the next scheduled check')
     return
   }
 
-  retryAttempt += 1
   updateLog.info(
-    `[update] retry ${retryAttempt} scheduled in ${Math.round(delay / 1000)}s`,
+    `[update] retry ${retryAttempt} scheduled in ${Math.round(delayMs / 1000)}s`,
   )
   retryTimer = setTimeout(() => {
     retryTimer = null
     runCheck('retry')
-  }, delay)
+  }, delayMs)
 }
 
 /**
@@ -258,10 +265,16 @@ async function beginDownload(): Promise<void> {
     )
     await autoUpdater.downloadUpdate()
   } catch (error) {
-    // `downloadUpdate()` both rejects AND dispatches `error` (AppUpdater.js),
-    // and our own `error` handler is what clears `checkInFlight` and notifies
-    // the renderer. Emitting here too would report one failure twice; this
-    // catch exists to keep the rejection from surfacing as an unhandled one.
+    // Clearing the flag here is what keeps a failure from wedging the updater
+    // for the lifetime of the process. `downloadUpdate()` dispatches `error`
+    // itself, so on that path this is a harmless second clear — but anything
+    // that throws BEFORE it (a rebuild that blew up, a sink whose webContents
+    // was destroyed mid-check) dispatches nothing at all. Without this,
+    // `checkInFlight` stays true forever, every later check returns 'busy',
+    // and the retry ladder never arms because it only fires from `error`.
+    checkInFlight = false
+    // Deliberately no `emit`: the `error` path already told the renderer, and a
+    // second report would show one failure twice.
     updateLog.warn('[update] download did not start', error)
   }
 }

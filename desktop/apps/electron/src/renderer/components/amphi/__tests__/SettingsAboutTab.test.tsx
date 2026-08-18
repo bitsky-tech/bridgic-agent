@@ -324,3 +324,16 @@ describe('SettingsAboutTab community links', () => {
     await cleanup()
   })
 })
+
+describe('SettingsAboutTab update row honesty', () => {
+  it('does not claim "up to date" before anything has been checked', async () => {
+    const { host, cleanup } = await mountAbout()
+
+    // 回归防护,不是修 bug —— `unknown` 目前会提前 return null。
+    // 之所以值得钉住:后台检查发现更新后要重建差分源(约 44 秒),这段时间里
+    // 打开面板拿到的是 stagedVersion: null。哪天有人把 unknown 并进末尾那个
+    // else,面板就会在一个更新正在准备的当口断言「已是最新」。
+    expect(host.textContent).not.toContain(i18n.t('modals.about.updateUpToDate'))
+    await cleanup()
+  })
+})

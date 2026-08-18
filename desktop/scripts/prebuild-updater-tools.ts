@@ -61,7 +61,21 @@ const TARGET_DIR = path.join(
   'updater_tools',
 )
 
-/** Locate an installed package's root via its package.json, so hoisting can move. */
+/**
+ * Locate an installed package's root via its package.json, so hoisting can move.
+ *
+ * Both packages are pinned to EXACT versions in package.json rather than left
+ * to arrive as electron-builder's transitive dependencies. Two reasons, and the
+ * second is the one that bites silently:
+ *
+ *   - resolving them at all only works while the package manager hoists them to
+ *     a place this script can see;
+ *   - app-builder owns the Rabin chunker that produces blockmaps. If a version
+ *     bump changed its chunking, blockmaps generated on already-installed
+ *     clients would stop matching the ones a new release ships, and every
+ *     differential download would quietly fall back to a full one — no error,
+ *     anywhere. Pinning turns that into a visible lockfile change.
+ */
 function packageRoot(name: string): string {
   return path.dirname(require.resolve(`${name}/package.json`))
 }

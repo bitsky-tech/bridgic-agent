@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { isRetriableUpdateError, retryDelayMs } from '../update-retry'
+import { advanceRetry, isRetriableUpdateError, retryDelayMs } from '../update-retry'
 
 describe('deciding whether an update failure is worth retrying', () => {
   it('gives up on a feed that has no build for this architecture', () => {
@@ -76,5 +76,31 @@ describe('spacing out update retries', () => {
     }
 
     expect(total).toBeLessThan(4 * 60 * 60 * 1000)
+  })
+})
+
+describe('carrying the ladder across failure rounds', () => {
+  it('advances one rung per failure', () => {
+    expect(advanceRetry(0)).toEqual({ delayMs: 60_000, nextAttempt: 1 })
+    expect(advanceRetry(2)).toEqual({ delayMs: 240_000, nextAttempt: 3 })
+  })
+
+  it('rewinds to the start once the ladder is spent', () => {
+    // The bug this pins: leaving the counter at its maximum armed the backoff
+    // exactly once per process. On a feed that is down for a while, every later
+    // transient failure -- including one hours afterwards -- found the ladder
+    // already exhausted and got no retry at all, which is precisely the
+    // behaviour this module exists to replace.
+    expect(advanceRetry(4)).toEqual({ delayMs: null, nextAttempt: 0 })
+    expect(advanceRetry(99)).toEqual({ delayMs: null, nextAttempt: 0 })
+  })
+
+  it('lets a fresh round get the full ladder again', () => {
+    let attempt = 0
+    for (let i = 0; i < 4; i++) attempt = advanceRetry(attempt).nextAttempt
+    const spent = advanceRetry(attempt)
+
+    expect(spent.delayMs).toBeNull()
+    expect(advanceRetry(spent.nextAttempt).delayMs).toBe(60_000)
   })
 })

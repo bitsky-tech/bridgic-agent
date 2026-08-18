@@ -126,11 +126,17 @@ publish:
 # No asarUnpack whitelist is needed. Everything that requires a physical on-disk
 # path is already OUTSIDE the asar, in extraResources (Contents/Resources/):
 # the amphi binary (execFile'd via process.resourcesPath), uv_runtime,
-# python_runtime, and node_runtime. Inside the app there are zero native .node modules,
-# zero spawns of app-internal binaries, and zero fs reads of bundled files (all
-# fs I/O targets ~/.bridgic / userData). preload + renderer load through
-# Electron's native asar support. The two getAppPath()/resources/icon.png reads
-# are both dev-only (guarded by !app.isPackaged).
+# python_runtime, node_runtime, and updater_tools. Inside the app there are zero
+# native .node modules. preload + renderer load through Electron's native asar
+# support. The two getAppPath()/resources/icon.png reads are both dev-only
+# (guarded by !app.isPackaged).
+#
+# The main process DOES spawn bundled binaries and read bundled files —
+# `updater_tools/{7za,app-builder}` and `app-update.yml`, all via
+# `process.resourcesPath` (see main/rebuild-update-zip.ts). That is exactly why
+# they live in extraResources: an asar path is not a real path, so anything
+# execFile'd or read with fs must stay outside. Adding such a consumer without
+# putting its target here is what this note exists to prevent.
 asar: true
 
 # Custom URL scheme — lets the Codex OAuth success page (and any deep link)
