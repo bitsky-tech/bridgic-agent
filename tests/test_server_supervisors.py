@@ -243,13 +243,17 @@ def test_detached_supervisor_trims_an_oversized_crash_log_before_launch(
     )
     command = ServeCommand(executable=tmp_path / "amphi", frozen=True)
     log_path = tmp_path / "daemon.stderr.log"
-    log_path.write_bytes(b"x" * (6 * 1024 * 1024))
+    log_path.write_bytes(b"old\n" * (6 * 1024 * 1024 // 4) + b"newest traceback\n")
 
     DetachedSupervisor(command, log_path, platform="darwin").start(
         command.serve("127.0.0.1", 7421)
     )
 
-    assert log_path.stat().st_size == 0
+    survived = log_path.read_bytes()
+    assert len(survived) <= 256 * 1024
+    # 保留的是尾部：崩溃循环里最新的那次 traceback 才是正在查的那次。
+    assert survived.endswith(b"newest traceback\n")
+    assert survived.startswith(b"old\n")
 
 
 def test_detached_supervisor_wraps_process_launch_failures(
@@ -390,7 +394,8 @@ def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
     runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
     runtime_dir.mkdir(parents=True)
     stderr_log = runtime_dir / "daemon.stderr.log"
-    stderr_log.write_bytes(b"x" * (6 * 1024 * 1024))
+    stderr_log.write_bytes(b"line\n" * (6 * 1024 * 1024 // 5))
+    original_size = stderr_log.stat().st_size
 
     def runner(arguments, **_options):
         if arguments[1] == "bootout":
@@ -407,8 +412,8 @@ def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
 
     supervisor.enable(spec)
 
-    assert sizes_at_bootout["stderr"] == 6 * 1024 * 1024
-    assert stderr_log.stat().st_size == 0
+    assert sizes_at_bootout["stderr"] == original_size
+    assert 0 < stderr_log.stat().st_size <= 256 * 1024
 
 
 def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
