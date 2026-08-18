@@ -16,10 +16,18 @@
   --font-sans: 'Plus Jakarta Sans', -apple-system, 'PingFang SC', 'Noto Sans SC', sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
 
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
+  /* The bottom four steps were each 1px smaller than this (11/12/13/14) and
+     users reported the UI as hard to read — body copy in a chat window sat at
+     12px. The scale's floor is --text-2xs; nothing should be smaller, which is
+     why it exists at all: it replaces the text-[9px] / text-[10px] /
+     text-[11px] one-offs that used to bypass the scale.
+     lg and up are unchanged — headings were never the complaint, and leaving
+     them still keeps the layout risk on the four steps that had to move. */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
   --text-lg: 16px;
   --text-xl: 18px;
   --text-2xl: 22px;
@@ -62,6 +70,14 @@
   --bg-elevated: #31312F;
   --bg-hover: #383836;
   --bg-active: #424240;
+  /* Selection has its own value because it is its own idea, not a shade of the
+     pointer states: it persists, it must not be mistaken for the row the cursor
+     happens to sit on, and it must not shout. Reusing --bg-hover made selection
+     invisible (1.22:1 here, 1.08:1 in light); reusing --bg-active read as heavy
+     once every selected surface in the app carried it. This sits at the midpoint
+     — 1.32:1 against --bg-surface. Change it here and all 14 selected surfaces
+     move together. */
+  --bg-selected: #3D3D3B;
   --bg-input: #2C2C2A;
   --bg-modal: #2A2A28;
   --bg-tooltip: #454543;
@@ -71,10 +87,22 @@
   --border-strong: #4E4E4C;
 
   --text-primary: #EDEBE7;
-  --text-secondary: #A8A5A0;
-  --text-tertiary: #918E89;
+  /* Contrast is measured against --bg-hover, not --bg-surface: a hovered list
+     row is a state the pointer rests in, so its text has to stay readable
+     there, and the hover background is the brightest one text sits on for any
+     length of time. On bg-surface that lands at 12.08 / 7.51 / 5.65 — the
+     three steps stay clearly apart. */
+  --text-secondary: #BEBBB6;
+  --text-tertiary: #A5A29D;
   --text-inverse: #242422;
   --text-on-brand: #FFFFFF;
+
+  /* Blue/purple used as TEXT. --brand-blue / --brand-purple stay untouched
+     because they are also fills (gradients, --stage-done, icon backgrounds),
+     where text contrast does not apply. Splitting the two roles is what lets
+     the light theme darken its text variant without dulling the brand. */
+  --text-accent: #0099FF;
+  --text-accent-purple: #B97BE2;
 
   --status-success: #34D399;
   --status-success-bg: rgba(52, 211, 153, 0.12);
@@ -95,7 +123,7 @@
   --entity-command-bg: rgba(0, 153, 255, 0.12);
   --entity-schedule: #F5A623;
   --entity-schedule-bg: rgba(245, 166, 35, 0.12);
-  --entity-skill: #B370E0;
+  --entity-skill: #B97BE2;
   --entity-skill-bg: rgba(179, 112, 224, 0.12);
   --entity-workflow: #2DD4BF;
   --entity-workflow-bg: rgba(45, 212, 191, 0.12);
@@ -124,6 +152,9 @@
   --bg-elevated: #FFFFFF;
   --bg-hover: #F5F6F9;
   --bg-active: #ECEDF2;
+  /* See the dark theme's note. Midway between hover and active: 1.13:1 against
+     white, where hover is 1.08 and active 1.17. */
+  --bg-selected: #F0F1F5;
   --bg-input: #F2F3F7;
   --bg-modal: #FFFFFF;
   --bg-tooltip: #1A1D28;
@@ -133,33 +164,44 @@
   --border-strong: #C5C7D0;
 
   --text-primary: #1A1D28;
-  --text-secondary: #6B7084;
-  --text-tertiary: #9CA0B0;
+  /* Measured against --bg-input, the darkest surface these sit on for any
+     length of time; on pure white that leaves 16.80 / 7.05 / 5.07. */
+  --text-secondary: #53586C;
+  --text-tertiary: #6A6E7E;
   --text-inverse: #FFFFFF;
   --text-on-brand: #FFFFFF;
 
-  --status-success: #059669;
+  /* See the dark theme's note. On white, --brand-blue is only 3.00:1 and
+     --brand-purple 3.33:1 — both fail body text, so the text role gets its
+     own darker value while the brand fills keep the original hue. */
+  --text-accent: #0079C9;
+  --text-accent-purple: #A14DD8;
+
+  --status-success: #04865E;
   --status-success-bg: rgba(5, 150, 105, 0.08);
   --status-error: #DC2626;
   --status-error-bg: rgba(220, 38, 38, 0.08);
-  --status-warning: #D97706;
+  --status-warning: #B06105;
   --status-warning-bg: rgba(217, 119, 6, 0.08);
   --status-info: #2563EB;
   --status-info-bg: rgba(37, 99, 235, 0.08);
-  --status-pending: #9CA0B0;
+  --status-pending: #6F748B;
   --status-pending-bg: rgba(156, 160, 176, 0.08);
 
   --accent-blue-subtle: rgba(0, 153, 255, 0.08);
   --accent-purple-subtle: rgba(179, 112, 224, 0.08);
 
-  /* Entity types — light theme (blue/purple stay brand; schedule/workflow darkened to keep contrast) */
-  --entity-command: #0099FF;
+  /* Entity types — light theme. Every one of these renders as a small label on
+     white, so all five are pinned at >=4.5:1; hue and saturation are the
+     originals, only lightness moved. The tint backgrounds keep the original
+     rgba (a fill has no contrast requirement). */
+  --entity-command: #0079C9;
   --entity-command-bg: rgba(0, 153, 255, 0.12);
-  --entity-schedule: #C9791A;
+  --entity-schedule: #A86516;
   --entity-schedule-bg: rgba(201, 121, 26, 0.10);
-  --entity-skill: #B370E0;
+  --entity-skill: #A14DD8;
   --entity-skill-bg: rgba(179, 112, 224, 0.12);
-  --entity-workflow: #0F9E8B;
+  --entity-workflow: #0D8474;
   --entity-workflow-bg: rgba(15, 158, 139, 0.10);
   --entity-workflow-run: #5E7199;
   --entity-workflow-run-bg: rgba(94, 113, 153, 0.10);

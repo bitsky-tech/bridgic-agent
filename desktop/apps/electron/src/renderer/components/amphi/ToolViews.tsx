@@ -50,7 +50,7 @@ function stringify(value: unknown): string {
 function RawText({ text }: { text: string }) {
   const { t } = useTranslation()
   return (
-    <pre className="m-0 max-h-[280px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-hover px-3 py-2.5 text-[11px] font-mono leading-[1.6] text-text-secondary">
+    <pre className="m-0 max-h-[280px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-hover px-3 py-2.5 text-xs font-mono leading-[1.6] text-text-secondary">
       {text || t('session.tool.noOutput')}
     </pre>
   )
@@ -65,7 +65,7 @@ function OverflowNoticeView({ notice }: { notice: OverflowNotice }) {
         <span className="flex shrink-0 text-text-tertiary">{Icons.file(13)}</span>
         {t('session.tool.overflow.title')}
       </div>
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-[11px] leading-[1.6]">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs leading-[1.6]">
         <dt className="text-text-tertiary">{t('session.tool.overflow.size')}</dt>
         <dd className="m-0 font-mono text-text-secondary">
           {t('session.tool.overflow.bytes', {
@@ -97,7 +97,7 @@ function ExtLink({ url }: { url: string }) {
           .openExternal(url)
           .catch((e: unknown) => rlog.warn('[tool] openExternal failed', e))
       }}
-      className="cursor-pointer break-all text-left text-xs text-brand-blue hover:underline"
+      className="cursor-pointer break-all text-left text-xs text-text-accent hover:underline"
     >
       {url}
     </button>
@@ -301,7 +301,7 @@ function ParamsSection({ input, hasError }: { input: unknown; hasError: boolean 
       <button
         type="button"
         onClick={() => setOverride(!open)}
-        className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.4px] text-text-tertiary transition-colors hover:text-text-secondary"
+        className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-[0.4px] text-text-tertiary transition-colors hover:text-text-secondary"
       >
         <span className={cn('flex transition-transform duration-300 ease-out', open && 'rotate-90')}>
           {Icons.chevronRight(9)}
@@ -337,7 +337,7 @@ function JsonBlock({ body, error }: { body: string; error?: boolean }) {
   return (
     <pre
       className={cn(
-        'mb-0 mt-1.5 max-h-[148px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-hover px-3 py-2.5 text-[11px] font-mono leading-[1.65]',
+        'mb-0 mt-1.5 max-h-[148px] min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-bg-hover px-3 py-2.5 text-xs font-mono leading-[1.65]',
         error ? 'text-status-error' : 'text-text-secondary',
       )}
     >
@@ -349,7 +349,7 @@ function JsonBlock({ body, error }: { body: string; error?: boolean }) {
 function Section({ label, body, error }: { label: string; body: string; error?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.4px] text-text-tertiary">
+      <div className="text-2xs font-semibold uppercase tracking-[0.4px] text-text-tertiary">
         {label}
       </div>
       <JsonBlock body={body} error={error} />

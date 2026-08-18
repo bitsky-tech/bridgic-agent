@@ -43,7 +43,7 @@ export function BuildConfirmCard({
   return (
     <div className={floating ? 'w-full' : 'max-w-xl rounded-lg border border-border-subtle bg-bg-elevated p-4 shadow-sm'}>
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-purple-subtle text-brand-purple">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-purple-subtle text-text-accent-purple">
           {Icons.workflow(17)}
         </span>
         <div className="min-w-0 flex-1">

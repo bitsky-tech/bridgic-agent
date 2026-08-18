@@ -95,7 +95,7 @@ function LandingInput({ needsModelConfig, onConfigureModel, inputSlot }: Landing
           used to have cursor:pointer but no onClick, so clicking did nothing and misled users; it has been removed. */}
       <div className="flex-1">
         <div className="text-md text-text-tertiary leading-[1.6]">
-          {t('landing.inputHint.before')}<span className="text-brand-blue">/build</span>{t('landing.inputHint.after')}
+          {t('landing.inputHint.before')}<span className="text-text-accent">/build</span>{t('landing.inputHint.after')}
         </div>
       </div>
       <div className="flex items-center gap-1.5">
@@ -212,7 +212,7 @@ function WorkflowMarket({ cards, onPick }: WorkflowMarketProps) {
             onClick={() => onPick?.(c)}
           >
             <div className="flex items-start justify-between mb-2.5">
-              <div className="w-9 h-9 rounded-md bg-accent-blue-subtle flex items-center justify-center text-brand-blue">
+              <div className="w-9 h-9 rounded-md bg-accent-blue-subtle flex items-center justify-center text-text-accent">
                 {Icons.workflow(18)}
               </div>
               {c.status === 'verified' && <Badge color="success">{t('landing.market.verified')}</Badge>}

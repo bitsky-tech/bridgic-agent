@@ -74,7 +74,7 @@ export function FocusStageRail({ stage, streaming, compact = false }: FocusStage
 /** Three-state colouring for the circles — the full rail has moved to the shared `StageRail`, this is left for the compact hover overlay. */
 function stageDotClass(done: boolean, active: boolean): string {
   if (done) return 'bg-brand-blue text-white'
-  if (active) return 'bg-bg-elevated text-brand-blue border-[1.5px] border-brand-blue'
+  if (active) return 'bg-bg-elevated text-text-accent border-[1.5px] border-brand-blue'
   return 'bg-stage-track text-text-tertiary'
 }
 
@@ -96,7 +96,7 @@ function compactBarClass(done: boolean, active: boolean): string {
 function StageDotMark({ done, active, index }: { done: boolean; active: boolean; index: number }) {
   if (done) return Icons.check(9)
   if (active) return <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-pulse" />
-  return <span className="text-[9px] font-bold">{index + 1}</span>
+  return <span className="text-2xs font-bold">{index + 1}</span>
 }
 
 /** One row of the hover overlay: dot + stage name + status label + description. */
@@ -115,7 +115,7 @@ function CompactStageRow({
     <div className={cn('flex items-start gap-2.5 px-3 py-1.5 rounded-md', active && 'bg-accent-blue-subtle')}>
       <span
         className={cn(
-          'shrink-0 mt-px w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold',
+          'shrink-0 mt-px w-4 h-4 rounded-full flex items-center justify-center text-2xs font-bold',
           stageDotClass(done, active),
         )}
       >
@@ -124,10 +124,10 @@ function CompactStageRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className={cn('text-xs', stageTextClass(done, active))}>{t(`focusMode.stages.${stage}`)}</span>
-          {done && <span className="text-[9px] text-brand-blue font-semibold">{t('focusMode.completed')}</span>}
-          {active && <span className="text-[9px] text-brand-blue font-semibold">{t('focusMode.inProgress')}</span>}
+          {done && <span className="text-2xs text-text-accent font-semibold">{t('focusMode.completed')}</span>}
+          {active && <span className="text-2xs text-text-accent font-semibold">{t('focusMode.inProgress')}</span>}
         </div>
-        <div className="text-[11px] text-text-tertiary leading-snug mt-px">{t(`focusMode.stageDescriptions.${stage}`)}</div>
+        <div className="text-xs text-text-tertiary leading-snug mt-px">{t(`focusMode.stageDescriptions.${stage}`)}</div>
       </div>
     </div>
   )
@@ -141,11 +141,11 @@ function CompactStageHover({ current, streaming }: { current: number; streaming:
     <div className="absolute top-[calc(100%+8px)] left-0 z-50 w-64 bg-bg-elevated border border-border-default rounded-lg shadow-md p-1.5 pt-3">
       <div className="flex items-center gap-1.5 px-3 pb-2 mb-1 border-b border-border-subtle">
         <span className="text-sm font-bold text-text-primary">{t('focusMode.progress')}</span>
-        <span className="text-[11px] text-text-tertiary font-mono">
+        <span className="text-xs text-text-tertiary font-mono">
           {Math.min(current + 1, total)}/{total}
         </span>
         {streaming && (
-          <span className="ml-auto flex items-center gap-1 text-[10px] font-semibold text-brand-blue">
+          <span className="ml-auto flex items-center gap-1 text-2xs font-semibold text-text-accent">
             <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-pulse" /> {t('focusMode.inProgress')}
           </span>
         )}
@@ -200,10 +200,10 @@ function CompactStageRail({ current, streaming }: { current: number; streaming: 
             {shownLabel}
           </span>
           {streaming && <span className="w-1.5 h-1.5 rounded-full bg-brand-blue shrink-0 animate-pulse" />}
-          <span className="text-[11px] text-text-tertiary font-mono whitespace-nowrap shrink-0">
+          <span className="text-xs text-text-tertiary font-mono whitespace-nowrap shrink-0">
             {Math.min(current + 1, total)}/{total}
           </span>
-          <span className="flex text-text-tertiary shrink-0 opacity-70">{Icons.chevronDown(12)}</span>
+          <span className="flex text-text-tertiary shrink-0">{Icons.chevronDown(12)}</span>
         </div>
       </div>
       {hover && <CompactStageHover current={current} streaming={streaming} />}
@@ -276,7 +276,7 @@ function BuildTopStatusBar({
       isCompact={compact}
       title={t('focusMode.title')}
       badge={
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-accent-blue-subtle px-2 py-0.5 text-[10px] font-semibold text-brand-blue">
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-accent-blue-subtle px-2 py-0.5 text-2xs font-semibold text-text-accent">
           {shownStage}
         </span>
       }
@@ -288,7 +288,7 @@ function BuildTopStatusBar({
       }
       status={
         <span className={cn(
-          'items-center gap-1.5 text-[11px] font-medium text-text-secondary',
+          'items-center gap-1.5 text-xs font-medium text-text-secondary',
           compact ? 'hidden' : 'hidden sm:flex',
         )}>
           <span className={cn(

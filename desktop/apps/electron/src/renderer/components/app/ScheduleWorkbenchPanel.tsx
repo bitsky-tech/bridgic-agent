@@ -192,7 +192,7 @@ function ScheduleWorkbenchCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <h3 className="min-w-0 break-words text-[13px] font-semibold leading-5 text-text-primary">
+            <h3 className="min-w-0 break-words text-sm font-semibold leading-5 text-text-primary">
               {schedule.name}
             </h3>
             <ScheduleStatusBadge status={status} />
@@ -208,7 +208,7 @@ function ScheduleWorkbenchCard({
         <span aria-hidden="true" className="shrink-0">{Icons.refresh(12)}</span>
         <span className="min-w-0 truncate text-text-secondary" title={cronText}>{cronText}</span>
       </div>
-      <div className="mt-1 grid min-w-0 grid-cols-1 gap-0.5 text-[11px] leading-4 text-text-tertiary min-[440px]:grid-cols-2 min-[440px]:gap-2">
+      <div className="mt-1 grid min-w-0 grid-cols-1 gap-0.5 text-xs leading-4 text-text-tertiary min-[440px]:grid-cols-2 min-[440px]:gap-2">
         <span className="min-w-0 truncate" title={schedule.lastRun}>
           {t('schedule.row.lastRun')}<span className="font-mono">{schedule.lastRun}</span>
         </span>
@@ -268,7 +268,7 @@ function ScheduleStatusBadge({ status }: { status: ScheduleStatus }) {
   }
   return (
     <span
-      className={cn('inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold', className)}
+      className={cn('inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-2xs font-semibold', className)}
       data-schedule-status={status}
     >
       <span aria-hidden="true" className={cn('h-1.5 w-1.5 rounded-full', dotClassName)} />

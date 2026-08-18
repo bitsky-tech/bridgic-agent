@@ -21,6 +21,7 @@ import type { DirTreeNode } from '@shared/dir-tree'
 import { cn } from '@/lib/cn'
 import { extColor, formatSize } from '@/lib/fileTree'
 import { Icons } from './Icons'
+import { RowActionMenu } from './RowActionMenu'
 import { Tooltip } from './Tooltip'
 import { WindowedList } from './WindowedList'
 
@@ -169,10 +170,10 @@ function TreeNodeRow({
           </span>
         </Tooltip>
         {node.unreadable && (
-          <span className="text-[10px] text-text-tertiary flex-shrink-0">{t('asset.tree.noPermission')}</span>
+          <span className="text-2xs text-text-tertiary flex-shrink-0">{t('asset.tree.noPermission')}</span>
         )}
         {node.sizeBytes !== null && (
-          <span className="text-[10px] text-text-tertiary flex-shrink-0">
+          <span className="text-2xs text-text-tertiary flex-shrink-0">
             {formatSize(node.sizeBytes)}
           </span>
         )}
@@ -206,7 +207,7 @@ function TreeNodeRow({
             }}
             aria-label={t('asset.tree.mention', { name: node.name })}
             // Always rendered, shown/hidden via opacity: it appears on hover without causing row-width jitter (§LS1).
-            className="w-4 text-center text-[11px] font-semibold text-brand-blue flex-shrink-0 opacity-0 group-hover/tree-row:opacity-100 transition-opacity"
+            className="w-4 text-center text-xs font-semibold text-text-accent flex-shrink-0 opacity-0 group-hover/tree-row:opacity-100 transition-opacity"
           >
             @
           </button>
@@ -230,40 +231,14 @@ interface TreeRowMenuDropdownProps {
 /** Child-row ⋯ dropdown: copy path / reveal in file manager (no "remove" — see the props comment). */
 function TreeRowMenuDropdown({ node, menu }: TreeRowMenuDropdownProps) {
   const { t } = useTranslation()
-  const itemCls =
-    'w-full text-left px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover'
   return (
-    <>
-      <div
-        className="fixed inset-0 z-40"
-        onClick={(e) => {
-          e.stopPropagation()
-          menu.onToggle(node.relPath)
-        }}
-      />
-      <div className="absolute right-1 top-full -mt-1 z-50 min-w-[168px] rounded-md border border-border-default bg-bg-input shadow-md py-1">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            menu.onCopyPath(node)
-          }}
-          className={itemCls}
-        >
-          {t('asset.common.copyPath')}
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            menu.onReveal(node)
-          }}
-          className={itemCls}
-        >
-          {t('asset.common.revealInFileManager')}
-        </button>
-      </div>
-    </>
+    <RowActionMenu
+      onDismiss={() => menu.onToggle(node.relPath)}
+      items={[
+        { label: t('asset.common.copyPath'), onSelect: () => menu.onCopyPath(node) },
+        { label: t('asset.common.revealInFileManager'), onSelect: () => menu.onReveal(node) },
+      ]}
+    />
   )
 }
 
@@ -284,14 +259,14 @@ function ExpandedBody({
   if (node.children === undefined) {
     return (
       <div className={shell}>
-        <div className="px-2 py-[5px] text-[10px] text-text-tertiary">{t('asset.common.loading')}</div>
+        <div className="px-2 py-[5px] text-2xs text-text-tertiary">{t('asset.common.loading')}</div>
       </div>
     )
   }
   if (node.children.length === 0) {
     return (
       <div className={shell}>
-        <div className="px-2 py-[5px] text-[10px] text-text-tertiary">{t('asset.common.emptyFolder')}</div>
+        <div className="px-2 py-[5px] text-2xs text-text-tertiary">{t('asset.common.emptyFolder')}</div>
       </div>
     )
   }

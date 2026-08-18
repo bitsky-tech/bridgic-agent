@@ -238,7 +238,7 @@ export function SpecPreviewPane() {
     )
   } else if (pendingTaskConfirm) {
     statusBadge = (
-      <span className="rounded-full bg-accent-blue-subtle px-2 py-0.5 text-xs font-semibold text-brand-blue shrink-0">
+      <span className="rounded-full bg-accent-blue-subtle px-2 py-0.5 text-xs font-semibold text-text-accent shrink-0">
         {t('specPreview.badge.awaitingConfirmation')}
       </span>
     )
@@ -270,7 +270,7 @@ export function SpecPreviewPane() {
         <button
           type="button"
           onClick={beginEdit}
-          className="flex items-center justify-center w-7 h-7 rounded-md text-text-tertiary hover:bg-bg-hover hover:text-brand-blue"
+          className="flex items-center justify-center w-7 h-7 rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-accent"
         >
           {Icons.edit(14)}
         </button>
@@ -309,13 +309,13 @@ export function SpecPreviewPane() {
         className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4"
         style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}
       >
-        <span className="text-brand-blue flex shrink-0">{Icons.file(15)}</span>
+        <span className="text-text-accent flex shrink-0">{Icons.file(15)}</span>
         <span className="flex-1 min-w-0 truncate text-sm font-semibold text-text-primary">
           {editBaselinePreview ? t('specPreview.originalFileName') : t('specPreview.fileName')}
         </span>
         {statusBadge}
         {pendingCount > 0 ? (
-          <span className="px-2 py-0.5 rounded-full bg-accent-blue-subtle text-brand-blue text-xs font-semibold shrink-0">
+          <span className="px-2 py-0.5 rounded-full bg-accent-blue-subtle text-text-accent text-xs font-semibold shrink-0">
             {t('specPreview.pendingCount', { count: pendingCount })}
           </span>
         ) : null}
@@ -328,8 +328,8 @@ export function SpecPreviewPane() {
                 setReviewView('diff')
               }}
               className={cn(
-                'h-6 rounded px-2 text-[11px] font-semibold',
-                reviewView === 'diff' ? 'bg-bg-surface text-brand-blue shadow-sm' : 'text-text-tertiary',
+                'h-6 rounded px-2 text-xs font-semibold',
+                reviewView === 'diff' ? 'bg-bg-surface text-text-accent shadow-sm' : 'text-text-tertiary',
               )}
             >
               {t('specPreview.diff')}
@@ -341,8 +341,8 @@ export function SpecPreviewPane() {
                 setReviewView('document')
               }}
               className={cn(
-                'h-6 rounded px-2 text-[11px] font-semibold',
-                reviewView === 'document' ? 'bg-bg-surface text-brand-blue shadow-sm' : 'text-text-tertiary',
+                'h-6 rounded px-2 text-xs font-semibold',
+                reviewView === 'document' ? 'bg-bg-surface text-text-accent shadow-sm' : 'text-text-tertiary',
               )}
             >
               {t('specPreview.latest')}
@@ -355,7 +355,7 @@ export function SpecPreviewPane() {
       <div
         className={cn(
           'flex items-center gap-1.5 px-4 py-2 border-b border-border-subtle text-xs',
-          archived ? 'bg-status-success-bg text-status-success' : 'bg-accent-blue-subtle text-brand-blue',
+          archived ? 'bg-status-success-bg text-status-success' : 'bg-accent-blue-subtle text-text-accent',
         )}
       >
         {instruction}
@@ -563,7 +563,7 @@ function CommentComposer({ quote, text: draft, onChange, onAdd, onCancel }: Comm
   return (
     <div className="shrink-0 border-t border-border-default bg-bg-surface px-3.5 py-3 animate-enter">
       <div className="flex items-center gap-1.5 mb-2">
-        <span className="flex items-center gap-1 text-xs font-semibold text-brand-blue">
+        <span className="flex items-center gap-1 text-xs font-semibold text-text-accent">
           {Icons.chat(12)} {t('specPreview.commentSelection')}
         </span>
         <span className="flex-1" />
@@ -586,7 +586,7 @@ function CommentComposer({ quote, text: draft, onChange, onAdd, onCancel }: Comm
           <button
             type="button"
             onClick={() => setQuoteExpanded((v) => !v)}
-            className="mt-1 text-[10px] font-semibold text-brand-blue hover:underline"
+            className="mt-1 text-2xs font-semibold text-text-accent hover:underline"
           >
             {quoteExpanded ? t('specPreview.collapse') : t('specPreview.expandAll')}
           </button>

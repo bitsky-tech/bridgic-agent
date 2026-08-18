@@ -86,7 +86,7 @@ function emptyRunText(t: ReturnType<typeof useTranslation>['t'], hydrated: boole
 function RunMeta({ label, value, accent, mono }: { label: string; value: string; accent?: string; mono?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="text-[10px] text-text-tertiary mb-0.5">{label}</div>
+      <div className="text-2xs text-text-tertiary mb-0.5">{label}</div>
       <Tooltip content={value} onlyWhenTruncated>
         <div className={cn('text-sm font-semibold truncate', accent ?? 'text-text-primary', mono && 'font-mono')}>
           {value}
@@ -291,7 +291,7 @@ export function RunLogDrawer({ scheduleId, run }: RunLogDrawerProps) {
           <div className="text-sm text-text-secondary mt-1">{name}</div>
           <div className="grid grid-cols-3 gap-3 mt-3.5">
             <RunMeta label={t('schedule.run.time')} value={run.time} mono />
-            <RunMeta label={t('schedule.run.trigger')} value={t('schedule.run.scheduledTrigger')} accent="text-brand-blue" />
+            <RunMeta label={t('schedule.run.trigger')} value={t('schedule.run.scheduledTrigger')} accent="text-text-accent" />
             <RunMeta label={t('schedule.run.sessionId')} value={viewSessionId} mono />
           </div>
         </div>

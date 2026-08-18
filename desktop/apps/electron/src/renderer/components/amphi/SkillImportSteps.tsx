@@ -41,7 +41,7 @@ function SourceBar({
       <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-bg-hover border border-border-subtle mb-3.5">
         {Icons.link(14)}
         <span className="text-xs text-text-secondary font-mono flex-1 truncate">{path}</span>
-        <span className="text-[10px] font-semibold text-brand-blue bg-accent-blue-subtle px-2 py-0.5 rounded-full shrink-0">
+        <span className="text-2xs font-semibold text-text-accent bg-accent-blue-subtle px-2 py-0.5 rounded-full shrink-0">
           {remoteBadge}
         </span>
       </div>
@@ -101,14 +101,14 @@ function NewRow({
           <>
             <div
               ref={descRef}
-              className={cn('text-[11px] text-text-secondary mt-0.5', !expanded && 'line-clamp-3')}
+              className={cn('text-xs text-text-secondary mt-0.5', !expanded && 'line-clamp-3')}
             >
               {item.scanned.description}
             </div>
             {clamped && (
               <button
                 type="button"
-                className="mt-1 text-[10px] font-semibold text-brand-blue"
+                className="mt-1 text-2xs font-semibold text-text-accent"
                 onClick={(e) => {
                   e.stopPropagation()
                   setExpanded((x) => !x)
@@ -188,14 +188,14 @@ export function ImportReviewStep({
                 {t('skill.import.review.conflictHint')}
               </span>
             </span>
-            <div className="flex items-center gap-1.5 text-[11px]">
+            <div className="flex items-center gap-1.5 text-xs">
               <button
                 type="button"
                 className={cn(
                   'inline-flex items-center gap-1 font-semibold px-2.5 py-1 rounded-sm border',
                   allReplace
                     ? 'border-brand-blue bg-brand-blue text-white'
-                    : 'border-transparent text-brand-blue',
+                    : 'border-transparent text-text-accent',
                 )}
                 onClick={() => onBatch(true)}
               >
@@ -207,7 +207,7 @@ export function ImportReviewStep({
                 className={cn(
                   'font-semibold px-2.5 py-1 rounded-sm border',
                   allKeep
-                    ? 'border-border-strong bg-bg-active text-text-primary'
+                    ? 'border-border-strong bg-bg-selected text-text-primary'
                     : 'border-transparent text-text-secondary',
                 )}
                 onClick={() => onBatch(false)}
@@ -281,7 +281,7 @@ export function ImportResultStep({ summary }: { summary: ImportSummary }) {
             <span className="text-status-error mt-0.5">{Icons.x(12)}</span>
             <div className="min-w-0">
               <span className="font-mono text-text-primary">{s.name}</span>
-              <div className="text-[11px] text-text-tertiary truncate">{s.reason}</div>
+              <div className="text-xs text-text-tertiary truncate">{s.reason}</div>
             </div>
           </div>
         ))}

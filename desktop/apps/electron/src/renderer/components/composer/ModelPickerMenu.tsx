@@ -62,7 +62,7 @@ export function ModelPickerMenu() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="relative inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-bg-hover text-text-secondary text-xs font-medium hover:text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40"
+          className="relative inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-bg-hover text-text-primary text-sm font-medium hover:bg-bg-active outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/40"
           aria-label={t('composer.model.switchAria')}
         >
           {Icons.robot(14)}
@@ -275,7 +275,7 @@ function ModelPickerBody({
 
 /** Centred empty-state hint (no models / no matches). */
 function EmptyHint({ text }: { text: string }) {
-  return <div className="px-3 py-12 text-xs text-text-tertiary text-center">{text}</div>
+  return <div className="px-3 py-12 text-sm text-text-tertiary text-center">{text}</div>
 }
 
 function Groups({
@@ -299,7 +299,7 @@ function Groups({
       {groups.map((g, gi) => (
         <div key={g.id}>
           {gi > 0 && <div className="mx-3 my-1 h-px bg-border-subtle" />}
-          <div className="px-4 pt-1.5 pb-1 text-[11px] font-semibold text-text-tertiary tracking-wide">
+          <div className="px-4 pt-1.5 pb-1 text-xs font-semibold text-text-tertiary tracking-wide">
             {g.displayName}
           </div>
           {g.rows.map((row) => {
@@ -349,7 +349,7 @@ function Row({
       )}
     >
       <span
-        className="w-[22px] h-[22px] rounded-[5px] flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
+        className="w-[22px] h-[22px] rounded-[5px] flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
         style={{ background: brand.brandColor }}
       >
         {brand.iconLetter}
@@ -363,7 +363,7 @@ function Row({
         {row.modelId}
       </span>
       {active && (
-        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-accent-blue-subtle text-brand-blue flex-shrink-0">
+        <span className="text-2xs font-semibold px-1.5 py-0.5 rounded bg-accent-blue-subtle text-text-accent flex-shrink-0">
           {t('composer.model.current')}
         </span>
       )}

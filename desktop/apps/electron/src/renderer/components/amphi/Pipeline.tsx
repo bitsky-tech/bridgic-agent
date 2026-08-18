@@ -443,7 +443,7 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
             {(hiddenCount > 0 || serverHasMore) && (
               <div
                 ref={topSentinelRef}
-                className="px-2 py-[5px] text-center text-[10px] text-text-tertiary"
+                className="px-2 py-[5px] text-center text-2xs text-text-tertiary"
               >
                 {hiddenCount > 0
                   ? t('session.pipeline.loadEarlierWithCount', { n: hiddenCount })
@@ -958,7 +958,7 @@ function MessageCompletionBar({
   }
   return (
     <div
-      className="flex w-fit select-none flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-5 text-text-tertiary tabular-nums"
+      className="flex w-fit select-none flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-5 text-text-tertiary tabular-nums"
       aria-label={t('session.pipeline.generationInfoAria')}
     >
       {metrics.map((metric, index) => (
@@ -1010,9 +1010,9 @@ function AgentActivityIndicator({
           <span />
         </span>
       ) : (
-        <span className="flex shrink-0 text-brand-blue" aria-hidden="true">{Icons.chat(13)}</span>
+        <span className="flex shrink-0 text-text-accent" aria-hidden="true">{Icons.chat(13)}</span>
       )}
-      <span className="shrink-0 font-medium text-brand-blue">{label}</span>
+      <span className="shrink-0 font-medium text-text-accent">{label}</span>
       <ActiveElapsedTime startedAt={startedAt} />
     </div>
   )
@@ -1078,7 +1078,7 @@ function ModelRetryIndicator({
   const { t } = useTranslation()
   return (
     <div
-      className="inline-flex items-center gap-2 rounded-md bg-accent-blue-subtle px-2.5 py-1.5 text-xs text-brand-blue"
+      className="inline-flex items-center gap-2 rounded-md bg-accent-blue-subtle px-2.5 py-1.5 text-xs text-text-accent"
       role="status"
       aria-label={t('session.pipeline.reconnectingAria', { attempt: retry.attempt, max: retry.maxRetries })}
     >

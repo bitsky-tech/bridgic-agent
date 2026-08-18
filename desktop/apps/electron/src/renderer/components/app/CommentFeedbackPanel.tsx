@@ -91,7 +91,7 @@ export function CommentFeedbackPanel() {
 
       {/* The divider clearly separates the two areas: "the comments collected" and "the send action". */}
       <div className="border-t border-border-subtle px-4 pt-3.5 pb-4">
-        <div className="text-md font-bold text-brand-purple mb-1">{t('commentFeedback.continueBuild')}</div>
+        <div className="text-md font-bold text-text-accent-purple mb-1">{t('commentFeedback.continueBuild')}</div>
         <div className="text-sm text-text-secondary mb-3">{t('commentFeedback.summary', { count: n })}</div>
 
         <button
@@ -146,7 +146,7 @@ function CommentItem({ comment, onRemove }: CommentItemProps) {
     <div className="group relative rounded-lg border border-border-subtle bg-bg-surface p-2.5 pr-8">
       {/* Selected source text — a reference, de-emphasized into a small grey box; expandable when very long. */}
       <div className="mb-2 rounded-md bg-bg-hover px-2 py-1.5">
-        <div className="mb-0.5 text-[10px] font-medium text-text-tertiary">{t('commentFeedback.selectedSource')}</div>
+        <div className="mb-0.5 text-2xs font-medium text-text-tertiary">{t('commentFeedback.selectedSource')}</div>
         <div
           ref={quoteRef}
           className={cn('text-xs italic leading-snug text-text-tertiary', !quoteExpanded && 'line-clamp-2')}
@@ -157,7 +157,7 @@ function CommentItem({ comment, onRemove }: CommentItemProps) {
           <button
             type="button"
             onClick={() => setQuoteExpanded((v) => !v)}
-            className="mt-1 text-[10px] font-semibold text-brand-purple hover:underline"
+            className="mt-1 text-2xs font-semibold text-text-accent-purple hover:underline"
           >
             {quoteExpanded ? t('commentFeedback.collapse') : t('commentFeedback.expandAll')}
           </button>
@@ -165,7 +165,7 @@ function CommentItem({ comment, onRemove }: CommentItemProps) {
       </div>
       {/* My comment — the main event; expandable when very long. */}
       <div>
-        <div className="mb-0.5 text-[10px] font-semibold text-brand-purple">{t('commentFeedback.myComment')}</div>
+        <div className="mb-0.5 text-2xs font-semibold text-text-accent-purple">{t('commentFeedback.myComment')}</div>
         <div
           ref={textRef}
           className={cn('text-sm font-medium leading-snug text-text-primary', !textExpanded && 'line-clamp-3')}
@@ -176,7 +176,7 @@ function CommentItem({ comment, onRemove }: CommentItemProps) {
           <button
             type="button"
             onClick={() => setTextExpanded((v) => !v)}
-            className="mt-1 text-[10px] font-semibold text-brand-purple hover:underline"
+            className="mt-1 text-2xs font-semibold text-text-accent-purple hover:underline"
           >
             {textExpanded ? t('commentFeedback.collapse') : t('commentFeedback.expandAll')}
           </button>

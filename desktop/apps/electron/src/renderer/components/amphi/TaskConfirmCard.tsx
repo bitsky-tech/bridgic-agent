@@ -56,7 +56,7 @@ export function TaskConfirmCard({
     <div className={floating ? 'w-full' : 'max-w-xl rounded-lg border border-border-subtle bg-bg-elevated p-3.5 shadow-sm'}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
             {Icons.file(16)}
           </span>
           <div className="min-w-0">
@@ -78,7 +78,7 @@ export function TaskConfirmCard({
           <button
             type="button"
             onClick={() => openPreview()}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-subtle px-2.5 text-xs font-semibold text-brand-blue hover:bg-bg-hover"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-subtle px-2.5 text-xs font-semibold text-text-accent hover:bg-bg-hover"
           >
             {Icons.eye(14)} {t('workflow.task.preview')}
           </button>

@@ -67,7 +67,7 @@ export function StructuredInput({ blocks, className }: StructuredInputProps) {
                 <Quote size={14} strokeWidth={1.5} />
               </span>
               <span className="min-w-0">
-                <span className="mb-0.5 block text-[11px] font-medium text-text-secondary">{source}</span>
+                <span className="mb-0.5 block text-xs font-medium text-text-secondary">{source}</span>
                 <span className="line-clamp-3 block whitespace-pre-wrap break-words text-xs leading-relaxed text-text-tertiary">
                   {quote.text}
                 </span>

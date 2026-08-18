@@ -110,7 +110,7 @@ export function InputToolbar(_props: InputToolbarProps) {
                           <FileOutput size={14} className="shrink-0 text-entity-workflow-run" />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-xs font-semibold text-text-primary">{run.workflow_name}</span>
-                            <span className="mt-0.5 block truncate text-[10px] text-text-tertiary">
+                            <span className="mt-0.5 block truncate text-2xs text-text-tertiary">
                               {formatWorkflowRunTimestamp(run.created_at)}{input ? ` · ${input}` : ''}
                             </span>
                           </span>

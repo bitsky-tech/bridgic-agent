@@ -263,7 +263,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
         '[&_ul]:my-2 [&_ul]:pl-5 [&_ul]:list-disc',
         '[&_ol]:my-2 [&_ol]:pl-5 [&_ol]:list-decimal',
         '[&_li]:my-0.5',
-        '[&_a]:text-brand-blue [&_a]:underline [&_a]:underline-offset-2 [&_a]:cursor-pointer',
+        '[&_a]:text-text-accent [&_a]:underline [&_a]:underline-offset-2 [&_a]:cursor-pointer',
         '[&_blockquote]:border-l-2 [&_blockquote]:border-border-default [&_blockquote]:pl-3 [&_blockquote]:text-text-secondary [&_blockquote]:my-2',
         '[&_hr]:my-3 [&_hr]:border-border-subtle',
         '[&_strong]:font-semibold',

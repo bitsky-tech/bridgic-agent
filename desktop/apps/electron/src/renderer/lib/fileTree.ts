@@ -109,7 +109,7 @@ const EXT_COLOR: Record<string, string> = {
 
 /** Icon tint class: folders brand-blue, files by extension, default tertiary. */
 export function extColor(name: string, kind: 'file' | 'folder'): string {
-  if (kind === 'folder') return 'text-brand-blue'
+  if (kind === 'folder') return 'text-text-accent'
   const ext = (name.split('.').pop() ?? '').toLowerCase()
   return EXT_COLOR[ext] ?? 'text-text-tertiary'
 }

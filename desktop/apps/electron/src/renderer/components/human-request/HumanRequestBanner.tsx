@@ -70,7 +70,7 @@ function OptionMarker({ review, selected, index }: { review: boolean; selected: 
       <span
         aria-hidden="true"
         className={cn(
-          'mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center text-[10px] font-bold',
+          'mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center text-2xs font-bold',
           selected
             ? 'border-brand-blue bg-brand-blue text-white'
             : 'border-border-default bg-bg-surface',
@@ -294,10 +294,10 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
         className="flex h-11 w-full items-center gap-2.5 rounded-xl border border-border-default bg-bg-elevated px-3.5 text-left shadow-lg animate-focus-enter hover:border-brand-blue/50"
         aria-label={t('humanRequest.expandAria')}
       >
-        <span className="flex shrink-0 text-brand-blue">{Icons.chat(15)}</span>
+        <span className="flex shrink-0 text-text-accent">{Icons.chat(15)}</span>
         <span className="shrink-0 text-xs font-semibold text-text-primary">{t('humanRequest.waitingTitle')}</span>
         <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{summary}</span>
-        <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-brand-blue">
+        <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-text-accent">
           {t('humanRequest.expand')} {Icons.chevronDown(12)}
         </span>
       </button>
@@ -324,7 +324,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
             <div className="flex flex-wrap items-center gap-2">
               <div className="text-sm font-semibold text-text-primary">{t('humanRequest.acceptance.title')}</div>
               {acceptanceRuleCount > 1 && (
-                <span className="rounded-full bg-bg-hover px-2 py-0.5 text-[11px] text-text-secondary">
+                <span className="rounded-full bg-bg-hover px-2 py-0.5 text-xs text-text-secondary">
                   {t('humanRequest.acceptance.suggestionCount', { n: acceptanceRuleCount })}
                 </span>
               )}
@@ -346,7 +346,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
       )}
       {floating && !acceptanceReview && (
         <div className="mb-3 flex items-center gap-2 border-b border-border-subtle pb-2.5">
-          <span className="flex text-brand-blue">{Icons.chat(14)}</span>
+          <span className="flex text-text-accent">{Icons.chat(14)}</span>
           <span className="text-xs font-semibold text-text-primary">{t('humanRequest.needAnswer')}</span>
           <button
             type="button"
@@ -393,13 +393,13 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
                   )}
                 >
                   {q.header || t('humanRequest.questionN', { n: i + 1 })}
-                  {isAnswered(i, q) && <span className="ml-1 text-brand-blue">✓</span>}
+                  {isAnswered(i, q) && <span className="ml-1 text-text-accent">✓</span>}
                 </div>
               ))}
             </div>
           )}
           {acceptanceReview && acceptanceRuleCount > 1 && (
-            <div className="text-[11px] font-medium text-brand-blue">
+            <div className="text-xs font-medium text-text-accent">
               {t('humanRequest.acceptance.position', { current: activeIdx + 1, total: acceptanceRuleCount })}
             </div>
           )}
@@ -448,7 +448,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
                 {opt.preview && (
                   <button
                     type="button"
-                    className="shrink-0 self-start text-xs text-brand-blue hover:underline"
+                    className="shrink-0 self-start text-xs text-text-accent hover:underline"
                     onClick={(event) => {
                       event.stopPropagation()
                       togglePreview(activeIdx, oi)
@@ -516,7 +516,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
           {activeReviewList && active.multiSelect && (
             <button
               type="button"
-              className="text-xs text-brand-blue hover:underline"
+              className="text-xs text-text-accent hover:underline"
               onClick={() => selectAll(activeIdx, active)}
             >
               {t('humanRequest.selectAll')}
@@ -527,7 +527,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
               type="button"
               className={cn(
                 'text-xs hover:underline',
-                emptySelections[activeIdx] ? 'text-brand-blue' : 'text-text-secondary',
+                emptySelections[activeIdx] ? 'text-text-accent' : 'text-text-secondary',
               )}
               onClick={() => chooseEmpty(activeIdx)}
             >
@@ -549,7 +549,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
             >
               <span className="flex shrink-0 text-text-tertiary">{Icons.play(10)}</span>
               <span className="font-medium">{t('humanRequest.acceptance.executionOnly')}</span>
-              <span className="text-[11px] text-text-tertiary">{t('humanRequest.acceptance.executionOnlyHint')}</span>
+              <span className="text-xs text-text-tertiary">{t('humanRequest.acceptance.executionOnlyHint')}</span>
             </button>
           )}
         </div>

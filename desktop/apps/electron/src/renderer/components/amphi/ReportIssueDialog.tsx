@@ -438,7 +438,7 @@ function ReportIssueDialogBody({ request }: { request: IssueReportRequestSnapsho
               <div className="text-xs font-semibold text-text-primary">
                 {t('issueReport.fileMode.exportedTitle')}
               </div>
-              <div className="mt-1 break-all font-mono text-[11px] leading-relaxed text-text-tertiary">
+              <div className="mt-1 break-all font-mono text-xs leading-relaxed text-text-tertiary">
                 {exportedPath}
               </div>
               <button
@@ -607,7 +607,7 @@ function ReportIssueDialogBody({ request }: { request: IssueReportRequestSnapsho
                 </div>
               )}
 
-              <div className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-text-tertiary">
+              <div className="mt-3 flex items-start gap-1.5 text-xs leading-relaxed text-text-tertiary">
                 <ShieldCheck size={12} strokeWidth={1.8} className="mt-0.5 shrink-0" aria-hidden="true" />
                 {t(fileMode
                   ? 'issueReport.advanced.filePrivacyNotice'

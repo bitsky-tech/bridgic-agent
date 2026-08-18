@@ -103,20 +103,20 @@ export function ToolCallRow({ call }: ToolCallRowProps) {
         className={cn(
           'flex w-full items-center gap-[7px] rounded-md py-[3px] transition-colors',
           isError ? 'text-status-error' : 'text-text-tertiary hover:text-text-secondary',
-          isBrowserRunning && 'bg-accent-blue-subtle text-brand-blue',
+          isBrowserRunning && 'bg-accent-blue-subtle text-text-accent',
         )}
         data-browser-tool-state={isBrowserRunning ? 'running' : undefined}
       >
         <span className={cn(
           'flex shrink-0',
-          isBrowserRunning && 'text-brand-blue',
+          isBrowserRunning && 'text-text-accent',
         )}>
           {toolIcon(kind, name, isError)}
         </span>
         <span
           className={cn('flex min-w-0 items-baseline gap-1 text-xs', longSubject ? 'flex-1' : 'shrink-0')}
         >
-          <span className={cn('shrink-0 text-text-tertiary', isBrowserRunning && 'text-brand-blue')}>
+          <span className={cn('shrink-0 text-text-tertiary', isBrowserRunning && 'text-text-accent')}>
             {label.verb}
           </span>
           <SubjectText label={label} />
@@ -124,7 +124,7 @@ export function ToolCallRow({ call }: ToolCallRowProps) {
               part of the subject, e.g. "view file Y of skill X". With nine rows of the same skill reading different files,
               putting them apart would require scanning the whole width to pair them up. */}
           {meta.detail && (
-            <span className="min-w-0 truncate text-[11px] text-text-tertiary">
+            <span className="min-w-0 truncate text-xs text-text-tertiary">
               <span className="px-0.5">·</span>
               {meta.detail}
             </span>
@@ -132,15 +132,15 @@ export function ToolCallRow({ call }: ToolCallRowProps) {
           {/* Put the badge inside the items-baseline group so it aligns to the file name's text baseline (otherwise an 11px
               badge floats high relative to a 12px file name inside an items-center row). */}
           {meta.badge && (
-            <span className="shrink-0 font-mono text-[11px] font-semibold text-status-success">
+            <span className="shrink-0 font-mono text-xs font-semibold text-status-success">
               {meta.badge}
             </span>
           )}
         </span>
-        {meta.note && <span className="shrink-0 text-[11px] text-text-tertiary">{meta.note}</span>}
+        {meta.note && <span className="shrink-0 text-xs text-text-tertiary">{meta.note}</span>}
         {!longSubject && <span className="flex-1" />}
         {durationMs > 0 && (
-          <span className="shrink-0 font-mono text-[11px] text-text-tertiary">
+          <span className="shrink-0 font-mono text-xs text-text-tertiary">
             {formatDuration(durationMs)}
           </span>
         )}
@@ -152,7 +152,7 @@ export function ToolCallRow({ call }: ToolCallRowProps) {
         >
           {Icons.chevronRight(11)}
         </span>
-        {kind === 'write' && !open && <span className="shrink-0 text-[11px] text-brand-blue">{t('session.tool.preview')}</span>}
+        {kind === 'write' && !open && <span className="shrink-0 text-xs text-text-accent">{t('session.tool.preview')}</span>}
       </button>
       {kind === 'bash' && call.subagents?.length ? (
         <SubagentGroup subagents={call.subagents} />

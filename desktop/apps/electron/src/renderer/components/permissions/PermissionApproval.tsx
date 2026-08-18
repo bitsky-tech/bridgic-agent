@@ -113,7 +113,7 @@ function ItemBody({ summary, cmd }: { summary?: string; cmd: string }) {
           <button
             type="button"
             onClick={() => setShowCmd((v) => !v)}
-            className="mt-1 text-[11px] font-medium text-brand-blue"
+            className="mt-1 text-xs font-medium text-text-accent"
           >
             {showCmd ? t('permission.command.collapse') : t('permission.command.expand')}
           </button>
@@ -139,7 +139,7 @@ function ClampText({ text }: { text: string }) {
     <div className="mt-0.5">
       <div
         ref={ref}
-        className={cn('text-[11px] leading-[1.5] text-text-secondary', !expanded && 'line-clamp-3')}
+        className={cn('text-xs leading-[1.5] text-text-secondary', !expanded && 'line-clamp-3')}
       >
         {text}
       </div>
@@ -147,7 +147,7 @@ function ClampText({ text }: { text: string }) {
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="mt-0.5 text-[11px] font-medium text-brand-blue"
+          className="mt-0.5 text-xs font-medium text-text-accent"
         >
           {expanded ? t('permission.clamp.collapse') : t('permission.clamp.expand')}
         </button>
@@ -237,7 +237,7 @@ export function PermissionApproval({
     return (
       <div className="my-2.5 max-w-[640px] rounded-lg border border-status-warning bg-bg-elevated px-4 py-3">
         <div className="text-sm font-bold text-text-primary">{t('permission.empty.title')}</div>
-        <div className="mt-1 text-[11px] text-text-secondary">
+        <div className="mt-1 text-xs text-text-secondary">
           {t('permission.empty.desc')}
         </div>
       </div>
@@ -326,12 +326,12 @@ export function PermissionApproval({
           dangerous"). Orange still separates it clearly from the regular blue, which is enough to say "give
           this one a second look". */}
       <div className={cn('flex items-center gap-2.5 px-4 py-2.5', anyHigh ? 'bg-status-warning-bg' : 'bg-accent-blue-subtle')}>
-        <span className={anyHigh ? 'text-status-warning' : 'text-brand-blue'}>
+        <span className={anyHigh ? 'text-status-warning' : 'text-text-accent'}>
           {anyHigh ? PIcon.alert(16) : PIcon.shield(16)}
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-bold text-text-primary">{headTitle(t, isSingle, items.length, anyHigh, decidedProp === true)}</div>
-          <div className="text-[11px] text-text-secondary mt-px">{headSubtitle(t, isSingle, anyHigh, decidedProp === true)}</div>
+          <div className="text-xs text-text-secondary mt-px">{headSubtitle(t, isSingle, anyHigh, decidedProp === true)}</div>
         </div>
       </div>
 
@@ -380,7 +380,7 @@ export function PermissionApproval({
         {isSingle && decided[0] === undefined && (
           <>
             <div className="mt-3">
-              <div className="text-[11px] font-semibold text-text-tertiary mb-1.5">{t('permission.instruction.label')}</div>
+              <div className="text-xs font-semibold text-text-tertiary mb-1.5">{t('permission.instruction.label')}</div>
               <input
                 value={instruction}
                 onChange={(e) => setInstruction(e.target.value)}
@@ -396,7 +396,7 @@ export function PermissionApproval({
                 {PIcon.ban(13)} {instruction.trim() ? t('permission.action.denyWithInstruction') : t('permission.action.deny')}
               </button>
               <span className="flex-1" />
-              {instruction.trim() && <span className="text-[10px] text-text-tertiary">{t('permission.instruction.onceOnly')}</span>}
+              {instruction.trim() && <span className="text-2xs text-text-tertiary">{t('permission.instruction.onceOnly')}</span>}
               <button
                 onClick={() => decide(0, true)}
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-brand-blue text-white text-xs font-semibold"
@@ -410,10 +410,10 @@ export function PermissionApproval({
           <div className="mt-3 pb-3.5">
             <div className="flex items-center gap-2.5">
               <DecidedChip allow={decided[0]} />
-              <span className="text-[11px] text-text-tertiary">{decidedNote(t, decided[0], shownInstruction !== '')}</span>
+              <span className="text-xs text-text-tertiary">{decidedNote(t, decided[0], shownInstruction !== '')}</span>
             </div>
             {shownInstruction && (
-              <div className="mt-1.5 rounded-md border border-border-subtle bg-bg-input px-2.5 py-1.5 text-[11px] leading-[1.5] text-text-secondary break-words">
+              <div className="mt-1.5 rounded-md border border-border-subtle bg-bg-input px-2.5 py-1.5 text-xs leading-[1.5] text-text-secondary break-words">
                 <span className="text-text-tertiary">{t('permission.instruction.echoLabel')}</span>
                 {shownInstruction}
               </div>
@@ -427,13 +427,13 @@ export function PermissionApproval({
             {highPending > 0 && (
               <div className="flex gap-2 px-3 py-2 rounded-md bg-status-warning-bg mt-3">
                 <span className="text-status-warning shrink-0 mt-px">{PIcon.alert(12)}</span>
-                <span className="text-[11px] text-text-primary leading-relaxed">
+                <span className="text-xs text-text-primary leading-relaxed">
                   <b>{t('permission.highNotice.bold', { n: highPending })}</b>{t('permission.highNotice.rest')}
                 </span>
               </div>
             )}
             <div className="flex items-center gap-2.5 mt-3">
-              <span className="text-[11px] text-text-tertiary shrink-0">
+              <span className="text-xs text-text-tertiary shrink-0">
                 {allDecided ? (
                   <span className="text-status-success font-semibold">{t('permission.progress.allDone', { n: items.length })}</span>
                 ) : (

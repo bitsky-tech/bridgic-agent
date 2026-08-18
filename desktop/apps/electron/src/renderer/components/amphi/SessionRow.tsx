@@ -159,7 +159,11 @@ export function SessionRow({
       onClick={onSelect}
       className={cn(
         'group flex items-center gap-2 px-2 py-[9px] rounded-md cursor-pointer relative',
-        active ? 'bg-bg-hover' : 'bg-transparent',
+        /* Same pair as NavItem above the divider — the sidebar is one list, so a
+           session row answers the pointer the way a nav row does. Only the
+           three-dot button used to react on hover, which made the row itself
+           read as static text rather than something clickable. */
+        active ? 'bg-bg-selected' : 'bg-transparent hover:bg-bg-hover',
       )}
     >
       {depth > 0 && (
@@ -193,7 +197,7 @@ export function SessionRow({
         >
           {session.title}
         </div>
-        {session.stage && <div className="text-xs text-brand-blue mt-0.5">{session.stage}</div>}
+        {session.stage && <div className="text-xs text-text-accent mt-0.5">{session.stage}</div>}
       </div>
       {childCount > 0 && (
         <button
@@ -203,7 +207,7 @@ export function SessionRow({
             event.stopPropagation()
             onToggleChildren?.()
           }}
-          className="flex shrink-0 items-center gap-0.5 text-[10px] text-text-tertiary hover:text-text-secondary"
+          className="flex shrink-0 items-center gap-0.5 text-2xs text-text-tertiary hover:text-text-secondary"
         >
           {!expanded && backgroundChildStatus && (
             <AgentStatusIndicator {...backgroundChildStatus} />

@@ -76,7 +76,7 @@ function RemoteSourceHint({ source }: { source: SkillRemoteSource | null }) {
     return (
       <div className="flex items-center gap-1.5 mb-[18px]">
         <span className="text-status-success">{Icons.check(13)}</span>
-        <span className="text-[11px] text-text-secondary">
+        <span className="text-xs text-text-secondary">
           <Trans i18nKey="skill.import.pick.recognized" values={{ source: label }} components={{ b: <strong className="text-text-primary" /> }} />
         </span>
       </div>
@@ -89,7 +89,7 @@ function RemoteSourceHint({ source }: { source: SkillRemoteSource | null }) {
   return (
     <div className="flex items-center gap-1.5 mb-[18px]">
       <span className="text-status-warning">{Icons.xCircle(13)}</span>
-      <span className="text-[11px] text-text-secondary">{message}</span>
+      <span className="text-xs text-text-secondary">{message}</span>
     </div>
   )
 }
@@ -128,7 +128,7 @@ export function ImportPickStep({
 
       {method === ImportMethod.Local ? (
         <div className="border-[1.5px] border-dashed border-border-strong rounded-lg px-6 py-9 text-center bg-bg-hover">
-          <div className="w-12 h-12 rounded-md bg-accent-blue-subtle text-brand-blue flex items-center justify-center mx-auto mb-3.5">
+          <div className="w-12 h-12 rounded-md bg-accent-blue-subtle text-text-accent flex items-center justify-center mx-auto mb-3.5">
             {Icons.folder(24)}
           </div>
           <div className="text-md font-semibold text-text-primary">{t('skill.import.pick.local.title')}</div>
@@ -183,22 +183,22 @@ export function ImportPickStep({
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-text-primary">
                     {s.name}{' '}
-                    <span className="text-[11px] font-normal text-text-tertiary">· {s.subKey ? t(s.subKey) : s.sub}</span>
+                    <span className="text-xs font-normal text-text-tertiary">· {s.subKey ? t(s.subKey) : s.sub}</span>
                     {!s.ready && (
-                      <span className="ml-1.5 text-[10px] font-semibold text-text-tertiary bg-bg-elevated border border-border-default px-1.5 py-px rounded-full">
+                      <span className="ml-1.5 text-2xs font-semibold text-text-tertiary bg-bg-elevated border border-border-default px-1.5 py-px rounded-full">
                         {t('skill.import.pick.comingSoon')}
                       </span>
                     )}
                   </div>
-                  <div className="text-[11px] text-text-tertiary font-mono mt-0.5 truncate">{s.eg}</div>
+                  <div className="text-xs text-text-tertiary font-mono mt-0.5 truncate">{s.eg}</div>
                 </div>
               </div>
             ))}
           </div>
 
           <div className="flex gap-2 mt-4 px-3 py-2.5 rounded-md bg-accent-blue-subtle">
-            <span className="text-brand-blue shrink-0 mt-px">{Icons.workflow(13)}</span>
-            <span className="text-[11px] text-text-secondary leading-[1.5]">
+            <span className="text-text-accent shrink-0 mt-px">{Icons.workflow(13)}</span>
+            <span className="text-xs text-text-secondary leading-[1.5]">
               <Trans i18nKey="skill.import.pick.remoteHint" components={{ b: <strong className="text-text-primary" /> }} />
             </span>
           </div>

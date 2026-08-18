@@ -156,7 +156,7 @@ const badgeStyles = cva(
         error: 'bg-status-error-bg text-status-error',
         warning: 'bg-status-warning-bg text-status-warning',
         info: 'bg-status-info-bg text-status-info',
-        brand: 'bg-accent-blue-subtle text-brand-blue',
+        brand: 'bg-accent-blue-subtle text-text-accent',
       },
     },
     defaultVariants: { color: 'default' },
