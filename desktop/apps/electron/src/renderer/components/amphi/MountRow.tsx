@@ -26,6 +26,7 @@ import {
   type WatchedLevel,
 } from '@/atoms/mounts'
 import { Icons } from './Icons'
+import { RowActionMenu } from './RowActionMenu'
 import { Tooltip } from './Tooltip'
 import { FileTreeView, type TreeRowMenu } from './FileTreeView'
 
@@ -42,15 +43,6 @@ function mountMeta(m: MountSummary, tree: DirListResult | undefined, t: TFunctio
   if (m.kind === 'folder') return tree?.ok ? t('asset.mount.itemCount', { n: tree.nodes.length }) : ''
   return formatSize(m.size_bytes ?? 0)
 }
-
-/* hover is --bg-active, one step stronger than the --bg-hover used by list
-   rows: a dropdown is a point-and-click decision, so the row under the
-   cursor has to be unmistakable. The container is --bg-elevated, not
-   --bg-input — in the light theme bg-input (#F2F3F7) is *darker* than
-   bg-hover (#F5F6F9), so hovering used to lighten the row instead of
-   darkening it, at 1.03:1. That is why the highlight was invisible. */
-const MENU_ITEM_CLS =
-  'w-full text-left px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-active'
 
 export interface MountRowProps {
   mount: MountSummary
@@ -225,55 +217,28 @@ export function MountRow({
           {Icons.dots(14)}
         </button>
         {menuOpen && (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={(e) => {
-                e.stopPropagation()
-                onMenuToggle()
-              }}
-            />
-            <div className="absolute right-1 top-full -mt-1 z-50 min-w-[168px] rounded-md border border-border-default bg-bg-elevated shadow-md py-1">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onCopyPath()
-                }}
-                className={MENU_ITEM_CLS}
-              >
-                {t('asset.common.copyPath')}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenInFileManager()
-                }}
-                className={MENU_ITEM_CLS}
-              >
-                {t('asset.common.revealInFileManager')}
-              </button>
-              {onRemove && (
-                <>
-                  <div className="my-1 h-px bg-border-subtle" />
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onRemove()
-                    }}
-                    className="w-full text-left px-2.5 py-1.5 text-xs text-status-error hover:bg-bg-hover"
-                  >
-                    {t('asset.mount.remove')}
-                    <span className="block text-2xs text-text-tertiary">
-                      {t('asset.mount.removeHint')}
-                    </span>
-                  </button>
-                </>
-              )}
-            </div>
-          </>
+          <RowActionMenu
+            onDismiss={onMenuToggle}
+            items={[
+              { label: t('asset.common.copyPath'), onSelect: onCopyPath },
+              { label: t('asset.common.revealInFileManager'), onSelect: onOpenInFileManager },
+              ...(onRemove
+                ? [{
+                  label: (
+                    <>
+                      {t('asset.mount.remove')}
+                      <span className="block text-2xs text-text-tertiary">
+                        {t('asset.mount.removeHint')}
+                      </span>
+                    </>
+                  ),
+                  onSelect: onRemove,
+                  tone: 'danger' as const,
+                  separated: true,
+                }]
+                : []),
+            ]}
+          />
         )}
         <button
           type="button"
