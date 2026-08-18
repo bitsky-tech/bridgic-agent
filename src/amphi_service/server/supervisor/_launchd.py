@@ -11,12 +11,14 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from .._manager import RUNTIME_DIR_PARTS
 from ._base import (
     AutostartStatus,
     AutostartSupervisor,
     ServerLaunchSpec,
     SupervisorError,
     UnsupportedSupervisor,
+    trim_oversized_log,
 )
 
 LABEL = "ai.bridgic.agent.daemon"
@@ -62,8 +64,16 @@ class LaunchdSupervisor(AutostartSupervisor):
 
     @property
     def log_directory(self) -> Path:
-        """Return the conventional per-user log directory."""
-        return self.home / "Library" / "Logs" / "Amphi"
+        """Return the crash-net log directory: the daemon runtime dir.
+
+        Historically ``~/Library/Logs/Amphi`` — a third log location nothing
+        else documented. The plist's stdout/stderr targets are only a crash
+        net now (structured logs go to ``server.log`` via the daemon's own
+        rotating handler), and they live beside runtime.json so every daemon
+        artifact is discoverable in one directory. Existing installs migrate
+        automatically: the plist is re-rendered on every start.
+        """
+        return self.home.joinpath(*RUNTIME_DIR_PARTS)
 
     @property
     def domain(self) -> str:
@@ -122,6 +132,10 @@ class LaunchdSupervisor(AutostartSupervisor):
             raise SupervisorError(
                 f"could not create launchd directories under {self.home}"
             ) from exc
+        # Crash-net files append across daemon lifetimes; trim here because
+        # launchd holds them open for as long as the job runs.
+        trim_oversized_log(self.log_directory / "daemon.stdout.log")
+        trim_oversized_log(self.log_directory / "daemon.stderr.log")
         self._write_definition(self.render_plist(spec))
 
     def enable(self, spec: ServerLaunchSpec) -> AutostartStatus:

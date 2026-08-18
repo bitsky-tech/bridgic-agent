@@ -219,6 +219,22 @@ class AutostartStatus:
     detail: str | None = None
 
 
+#: Crash-net files (raw stdout/stderr redirect targets) append across daemon
+#: lifetimes and cannot be rotated at runtime — the daemon's own stream keeps
+#: them open — so supervisors trim them at (re)configuration time instead.
+CRASH_LOG_TRIM_BYTES = 5 * 1024 * 1024
+
+
+def trim_oversized_log(path: Path, max_bytes: int = CRASH_LOG_TRIM_BYTES) -> None:
+    """Truncate ``path`` once it outgrows ``max_bytes``. Never raises: the
+    crash net is best-effort diagnostics and must not block a launch."""
+    try:
+        if path.exists() and path.stat().st_size > max_bytes:
+            path.write_bytes(b"")
+    except OSError:
+        pass
+
+
 class SupervisorError(RuntimeError):
     """An operating-system supervisor operation failed."""
 
@@ -269,6 +285,7 @@ class AutostartSupervisor(ABC):
 __all__ = [
     "AutostartStatus",
     "AutostartSupervisor",
+    "CRASH_LOG_TRIM_BYTES",
     "PYINSTALLER_RESET_ENVIRONMENT",
     "ServeCommand",
     "ServerLaunchSpec",
@@ -276,4 +293,5 @@ __all__ = [
     "USER_ENVIRONMENT_KEYS",
     "UnsupportedSupervisor",
     "WINDOWS_AUTOSTART_EXECUTABLE",
+    "trim_oversized_log",
 ]

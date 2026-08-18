@@ -227,6 +227,31 @@ def test_detached_supervisor_uses_platform_process_isolation(
     assert log_path.exists()
 
 
+def test_detached_supervisor_trims_an_oversized_crash_log_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """兜底文件跨生命周期只追加，无法运行时轮转，所以在启动时截断。"""
+
+    class Process:
+        pid = 4321
+
+    monkeypatch.setattr(
+        _detached.subprocess,
+        "Popen",
+        lambda arguments, **options: Process(),
+    )
+    command = ServeCommand(executable=tmp_path / "amphi", frozen=True)
+    log_path = tmp_path / "daemon.stderr.log"
+    log_path.write_bytes(b"x" * (6 * 1024 * 1024))
+
+    DetachedSupervisor(command, log_path, platform="darwin").start(
+        command.serve("127.0.0.1", 7421)
+    )
+
+    assert log_path.stat().st_size == 0
+
+
 def test_detached_supervisor_wraps_process_launch_failures(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -270,11 +295,13 @@ def test_launchd_plist_has_foreground_keepalive_contract(tmp_path: Path) -> None
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 30,
+        # Crash net lives beside runtime.json now (single log directory),
+        # not under ~/Library/Logs/Amphi.
         "StandardOutPath": str(
-            tmp_path / "Library" / "Logs" / "Amphi" / "daemon.stdout.log"
+            tmp_path / ".bridgic" / "AmphiAgent" / "daemon.stdout.log"
         ),
         "StandardErrorPath": str(
-            tmp_path / "Library" / "Logs" / "Amphi" / "daemon.stderr.log"
+            tmp_path / ".bridgic" / "AmphiAgent" / "daemon.stderr.log"
         ),
     }
     assert definition["ProgramArguments"][3:5] == ["server", "serve"]

@@ -24,9 +24,20 @@ from .supervisor._base import (
 )
 
 
-RUNTIME_DIR = Path.home() / ".bridgic" / "AmphiAgent"
+#: Relative runtime-directory parts, shared with supervisors that must derive
+#: the same location from an injected home directory (see ``_launchd``).
+RUNTIME_DIR_PARTS = (".bridgic", "AmphiAgent")
+RUNTIME_DIR = Path.home().joinpath(*RUNTIME_DIR_PARTS)
 RUNTIME_FILE = RUNTIME_DIR / "runtime.json"
+#: Structured daemon log, written by the daemon's own rotating file handler
+#: (see ``_logging``) on every supervisor path.
 LOG_FILE = RUNTIME_DIR / "server.log"
+#: Crash net: where supervisors point the daemon's raw stdout/stderr, catching
+#: output produced before or outside the logging system (import-failure
+#: tracebacks, stray prints). Deliberately NOT ``server.log`` — the daemon's
+#: own stderr keeping that file open would make the rotating handler's rename
+#: fail on Windows.
+STDERR_LOG_FILE = RUNTIME_DIR / "daemon.stderr.log"
 LOCK_FILE = RUNTIME_DIR / "gateway.lock"
 CONTROL_LOCK_FILE = RUNTIME_DIR / "control.lock"
 DEFAULT_WS_PATH = "/ws"
@@ -1005,7 +1016,10 @@ class ServerManager:
 
             self._detached = DetachedSupervisor(
                 command=self.command,
-                log_path=self.log_path,
+                # Crash net, not server.log: the daemon writes its structured
+                # log itself (see _logging), and its own stderr holding
+                # server.log open would break rotation on Windows.
+                log_path=self.registration.path.parent / STDERR_LOG_FILE.name,
                 platform=self._platform,
             )
         return self._detached
@@ -1199,7 +1213,9 @@ __all__ = [
     "CONTROL_LOCK_FILE",
     "LOCK_FILE",
     "LOG_FILE",
+    "RUNTIME_DIR_PARTS",
     "RUNTIME_FILE",
+    "STDERR_LOG_FILE",
     "ServerError",
     "ServerControlLock",
     "ServerInstance",

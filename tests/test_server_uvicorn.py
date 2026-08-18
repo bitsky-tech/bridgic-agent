@@ -25,6 +25,8 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     )
 
     class Registration:
+        path = tmp_path / "runtime.json"
+
         def write(self, *, instance_lock: Any, **values: Any) -> ServerInstance:
             assert instance_lock.held
             events.append(("write", values))
@@ -86,6 +88,11 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     monkeypatch.setattr(uvicorn_module.uvicorn, "Config", lambda *args, **kwargs: (args, kwargs))
     monkeypatch.setattr(uvicorn_module, "GracefulServer", Server)
     monkeypatch.setattr(uvicorn_module.os, "getpid", lambda: 1234)
+    monkeypatch.setattr(
+        uvicorn_module,
+        "configure_daemon_logging",
+        lambda log_path, **options: events.append(("logging", log_path, options)),
+    )
 
     UvicornRunner(
         registration=Registration(),
@@ -99,7 +106,13 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     )
 
     assert events[0] == "lock"
+    # 加锁之后、应用构造之前就要接好文件日志——应用构造期间已有日志输出。
     assert events[1] == (
+        "logging",
+        tmp_path / "server.log",
+        {"log_level": "debug"},
+    )
+    assert events[2] == (
         "service",
         {
             "bind_host": "127.0.0.1",

@@ -10,6 +10,8 @@ from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 
 import uvicorn
 
+from ._logging import configure_daemon_logging
+
 if TYPE_CHECKING:
     from ._manager import (
         ServerInstance,
@@ -23,7 +25,14 @@ LifecycleHook = Callable[[], Optional[Awaitable[None]]]
 
 
 def log_config() -> dict[str, Any]:
-    """Uvicorn's default logging, timestamped so field reports can be dated."""
+    """Uvicorn's default logging, timestamped so field reports can be dated.
+
+    Reload (dev) mode only. The managed path passes ``log_config=None`` so
+    uvicorn's loggers propagate to the root handlers installed by
+    ``configure_daemon_logging`` instead of owning a console of their own —
+    otherwise every uvicorn line would land twice in ``server.log`` whenever a
+    supervisor redirects the console there.
+    """
     config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
     for formatter in config["formatters"].values():
         formatter["fmt"] = f"%(asctime)s {formatter['fmt']}"
@@ -114,6 +123,17 @@ class UvicornRunner:
         self.instance_lock.acquire()
         published: Optional[ServerInstance] = None
         try:
+            # Before ServiceApp import: application construction already logs.
+            # The path lives beside runtime.json because that is the one
+            # directory every client can discover; a None result (unwritable
+            # dir) degrades to console-only logging instead of failing start.
+            from ._manager import LOG_FILE
+
+            configure_daemon_logging(
+                self.registration.path.parent / LOG_FILE.name,
+                log_level=options.log_level,
+            )
+
             from .._app import ServiceApp
 
             service = ServiceApp(
@@ -141,7 +161,9 @@ class UvicornRunner:
                 host=options.host,
                 port=options.port,
                 log_level=options.log_level,
-                log_config=log_config(),
+                # None on purpose: uvicorn then skips dictConfig entirely and
+                # its loggers propagate to the root handlers installed above.
+                log_config=None,
             )
             server = GracefulServer(
                 config,
