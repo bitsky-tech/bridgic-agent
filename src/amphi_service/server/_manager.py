@@ -60,11 +60,22 @@ class ServerStartTimeout(ServerError):
         *,
         timeout: float,
         log_path: Path,
+        stderr_log_path: Optional[Path] = None,
         pid: Optional[int] = None,
         diagnostic: Optional[str] = None,
     ) -> None:
         process = f" (pid {pid})" if pid is not None else ""
-        diagnostic = diagnostic or f"Check the daemon log: {log_path}"
+        # Name both files: which one holds the answer depends on how far the
+        # daemon got. ``server.log`` exists only once logging is configured,
+        # so anything that killed the process before that (a failed import, a
+        # missing dependency) is in the crash-net file instead.
+        if diagnostic is None:
+            diagnostic = f"Check the daemon log: {log_path}"
+            if stderr_log_path is not None:
+                diagnostic += (
+                    f" (and {stderr_log_path} for a crash before logging started)"
+                )
+            diagnostic += "."
         super().__init__(
             f"Service was launched{process} but did not become ready within "
             f"{timeout:.1f}s. {diagnostic}"
@@ -72,6 +83,7 @@ class ServerStartTimeout(ServerError):
         self.pid = pid
         self.timeout = timeout
         self.log_path = log_path
+        self.stderr_log_path = stderr_log_path
         self.diagnostic = diagnostic
 
 
@@ -654,6 +666,10 @@ class ServerManager:
         self._platform = platform or sys.platform
         self.command = command or ServeCommand(platform=self._platform)
         self.log_path = self.registration.path.parent / LOG_FILE.name
+        #: Where the supervisors point raw stdout/stderr. Holds whatever the
+        #: daemon printed before (or instead of) configuring file logging, so
+        #: it is the file that explains a daemon which never became ready.
+        self.stderr_log_path = self.registration.path.parent / STDERR_LOG_FILE.name
         self.lock_path = getattr(
             self.registration,
             "lock_path",
@@ -721,6 +737,7 @@ class ServerManager:
             raise ServerStartTimeout(
                 timeout=timeout,
                 log_path=self.log_path,
+                stderr_log_path=self.stderr_log_path,
                 pid=pid,
                 diagnostic=diagnostic,
             )
@@ -926,6 +943,7 @@ class ServerManager:
                 raise ServerStartTimeout(
                     timeout=timeout,
                     log_path=self.log_path,
+                    stderr_log_path=self.stderr_log_path,
                     pid=pid,
                     diagnostic=self._autostart_diagnostic(status),
                 )
@@ -1137,19 +1155,26 @@ class ServerManager:
             timeout=timeout,
         )
         if instance is None:
-            raise ServerStartTimeout(timeout=timeout, log_path=self.log_path)
+            raise ServerStartTimeout(
+                timeout=timeout,
+                log_path=self.log_path,
+                stderr_log_path=self.stderr_log_path,
+            )
         return ServerStartResult(instance, False, "existing")
 
     def _autostart_diagnostic(self, status: AutostartStatus) -> str:
+        # Both branches name the crash net, not server.log: a daemon that
+        # never became ready usually died before it configured file logging,
+        # so its traceback is in the raw stdout/stderr redirect.
         if status.manager == "launchd":
             return (
                 "Check launchctl status and the daemon logs under "
-                f"{Path.home() / 'Library' / 'Logs' / 'Amphi'}."
+                f"{self.stderr_log_path.parent} ({self.stderr_log_path.name})."
             )
         if status.manager == "windows_run":
             return (
                 "Check the current user's HKCU Run entry and the detached "
-                f"daemon log at {self.log_path}."
+                f"daemon log at {self.stderr_log_path}."
             )
         return f"Check the {status.manager} supervisor diagnostics."
 

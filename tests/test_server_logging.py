@@ -17,7 +17,12 @@ from typing import Iterator
 
 import pytest
 
-from src.amphi_service.server._logging import configure_daemon_logging
+import src.amphi_service.server._logging as logging_module
+from src.amphi_service.server._logging import (
+    APP_LOGGER_NAMES,
+    configure_console_logging,
+    configure_daemon_logging,
+)
 
 
 class _TtyStderr(io.StringIO):
@@ -75,7 +80,30 @@ def test_info_level_is_the_default_and_debug_opts_in(tmp_path: Path) -> None:
         tmp_path / "server2.log", log_level="trace", stderr=io.StringIO()
     )
     assert handler_debug is not None
-    assert root.level == logging.DEBUG
+    # --log-level 是 uvicorn 的选项，只能作用到应用自己的 logger：root 跟着降到
+    # DEBUG 会把 httpx / LLM SDK 的请求详情（含 body）写进用户会打开的文件，
+    # 几分钟就冲掉轮转预算。
+    assert root.level == logging.INFO
+    for name in APP_LOGGER_NAMES:
+        assert logging.getLogger(name).level == logging.DEBUG
+    assert logging.getLogger("httpx").getEffectiveLevel() == logging.INFO
+
+
+def test_app_logger_names_cover_this_repo_s_actual_module_names() -> None:
+    # packages = ["src"]，所以运行时模块名带 src. 前缀。这条断言让打包方式
+    # 一旦变化就立刻失败，而不是悄悄让 --log-level 失效。
+    assert any(
+        logging_module.__name__.startswith(f"{name}.") or logging_module.__name__ == name
+        for name in APP_LOGGER_NAMES
+    ), logging_module.__name__
+
+
+def test_higher_log_levels_apply_to_root_too(tmp_path: Path) -> None:
+    handler = configure_daemon_logging(
+        tmp_path / "server.log", log_level="warning", stderr=io.StringIO()
+    )
+    assert handler is not None
+    assert logging.getLogger().level == logging.WARNING
 
 
 def test_rotation_produces_backups_instead_of_unbounded_growth(
@@ -100,7 +128,9 @@ def test_rotation_produces_backups_instead_of_unbounded_growth(
     assert log_path.stat().st_size <= 1024
 
 
-def test_unwritable_log_path_degrades_instead_of_raising(tmp_path: Path) -> None:
+def test_unwritable_log_path_degrades_to_console_instead_of_silence(
+    tmp_path: Path,
+) -> None:
     blocker = tmp_path / "not-a-directory"
     blocker.write_text("occupied", encoding="utf-8")
     stderr = io.StringIO()
@@ -108,7 +138,23 @@ def test_unwritable_log_path_degrades_instead_of_raising(tmp_path: Path) -> None
     handler = configure_daemon_logging(blocker / "server.log", stderr=stderr)
 
     assert handler is None
-    assert "continuing without file logging" in stderr.getvalue()
+    assert "falling back to console logging" in stderr.getvalue()
+    # 关键：调用方给 uvicorn 传的是 log_config=None，root 没 handler 就等于
+    # 整个进程（含 uvicorn 自己的启动横幅）彻底失声。
+    logging.getLogger("probe.degraded").info("仍然要看得到")
+    assert "仍然要看得到" in stderr.getvalue()
+    assert logging.getLogger("uvicorn.error").hasHandlers()
+
+
+def test_console_only_configuration_serves_the_reload_worker(tmp_path: Path) -> None:
+    stderr = io.StringIO()
+
+    configure_console_logging(stderr=stderr)
+
+    logging.getLogger("probe.reload").info("dev reload 也要有日志")
+    assert "dev reload 也要有日志" in stderr.getvalue()
+    # reload worker 由 uvicorn 另起进程，绝不能共享 daemon 的轮转文件。
+    assert not list(tmp_path.iterdir())
 
 
 def test_console_handler_only_when_stderr_is_a_tty(tmp_path: Path) -> None:

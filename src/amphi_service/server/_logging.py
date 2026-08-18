@@ -31,9 +31,9 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 # server.log survives a version upgrade with one consistent line shape.
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-#: CLI ``--log-level`` choices → root logger level. Uvicorn's ``trace`` has no
+#: CLI ``--log-level`` choices → logger level. Uvicorn's ``trace`` has no
 #: stdlib equivalent below DEBUG, so it maps to DEBUG.
-_ROOT_LEVELS = {
+_LEVELS = {
     "critical": logging.CRITICAL,
     "error": logging.ERROR,
     "warning": logging.WARNING,
@@ -41,6 +41,55 @@ _ROOT_LEVELS = {
     "debug": logging.DEBUG,
     "trace": logging.DEBUG,
 }
+
+#: The packages whose loggers ``--log-level`` is meant to control.
+#:
+#: The flag is a *uvicorn* option that historically reached only the three
+#: ``uvicorn*`` loggers. Applying it to the root logger instead would hand
+#: ``--log-level debug`` to every dependency in the process — httpx, the LLM
+#: SDK clients, asyncio — whose DEBUG records include request options and
+#: bodies. That both floods the rotation budget and writes third-party request
+#: detail into the file the GUI's "Open Logs" button hands to the user.
+#: The ``src.`` prefix is not a source-tree artifact: ``pyproject.toml`` ships
+#: ``packages = ["src"]``, so every module is imported as ``src.amphi_*`` in a
+#: wheel and in the frozen build alike. ``test_server_logging`` asserts this
+#: list still covers this very module's ``__name__``.
+APP_LOGGER_NAMES: tuple[str, ...] = (
+    "src.amphi_service",
+    "src.amphi_agent",
+    "src.amphi_store",
+    "src.amphi_cli",
+)
+
+
+def _apply_levels(log_level: str) -> None:
+    """Point ``--log-level`` at the application's own loggers, not at root."""
+    level = _LEVELS.get(log_level, logging.INFO)
+    # Root never drops below INFO: a DEBUG root would hand every dependency's
+    # DEBUG stream (request options and bodies included) to a file the GUI
+    # opens for the user, and would flood the rotation budget in minutes.
+    logging.getLogger().setLevel(max(level, logging.INFO))
+    for name in APP_LOGGER_NAMES:
+        logging.getLogger(name).setLevel(level)
+
+
+def configure_console_logging(
+    *,
+    log_level: str = "info",
+    stderr: Optional[Any] = None,
+) -> logging.Handler:
+    """Attach console-only logging to the root logger.
+
+    Used by the ``--reload`` development path, whose worker processes are
+    spawned by uvicorn and must not share the daemon's rotating file (two
+    processes rotating one file corrupt each other's renames).
+    """
+    stream = sys.stderr if stderr is None else stderr
+    _apply_levels(log_level)
+    console = logging.StreamHandler(stream)
+    console.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
+    logging.getLogger().addHandler(console)
+    return console
 
 
 def configure_daemon_logging(
@@ -54,14 +103,18 @@ def configure_daemon_logging(
     """Attach rotating file logging to the root logger.
 
     Returns the file handler on success and ``None`` when the log file cannot
-    be opened — the daemon then runs without file logging rather than failing
+    be opened — the daemon then logs to the console rather than failing
     startup over its own diagnostics (the same start-degraded philosophy as
     ``runtime._env_supervisor``).
 
-    A console handler is added only when ``stderr`` is a TTY: a developer
-    running ``amphi server serve`` in a terminal keeps live output, while a
-    supervised daemon (stderr redirected to the crash-net file, never a TTY)
-    writes each record exactly once, to ``server.log``.
+    Exactly one destination is normally installed. A console handler is added
+    when ``stderr`` is a TTY — a developer running ``amphi server serve`` in a
+    terminal keeps live output — and *also* when the file handler could not be
+    opened, because the caller passes ``log_config=None`` to uvicorn: without
+    a root handler, uvicorn's own loggers have nowhere to write either, and a
+    daemon that cannot open its log file would start in total silence. Under a
+    supervisor that console is the crash-net file, which is the right place
+    for it.
 
     Parameters
     ----------
@@ -76,6 +129,15 @@ def configure_daemon_logging(
     """
     stream = sys.stderr if stderr is None else stderr
     formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    # Levels first, so the degraded path below is still correctly configured.
+    _apply_levels(log_level)
+    root = logging.getLogger()
+
+    def add_console() -> None:
+        console = logging.StreamHandler(stream)
+        console.setFormatter(formatter)
+        root.addHandler(console)
+
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = RotatingFileHandler(
@@ -89,28 +151,27 @@ def configure_daemon_logging(
     except OSError as exc:
         print(
             f"[daemon-logging] could not open {log_path}: {exc}; "
-            "continuing without file logging",
+            "falling back to console logging",
             file=stream,
         )
+        add_console()
         return None
 
     file_handler.setFormatter(formatter)
-    root = logging.getLogger()
-    root.setLevel(_ROOT_LEVELS.get(log_level, logging.INFO))
     root.addHandler(file_handler)
 
-    is_tty = getattr(stream, "isatty", lambda: False)
     try:
-        if is_tty():
-            console = logging.StreamHandler(stream)
-            console.setFormatter(formatter)
-            root.addHandler(console)
-    except (OSError, ValueError):
-        pass
+        is_tty = bool(stream.isatty())
+    except (AttributeError, OSError, ValueError):
+        is_tty = False
+    if is_tty:
+        add_console()
     return file_handler
 
 
 __all__ = [
+    "APP_LOGGER_NAMES",
+    "configure_console_logging",
     "LOG_BACKUP_COUNT",
     "LOG_DATE_FORMAT",
     "LOG_FORMAT",

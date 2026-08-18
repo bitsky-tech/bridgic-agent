@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import logging
 import os
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 
 import uvicorn
 
-from ._logging import configure_daemon_logging
+from ._logging import configure_console_logging, configure_daemon_logging
 
 if TYPE_CHECKING:
     from ._manager import (
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
 
 
 LifecycleHook = Callable[[], Optional[Awaitable[None]]]
+
+logger = logging.getLogger(__name__)
 
 
 def log_config() -> dict[str, Any]:
@@ -96,10 +99,7 @@ class GracefulServer(uvicorn.Server):
         except Exception as exc:  # noqa: BLE001 - shutdown must continue
             if not swallow:
                 raise
-            print(
-                f"[GracefulServer] lifecycle hook failed: {exc}",
-                file=sys.stderr,
-            )
+            logger.warning("[GracefulServer] lifecycle hook failed: %s", exc)
 
 
 class UvicornRunner:
@@ -131,12 +131,10 @@ class UvicornRunner:
             from ._manager import LOG_FILE
 
             log_path = self.registration.path.parent / LOG_FILE.name
-            log_file: Optional[Path] = (
-                log_path
-                if configure_daemon_logging(log_path, log_level=options.log_level)
-                is not None
-                else None
-            )
+            handler = configure_daemon_logging(log_path, log_level=options.log_level)
+            # None means the daemon is logging to the console instead, so the
+            # registration must not advertise a file that holds nothing.
+            log_file: Optional[Path] = log_path if handler is not None else None
 
             from .._app import ServiceApp
 
@@ -200,9 +198,17 @@ class UvicornRunner:
 
 
 def create_reload_app() -> Any:
-    """Create the unmanaged ASGI application used by Uvicorn reload workers."""
+    """Create the unmanaged ASGI application used by Uvicorn reload workers.
+
+    Logging is configured here, not in :meth:`UvicornRunner._run_reload`:
+    uvicorn spawns a fresh process per reload, so the parent's configuration
+    never reaches the worker that actually runs the application. Without this
+    the root logger has no handler and the whole reason ``_logging`` exists —
+    application records reaching a log at all — would not hold in dev.
+    """
     from .._app import ServiceApp
 
+    configure_console_logging()
     return ServiceApp(bind_host=None, bind_port=None).app
 
 

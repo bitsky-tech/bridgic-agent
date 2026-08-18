@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -176,13 +177,16 @@ def test_uvicorn_reload_is_explicitly_unmanaged(
 
 @pytest.mark.asyncio
 async def test_lifecycle_hook_failure_is_only_swallowed_during_shutdown(
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     def fail() -> None:
         raise RuntimeError("hook broke")
 
-    await GracefulServer._run_hook(fail, swallow=True)
-    assert "hook broke" in capsys.readouterr().err
+    # 走 logging（不再是 print 到 stderr）：supervisor 把裸 stderr 重定向到
+    # 崩溃兜底文件，而那不是 GUI「打开日志」会打开的那个文件。
+    with caplog.at_level(logging.WARNING, logger=uvicorn_module.logger.name):
+        await GracefulServer._run_hook(fail, swallow=True)
+    assert "hook broke" in caplog.text
 
     with pytest.raises(RuntimeError, match="hook broke"):
         await GracefulServer._run_hook(fail, swallow=False)
