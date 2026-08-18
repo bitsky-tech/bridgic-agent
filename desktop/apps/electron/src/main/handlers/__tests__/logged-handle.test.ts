@@ -22,12 +22,15 @@ describe('sanitizeForLogging', () => {
     expect(sanitizeForLogging(9007199254740993n)).toBe('9007199254740993')
   })
 
-  it('truncates arrays to the first 10 elements', () => {
+  it('truncates arrays to the first 10 elements and marks the remainder', () => {
     const arr = Array.from({ length: 25 }, (_, i) => i)
-    const out = sanitizeForLogging(arr) as number[]
-    expect(out).toHaveLength(10)
+    const out = sanitizeForLogging(arr) as unknown[]
+    // 10 real elements + the remainder marker: a silently shortened array
+    // reads as "that was all of it".
+    expect(out).toHaveLength(11)
     expect(out[0]).toBe(0)
     expect(out[9]).toBe(9)
+    expect(out[10]).toBe('…(+15 more)')
   })
 
   it('truncates objects after 20 keys with a remainder marker', () => {

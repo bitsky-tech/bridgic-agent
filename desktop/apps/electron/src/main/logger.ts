@@ -1,6 +1,6 @@
 import log from 'electron-log/main'
 import { amphiUserFile } from './paths'
-import { safeStringify, toSerializable } from './log-serialize'
+import { toLogLine, toLogText } from './log-serialize'
 
 // All desktop-owned files live under one root (~/.bridgic/amphi —
 // see paths.ts). Redirect electron-log's default (~/Library/Logs/<app>/)
@@ -21,32 +21,13 @@ function resolveDebugMode(): boolean {
 
 export const isDebugMode = resolveDebugMode()
 
-// NDJSON file format — same shape for dev and prod so log tools can parse uniformly.
-//
-// safeStringify/toSerializable, not bare JSON.stringify: this callback runs
-// before electron-log's own serialization transform, so it receives raw
-// values. A circular Error (execSync timeout) used to make JSON.stringify
-// throw, and electron-log's default internal-error handler is a no-op — the
-// line was dropped with no trace. Plain Errors also stringified to `{}`
-// (message/stack are non-enumerable). See log-serialize.ts.
-log.transports.file.format = ({ message }) =>
-  [
-    safeStringify({
-      timestamp: message.date.toISOString(),
-      level: message.level,
-      scope: message.scope,
-      message: message.data.map(toSerializable),
-    }),
-  ]
-
-// Second belt: if a transport ever throws anyway, surface it on stderr
-// instead of electron-log's default silent no-op. The method exists on the
-// Logger class (see electron-log src/core/Logger.js) but is absent from its
-// type declarations, hence the cast.
-;(log as unknown as { processInternalErrorFn: (error: unknown) => void }).processInternalErrorFn =
-  (error) => {
-    console.error('[logger] transport failed', error)
-  }
+// NDJSON file format — same shape for dev and prod so log tools can parse
+// uniformly. The whole line is built inside toLogLine (never here) because
+// this callback runs before electron-log's own serialization transform and a
+// callback that throws is swallowed by Logger.processMessage — anything
+// evaluated in the argument list would be outside the safety net, which is
+// how the shell-env failure warning went missing in the first place.
+log.transports.file.format = ({ message }) => [toLogLine(message)]
 
 if (isDebugMode) {
   log.transports.file.level = 'debug'
@@ -55,9 +36,7 @@ if (isDebugMode) {
   log.transports.console.format = ({ message }) => {
     const scope = message.scope ? `[${message.scope}]` : ''
     const level = message.level.toUpperCase().padEnd(5)
-    const data = message.data
-      .map((d: unknown) => (typeof d === 'object' ? safeStringify(toSerializable(d)) : String(d)))
-      .join(' ')
+    const data = message.data.map(toLogText).join(' ')
     return [`${message.date.toISOString()} ${level} ${scope} ${data}`]
   }
   log.transports.console.level = 'debug'
