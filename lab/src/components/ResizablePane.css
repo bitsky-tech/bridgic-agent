@@ -1,0 +1,102 @@
+.resizable-pane {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--bg-surface, #fff);
+}
+
+.resizable-pane-content {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.resizable-pane-separator {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.resizable-pane-left .resizable-pane-separator {
+  right: -5px;
+}
+
+.resizable-pane-right .resizable-pane-separator {
+  left: -5px;
+}
+
+.resizable-pane-separator::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  content: '';
+  background: var(--border-default, #d6dae3);
+  transition: width 120ms ease, background 120ms ease;
+}
+
+.resizable-pane-separator:hover::after,
+.resizable-pane-separator:focus-visible::after,
+.resizable-pane.is-dragging .resizable-pane-separator::after {
+  width: 2px;
+  background: var(--accent, #168cff);
+}
+
+.resizable-pane-separator:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #168cff) 28%, transparent);
+}
+
+.resizable-pane.is-dragging,
+.resizable-pane.is-dragging * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.resizable-pane-toggle {
+  position: absolute;
+  z-index: 21;
+  top: 12px;
+  display: grid;
+  width: 24px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-default, #d6dae3);
+  border-radius: 7px;
+  color: var(--text-secondary, #4f596d);
+  background: var(--bg-surface, #fff);
+  box-shadow: 0 3px 10px rgb(20 30 50 / 8%);
+  cursor: pointer;
+}
+
+.resizable-pane-left .resizable-pane-toggle {
+  right: -12px;
+}
+
+.resizable-pane-right .resizable-pane-toggle {
+  left: -12px;
+}
+
+.resizable-pane-toggle:hover,
+.resizable-pane-toggle:focus-visible {
+  color: var(--text-primary, #151923);
+  border-color: var(--accent, #168cff);
+  outline: none;
+}
+
+.resizable-pane.is-collapsed .resizable-pane-toggle {
+  top: 12px;
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  box-shadow: none;
+}

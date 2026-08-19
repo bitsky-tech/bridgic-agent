@@ -38,6 +38,7 @@ const LIST_ONLY = process.argv.includes('--list')
 const EXEMPT_FILES = new Set([
   'src/amphi_service/i18n.py',
   'desktop/scripts/check-chinese.ts',
+  'lab/src/i18n/zh-CN.ts',
 ])
 
 /**

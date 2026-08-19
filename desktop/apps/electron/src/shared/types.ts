@@ -170,6 +170,15 @@ export type {
 export type AutoUpdateEvent =
   | { type: 'checking' }
   | { type: 'available'; info: { version: string } }
+  /**
+   * Rebuilding the differential source before the download starts.
+   *
+   * Only ever emitted once per machine — the first update after a .pkg install,
+   * where nothing left an `update.zip` behind to diff against. It takes ~44 s,
+   * which is long enough that a click on "check for updates" would otherwise
+   * look like it did nothing.
+   */
+  | { type: 'preparing' }
   | { type: 'not-available' }
   /**
    * A background failure. Stays silent in the floating card by design.

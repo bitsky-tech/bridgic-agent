@@ -23,10 +23,15 @@ import { app, BrowserWindow, autoUpdater as squirrel } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { APP_BUNDLE_ID } from '../shared/app-meta'
 import { updateLog } from './logger'
+import { createRebuildDeps, prepareDifferentialSource } from './rebuild-update-zip'
+import { updateCheckBlockedBy } from './update-guards'
+import { advanceRetry, isRetriableUpdateError } from './update-retry'
 
 export type AutoUpdateEvent =
   | { type: 'checking' }
   | { type: 'available'; info: UpdateInfo }
+  /** Rebuilding the differential source; can hold the download for ~a minute. */
+  | { type: 'preparing' }
   | { type: 'not-available' }
   | { type: 'error'; message: string; code?: string }
   | { type: 'progress'; percent: number; bytesPerSecond: number }
@@ -70,9 +75,16 @@ let handoverStarted = false
 /**
  * True from the moment a check is dispatched until it reaches a terminal event.
  *
- * NOT the same as "a check is running": `autoDownload` is on, so a successful
- * check flows straight into a download that can outlive the next tick of the
- * timer. Only `update-not-available`, `update-downloaded` and `error` end it.
+ * NOT the same as "a check is running": a successful check flows straight into
+ * `beginDownload()`, which can outlive the next tick of the timer — and on
+ * macOS that now includes a rebuild of the differential source. Only
+ * `update-not-available`, `update-downloaded` and `error` end it, plus
+ * `beginDownload`'s own catch for failures that reach no event at all.
+ *
+ * `autoDownload` is off (see `startUpdateChecks`), so the download is started by
+ * our `update-available` handler rather than by electron-updater. That makes
+ * this flag's lifetime our responsibility: every path out of `beginDownload`
+ * must clear it, or the updater is wedged until the process restarts.
  */
 let checkInFlight = false
 
@@ -128,25 +140,24 @@ export function onQuitForUpdate(teardown: () => void): void {
 }
 
 /**
- * Ask the feed for a newer version, unless a previous round is still open.
+ * Ask the feed for a newer version, unless something says not to.
  *
- * Both guards matter on the timer path. Re-checking while a download is in
- * flight makes electron-updater fetch the same payload a second time, and
- * re-checking once something is staged would re-download an update the user has
- * already been offered but not yet chosen to install.
+ * Every guard matters on the timer path: re-checking during a download makes
+ * electron-updater fetch the same payload twice, re-checking once something is
+ * staged re-downloads what the user was already offered, and re-checking during
+ * the installer handover tears down the proxy Squirrel is reading from. See
+ * `updateCheckBlockedBy` for the reasoning behind each.
  */
-function runCheck(reason: 'launch' | 'timer' | 'manual'): UpdateCheckOutcome {
-  if (!updaterEnabled) {
-    updateLog.info(`[update] ${reason} check skipped: updater is disabled in this build`)
-    return 'disabled'
-  }
-  if (checkInFlight) {
-    updateLog.info(`[update] ${reason} check skipped: a check or download is still in flight`)
-    return 'busy'
-  }
-  if (hasStagedUpdate()) {
-    updateLog.info(`[update] ${reason} check skipped: an update is already staged`)
-    return 'staged'
+function runCheck(reason: 'launch' | 'timer' | 'manual' | 'retry'): UpdateCheckOutcome {
+  const blocked = updateCheckBlockedBy({
+    updaterEnabled,
+    checkInFlight,
+    hasStagedUpdate: hasStagedUpdate(),
+    handoverStarted,
+  })
+  if (blocked !== null) {
+    updateLog.info(`[update] ${reason} check skipped: ${blocked}`)
+    return blocked
   }
 
   checkInFlight = true
@@ -160,6 +171,63 @@ function runCheck(reason: 'launch' | 'timer' | 'manual'): UpdateCheckOutcome {
   return 'started'
 }
 
+/** Pending backoff retry, if any. At most one is ever queued. */
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Retries already scheduled since the last check that reached a good end. */
+let retryAttempt = 0
+
+/**
+ * Forget the backoff ladder.
+ *
+ * Called from both terminal successes. Without it a single bad afternoon would
+ * leave the counter high for the rest of the process's life, so the next
+ * unrelated failure would start its ladder near the top — and a tray-resident
+ * app lives for weeks.
+ */
+function resetRetries(): void {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+  retryAttempt = 0
+}
+
+/**
+ * Queue one more attempt after a failure, if that failure looks transient.
+ *
+ * The point is the gap this closes: `error` clears `checkInFlight`, and without
+ * a retry nothing else happens until the next {@link CHECK_INTERVAL_MS} tick.
+ * A laptop that slept mid-download therefore stays on the old version for hours
+ * while being online the entire time.
+ */
+function scheduleRetry(code: string | undefined): void {
+  // One at a time. `error` can fire more than once for a single round (a failed
+  // check and its failed download), and each queuing its own timer would turn
+  // the ladder into a burst.
+  if (retryTimer !== null) return
+
+  if (!isRetriableUpdateError(code)) {
+    updateLog.info(`[update] not retrying: ${code} will fail the same way`)
+    return
+  }
+
+  const { delayMs, nextAttempt } = advanceRetry(retryAttempt)
+  retryAttempt = nextAttempt
+  if (delayMs === null) {
+    updateLog.info('[update] retry ladder exhausted; waiting for the next scheduled check')
+    return
+  }
+
+  updateLog.info(
+    `[update] retry ${retryAttempt} scheduled in ${Math.round(delayMs / 1000)}s`,
+  )
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    runCheck('retry')
+  }, delayMs)
+}
+
 /**
  * Run a check on the user's behalf (Settings → About → Check for updates).
  *
@@ -168,6 +236,59 @@ function runCheck(reason: 'launch' | 'timer' | 'manual'): UpdateCheckOutcome {
  */
 export function requestManualCheck(): UpdateCheckOutcome {
   return runCheck('manual')
+}
+
+/**
+ * Make the download as small as it can be, then start it.
+ *
+ * Called from `update-available` because `autoDownload` is off. The rebuild has
+ * to happen here rather than at launch: it is only worth ~44 s of CPU once we
+ * know an update actually exists, and on the overwhelmingly common path
+ * (`needsRebuild` false, because a previous download already left an
+ * `update.zip`) it costs nothing at all.
+ *
+ * Deliberately does NOT touch `checkInFlight`. That flag is set by `runCheck`
+ * and cleared only by the three terminal events; a rebuild happening in between
+ * just makes the in-flight window longer, which is exactly what should keep the
+ * 4-hourly timer from starting a second round on top of this one.
+ */
+async function beginDownload(): Promise<void> {
+  try {
+    // Skip the rebuild when nothing will read its output. `MacUpdater`'s
+    // `canDifferentialDownload()` returns false whenever this flag is set
+    // (MacUpdater.js:89-95) and its `done` handler then never refreshes
+    // `update.zip` either — so on a private feed we would burn ~44 s and leave
+    // 237 MB in the user's cache forever, to produce a file no code path opens.
+    // Worse, `needsRebuild` is false from then on, so it looks like it worked.
+    const deps = autoUpdater.disableDifferentialDownload
+      ? null
+      : createRebuildDeps(
+          (message) => updateLog.info(`[update] ${message}`),
+          (message, error) => updateLog.warn(`[update] ${message}`, error),
+        )
+    // Never throws — a failed rebuild is reported by returning false and only
+    // means this download is a full one.
+    await prepareDifferentialSource(deps, () => emit({ type: 'preparing' }))
+    await autoUpdater.downloadUpdate()
+  } catch (error) {
+    // Clearing the flag here is what keeps a failure from wedging the updater
+    // for the lifetime of the process. `downloadUpdate()` dispatches `error`
+    // itself, so on that path this is a harmless second clear — but anything
+    // that throws BEFORE it (a rebuild that blew up, a sink whose webContents
+    // was destroyed mid-check) dispatches nothing at all. Without this,
+    // `checkInFlight` stays true forever, every later check returns 'busy',
+    // and the retry ladder never arms because it only fires from `error`.
+    checkInFlight = false
+    // No `emit` here, and the two paths through this catch differ in whether
+    // that is right. When `downloadUpdate()` threw, its own dispatch already
+    // told the renderer and a second report would show one failure twice. When
+    // something threw earlier, nobody told the renderer at all — that round is
+    // silently lost until the next scheduled check, since the retry ladder also
+    // only arms from `error`. No such throw is reachable today (the sink is
+    // guarded by `win?.`, and `resourcesPath` always resolves in a packaged
+    // build), which is why this stays a log rather than a second error path.
+    updateLog.warn('[update] download did not start', error)
+  }
 }
 
 /**
@@ -186,7 +307,16 @@ export function startUpdateChecks(): void {
   }
 
   autoUpdater.logger = updateLog
-  autoUpdater.autoDownload = true
+  // Off so `update-available` can run the differential-source rebuild BEFORE
+  // any bytes are fetched (see the handler below). With `true`, electron-updater
+  // starts downloading straight out of the check, and on a machine installed
+  // from the .pkg that download is the full 222 MB — the rebuild would finish
+  // long after the thing it was meant to shrink.
+  //
+  // `checkInFlight` still spans check + download: nothing clears it between the
+  // two, and the only paths that do clear it (`update-not-available`, `error`,
+  // `update-downloaded`) are unchanged. The rebuild simply widens the window.
+  autoUpdater.autoDownload = false
 
   // MUST stay false on every platform. Installing is a decision, and quitting is
   // not a decision to install.
@@ -293,13 +423,17 @@ export function startUpdateChecks(): void {
     // the previous one finished at.
     loggedDecile = -1
     emit({ type: 'available', info })
+    // `autoDownload` is off, so nothing downloads until this is called.
+    void beginDownload()
   })
   autoUpdater.on('update-not-available', () => {
     checkInFlight = false
+    resetRetries()
     emit({ type: 'not-available' })
   })
   autoUpdater.on('error', (err) => {
     checkInFlight = false
+    scheduleRetry((err as { code?: string }).code)
     // Clear the staged flag: a post-download failure (evicted cache, checksum
     // mismatch) otherwise leaves the banner offering an install that would stop
     // the daemon and then find nothing to install.
@@ -326,6 +460,7 @@ export function startUpdateChecks(): void {
   })
   autoUpdater.on('update-downloaded', (info) => {
     checkInFlight = false
+    resetRetries()
     stagedUpdate = info
     emit({ type: 'downloaded', info })
   })

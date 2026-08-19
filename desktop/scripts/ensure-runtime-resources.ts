@@ -78,11 +78,19 @@ export class RuntimeResourcesPreflight {
       && manifest.pythonVersion === PYTHON_VERSION
       && manifest.target === target
       && executable !== null
+      // `-B` is load-bearing, not tidiness. Without it these two probes leave 67
+      // .pyc files behind in `python_runtime` -- a directory that is packaging
+      // INPUT. The Windows job runs `dev:resources` before `dist:win`, so those
+      // files shipped in the release; whether they exist at all depends on
+      // whether the runtime happened to be stale that run, which makes the
+      // artifact's bytes non-deterministic and erodes differential-update block
+      // matching. Same root cause as the `-B` in `_python_env.py`, build side.
       && this.commandOutput(executable, [
+        '-B',
         '-c',
         'import platform; print(platform.python_version())',
       ]) === PYTHON_VERSION
-      && this.commandOutput(executable, ['-m', 'ensurepip', '--version'])?.startsWith('pip ')
+      && this.commandOutput(executable, ['-B', '-m', 'ensurepip', '--version'])?.startsWith('pip ')
         === true
   }
 

@@ -772,6 +772,7 @@
       "updateFailed": "检查失败",
       "updateNoBuildForArch": "当前架构没有可用更新,请前往项目页面下载对应版本",
       "updateNow": "立即更新",
+      "updatePreparing": "正在准备增量更新…",
       "updateStaged": "新版本 {{version}} 已就绪",
       "updateUpToDate": "已是最新版本",
       "version": "版本"
