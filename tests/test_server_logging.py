@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from pathlib import Path
 from typing import Iterator
 
@@ -22,6 +23,7 @@ from src.amphi_service.server._logging import (
     APP_LOGGER_NAMES,
     configure_console_logging,
     configure_daemon_logging,
+    log_crash_net_size,
 )
 
 
@@ -182,3 +184,52 @@ def test_console_handler_only_when_stderr_is_a_tty(tmp_path: Path) -> None:
 
     logging.getLogger("console.probe").error("终端也要看得到")
     assert "终端也要看得到" in tty.getvalue()
+
+
+def test_startup_banner_marks_each_daemon_session(tmp_path: Path) -> None:
+    # server.log 5MB×2 轮转,一个文件里混着多次重启;没有分界线就无法回答
+    # "从哪行开始是升级后的版本"。横幅是每次会话在文件里的硬分界。
+    from src import __version__
+
+    log_path = tmp_path / "server.log"
+    handler = configure_daemon_logging(log_path, stderr=io.StringIO())
+    assert handler is not None
+
+    content = log_path.read_text(encoding="utf-8")
+    assert "[daemon-logging] started" in content
+    assert f"pid={os.getpid()}" in content
+    assert f"version={__version__}" in content
+    assert "log_level=info" in content
+
+
+def test_crash_net_note_points_at_preexisting_crash_output(tmp_path: Path) -> None:
+    # 场景:launchd KeepAlive 崩溃循环后的下一次成功启动。traceback 在
+    # daemon.stderr.log 里,而排查者正盯着 server.log —— 这行面包屑把人引过去。
+    log_path = tmp_path / "server.log"
+    crash_net = tmp_path / "daemon.stderr.log"
+    crash_net.write_bytes(b"Traceback (most recent call last):\n" * 3)
+    handler = configure_daemon_logging(log_path, stderr=io.StringIO())
+    assert handler is not None
+
+    log_crash_net_size(crash_net)
+
+    content = log_path.read_text(encoding="utf-8")
+    assert "crash net" in content
+    assert str(crash_net) in content
+    assert str(crash_net.stat().st_size) in content
+
+
+def test_crash_net_note_stays_silent_when_there_is_nothing_to_read(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "server.log"
+    handler = configure_daemon_logging(log_path, stderr=io.StringIO())
+    assert handler is not None
+    banner_only = log_path.read_text(encoding="utf-8")
+
+    log_crash_net_size(tmp_path / "missing.log")
+    empty = tmp_path / "empty.log"
+    empty.write_bytes(b"")
+    log_crash_net_size(empty)
+
+    assert log_path.read_text(encoding="utf-8") == banner_only

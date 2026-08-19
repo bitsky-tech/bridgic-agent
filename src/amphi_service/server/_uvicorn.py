@@ -12,7 +12,11 @@ from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 
 import uvicorn
 
-from ._logging import configure_console_logging, configure_daemon_logging
+from ._logging import (
+    configure_console_logging,
+    configure_daemon_logging,
+    log_crash_net_size,
+)
 
 if TYPE_CHECKING:
     from ._manager import (
@@ -132,13 +136,17 @@ class UvicornRunner:
             # The path lives beside runtime.json because that is the one
             # directory every client can discover; a None result (unwritable
             # dir) degrades to console-only logging instead of failing start.
-            from ._manager import LOG_FILE
+            from ._manager import LOG_FILE, STDERR_LOG_FILE
 
             log_path = self.registration.path.parent / LOG_FILE.name
             handler = configure_daemon_logging(log_path, log_level=options.log_level)
             # None means the daemon is logging to the console instead, so the
             # registration must not advertise a file that holds nothing.
             log_file: Optional[Path] = log_path if handler is not None else None
+            # Point the reader at any crash output earlier runs left behind —
+            # a KeepAlive crash loop appends tracebacks there and nothing in
+            # server.log would otherwise say the file exists.
+            log_crash_net_size(self.registration.path.parent / STDERR_LOG_FILE.name)
 
             from .._app import ServiceApp
 

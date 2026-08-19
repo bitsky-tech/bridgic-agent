@@ -281,10 +281,30 @@ def test_managed_daemon_does_not_write_access_logs_into_server_log(
         release=lambda: None,
         path=tmp_path / "lock",
     )
+    # 上一次启动留下的崩溃输出:run() 应在 server.log 里留面包屑指向它。
+    crash_net = tmp_path / "daemon.stderr.log"
+    crash_net.write_bytes(b"Traceback (most recent call last):\n")
 
-    UvicornRunner(registration=registration, instance_lock=lock).run(
-        ServerOptions(host="127.0.0.1", port=9000, log_level="info", reload=False)
-    )
+    # configure_daemon_logging 在本测试里是真调用,会给 root 挂真 handler;
+    # 不摘掉会把指向 tmp_path 的 file handler 泄漏给会话里之后的所有测试。
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    try:
+        UvicornRunner(registration=registration, instance_lock=lock).run(
+            ServerOptions(host="127.0.0.1", port=9000, log_level="info", reload=False)
+        )
 
-    assert captured["log_config"] is None
-    assert captured["access_log"] is False
+        assert captured["log_config"] is None
+        assert captured["access_log"] is False
+
+        # 启动横幅 + crash-net 面包屑都落在 server.log 里(wiring 验证)。
+        content = (tmp_path / "server.log").read_text(encoding="utf-8")
+        assert "[daemon-logging] started pid=" in content
+        assert f"crash net {crash_net} holds {crash_net.stat().st_size} bytes" in content
+    finally:
+        for handler in list(root.handlers):
+            if handler not in saved_handlers:
+                root.removeHandler(handler)
+                handler.close()
+        root.setLevel(saved_level)

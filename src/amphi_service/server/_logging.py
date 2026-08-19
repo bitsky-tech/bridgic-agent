@@ -19,10 +19,16 @@ system — import-failure tracebacks, stray prints.
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
+
+from src import __version__
+
+logger = logging.getLogger(__name__)
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 2
@@ -166,7 +172,40 @@ def configure_daemon_logging(
         is_tty = False
     if is_tty:
         add_console()
+    # Session banner, emitted after every handler is attached so a dev
+    # terminal prints it too. The rotation mixes several daemon sessions into
+    # one file; without a hard boundary carrying pid and version there is no
+    # answering "which lines are from after the upgrade?", nor matching a
+    # crash-net traceback to the server.log session it interrupted.
+    logger.info(
+        "[daemon-logging] started pid=%d version=%s log_level=%s python=%s file=%s",
+        os.getpid(),
+        __version__,
+        log_level,
+        platform.python_version(),
+        log_path,
+    )
     return file_handler
+
+
+def log_crash_net_size(path: Path) -> None:
+    """One INFO breadcrumb when the crash net holds output from earlier runs.
+
+    The reader of ``server.log`` cannot see ``daemon.stderr.log`` from inside
+    the file, yet that is where the traceback of a start-up death lives — a
+    launchd ``KeepAlive`` crash loop appends one per restart and nothing in
+    ``server.log`` hints that the file exists. Never raises: a stat failure
+    only costs the breadcrumb.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size <= 0:
+        return
+    logger.info(
+        "[daemon-logging] crash net %s holds %d bytes from previous runs", path, size
+    )
 
 
 __all__ = [
@@ -177,4 +216,5 @@ __all__ = [
     "LOG_FORMAT",
     "LOG_MAX_BYTES",
     "configure_daemon_logging",
+    "log_crash_net_size",
 ]
