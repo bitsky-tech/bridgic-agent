@@ -198,32 +198,6 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
           copyValue={PUBLIC_REPO_URL}
         />
 
-        {/* In Settings rather than a menu because this is the one surface all
-            three platforms share: Windows has no macOS-style menu bar, and the
-            tray only offers logs once the gateway is already failing. Sits next
-            to the update row and above the issue-report link — logs are what a
-            bug report needs attached. */}
-        <AboutRow
-          label={t('modals.about.logs')}
-          description={t('modals.about.logsDescription')}
-        >
-          <div className="flex items-center gap-3">
-            {logsMissing && (
-              <span data-testid="about-logs-missing" className="text-xs text-status-error">
-                {t('modals.about.logsNotFound')}
-              </span>
-            )}
-            <Btn
-              variant="default"
-              size="xs"
-              onClick={() => void handleOpenLogs()}
-              data-testid="about-open-logs"
-            >
-              {t('modals.about.openLogs')}
-            </Btn>
-          </div>
-        </AboutRow>
-
         <AboutRow label={t('modals.about.softwareUpdate')}>
           <div className="flex items-center gap-3">
             <UpdateStateLabel state={updateState} />
@@ -274,6 +248,31 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
           text={t('modals.about.contactIssueAction')}
           href={APP_NEW_ISSUE_URL}
         />
+        {/* Directly under the issue-report row: logs are what a bug report
+            needs attached. In Settings rather than a menu because this is the
+            one surface all three platforms share — Windows has no macOS-style
+            menu bar, and the tray only offers logs once the gateway is already
+            failing. */}
+        <AboutRow
+          label={t('modals.about.logs')}
+          description={t('modals.about.logsDescription')}
+        >
+          <div className="flex items-center gap-3">
+            {logsMissing && (
+              <span data-testid="about-logs-missing" className="text-xs text-status-error">
+                {t('modals.about.logsNotFound')}
+              </span>
+            )}
+            <Btn
+              variant="default"
+              size="xs"
+              onClick={() => void handleOpenLogs()}
+              data-testid="about-open-logs"
+            >
+              {t('modals.about.openLogs')}
+            </Btn>
+          </div>
+        </AboutRow>
         <LinkRow
           testId="feedback"
           label={t('modals.about.contactFeedback')}
