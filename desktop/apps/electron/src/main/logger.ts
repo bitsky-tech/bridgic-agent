@@ -67,7 +67,9 @@ export const telemetryLog = log.scope('telemetry')
 
 /**
  * Path to the active log file. Available in both debug and prod modes (prod
- * keeps warn+error). Surfaced in the application menu via "View → Open Log".
+ * keeps info+). Exposed over IPC as `app:openLogFile`; no menu or UI entry
+ * calls it today — Settings → About reveals the DAEMON log via
+ * `backend:openLogs` instead, this one is the desktop process's own log.
  */
 export function getLogFilePath(): string | undefined {
   return log.transports.file.getFile()?.path

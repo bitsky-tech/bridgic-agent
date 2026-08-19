@@ -152,6 +152,17 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
     onRequestClose?.()
   }
 
+  const [logsMissing, setLogsMissing] = useState(false)
+  const handleOpenLogs = useCallback(async () => {
+    // Reveals the daemon log in the file manager (backend:openLogs picks the
+    // right file — see daemon-log-path.ts). The main process already logged
+    // every path it tried on failure; the row only needs to say that nothing
+    // could be shown, because a button that silently does nothing reads as
+    // broken.
+    const result = await window.api.backend.openLogs()
+    setLogsMissing(!result.ok)
+  }, [])
+
   return (
     <SettingsTabLayout>
       <Card className="p-0 divide-y divide-border-subtle">
@@ -186,6 +197,32 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
           href={PUBLIC_REPO_URL}
           copyValue={PUBLIC_REPO_URL}
         />
+
+        {/* In Settings rather than a menu because this is the one surface all
+            three platforms share: Windows has no macOS-style menu bar, and the
+            tray only offers logs once the gateway is already failing. Sits next
+            to the update row and above the issue-report link — logs are what a
+            bug report needs attached. */}
+        <AboutRow
+          label={t('modals.about.logs')}
+          description={t('modals.about.logsDescription')}
+        >
+          <div className="flex items-center gap-3">
+            {logsMissing && (
+              <span data-testid="about-logs-missing" className="text-xs text-status-error">
+                {t('modals.about.logsNotFound')}
+              </span>
+            )}
+            <Btn
+              variant="default"
+              size="xs"
+              onClick={() => void handleOpenLogs()}
+              data-testid="about-open-logs"
+            >
+              {t('modals.about.openLogs')}
+            </Btn>
+          </div>
+        </AboutRow>
 
         <AboutRow label={t('modals.about.softwareUpdate')}>
           <div className="flex items-center gap-3">
