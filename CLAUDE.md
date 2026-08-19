@@ -12,13 +12,20 @@ Comments are already gated: `bun run check:chinese` fails on any Chinese comment
 in `.ts`, `.tsx`, or `.py`, across both halves of the repo. Run it instead of
 eyeballing the diff.
 
-That check exempts three things on purpose — leave them in Chinese:
+That check exempts three things. Two are Chinese on purpose — leave them:
 
-- **Tests.** `__tests__/`, `tests/`, and `*.test.ts(x)` keep Chinese assertions
-  and Chinese case names deliberately.
 - **`docs/`.** Chinese technical writing, not product surface.
 - **The i18n catalogs.** `desktop/packages/shared/src/i18n/locales/` is the
   translated copy itself. Display strings belong there, never inline.
+
+The third exemption is legacy, not license:
+
+- **Tests.** Test code MUST be written in English — comments, docstrings,
+  and case names alike, same as any other code. The check still skips
+  `__tests__/`, `tests/`, and `*.test.ts(x)` only because the existing
+  Chinese tests predate this rule; the exemption grandfathers them, it does
+  not permit new Chinese test code. Nothing enforces this yet, so it is on
+  you.
 
 Two things no check can see:
 
