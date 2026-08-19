@@ -5,8 +5,8 @@
  *
  *   - `backend:snapshot`  → returns current PythonClient snapshot
  *   - `backend:restart`   → user-initiated restart
- *   - `backend:openLogs`  → reveal the daemon log via shell (path reported
- *     by the daemon, with guessed fallbacks — see daemon-log-path.ts)
+ *   - `backend:openLogs`  → reveal the daemon log in the file manager (path
+ *     reported by the daemon, with guessed fallbacks — see daemon-log-path.ts)
  *   - `backend:autostartStatus` / `backend:setAutostart` → login autostart
  *
  * State broadcast happens at module load time: we subscribe to
@@ -148,7 +148,12 @@ export function registerBackendHandlers(): void {
  * exception handling (consistent with backend:openLogs' shape).
  */
 /**
- * Reveal the daemon log with the OS default handler.
+ * Reveal the daemon log in the file manager (not the OS default opener, same
+ * as app:openLogFile for main.log): the ranking below picks ONE file, but a
+ * user report usually needs its neighbours too — the rotated server.log.1/.2
+ * when the crash happened right before a rollover, and daemon.stderr.log next
+ * to a stale server.log when the mtime heuristic guessed wrong. Opening the
+ * directory makes every candidate visible instead of betting on one.
  *
  * Exported (not just the IPC handler body) because the tray's error line links
  * here too — the tray lives in main and has no renderer to route through.
@@ -186,15 +191,10 @@ export async function openDaemonLogs(): Promise<
     mainLog.warn(`[backend] ${reason}`)
     return { ok: false as const, reason }
   }
-  // openPath resolves to an error string (not a rejection) when the OS
-  // refuses — no handler registered for .log, a sandbox denial. Reporting
-  // ok:true there is how "nothing happened, nothing was said" is produced.
-  const failure = await shell.openPath(logPath)
-  if (failure) {
-    const reason = `could not open ${logPath}: ${failure}`
-    mainLog.warn(`[backend] ${reason}`)
-    return { ok: false as const, reason }
-  }
+  // showItemInFolder returns void — unlike openPath there is no failure
+  // signal to relay, and no "no handler registered for .log" mode to hit:
+  // every platform has a file manager.
+  shell.showItemInFolder(logPath)
   return { ok: true as const, path: logPath }
 }
 
