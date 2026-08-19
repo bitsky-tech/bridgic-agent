@@ -52,6 +52,8 @@ type UpdateRowState =
   | { kind: 'unknown' }
   | { kind: 'disabled' }
   | { kind: 'checking' }
+  /** Rebuilding the differential source; only ever seen once per machine. */
+  | { kind: 'preparing' }
   | { kind: 'up-to-date' }
   | { kind: 'downloading'; percent: number }
   | { kind: 'staged'; version: string }
@@ -94,6 +96,9 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
         case 'checking':
           setUpdateState({ kind: 'checking' })
           break
+        case 'preparing':
+          setUpdateState({ kind: 'preparing' })
+          break
         case 'not-available':
           setUpdateState({ kind: 'up-to-date' })
           break
@@ -115,13 +120,20 @@ export function SettingsAboutTab({ onRequestClose }: SettingsAboutTabProps) {
   const handleCheck = useCallback(async () => {
     const outcome = await window.api.update.checkNow()
     rlog.debug('[about] manual update check', { outcome })
-    // `started` hands the row over to the event stream. `busy` deliberately
-    // leaves the row ALONE: a check or download is already running, and what
-    // the stream last reported ("downloading 45%") describes it far better
-    // than resetting to "checking". Setting "checking" up front was exactly
-    // why clicking mid-download looked like the button did nothing — it threw
-    // away the only informative state the row had.
+    // `started` hands the row over to the event stream. `busy` must not clobber
+    // what the stream last reported ("downloading 45%") — that describes the
+    // running round far better than "checking", and resetting it was exactly
+    // why clicking mid-download looked like the button did nothing.
+    //
+    // It does fill in an EMPTY row, though. A round that began before this tab
+    // mounted leaves `unknown`, which renders nothing, and on the first update
+    // after install that silence now lasts the ~44 s rebuild — during which the
+    // button would otherwise look equally dead. Only `unknown` is overwritten,
+    // so the informative states stay put.
     if (outcome === 'started') setUpdateState({ kind: 'checking' })
+    if (outcome === 'busy') {
+      setUpdateState((prev) => (prev.kind === 'unknown' ? { kind: 'checking' } : prev))
+    }
     if (outcome === 'disabled') setUpdateState({ kind: 'disabled' })
     if (outcome === 'staged') {
       const status = await window.api.update.getStatus()
@@ -450,6 +462,8 @@ function UpdateStateLabel({ state }: { state: UpdateRowState }) {
     text = t('modals.about.updateDisabled')
   } else if (state.kind === 'checking') {
     text = t('modals.about.updateChecking')
+  } else if (state.kind === 'preparing') {
+    text = t('modals.about.updatePreparing')
   } else if (state.kind === 'downloading') {
     text = t('modals.about.updateDownloading', { percent: state.percent })
   } else if (state.kind === 'staged') {

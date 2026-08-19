@@ -37,11 +37,12 @@
     "prebuild:fetch-uv": "bun run scripts/prebuild-fetch-uv.ts",
     "prebuild:fetch-python": "bun run scripts/prebuild-fetch-python.ts",
     "prebuild:fetch-node": "bun run scripts/prebuild-fetch-node.ts",
+    "prebuild:updater-tools": "bun run scripts/prebuild-updater-tools.ts",
     "release-manifest": "bun run scripts/release-manifest.ts",
     "check:payload-paths": "bun run scripts/check-payload-paths.ts",
     "check:chinese": "bun run scripts/check-chinese.ts",
-    "dist:mac": "bun run scripts/prebuild-fetch-amphi.ts arm64 && bun run scripts/prebuild-fetch-uv.ts arm64 && bun run scripts/prebuild-fetch-python.ts arm64 && bun run scripts/prebuild-fetch-node.ts arm64 && bun run check:payload-paths && bash apps/electron/scripts/build-dmg.sh arm64",
-    "dist:mac:x64": "bun run scripts/prebuild-fetch-amphi.ts x64 && bun run scripts/prebuild-fetch-uv.ts x64 && bun run scripts/prebuild-fetch-python.ts x64 && bun run scripts/prebuild-fetch-node.ts x64 && bun run check:payload-paths && bash apps/electron/scripts/build-dmg.sh x64",
+    "dist:mac": "bun run scripts/prebuild-fetch-amphi.ts arm64 && bun run scripts/prebuild-fetch-uv.ts arm64 && bun run scripts/prebuild-fetch-python.ts arm64 && bun run scripts/prebuild-fetch-node.ts arm64 && bun run scripts/prebuild-updater-tools.ts arm64 && bun run check:payload-paths && bash apps/electron/scripts/build-dmg.sh arm64",
+    "dist:mac:x64": "bun run scripts/prebuild-fetch-amphi.ts x64 && bun run scripts/prebuild-fetch-uv.ts x64 && bun run scripts/prebuild-fetch-python.ts x64 && bun run scripts/prebuild-fetch-node.ts x64 && bun run scripts/prebuild-updater-tools.ts x64 && bun run check:payload-paths && bash apps/electron/scripts/build-dmg.sh x64",
     "dist:win": "bun run scripts/prebuild-fetch-amphi.ts x64 && bun run scripts/prebuild-fetch-uv.ts x64 && bun run scripts/prebuild-fetch-python.ts x64 && bun run scripts/prebuild-fetch-node.ts x64 && bun run check:payload-paths && powershell -ExecutionPolicy Bypass -File apps/electron/scripts/build-win.ps1",
     "dist:linux": "bun run scripts/prebuild-fetch-amphi.ts x64 && bun run scripts/prebuild-fetch-uv.ts x64 && bun run scripts/prebuild-fetch-python.ts x64 && bun run scripts/prebuild-fetch-node.ts x64 && bun run check:payload-paths && bash apps/electron/scripts/build-linux.sh",
     "typecheck": "bun run typecheck:shared && bun run typecheck:ui && bun run typecheck:electron && bun run typecheck:scripts",
@@ -62,6 +63,8 @@
     "prepare": "cd .. && husky"
   },
   "devDependencies": {
+    "7zip-bin": "5.2.0",
+    "app-builder-bin": "5.0.0-alpha.12",
     "@happy-dom/global-registrator": "^20.10.6",
     "@tailwindcss/vite": "^4.1.18",
     "@types/bun": "latest",

@@ -13,7 +13,7 @@ import threading
 import time
 from functools import cache
 from pathlib import Path
-from typing import MutableMapping, Optional
+from typing import Mapping, MutableMapping, Optional
 
 from filelock import FileLock, Timeout as FileLockTimeout
 
@@ -29,6 +29,43 @@ from ._probe import (
 from ._resources import BundledRuntimeResources
 
 logger = logging.getLogger(__name__)
+
+
+def isolated_python_command(executable: Path, *args: str) -> list[str]:
+    """Build an isolated interpreter call that leaves no bytecode behind.
+
+    macOS seals every file inside a signed ``.app``. CPython writing
+    ``__pycache__/*.pyc`` beside the standard library it just imported adds
+    files the seal does not cover, and ``codesign --verify`` then reports
+    "a sealed resource is missing or invalid" for an app that shipped
+    correctly signed. A real install accumulated 170 stray ``.pyc`` files
+    under ``Contents/Resources/python_runtime/`` this way.
+
+    ``apply()`` already redirects ``PYTHONPYCACHEPREFIX`` for user commands,
+    which is not enough here: these probes run the interpreter with ``-I``,
+    and isolated mode implies ``-E`` — every ``PYTHON*`` variable is
+    discarded. Only a command-line switch survives it.
+    """
+    return [str(executable), "-I", "-B", *args]
+
+
+def no_bytecode_environment(base: Mapping[str, str]) -> dict[str, str]:
+    """Copy ``base`` with bytecode writing disabled and interpreter hooks removed.
+
+    For interpreters whose argv we never see — uv spawns its own while creating
+    the base, and ensurepip spawns one to run pip — the environment is the only
+    lever left. Returns a copy so a caller reusing one env mapping does not
+    inherit this silently.
+
+    ``PYTHONBREAKPOINT`` is dropped rather than merely ignored: it names an
+    importable callable the interpreter will run, and the ensurepip call below
+    cannot use ``-I`` (which would imply ``-E``) without also discarding the
+    variable this function exists to set.
+    """
+    environment = dict(base)
+    environment.pop("PYTHONBREAKPOINT", None)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return environment
 
 
 class BundledUvRuntime:
@@ -362,7 +399,12 @@ class BundledUPythonRuntime:
             return None
         try:
             result = subprocess.run(
-                [str(executable), "--version"],
+                # `-B` for the same reason as the isolated probes below: this
+                # starts a real interpreter, and whatever it compiles would land
+                # inside the signed bundle. `--version` prints before any user
+                # code or sys.path lookup happens, so it needs none of the rest
+                # of the isolation the probes below carry.
+                [str(executable), "-B", "--version"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -455,6 +497,10 @@ class BundledUPythonRuntime:
         for name in ("VIRTUAL_ENV", "UV_PROJECT", "UV_PROJECT_ENVIRONMENT"):
             environment.pop(name, None)
         environment["UV_PYTHON"] = str(bundled_python)
+        # uv spawns the packaged interpreter itself while seeding the base, so
+        # there is no argv of ours to put `-B` on. Without this, creating the
+        # base leaves bytecode inside the signed bundle.
+        environment = no_bytecode_environment(environment)
         try:
             try:
                 result = subprocess.run(
@@ -619,16 +665,33 @@ class BundledUPythonRuntime:
         environment["PIP_CONFIG_FILE"] = os.devnull
         try:
             result = subprocess.run(
+                # Deliberately NOT isolated_python_command: ensurepip runs pip in
+                # a subprocess and copies our isolation into it --
+                # `if sys.flags.isolated: cmd.insert(1, '-I')` in CPython's
+                # ensurepip -- while giving that subprocess no `-B` of its own.
+                # It then compiles pip's whole dependency tree (importlib, email,
+                # urllib, http, zipfile, ...) into the signed bundle: 164 files
+                # measured. Dropping `-I` is what lets PYTHONDONTWRITEBYTECODE
+                # reach the grandchild.
+                #
+                # `-P` replaces the half of `-I` that still matters here. `-m`
+                # puts the CWD on sys.path[0], and the CWD is the writable shared
+                # base -- a .py dropped there shadowing anything ensurepip
+                # imports would execute during the pip bootstrap. `-P` closes
+                # that without implying `-E`. The rest of the isolation is the
+                # environment: it strips PYTHONHOME/PYTHONPATH/PYTHONUSERBASE
+                # and PYTHONBREAKPOINT, and pins PYTHONNOUSERSITE.
                 [
                     str(self.python_executable),
-                    "-I",
+                    "-P",
+                    "-B",
                     "-m",
                     "ensurepip",
                     "--upgrade",
                     "--default-pip",
                 ],
                 cwd=self.root,
-                env=environment,
+                env=no_bytecode_environment(environment),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -686,12 +749,11 @@ class BundledUPythonRuntime:
         """
         try:
             result = subprocess.run(
-                [
-                    str(self.python_executable),
-                    "-I",
+                isolated_python_command(
+                    self.python_executable,
                     "-c",
                     "import sysconfig; print(sysconfig.get_path('purelib'))",
-                ],
+                ),
                 cwd=self.root,
                 capture_output=True,
                 text=True,
@@ -715,7 +777,7 @@ class BundledUPythonRuntime:
         """Return whether pip imports in the base, ignoring the launcher."""
         try:
             result = subprocess.run(
-                [str(self.python_executable), "-I", "-c", "import pip"],
+                isolated_python_command(self.python_executable, "-c", "import pip"),
                 cwd=self.root,
                 capture_output=True,
                 text=True,
