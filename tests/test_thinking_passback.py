@@ -198,13 +198,17 @@ def test_turn_messages_openai_empty_reasoning_fallback() -> None:
     assert ai1.extras["reasoning_content"] == ""
 
 
-def test_turn_messages_anthropic_empty_thinking_fallback() -> None:
-    """Same, Anthropic shape: round 1 with no thinking gets an empty thinking block."""
-    tb = [{"type": "thinking", "thinking": "r", "signature": "S"}]
+def test_turn_messages_anthropic_round_without_thinking_gets_no_fake_block() -> None:
+    """Anthropic shape: adaptive thinking may skip a round entirely (Sonnet 5 on a
+    trivial tool-call round). That round must replay WITHOUT a thinking block — a
+    synthesized ``{"thinking": "", "signature": ""}`` has no valid signature and
+    Anthropic (and relays in front of it) 400 with "each thinking block must
+    contain thinking"."""
+    tb = [{"type": "thinking", "thinking": "", "signature": "S"}]
     msgs = _turn_messages(_ota_two_tool_rounds({"thinking_blocks": tb}, {}))
     ai0, ai1 = msgs[0], msgs[2]
     assert ai0.extras["thinking_blocks"] == tb
-    assert ai1.extras["thinking_blocks"] == [{"type": "thinking", "thinking": "", "signature": ""}]
+    assert "thinking_blocks" not in (ai1.extras or {})
 
 
 ############################################################################
