@@ -45,7 +45,7 @@ import {
   TurnPromptAnalysis,
   type TurnPromptPotentialRow,
 } from './components'
-import { I18nProvider, useI18n, type Locale, type TranslationKey } from './i18n'
+import { I18nProvider, localeSelfName, useI18n, type Locale, type TranslationKey } from './i18n'
 import {
   buildPromptViewModel,
   promptMessagesWithoutProviderMetadata,
@@ -382,7 +382,8 @@ function PlatformHeader({
   onThemeChange: () => void
 }) {
   const { locale, t, toggleLocale } = useI18n()
-  const targetLocaleLabel = locale === 'en-US' ? '中文' : 'EN'
+  const targetLocale = locale === 'en-US' ? 'zh-CN' : 'en-US'
+  const targetLocaleLabel = localeSelfName(targetLocale)
   const languageLabel = locale === 'en-US' ? t('language.switchToChinese') : t('language.switchToEnglish')
 
   return (
@@ -424,7 +425,7 @@ function PlatformHeader({
           onClick={toggleLocale}
         >
           <Languages size={14} aria-hidden="true" />
-          <span lang={locale === 'en-US' ? 'zh-CN' : 'en'}>{targetLocaleLabel}</span>
+          <span lang={targetLocale}>{targetLocaleLabel}</span>
         </button>
         <button
           type="button"

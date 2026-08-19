@@ -52,6 +52,10 @@ export function translate(locale: Locale, key: TranslationKey, params: Translati
   })
 }
 
+export function localeSelfName(locale: Locale): string {
+  return dictionaries[locale]['language.selfName']
+}
+
 export function I18nProvider({
   children,
   initialLocale,

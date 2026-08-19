@@ -1,4 +1,5 @@
 export const en = {
+  'language.selfName': 'EN',
   'language.switchToChinese': 'Switch to Chinese',
   'language.switchToEnglish': 'Switch to English',
   'brand.subtitle': 'Local engineering workspace',

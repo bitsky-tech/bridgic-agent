@@ -1,6 +1,7 @@
 import type { TranslationKey } from './en'
 
 export const zhCN = {
+  'language.selfName': '中文',
   'language.switchToChinese': '切换到中文',
   'language.switchToEnglish': '切换到英文',
   'brand.subtitle': '本地工程工作台',
