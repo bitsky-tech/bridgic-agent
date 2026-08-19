@@ -138,7 +138,7 @@ export function longestPackagedPath(resourcesDir = RESOURCES_DIR): {
       continue
     }
     let files = 0
-    walk(root, (absolute) => {
+    const measure = (absolute: string): void => {
       files += 1
       // Windows separators, and prefixed with `resources/` because that is where
       // the tree lands relative to $INSTDIR.
@@ -146,7 +146,11 @@ export function longestPackagedPath(resourcesDir = RESOURCES_DIR): {
       if (longest === null || rel.length > longest.length) {
         longest = { length: rel.length, path: rel }
       }
-    })
+    }
+    // An extraResources entry may name a single file (LICENSE, NOTICE), and
+    // walk() readdirs its root — ENOTDIR on a file.
+    if (statSync(root).isDirectory()) walk(root, measure)
+    else measure(root)
     // An existing but empty subtree is a failed fetch that still created the
     // directory. Counting it as present would let the check report success over
     // a payload that is not actually there.
