@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 from bridgic.core.model.types import Role
 from httpx import AsyncClient
@@ -179,6 +181,104 @@ async def test_permission_denial(flow_client: AsyncClient, flow_socket: WebSocke
     assert permission["decided"] is True
     assert permission["items"][0]["decision"] == "deny"
     assert assistant["finalAnswer"] == "I left the schedule unchanged."
+
+
+async def test_permission_memory(flow_client: AsyncClient, flow_socket: WebSocketRecorder, scripted_llm: ScriptedLlm):
+    """Final permission memory:
+
+    {
+      "first_call": {"decision": "allow", "marker_lines": 1},
+      "identical_call": {"permission_request": false, "marker_lines": 2},
+      "changed_call": {"permission_request": true, "marker_created": false}
+    }
+
+    Checks:
+    1. An auto-mode safety review can be explicitly approved and executed.
+    2. Repeating the exact Tool Call in the same Session does not ask again.
+    3. Changing the Tool Call arguments requires a new permission decision.
+    """
+    async def send_chat(session_id: str, text: str) -> None:
+        await flow_socket.send({
+            "type": "chat",
+            "session_id": session_id,
+            "input": text,
+            "blocks": [{"type": "text", "value": text}],
+        })
+        assert (await flow_socket.receive_until("ack", for_type="chat"))["session_id"] == session_id
+
+    response = await flow_client.post("/me/execution-mode", json={"mode": "auto"})
+    assert response.status_code == 200
+    response = await flow_client.post("/sessions", json={"model": FLOW_MODEL})
+    assert response.status_code == 201
+    created = response.json()
+    session_id = created["id"]
+    cwd = f"{created['workspace_root']}/.work"
+    marker = Path(cwd) / "permission-memory.txt"
+    changed_marker = Path(cwd) / "permission-memory-changed.txt"
+    command = (
+        "Write-Output $env:SESSION_ID | Out-File -Append permission-memory.txt"
+        if os.name == "nt"
+        else "printf '%s\\n' \"$SESSION_ID\" >> permission-memory.txt"
+    )
+    changed_command = (
+        "Write-Output $env:EXECUTION_MODE | Out-File -Append permission-memory-changed.txt"
+        if os.name == "nt"
+        else "printf '%s\\n' \"$EXECUTION_MODE\" >> permission-memory-changed.txt"
+    )
+    safety_review = [
+        {
+            "index": 0,
+            "verdict": "ask",
+            "rule": "S1",
+            "reason": "Confirm access to the process environment.",
+        }
+    ]
+    scripted_llm.enqueue_safety_review(safety_review)
+    scripted_llm.enqueue_safety_review(safety_review)
+    await subscribe(flow_socket, session_id)
+
+    # Check 1: An auto-mode safety review can be explicitly approved and executed.
+    scripted_llm.enqueue_tool("bash", {"command": command, "cwd": cwd}, call_id="call_env_first")
+    scripted_llm.enqueue_text("The first environment check completed.")
+    await send_chat(session_id, "Read the current Session identifier.")
+    request = await flow_socket.receive_until("permission_request", session_id=session_id)
+    assert (await flow_socket.receive_until("final", session_id=session_id))["answer"] == ""
+    assert request["items"][0]["arguments"] == {"command": command, "cwd": cwd}
+    await flow_socket.send({
+        "type": "permission_answer",
+        "session_id": session_id,
+        "request_id": request["request_id"],
+        "answers": [{"call_index": 0, "decision": "allow"}],
+    })
+    assert (await flow_socket.receive_until("ack", for_type="permission_answer"))["session_id"] == session_id
+    first = await flow_socket.receive_until("final", session_id=session_id)
+    assert first["answer"] == "The first environment check completed."
+    assert marker.read_text(encoding="utf-8-sig").splitlines() == [session_id]
+
+    # Check 2: Repeating the exact Tool Call in the same Session does not ask again.
+    request_count = sum(message.get("type") == "permission_request" for message in flow_socket.messages)
+    scripted_llm.enqueue_tool("bash", {"command": command, "cwd": cwd}, call_id="call_env_repeat")
+    scripted_llm.enqueue_text("The repeated environment check completed.")
+    await send_chat(session_id, "Repeat the same environment check.")
+    repeated = await flow_socket.receive_until("final", session_id=session_id)
+    assert repeated["answer"] == "The repeated environment check completed."
+    assert sum(message.get("type") == "permission_request" for message in flow_socket.messages) == request_count
+    assert marker.read_text(encoding="utf-8-sig").splitlines() == [session_id, session_id]
+
+    # Check 3: Changing the Tool Call arguments requires a new permission decision.
+    scripted_llm.enqueue_tool(
+        "bash",
+        {"command": changed_command, "cwd": cwd},
+        call_id="call_env_changed",
+    )
+    await send_chat(session_id, "Read the execution mode instead.")
+    changed_request = await flow_socket.receive_until("permission_request", session_id=session_id)
+    assert (await flow_socket.receive_until("final", session_id=session_id))["answer"] == ""
+    assert changed_request["items"][0]["arguments"] == {
+        "command": changed_command,
+        "cwd": cwd,
+    }
+    assert changed_marker.exists() is False
 
 
 async def test_human_choice(flow_client: AsyncClient, flow_socket: WebSocketRecorder, scripted_llm: ScriptedLlm):
