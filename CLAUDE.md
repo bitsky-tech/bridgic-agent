@@ -5,27 +5,21 @@ configuration. Where the two disagree, this file wins.
 
 ## Language
 
-**Commit messages and pull request descriptions MUST be written in English.**
-Nothing checks these, so they are on you.
+**Everything that lands in this repository MUST be written in English** —
+code, comments, docstrings, tests (case names included), docs, commit
+messages, and pull request descriptions. The single exception is the i18n
+catalogs (`desktop/packages/shared/src/i18n/locales/`): they ARE the
+translated copy. Display strings belong there, never inline.
 
-Comments are already gated: `bun run check:chinese` fails on any Chinese comment
-in `.ts`, `.tsx`, or `.py`, across both halves of the repo. Run it instead of
+Comments are gated: `bun run check:chinese` fails on any Chinese comment in
+`.ts`, `.tsx`, or `.py`, across both halves of the repo. Run it instead of
 eyeballing the diff.
 
-That check exempts three things. Two are Chinese on purpose — leave them:
-
-- **`docs/`.** Chinese technical writing, not product surface.
-- **The i18n catalogs.** `desktop/packages/shared/src/i18n/locales/` is the
-  translated copy itself. Display strings belong there, never inline.
-
-The third exemption is legacy, not license:
-
-- **Tests.** Test code MUST be written in English — comments, docstrings,
-  and case names alike, same as any other code. The check still skips
-  `__tests__/`, `tests/`, and `*.test.ts(x)` only because the existing
-  Chinese tests predate this rule; the exemption grandfathers them, it does
-  not permit new Chinese test code. Nothing enforces this yet, so it is on
-  you.
+The check still skips `__tests__/`, `tests/`, `*.test.ts(x)`, and `docs/`.
+That is legacy, not license: the Chinese content already there predates this
+rule and has not been migrated yet. New content in those places must be
+English like everything else — nothing enforces that yet, so it is on you.
+Commit messages and PR descriptions are likewise unchecked.
 
 Two things no check can see:
 
