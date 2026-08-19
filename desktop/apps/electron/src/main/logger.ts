@@ -1,6 +1,6 @@
 import log from 'electron-log/main'
 import { amphiUserFile } from './paths'
-import { toLogLine, toLogText } from './log-serialize'
+import { toConsoleLine, toLogLine } from './log-serialize'
 
 // All desktop-owned files live under one root (~/.bridgic/amphi —
 // see paths.ts). Redirect electron-log's default (~/Library/Logs/<app>/)
@@ -33,12 +33,10 @@ if (isDebugMode) {
   log.transports.file.level = 'debug'
   log.transports.file.maxSize = 5 * 1024 * 1024 // 5 MB
 
-  log.transports.console.format = ({ message }) => {
-    const scope = message.scope ? `[${message.scope}]` : ''
-    const level = message.level.toUpperCase().padEnd(5)
-    const data = message.data.map(toLogText).join(' ')
-    return [`${message.date.toISOString()} ${level} ${scope} ${data}`]
-  }
+  // Built inside toConsoleLine for the same reason as the file format above:
+  // every field read here (the timestamp, the level) can throw, and a
+  // throwing console callback loses the line just as silently.
+  log.transports.console.format = ({ message }) => [toConsoleLine(message)]
   log.transports.console.level = 'debug'
 } else {
   // Production: `info` and above, so a user report carries the story and not

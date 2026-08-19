@@ -37,6 +37,26 @@ def completed(
     return subprocess.CompletedProcess(arguments, returncode, stdout, stderr)
 
 
+def _launchctl(
+    arguments: list[str],
+    loaded: dict[str, bool],
+) -> subprocess.CompletedProcess[str]:
+    """真实 launchctl 的最小行为模型。
+
+    bootout 卸载、bootstrap 装载、print 用返回码回答"现在还在不在"(未装载时
+    113)。恒返回 0 的假 runner 会让 print 永远说"还在",于是测不出
+    enable 里那条"bootout 之后必须真的卸载了"的守卫。
+    """
+    verb = arguments[1]
+    if verb == "bootout":
+        loaded["value"] = False
+    elif verb == "bootstrap":
+        loaded["value"] = True
+    elif verb == "print":
+        return completed(arguments, 0 if loaded["value"] else 113)
+    return completed(arguments, 0)
+
+
 def test_legacy_autostart_supervisor_fails_safe_for_config_only_operations() -> None:
     class LegacySupervisor(AutostartSupervisor):
         def enable(self, spec: ServerLaunchSpec) -> AutostartStatus:
@@ -397,10 +417,12 @@ def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
     stderr_log.write_bytes(b"line\n" * (6 * 1024 * 1024 // 5))
     original_size = stderr_log.stat().st_size
 
+    loaded = {"value": True}
+
     def runner(arguments, **_options):
         if arguments[1] == "bootout":
             sizes_at_bootout["stderr"] = stderr_log.stat().st_size
-        return completed(arguments, 0)
+        return _launchctl(arguments, loaded)
 
     supervisor = LaunchdSupervisor(
         runner=runner,
@@ -416,8 +438,40 @@ def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
     assert 0 < stderr_log.stat().st_size <= 256 * 1024
 
 
+def test_launchd_does_not_trim_when_the_job_survives_bootout(tmp_path: Path) -> None:
+    """bootout 没能卸载 job 时,截断会写出 NUL 空洞,所以必须先报错再说。
+
+    launchctl bootout 失败(job 卡住 / EPERM / KeepAlive 正在重启)时不抛错,
+    此前 enable 直接往下走去截断——而 disable/deactivate 都会先查 _is_loaded。
+    """
+    runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
+    runtime_dir.mkdir(parents=True)
+    stderr_log = runtime_dir / "daemon.stderr.log"
+    stderr_log.write_bytes(b"line\n" * (6 * 1024 * 1024 // 5))
+    original_size = stderr_log.stat().st_size
+
+    def runner(arguments, **_options):
+        # bootout 报成功,但 job 依然在:print 一直返回 0。
+        return completed(arguments, 0)
+
+    supervisor = LaunchdSupervisor(
+        runner=runner,
+        platform="darwin",
+        home=tmp_path,
+        uid=502,
+    )
+    spec = ServeCommand(executable=tmp_path / "amphi", frozen=True).serve("127.0.0.1", 7421)
+
+    with pytest.raises(SupervisorError, match="remains loaded"):
+        supervisor.enable(spec)
+
+    assert stderr_log.stat().st_size == original_size
+
+
 def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
     calls: list[list[str]] = []
+
+    loaded = {"value": True}
 
     def runner(arguments, **options):
         calls.append(arguments)
@@ -427,7 +481,10 @@ def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
             "check": False,
             "timeout": LaunchdSupervisor.COMMAND_TIMEOUT,
         }
-        return completed(arguments, 0 if arguments[1] != "bootout" else 3)
+        if arguments[1] == "bootout":
+            loaded["value"] = False
+            return completed(arguments, 3)
+        return _launchctl(arguments, loaded)
 
     supervisor = LaunchdSupervisor(
         runner=runner,
@@ -451,6 +508,8 @@ def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
     )
     assert calls == [
         ["launchctl", "bootout", f"gui/502/{LABEL}"],
+        # 截断 crash net 之前先确认 job 真的卸载了。
+        ["launchctl", "print", f"gui/502/{LABEL}"],
         [
             "launchctl",
             "bootstrap",

@@ -3,8 +3,8 @@ import vm from 'node:vm'
 import {
   LOG_LIMITS,
   safeStringify,
+  toConsoleLine,
   toLogLine,
-  toLogText,
   toSerializable,
 } from '../log-serialize'
 
@@ -104,6 +104,30 @@ describe('不把子进程捕获的输出写进日志', () => {
     expect(rendered).toContain('[stderr 16 chars]')
     expect(rendered).toContain('[output 3 entries]')
   })
+
+  it('普通结果对象上的 stdout/stderr 同样只留摘要（不只是 Error）', () => {
+    // spawnSync 成功返回时也带着这些字段，它不是 Error，此前被逐字复制。
+    const rendered = line('[shell-env] probe', {
+      status: 0,
+      stdout: 'OPENAI_API_KEY=sk-super-secret-value\n',
+      stderr: '',
+    })
+    expect(rendered).not.toContain('sk-super-secret-value')
+    expect(rendered).toContain('[stdout 37 chars]')
+    expect(rendered).toContain('"status":0')
+  })
+
+  it('非超时失败时藏在 message 里的 stderr 被切掉', () => {
+    // execSync 非零退出时 Node 把 stderr 拼进 message：
+    // `Command failed: <cmd>\n<stderr>`，键名检查看不到它。
+    const err = new Error(
+      'Command failed: zsh -l -i -c \'env\'\nOPENAI_API_KEY=sk-super-secret-value\n',
+    )
+    const rendered = line(err)
+    expect(rendered).not.toContain('sk-super-secret-value')
+    expect(rendered).toContain('Command failed: zsh -l -i -c')
+    expect(rendered).toContain('chars of output')
+  })
 })
 
 describe('Error 序列化', () => {
@@ -183,6 +207,42 @@ describe('体积与耗时上限', () => {
     expect(rendered).toContain('[truncated]')
   })
 
+  it('大 Map/Set 只取上限内的条目，不先整体展开', () => {
+    const big = new Map<number, number>()
+    for (let i = 0; i < 50_000; i += 1) big.set(i, i)
+    const out = toSerializable(big) as unknown[]
+    expect(out).toHaveLength(LOG_LIMITS.maxArrayItems + 1)
+    expect(out[LOG_LIMITS.maxArrayItems]).toBe(`…(+${50_000 - LOG_LIMITS.maxArrayItems} more)`)
+    expect(out[0]).toEqual([0, 0])
+  })
+
+  it('超过键数上限的 getter 不被白白触发', () => {
+    let reads = 0
+    const wide: Record<string, unknown> = {}
+    for (let i = 0; i < 40; i += 1) {
+      Object.defineProperty(wide, `k${i}`, {
+        enumerable: true,
+        get: () => {
+          reads += 1
+          return i
+        },
+      })
+    }
+    const out = toSerializable(wide) as Record<string, unknown>
+    expect(reads).toBe(LOG_LIMITS.maxObjectKeys)
+    expect(out['…']).toBe(`+${40 - LOG_LIMITS.maxObjectKeys} more`)
+  })
+
+  it('节点预算按整次日志调用共享，不是每个参数各给一份', () => {
+    // 约 1600 个节点：单个参数远在 5000 预算内，四个加起来必然超。
+    const fanout = (width: number, build: (i: number) => unknown): Record<string, unknown> =>
+      Object.fromEntries(Array.from({ length: width }, (_, i) => [`k${i}`, build(i)]))
+    const bulky = fanout(20, () => fanout(20, () => fanout(3, (i) => i)))
+
+    expect(line(bulky)).not.toContain('[truncated]')
+    expect(line(bulky, bulky, bulky, bulky)).toContain('[truncated]')
+  })
+
   it('深度超限截断为 …', () => {
     let deep: unknown = 'leaf'
     for (let i = 0; i < 10; i += 1) deep = { next: deep }
@@ -221,10 +281,38 @@ describe('对象键的边界情况', () => {
   })
 })
 
-describe('toLogText（终端 transport）', () => {
+describe('toConsoleLine（终端 transport）', () => {
+  const consoleLine = (level: unknown, ...data: unknown[]): string =>
+    toConsoleLine({
+      date: new Date('2026-08-18T00:00:00Z'),
+      level: level as string,
+      scope: 'main',
+      data,
+    })
+
   it('字符串原样输出，对象走安全序列化', () => {
-    expect(toLogText('plain')).toBe('plain')
-    expect(toLogText(execSyncTimeoutError())).toContain('ETIMEDOUT')
+    const rendered = consoleLine('debug', 'plain', execSyncTimeoutError())
+    expect(rendered).toContain('plain')
+    expect(rendered).toContain('ETIMEDOUT')
+    expect(rendered).toContain('DEBUG')
+  })
+
+  it('undefined 参数打印出来，而不是在行里留个空档', () => {
+    // JSON.stringify(undefined) 不是字符串。此前它让参数静默消失，而"某个
+    // 变量没被赋值"恰恰是看日志时要找的东西。
+    expect(consoleLine('info', 'a', undefined, 1)).toContain('a undefined 1')
+  })
+
+  it('非法 Date 与缺失 level 都降级，不整行丢掉', () => {
+    // 这个回调抛错会被 electron-log 吞掉整行——正是本模块要防的那类失败。
+    const rendered = toConsoleLine({
+      date: new Date('nonsense'),
+      level: undefined as unknown as string,
+      data: ['still printed'],
+    })
+    expect(rendered).toContain('[invalid date]')
+    expect(rendered).toContain('UNSET')
+    expect(rendered).toContain('still printed')
   })
 })
 

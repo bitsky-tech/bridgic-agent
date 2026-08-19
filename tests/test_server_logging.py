@@ -36,6 +36,10 @@ def _restore_root_logger() -> Iterator[None]:
     saved_handlers = list(root.handlers)
     saved_level = root.level
     saved_disable = logging.root.manager.disable
+    # _apply_levels 改的是进程级的 logger 对象，root 之外还有这四个。不还原
+    # 的话，本模块里最后跑的那个用例（DEBUG 或 WARNING）会决定整个会话剩下
+    # 部分的应用 logger 级别——随机顺序下就是别处 caplog 用例的偶发失败。
+    saved_app_levels = {name: logging.getLogger(name).level for name in APP_LOGGER_NAMES}
     logging.disable(logging.NOTSET)
     yield
     for handler in list(root.handlers):
@@ -43,6 +47,8 @@ def _restore_root_logger() -> Iterator[None]:
             root.removeHandler(handler)
             handler.close()
     root.setLevel(saved_level)
+    for name, level in saved_app_levels.items():
+        logging.getLogger(name).setLevel(level)
     logging.disable(saved_disable)
 
 

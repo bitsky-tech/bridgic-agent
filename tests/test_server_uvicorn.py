@@ -190,3 +190,101 @@ async def test_lifecycle_hook_failure_is_only_swallowed_during_shutdown(
 
     with pytest.raises(RuntimeError, match="hook broke"):
         await GracefulServer._run_hook(fail, swallow=False)
+
+
+def test_reload_worker_inherits_the_requested_log_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--log-level debug 必须传到 reload worker 的应用 logger 上。
+
+    uvicorn 只会把它交给自己那三个 uvicorn* logger;worker 是另起的进程,
+    拿不到父进程的参数。此前 create_reload_app 无参调用,把 APP_LOGGER_NAMES
+    钉死在 INFO——开发者唯一会主动要 DEBUG 的模式反而看不到 DEBUG。
+    """
+    applied: list[str] = []
+
+    class Unused:
+        def acquire(self) -> None:
+            raise AssertionError("reload must not acquire the daemon lock")
+
+    # setenv(而不是 delenv):monkeypatch 记下原值,teardown 时才会把
+    # 生产代码写进去的那个值清掉,不然它会漏给后面的测试。
+    monkeypatch.setenv(uvicorn_module.RELOAD_LOG_LEVEL_ENV, "info")
+    monkeypatch.setattr(uvicorn_module.uvicorn, "run", lambda *args, **kwargs: None)
+    UvicornRunner(registration=Unused(), instance_lock=Unused()).run(
+        ServerOptions(host="0.0.0.0", port=9000, log_level="debug", reload=True)
+    )
+
+    monkeypatch.setattr(
+        uvicorn_module,
+        "configure_console_logging",
+        lambda **kwargs: applied.append(kwargs.get("log_level", "info")),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "ServiceApp",
+        lambda **_kwargs: SimpleNamespace(app=object()),
+    )
+
+    uvicorn_module.create_reload_app()
+
+    assert applied == ["debug"]
+
+
+def test_managed_daemon_does_not_write_access_logs_into_server_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """log_config=None 会让 uvicorn.access 冒泡到 root 的文件 handler。
+
+    默认 dictConfig 给它单独的 handler + propagate=False,所以它从来没进过
+    应用日志;现在它会和应用诊断抢同一份 5MB × 2 的轮转预算。
+    """
+    captured: dict[str, Any] = {}
+
+    class _Config:
+        def __init__(self, _app: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    class _Server:
+        def __init__(self, config: Any, **_kwargs: Any) -> None:
+            self.config = config
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(uvicorn_module.uvicorn, "Config", _Config)
+    monkeypatch.setattr(uvicorn_module, "GracefulServer", _Server)
+    monkeypatch.setattr(
+        app_module,
+        "ServiceApp",
+        lambda **_kwargs: SimpleNamespace(
+            app=object(),
+            state=SimpleNamespace(
+                gateway=SimpleNamespace(
+                    started_at=0.0, ws_path="/ws", version="0",
+                ),
+                auth=SimpleNamespace(current_token="t"),
+            ),
+            pre_shutdown_hook=None,
+            bind_shutdown=lambda _cb: None,
+        ),
+    )
+
+    registration = SimpleNamespace(
+        path=tmp_path / "runtime.json",
+        write=lambda **_kwargs: None,
+        clear=lambda *_args, **_kwargs: None,
+    )
+    lock = SimpleNamespace(
+        acquire=lambda: None,
+        release=lambda: None,
+        path=tmp_path / "lock",
+    )
+
+    UvicornRunner(registration=registration, instance_lock=lock).run(
+        ServerOptions(host="127.0.0.1", port=9000, log_level="info", reload=False)
+    )
+
+    assert captured["log_config"] is None
+    assert captured["access_log"] is False

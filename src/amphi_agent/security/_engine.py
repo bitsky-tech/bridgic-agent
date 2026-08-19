@@ -224,12 +224,19 @@ class PermissionEngine:
         an empty ``ws`` also makes every path judge as out of bounds). The result was
         users buried in dialogs while the backend logged nothing, leaving production
         completely undiagnosable.
+
+        The line carries the tool and the verdict, never the call's arguments. Since
+        the daemon gained a root file handler these records land in ``server.log`` —
+        the file the GUI's "Open Logs" hands to the user and that users attach to bug
+        reports — and a blocked ``curl -H "Authorization: Bearer ..."`` would be
+        persisted verbatim. The full arguments stay on the audit side channel, which
+        is written to the workspace rather than to a shareable log.
         """
         hard = [getattr(calls[i], "tool", "") for i, j in enumerate(judgements) if j.hard_deny]
         if hard:
             logger.warning("[permission] hard_deny matched mode=%s tools=%s", self._mode.value, hard)
         blocked = [
-            (getattr(calls[i], "tool", ""), verdicts[i].verdict, _summary(calls[i]))
+            (getattr(calls[i], "tool", ""), verdicts[i].verdict)
             for i in range(len(calls))
             if verdicts[i].verdict != "allow"
         ]

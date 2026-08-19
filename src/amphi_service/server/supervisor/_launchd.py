@@ -154,7 +154,15 @@ class LaunchdSupervisor(AutostartSupervisor):
         """Atomically install, reload, and start the LaunchAgent."""
         self._install_definition(spec)
         self._bootout()
-        # After bootout: the job no longer holds the crash-net files open.
+        # ``_bootout`` does not raise when launchctl refuses (a wedged job, a
+        # KeepAlive restart in flight), and trimming under a job that still
+        # holds the files open is exactly what its docstring forbids. Same
+        # guard as ``disable`` / ``deactivate``; this is the path every
+        # ``server start`` takes on macOS.
+        if self._is_loaded():
+            raise SupervisorError(
+                f"launchd job {self.target} remains loaded after bootout"
+            )
         self._trim_crash_net()
         result = self._run(
             ("launchctl", "bootstrap", self.domain, str(self.plist_path))

@@ -374,3 +374,19 @@ async def test_no_audit_dir_disables_grants(tmp_path: Path) -> None:
     engine = PermissionEngine("/workspace", [], ExecutionMode.AUTO, _AlwaysAsk())
     v = await engine.evaluate([_call("bash", command="curl -sS https://api.test/ping")])
     assert v[0].verdict == "ask"
+
+
+async def test_decision_log_never_carries_call_arguments(caplog) -> None:
+    # daemon 有了 root file handler 之后,这条 INFO 会落进 server.log ——
+    # 也就是 GUI"Open Logs"打开、用户往 bug 报告里贴的那个文件。
+    # 命令文本(可能含 token / 密码)不许出现在里面,tool + verdict 才是诊断价值。
+    caplog.set_level("INFO", logger="src.amphi_agent.security._engine")
+    engine = PermissionEngine("/workspace", [], ExecutionMode.REQUEST)
+    await engine.evaluate(
+        [_call("bash", command='curl -H "Authorization: Bearer sk-super-secret"  https://x/')]
+    )
+    text = caplog.text
+    assert "sk-super-secret" not in text
+    assert "Authorization" not in text
+    assert "[permission]" in text
+    assert "bash" in text

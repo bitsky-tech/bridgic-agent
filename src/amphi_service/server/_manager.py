@@ -1052,7 +1052,7 @@ class ServerManager:
                 # Crash net, not server.log: the daemon writes its structured
                 # log itself (see _logging), and its own stderr holding
                 # server.log open would break rotation on Windows.
-                log_path=self.registration.path.parent / STDERR_LOG_FILE.name,
+                log_path=self.stderr_log_path,
                 platform=self._platform,
             )
         return self._detached

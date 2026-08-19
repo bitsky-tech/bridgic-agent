@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 LifecycleHook = Callable[[], Optional[Awaitable[None]]]
 
+#: How ``--log-level`` reaches a reload worker, which uvicorn spawns as a
+#: fresh process that inherits environment but not arguments.
+RELOAD_LOG_LEVEL_ENV = "AMPHI_RELOAD_LOG_LEVEL"
+
 logger = logging.getLogger(__name__)
 
 
@@ -167,6 +171,15 @@ class UvicornRunner:
                 # None on purpose: uvicorn then skips dictConfig entirely and
                 # its loggers propagate to the root handlers installed above.
                 log_config=None,
+                # That propagation is also why access logging has to go: with
+                # a dictConfig uvicorn gives uvicorn.access its own handler
+                # and propagate=False, so it never touched the app's log. Now
+                # it would share server.log's 5 MB × 2 rotation budget, and a
+                # health check every 30 s (PythonClient) plus normal API
+                # traffic would rotate away the tracebacks this file exists to
+                # keep. The --reload path keeps its access log: it uses
+                # log_config() and writes to a terminal, not to the budget.
+                access_log=False,
             )
             server = GracefulServer(
                 config,
@@ -186,6 +199,9 @@ class UvicornRunner:
     @staticmethod
     def _run_reload(options: ServerOptions) -> None:
         """Run an unmanaged development reloader."""
+        # The worker is a separate process, so the flag has to travel as
+        # environment rather than as an argument. See create_reload_app.
+        os.environ[RELOAD_LOG_LEVEL_ENV] = options.log_level
         uvicorn.run(
             "src.amphi_service.server._uvicorn:create_reload_app",
             factory=True,
@@ -205,10 +221,16 @@ def create_reload_app() -> Any:
     never reaches the worker that actually runs the application. Without this
     the root logger has no handler and the whole reason ``_logging`` exists —
     application records reaching a log at all — would not hold in dev.
+
+    ``--log-level`` has to travel the same distance. Uvicorn hands the worker
+    its own three loggers at the requested level, but the application loggers
+    ``APP_LOGGER_NAMES`` exists to control are configured here; defaulting
+    them to INFO discarded ``--log-level debug`` in the one mode where a
+    developer asks for it by name.
     """
     from .._app import ServiceApp
 
-    configure_console_logging()
+    configure_console_logging(log_level=os.environ.get(RELOAD_LOG_LEVEL_ENV, "info"))
     return ServiceApp(bind_host=None, bind_port=None).app
 
 

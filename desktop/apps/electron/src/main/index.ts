@@ -348,13 +348,11 @@ function bootstrapPrimaryInstance(): void {
         quitApp: () => {
           void quitApp()
         },
-        // The tray has nowhere to render an error, so a failure has to reach
-        // the log instead — a click that silently does nothing is otherwise
-        // indistinguishable from a broken menu item.
+        // The tray has nowhere to render an error, but openDaemonLogs already
+        // logs every failure with its reason — repeating it here just doubled
+        // each line. The result is discarded on purpose.
         openLogs: () => {
-          void openDaemonLogs().then((result) => {
-            if (!result.ok) mainLog.warn(`[tray] open logs failed: ${result.reason}`)
-          })
+          void openDaemonLogs()
         },
       })
     },
