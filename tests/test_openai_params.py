@@ -46,6 +46,35 @@ def test_sanitize_non_openai_untouched() -> None:
     assert sanitize_openai_params(dict(src), base_url="https://api.deepseek.com") == src
 
 
+def test_sanitize_reasoning_model_rules_apply_on_any_host() -> None:
+    """Official rule: reasoning models reject temperature/top_p/... and only take
+    max_completion_tokens — a property of the model, not of the host. A relay
+    (LiteLLM, new-api) serving gpt-5-mini gets the same sanitized request."""
+    out = sanitize_openai_params(
+        {"model": "gpt-5-mini", "temperature": 0.0, "top_p": 1, "max_tokens": 64, "messages": []},
+        base_url="http://litellm.local:4000/v1")
+    assert "temperature" not in out and "top_p" not in out
+    assert "max_tokens" not in out and out["max_completion_tokens"] == 64
+
+
+def test_sanitize_o_series_on_relay_host() -> None:
+    out = sanitize_openai_params(
+        {"model": "o4-mini", "temperature": 0.0, "presence_penalty": 0.5, "max_tokens": 8},
+        base_url="http://136.116.56.93:3000/v1")
+    assert "temperature" not in out and "presence_penalty" not in out
+    assert out["max_completion_tokens"] == 8 and "max_tokens" not in out
+
+
+def test_sanitize_chat_alias_on_relay_host_untouched() -> None:
+    src = {"model": "gpt-5-chat-latest", "temperature": 0.0, "max_tokens": 8}
+    assert sanitize_openai_params(dict(src), base_url="http://litellm.local:4000/v1") == src
+
+
+def test_sanitize_non_reasoning_openai_model_on_relay_host_untouched() -> None:
+    src = {"model": "gpt-4o", "temperature": 0.0, "max_tokens": 8}
+    assert sanitize_openai_params(dict(src), base_url="http://litellm.local:4000/v1") == src
+
+
 def test_sanitize_kimi_code_forces_supported_temperature() -> None:
     src = {"model": "k3", "temperature": 0.0, "max_tokens": 8}
     out = sanitize_openai_params(src, base_url="https://api.kimi.com/coding/v1")
@@ -407,3 +436,130 @@ async def test_kimi_stream_open_timeout_is_bounded(monkeypatch) -> None:
 
     assert calls == 3
     assert [payload["attempt"] for channel, payload in events if channel == "model_retry"] == [1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Relay-shaped unsupported-param errors (LiteLLM) + achat self-heal
+# ---------------------------------------------------------------------------
+# LiteLLM enforces OpenAI's parameter rules itself and raises
+# ``litellm.UnsupportedParamsError`` with code "400" and param null — the
+# parameter name only lives in the message text. new-api tolerates the same
+# params, which is why this never surfaced there.
+
+class _LiteLLMExc(Exception):
+    """The shape the openai SDK exposes for a LiteLLM UnsupportedParamsError."""
+
+    status_code = 400
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"Error code: 400 - {{'error': {{'message': {message!r}}}}}")
+        self.code = "400"
+        self.param = None
+        self.body = {"error": {"message": message, "type": "None", "param": None, "code": "400"}}
+
+
+_LITELLM_GPT5 = (
+    "litellm.UnsupportedParamsError: gpt-5 models (including gpt-5-codex) don't support "
+    "temperature=0.0. Only temperature=1 is supported. To drop unsupported params set "
+    "`litellm.drop_params = True`. Received Model Group=gpt-5-mini\nAvailable Model Group Fallbacks=None"
+)
+_LITELLM_O_SERIES = (
+    "litellm.UnsupportedParamsError: O-series models don't support temperature=0.0. Only "
+    "temperature=1 is supported. To drop unsupported openai params from the call, set "
+    "`litellm.drop_params = True`"
+)
+
+
+def test_unsupported_param_of_reads_relay_message_text() -> None:
+    assert unsupported_param_of(_LiteLLMExc(_LITELLM_GPT5)) == "temperature"
+    assert unsupported_param_of(_LiteLLMExc(_LITELLM_O_SERIES)) == "temperature"
+    # OpenAI's own wording when the structured code/param fields are missing
+    assert unsupported_param_of(
+        _LiteLLMExc("Unsupported parameter: 'top_p' is not supported with this model.")
+    ) == "top_p"
+    # a 400 that names no request parameter is not healable
+    assert unsupported_param_of(_LiteLLMExc("Invalid model group")) is None
+    # only request parameters are candidates — random words before '=' don't count
+    assert unsupported_param_of(_LiteLLMExc("models don't support images=true")) is None
+
+
+async def test_self_heal_on_relay_unsupported_params_error() -> None:
+    """A LiteLLM-shaped 400 naming temperature → stripped, retried, cached."""
+    from bridgic.llms.openai import OpenAIConfiguration
+    from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm, _REJECTED_PARAMS
+
+    _REJECTED_PARAMS.clear()
+    calls: list = []
+
+    async def create(**params):
+        calls.append(dict(params))
+        if "temperature" in params:
+            raise _LiteLLMExc(_LITELLM_GPT5)
+        return _ok_stream()
+
+    # a name the static sanitizer cannot classify (a future reasoning model)
+    llm = OpenAICompatLlm(
+        api_key="k", api_base="http://litellm.local:4000/v1",
+        configuration=OpenAIConfiguration(model="gpt-6-reasoner", temperature=0.0),
+    )
+    llm.async_client = _fake_client(create)
+
+    result = await llm.stream_turn([], None, publish=lambda *a, **k: None)
+
+    assert result.content == "ok"
+    assert len(calls) == 2 and "temperature" not in calls[1]
+    assert "temperature" in _REJECTED_PARAMS.get(llm._reject_key(), set())
+    _REJECTED_PARAMS.clear()
+
+
+def test_build_parameters_pre_strips_learned_rejections() -> None:
+    """What the stream path learned applies to achat/chat too (probe, classifier)."""
+    from bridgic.core.model.types import Message, Role
+    from bridgic.llms.openai import OpenAIConfiguration
+    from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm, _REJECTED_PARAMS
+
+    _REJECTED_PARAMS.clear()
+    llm = OpenAICompatLlm(
+        api_key="k", api_base="http://litellm.local:4000/v1",
+        configuration=OpenAIConfiguration(model="gpt-4o", temperature=0.0),
+    )
+    _REJECTED_PARAMS[llm._reject_key()] = {"temperature"}
+
+    params = llm._build_parameters(messages=[Message.from_text("hi", role=Role.USER)])
+
+    assert "temperature" not in params
+    _REJECTED_PARAMS.clear()
+
+
+async def test_achat_self_heals_unsupported_param(monkeypatch) -> None:
+    """achat (probe / classifier) strips a rejected param and retries once, so a
+    brand-new process can talk to gpt-5-mini through LiteLLM without a stream
+    having learned the rejection first."""
+    from bridgic.core.model import ModelUnrecoverableError
+    from bridgic.core.model.types import Message, Role
+    from bridgic.llms.openai import OpenAIConfiguration, OpenAILlm
+    from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm, _REJECTED_PARAMS
+
+    _REJECTED_PARAMS.clear()
+    attempts: list = []
+
+    async def fake_super_achat(self, messages, **kwargs):
+        attempts.append(dict(self._build_parameters(messages=messages, **kwargs)))
+        if "temperature" in attempts[-1]:
+            raise ModelUnrecoverableError(
+                "achat failed", operation="achat", original_exception=_LiteLLMExc(_LITELLM_GPT5),
+            )
+        return "pong"
+
+    monkeypatch.setattr(OpenAILlm, "achat", fake_super_achat)
+    llm = OpenAICompatLlm(
+        api_key="k", api_base="http://litellm.local:4000/v1",
+        configuration=OpenAIConfiguration(model="gpt-6-reasoner", temperature=0.0),
+    )
+
+    out = await llm.achat([Message.from_text("ping", role=Role.USER)])
+
+    assert out == "pong"
+    assert len(attempts) == 2 and "temperature" not in attempts[1]
+    assert "temperature" in _REJECTED_PARAMS.get(llm._reject_key(), set())
+    _REJECTED_PARAMS.clear()

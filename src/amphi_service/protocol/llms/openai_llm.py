@@ -165,10 +165,45 @@ class OpenAICompatLlm(OpenAILlm):
 
         Covers every exit: stream_turn (streaming) and the inherited chat/achat
         (probing/titling/compaction) all go through this assembly, so reasoning models'
-        parameter 400s are cured here in one place. Non-OpenAI endpoints pass through.
+        parameter 400s are cured here in one place. Reasoning-model rules are keyed
+        on the model name, so they hold behind relays too; other endpoints pass through.
         """
         params = super()._build_parameters(*args, **kwargs)
-        return sanitize_openai_params(params, base_url=getattr(self, "api_base", None))
+        params = sanitize_openai_params(params, base_url=getattr(self, "api_base", None))
+        # Drop what this endpoint already rejected (learned by ``_create_stream`` /
+        # ``achat``), so the probe and the safety classifier don't re-hit the 400.
+        for name in _REJECTED_PARAMS.get(self._reject_key(), ()):
+            params.pop(name, None)
+        return params
+
+    async def achat(self, messages: List[Message], **kwargs: Any) -> Any:
+        """bridgic's achat plus the unsupported-parameter self-heal.
+
+        Known reasoning models are sanitized up front; this covers the rest — a
+        model the name heuristic misses behind a strict relay (LiteLLM without
+        ``drop_params``) rejects e.g. ``temperature`` on every call, including the
+        provider probe and the safety classifier, which reach the model through
+        achat before any stream could learn the rejection. A
+        ``ModelUnrecoverableError`` wrapping such a 400 strips the named param,
+        caches it, and retries; anything else propagates unchanged.
+        """
+        key = self._reject_key()
+        heal_retries = 0
+        while True:
+            try:
+                return await super().achat(messages, **kwargs)
+            except Exception as exc:  # noqa: BLE001 — only the named-param 400 is healed
+                original = getattr(exc, "original_exception", None) or exc
+                param = unsupported_param_of(original)
+                if (
+                    param is not None
+                    and param not in _REJECTED_PARAMS.get(key, set())
+                    and heal_retries < _MAX_SELF_HEAL_RETRIES
+                ):
+                    _REJECTED_PARAMS.setdefault(key, set()).add(param)
+                    heal_retries += 1
+                    continue
+                raise
 
     async def stream_turn(
         self,
