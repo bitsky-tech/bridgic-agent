@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bridgic-gradient" x1="0" y1="32" x2="64" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#008dfd" />
+      <stop offset="1" stop-color="#b970ff" />
+    </linearGradient>
+    <clipPath id="bridgic-clip">
+      <rect width="64" height="64" rx="12" ry="12" fill="none" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#bridgic-clip)">
+    <path fill="url(#bridgic-gradient)" d="M0 0h64v64H0z" />
+    <path fill="#fff" d="M53.33 19.2l-14.22-8.53L32 14.93l14.22 8.54L32 32l14.22 8.53L32 49.07l7.11 4.26 14.22-8.53v-8.53L46.22 32l7.11-4.27V19.2zM17.78 32L32 23.47l-7.11-4.27-14.22 8.53v8.54l14.22 8.53L32 40.53 17.78 32z" />
+  </g>
+</svg>
