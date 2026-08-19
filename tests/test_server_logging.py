@@ -233,3 +233,105 @@ def test_crash_net_note_stays_silent_when_there_is_nothing_to_read(
     log_crash_net_size(empty)
 
     assert log_path.read_text(encoding="utf-8") == banner_only
+
+
+def _blocked(log_path: Path) -> None:
+    # 让 RotatingFileHandler 打不开:路径上是个目录 → OSError(IsADirectoryError)。
+    log_path.mkdir()
+
+
+def test_degraded_configure_installs_the_self_healing_fallback(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "server.log"
+    _blocked(log_path)
+
+    handler = configure_daemon_logging(log_path, stderr=io.StringIO())
+
+    assert handler is None
+    fallbacks = [
+        h
+        for h in logging.getLogger().handlers
+        if isinstance(h, logging_module._SelfHealingConsoleHandler)
+    ]
+    assert len(fallbacks) == 1
+
+
+def test_degraded_logging_recovers_when_the_path_becomes_writable(
+    tmp_path: Path,
+) -> None:
+    """降级的常见诱因(磁盘满/目录被临时锁)是暂时的;此前一旦降级就永远
+    把全部日志写进无轮转的 crash net,直到下次重启。现在按 emit 限频重试,
+    路径恢复可写后自动切回 server.log。"""
+    log_path = tmp_path / "server.log"
+    _blocked(log_path)
+    console = io.StringIO()
+    now = {"t": 0.0}
+
+    fallback = logging_module._SelfHealingConsoleHandler(
+        console,
+        log_path=log_path,
+        formatter=logging.Formatter(logging_module.LOG_FORMAT),
+        max_bytes=logging_module.LOG_MAX_BYTES,
+        backup_count=logging_module.LOG_BACKUP_COUNT,
+        retry_seconds=300.0,
+        monotonic=lambda: now["t"],
+    )
+    root = logging.getLogger()
+    root.addHandler(fallback)
+    root.setLevel(logging.INFO)
+    probe = logging.getLogger("probe.selfheal")
+
+    # 阶段 1:路径仍不可写,重试窗口已到 → 尝试失败,继续走 console。
+    now["t"] = 301.0
+    probe.info("degraded-1")
+    assert "degraded-1" in console.getvalue()
+    assert not (tmp_path / "server.log").is_file()
+
+    # 阶段 2:路径恢复可写,但还在限频窗口内 → 不重试,仍走 console。
+    log_path.rmdir()
+    probe.info("degraded-2")
+    assert "degraded-2" in console.getvalue()
+    assert not log_path.is_file()
+
+    # 阶段 3:窗口过后第一条记录触发接管:本条起进文件,console 不再增长。
+    now["t"] = 602.0
+    probe.info("recovered-1")
+    console_after_heal = console.getvalue()
+    content = log_path.read_text(encoding="utf-8")
+    assert "recovered-1" in content
+    assert "[daemon-logging] recovered" in content
+    assert "recovered-1" not in console_after_heal
+
+    probe.info("recovered-2")
+    assert "recovered-2" in log_path.read_text(encoding="utf-8")
+    assert console.getvalue() == console_after_heal
+
+
+def test_degraded_recovery_keeps_a_tty_console(tmp_path: Path) -> None:
+    # 开发终端里降级后恢复:成功路径本来就是 file + TTY console 双写,
+    # 恢复后的拓扑必须一致 —— 终端不能突然安静下来。
+    log_path = tmp_path / "server.log"
+    _blocked(log_path)
+    console = _TtyStderr()
+    now = {"t": 0.0}
+
+    fallback = logging_module._SelfHealingConsoleHandler(
+        console,
+        log_path=log_path,
+        formatter=logging.Formatter(logging_module.LOG_FORMAT),
+        max_bytes=logging_module.LOG_MAX_BYTES,
+        backup_count=logging_module.LOG_BACKUP_COUNT,
+        retry_seconds=300.0,
+        monotonic=lambda: now["t"],
+    )
+    root = logging.getLogger()
+    root.addHandler(fallback)
+    root.setLevel(logging.INFO)
+
+    log_path.rmdir()
+    now["t"] = 301.0
+    logging.getLogger("probe.selfheal.tty").info("after-heal")
+
+    assert "after-heal" in log_path.read_text(encoding="utf-8")
+    assert "after-heal" in console.getvalue()
