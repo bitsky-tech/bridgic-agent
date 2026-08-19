@@ -182,7 +182,7 @@ export function SessionAssetsPanel({
             type="button"
             onClick={() => setAddOpen((o) => !o)}
             disabled={!sessionId}
-            className="inline-flex items-center gap-0.5 text-xs text-brand-blue hover:opacity-80 disabled:opacity-40"
+            className="inline-flex items-center gap-0.5 text-xs text-text-accent hover:opacity-80 disabled:opacity-40"
             aria-expanded={addOpen}
           >
             {Icons.plus(12)}

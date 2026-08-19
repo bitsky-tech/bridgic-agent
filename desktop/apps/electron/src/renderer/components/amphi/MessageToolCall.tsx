@@ -72,7 +72,7 @@ export function MessageToolCall({ call }: MessageToolCallProps) {
 function ToolSection({ label, body, error }: { label: string; body: string; error?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="text-[0.7rem] uppercase tracking-wide text-text-tertiary mb-1">{label}</div>
+      <div className="text-xs uppercase tracking-wide text-text-tertiary mb-1">{label}</div>
       <pre
         className={cn(
           // max-h + overflow-auto: tool inputs/results can be very long (reading a whole file, big JSON),

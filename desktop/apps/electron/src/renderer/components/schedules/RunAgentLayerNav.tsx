@@ -70,16 +70,16 @@ export function RunAgentLayerNav({ subagents, mainSessionId, selectedSessionId, 
   const { t } = useTranslation()
   return (
     <aside className="w-52 flex-shrink-0 overflow-y-auto border-r border-border-subtle px-2.5 py-3">
-      <div className="mb-1.5 px-2 text-[11px] font-medium text-text-tertiary">{t('schedule.nav.title')}</div>
+      <div className="mb-1.5 px-2 text-xs font-medium text-text-tertiary">{t('schedule.nav.title')}</div>
       <NavButton
-        icon={<Bot size={14} className="text-brand-blue" />}
+        icon={<Bot size={14} className="text-text-accent" />}
         label={t('schedule.nav.mainAgent')}
         selected={selectedSessionId === mainSessionId}
         onClick={() => onSelect(mainSessionId)}
       />
       {subagents.length > 0 && (
         <>
-          <div className="mb-1 mt-3 px-2 text-[11px] text-text-tertiary">
+          <div className="mb-1 mt-3 px-2 text-xs text-text-tertiary">
             {t('schedule.nav.subAgents', { n: subagents.length })}
           </div>
           <div className="space-y-0.5">

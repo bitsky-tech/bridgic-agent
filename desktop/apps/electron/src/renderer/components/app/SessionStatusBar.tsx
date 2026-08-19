@@ -132,7 +132,7 @@ export function SessionStatusBar({
             </div>
             {!isNarrow && (
               <Tooltip content={description} onlyWhenTruncated>
-                <div className="mt-0.5 truncate text-[11px] text-text-tertiary">{description}</div>
+                <div className="mt-0.5 truncate text-xs text-text-tertiary">{description}</div>
               </Tooltip>
             )}
           </div>

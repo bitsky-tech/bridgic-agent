@@ -165,6 +165,17 @@ describe('SettingsAboutTab update row', () => {
     expect(host.textContent).toContain(i18n.t('modals.about.updateFailed'))
     await cleanup()
   })
+
+  it('explains the wait while the smaller download is being prepared', async () => {
+    const { host, emit, cleanup } = await mountAbout()
+
+    await emit({ type: 'preparing' })
+
+    // 重建差分源约 44 秒,且只在装机后的首次更新出现。这段时间不给反馈,
+    // 点过「检查更新」的人看到的就是一行不动的字 —— 与卡死无法区分。
+    expect(host.textContent).toContain(i18n.t('modals.about.updatePreparing'))
+    await cleanup()
+  })
 })
 
 /**
@@ -310,6 +321,48 @@ describe('SettingsAboutTab community links', () => {
     await clickTestId('about-wechat-toggle')
     expect(count('about-wechat-qr')).toBe(0)
 
+    await cleanup()
+  })
+})
+
+describe('SettingsAboutTab update row honesty', () => {
+  it('does not claim "up to date" before anything has been checked', async () => {
+    const { host, cleanup } = await mountAbout()
+
+    // 回归防护,不是修 bug —— `unknown` 目前会提前 return null。
+    // 之所以值得钉住:后台检查发现更新后要重建差分源(约 44 秒),这段时间里
+    // 打开面板拿到的是 stagedVersion: null。哪天有人把 unknown 并进末尾那个
+    // else,面板就会在一个更新正在准备的当口断言「已是最新」。
+    expect(host.textContent).not.toContain(i18n.t('modals.about.updateUpToDate'))
+    await cleanup()
+  })
+})
+
+describe('SettingsAboutTab check button feedback', () => {
+  it('says something when a check is already running and the row is blank', async () => {
+    // 后台检查发现更新后要重建差分源(约 44 秒),整个窗口内没有任何事件到达
+    // 面板。此时打开 Settings 的用户看到的是空白一行,点「检查更新」拿到 busy,
+    // 若不落任何状态,按钮就像坏的一样。
+    checkNow.mockImplementation(async () => 'busy')
+    const { host, click, cleanup } = await mountAbout()
+
+    await click()
+
+    expect(host.textContent).toContain(i18n.t('modals.about.updateChecking'))
+    await cleanup()
+  })
+
+  it('does not overwrite a more informative state with "checking"', async () => {
+    // 已知在下载 45% 时,「检查中」是信息量更低的说法 —— 这正是当初 busy
+    // 不动那一行的原因,不能因为上面那条把它退回去。
+    checkNow.mockImplementation(async () => 'busy')
+    const { host, emit, click, cleanup } = await mountAbout()
+
+    await emit({ type: 'progress', percent: 45, bytesPerSecond: 1024 })
+    const during = host.textContent
+    await click()
+
+    expect(host.textContent).toBe(during)
     await cleanup()
   })
 })

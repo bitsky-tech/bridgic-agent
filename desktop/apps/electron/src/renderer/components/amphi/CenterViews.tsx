@@ -40,6 +40,11 @@ import {
 } from '@/lib/amphiClient'
 import { formatBytes } from '@/lib/toolDisplay'
 import { formatWorkflowRunShortTimestamp, workflowRunInputBlocks } from '@/lib/workflowRun'
+import { CenterPageLayout } from './CenterPageLayout'
+import { EmptyState } from './EmptyState'
+import { FilterTabs } from './FilterTabs'
+import { RefreshButton } from './RefreshButton'
+import { SearchBox } from './SearchBox'
 import { Icons } from './Icons'
 import { StructuredInput } from './StructuredInput'
 import { WindowedList } from './WindowedList'
@@ -124,13 +129,11 @@ export function CenterWorkflows({
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-8 pt-5 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-text-primary m-0">{t('center.common.workflows')}</h2>
-          <p className="text-sm text-text-secondary mt-1">{t('center.workflows.subtitle')}</p>
-        </div>
-        <div className="flex gap-2">
+    <CenterPageLayout
+      title={t('center.common.workflows')}
+      subtitle={t('center.workflows.subtitle')}
+      actions={
+        <>
           <input
             ref={importInputRef}
             type="file"
@@ -142,37 +145,25 @@ export function CenterWorkflows({
               event.target.value = ''
             }}
           />
-          <label className="flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-bg-input border border-border-subtle w-[220px]">
-            {Icons.search(14)}
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('center.workflows.searchPlaceholder')}
-              className="w-full bg-transparent text-sm text-text-primary outline-none placeholder:text-text-tertiary"
-            />
-          </label>
-          <Btn variant="default" size="md" onClick={() => importInputRef.current?.click()}>
+          <SearchBox
+            value={query}
+            onChange={setQuery}
+            placeholder={t('center.workflows.searchPlaceholder')}
+          />
+          <Btn variant="primary" size="md" onClick={() => importInputRef.current?.click()}>
             {Icons.download(14)} {t('center.common.import')}
           </Btn>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-auto px-8 pt-5 pb-8">
+        </>
+      }
+    >
+      <>
         {visible.length === 0 ? (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center">
-              <div className="mx-auto mb-3 w-11 h-11 rounded-md bg-accent-blue-subtle flex items-center justify-center text-brand-blue">
-                {Icons.workflow(22)}
-              </div>
-              {/* "No search matches" and "there are none at all" are two different things — the former suggests changing the keyword, the latter points to /build. */}
-              <div className="text-sm font-semibold text-text-primary">
-                {isSearching ? t('center.workflows.empty.noMatchTitle') : t('center.workflows.empty.title')}
-              </div>
-              <div className="mt-1 text-xs text-text-secondary">
-                {isSearching ? t('center.workflows.empty.noMatchDesc') : t('center.workflows.empty.desc')}
-              </div>
-            </div>
-          </div>
+          /* "No search matches" and "there are none at all" are two different things — the former suggests changing the keyword, the latter points to /build. */
+          <EmptyState
+            icon={Icons.workflow}
+            title={isSearching ? t('center.workflows.empty.noMatchTitle') : t('center.workflows.empty.title')}
+            description={isSearching ? t('center.workflows.empty.noMatchDesc') : t('center.workflows.empty.desc')}
+          />
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {visible.map((w) => (
@@ -185,7 +176,7 @@ export function CenterWorkflows({
                 <div className="px-[18px] py-4">
                   <div className="flex items-start justify-between mb-2.5">
                     <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-md bg-accent-blue-subtle flex items-center justify-center text-brand-blue">
+                      <div className="w-9 h-9 rounded-md bg-accent-blue-subtle flex items-center justify-center text-text-accent">
                         {Icons.workflow(18)}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -331,8 +322,8 @@ export function CenterWorkflows({
             ))}
           </div>
         )}
-      </div>
-    </div>
+      </>
+    </CenterPageLayout>
   )
 }
 
@@ -388,7 +379,7 @@ function SkillRow({
           className={cn(
             'w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0',
             skill.enabled
-              ? 'bg-accent-purple-subtle text-brand-purple'
+              ? 'bg-accent-purple-subtle text-text-accent-purple'
               : 'bg-bg-hover text-text-tertiary',
           )}
         >
@@ -412,7 +403,7 @@ function SkillRow({
               {clamped && (
                 <button
                   type="button"
-                  className="mt-1 text-xs font-semibold text-brand-blue"
+                  className="mt-1 text-xs font-semibold text-text-accent"
                   onClick={() => setExpanded((x) => !x)}
                 >
                   {expanded ? t('center.common.collapse') : t('center.common.expandFull')}
@@ -464,13 +455,13 @@ function SkillsBody({
 }) {
   const { t } = useTranslation()
   if (state === 'loading' && skills.length === 0) {
-    return <div className="text-sm text-text-tertiary py-8 text-center">{t('center.common.loading')}</div>
+    return <EmptyState title={t('center.common.loading')} />
   }
   if (state === 'error') {
-    return <div className="text-sm text-status-error py-8 text-center">{t('center.skills.loadFailed')}</div>
+    return <EmptyState title={t('center.skills.loadFailed')} tone="error" />
   }
   if (skills.length === 0) {
-    return <div className="text-sm text-text-tertiary py-8 text-center">{t('center.skills.empty')}</div>
+    return <EmptyState icon={Icons.terminal} title={t('center.skills.empty')} />
   }
   return (
     <div className="flex flex-col gap-3">
@@ -512,22 +503,19 @@ export function CenterSkills() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-8 pt-5 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-text-primary m-0">Skills</h2>
-          <p className="text-sm text-text-secondary mt-1">{t('center.skills.subtitle')}</p>
-        </div>
-        <div className="flex gap-2">
-          <div className="flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-bg-input border border-border-subtle w-[220px]">
-            {Icons.search(14)}
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('center.skills.searchPlaceholder')}
-              className="bg-transparent outline-none text-sm text-text-primary placeholder:text-text-tertiary w-full"
-            />
-          </div>
+    <CenterPageLayout
+      /* Not run through i18n, unlike the three sibling pages — "Skills" is left
+         as-is here rather than silently introducing a key the locale files do
+         not have. */
+      title="Skills"
+      subtitle={t('center.skills.subtitle')}
+      actions={
+        <>
+          <SearchBox
+            value={query}
+            onChange={setQuery}
+            placeholder={t('center.skills.searchPlaceholder')}
+          />
           <Btn
             variant="primary"
             size="md"
@@ -536,40 +524,24 @@ export function CenterSkills() {
           >
             {Icons.download(14)} {t('center.skills.manualImport')}
           </Btn>
-        </div>
-      </div>
-
-      {/* Filter tabs — §LS1: flip only color/background, never the font weight or border width. */}
-      <div className="px-8 pt-4">
-        <div className="flex gap-1 p-1 rounded-md border border-border-subtle bg-bg-surface w-fit">
-          {SKILL_FILTER_KEYS.map((key) => (
-            <button
-              key={key}
-              type="button"
-              data-testid={`skill-filter-${key}`}
-              onClick={() => setFilter(key)}
-              className={cn(
-                'px-3 py-1 rounded-[5px] text-sm',
-                filter === key
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-tertiary hover:text-text-secondary',
-              )}
-            >
-              {getSkillFilterLabel(t, key)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-auto px-8 pt-4 pb-8">
-        <SkillsBody
-          state={hydrationState}
-          skills={visible}
-          onToggle={handleToggle}
-          onDelete={handleDelete}
+        </>
+      }
+      filters={
+        <FilterTabs
+          tabs={SKILL_FILTER_KEYS.map((key) => ({ key, label: getSkillFilterLabel(t, key) }))}
+          value={filter}
+          onChange={setFilter}
+          testIdPrefix="skill-filter-"
         />
-      </div>
-    </div>
+      }
+    >
+      <SkillsBody
+        state={hydrationState}
+        skills={visible}
+        onToggle={handleToggle}
+        onDelete={handleDelete}
+      />
+    </CenterPageLayout>
   )
 }
 
@@ -614,7 +586,7 @@ function runStatus(t: TFunction, run: WorkflowRunSummary): { label: string; tone
   if (run.status === 'paused') return { label: t('center.common.status.paused'), tone: 'bg-bg-hover text-text-tertiary' }
   if (run.status === 'cancelled') return { label: t('center.common.status.cancelled'), tone: 'bg-bg-hover text-text-tertiary' }
   if (run.status === 'waiting') return { label: t('center.common.status.waiting'), tone: 'bg-status-warning-bg text-status-warning' }
-  return { label: t('center.common.status.running'), tone: 'bg-accent-blue-subtle text-brand-blue' }
+  return { label: t('center.common.status.running'), tone: 'bg-accent-blue-subtle text-text-accent' }
 }
 
 function SessionFilesTable({
@@ -650,12 +622,12 @@ function SessionFilesTable({
             className="grid grid-cols-[minmax(0,1fr)_100px_110px_minmax(150px,220px)] items-center gap-3 border-t border-border-subtle px-4 py-2.5"
           >
             <div className="flex min-w-0 items-center gap-2.5">
-              <span className={cn('flex shrink-0', asset.exists ? 'text-brand-blue' : 'text-status-error')}>
+              <span className={cn('flex shrink-0', asset.exists ? 'text-text-accent' : 'text-status-error')}>
                 {asset.kind === 'folder' ? Icons.folder(17) : Icons.file(17)}
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium text-text-primary">{asset.name}</span>
-                <span className="mt-0.5 block truncate font-mono text-[10px] text-text-tertiary">{asset.path}</span>
+                <span className="mt-0.5 block truncate font-mono text-2xs text-text-tertiary">{asset.path}</span>
               </span>
             </div>
             <span className={cn('text-xs', asset.exists ? 'text-text-secondary' : 'text-status-error')}>{mountSize(t, asset)}</span>
@@ -664,7 +636,7 @@ function SessionFilesTable({
             <button
               type="button"
               onClick={() => onOpenSession(asset.session_id)}
-              className="truncate text-left text-xs font-medium text-brand-blue hover:underline"
+              className="truncate text-left text-xs font-medium text-text-accent hover:underline"
             >
               {asset.session_title || asset.session_id}
             </button>
@@ -728,7 +700,7 @@ function WorkflowResultsTree({
               >
                 <span className="flex min-w-0 items-center gap-2.5">
                   <span className="shrink-0 text-text-tertiary">{open ? Icons.chevronDown(14) : Icons.chevronRight(14)}</span>
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">{Icons.workflow(15)}</span>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">{Icons.workflow(15)}</span>
                   <span className="truncate text-sm font-semibold text-text-primary">{group.workflowName}</span>
                 </span>
                 <span className="text-xs text-text-secondary">{t('center.assets.runs.runCount', { n: group.runs.length })}</span>
@@ -748,9 +720,9 @@ function WorkflowResultsTree({
                         <span className="block truncate text-sm font-medium text-text-primary">
                           <StructuredInput blocks={workflowRunInputBlocks(run)} />
                         </span>
-                        <span className="mt-0.5 block truncate font-mono text-[10px] text-text-tertiary">{run.id}</span>
+                        <span className="mt-0.5 block truncate font-mono text-2xs text-text-tertiary">{run.id}</span>
                       </span>
-                      <span className={cn('w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold', status.tone)}>{status.label}</span>
+                      <span className={cn('w-fit rounded-full px-2 py-0.5 text-2xs font-semibold', status.tone)}>{status.label}</span>
                       <span className="font-mono text-xs text-text-secondary">{formatWorkflowRunShortTimestamp(run.created_at)}</span>
                     </button>
                     {run.status === 'completed' ? (
@@ -851,29 +823,27 @@ export function CenterAssets() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-8 pt-5 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-text-primary m-0">{t('center.common.myAssets')}</h2>
-          <p className="text-sm text-text-secondary mt-1">{t('center.assets.subtitle')}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-bg-input border border-border-subtle w-[260px]">
-            {Icons.search(14)}
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('center.assets.searchPlaceholder')}
-              className="w-full bg-transparent text-sm text-text-primary outline-none placeholder:text-text-tertiary"
-            />
-          </label>
-          <Btn variant="ghost" size="sm" onClick={() => void hydrate()}>{Icons.refresh(14)} {t('center.common.refresh')}</Btn>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-auto px-8 pt-5 pb-8">
+    <CenterPageLayout
+      title={t('center.common.myAssets')}
+      subtitle={t('center.assets.subtitle')}
+      actions={
+        <>
+          <SearchBox
+            value={query}
+            onChange={setQuery}
+            placeholder={t('center.assets.searchPlaceholder')}
+          />
+          {/* The page-level "loading" line only renders while there is nothing to
+              show (`sessionFiles.length === 0 && ...`) — deliberately, so a
+              refresh never blanks out content you are reading. That left the
+              button as the only place a refresh could be seen at all. */}
+          <RefreshButton onRefresh={hydrate} label={t('center.common.refresh')} />
+        </>
+      }
+    >
+      <>
         {hydrationState === 'loading' && sessionFiles.length === 0 && workflowRuns.length === 0 ? (
-          <div className="py-12 text-center text-sm text-text-tertiary">{t('center.assets.loading')}</div>
+          <EmptyState title={t('center.assets.loading')} />
         ) : null}
         {hydrationError ? (
           <div className="mb-4 flex items-center justify-between rounded-md bg-status-error-bg px-4 py-2.5 text-sm text-status-error">
@@ -900,7 +870,7 @@ export function CenterAssets() {
           })}
           onDeleteRun={(run) => void deleteWorkflowRun(run)}
         />
-      </div>
-    </div>
+      </>
+    </CenterPageLayout>
   )
 }

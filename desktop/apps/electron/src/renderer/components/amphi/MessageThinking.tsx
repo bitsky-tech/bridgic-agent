@@ -34,7 +34,7 @@ export function MessageThinking({ thinking, streaming = false }: MessageThinking
     <div>
       <div className="mb-1.5 flex items-center gap-1.5 text-text-secondary">
         {Icons.lightbulb(13)}
-        <span className="text-[11px] font-semibold tracking-[0.3px]">{t('message.thinking')}</span>
+        <span className="text-xs font-semibold tracking-[0.3px]">{t('message.thinking')}</span>
       </div>
       <StickyScroll
         active={streaming}

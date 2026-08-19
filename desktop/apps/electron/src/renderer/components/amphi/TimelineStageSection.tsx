@@ -71,7 +71,7 @@ export function TimelineStageSection({
           <span className="shrink-0 font-medium text-text-secondary">{eyebrow}</span>
           <span className="truncate font-medium text-text-primary">{title}</span>
         </span>
-        <span className="shrink-0 text-[11px] text-text-tertiary group-hover:text-text-secondary">
+        <span className="shrink-0 text-xs text-text-tertiary group-hover:text-text-secondary">
           {open ? t('timeline.collapse') : t('timeline.expand')}
         </span>
       </button>

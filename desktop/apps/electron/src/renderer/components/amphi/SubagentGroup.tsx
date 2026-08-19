@@ -48,9 +48,9 @@ export function SubagentGroup({ subagents }: SubagentGroupProps) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 py-1.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary"
+        className="flex w-full items-center gap-2 py-1.5 text-left text-xs text-text-tertiary hover:text-text-secondary"
       >
-        <Bot size={13} className="shrink-0 text-brand-blue" />
+        <Bot size={13} className="shrink-0 text-text-accent" />
         <span className="font-medium text-text-secondary">{t('subagent.group.summary', { n: children.length })}</span>
         <span className="min-w-0 flex-1 truncate">{summaries.join(' · ')}</span>
         <ChevronDown size={12} className={cn('shrink-0 transition-transform', !open && '-rotate-90')} />
@@ -85,7 +85,7 @@ export function SubagentGroup({ subagents }: SubagentGroupProps) {
                 <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">
                   {child.goal || t('subagent.group.untitled')}
                 </span>
-                <span className="shrink-0 text-[11px] text-text-tertiary">
+                <span className="shrink-0 text-xs text-text-tertiary">
                   {lifecycle.shortLabel}
                 </span>
               </button>

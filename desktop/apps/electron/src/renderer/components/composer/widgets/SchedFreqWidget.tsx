@@ -333,7 +333,7 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
           'inline-flex items-center gap-1 align-baseline rounded-md border px-2 py-0.5 text-xs cursor-pointer',
-          'bg-accent-purple-subtle text-brand-purple border-brand-purple/30 hover:border-brand-purple',
+          'bg-accent-purple-subtle text-text-accent-purple border-brand-purple/30 hover:border-brand-purple',
         )}
       >
         {describe(cron)}
@@ -374,7 +374,7 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
             <PeriodFields st={st} set={set} />
             {/* Preview — human-readable only, never the raw cron. */}
             <div className="flex items-center gap-2.5 pt-3 border-t border-border-subtle">
-              <span className="text-[10px] font-semibold text-brand-blue bg-accent-blue-subtle px-2 py-0.5 rounded-full shrink-0">
+              <span className="text-2xs font-semibold text-text-accent bg-accent-blue-subtle px-2 py-0.5 rounded-full shrink-0">
                 {t('widget.schedFreq.preview')}
               </span>
               <span className="text-xs text-text-secondary">{describe(cron)}</span>

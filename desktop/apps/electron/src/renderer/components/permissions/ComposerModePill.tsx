@@ -124,19 +124,19 @@ export function ComposerModePill() {
                 }}
                 className={cn(
                   'flex items-start gap-2.5 px-3 py-2.5 rounded-md cursor-pointer border border-transparent',
-                  on && 'bg-bg-hover',
+                  on && 'bg-bg-selected',
                 )}
               >
                 <span className={cn('mt-0.5 shrink-0', modeTint(m.id))}>{modeIcon(m.id)(16)}</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-text-primary">{t(m.labelKey)}</div>
-                  <div className="text-[11px] text-text-secondary mt-0.5 leading-snug">{t(m.descKey)}</div>
+                  <div className="text-xs text-text-secondary mt-0.5 leading-snug">{t(m.descKey)}</div>
                 </div>
-                {on && <span className="text-brand-blue mt-0.5 shrink-0">{PIcon.check(14)}</span>}
+                {on && <span className="text-text-accent mt-0.5 shrink-0">{PIcon.check(14)}</span>}
               </div>
             )
           })}
-          <div className="px-3 pt-2 pb-1 mt-1 border-t border-border-subtle text-[11px] text-text-tertiary">
+          <div className="px-3 pt-2 pb-1 mt-1 border-t border-border-subtle text-xs text-text-tertiary">
             {t('permission.pill.globalNote')}
           </div>
         </div>

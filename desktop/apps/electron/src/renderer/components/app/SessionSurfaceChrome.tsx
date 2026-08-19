@@ -139,8 +139,8 @@ export function SurfaceRailButton({
       className={cn(
         'relative flex h-[50px] w-full flex-col items-center justify-center gap-1 rounded-[10px]',
         'border border-transparent text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary',
-        isActive && 'bg-bg-active text-text-primary',
-        isBusy && !showAttention && 'border-brand-blue/30 bg-accent-blue-subtle text-brand-blue',
+        isActive && 'bg-bg-selected text-text-primary',
+        isBusy && !showAttention && 'border-brand-blue/30 bg-accent-blue-subtle text-text-accent',
         showAttention && 'animate-surface-attention border-status-warning/40 bg-status-warning-bg text-status-warning hover:bg-status-warning-bg hover:text-status-warning motion-reduce:animate-none',
       )}
     >
@@ -157,12 +157,12 @@ export function SurfaceRailButton({
       ) : null}
       <span className={cn(
         'flex h-5 items-center justify-center',
-        isBusy && !showAttention && 'text-brand-blue',
+        isBusy && !showAttention && 'text-text-accent',
         isPulsing && 'animate-pulse motion-reduce:animate-none',
       )}>
         {icon}
       </span>
-      <span className="max-w-[46px] truncate text-[10px] font-medium leading-none">{label}</span>
+      <span className="max-w-[46px] truncate text-2xs font-medium leading-none">{label}</span>
     </button>
   )
 }

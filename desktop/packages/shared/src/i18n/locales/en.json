@@ -772,6 +772,7 @@
       "updateFailed": "Check failed",
       "updateNoBuildForArch": "No update is available for this architecture — download a matching build from the project page",
       "updateNow": "Update now",
+      "updatePreparing": "Preparing a smaller download…",
       "updateStaged": "Version {{version}} is ready",
       "updateUpToDate": "Up to date",
       "version": "Version"

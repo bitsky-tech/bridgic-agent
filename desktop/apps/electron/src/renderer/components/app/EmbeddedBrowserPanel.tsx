@@ -218,7 +218,7 @@ function BrowserLaunchEmptyState({ sessionId }: { sessionId: string }) {
         style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}
         data-testid="browser-empty-header"
       >
-        <span className="flex text-brand-blue">{Icons.globe(16)}</span>
+        <span className="flex text-text-accent">{Icons.globe(16)}</span>
         <span className="text-sm font-semibold text-text-primary">
           {t('session.resourcePanel.browser')}
         </span>

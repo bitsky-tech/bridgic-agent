@@ -65,7 +65,7 @@ function WorkflowPhaseRail({
             />
           ))}
         </div>
-        <span className="min-w-0 truncate whitespace-nowrap text-[11px] font-medium text-text-secondary">
+        <span className="min-w-0 truncate whitespace-nowrap text-xs font-medium text-text-secondary">
           {currentLabel}{narrow ? ` · ${progress}` : ''}
         </span>
       </div>
@@ -152,7 +152,7 @@ export function WorkflowRunHeader({ sessionId }: { sessionId?: string }) {
       isNarrow={narrow}
       title={t('workflowRunHeader.title')}
       badge={
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-accent-blue-subtle px-2 py-0.5 text-[10px] font-semibold text-brand-blue">
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-accent-blue-subtle px-2 py-0.5 text-2xs font-semibold text-text-accent">
           {phaseLabel} · {phaseProgress}
         </span>
       }
@@ -171,7 +171,7 @@ export function WorkflowRunHeader({ sessionId }: { sessionId?: string }) {
       }
       status={
         <span className={cn(
-          'hidden items-center gap-1.5 text-[11px] font-medium text-text-secondary',
+          'hidden items-center gap-1.5 text-xs font-medium text-text-secondary',
           !compact && 'sm:flex',
         )}>
           <span className={cn(

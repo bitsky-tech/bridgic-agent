@@ -126,7 +126,7 @@ export function ProcessTimeline({ blocks, streaming = false, defaultOpen = false
           {Icons.chevronRight(13)}
         </span>
         <span className="whitespace-nowrap text-xs font-medium text-text-secondary">{t('session.timeline.title')}</span>
-        <span className="whitespace-nowrap text-[11px] text-text-tertiary">
+        <span className="whitespace-nowrap text-xs text-text-tertiary">
           {t('session.timeline.summary.calls', { n: countToolCalls(blocks) })} · {t('session.timeline.summary.messages', { n: countMessages(blocks) })}
           {workflowSteps > 0 ? ` · ${t('session.timeline.summary.steps', { n: workflowSteps })}` : null}
           {confirmations > 0 ? ` · ${t('session.timeline.summary.confirmations', { n: confirmations })}` : null}
@@ -376,7 +376,7 @@ function CompletedInteractionRow({ block, sessionId }: { block: CompletedInterac
         </span>
         <span className="shrink-0 font-medium text-text-secondary">{label}</span>
         {detail && <span className="min-w-0 flex-1 truncate text-text-tertiary">{detail}</span>}
-        <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-text-tertiary group-hover:text-text-secondary">
+        <span className="ml-auto flex shrink-0 items-center gap-1 text-xs text-text-tertiary group-hover:text-text-secondary">
           {open ? t('session.interaction.hideRecord') : t('session.interaction.showRecord')}
           <span className={cn('transition-transform duration-200', open && 'rotate-90')}>
             {Icons.chevronRight(11)}

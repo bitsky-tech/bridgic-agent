@@ -260,10 +260,10 @@ function WorkflowResultRow({
           {statusIcon}
         </span>
         <div className="min-w-0 flex-1">
-          <h3 className="break-words text-[13px] font-semibold leading-5 text-text-primary">
+          <h3 className="break-words text-sm font-semibold leading-5 text-text-primary">
             {run.workflow_name}
           </h3>
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-text-tertiary">
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-text-tertiary">
             <span
               className={cn(
                 'font-medium',
@@ -286,7 +286,7 @@ function WorkflowResultRow({
         </p>
       ) : null}
       <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border-subtle pt-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-text-tertiary" title={run.id}>
+        <span className="min-w-0 flex-1 truncate font-mono text-2xs text-text-tertiary" title={run.id}>
           {run.id}
         </span>
         {onReference ? (

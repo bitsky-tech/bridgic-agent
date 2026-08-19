@@ -100,7 +100,7 @@ export function WorkflowDetailModal({
       contentStyle={{ overflow: 'hidden' }}
       customHeader={
         <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-5 py-4">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
             {Icons.workflow(20)}
           </div>
           <div className="min-w-0 flex-1">
@@ -467,17 +467,17 @@ function WorkflowNavItem({
       onClick={() => onSelect(entry.id)}
       className={cn(
         'mb-0.5 flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-2 text-left max-md:mb-0 max-md:w-[158px] max-md:shrink-0',
-        selected ? 'bg-accent-blue-subtle text-brand-blue' : 'text-text-secondary hover:bg-bg-hover',
+        selected ? 'bg-accent-blue-subtle text-text-accent' : 'text-text-secondary hover:bg-bg-hover',
       )}
     >
       <span className={cn(
         'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-bg-surface',
-        selected ? 'border-brand-blue/20 text-brand-blue' : 'border-border-subtle text-text-tertiary',
+        selected ? 'border-brand-blue/20 text-text-accent' : 'border-border-subtle text-text-tertiary',
       )}>
         <Icon size={14} strokeWidth={1.7} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className={cn('block truncate text-sm font-semibold', selected ? 'text-brand-blue' : 'text-text-primary')}>{entry.label}</span>
+        <span className={cn('block truncate text-sm font-semibold', selected ? 'text-text-accent' : 'text-text-primary')}>{entry.label}</span>
         <span className="mt-0.5 block truncate font-mono text-xs text-text-tertiary">{entry.path}</span>
       </span>
     </button>
@@ -563,7 +563,7 @@ function WorkflowDocumentReader({ entry }: { entry: WorkflowDocument }) {
                   aria-label={t('workflow.detail.openOutlineAria')}
                   aria-expanded={outlineOpen}
                   onClick={() => setOutlineOpen((open) => !open)}
-                  className="hidden h-7 w-7 items-center justify-center rounded-md hover:bg-bg-hover hover:text-brand-blue max-xl:flex"
+                  className="hidden h-7 w-7 items-center justify-center rounded-md hover:bg-bg-hover hover:text-text-accent max-xl:flex"
                 >
                   <ListTree size={15} strokeWidth={1.8} />
                 </button>
@@ -584,7 +584,7 @@ function WorkflowDocumentReader({ entry }: { entry: WorkflowDocument }) {
               <MarkdownMessage
                 content={entry.content}
                 className={cn(
-                  'text-[15px] leading-7 text-text-primary',
+                  'text-md leading-7 text-text-primary',
                   '[&_p]:my-3 [&_li]:my-1',
                   '[&_h1]:mb-7 [&_h1]:mt-0 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:leading-[1.35]',
                   '[&_h2]:mb-3 [&_h2]:mt-9 [&_h2]:text-lg [&_h2]:font-semibold',
@@ -625,7 +625,7 @@ function WorkflowOutline({ headings, activeHeading, onSelect }: { headings: Outl
             onClick={() => onSelect(heading)}
             className={cn(
               'relative block w-full truncate rounded-sm py-1.5 pr-2 text-left text-xs leading-5',
-              active ? 'bg-accent-blue-subtle font-semibold text-brand-blue' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+              active ? 'bg-accent-blue-subtle font-semibold text-text-accent' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
             )}
             style={{ paddingLeft: 10 + Math.min(heading.level - minimumLevel, 3) * 12 }}
           >

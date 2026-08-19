@@ -26,6 +26,7 @@ import { backendStateAtom } from '@/atoms/backend'
 import { BackendState } from '../../../main/python-client/types'
 import { cn } from '@/lib/cn'
 import { Icons } from './Icons'
+import { NavItem } from './NavItem'
 import { Tooltip } from './Tooltip'
 import { WindowedList } from './WindowedList'
 import { SettingsTabId } from './Modals'
@@ -187,27 +188,17 @@ export function LeftSidebar({
       </div>
 
       {/* Nav items — these change the CENTER content, not the sidebar itself */}
-      <div className="pt-2 px-2 flex flex-col gap-px">
-        {navItems.map((m) => {
-          const active = activeNav === m.id
-          return (
-            <div
-              key={m.id}
-              data-testid={`nav-${m.id}`}
-              onClick={() => onSelectNav?.(m.id)}
-              className={cn(
-                'flex items-center gap-2.5 px-2.5 py-[7px] rounded-md cursor-pointer',
-                active ? 'bg-bg-hover text-text-primary' : 'bg-transparent text-text-secondary',
-              )}
-            >
-              <span className={cn('flex items-center flex-shrink-0', active ? 'opacity-100' : 'opacity-60')}>
-                {m.icon(16)}
-              </span>
-              <span className={cn('flex-1 text-sm', active ? 'font-semibold' : 'font-normal')}>{t(m.labelKey)}</span>
-              <span className="text-text-tertiary opacity-50">{Icons.chevronRight(14)}</span>
-            </div>
-          )
-        })}
+      <div className="pt-2 px-2 flex flex-col gap-0.5">
+        {navItems.map((m) => (
+          <NavItem
+            key={m.id}
+            testId={`nav-${m.id}`}
+            icon={m.icon}
+            label={t(m.labelKey)}
+            active={activeNav === m.id}
+            onClick={() => onSelectNav?.(m.id)}
+          />
+        ))}
       </div>
 
       <Divider style={{ margin: '6px 12px' }} />
@@ -215,8 +206,8 @@ export function LeftSidebar({
       {/* Session list label */}
       <div className="px-2">
         <div className="flex items-center justify-between px-1.5 pt-1 pb-1.5">
-          <span className="text-xs font-semibold text-text-tertiary uppercase tracking-[0.5px]">{t('sidebar.sessions')}</span>
-          <span className="text-[10px] text-text-tertiary">{sessions.length}</span>
+          <span className="text-xs font-semibold text-text-secondary uppercase tracking-[0.5px]">{t('sidebar.sessions')}</span>
+          <span className="text-2xs text-text-tertiary">{sessions.length}</span>
         </div>
       </div>
 
@@ -272,7 +263,7 @@ export function LeftSidebar({
             >
               {Icons.bell(16)}
               {pendingCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-status-warning text-white text-[9px] font-bold flex items-center justify-center leading-none">
+                <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-status-warning text-white text-2xs font-bold flex items-center justify-center leading-none">
                   {pendingCount}
                 </span>
               )}

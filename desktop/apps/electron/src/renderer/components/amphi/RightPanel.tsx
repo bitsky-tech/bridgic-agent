@@ -275,7 +275,7 @@ export function RightPanel({
             )}
           >
             {c.label}
-            {c.count !== undefined && <span className="ml-1 opacity-60">{c.count}</span>}
+            {c.count !== undefined && <span className="ml-1">{c.count}</span>}
           </button>
         ))}
       </div>
@@ -372,7 +372,7 @@ export function BuildingCard({ fields = {} }: { fields?: BuildingFields }) {
               >
                 {f.label}
               </span>
-              {filled && f.editable && <span className="text-brand-blue">{Icons.edit(12)}</span>}
+              {filled && f.editable && <span className="text-text-accent">{Icons.edit(12)}</span>}
               {filled && !f.editable && <span className="text-text-tertiary">{Icons.eye(12)}</span>}
             </div>
           )
@@ -397,7 +397,7 @@ export function CompletedCard({
       <div className="px-3.5 py-3">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-md bg-accent-purple-subtle flex items-center justify-center text-brand-purple">
+            <div className="w-7 h-7 rounded-md bg-accent-purple-subtle flex items-center justify-center text-text-accent-purple">
               {Icons.workflow(14)}
             </div>
             <div>
@@ -414,7 +414,7 @@ export function CompletedCard({
                   e.stopPropagation()
                   onPreview?.()
                 }}
-                className="flex items-center justify-center w-6 h-6 rounded-sm text-text-tertiary hover:bg-bg-hover hover:text-brand-blue"
+                className="flex items-center justify-center w-6 h-6 rounded-sm text-text-tertiary hover:bg-bg-hover hover:text-text-accent"
               >
                 {Icons.eye(14)}
               </button>
@@ -463,14 +463,14 @@ export function WorkflowRunResultCard({
       <div className="px-3.5 py-3">
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-brand-blue">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
               {Icons.file(14)}
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-text-primary">
                 {run.workflow_name}
               </div>
-              <div className="mt-0.5 text-[11px] text-text-tertiary">
+              <div className="mt-0.5 text-xs text-text-tertiary">
                 {formatWorkflowRunShortTimestamp(run.finished_at ?? run.created_at, i18n.language)}
               </div>
             </div>
@@ -482,7 +482,7 @@ export function WorkflowRunResultCard({
                 event.stopPropagation()
                 onPreview?.()
               }}
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-bg-hover hover:text-brand-blue"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-bg-hover hover:text-text-accent"
             >
               {Icons.eye(14)}
             </button>

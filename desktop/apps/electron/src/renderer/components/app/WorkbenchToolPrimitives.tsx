@@ -150,7 +150,7 @@ export function WorkbenchScopeButtons<T extends string>({
           >
             {option.label}
             {option.count === undefined ? null : (
-              <span className="ml-1 opacity-60">{option.count}</span>
+              <span className="ml-1">{option.count}</span>
             )}
           </button>
         )

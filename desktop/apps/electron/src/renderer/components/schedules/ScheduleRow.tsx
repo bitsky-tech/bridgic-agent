@@ -55,7 +55,7 @@ export const ScheduleRow = memo(function ScheduleRow({ s }: ScheduleRowProps) {
       onClick={() => openDetail(s.id)}
       className="px-[18px] py-3.5 flex items-center gap-3.5 cursor-pointer hover:bg-bg-hover transition-colors"
     >
-      <div className="w-10 h-10 rounded-md flex-shrink-0 flex items-center justify-center bg-accent-purple-subtle text-brand-purple">
+      <div className="w-10 h-10 rounded-md flex-shrink-0 flex items-center justify-center bg-accent-purple-subtle text-text-accent-purple">
         {Icons.clock(18)}
       </div>
 
@@ -76,7 +76,7 @@ export const ScheduleRow = memo(function ScheduleRow({ s }: ScheduleRowProps) {
             {t('schedule.row.lastRun')}<SchedTime value={s.lastRun} />
           </span>
           <span
-            className={cn('text-xs', st === ScheduleStatus.Active ? 'text-brand-blue' : 'text-text-tertiary')}
+            className={cn('text-xs', st === ScheduleStatus.Active ? 'text-text-accent' : 'text-text-tertiary')}
           >
             {t('schedule.row.nextRun')}<SchedTime value={s.nextRun} />
           </span>

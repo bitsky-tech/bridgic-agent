@@ -29,7 +29,7 @@ export function SessionFilesPanel() {
     <WorkbenchToolSurface testId="session-files-panel">
       <WorkbenchToolHeader
         icon={Icons.folder(15)}
-        iconClassName="bg-accent-blue-subtle text-brand-blue"
+        iconClassName="bg-accent-blue-subtle text-text-accent"
         testId="session-files-header"
         title={t('session.workbench.files.title', {
           defaultValue: t('session.resourcePanel.files'),

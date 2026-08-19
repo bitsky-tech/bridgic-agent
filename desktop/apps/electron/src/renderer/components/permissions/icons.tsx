@@ -150,11 +150,11 @@ export function deriveRisk(f: RiskFacts): Risk {
 /** Category icon + colors (capability → presentation). */
 export function categoryMeta(capability: string): { icon: (s?: number) => ReactNode; tint: string; bg: string } {
   if (capability === 'execute') return { icon: PIcon.terminal, tint: 'text-status-warning', bg: 'bg-status-warning-bg' }
-  if (capability === 'network') return { icon: PIcon.globe, tint: 'text-brand-blue', bg: 'bg-accent-blue-subtle' }
-  if (capability === 'mcp') return { icon: PIcon.robot, tint: 'text-brand-blue', bg: 'bg-accent-blue-subtle' }
+  if (capability === 'network') return { icon: PIcon.globe, tint: 'text-text-accent', bg: 'bg-accent-blue-subtle' }
+  if (capability === 'mcp') return { icon: PIcon.robot, tint: 'text-text-accent', bg: 'bg-accent-blue-subtle' }
   if (capability === 'read' || capability === 'edit' || capability === 'manage'
     || capability === 'manage_write' || capability === 'control') {
-    return { icon: PIcon.folder, tint: 'text-brand-purple', bg: 'bg-accent-purple-subtle' }
+    return { icon: PIcon.folder, tint: 'text-text-accent-purple', bg: 'bg-accent-purple-subtle' }
   }
   // Unknown capability (added by the backend, not yet mirrored on the frontend): use a neutral warning style, do not draw the most harmless-looking folder.
   return { icon: PIcon.alert, tint: 'text-status-warning', bg: 'bg-status-warning-bg' }
@@ -166,14 +166,14 @@ export function categoryMeta(capability: string): { icon: (s?: number) => ReactN
 const RISK_BADGE: Record<Risk, { labelKey: string; cls: string }> = {
   high: { labelKey: 'permission.risk.high', cls: 'text-status-error bg-status-error-bg' },
   med: { labelKey: 'permission.risk.med', cls: 'text-status-warning bg-status-warning-bg' },
-  low: { labelKey: 'permission.risk.low', cls: 'text-brand-blue bg-accent-blue-subtle' },
+  low: { labelKey: 'permission.risk.low', cls: 'text-text-accent bg-accent-blue-subtle' },
 }
 
 /** Tier badge (shows "what this step is", no danger narrative). */
 export function RiskBadge({ risk }: { risk: Risk }) {
   const { t } = useTranslation()
   const b = RISK_BADGE[risk]
-  return <span className={cn('text-[10px] font-semibold px-1.5 py-px rounded shrink-0', b.cls)}>{t(b.labelKey)}</span>
+  return <span className={cn('text-2xs font-semibold px-1.5 py-px rounded shrink-0', b.cls)}>{t(b.labelKey)}</span>
 }
 
 /** Decided-record chip (allowed / denied). */
@@ -181,13 +181,13 @@ export function DecidedChip({ allow }: { allow: boolean }) {
   const { t } = useTranslation()
   if (allow) {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-status-success shrink-0">
+      <span className="inline-flex items-center gap-1 text-xs font-semibold text-status-success shrink-0">
         {PIcon.check(12)} {t('permission.decided.allowed')}
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-status-error shrink-0">
+    <span className="inline-flex items-center gap-1 text-xs font-semibold text-status-error shrink-0">
       {PIcon.x(12)} {t('permission.decided.denied')}
     </span>
   )
@@ -204,5 +204,5 @@ export function modeIcon(id: ExecutionMode): (s?: number) => ReactNode {
 export function modeTint(id: ExecutionMode): string {
   if (id === 'full') return 'text-status-warning'  // warning (use with care) rather than danger red — full still keeps the system red lines and the credential-deletion block
   if (id === 'request') return 'text-status-info'
-  return 'text-brand-blue'
+  return 'text-text-accent'
 }

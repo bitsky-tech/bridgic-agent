@@ -54,7 +54,7 @@ export function WindowedList<T>({
     <div className={className}>
       {items.slice(0, visibleCount).map((item, index) => children(item, index))}
       {hasMore && (
-        <div ref={sentinelRef} className="px-2 py-[5px] text-[10px] text-text-tertiary">
+        <div ref={sentinelRef} className="px-2 py-[5px] text-2xs text-text-tertiary">
           {t('windowedList.loadingMore', { count: items.length })}
         </div>
       )}

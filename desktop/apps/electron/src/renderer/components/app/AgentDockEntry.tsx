@@ -26,9 +26,9 @@ export function AgentDockEntry({
       aria-label={modeAvailable ? modeAriaLabel : t('session.resourcePanel.agent')}
       className={cn(
         'relative flex h-[53px] w-full flex-col items-center justify-center gap-1 rounded-[10px]',
-        'border border-transparent text-brand-purple transition-colors hover:bg-bg-hover',
+        'border border-transparent text-text-accent-purple transition-colors hover:bg-bg-hover',
         'disabled:cursor-default disabled:hover:bg-transparent',
-        active && 'bg-bg-active',
+        active && 'bg-bg-selected',
       )}
       data-testid="session-agent-launcher"
       disabled={!modeAvailable}
@@ -43,7 +43,7 @@ export function AgentDockEntry({
         />
       ) : null}
       <BridgicLogo size={18} />
-      <span className="max-w-[46px] truncate text-[10px] font-medium leading-none">
+      <span className="max-w-[46px] truncate text-2xs font-medium leading-none">
         {t('session.resourcePanel.agent')}
       </span>
     </button>

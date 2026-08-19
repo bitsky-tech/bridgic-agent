@@ -105,7 +105,7 @@ export function WorkflowRunDetailsPane() {
         className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4"
         style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}
       >
-        <span className="flex shrink-0 text-brand-blue">{Icons.workflow(16)}</span>
+        <span className="flex shrink-0 text-text-accent">{Icons.workflow(16)}</span>
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
           {t('workflowRunHeader.detailsTitle')}
         </span>
@@ -140,7 +140,7 @@ export function WorkflowRunDetailsPane() {
                   <div className="text-lg font-semibold tabular-nums text-text-primary">
                     {completedSteps}<span className="text-xs font-medium text-text-tertiary">/{totalSteps}</span>
                   </div>
-                  <div className="text-[10px] text-text-tertiary">
+                  <div className="text-2xs text-text-tertiary">
                     {t('workflowRunHeader.overallProgress')}
                   </div>
                 </div>
@@ -236,16 +236,16 @@ export function WorkflowRunDetailsPane() {
                 )}
               >
                 <span className={cn(
-                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
+                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-2xs font-semibold',
                   tab.complete && 'bg-status-success-bg text-status-success',
-                  tab.current && 'border border-brand-blue bg-accent-blue-subtle text-brand-blue',
+                  tab.current && 'border border-brand-blue bg-accent-blue-subtle text-text-accent',
                   !tab.complete && !tab.current && 'border border-border-default text-text-tertiary',
                 )}>
                   {tab.complete ? Icons.check(11) : tabIndex + 1}
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-xs font-semibold">{tab.label}</span>
-                  <span className="block truncate text-[10px] text-text-tertiary">{progress}</span>
+                  <span className="block truncate text-2xs text-text-tertiary">{progress}</span>
                 </span>
               </button>
             )
@@ -297,9 +297,9 @@ export function WorkflowRunDetailsPane() {
                   )} />
                 )}
                 <span className={cn(
-                  'relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
+                  'relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-2xs font-semibold',
                   done && 'bg-status-success-bg text-status-success ring-4 ring-bg-surface',
-                  active && 'border border-brand-blue bg-accent-blue-subtle text-brand-blue ring-4 ring-bg-surface',
+                  active && 'border border-brand-blue bg-accent-blue-subtle text-text-accent ring-4 ring-bg-surface',
                   failed && 'bg-status-error-bg text-status-error ring-4 ring-bg-surface',
                   !done && !active && !failed && 'border border-border-default bg-bg-surface text-text-tertiary ring-4 ring-bg-surface',
                 )}>
@@ -324,7 +324,7 @@ export function WorkflowRunDetailsPane() {
                       {title}
                     </span>
                     {active && (
-                      <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium', statusTone)}>
+                      <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium', statusTone)}>
                         {status}
                       </span>
                     )}
@@ -332,7 +332,7 @@ export function WorkflowRunDetailsPane() {
                   <div
                     data-testid="workflow-run-step-detail"
                     className={cn(
-                      'mt-1 min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px] leading-relaxed text-text-tertiary',
+                      'mt-1 min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-xs leading-relaxed text-text-tertiary',
                       failed && 'text-status-error',
                     )}
                   >
@@ -357,7 +357,7 @@ function RunMetric({ value, label }: { value: number; label: string }) {
   return (
     <div className="min-w-0 px-2 py-2.5 text-center">
       <div className="text-sm font-semibold tabular-nums text-text-primary">{value}</div>
-      <div className="truncate text-[10px] text-text-tertiary">{label}</div>
+      <div className="truncate text-2xs text-text-tertiary">{label}</div>
     </div>
   )
 }
