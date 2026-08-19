@@ -22,9 +22,10 @@ import logging
 import os
 import platform
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from src import __version__
 
@@ -98,6 +99,92 @@ def configure_console_logging(
     return console
 
 
+class _SelfHealingConsoleHandler(logging.StreamHandler):
+    """Console fallback that keeps trying to move to the real log file.
+
+    The degraded path has no rotation: under a supervisor the "console" is
+    the crash-net file, and a daemon that stays degraded writes every record
+    into a file nothing trims while it runs. The usual causes (full disk, a
+    directory briefly locked by security software) are transient, so each
+    emitted record — rate-limited to one attempt per ``retry_seconds`` —
+    retries opening the rotating handler and hands over on success.
+
+    Emit-driven on purpose: the growth this guards against only happens
+    while records flow, so a silent daemon costs nothing and no timer thread
+    is needed. ``runtime.json`` is left alone — it advertised no ``log_file``
+    at startup and cannot be republished from here, but the desktop's
+    discovery chain picks the most recently written candidate, which after
+    the handover is ``server.log`` again.
+    """
+
+    def __init__(
+        self,
+        stream: Any,
+        *,
+        log_path: Path,
+        formatter: logging.Formatter,
+        max_bytes: int,
+        backup_count: int,
+        retry_seconds: float = 300.0,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        super().__init__(stream)
+        self.setFormatter(formatter)
+        self._log_path = log_path
+        self._max_bytes = max_bytes
+        self._backup_count = backup_count
+        self._retry_seconds = retry_seconds
+        self._monotonic = monotonic
+        # The open just failed at construction time; the clock starts now.
+        self._next_retry = monotonic() + retry_seconds
+        self._retired = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not self._retired:
+            self._maybe_heal()
+        if self._retired:
+            return
+        super().emit(record)
+
+    def _maybe_heal(self) -> None:
+        now = self._monotonic()
+        if now < self._next_retry:
+            return
+        self._next_retry = now + self._retry_seconds
+        try:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                self._log_path,
+                maxBytes=self._max_bytes,
+                backupCount=self._backup_count,
+                encoding="utf-8",
+                errors="backslashreplace",
+            )
+        except OSError:
+            return
+        file_handler.setFormatter(self.formatter)
+        # Appended DURING callHandlers' iteration over this very list, which
+        # visits appended entries: the record that triggered the handover
+        # lands in the file, not on the floor.
+        logging.getLogger().addHandler(file_handler)
+        try:
+            is_tty = bool(self.stream.isatty())
+        except (AttributeError, OSError, ValueError):
+            is_tty = False
+        # Mirror the healthy topology: a dev terminal keeps its console (the
+        # success path attaches one alongside the file), the crash net goes
+        # quiet again. Retire BEFORE logging the recovery line so it cannot
+        # land here; NOT removed from the root logger, because removeHandler
+        # would mutate the list mid-iteration and skip the next handler.
+        self._retired = not is_tty
+        logger.info(
+            "[daemon-logging] recovered pid=%d version=%s, resuming at %s",
+            os.getpid(),
+            __version__,
+            self._log_path,
+        )
+
+
 def configure_daemon_logging(
     log_path: Path,
     *,
@@ -160,7 +247,16 @@ def configure_daemon_logging(
             "falling back to console logging",
             file=stream,
         )
-        add_console()
+        # Self-healing, not a plain console: see _SelfHealingConsoleHandler.
+        root.addHandler(
+            _SelfHealingConsoleHandler(
+                stream,
+                log_path=log_path,
+                formatter=formatter,
+                max_bytes=max_bytes,
+                backup_count=backup_count,
+            )
+        )
         return None
 
     file_handler.setFormatter(formatter)
