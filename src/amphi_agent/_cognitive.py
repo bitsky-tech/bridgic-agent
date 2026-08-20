@@ -260,12 +260,12 @@ class MainThink(CognitiveWorker):
     # The main worker's observe-think-act agent loop
     ############################################################################
     async def thinking(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Dict[str, Any]], str]:
-        # Persist the source Build unit before it can switch stages. Explicit
-        # None closes a Build section; an absent field identifies old records.
+        # Persist the source cognitive scope before this round can switch state.
         status = ota_context.think_status
-        ota_context._current_record().build_stage = (
-            status.stage if isinstance(status, BuildStageState) else None
-        )
+        ota_context._current_record().think_scope = {
+            "mode": status.mode,
+            "stage": status.stage,
+        }
         messages = await self.assemble_messages(ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
         stream = ota_context.stream
@@ -414,6 +414,35 @@ class MainThink(CognitiveWorker):
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(ota_context, context)
         return messages
+
+    @staticmethod
+    def _record_think_scope(record: Any) -> Optional[Tuple[str, str]]:
+        """Return one round's cognitive mode and stage, including legacy Build records."""
+        scope = _view(record, "think_scope")
+        mode = str(_view(scope, "mode") or "").strip()
+        stage = str(_view(scope, "stage") or "").strip()
+        if mode and stage:
+            return mode, stage
+        legacy_build_stage = str(_view(record, "build_stage") or "").strip()
+        return ("build", legacy_build_stage) if legacy_build_stage else None
+
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Project this Turn from the latest different stage in the same cognitive mode."""
+        stage_boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (scope := self._record_think_scope(ota_context.ota_record[index]))
+                is not None
+                and scope[0] == mode
+                and scope[1] != stage
+            )
+        ), None)
+        if stage_boundary is None:
+            return ota_context, None
+        return ota_context.model_copy(update={
+            "ota_record": ota_context.ota_record[stage_boundary + 1:],
+        }), stage_boundary
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
         """Render Main context from the most stable prefix to live round state."""
@@ -1263,10 +1292,16 @@ class WorkflowRunThink(MainThink):
             umbrella,
         )
 
+        turn_context, stage_boundary = self._stage_turn_context(
+            ota_context,
+            "run_workflow",
+            self.workflow_stage,
+        )
         messages = [Message.from_text(system, role=Role.SYSTEM)]
-        messages += await self.session_messages_block(ota_context, context)
+        if self.workflow_stage == "execute" and stage_boundary is None:
+            messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
@@ -1799,20 +1834,11 @@ class ClarifyThink(BuildThink):
             umbrella,
         )
 
-        turn_context = ota_context
-        stage_boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (stage := _view(ota_context.ota_record[index], "build_stage"))
-                is not None
-                and stage != "clarify"
-            )
-        ), None)
-        if stage_boundary is not None:
-            turn_context = ota_context.model_copy(update={
-                "ota_record": ota_context.ota_record[stage_boundary + 1:],
-            })
+        turn_context, stage_boundary = self._stage_turn_context(
+            ota_context,
+            "build",
+            "clarify",
+        )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         if stage_boundary is None:
@@ -2068,20 +2094,11 @@ class ExploreThink(BuildThink):
             umbrella,
         )
 
-        turn_context = ota_context
-        stage_boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (stage := _view(ota_context.ota_record[index], "build_stage"))
-                is not None
-                and stage != "explore"
-            )
-        ), None)
-        if stage_boundary is not None:
-            turn_context = ota_context.model_copy(update={
-                "ota_record": ota_context.ota_record[stage_boundary + 1:],
-            })
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "explore",
+        )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
@@ -2177,20 +2194,11 @@ class GenerateThink(BuildThink):
             umbrella,
         )
 
-        turn_context = ota_context
-        stage_boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (stage := _view(ota_context.ota_record[index], "build_stage"))
-                is not None
-                and stage != "generate"
-            )
-        ), None)
-        if stage_boundary is not None:
-            turn_context = ota_context.model_copy(update={
-                "ota_record": ota_context.ota_record[stage_boundary + 1:],
-            })
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "generate",
+        )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
@@ -2279,20 +2287,11 @@ class VerifyThink(BuildThink):
             umbrella,
         )
 
-        turn_context = ota_context
-        stage_boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (stage := _view(ota_context.ota_record[index], "build_stage"))
-                is not None
-                and stage != "verify"
-            )
-        ), None)
-        if stage_boundary is not None:
-            turn_context = ota_context.model_copy(update={
-                "ota_record": ota_context.ota_record[stage_boundary + 1:],
-            })
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "verify",
+        )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))

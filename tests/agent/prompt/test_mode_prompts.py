@@ -47,14 +47,14 @@ async def test_message_scopes() -> None:
     """Final special-mode message scope:
 
     {
-      "child_clarify_workflow": ["System", "past User/AI", "current User", "current AI"],
-      "explore_generate_verify": ["System", "current User", "current AI"]
+      "child_clarify_execute": ["System", "past User/AI", "current User", "current AI"],
+      "explore_generate_verify_validate": ["System", "current User", "current AI"]
     }
 
     Checks:
     1. Every special mode keeps Persona and dynamic Context in one leading System message.
-    2. Child, Clarify, Execute, and Validate replay Session history in native roles.
-    3. Explore, Generate, and Verify crop earlier Session messages completely.
+    2. Child, Clarify, and Execute replay Session history in native roles.
+    3. Explore, Generate, Verify, and Validate crop earlier Session messages completely.
     4. Every mode retains the current input as User and current Turn activity as AI.
     """
 
@@ -96,7 +96,7 @@ async def test_message_scopes() -> None:
         (GenerateThink(), {"mode": "build", "stage": "generate"}, False, False),
         (VerifyThink(), {"mode": "build", "stage": "verify"}, False, False),
         (ContextFreeWorkflowThink(), {**workflow_state, "stage": "execute"}, False, True),
-        (ContextFreeValidateThink(), {**workflow_state, "stage": "validate"}, False, True),
+        (ContextFreeValidateThink(), {**workflow_state, "stage": "validate"}, False, False),
     )
 
     for worker, state, child, includes_history in cases:
@@ -113,11 +113,11 @@ async def test_message_scopes() -> None:
         expected.extend([Role.USER, Role.AI])
         assert roles == expected
 
-        # Check 2: Child, Clarify, Execute, and Validate replay Session history in native roles.
+        # Check 2: Child, Clarify, and Execute replay Session history in native roles.
         if includes_history:
             assert contents[1:3] == ["Past request", "Past answer"]
 
-        # Check 3: Explore, Generate, and Verify crop earlier Session messages completely.
+        # Check 3: Explore, Generate, Verify, and Validate crop earlier Session messages completely.
         else:
             assert "Past request" not in contents
             assert "Past answer" not in contents
@@ -125,6 +125,101 @@ async def test_message_scopes() -> None:
         # Check 4: Every mode retains the current input as User and current Turn activity as AI.
         assert contents[-2].startswith("Current build request\n\n<current_time>")
         assert contents[-1] == "Current Turn progress"
+
+
+async def test_workflow_stage_message_scope() -> None:
+    """Validate drops Execute history while Execute sections retain their shared stage trace."""
+    class ContextFreeWorkflowThink(WorkflowThink):
+        async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
+            return []
+
+    class ContextFreeValidateThink(ValidateThink):
+        async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
+            return []
+
+    def record(stage: str, content: str) -> OTARecord:
+        round_ = OTARecord(think_result={"step_content": content, "tool_calls": []})
+        round_.think_scope = {"mode": "run_workflow", "stage": stage}
+        return round_
+
+    workflow_state = {
+        "mode": "run_workflow",
+        "workflow_id": "workflow-a",
+        "generation": "generation-a",
+    }
+    validate_ota = AmphiOTAContext(
+        user_input="Run the workflow",
+        prompt_time=PROMPT_TIME,
+        state={"think": {**workflow_state, "stage": "validate", "step_index": 0}},
+        ota_record=[
+            record("execute", "Execution history"),
+            record("validate", "Validation progress"),
+        ],
+    )
+    validate_messages = await ContextFreeValidateThink().assemble_messages(validate_ota, _context())
+    validate_contents = [message.content for message in validate_messages]
+    assert "Execution history" not in validate_contents
+    assert "Past request" not in validate_contents
+    assert "Past answer" not in validate_contents
+    assert "Validation progress" in validate_contents
+
+    execute_ota = AmphiOTAContext(
+        user_input="Run the workflow",
+        prompt_time=PROMPT_TIME,
+        state={"think": {**workflow_state, "stage": "execute", "step_index": 1}},
+        ota_record=[
+            record("execute", "First execution section"),
+            record("execute", "Second execution section"),
+        ],
+    )
+    execute_messages = await ContextFreeWorkflowThink().assemble_messages(execute_ota, _context())
+    execute_contents = [message.content for message in execute_messages]
+    assert "Past request" in execute_contents
+    assert "Past answer" in execute_contents
+    assert "First execution section" in execute_contents
+    assert "Second execution section" in execute_contents
+
+
+async def test_build_stage_message_scope_uses_generic_marker() -> None:
+    """Build stage isolation uses think_scope while Main-to-Clarify retains its entry context."""
+    def record(mode: str, stage: str, content: str) -> OTARecord:
+        round_ = OTARecord(think_result={"step_content": content, "tool_calls": []})
+        round_.think_scope = {"mode": mode, "stage": stage}
+        return round_
+
+    explore_ota = AmphiOTAContext(
+        user_input="Build the workflow",
+        prompt_time=PROMPT_TIME,
+        state={"think": {"mode": "build", "stage": "explore"}},
+        ota_record=[
+            record("build", "clarify", "Clarify history"),
+            record("build", "explore", "Explore progress"),
+        ],
+    )
+    explore_contents = [
+        message.content
+        for message in await ExploreThink().assemble_messages(explore_ota, _context())
+    ]
+    assert "Clarify history" not in explore_contents
+    assert "Past request" not in explore_contents
+    assert "Explore progress" in explore_contents
+
+    clarify_ota = AmphiOTAContext(
+        user_input="Build the workflow",
+        prompt_time=PROMPT_TIME,
+        state={"think": {"mode": "build", "stage": "clarify"}},
+        ota_record=[
+            record("normal", "main", "Main handoff"),
+            record("build", "clarify", "Clarify progress"),
+        ],
+    )
+    clarify_contents = [
+        message.content
+        for message in await ClarifyThink().assemble_messages(clarify_ota, _context())
+    ]
+    assert "Past request" in clarify_contents
+    assert "Main handoff" in clarify_contents
+    assert "Clarify progress" in clarify_contents
 
 
 async def test_build_dispatch() -> None:
