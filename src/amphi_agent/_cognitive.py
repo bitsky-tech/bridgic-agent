@@ -1768,7 +1768,8 @@ class ClarifyThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, conversation, user input, and turn trace.
+            Persona, live context, stage-scoped conversation, user input, and
+            turn trace.
 
         Notes
         -----
@@ -1777,9 +1778,11 @@ class ClarifyThink(BuildThink):
             SYSTEM  clarify persona
                     + <context> containing transcript, skills, artifacts, memory,
                       Build workspace, and Session workspace
-            ...     persisted session messages in their native roles
+            ...     persisted session messages in their native roles on initial
+                    entry from Main; omitted after another Build stage hands back
+                    to Clarify
             USER    current user input
-            ...     current-turn assistant and tool-result messages
+            ...     current-Clarify assistant and tool-result messages
 
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
@@ -1796,10 +1799,26 @@ class ClarifyThink(BuildThink):
             umbrella,
         )
 
+        turn_context = ota_context
+        stage_boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (stage := _view(ota_context.ota_record[index], "build_stage"))
+                is not None
+                and stage != "clarify"
+            )
+        ), None)
+        if stage_boundary is not None:
+            turn_context = ota_context.model_copy(update={
+                "ota_record": ota_context.ota_record[stage_boundary + 1:],
+            })
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
-        messages += await self.session_messages_block(ota_context, context)
+        if stage_boundary is None:
+            messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
@@ -2032,7 +2051,8 @@ class ExploreThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, task artifact, user input, and turn trace.
+            Persona, live context, task artifact, user input, and the current
+            Explore trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2048,9 +2068,24 @@ class ExploreThink(BuildThink):
             umbrella,
         )
 
+        turn_context = ota_context
+        stage_boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (stage := _view(ota_context.ota_record[index], "build_stage"))
+                is not None
+                and stage != "explore"
+            )
+        ), None)
+        if stage_boundary is not None:
+            turn_context = ota_context.model_copy(update={
+                "ota_record": ota_context.ota_record[stage_boundary + 1:],
+            })
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
@@ -2124,7 +2159,8 @@ class GenerateThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, upstream artifacts, user input, and turn trace.
+            Persona, live context, upstream artifacts, user input, and the
+            current Generate trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2141,9 +2177,24 @@ class GenerateThink(BuildThink):
             umbrella,
         )
 
+        turn_context = ota_context
+        stage_boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (stage := _view(ota_context.ota_record[index], "build_stage"))
+                is not None
+                and stage != "generate"
+            )
+        ), None)
+        if stage_boundary is not None:
+            turn_context = ota_context.model_copy(update={
+                "ota_record": ota_context.ota_record[stage_boundary + 1:],
+            })
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
@@ -2209,7 +2260,8 @@ class VerifyThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, upstream artifacts, user input, and turn trace.
+            Persona, live context, upstream artifacts, user input, and the
+            current Verify trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2227,9 +2279,24 @@ class VerifyThink(BuildThink):
             umbrella,
         )
 
+        turn_context = ota_context
+        stage_boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (stage := _view(ota_context.ota_record[index], "build_stage"))
+                is not None
+                and stage != "verify"
+            )
+        ), None)
+        if stage_boundary is not None:
+            turn_context = ota_context.model_copy(update={
+                "ota_record": ota_context.ota_record[stage_boundary + 1:],
+            })
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
