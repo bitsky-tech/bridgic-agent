@@ -52,7 +52,10 @@ async def test_desktop_cold_start(gateway_cli: GatewayCLI) -> None:
     }
     assert runtime["token"]
     assert runtime["ws_path"] == "/ws"
-    assert runtime_path.with_name("server.log").is_file()
+    service_log = runtime_path.with_name("server.log")
+    assert Path(runtime["log_file"]) == service_log
+    assert service_log.is_file()
+    assert "[daemon-logging] started" in service_log.read_text(encoding="utf-8")
 
     client_id = "desktop-cold-start-gui"
     frontend_headers = {
@@ -94,6 +97,9 @@ async def test_desktop_cold_start(gateway_cli: GatewayCLI) -> None:
                 for item in clients.json()
             )
 
+    # Access traffic must not consume the bounded application diagnostic log.
+    assert "GET /api/gateway/info" not in service_log.read_text(encoding="utf-8")
+
     # Check 5: The real stop command removes the process and its runtime registration.
     stopped = await gateway_cli.stop()
     assert stopped.returncode == 0, stopped.stderr
@@ -123,6 +129,6 @@ async def test_single_instance(running_gateway: RunningGateway) -> None:
     # Check 2: The rejected start does not replace or interrupt the original Gateway.
     assert running_gateway.process.poll() is None
     current = json.loads(running_gateway.runtime_file.read_text(encoding="utf-8"))
-    assert current["pid"] == running_gateway.process.pid
+    assert current["pid"] == running_gateway.pid
     async with httpx.AsyncClient(base_url=running_gateway.base_url, timeout=3) as client:
         assert (await client.get("/api/gateway/health")).status_code == 200

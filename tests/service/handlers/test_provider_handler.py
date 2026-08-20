@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -161,6 +162,36 @@ async def test_builtin_protocol(service_client: httpx.AsyncClient) -> None:
     assert response.status_code == 200
     assert response.json()["protocol"] == "google"
     assert response.json()["api_key_set"] is True
+
+
+async def test_codex_activation_clears_api_key_routing(service_client, service_app, monkeypatch) -> None:
+    """Switching an OpenAI channel to Codex removes its stale API endpoint."""
+    response = await service_client.post(
+        "/me/providers",
+        json={
+            "provider_id": "openai",
+            "api_key": "offline-openai-key",
+            "base_url": "https://api.openai.com/v1",
+            "protocol": "openai",
+        },
+    )
+    assert response.status_code == 201
+
+    credentials = SimpleNamespace(access_token="token", account_id="account")
+    monkeypatch.setattr(providers_handler, "resolve_codex_credentials", lambda: credentials)
+    await providers_handler._activate_codex_provider(service_app.state.llms, "local")
+
+    providers = (await service_client.get("/me/providers")).json()
+    codex = next(provider for provider in providers if provider["id"] == "openai")
+    assert codex["protocol"] == "openai-codex"
+    assert codex["base_url"] is None
+
+    response = await service_client.post(
+        "/me/active-model",
+        json={"provider_id": "openai", "model": "gpt-5.5"},
+    )
+    assert response.status_code == 200
+    assert (await service_client.get("/me")).json()["base_url"] is None
 
 
 async def test_active_model(service_client: httpx.AsyncClient) -> None:

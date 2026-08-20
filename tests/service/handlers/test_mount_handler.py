@@ -118,7 +118,7 @@ async def test_mount_boundaries(service_client: httpx.AsyncClient, test_sandbox:
     )
     assert missing_response.status_code == 404
     assert missing_response.json() == {
-        "detail": f"No such path on the agent host: '{missing}'."
+        "detail": f"No such path on the agent host: {str(missing)!r}."
     }
 
     # Check 3: The system work mount remains protected from deletion.

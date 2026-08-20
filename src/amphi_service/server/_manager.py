@@ -24,9 +24,24 @@ from .supervisor._base import (
 )
 
 
-RUNTIME_DIR = Path.home() / ".bridgic" / "AmphiAgent"
+#: Relative runtime-directory parts, shared with supervisors that must derive
+#: the same location from an injected home directory (see ``_launchd``).
+RUNTIME_DIR_PARTS = (".bridgic", "AmphiAgent")
+RUNTIME_DIR = Path.home().joinpath(*RUNTIME_DIR_PARTS)
 RUNTIME_FILE = RUNTIME_DIR / "runtime.json"
+#: Structured daemon log, written by the daemon's own rotating file handler
+#: (see ``_logging``) on every supervisor path.
 LOG_FILE = RUNTIME_DIR / "server.log"
+#: Crash net: where supervisors point the daemon's raw stdout/stderr, catching
+#: output produced before or outside the logging system (import-failure
+#: tracebacks, stray prints). Deliberately NOT ``server.log`` — the daemon's
+#: own stderr keeping that file open would make the rotating handler's rename
+#: fail on Windows.
+STDERR_LOG_FILE = RUNTIME_DIR / "daemon.stderr.log"
+#: The stdout half of the same crash net. Only a process-owning supervisor
+#: (launchd) splits the two streams; the detached path merges stdout into
+#: ``STDERR_LOG_FILE``.
+STDOUT_LOG_FILE = RUNTIME_DIR / "daemon.stdout.log"
 LOCK_FILE = RUNTIME_DIR / "gateway.lock"
 CONTROL_LOCK_FILE = RUNTIME_DIR / "control.lock"
 DEFAULT_WS_PATH = "/ws"
@@ -49,11 +64,22 @@ class ServerStartTimeout(ServerError):
         *,
         timeout: float,
         log_path: Path,
+        stderr_log_path: Optional[Path] = None,
         pid: Optional[int] = None,
         diagnostic: Optional[str] = None,
     ) -> None:
         process = f" (pid {pid})" if pid is not None else ""
-        diagnostic = diagnostic or f"Check the daemon log: {log_path}"
+        # Name both files: which one holds the answer depends on how far the
+        # daemon got. ``server.log`` exists only once logging is configured,
+        # so anything that killed the process before that (a failed import, a
+        # missing dependency) is in the crash-net file instead.
+        if diagnostic is None:
+            diagnostic = f"Check the daemon log: {log_path}"
+            if stderr_log_path is not None:
+                diagnostic += (
+                    f" (and {stderr_log_path} for a crash before logging started)"
+                )
+            diagnostic += "."
         super().__init__(
             f"Service was launched{process} but did not become ready within "
             f"{timeout:.1f}s. {diagnostic}"
@@ -61,6 +87,7 @@ class ServerStartTimeout(ServerError):
         self.pid = pid
         self.timeout = timeout
         self.log_path = log_path
+        self.stderr_log_path = stderr_log_path
         self.diagnostic = diagnostic
 
 
@@ -98,6 +125,10 @@ class ServerInstance:
     lock_file: Optional[str] = None
     ws_path: str = DEFAULT_WS_PATH
     version: Optional[str] = None
+    #: Where this daemon actually writes its structured log. ``None`` means
+    #: file logging could not be set up (or a pre-log_file daemon wrote the
+    #: registration) — clients then fall back to guessing, exactly as before.
+    log_file: Optional[str] = None
 
     def base_url(self) -> str:
         """Return a loopback-safe HTTP base URL for this instance."""
@@ -154,6 +185,10 @@ class ServerStatus:
                 "pid": self.instance.pid,
                 "started_at": self.instance.started_at,
                 "runtime_file": str(self.runtime_file),
+                # The daemon's own answer to "where are the logs?". None when
+                # file logging is degraded or the daemon predates the field —
+                # clients fall back to guessing beside runtime_file.
+                "log_file": self.instance.log_file,
             }
         return {
             "status": "stale",
@@ -218,6 +253,7 @@ class ServerRegistration:
                 lock_file=self._optional_str(data.get("lock_file")),
                 ws_path=str(data.get("ws_path", DEFAULT_WS_PATH)),
                 version=self._optional_str(data.get("version")),
+                log_file=self._optional_str(data.get("log_file")),
             )
         except (
             KeyError,
@@ -241,6 +277,7 @@ class ServerRegistration:
         lock_file: Optional[Path] = None,
         ws_path: str = DEFAULT_WS_PATH,
         version: Optional[str] = None,
+        log_file: Optional[Path] = None,
     ) -> ServerInstance:
         """Atomically publish a service instance with private file permissions."""
         self._require_instance_lock(instance_lock, operation="publishing")
@@ -258,6 +295,7 @@ class ServerRegistration:
             lock_file=str(lock_file) if lock_file is not None else None,
             ws_path=ws_path,
             version=version,
+            log_file=str(log_file) if log_file is not None else None,
         )
         temporary = self.path.with_name(
             f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
@@ -632,6 +670,10 @@ class ServerManager:
         self._platform = platform or sys.platform
         self.command = command or ServeCommand(platform=self._platform)
         self.log_path = self.registration.path.parent / LOG_FILE.name
+        #: Where the supervisors point raw stdout/stderr. Holds whatever the
+        #: daemon printed before (or instead of) configuring file logging, so
+        #: it is the file that explains a daemon which never became ready.
+        self.stderr_log_path = self.registration.path.parent / STDERR_LOG_FILE.name
         self.lock_path = getattr(
             self.registration,
             "lock_path",
@@ -699,6 +741,7 @@ class ServerManager:
             raise ServerStartTimeout(
                 timeout=timeout,
                 log_path=self.log_path,
+                stderr_log_path=self.stderr_log_path,
                 pid=pid,
                 diagnostic=diagnostic,
             )
@@ -904,6 +947,7 @@ class ServerManager:
                 raise ServerStartTimeout(
                     timeout=timeout,
                     log_path=self.log_path,
+                    stderr_log_path=self.stderr_log_path,
                     pid=pid,
                     diagnostic=self._autostart_diagnostic(status),
                 )
@@ -1005,7 +1049,10 @@ class ServerManager:
 
             self._detached = DetachedSupervisor(
                 command=self.command,
-                log_path=self.log_path,
+                # Crash net, not server.log: the daemon writes its structured
+                # log itself (see _logging), and its own stderr holding
+                # server.log open would break rotation on Windows.
+                log_path=self.stderr_log_path,
                 platform=self._platform,
             )
         return self._detached
@@ -1112,19 +1159,26 @@ class ServerManager:
             timeout=timeout,
         )
         if instance is None:
-            raise ServerStartTimeout(timeout=timeout, log_path=self.log_path)
+            raise ServerStartTimeout(
+                timeout=timeout,
+                log_path=self.log_path,
+                stderr_log_path=self.stderr_log_path,
+            )
         return ServerStartResult(instance, False, "existing")
 
     def _autostart_diagnostic(self, status: AutostartStatus) -> str:
+        # Both branches name the crash net, not server.log: a daemon that
+        # never became ready usually died before it configured file logging,
+        # so its traceback is in the raw stdout/stderr redirect.
         if status.manager == "launchd":
             return (
                 "Check launchctl status and the daemon logs under "
-                f"{Path.home() / 'Library' / 'Logs' / 'Amphi'}."
+                f"{self.stderr_log_path.parent} ({self.stderr_log_path.name})."
             )
         if status.manager == "windows_run":
             return (
                 "Check the current user's HKCU Run entry and the detached "
-                f"daemon log at {self.log_path}."
+                f"daemon log at {self.stderr_log_path}."
             )
         return f"Check the {status.manager} supervisor diagnostics."
 
@@ -1199,7 +1253,10 @@ __all__ = [
     "CONTROL_LOCK_FILE",
     "LOCK_FILE",
     "LOG_FILE",
+    "RUNTIME_DIR_PARTS",
     "RUNTIME_FILE",
+    "STDERR_LOG_FILE",
+    "STDOUT_LOG_FILE",
     "ServerError",
     "ServerControlLock",
     "ServerInstance",

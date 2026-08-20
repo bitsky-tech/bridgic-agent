@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from src.amphi_agent.tools._skills import (
     import_skills,
@@ -66,7 +67,9 @@ async def test_skill_lifecycle(tool_harness: ToolHarness) -> None:
     reference = json.loads(await view_skill(skill_dir, "references/format.md"))
     assert main["success"] is True
     assert main["name"] == "sample-skill"
-    assert main["linked_files"] == {"references": ["references/format.md"]}
+    assert main["linked_files"] == {
+        "references": [str(Path("references") / "format.md")],
+    }
     assert reference["content"] == "# Format\n\nUse Markdown.\n"
 
     # Check 5: Uninstall removes the imported Skill from the complete installed projection.

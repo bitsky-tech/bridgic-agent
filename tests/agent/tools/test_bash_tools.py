@@ -114,12 +114,13 @@ async def test_command_termination(tool_harness: ToolHarness, monkeypatch: pytes
     def delayed_marker(name: str) -> str:
         if os.name != "nt":
             return f"/bin/bash -c 'printf started > {name}-started; sleep 2; printf survived > {name}'"
-        child = (
-            f"[IO.File]::WriteAllText('{name}-started', 'started'); "
-            "Start-Sleep -Seconds 2; "
-            f"[IO.File]::WriteAllText('{name}', 'survived')"
+        return (
+            'cmd.exe /d /s /c "'
+            f"echo started>{name}-started & "
+            "ping 127.0.0.1 -n 8 >nul & "
+            f"echo survived>{name}"
+            '"'
         )
-        return "powershell.exe -NoLogo -NoProfile -NonInteractive " f'-Command "{child}"'
 
     async def assert_marker_stays_absent(name: str) -> None:
         marker = tool_harness.workspace.work_dir / name
@@ -131,9 +132,10 @@ async def test_command_termination(tool_harness: ToolHarness, monkeypatch: pytes
     monkeypatch.setattr(tool_harness.workspace.environment, "bash_env", test_environment)
     cwd = str(tool_harness.workspace.work_dir)
 
+    timeout_ms = 5_000 if os.name == "nt" else 1_500
     with pytest.raises(TimeoutError) as timeout:
-        await bash(delayed_marker("timeout-marker.txt"), cwd, timeout=1500)
-    assert str(timeout.value) == "Command timed out after 1500ms and was killed."
+        await bash(delayed_marker("timeout-marker.txt"), cwd, timeout=timeout_ms)
+    assert str(timeout.value) == f"Command timed out after {timeout_ms}ms and was killed."
     assert (tool_harness.workspace.work_dir / "timeout-marker.txt-started").exists()
     await assert_marker_stays_absent("timeout-marker.txt")
 

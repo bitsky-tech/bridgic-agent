@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,22 @@ import pytest
 from src.amphi_agent._workspace import Workspace
 from src.amphi_store import SessionMountRecord
 from tests._support.sandbox import IsolatedPaths
+
+
+async def test_prepare_environment_propagates_worker_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker failure reaches the event-loop caller instead of parking it."""
+    def fail() -> None:
+        raise RuntimeError("runtime preparation failed")
+
+    monkeypatch.setattr(
+        "src.amphi_agent._workspace.WorkspaceEnvironment.prepare_app_environment",
+        fail,
+    )
+
+    with pytest.raises(RuntimeError, match="runtime preparation failed"):
+        await asyncio.wait_for(Workspace.prepare_environment(), timeout=1)
 
 
 async def test_prepare(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:

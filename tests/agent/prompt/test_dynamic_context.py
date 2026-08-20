@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from pytest import MonkeyPatch
@@ -181,7 +182,7 @@ async def test_main_context(test_sandbox: IsolatedPaths, prompt_store: None) -> 
     assert "Daily context check" in dynamic
     assert "Context workflow" in dynamic
     assert "Prefer deterministic context fixtures." in dynamic
-    assert str(workspace.work_dir) in dynamic
+    assert json.dumps(str(workspace.work_dir), ensure_ascii=False) in dynamic
 
     # Check 3: An unavailable Browser contributes no dynamic Context block.
     assert "<browser>" not in dynamic
@@ -242,24 +243,25 @@ async def test_optional_context(test_sandbox: IsolatedPaths, prompt_store: None,
         workflow_runs=workflow_runs,
         browser=browser,
     )
-    messages = await MainThink().assemble_messages(
-        AmphiOTAContext(user_input="Inspect optional context", prompt_time=PROMPT_TIME),
-        context,
-    )
+    worker = MainThink()
+    ota_context = AmphiOTAContext(user_input="Inspect optional context", prompt_time=PROMPT_TIME)
+    messages = await worker.assemble_messages(ota_context, context)
     dynamic = _dynamic_context(messages[0].content)
+    runtime_state = await worker.runtime_state_block(ota_context, context)
 
     # Check 1: A published Workflow Run appears in the global result catalogue.
     assert "<workflow_results>" in dynamic
     assert f"Published context report result (run_id: {run_id}" in dynamic
     assert "status: completed, validation: passed" in dynamic
-    assert f'result path: "{run_root / "result"}"' in dynamic
+    result_path = json.dumps(str(run_root / "result"), ensure_ascii=False)
+    assert f"result path: {result_path}" in dynamic
     assert 'input: "Create the published report"' in dynamic
 
     # Check 2: Existing Browser tabs expose bounded metadata and identify the active tab.
-    assert "<browser>" in dynamic
-    assert r'tab=1 active=true title="Context \u003creport\u003e"' in dynamic
-    assert 'url="https://example.test/report?mode=prompt"' in dynamic
-    assert 'tab=2 title="Reference" url="https://example.test/reference"' in dynamic
+    assert "<browser>" in runtime_state
+    assert r'tab=1 active=true title="Context \u003creport\u003e"' in runtime_state
+    assert 'url="https://example.test/report?mode=prompt"' in runtime_state
+    assert 'tab=2 title="Reference" url="https://example.test/reference"' in runtime_state
 
 
 async def test_child_context(test_sandbox: IsolatedPaths, prompt_store: None) -> None:

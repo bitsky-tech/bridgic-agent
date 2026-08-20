@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar, Dict, Optional, Tuple
@@ -28,6 +28,8 @@ from ._codex_credentials import (
     CODEX_TOKEN_URL,
     CodexAuthError,
 )
+
+logger = logging.getLogger(__name__)
 
 AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
@@ -170,10 +172,10 @@ def exchange_code(
             body = "<unreadable>"
         # Surface the real reason (server.log + the AuthError message → GUI),
         # instead of a generic "please retry".
-        print(
-            f"[codex-oauth] code->token exchange failed: HTTP {resp.status_code} body={body}",
-            file=sys.stderr,
-            flush=True,
+        logger.error(
+            "[codex-oauth] code->token exchange failed: HTTP %s body=%s",
+            resp.status_code,
+            body,
         )
         raise CodexAuthError(
             backend_i18n.text(

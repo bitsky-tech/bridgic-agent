@@ -780,6 +780,7 @@ export class PythonClient extends EventEmitter {
         runtime_file: filePath,
         version: runtime.version,
         ws_path: runtime.wsPath,
+        log_file: runtime.logFile,
       }
       const candidate = buildEndpoint(status, runtime)
       if (candidate.token === null) {

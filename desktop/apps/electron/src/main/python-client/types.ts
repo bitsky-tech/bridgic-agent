@@ -95,9 +95,13 @@ interface BackendEndpointFields {
   wsPath: string | null
   /** Absolute path to the daemon's `runtime.json`, as reported by
    *  `amphi server status` → `runtime_file`. The bearer token is read
-   *  from this exact path (the daemon chooses the dir — we don't guess),
-   *  and `server.log` lives in the same directory (used by "Open Logs"). */
+   *  from this exact path (the daemon chooses the dir — we don't guess). */
   runtimeFile: string | null
+  /** Absolute path of the daemon's structured log, as the daemon itself
+   *  reported it (runtime.json / status `log_file`). Null when file logging
+   *  is degraded or the daemon predates the field — "Open Logs" then falls
+   *  back to guessing beside `runtimeFile`. */
+  logFile: string | null
   /** This GUI process's stable `X-Client-Id` (see `guiClientId`). Injected
    *  by `PythonClient._adoptEndpoint` so the renderer can put it on the WS
    *  `hello` frame — without it the daemon never registers the chat
@@ -153,6 +157,7 @@ export type StatusJson =
       ws_path?: string | null
       lock_file?: string | null
       token_set?: boolean
+      log_file?: string | null
     }
   | {
       status: typeof StatusKind.Stopped
