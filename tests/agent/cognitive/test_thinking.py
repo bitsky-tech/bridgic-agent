@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
@@ -14,7 +15,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     {
       "visible_checkpoint": {"content": "Fresh answer", "reasoning": "Fresh reasoning"},
       "returned": {"content": "Fresh answer", "tool": "read_file"},
-      "usage": {"input_tokens": 4, "output_tokens": 3, "spent_tokens": 7},
+      "usage": {"input_tokens": 11, "output_tokens": 3, "spent_tokens": 14},
       "build_stage": "generate"
     }
 
@@ -63,7 +64,12 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
                     "call_id": "call-live",
                 }],
                 content="Fresh answer",
-                usage={"input_tokens": 4, "output_tokens": 3},
+                usage=SimpleNamespace(
+                    input_tokens=4,
+                    output_tokens=3,
+                    cache_creation_input_tokens=2,
+                    cache_read_input_tokens=5,
+                ),
                 capture={"reasoning_items": [{"id": "reasoning-live"}]},
             )
 
@@ -94,10 +100,10 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     assert record.reasoning_items == [{"id": "reasoning-live"}]
 
     # Check 3: Usage reaches the Turn totals, worker meter, and live event stream once.
-    assert (ota_context.input_tokens, ota_context.output_tokens) == (4, 3)
-    assert worker.spent_tokens == 7
+    assert (ota_context.input_tokens, ota_context.output_tokens) == (11, 3)
+    assert worker.spent_tokens == 14
     assert [event for event in stream.events if event[0] == "usage"] == [
-        ("usage", {"input_tokens": 4, "output_tokens": 3})
+        ("usage", {"input_tokens": 11, "output_tokens": 3})
     ]
 
     # Check 4: The open OTA record identifies the Build stage that produced it.
