@@ -910,6 +910,10 @@ async def _activate_codex_provider(llms: LlmCache, user_id: str) -> None:
         display_name="OpenAI",
         models=models,
     )
+    # upsert preserves a non-None base_url — explicitly forget the api_key-era
+    # url, or the next /me/active-model mirrors it back and Codex requests go
+    # to https://api.openai.com/v1/codex/responses (404).
+    await ProviderRepository().clear_base_url(user_id, _CODEX_PROVIDER_ID)
     await ProviderRepository().set_active(user_id, _CODEX_PROVIDER_ID)
     # Set current_model too: the chat picker's activeModelAtom needs a matching
     # (active provider, current model) pair, else the GUI shows "configure a

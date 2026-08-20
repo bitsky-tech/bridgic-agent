@@ -27,6 +27,12 @@ from ._streaming import (
 # learned per process, so subsequent calls strip them up front.
 _REJECTED_PARAMS: Dict[tuple, set] = {}
 
+# Marker key on ``Message.extras`` identifying the per-round <runtime_state>
+# tail (set by the agent layer; value duplicated here to keep this module free
+# of agent imports). bridgic splats extras onto the wire message, so the flag
+# must be stripped before conversion — providers reject unknown fields.
+_VOLATILE_TAIL_EXTRA = "volatile_tail"
+
 # Upper bound on parameter-stripping retries: in practice there are only a handful of
 # unsupported parameters, so this is plenty and can never loop forever.
 _MAX_SELF_HEAL_RETRIES = 8
@@ -168,6 +174,15 @@ class OpenAICompatLlm(OpenAILlm):
         parameter 400s are cured here in one place. Reasoning-model rules are keyed
         on the model name, so they hold behind relays too; other endpoints pass through.
         """
+        messages = kwargs.get("messages")
+        if messages:
+            kwargs = {**kwargs, "messages": [
+                msg.model_copy(update={
+                    "extras": {k: v for k, v in msg.extras.items() if k != _VOLATILE_TAIL_EXTRA}
+                })
+                if (msg.extras or {}).get(_VOLATILE_TAIL_EXTRA) else msg
+                for msg in messages
+            ]}
         params = super()._build_parameters(*args, **kwargs)
         params = sanitize_openai_params(params, base_url=getattr(self, "api_base", None))
         # Drop what this endpoint already rejected (learned by ``_create_stream`` /

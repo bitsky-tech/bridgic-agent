@@ -502,9 +502,8 @@ async def test_prompt_contexts_are_ordered_from_stable_to_volatile(monkeypatch) 
     monkeypatch.setattr(main, "workflows_block", async_block("workflows"))
     monkeypatch.setattr(main, "memory_block", async_block("memory"))
     monkeypatch.setattr(main, "workspace_block", async_block("workspace"))
-    monkeypatch.setattr(main, "browser_block", async_block("browser"))
     assert await main.context_blocks(ota, context) == [
-        "transcript", "skills", "schedules", "workflows", "memory", "workspace", "browser",
+        "transcript", "skills", "schedules", "workflows", "memory", "workspace",
     ]
 
     subagent = SubAgentThink()
@@ -512,9 +511,8 @@ async def test_prompt_contexts_are_ordered_from_stable_to_volatile(monkeypatch) 
     monkeypatch.setattr(subagent, "workflows_block", async_block("workflows"))
     monkeypatch.setattr(subagent, "memory_block", async_block("memory"))
     monkeypatch.setattr(subagent, "workspace_block", async_block("workspace"))
-    monkeypatch.setattr(subagent, "browser_block", async_block("browser"))
     assert await subagent.context_blocks(ota, context) == [
-        "skills", "workflows", "memory", "workspace", "browser",
+        "skills", "workflows", "memory", "workspace",
     ]
 
     workflow = WorkflowThink()
@@ -524,9 +522,8 @@ async def test_prompt_contexts_are_ordered_from_stable_to_volatile(monkeypatch) 
     monkeypatch.setattr(workflow, "workflow_run_block", async_block("workflow_run"))
     monkeypatch.setattr(workflow, "memory_block", async_block("memory"))
     monkeypatch.setattr(workflow, "workspace_block", async_block("workspace"))
-    monkeypatch.setattr(workflow, "browser_block", async_block("browser"))
     assert await workflow.context_blocks(ota, context) == [
-        "transcript", "skills", "schedules", "workflow_run", "memory", "workspace", "browser",
+        "transcript", "skills", "schedules", "workflow_run", "memory", "workspace",
     ]
 
     build = ClarifyThink()
@@ -536,9 +533,8 @@ async def test_prompt_contexts_are_ordered_from_stable_to_volatile(monkeypatch) 
     monkeypatch.setattr(build, "memory_block", async_block("memory"))
     monkeypatch.setattr(build, "build_workspace_block", lambda *_: "build_workspace")
     monkeypatch.setattr(build, "workspace_block", async_block("workspace"))
-    monkeypatch.setattr(build, "browser_block", async_block("browser"))
     assert await build.build_context_blocks(ota, context, "task.md") == [
-        "transcript", "skills", "artifacts", "memory", "build_workspace", "workspace", "browser",
+        "transcript", "skills", "artifacts", "memory", "build_workspace", "workspace",
     ]
 
 

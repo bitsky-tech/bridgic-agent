@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+from types import SimpleNamespace
 import pytest
 
 from src.amphi_service.protocol import PROVIDER_CATALOG_BY_ID
@@ -1010,3 +1011,40 @@ def test_codex_catalog_is_handed_out_as_a_copy() -> None:
     handed_out = [dict(m) for m in CODEX_CATALOG_MODELS]  # handler 的出网方式
     handed_out[0]["name"] = "MUTATED"
     assert [dict(m) for m in CODEX_CATALOG_MODELS] == snapshot, "全局目录被下游改动污染"
+
+
+async def test_codex_activation_clears_stale_api_key_base_url(
+    client: httpx.AsyncClient,
+    service_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching the 'openai' channel from api_key mode to the Codex
+    subscription must clear the api_key-era base_url. The upsert treats None
+    as "preserve", so without an explicit clear the stale
+    ``https://api.openai.com/v1`` survives on the row, gets mirrored back onto
+    the user by the next ``POST /me/active-model``, and CodexResponsesLlm then
+    requests ``https://api.openai.com/v1/codex/responses`` → 404."""
+    import src.amphi_service.handler._providers_handler as ph
+
+    # 1) api_key mode writes a base_url onto the row.
+    r = await client.post("/me/providers", json={
+        "provider_id": "openai", "api_key": "sk-test",
+        "base_url": "https://api.openai.com/v1", "protocol": "openai",
+    })
+    assert r.status_code in (200, 201), r.text
+
+    # 2) the OAuth sign-in flow activates the Codex subscription.
+    monkeypatch.setattr(ph, "resolve_codex_credentials",
+                        lambda: SimpleNamespace(access_token="t", account_id="a"))
+    await ph._activate_codex_provider(service_app.state.llms, "local")
+
+    rows = (await client.get("/me/providers")).json()
+    codex = next(p for p in rows if p["id"] == "openai")
+    assert codex["protocol"] == "openai-codex"
+    assert codex["base_url"] is None, "stale api_key-mode base_url must be cleared"
+
+    # 3) re-activating via the model picker must not resurrect the stale base.
+    r = await client.post("/me/active-model", json={"provider_id": "openai", "model": "gpt-5.5"})
+    assert r.status_code == 200, r.text
+    me = (await client.get("/me")).json()
+    assert me["base_url"] is None
