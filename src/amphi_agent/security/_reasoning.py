@@ -20,8 +20,9 @@ the comments). Two traps:
     only *hide* the chain of thought without saving generation time — always use the
     parameters that genuinely skip the thinking phase.
   * **The cannot-be-disabled class** (reasoning-only): deepseek-reasoner / o1-mini /
-    GLM-Z1 / Gemini-2.5-pro / Anthropic Fable5·Mythos5 — the only option is switching
-    models.
+    GLM-Z1 / Gemini-2.5-pro — the only option is switching models. Anthropic
+    Fable 5 / Mythos 5 (and Opus 5, where "disabled" leaks ``<thinking>`` into the
+    answer) can at least be lowered with ``output_config.effort: low``.
   * **base_url wins over the model name**: the same model (e.g. ``qwen3-coder``) is
     disabled differently on DashScope than on OpenRouter, so the actual endpoint domain
     is authoritative.
@@ -31,8 +32,9 @@ turn a timeout degradation into a 400 degradation).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # status semantics:
 #   disabled   — parameters injected, chain of thought off
@@ -75,6 +77,19 @@ def _model_of(llm: Any) -> str:
     return (m if isinstance(m, str) else _attr(llm, "model")).lower()
 
 
+# ``claude-<family>-5`` with nothing numeric right after the 5 (so ``claude-sonnet-4-5`` is 4.x).
+_CLAUDE_5 = re.compile(r"claude-([a-z]+)-5(?!\d)")
+
+
+def _claude_5_family(model: str) -> Optional[str]:
+    """``"sonnet"`` / ``"opus"`` / ``"fable"`` … for a Claude 5-series id, else None.
+    Fable / Mythos are matched by name alone (``claude-mythos-preview`` has no ``-5``)."""
+    if "fable" in model or "mythos" in model:
+        return "fable"
+    match = _CLAUDE_5.search(model)
+    return match.group(1) if match else None
+
+
 def reasoning_off(llm: Any) -> ReasoningOff:
     """Decide the disable-reasoning parameters for a single call from the llm's vendor
     (reads public attributes only, imports no provider class)."""
@@ -82,12 +97,22 @@ def reasoning_off(llm: Any) -> ReasoningOff:
     model = _model_of(llm)
     base = (_attr(llm, "api_base") or _attr(llm, "base_url")).lower()
 
-    # Anthropic: extended thinking is opt-in by default, and plain Messages carries no chain of
-    # thought anyway. Fable5/Mythos5 force reasoning and return 400 if sent disabled — so send
-    # nothing there either and keep the default.
-    # Source: platform.claude.com/docs/en/build-with-claude/extended-thinking
+    # Anthropic: up to the 4.x generations extended thinking is opt-in, so a plain Messages call
+    # carries no chain of thought — nothing to inject. The 5 series (Sonnet 5 / Opus 5 / Fable 5 /
+    # Mythos 5) thinks adaptively BY DEFAULT: Sonnet 5 accepts ``thinking:{type:disabled}`` and
+    # genuinely skips the phase; Opus 5 accepts it too but then leaks ``<thinking>`` tags into the
+    # visible answer (breaks the JSON verdict) — Anthropic's guidance is low effort instead; Fable
+    # 5 / Mythos 5 cannot disable at all (400) and only take ``output_config.effort``. A relay
+    # alias that hides the family gets nothing (the classifier's strip-and-retry covers a guess).
+    # Source: platform.claude.com/docs/en/build-with-claude/extended-thinking ;
+    #         platform.claude.com/docs/en/about-claude/models/migrating (Opus 5 disabled-thinking)
     if protocol == "anthropic":
-        return ReasoningOff({}, _NOT_NEEDED)
+        family = _claude_5_family(model)
+        if family is None:
+            return ReasoningOff({}, _NOT_NEEDED if "claude" in model else _UNKNOWN)
+        if family == "sonnet":
+            return ReasoningOff({"extra_body": {"thinking": {"type": "disabled"}}}, _DISABLED)
+        return ReasoningOff({"extra_body": {"output_config": {"effort": "low"}}}, _MINIMIZED)
 
     # Google Gemini: thinking goes through the SDK config (not a chat-completions parameter) and
     # is handled by the google adapter layer; 2.5-pro cannot turn it off.
@@ -183,15 +208,25 @@ def _doubao(model: str) -> ReasoningOff:
     return _thinking_disabled()
 
 
+# ``gpt-5.<n>`` — every point release from 5.1 on; plain ``gpt-5`` / ``gpt-5-mini`` don't match.
+_GPT5_POINT_RELEASE = re.compile(r"^gpt-5\.\d")
+
+
 def _openai(model: str) -> ReasoningOff:
-    # Top-level reasoning_effort. gpt-5.1+ → none (fully off); gpt-5 → minimal (its floor);
-    # o-series → low (its floor, cannot be disabled); o1-mini ignores the parameter.
-    # Source: learn.microsoft.com/.../openai/how-to/reasoning
+    # Top-level reasoning_effort. gpt-5.1 and every later point release (5.2 / 5.4 / 5.5 / 5.6 …)
+    # → none (fully off; "minimal" was removed with 5.1 and 400s "does not support 'minimal'");
+    # gpt-5 / gpt-5-mini / gpt-5-nano → minimal (their floor, "none" is rejected); o-series → low
+    # (its floor, cannot be disabled); o1-mini ignores the parameter. The ``*-chat*`` aliases are
+    # non-reasoning (or pinned to one effort) — nothing to inject.
+    # Source: learn.microsoft.com/.../openai/how-to/reasoning ; models.dev providers/openai
+    # (reasoning_options per model) ; verified live 2026-08-19 through a new-api relay.
+    if "chat" in model:
+        return ReasoningOff({}, _NOT_NEEDED)
     if model.startswith("o1-mini"):
         return ReasoningOff({}, _CANNOT)
     if model.startswith(("o1", "o3", "o4")):
         return ReasoningOff({"reasoning_effort": "low"}, _MINIMIZED)
-    if model.startswith(("gpt-5.1", "gpt-5.2")):
+    if _GPT5_POINT_RELEASE.match(model):
         return ReasoningOff({"reasoning_effort": "none"}, _DISABLED)
     if model.startswith("gpt-5"):
         return ReasoningOff({"reasoning_effort": "minimal"}, _MINIMIZED)

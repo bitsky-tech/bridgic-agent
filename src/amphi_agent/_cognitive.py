@@ -971,9 +971,13 @@ class MainThink(CognitiveWorker):
             return f"- `{call['name']}` — " + "; ".join(facts)
 
         def reasoning_extras(record: Any, mode: Optional[str]) -> Dict[str, Any]:
-            """This round's captured reasoning as ``Message.extras`` for replay — a
-            thinking-mode round that emitted none still gets an empty fallback DeepSeek
-            requires; ``mode`` None (not a thinking model) → nothing added."""
+            """This round's captured reasoning as ``Message.extras`` for replay — an
+            OpenAI-wire thinking round that emitted none still gets the empty
+            ``reasoning_content`` DeepSeek requires; ``mode`` None (not a thinking
+            model) → nothing added. Anthropic rounds are never synthesized: adaptive
+            thinking may legitimately skip a round, and a thinking block without a
+            real signature is rejected (400 "each thinking block must contain
+            thinking")."""
             extras: Dict[str, Any] = {}
             thinking_blocks = _view(record, "thinking_blocks")
             reasoning_content = _view(record, "reasoning_content")
@@ -981,23 +985,19 @@ class MainThink(CognitiveWorker):
                 extras["thinking_blocks"] = thinking_blocks
             elif reasoning_content:
                 extras["reasoning_content"] = reasoning_content
-            elif mode == "anthropic":
-                extras["thinking_blocks"] = [{"type": "thinking", "thinking": "", "signature": ""}]
             elif mode == "openai":
                 extras["reasoning_content"] = ""
             return extras
 
-        # reasoning_mode: which wire this turn's thinking rides (from whatever round
-        # captured it), else None. DeepSeek requires the assistant turn's reasoning
-        # echoed on EVERY tool-call turn once thinking is active — including rounds
-        # that emitted none; None → not a thinking model, so no fallback is synthesized.
+        # reasoning_mode: "openai" once any round captured ``reasoning_content`` —
+        # DeepSeek (OpenAI wire) requires the assistant turn's reasoning echoed on
+        # EVERY tool-call turn once thinking is active, including rounds that emitted
+        # none; None → nothing is synthesized. Anthropic thinking blocks are only ever
+        # replayed as captured (see ``reasoning_extras``).
         reasoning_mode: Optional[str] = None
         for record in records:
             if _view(record, "reasoning_content"):
                 reasoning_mode = "openai"
-                break
-            if _view(record, "thinking_blocks"):
-                reasoning_mode = "anthropic"
                 break
 
         messages: List[Message] = []

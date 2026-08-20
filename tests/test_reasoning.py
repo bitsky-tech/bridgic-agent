@@ -65,7 +65,53 @@ def test_reasoning_off_provider_matrix() -> None:
         ("openai", "gpt-5", "https://api.openai.com/v1", {"reasoning_effort": "minimal"}, "minimized"),
         ("openai", "gpt-5.1", "https://api.openai.com/v1", {"reasoning_effort": "none"}, "disabled"),
         ("openai", "o3-mini", "https://api.openai.com/v1", {"reasoning_effort": "low"}, "minimized"),
+        # Through a new-api relay (unknown base) → fall back to the model name. From gpt-5.1 on
+        # "minimal" is gone and only "none" is accepted (5.4/5.5 return 400 "does not support
+        # 'minimal'" live); gpt-5 / gpt-5-mini are the reverse and accept only "minimal".
+        ("openai", "gpt-5.4", "http://my-new-api:3000/v1", {"reasoning_effort": "none"}, "disabled"),
+        ("openai", "gpt-5.4-mini", "http://my-new-api:3000/v1", {"reasoning_effort": "none"}, "disabled"),
+        ("openai", "gpt-5.5", "http://my-new-api:3000/v1", {"reasoning_effort": "none"}, "disabled"),
+        ("openai", "gpt-5.6-sol", "http://my-new-api:3000/v1", {"reasoning_effort": "none"}, "disabled"),
+        ("openai", "gpt-5-mini", "http://my-new-api:3000/v1", {"reasoning_effort": "minimal"}, "minimized"),
+        ("openai", "o4-mini", "http://my-new-api:3000/v1", {"reasoning_effort": "low"}, "minimized"),
+        # *-chat-latest aliases: non-reasoning or a fixed effort — never inject anything
+        ("openai", "gpt-5-chat-latest", "http://my-new-api:3000/v1", {}, "not_needed"),
+        ("openai", "gpt-5.2-chat-latest", "https://api.openai.com/v1", {}, "not_needed"),
         ("anthropic", "claude-sonnet-4-5", "", {}, "not_needed"),
+        ("anthropic", "claude-opus-4-8", "", {}, "not_needed"),
+        # The 5 series thinks adaptively by default: Sonnet 5 can genuinely switch it off; Opus 5
+        # leaks <thinking> into the answer when disabled (Anthropic recommends low effort instead);
+        # Fable / Mythos cannot disable at all and only take a lower effort.
+        (
+            "anthropic",
+            "claude-sonnet-5",
+            "https://my-new-api.example/",
+            {"extra_body": {"thinking": {"type": "disabled"}}},
+            "disabled",
+        ),
+        (
+            "anthropic",
+            "claude-opus-5",
+            "",
+            {"extra_body": {"output_config": {"effort": "low"}}},
+            "minimized",
+        ),
+        (
+            "anthropic",
+            "claude-fable-5",
+            "",
+            {"extra_body": {"output_config": {"effort": "low"}}},
+            "minimized",
+        ),
+        (
+            "anthropic",
+            "claude-mythos-5",
+            "",
+            {"extra_body": {"output_config": {"effort": "low"}}},
+            "minimized",
+        ),
+        # An unrecognised relay alias → conservatively inject nothing (the classifier's strip-and-retry covers it)
+        ("anthropic", "my-relay-alias", "https://my-new-api.example/", {}, "unknown"),
         ("openai", "some-random-model", "https://my-proxy.internal/v1", {}, "unknown"),
     ]
 

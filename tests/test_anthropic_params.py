@@ -13,6 +13,7 @@ from src.amphi_service.protocol.llms.anthropic_llm import (
     AnthropicConfiguration,
     AnthropicLlm,
     _REJECTED_PARAMS,
+    _THINKING_TIERS,
     _deprecated_param_of,
 )
 
@@ -116,6 +117,9 @@ async def test_stream_turn_self_heals_and_caches() -> None:
 
     llm = _llm()
     llm._run_stream = fake_run_stream  # type: ignore[method-assign]
+    # Thinking tiers never carry sampling params; pin the no-thinking tier so the
+    # stream path actually sends temperature and exercises the self-heal.
+    _THINKING_TIERS[llm._reject_key()] = 3
 
     result = await llm.stream_turn([], None, publish=lambda *a, **k: None)
 
@@ -124,3 +128,4 @@ async def test_stream_turn_self_heals_and_caches() -> None:
     assert "temperature" not in seen[1]
     assert "temperature" in _REJECTED_PARAMS.get(llm._reject_key(), set())
     _REJECTED_PARAMS.clear()
+    _THINKING_TIERS.clear()
