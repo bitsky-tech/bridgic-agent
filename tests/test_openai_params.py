@@ -563,3 +563,29 @@ async def test_achat_self_heals_unsupported_param(monkeypatch) -> None:
     assert len(attempts) == 2 and "temperature" not in attempts[1]
     assert "temperature" in _REJECTED_PARAMS.get(llm._reject_key(), set())
     _REJECTED_PARAMS.clear()
+
+
+def test_build_parameters_strips_volatile_tail_flag_from_wire() -> None:
+    """bridgic splats ``Message.extras`` onto the OpenAI wire message; the
+    ``volatile_tail`` marker is internal routing (cache-prefix control) and must
+    never reach the provider."""
+    from bridgic.core.model.types import Message, Role
+    from bridgic.llms.openai import OpenAIConfiguration
+    from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+    from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm
+
+    llm = OpenAICompatLlm(
+        api_key="k", api_base="http://relay.example:3000/v1",
+        configuration=OpenAIConfiguration(model="gpt-4o"),
+    )
+    messages = [
+        Message.from_text("go", role=Role.USER),
+        Message.from_text("<runtime_state>x</runtime_state>", role=Role.USER,
+                          extras={VOLATILE_TAIL_EXTRA: True}),
+    ]
+    params = llm._build_parameters(messages=messages)
+
+    wire = params["messages"]
+    assert len(wire) == 2 and wire[1]["content"].startswith("<runtime_state>")
+    assert VOLATILE_TAIL_EXTRA not in wire[1], "internal flag leaked onto the wire"
+    assert (messages[1].extras or {}).get(VOLATILE_TAIL_EXTRA) is True, "caller message must not be mutated"

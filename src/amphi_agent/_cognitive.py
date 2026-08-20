@@ -56,6 +56,12 @@ __all__ = [
 
 SESSION_MESSAGE_RECORD_LIMIT = 100
 logger = logging.getLogger(__name__)
+# Marker on ``Message.extras`` for the per-round <runtime_state> USER tail: live
+# state (changed files, browser tabs) that must stay OUT of the cacheable request
+# prefix. Adapters treat it specially (Anthropic: no cache breakpoint on or after
+# it; OpenAI: the flag is stripped before the wire) and it is never persisted.
+VOLATILE_TAIL_EXTRA = "volatile_tail"
+
 CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
     "bash",
     "read_file",
@@ -267,6 +273,7 @@ class MainThink(CognitiveWorker):
             status.stage if isinstance(status, BuildStageState) else None
         )
         messages = await self.assemble_messages(ota_context, context)
+        messages = await self.append_runtime_state(messages, ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
         stream = ota_context.stream
         def publish(event: str, **payload: Any) -> None:
@@ -424,7 +431,6 @@ class MainThink(CognitiveWorker):
             await self.workflows_block(ota_context, context),
             await self.memory_block(ota_context, context),
             await self.workspace_block(ota_context, context),
-            await self.browser_block(ota_context, context),
         ]
 
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
@@ -449,6 +455,54 @@ class MainThink(CognitiveWorker):
     ) -> str:
         """Compose the stable-first SYSTEM prefix without per-Invocation metadata."""
         return "\n\n".join(block for block in blocks if block)
+
+    async def runtime_state_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Render this round's LIVE state — Workspace changed files (plus recent
+        checkpoints) and open browser tabs — as one ``<runtime_state>`` block.
+
+        Kept out of SYSTEM on purpose: this text changes between rounds (every
+        file write, every navigation), and prompt caching is a byte-prefix match,
+        so it rides at the very end of the request instead (see
+        ``append_runtime_state``)."""
+        lines: List[str] = []
+        workspace = context.workspace
+        if workspace is not None:
+            try:
+                lines.extend(workspace.checkpoints.changed_files_context_lines())
+                if self.show_workspace_checkpoints:
+                    lines.extend(workspace.checkpoints.checkpoint_context_lines(max_count=3))
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"- Changed files: unavailable ({type(exc).__name__}: {exc})")
+        browser = await self.browser_block(ota_context, context)
+        if browser:
+            lines.append(browser)
+        if not lines:
+            return ""
+        return (
+            "<runtime_state>\n"
+            "Live workspace and browser state as of this round (may change between rounds).\n"
+            + "\n".join(lines)
+            + "\n</runtime_state>"
+        )
+
+    async def append_runtime_state(
+        self,
+        messages: List[Message],
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+    ) -> List[Message]:
+        """Append the ``<runtime_state>`` USER tail to this round's request.
+
+        The tail is flagged ``VOLATILE_TAIL_EXTRA`` and NEVER persisted (the OTA
+        record does not store it), so replayed history stays byte-stable for the
+        provider prompt cache while the model still sees fresh live state."""
+        state = await self.runtime_state_block(ota_context, context)
+        if not state:
+            return messages
+        return [
+            *messages,
+            Message.from_text(state, role=Role.USER, extras={VOLATILE_TAIL_EXTRA: True}),
+        ]
 
     async def browser_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render lightweight metadata for an already-open browser."""
@@ -611,15 +665,9 @@ class MainThink(CognitiveWorker):
             f"- Node environment: {_node_environment_summary(workspace)}",
         ])
         lines.append(f"- Python environment: {_python_environment_summary(workspace)}")
-        if workspace is None:
-            lines.append("- Changed files: none")
-        else:
-            try:
-                lines.extend(workspace.checkpoints.changed_files_context_lines())
-                if self.show_workspace_checkpoints:
-                    lines.extend(workspace.checkpoints.checkpoint_context_lines(max_count=3))
-            except Exception as exc:  # noqa: BLE001
-                lines.append(f"- Changed files: unavailable ({type(exc).__name__}: {exc})")
+        # Live state (changed files, checkpoints) deliberately lives in
+        # ``runtime_state_block`` — putting it here would change the SYSTEM text
+        # on every file write and invalidate the whole cached request prefix.
         lines.append("</Workspace>")
         return "\n".join(lines)
 
@@ -1188,6 +1236,12 @@ class MainThink(CognitiveWorker):
         inp = get("prompt_tokens")
         if inp is None:
             inp = get("input_tokens")
+            # Anthropic's input_tokens EXCLUDES cache reads/writes; fold them in
+            # so turn totals stay comparable whether or not caching hit.
+            if inp is not None:
+                inp = int(inp) + int(get("cache_creation_input_tokens") or 0) + int(
+                    get("cache_read_input_tokens") or 0
+                )
         out = get("completion_tokens")
         if out is None:
             out = get("output_tokens")
@@ -1229,7 +1283,6 @@ class SubAgentThink(MainThink):
             await self.workflows_block(ota_context, context),
             await self.memory_block(ota_context, context),
             await self.workspace_block(ota_context, context),
-            await self.browser_block(ota_context, context),
         ]
 
 
@@ -1278,7 +1331,6 @@ class WorkflowRunThink(MainThink):
             await self.workflow_run_block(ota_context, context, self.workflow_stage),
             await self.memory_block(ota_context, context),
             await self.workspace_block(ota_context, context),
-            await self.browser_block(ota_context, context),
         ]
 
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
@@ -1674,7 +1726,6 @@ class BuildThink(MainThink):
             await self.memory_block(ota_context, context),
             self.build_workspace_block(context),
             await self.workspace_block(ota_context, context),
-            await self.browser_block(ota_context, context),
         ]
 
     @staticmethod
