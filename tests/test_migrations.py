@@ -156,3 +156,60 @@ async def test_schema_init_migrates_legacy_workflow_run_states(
             assert [row[0] for row in associations] == ["completed", "failed"]
     finally:
         await Repository.close()
+
+
+async def test_schema_init_repairs_codex_rows_with_stale_base_url(tmp_path) -> None:
+    """Databases written before the api_key→Codex switch fix carry a stale
+    ``base_url`` on ``protocol='openai-codex'`` rows (and on the mirroring user
+    row), which sends Codex traffic to ``https://api.openai.com/v1/codex/...``.
+    Schema init must NULL both — the Codex flow never legitimately sets one."""
+    import sqlite3
+
+    from src.amphi_store._base import Repository
+
+    db = tmp_path / "legacy.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        """
+        CREATE TABLE provider_credentials (
+            id INTEGER NOT NULL PRIMARY KEY, user_id VARCHAR NOT NULL,
+            provider_id VARCHAR NOT NULL, auth_mode VARCHAR NOT NULL,
+            api_key VARCHAR, base_url VARCHAR, is_active BOOLEAN NOT NULL,
+            is_enabled BOOLEAN NOT NULL, protocol VARCHAR NOT NULL,
+            display_name VARCHAR, enabled_models TEXT, created_at DATETIME NOT NULL
+        );
+        INSERT INTO provider_credentials VALUES
+            (1, 'local', 'openai', 'oauth', NULL, 'https://api.openai.com/v1',
+             1, 1, 'openai-codex', 'OpenAI', '[]', '2026-01-01'),
+            (2, 'local', 'glm', 'api_key', 'sk-x', 'https://open.bigmodel.cn/api/paas/v4',
+             0, 1, 'openai', 'GLM', '[]', '2026-01-01');
+        CREATE TABLE users (
+            id VARCHAR NOT NULL PRIMARY KEY, display_name VARCHAR,
+            api_key VARCHAR, base_url VARCHAR, protocol VARCHAR NOT NULL,
+            current_model VARCHAR, default_max_rounds INTEGER,
+            default_temperature FLOAT, execution_mode VARCHAR
+        );
+        INSERT INTO users VALUES
+            ('local', NULL, NULL, 'https://api.openai.com/v1', 'openai-codex',
+             'gpt-5.5', 50, 0.0, 'auto');
+        """
+    )
+    con.commit(); con.close()
+
+    Repository.connect(db)
+    try:
+        await Repository.init_schema()
+    finally:
+        await Repository.close()
+
+    con = sqlite3.connect(db)
+    codex_base, = con.execute(
+        "SELECT base_url FROM provider_credentials WHERE provider_id='openai'").fetchone()
+    glm_base, = con.execute(
+        "SELECT base_url FROM provider_credentials WHERE provider_id='glm'").fetchone()
+    user_base, = con.execute("SELECT base_url FROM users WHERE id='local'").fetchone()
+    con.close()
+
+    assert codex_base is None, "stale codex base_url must be nulled"
+    assert glm_base == "https://open.bigmodel.cn/api/paas/v4", "api_key rows untouched"
+    assert user_base is None, "the user mirror must be repaired too"
