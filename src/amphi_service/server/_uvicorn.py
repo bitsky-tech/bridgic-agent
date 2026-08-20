@@ -142,6 +142,7 @@ class UvicornRunner:
                 port=options.port,
                 log_level=options.log_level,
                 log_config=log_config(),
+                ws="websockets-sansio",
             )
             server = GracefulServer(
                 config,
@@ -169,6 +170,7 @@ class UvicornRunner:
             log_level=options.log_level,
             log_config=log_config(),
             reload=True,
+            ws="websockets-sansio",
         )
 
 

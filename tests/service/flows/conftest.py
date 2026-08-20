@@ -107,7 +107,14 @@ async def flow_server(flow_app: "ServiceApp") -> AsyncIterator[FlowServer]:
             await super().startup(sockets=sockets)
             self.ready.set()
 
-    config = uvicorn.Config(flow_app.app, host="127.0.0.1", port=0, lifespan="off", log_level="warning")
+    config = uvicorn.Config(
+        flow_app.app,
+        host="127.0.0.1",
+        port=0,
+        lifespan="off",
+        log_level="warning",
+        ws="websockets-sansio",
+    )
     server = ReadyServer(config)
     bound_socket = config.bind_socket()
     port = bound_socket.getsockname()[1]
