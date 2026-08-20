@@ -377,9 +377,10 @@ async def test_no_audit_dir_disables_grants(tmp_path: Path) -> None:
 
 
 async def test_decision_log_never_carries_call_arguments(caplog) -> None:
-    # daemon 有了 root file handler 之后,这条 INFO 会落进 server.log ——
-    # 也就是 GUI"Open Logs"打开、用户往 bug 报告里贴的那个文件。
-    # 命令文本(可能含 token / 密码)不许出现在里面,tool + verdict 才是诊断价值。
+    # With the daemon's root file handler, this INFO lands in server.log —
+    # the file the GUI's "Open Logs" opens and users paste into bug reports.
+    # Command text (tokens / passwords included) must never appear there;
+    # tool + verdict carry the diagnostic value.
     caplog.set_level("INFO", logger="src.amphi_agent.security._engine")
     engine = PermissionEngine("/workspace", [], ExecutionMode.REQUEST)
     await engine.evaluate(

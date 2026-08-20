@@ -178,7 +178,7 @@ describe('buildEndpoint', () => {
     expect(ep.startedAt).toBe('2026-05-28T12:00:00')
   })
 
-  it('logFile 优先取 runtime.json，其次 status，再退到 null', () => {
+  it('logFile prefers runtime.json, then status, then null', () => {
     const ep = buildEndpoint(mkStatus(), mkRuntime({ logFile: '/from/runtime/server.log' }))
     expect(ep.logFile).toBe('/from/runtime/server.log')
 

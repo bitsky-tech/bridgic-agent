@@ -41,11 +41,12 @@ def _launchctl(
     arguments: list[str],
     loaded: dict[str, bool],
 ) -> subprocess.CompletedProcess[str]:
-    """真实 launchctl 的最小行为模型。
+    """Minimal behavioral model of the real launchctl.
 
-    bootout 卸载、bootstrap 装载、print 用返回码回答"现在还在不在"(未装载时
-    113)。恒返回 0 的假 runner 会让 print 永远说"还在",于是测不出
-    enable 里那条"bootout 之后必须真的卸载了"的守卫。
+    bootout unloads, bootstrap loads, and print answers "is it still there"
+    via its return code (113 when not loaded). A fake runner that always
+    returns 0 makes print say "still there" forever, which hides the guard in
+    enable that requires the job to be genuinely gone after bootout.
     """
     verb = arguments[1]
     if verb == "bootout":
@@ -251,7 +252,8 @@ def test_detached_supervisor_trims_an_oversized_crash_log_before_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """兜底文件跨生命周期只追加，无法运行时轮转，所以在启动时截断。"""
+    """The crash net only appends across lifecycles and cannot rotate at
+    runtime, so it is trimmed at start."""
 
     class Process:
         pid = 4321
@@ -271,7 +273,8 @@ def test_detached_supervisor_trims_an_oversized_crash_log_before_launch(
 
     survived = log_path.read_bytes()
     assert len(survived) <= 256 * 1024
-    # 保留的是尾部：崩溃循环里最新的那次 traceback 才是正在查的那次。
+    # The tail is what survives: in a crash loop the newest traceback is the
+    # one under investigation.
     assert survived.endswith(b"newest traceback\n")
     assert survived.startswith(b"old\n")
 
@@ -405,10 +408,11 @@ def test_detached_launch_ignores_the_spec_environment_snapshot(
 def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
     tmp_path: Path,
 ) -> None:
-    """launchd 在 job 存活期间一直持有这两个文件的描述符。
+    """launchd holds descriptors for both files for the life of the job.
 
-    若在 bootout 之前截断，而该描述符不是 O_APPEND，下一次写入会落在原来的
-    偏移量上，写出一大片 NUL 空洞，文件反而彻底读不了。
+    Truncating before bootout — under a descriptor that is not O_APPEND —
+    leaves the next write at its old offset, producing a huge hole of NULs
+    that makes the file unreadable altogether.
     """
     sizes_at_bootout: dict[str, int] = {}
     runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
@@ -439,10 +443,12 @@ def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
 
 
 def test_launchd_does_not_trim_when_the_job_survives_bootout(tmp_path: Path) -> None:
-    """bootout 没能卸载 job 时,截断会写出 NUL 空洞,所以必须先报错再说。
+    """If bootout failed to unload the job, trimming writes NUL holes — so
+    raising first is mandatory.
 
-    launchctl bootout 失败(job 卡住 / EPERM / KeepAlive 正在重启)时不抛错,
-    此前 enable 直接往下走去截断——而 disable/deactivate 都会先查 _is_loaded。
+    A failing launchctl bootout (wedged job / EPERM / a KeepAlive restart in
+    flight) does not raise; enable used to march straight on to the trim,
+    while disable/deactivate both check _is_loaded first.
     """
     runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
     runtime_dir.mkdir(parents=True)
@@ -451,7 +457,8 @@ def test_launchd_does_not_trim_when_the_job_survives_bootout(tmp_path: Path) -> 
     original_size = stderr_log.stat().st_size
 
     def runner(arguments, **_options):
-        # bootout 报成功,但 job 依然在:print 一直返回 0。
+        # bootout reports success, yet the job survives: print keeps
+        # returning 0.
         return completed(arguments, 0)
 
     supervisor = LaunchdSupervisor(
@@ -508,7 +515,7 @@ def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
     )
     assert calls == [
         ["launchctl", "bootout", f"gui/502/{LABEL}"],
-        # 截断 crash net 之前先确认 job 真的卸载了。
+        # Confirm the job is genuinely unloaded before trimming the crash net.
         ["launchctl", "print", f"gui/502/{LABEL}"],
         [
             "launchctl",

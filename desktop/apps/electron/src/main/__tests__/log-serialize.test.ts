@@ -8,7 +8,7 @@ import {
   toSerializable,
 } from '../log-serialize'
 
-/** 复刻 execSync 超时抛出的 Error 形状：循环引用 + 捕获到的子进程输出。 */
+/** Replica of the Error execSync raises on timeout: a cycle plus captured child-process output. */
 function execSyncTimeoutError(stdout = 'partial output'): Error {
   const err = new Error('spawnSync /bin/zsh ETIMEDOUT') as Error & Record<string, unknown>
   err.errno = -110
@@ -24,39 +24,39 @@ function line(...data: unknown[]): string {
   return toLogLine({ date: new Date('2026-08-18T00:00:00Z'), level: 'error', scope: 'main', data })
 }
 
-describe('toLogLine 永不抛错、永不丢行', () => {
+describe('toLogLine never throws and never drops a line', () => {
   const hostile: Array<[string, () => unknown]> = [
-    ['循环引用的 execSync 错误', () => execSyncTimeoutError()],
+    ['cyclic execSync error', () => execSyncTimeoutError()],
     [
-      '取值即抛错的 getter',
+      'getter that throws on read',
       () => ({
         get boom() {
           throw new Error('getter exploded')
         },
       }),
     ],
-    ['非法 Date', () => new Date('nonsense')],
+    ['invalid Date', () => new Date('nonsense')],
     [
-      '已撤销的 Proxy',
+      'revoked Proxy',
       () => {
         const revocable = Proxy.revocable({}, {})
         revocable.revoke()
         return revocable.proxy
       },
     ],
-    ['键无法转为原始值的 Map', () => new Map([[Object.create(null) as object, 1]])],
-    ['互相引用的两个对象', () => {
+    ['Map whose key cannot become a primitive', () => new Map([[Object.create(null) as object, 1]])],
+    ['two mutually referencing objects', () => {
       const a: Record<string, unknown> = {}
       const b: Record<string, unknown> = { a }
       a.b = b
       return a
     }],
-    ['无原型对象', () => Object.create(null)],
-    ['BigInt / Symbol / 函数', () => ({ big: 1n, sym: Symbol('s'), fn: () => undefined })],
+    ['null-prototype object', () => Object.create(null)],
+    ['BigInt / Symbol / function', () => ({ big: 1n, sym: Symbol('s'), fn: () => undefined })],
   ]
 
   for (const [name, make] of hostile) {
-    it(`${name}：产出合法 JSON 行`, () => {
+    it(`${name}: produces a valid JSON line`, () => {
       let rendered = ''
       expect(() => {
         rendered = line('[probe]', make())
@@ -67,7 +67,7 @@ describe('toLogLine 永不抛错、永不丢行', () => {
     })
   }
 
-  it('非法 Date 作为时间戳时降级而不是丢行', () => {
+  it('degrades an invalid Date timestamp instead of dropping the line', () => {
     const rendered = toLogLine({
       date: new Date('nonsense'),
       level: 'warn',
@@ -80,21 +80,21 @@ describe('toLogLine 永不抛错、永不丢行', () => {
   })
 })
 
-describe('不把子进程捕获的输出写进日志', () => {
-  it('execSync 超时错误里的 stdout 只留长度，不留内容', () => {
-    // shell-env.ts 跑的是 `zsh -l -i -c 'echo __ENV_START__ && env'`：超时后
-    // Node 把已捕获的 env dump 挂在错误上，其中含用户的 API key。
+describe('captured child-process output never reaches the log', () => {
+  it('keeps only the length of the stdout on an execSync timeout error', () => {
+    // shell-env.ts runs `zsh -l -i -c 'echo __ENV_START__ && env'`: on timeout
+    // Node attaches the captured env dump to the error, user API keys included.
     const secret = 'OPENAI_API_KEY=sk-super-secret-value'
     const rendered = line('[shell-env] load failed', execSyncTimeoutError(`PATH=/usr/bin\n${secret}\n`))
     expect(rendered).not.toContain('sk-super-secret-value')
     expect(rendered).not.toContain('OPENAI_API_KEY')
     expect(rendered).toContain('[stdout 51 chars]')
-    // 诊断价值仍在：错误类型、错误码、调用点都保留。
+    // The diagnostic value survives: error type, code and call site all stay.
     expect(rendered).toContain('ETIMEDOUT')
     expect(rendered).toContain('spawnSync /bin/zsh')
   })
 
-  it('stderr 与 output 同样只留摘要', () => {
+  it('stderr and output are summarized the same way', () => {
     const err = new Error('boom') as Error & Record<string, unknown>
     err.stderr = 'secret-in-stderr'
     err.output = [null, 'secret-in-output', 'more']
@@ -105,8 +105,9 @@ describe('不把子进程捕获的输出写进日志', () => {
     expect(rendered).toContain('[output 3 entries]')
   })
 
-  it('普通结果对象上的 stdout/stderr 同样只留摘要（不只是 Error）', () => {
-    // spawnSync 成功返回时也带着这些字段，它不是 Error，此前被逐字复制。
+  it('summarizes stdout/stderr on plain result objects, not just on Errors', () => {
+    // A successful spawnSync result carries the same keys without being an
+    // Error; it used to be copied verbatim.
     const rendered = line('[shell-env] probe', {
       status: 0,
       stdout: 'OPENAI_API_KEY=sk-super-secret-value\n',
@@ -117,9 +118,9 @@ describe('不把子进程捕获的输出写进日志', () => {
     expect(rendered).toContain('"status":0')
   })
 
-  it('非超时失败时藏在 message 里的 stderr 被切掉', () => {
-    // execSync 非零退出时 Node 把 stderr 拼进 message：
-    // `Command failed: <cmd>\n<stderr>`，键名检查看不到它。
+  it('cuts the stderr hiding inside message on a non-timeout failure', () => {
+    // On a non-zero exit Node folds stderr into the message itself:
+    // `Command failed: <cmd>\n<stderr>` — invisible to any key-name check.
     const err = new Error(
       'Command failed: zsh -l -i -c \'env\'\nOPENAI_API_KEY=sk-super-secret-value\n',
     )
@@ -130,21 +131,21 @@ describe('不把子进程捕获的输出写进日志', () => {
   })
 })
 
-describe('Error 序列化', () => {
-  it('保留 name/message/stack（而不是 {}）', () => {
+describe('Error serialization', () => {
+  it('keeps name/message/stack (instead of {})', () => {
     const out = toSerializable(new Error('boom')) as Record<string, unknown>
     expect(out.name).toBe('Error')
     expect(out.message).toBe('boom')
     expect(typeof out.stack).toBe('string')
   })
 
-  it('循环引用标记为 [circular]', () => {
+  it('marks cycles as [circular]', () => {
     const out = toSerializable(execSyncTimeoutError()) as Record<string, unknown>
     expect(out.code).toBe('ETIMEDOUT')
     expect(out.error).toBe('[circular]')
   })
 
-  it('AggregateError 的 errors 子错误不丢失（fetch 失败的主力形态）', () => {
+  it('keeps AggregateError sub-errors (the main shape of a failed fetch)', () => {
     const out = toSerializable(
       new AggregateError([new Error('ECONNREFUSED ::1'), new Error('ECONNREFUSED 127.0.0.1')], 'fetch failed'),
     ) as { errors: Array<{ message: string }> }
@@ -152,15 +153,16 @@ describe('Error 序列化', () => {
     expect(out.errors[0]?.message).toContain('ECONNREFUSED ::1')
   })
 
-  it('cause 链被递归序列化', () => {
+  it('serializes the cause chain recursively', () => {
     const out = toSerializable(new Error('wrapper', { cause: new Error('root cause') })) as {
       cause: Record<string, unknown>
     }
     expect(out.cause.message).toBe('root cause')
   })
 
-  it('跨 realm 的 Error 也按 Error 处理（instanceof 判不出来）', () => {
-    // Electron 主进程里 utilityProcess / vm 上下文抛出的错误就是这个形状。
+  it('treats a cross-realm Error as an Error (instanceof cannot tell)', () => {
+    // Errors thrown from utilityProcess / vm contexts in the Electron main
+    // process arrive in exactly this shape.
     const foreign = vm.runInNewContext('new TypeError("from another realm")') as Error
     expect(foreign instanceof Error).toBe(false)
     const out = toSerializable(foreign) as Record<string, unknown>
@@ -169,20 +171,20 @@ describe('Error 序列化', () => {
   })
 })
 
-describe('体积与耗时上限', () => {
-  it('Buffer 记为字节数摘要，不逐字节展开', () => {
+describe('size and time ceilings', () => {
+  it('records a Buffer as a byte-count summary, never byte by byte', () => {
     const out = toSerializable({ body: Buffer.from('hello world') }) as Record<string, string>
     expect(out.body).toBe('[Buffer 11 bytes]')
     expect(safeStringify(toSerializable({ big: Buffer.alloc(200_000) })).length).toBeLessThan(100)
   })
 
-  it('超长字符串截断并标注原长', () => {
+  it('truncates long strings and appends the original length', () => {
     const out = toSerializable('x'.repeat(700)) as string
     expect(out).toContain('…(700)')
     expect(out.length).toBeLessThan(600)
   })
 
-  it('数组与对象超限时留下余量标记', () => {
+  it('leaves a remainder marker on oversized arrays and objects', () => {
     const arr = toSerializable(Array.from({ length: 25 }, (_, i) => i)) as unknown[]
     expect(arr).toHaveLength(LOG_LIMITS.maxArrayItems + 1)
     expect(arr[LOG_LIMITS.maxArrayItems]).toBe('…(+15 more)')
@@ -193,8 +195,9 @@ describe('体积与耗时上限', () => {
     expect(obj['…']).toBe('+10 more')
   })
 
-  it('共享子图不会指数级展开：节点预算封顶且耗时可控', () => {
-    // 每层 12 个键指向同一个子对象，深 6 层。没有预算时是 12^6 个节点。
+  it('shared subgraphs cannot expand exponentially: the node budget caps cost', () => {
+    // 12 keys per level all pointing at one shared child, 6 levels deep —
+    // 12^6 nodes without a budget.
     let shared: Record<string, unknown> = { leaf: true }
     for (let level = 0; level < 6; level += 1) {
       const next: Record<string, unknown> = {}
@@ -207,7 +210,7 @@ describe('体积与耗时上限', () => {
     expect(rendered).toContain('[truncated]')
   })
 
-  it('大 Map/Set 只取上限内的条目，不先整体展开', () => {
+  it('takes only the capped entries of a large Map/Set, never materializing it', () => {
     const big = new Map<number, number>()
     for (let i = 0; i < 50_000; i += 1) big.set(i, i)
     const out = toSerializable(big) as unknown[]
@@ -216,7 +219,7 @@ describe('体积与耗时上限', () => {
     expect(out[0]).toEqual([0, 0])
   })
 
-  it('超过键数上限的 getter 不被白白触发', () => {
+  it('does not invoke getters past the key cap for nothing', () => {
     let reads = 0
     const wide: Record<string, unknown> = {}
     for (let i = 0; i < 40; i += 1) {
@@ -233,8 +236,9 @@ describe('体积与耗时上限', () => {
     expect(out['…']).toBe(`+${40 - LOG_LIMITS.maxObjectKeys} more`)
   })
 
-  it('节点预算按整次日志调用共享，不是每个参数各给一份', () => {
-    // 约 1600 个节点：单个参数远在 5000 预算内，四个加起来必然超。
+  it('shares one node budget per log call, not one per argument', () => {
+    // ~1600 nodes: one argument sits well inside the 5000 budget, four of
+    // them together must exceed it.
     const fanout = (width: number, build: (i: number) => unknown): Record<string, unknown> =>
       Object.fromEntries(Array.from({ length: width }, (_, i) => [`k${i}`, build(i)]))
     const bulky = fanout(20, () => fanout(20, () => fanout(3, (i) => i)))
@@ -243,7 +247,7 @@ describe('体积与耗时上限', () => {
     expect(line(bulky, bulky, bulky, bulky)).toContain('[truncated]')
   })
 
-  it('深度超限截断为 …', () => {
+  it('truncates past the depth limit to …', () => {
     let deep: unknown = 'leaf'
     for (let i = 0; i < 10; i += 1) deep = { next: deep }
     const rendered = safeStringify(toSerializable(deep))
@@ -252,15 +256,15 @@ describe('体积与耗时上限', () => {
   })
 })
 
-describe('对象键的边界情况', () => {
-  it('自有 __proto__ 键被记录而不是静默丢失', () => {
+describe('object-key edge cases', () => {
+  it('records an own __proto__ key instead of silently dropping it', () => {
     const parsed: unknown = JSON.parse('{"__proto__":{"secret":1},"keep":2}')
     const out = toSerializable(parsed) as Record<string, unknown>
     expect(out.keep).toBe(2)
     expect(out['__proto__']).toEqual({ secret: 1 })
   })
 
-  it('名为 constructor/toString 的自有属性不被原型链误判为已存在', () => {
+  it('own constructor/toString properties are not mistaken for prototype ones', () => {
     const err = new Error('boom') as unknown as Record<string, unknown>
     err['constructor'] = 'shadowed'
     err['toString'] = 'also shadowed'
@@ -269,7 +273,7 @@ describe('对象键的边界情况', () => {
     expect(out['toString']).toBe('also shadowed')
   })
 
-  it('取值抛错的 getter 只降级该字段', () => {
+  it('a throwing getter degrades only its own field', () => {
     const out = toSerializable({
       ok: 'kept',
       get boom() {
@@ -281,7 +285,7 @@ describe('对象键的边界情况', () => {
   })
 })
 
-describe('toConsoleLine（终端 transport）', () => {
+describe('toConsoleLine (console transport)', () => {
   const consoleLine = (level: unknown, ...data: unknown[]): string =>
     toConsoleLine({
       date: new Date('2026-08-18T00:00:00Z'),
@@ -290,21 +294,23 @@ describe('toConsoleLine（终端 transport）', () => {
       data,
     })
 
-  it('字符串原样输出，对象走安全序列化', () => {
+  it('passes strings through verbatim and safely serializes objects', () => {
     const rendered = consoleLine('debug', 'plain', execSyncTimeoutError())
     expect(rendered).toContain('plain')
     expect(rendered).toContain('ETIMEDOUT')
     expect(rendered).toContain('DEBUG')
   })
 
-  it('undefined 参数打印出来，而不是在行里留个空档', () => {
-    // JSON.stringify(undefined) 不是字符串。此前它让参数静默消失，而"某个
-    // 变量没被赋值"恰恰是看日志时要找的东西。
+  it('prints an undefined argument instead of leaving a gap in the line', () => {
+    // JSON.stringify(undefined) is not a string. It used to make the argument
+    // vanish silently — and "a variable was unexpectedly unset" is exactly
+    // what one reads logs to find.
     expect(consoleLine('info', 'a', undefined, 1)).toContain('a undefined 1')
   })
 
-  it('非法 Date 与缺失 level 都降级，不整行丢掉', () => {
-    // 这个回调抛错会被 electron-log 吞掉整行——正是本模块要防的那类失败。
+  it('degrades an invalid Date and a missing level instead of losing the line', () => {
+    // A throw in this callback makes electron-log swallow the whole line —
+    // the exact failure this module exists to prevent.
     const rendered = toConsoleLine({
       date: new Date('nonsense'),
       level: undefined as unknown as string,
@@ -317,11 +323,11 @@ describe('toConsoleLine（终端 transport）', () => {
 })
 
 describe('safeStringify', () => {
-  it('正常对象与 JSON.stringify 一致', () => {
+  it('matches JSON.stringify on ordinary objects', () => {
     expect(safeStringify({ a: 1 })).toBe('{"a":1}')
   })
 
-  it('对会抛错的输入降级为 serializationError 行', () => {
+  it('degrades throwing input to a serializationError line', () => {
     const cyclic: Record<string, unknown> = {}
     cyclic.self = cyclic
     const parsed = JSON.parse(safeStringify(cyclic)) as { serializationError: string }

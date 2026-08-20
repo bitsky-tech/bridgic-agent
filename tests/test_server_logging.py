@@ -1,11 +1,14 @@
-"""configure_daemon_logging 的行为契约。
+"""Behavioral contract of configure_daemon_logging.
 
-这些测试守住三条底线：
-1. 业务 logger（logging.getLogger(__name__) 风格）的记录必须落进 server.log，
-   带时间戳/级别/logger 名——修复此前 root 无 handler、INFO 全丢、
-   ERROR 走 lastResort 的裸输出。
-2. 日志文件自身可轮转，且轮转只由 handler 持有文件（崩溃兜底另有文件）。
-3. 日志系统建不起来时降级续跑，绝不让 daemon 因自身诊断设施而起不来。
+These tests hold three lines:
+1. Records from application loggers (logging.getLogger(__name__) style) must
+   land in server.log with timestamp/level/logger name — fixing the era of a
+   handler-less root where INFO was dropped and ERROR fell through to
+   lastResort's bare output.
+2. The log file rotates, and only the handler holds it open (the crash net is
+   a separate file).
+3. When the logging setup itself fails, the daemon degrades and keeps running;
+   it must never fail startup over its own diagnostics.
 """
 
 from __future__ import annotations
@@ -38,9 +41,11 @@ def _restore_root_logger() -> Iterator[None]:
     saved_handlers = list(root.handlers)
     saved_level = root.level
     saved_disable = logging.root.manager.disable
-    # _apply_levels 改的是进程级的 logger 对象，root 之外还有这四个。不还原
-    # 的话，本模块里最后跑的那个用例（DEBUG 或 WARNING）会决定整个会话剩下
-    # 部分的应用 logger 级别——随机顺序下就是别处 caplog 用例的偶发失败。
+    # _apply_levels mutates process-wide logger objects — the four app loggers
+    # on top of root. Without restoring them, whichever test in this module
+    # runs last (DEBUG or WARNING) decides the app-logger levels for the rest
+    # of the session — under random ordering that is an intermittent failure
+    # in some unrelated caplog test.
     saved_app_levels = {name: logging.getLogger(name).level for name in APP_LOGGER_NAMES}
     logging.disable(logging.NOTSET)
     yield
@@ -61,17 +66,18 @@ def test_named_logger_records_reach_the_file_with_full_context(
     handler = configure_daemon_logging(log_path, stderr=io.StringIO())
     assert handler is not None
 
-    # 探针用全新 logger 名：真实名字（amphi_agent.* / uvicorn.*）可能被套件里
-    # 其他测试的 dictConfig 留下 propagate=False 或 disabled 状态。daemon 进程
-    # 里它们是干净的（我们传 log_config=None，uvicorn 不做 dictConfig）。
-    logging.getLogger("probe.module.logger").info("会话 %s 已建立", "s1")
-    logging.getLogger("probe.uvicorn.logger").warning("uvicorn 侧告警")
+    # Probes use fresh logger names: the real ones (amphi_agent.* / uvicorn.*)
+    # may carry propagate=False or a disabled flag left behind by some other
+    # test's dictConfig. In the daemon process they are clean (we pass
+    # log_config=None, so uvicorn never runs dictConfig).
+    logging.getLogger("probe.module.logger").info("session %s established", "s1")
+    logging.getLogger("probe.uvicorn.logger").warning("uvicorn-side warning")
     handler.flush()
 
     content = log_path.read_text(encoding="utf-8")
-    assert "INFO probe.module.logger 会话 s1 已建立" in content
-    assert "WARNING probe.uvicorn.logger uvicorn 侧告警" in content
-    # 每行都有时间戳前缀（形如 2026-08-18 10:00:00,123）。
+    assert "INFO probe.module.logger session s1 established" in content
+    assert "WARNING probe.uvicorn.logger uvicorn-side warning" in content
+    # Every line carries a timestamp prefix (like 2026-08-18 10:00:00,123).
     for line in content.strip().splitlines():
         assert line[:4].isdigit(), line
 
@@ -88,9 +94,10 @@ def test_info_level_is_the_default_and_debug_opts_in(tmp_path: Path) -> None:
         tmp_path / "server2.log", log_level="trace", stderr=io.StringIO()
     )
     assert handler_debug is not None
-    # --log-level 是 uvicorn 的选项，只能作用到应用自己的 logger：root 跟着降到
-    # DEBUG 会把 httpx / LLM SDK 的请求详情（含 body）写进用户会打开的文件，
-    # 几分钟就冲掉轮转预算。
+    # --log-level is a uvicorn option and may only reach the application's own
+    # loggers: dropping root to DEBUG with it would write httpx / LLM SDK
+    # request detail (bodies included) into a file the user opens, and flood
+    # the rotation budget within minutes.
     assert root.level == logging.INFO
     for name in APP_LOGGER_NAMES:
         assert logging.getLogger(name).level == logging.DEBUG
@@ -98,8 +105,9 @@ def test_info_level_is_the_default_and_debug_opts_in(tmp_path: Path) -> None:
 
 
 def test_app_logger_names_cover_this_repo_s_actual_module_names() -> None:
-    # packages = ["src"]，所以运行时模块名带 src. 前缀。这条断言让打包方式
-    # 一旦变化就立刻失败，而不是悄悄让 --log-level 失效。
+    # packages = ["src"], so runtime module names carry the src. prefix. This
+    # assertion fails the moment the packaging layout changes, instead of
+    # letting --log-level silently stop working.
     assert any(
         logging_module.__name__.startswith(f"{name}.") or logging_module.__name__ == name
         for name in APP_LOGGER_NAMES
@@ -128,7 +136,7 @@ def test_rotation_produces_backups_instead_of_unbounded_growth(
 
     logger = logging.getLogger("rotation.probe")
     for index in range(64):
-        logger.info("填充轮转的行 %04d %s", index, "x" * 64)
+        logger.info("rotation filler line %04d %s", index, "x" * 64)
     handler.flush()
 
     assert log_path.exists()
@@ -147,10 +155,10 @@ def test_unwritable_log_path_degrades_to_console_instead_of_silence(
 
     assert handler is None
     assert "falling back to console logging" in stderr.getvalue()
-    # 关键：调用方给 uvicorn 传的是 log_config=None，root 没 handler 就等于
-    # 整个进程（含 uvicorn 自己的启动横幅）彻底失声。
-    logging.getLogger("probe.degraded").info("仍然要看得到")
-    assert "仍然要看得到" in stderr.getvalue()
+    # Key point: the caller hands uvicorn log_config=None, so a handler-less
+    # root silences the whole process — uvicorn's own startup banner included.
+    logging.getLogger("probe.degraded").info("must still be visible")
+    assert "must still be visible" in stderr.getvalue()
     assert logging.getLogger("uvicorn.error").hasHandlers()
 
 
@@ -159,9 +167,10 @@ def test_console_only_configuration_serves_the_reload_worker(tmp_path: Path) -> 
 
     configure_console_logging(stderr=stderr)
 
-    logging.getLogger("probe.reload").info("dev reload 也要有日志")
-    assert "dev reload 也要有日志" in stderr.getvalue()
-    # reload worker 由 uvicorn 另起进程，绝不能共享 daemon 的轮转文件。
+    logging.getLogger("probe.reload").info("dev reload needs logs too")
+    assert "dev reload needs logs too" in stderr.getvalue()
+    # Reload workers are separate uvicorn-spawned processes and must never
+    # share the daemon's rotating file.
     assert not list(tmp_path.iterdir())
 
 
@@ -173,22 +182,25 @@ def test_console_handler_only_when_stderr_is_a_tty(tmp_path: Path) -> None:
         tmp_path / "server.log", stderr=io.StringIO()
     )
     assert handler is not None
-    # 非 TTY（被 supervisor 重定向）：只有文件 handler，避免兜底文件双写。
+    # Non-TTY (redirected by a supervisor): file handler only, so the crash
+    # net is not double-written.
     assert len(root.handlers) == before + 1
 
     tty = _TtyStderr()
     handler_tty = configure_daemon_logging(tmp_path / "server2.log", stderr=tty)
     assert handler_tty is not None
-    # TTY（开发者前台 serve）：文件 + 终端各一份。
+    # TTY (a developer's foreground serve): one copy to the file, one to the
+    # terminal.
     assert len(root.handlers) == before + 3
 
-    logging.getLogger("console.probe").error("终端也要看得到")
-    assert "终端也要看得到" in tty.getvalue()
+    logging.getLogger("console.probe").error("console must see this too")
+    assert "console must see this too" in tty.getvalue()
 
 
 def test_startup_banner_marks_each_daemon_session(tmp_path: Path) -> None:
-    # server.log 5MB×2 轮转,一个文件里混着多次重启;没有分界线就无法回答
-    # "从哪行开始是升级后的版本"。横幅是每次会话在文件里的硬分界。
+    # server.log rotates at 5MB x 2 and interleaves several restarts in one
+    # file; without a boundary line "which lines are post-upgrade" cannot be
+    # answered. The banner is each session's hard boundary in the file.
     from src import __version__
 
     log_path = tmp_path / "server.log"
@@ -203,8 +215,9 @@ def test_startup_banner_marks_each_daemon_session(tmp_path: Path) -> None:
 
 
 def test_crash_net_note_points_at_preexisting_crash_output(tmp_path: Path) -> None:
-    # 场景:launchd KeepAlive 崩溃循环后的下一次成功启动。traceback 在
-    # daemon.stderr.log 里,而排查者正盯着 server.log —— 这行面包屑把人引过去。
+    # Scenario: the first successful start after a launchd KeepAlive crash
+    # loop. The traceback sits in daemon.stderr.log while the investigator is
+    # staring at server.log — this breadcrumb sends them over.
     log_path = tmp_path / "server.log"
     crash_net = tmp_path / "daemon.stderr.log"
     crash_net.write_bytes(b"Traceback (most recent call last):\n" * 3)
@@ -236,7 +249,8 @@ def test_crash_net_note_stays_silent_when_there_is_nothing_to_read(
 
 
 def _blocked(log_path: Path) -> None:
-    # 让 RotatingFileHandler 打不开:路径上是个目录 → OSError(IsADirectoryError)。
+    # Make RotatingFileHandler unable to open: a directory sits on the path,
+    # so the open raises OSError (IsADirectoryError).
     log_path.mkdir()
 
 
@@ -260,9 +274,11 @@ def test_degraded_configure_installs_the_self_healing_fallback(
 def test_degraded_logging_recovers_when_the_path_becomes_writable(
     tmp_path: Path,
 ) -> None:
-    """降级的常见诱因(磁盘满/目录被临时锁)是暂时的;此前一旦降级就永远
-    把全部日志写进无轮转的 crash net,直到下次重启。现在按 emit 限频重试,
-    路径恢复可写后自动切回 server.log。"""
+    """The usual degradation causes (full disk, a briefly locked directory)
+    are transient; degrading used to be forever — every record went into the
+    unrotated crash net until the next restart. The fallback now retries per
+    emitted record, rate-limited, and switches back to server.log once the
+    path is writable again."""
     log_path = tmp_path / "server.log"
     _blocked(log_path)
     console = io.StringIO()
@@ -282,19 +298,22 @@ def test_degraded_logging_recovers_when_the_path_becomes_writable(
     root.setLevel(logging.INFO)
     probe = logging.getLogger("probe.selfheal")
 
-    # 阶段 1:路径仍不可写,重试窗口已到 → 尝试失败,继续走 console。
+    # Phase 1: path still unwritable, retry window open -> the attempt fails,
+    # records keep going to the console.
     now["t"] = 301.0
     probe.info("degraded-1")
     assert "degraded-1" in console.getvalue()
     assert not (tmp_path / "server.log").is_file()
 
-    # 阶段 2:路径恢复可写,但还在限频窗口内 → 不重试,仍走 console。
+    # Phase 2: path writable again but inside the rate-limit window -> no
+    # retry, still console.
     log_path.rmdir()
     probe.info("degraded-2")
     assert "degraded-2" in console.getvalue()
     assert not log_path.is_file()
 
-    # 阶段 3:窗口过后第一条记录触发接管:本条起进文件,console 不再增长。
+    # Phase 3: the first record after the window triggers the handover: it
+    # lands in the file, and the console stops growing.
     now["t"] = 602.0
     probe.info("recovered-1")
     console_after_heal = console.getvalue()
@@ -309,8 +328,9 @@ def test_degraded_logging_recovers_when_the_path_becomes_writable(
 
 
 def test_degraded_recovery_keeps_a_tty_console(tmp_path: Path) -> None:
-    # 开发终端里降级后恢复:成功路径本来就是 file + TTY console 双写,
-    # 恢复后的拓扑必须一致 —— 终端不能突然安静下来。
+    # Recovery after degrading in a dev terminal: the healthy path is file +
+    # TTY console side by side, and the recovered topology must match — the
+    # terminal cannot suddenly go quiet.
     log_path = tmp_path / "server.log"
     _blocked(log_path)
     console = _TtyStderr()

@@ -9,7 +9,7 @@ const STDERR_LOG = path.join(RUNTIME_DIR, 'daemon.stderr.log')
 const STDOUT_LOG = path.join(RUNTIME_DIR, 'daemon.stdout.log')
 const RUNTIME_JSON = path.join(RUNTIME_DIR, 'runtime.json')
 
-/** 用一张「路径 → mtime」表模拟磁盘；不在表里即不存在。 */
+/** A path -> mtime table stands in for the disk; absent from the table means absent. */
 function disk(files: Record<string, number>) {
   return {
     exists: (candidate: string) => candidate in files,
@@ -18,7 +18,7 @@ function disk(files: Record<string, number>) {
 }
 
 describe('daemonLogCandidates', () => {
-  it('daemon 上报的 log_file 排第一', () => {
+  it('ranks the daemon-reported log_file first', () => {
     const candidates = daemonLogCandidates(
       { logFile: SERVER_LOG, runtimeFile: RUNTIME_JSON },
       'darwin',
@@ -27,7 +27,7 @@ describe('daemonLogCandidates', () => {
     expect(candidates[0]).toBe(SERVER_LOG)
   })
 
-  it('没有 endpoint（daemon 未运行）时按约定目录猜测，含两个崩溃兜底文件', () => {
+  it('guesses from the conventional directory when there is no endpoint, crash-net files included', () => {
     expect(daemonLogCandidates({}, 'linux', HOME)).toEqual([
       SERVER_LOG,
       STDERR_LOG,
@@ -35,15 +35,16 @@ describe('daemonLogCandidates', () => {
     ])
   })
 
-  it('崩溃兜底同时覆盖 stdout —— launchd plist 配了两个流', () => {
-    // 只有 stderr 在链里的话，输出走 stdout 的崩溃（裸 print、PyInstaller
-    // 引导信息）会让「打开日志」报找不到，而证据就在同目录。
+  it('covers the stdout half of the crash net — the launchd plist wires both streams', () => {
+    // With only stderr in the chain, a crash whose output went to stdout
+    // (bare prints, PyInstaller bootstrap noise) makes "Open Logs" report
+    // nothing found while the evidence sits in the same directory.
     const candidates = daemonLogCandidates({ runtimeFile: RUNTIME_JSON }, 'linux', HOME)
     expect(candidates).toContain(STDOUT_LOG)
     expect(candidates).toContain(STDERR_LOG)
   })
 
-  it('旧版 daemon（无 log_file）用 runtimeFile 同目录猜测', () => {
+  it('guesses beside runtimeFile for a pre-log_file daemon', () => {
     const elsewhere = path.join(path.sep, 'custom', 'dir')
     const candidates = daemonLogCandidates(
       { runtimeFile: path.join(elsewhere, 'runtime.json') },
@@ -54,13 +55,13 @@ describe('daemonLogCandidates', () => {
     expect(candidates).toContain(SERVER_LOG)
   })
 
-  it('macOS 追加旧版 launchd 位置作为末位回退，其他平台没有', () => {
+  it('appends the legacy launchd location last on macOS only', () => {
     const legacy = path.join(HOME, 'Library', 'Logs', 'Amphi', 'daemon.stderr.log')
     expect(daemonLogCandidates({}, 'darwin', HOME)).toContain(legacy)
     expect(daemonLogCandidates({}, 'win32', HOME)).not.toContain(legacy)
   })
 
-  it('重复候选被去重', () => {
+  it('deduplicates repeated candidates', () => {
     const candidates = daemonLogCandidates(
       { logFile: SERVER_LOG, runtimeFile: RUNTIME_JSON },
       'linux',
@@ -77,12 +78,13 @@ describe('selectDaemonLog', () => {
     HOME,
   )
 
-  it('全都不存在时返回 null，由调用方报出尝试过的路径', () => {
+  it('returns null when nothing exists, leaving the caller to report every tried path', () => {
     expect(selectDaemonLog(candidates, disk({}), SERVER_LOG)).toBeNull()
   })
 
-  it('daemon 亲口上报且文件存在时直接采用，不比 mtime', () => {
-    // 上报的 server.log 是活的那份，哪怕兜底文件更新（另一个 daemon 实例）。
+  it('takes the daemon-reported file outright when it exists, without comparing mtimes', () => {
+    // The reported server.log is the live one, even when a crash-net file is
+    // newer (another daemon instance).
     const chosen = selectDaemonLog(
       candidates,
       disk({ [SERVER_LOG]: 100, [STDERR_LOG]: 999 }),
@@ -91,16 +93,17 @@ describe('selectDaemonLog', () => {
     expect(chosen).toBe(SERVER_LOG)
   })
 
-  it('daemon 未上报时取最新的一个：过期 server.log 不再遮住今天的崩溃', () => {
-    // 昨天跑成功过 → server.log 一直在；今天启动时在 import 阶段就死了，
-    // traceback 只在 daemon.stderr.log 里。取「第一个存在的」会打开昨天的日志。
+  it('takes the newest candidate without a report: a stale server.log cannot hide today\'s crash', () => {
+    // Yesterday's run succeeded, so server.log exists forever; today's start
+    // died during import, and the traceback lives only in daemon.stderr.log.
+    // "First one that exists" would open yesterday's log.
     const guesses = daemonLogCandidates({ runtimeFile: RUNTIME_JSON }, 'linux', HOME)
     expect(guesses.indexOf(SERVER_LOG)).toBeLessThan(guesses.indexOf(STDERR_LOG))
     const chosen = selectDaemonLog(guesses, disk({ [SERVER_LOG]: 100, [STDERR_LOG]: 500 }))
     expect(chosen).toBe(STDERR_LOG)
   })
 
-  it('上报的路径不存在时（日志降级）退回最新的兜底文件', () => {
+  it('falls back to the newest crash-net file when the reported path does not exist (degraded logging)', () => {
     const chosen = selectDaemonLog(
       candidates,
       disk({ [STDOUT_LOG]: 300, [STDERR_LOG]: 700 }),

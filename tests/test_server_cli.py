@@ -143,10 +143,12 @@ def test_start_passes_all_options_to_the_manager(capsys) -> None:
     ]
     printed = capsys.readouterr().out
     assert "Service started" in printed
-    # 托管方与日志路径是排障第一屏要的两件事，desktop 会把这行原样记进自己的日志。
+    # Supervisor owner and log path are the first two facts triage needs;
+    # the desktop records this line verbatim into its own log.
     assert "supervisor: detached" in printed
-    # 这个替身的 instance 没有 log_file（模拟旧 daemon / 日志降级），此时更要
-    # 给出崩溃兜底文件的位置，而不是什么都不说。
+    # This double's instance has no log_file (an old daemon / degraded
+    # logging) — precisely when the crash-net location must be named instead
+    # of saying nothing.
     assert "file logging unavailable" in printed
     assert "daemon.stderr.log" in printed
 

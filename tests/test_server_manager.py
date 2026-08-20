@@ -465,7 +465,8 @@ def test_manager_status_has_stopped_running_and_stale_states(tmp_path: Path) -> 
     assert running["status"] == "running"
     assert running["base_url"] == "http://127.0.0.1:7421"
     assert "token" not in running
-    # log_file 字段总是存在：daemon 亲口报告日志位置，None 表示降级/旧版。
+    # The log_file field is always present: the daemon reports its own log
+    # location, None meaning degraded / pre-log_file.
     assert running["log_file"] is None
 
     registration.alive = False

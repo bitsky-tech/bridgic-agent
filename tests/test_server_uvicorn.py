@@ -92,7 +92,8 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     monkeypatch.setattr(
         uvicorn_module,
         "configure_daemon_logging",
-        # 返回真值模拟 handler 创建成功：随后 write 必须回报同一个日志路径。
+        # A truthy return simulates a successful handler: the subsequent
+        # write must then advertise the same log path.
         lambda log_path, **options: (events.append(("logging", log_path, options)), object())[1],
     )
 
@@ -108,7 +109,8 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     )
 
     assert events[0] == "lock"
-    # 加锁之后、应用构造之前就要接好文件日志——应用构造期间已有日志输出。
+    # File logging must be wired after the lock but before the application
+    # is constructed — construction already logs.
     assert events[1] == (
         "logging",
         tmp_path / "server.log",
@@ -182,8 +184,9 @@ async def test_lifecycle_hook_failure_is_only_swallowed_during_shutdown(
     def fail() -> None:
         raise RuntimeError("hook broke")
 
-    # 走 logging（不再是 print 到 stderr）：supervisor 把裸 stderr 重定向到
-    # 崩溃兜底文件，而那不是 GUI「打开日志」会打开的那个文件。
+    # Through logging (no longer print-to-stderr): supervisors redirect bare
+    # stderr into the crash-net file, which is not the file the GUI's
+    # "Open Logs" opens.
     with caplog.at_level(logging.WARNING, logger=uvicorn_module.logger.name):
         await GracefulServer._run_hook(fail, swallow=True)
     assert "hook broke" in caplog.text
@@ -195,11 +198,12 @@ async def test_lifecycle_hook_failure_is_only_swallowed_during_shutdown(
 def test_reload_worker_inherits_the_requested_log_level(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """--log-level debug 必须传到 reload worker 的应用 logger 上。
+    """--log-level debug must reach the reload worker's application loggers.
 
-    uvicorn 只会把它交给自己那三个 uvicorn* logger;worker 是另起的进程,
-    拿不到父进程的参数。此前 create_reload_app 无参调用,把 APP_LOGGER_NAMES
-    钉死在 INFO——开发者唯一会主动要 DEBUG 的模式反而看不到 DEBUG。
+    uvicorn hands the flag only to its own three uvicorn* loggers; the worker
+    is a separate process and never sees the parent's arguments. Calling
+    create_reload_app with no arguments pinned APP_LOGGER_NAMES at INFO — the
+    one mode where a developer asks for DEBUG by name showed no DEBUG at all.
     """
     applied: list[str] = []
 
@@ -207,8 +211,9 @@ def test_reload_worker_inherits_the_requested_log_level(
         def acquire(self) -> None:
             raise AssertionError("reload must not acquire the daemon lock")
 
-    # setenv(而不是 delenv):monkeypatch 记下原值,teardown 时才会把
-    # 生产代码写进去的那个值清掉,不然它会漏给后面的测试。
+    # setenv (not delenv): monkeypatch records the prior value, so teardown
+    # removes what the production code wrote — otherwise it leaks into
+    # later tests.
     monkeypatch.setenv(uvicorn_module.RELOAD_LOG_LEVEL_ENV, "info")
     monkeypatch.setattr(uvicorn_module.uvicorn, "run", lambda *args, **kwargs: None)
     UvicornRunner(registration=Unused(), instance_lock=Unused()).run(
@@ -235,10 +240,11 @@ def test_managed_daemon_does_not_write_access_logs_into_server_log(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """log_config=None 会让 uvicorn.access 冒泡到 root 的文件 handler。
+    """log_config=None lets uvicorn.access propagate to root's file handler.
 
-    默认 dictConfig 给它单独的 handler + propagate=False,所以它从来没进过
-    应用日志;现在它会和应用诊断抢同一份 5MB × 2 的轮转预算。
+    The default dictConfig gives it its own handler with propagate=False, so
+    it never reached the application log; it would now compete with the
+    application's diagnostics for the same 5MB x 2 rotation budget.
     """
     captured: dict[str, Any] = {}
 
@@ -281,12 +287,14 @@ def test_managed_daemon_does_not_write_access_logs_into_server_log(
         release=lambda: None,
         path=tmp_path / "lock",
     )
-    # 上一次启动留下的崩溃输出:run() 应在 server.log 里留面包屑指向它。
+    # Crash output left by a previous start: run() should leave a breadcrumb
+    # in server.log pointing at it.
     crash_net = tmp_path / "daemon.stderr.log"
     crash_net.write_bytes(b"Traceback (most recent call last):\n")
 
-    # configure_daemon_logging 在本测试里是真调用,会给 root 挂真 handler;
-    # 不摘掉会把指向 tmp_path 的 file handler 泄漏给会话里之后的所有测试。
+    # configure_daemon_logging runs for real here and attaches a real handler
+    # to root; without removal, a file handler pointing into tmp_path leaks to
+    # every later test in the session.
     root = logging.getLogger()
     saved_handlers = list(root.handlers)
     saved_level = root.level
@@ -298,7 +306,8 @@ def test_managed_daemon_does_not_write_access_logs_into_server_log(
         assert captured["log_config"] is None
         assert captured["access_log"] is False
 
-        # 启动横幅 + crash-net 面包屑都落在 server.log 里(wiring 验证)。
+        # Both the startup banner and the crash-net breadcrumb land in
+        # server.log (wiring check).
         content = (tmp_path / "server.log").read_text(encoding="utf-8")
         assert "[daemon-logging] started pid=" in content
         assert f"crash net {crash_net} holds {crash_net.stat().st_size} bytes" in content
