@@ -383,6 +383,35 @@ async def test_connection_probe(
     assert (await client.get("/me/providers")).json() == []
 
 
+async def test_connection_probe_openai_sends_no_token_cap(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The OpenAI-protocol probe must not cap the reply at 1 token: reasoning
+    models (gpt-5.x / o-series) spend that budget on reasoning and the upstream
+    400s with "Could not finish the message because max_tokens ... was reached"
+    — reproduced live through new-api on gpt-5-mini with both ``max_tokens=1``
+    and ``max_completion_tokens=1``. A "ping" reply is short, so no cap is
+    still a cheap probe."""
+    from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm
+
+    seen = []
+
+    async def ok_probe(self, messages, **kwargs):
+        seen.append(self.configuration.max_tokens)
+        return "pong"
+
+    monkeypatch.setattr(OpenAICompatLlm, "achat", ok_probe)
+    r = await client.post("/me/providers/test", json={
+        "provider_id": "newapi-openai", "protocol": "openai",
+        "base_url": "http://relay.example:3000/v1",
+        "api_key": "sk-test", "model": "gpt-5-mini",
+    })
+
+    assert r.json()["ok"] is True
+    assert seen == [None], "probe must not send a 1-token cap (breaks reasoning models)"
+
+
 async def test_connection_probe_times_out_before_the_renderer(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -502,16 +531,14 @@ def test_probe_constructs_openai_compat_llm_and_sanitizes_gpt5_params() -> None:
         api_base=None,  # true OpenAI endpoint
         configuration=__import__(
             "bridgic.llms.openai", fromlist=["OpenAIConfiguration"]
-        ).OpenAIConfiguration(model="gpt-5.5", temperature=0.0, max_tokens=1),
+        ).OpenAIConfiguration(model="gpt-5.5", temperature=0.0, max_tokens=None),
     )
 
     msgs = [Message.from_text("ping", role=Role.USER)]
     params = llm_openai._build_parameters(messages=msgs)
 
-    # True-OpenAI gpt-5.x: max_tokens renamed, temperature stripped.
-    assert "max_tokens" not in params, "max_tokens must be renamed for true OpenAI"
-    assert "max_completion_tokens" in params, "must rename to max_completion_tokens"
-    assert params["max_completion_tokens"] == 1
+    # True-OpenAI gpt-5.x: no token cap is sent, temperature stripped.
+    assert "max_tokens" not in params and "max_completion_tokens" not in params
     assert "temperature" not in params, "temperature must be stripped for reasoning model"
 
     # DeepSeek endpoint: sanitizer is a no-op → max_tokens + temperature pass through.
