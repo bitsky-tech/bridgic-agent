@@ -139,6 +139,11 @@ jobs:
           version: "0.9.5"
           python-version: "3.13.6"
 
+      - name: Setup bundled Node version
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.1"
+
       - name: Install backend deps
         # --frozen: fail on a stale uv.lock instead of silently updating it.
         run: uv sync --frozen
@@ -171,4 +176,7 @@ jobs:
         # legitimate test is a few seconds) — it is a hang detector, not a
         # performance budget, so it must not start failing tests that are
         # merely slow on a loaded runner.
-        run: uv run pytest -q --timeout=300 --timeout-method=thread
+        run: >-
+          uv run pytest -q
+          --timeout=300 --timeout-method=thread
+          --cov=src --cov-report=term-missing:skip-covered --cov-fail-under=70

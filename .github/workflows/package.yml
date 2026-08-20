@@ -539,38 +539,17 @@ jobs:
       - name: Install backend deps (uv sync)
         run: uv sync --frozen
 
+      - name: Setup bundled Node version
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.1"
+
       - name: Test Windows backend compatibility
         shell: pwsh
-        run: >
-          uv run pytest -q
-          tests/test_windows_shell_smoke.py
-          tests/test_subprocess_flags.py
-          tests/test_classifier_context.py
-          tests/test_notify.py
-          tests/test_amphi_autostart_entry.py
-          tests/test_server_manager.py::test_registration_uses_the_native_windows_pid_probe
-          tests/test_server_manager.py::test_manager_uses_taskkill_for_the_windows_hard_fallback
-          tests/test_server_manager.py::test_manager_selects_the_native_autostart_supervisor
-          tests/test_server_supervisors.py::test_detached_supervisor_uses_platform_process_isolation
-          tests/test_server_supervisors.py::test_run_key_supervisor_registers_a_login_launcher
-          tests/test_server_supervisors.py::test_run_key_supervisor_rejects_a_missing_launcher
-          tests/test_tools_bash.py::test_bash_uses_windows_powershell_argv
-          tests/test_tools_bash.py::test_bash_windows_timeout_terminates_process_tree
-          tests/test_context.py::test_shell_environment_summary_switches_to_powershell
-          tests/test_classify.py::test_windows_shell_classifies_common_powershell_commands
-          tests/test_agent_runtime.py::test_node_runtime_resolves_windows_layout
-          tests/test_agent_runtime.py::test_an_exclusive_handle_does_not_even_make_the_base_unreadable
-          tests/test_agent_runtime.py::test_a_stripped_dacl_is_exactly_what_the_probe_calls_unreadable
-          tests/test_agent_runtime.py::test_a_base_nobody_can_read_can_still_be_moved_aside
-          tests/test_agent_runtime.py::test_an_open_handle_makes_the_move_impossible
-          tests/test_agent_runtime.py::test_a_really_poisoned_base_heals_itself
-          tests/test_agent_runtime.py::test_a_base_that_never_becomes_readable_is_moved_aside_and_rebuilt
-          tests/test_agent_runtime.py::test_a_base_whose_handle_clears_keeps_everything_installed_in_it
-          tests/test_agent_runtime.py::test_a_base_that_cannot_be_moved_aside_stays_retryable
-          tests/test_agent_runtime.py::test_node_base_that_never_becomes_readable_is_moved_aside_and_rebuilt
-          tests/test_agent_runtime.py::test_node_base_heals_when_only_its_support_files_are_unreadable
-          tests/test_agent_runtime.py::test_ensure_pip_replaces_a_pip_that_cannot_be_used
-          tests/test_agent_runtime.py::test_ensure_pip_leaves_a_healthy_pip_alone_when_the_probe_misfires
+        # The platform-neutral suite already runs on Linux in validate.yml.
+        # The marker lives beside the contracts, so renaming or splitting a test
+        # cannot silently leave this packaging gate with a stale node id.
+        run: uv run pytest -q --timeout=300 --timeout-method=thread -m windows_runtime
 
       - name: Build amphi binary (PyInstaller)
         # PowerShell counterpart of build-pyinstaller.sh — PyInstaller cannot

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 
+from tests._support.sandbox import IsolatedPaths
 from tests.service.flows._scripted_llm import FLOW_MODEL, ScriptedLlm
 
 
@@ -84,3 +87,53 @@ async def test_duplicate_reset(flow_client: httpx.AsyncClient, scripted_llm: Scr
         f"/sessions/{source_id}/files",
         params={"path": ".work/note.txt"},
     )).json()["content"] == "durable note"
+
+
+async def test_duplicate_owns_an_independent_uploaded_attachment(flow_client: httpx.AsyncClient, scripted_llm: ScriptedLlm, test_sandbox: IsolatedPaths) -> None:
+    """Duplicating and deleting Sessions preserves attachment ownership boundaries.
+
+    Checks:
+    1. Duplicate copies a managed upload into its own attachment directory.
+    2. Deleting the source removes only the source upload.
+    3. Deleting the duplicate removes the remaining copied upload.
+    """
+    created = await flow_client.post("/sessions", json={"model": FLOW_MODEL})
+    assert created.status_code == 201
+    source_id = created.json()["id"]
+    upload = await flow_client.post(
+        f"/sessions/{source_id}/mounts/upload",
+        files={"file": ("report.txt", b"independent attachment", "text/plain")},
+    )
+    assert upload.status_code == 201
+    source_path = Path(upload.json()["path"])
+
+    scripted_llm.enqueue_text("The attachment is ready.")
+    run = await flow_client.post(
+        f"/api/agent/sessions/{source_id}/run",
+        json={"input": "Finish this Session."},
+    )
+    assert run.status_code == 200
+
+    duplicate = await flow_client.post(f"/sessions/{source_id}/duplicate")
+    assert duplicate.status_code == 201
+    duplicate_id = duplicate.json()["id"]
+    mounts = (await flow_client.get(f"/sessions/{duplicate_id}/mounts")).json()
+    copied_mount = next(mount for mount in mounts if mount["name"] == "report.txt")
+    copied_path = Path(copied_mount["path"])
+
+    # Check 1: The copy has the same bytes under a distinct Session-owned path.
+    assert source_path.parent == test_sandbox.attachments / source_id
+    assert copied_path.parent == test_sandbox.attachments / duplicate_id
+    assert copied_path != source_path
+    assert copied_path.read_bytes() == source_path.read_bytes() == b"independent attachment"
+
+    # Check 2: Removing the source cannot remove the duplicate's file.
+    delete_source = await flow_client.delete(f"/sessions/{source_id}")
+    assert delete_source.status_code == 204
+    assert not source_path.exists()
+    assert copied_path.read_bytes() == b"independent attachment"
+
+    # Check 3: The final owner removes its attachment with the Session.
+    delete_duplicate = await flow_client.delete(f"/sessions/{duplicate_id}")
+    assert delete_duplicate.status_code == 204
+    assert not copied_path.exists()

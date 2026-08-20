@@ -1,7 +1,11 @@
+import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
+import pytest
 
+from src.amphi_service.handler import _skills_import_handler as skills_import_handler
 from tests._support.sandbox import IsolatedPaths
 
 
@@ -138,3 +142,52 @@ async def test_import_skill(service_client: httpx.AsyncClient, test_sandbox: Iso
     assert detail["source"] == "local"
     assert detail["source_uri"] == str(source)
     assert detail["enabled"] is True
+
+
+async def test_import_github_skill(service_client: httpx.AsyncClient, test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A downloaded GitHub Skill keeps its remote identity through installation."""
+    source = test_sandbox.root / "downloaded" / "research-helper"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text(
+        "---\nname: github-helper\ndescription: Imported from GitHub\n---\n# GitHub Helper\n",
+        encoding="utf-8",
+    )
+    remote_url = "https://github.com/acme/skills/tree/main/research-helper"
+
+    def download(owner: str, repo: str, path: str | None = None, ref: str | None = None) -> SimpleNamespace:
+        assert (owner, repo, ref, path) == ("acme", "skills", "main", "research-helper")
+        return SimpleNamespace(skill_dir=source, source_uri=remote_url)
+
+    monkeypatch.setattr(skills_import_handler, "_download_skill_from_github", download)
+    response = await service_client.get("/skills/import/scan", params={"path": remote_url})
+    assert response.status_code == 200
+    scanned = response.json()
+    assert len(scanned) == 1
+    assert scanned[0]["name"] == "github-helper"
+    assert scanned[0]["source"] == "github"
+    assert scanned[0]["source_uri"] == remote_url
+    assert scanned[0]["local_path"] == str(source)
+
+    response = await service_client.post("/skills/import", json=scanned)
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == 1
+    installed = test_sandbox.skills / "research-helper"
+    assert response.json()["imported_skills"][0]["skill_dir"] == str(installed)
+    assert (installed / "SKILL.md").is_file()
+
+
+def test_github_zip_rejects_path_escape(test_sandbox: IsolatedPaths) -> None:
+    """GitHub archives cannot write outside their extraction directory."""
+    archive_path = test_sandbox.root / "malicious.zip"
+    destination = test_sandbox.root / "extracted"
+    destination.mkdir()
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../escaped.txt", "must not escape")
+
+    with zipfile.ZipFile(archive_path) as archive:
+        with pytest.raises(
+            skills_import_handler._SkillDownloadError,
+            match="outside the destination",
+        ):
+            skills_import_handler._safe_extract_zip(archive, destination)
+    assert not (test_sandbox.root / "escaped.txt").exists()

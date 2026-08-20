@@ -17,6 +17,7 @@ class IsolatedPaths:
     workflows: Path
     runs: Path
     skills: Path
+    policy_file: Path
 
     @classmethod
     def from_root(cls, root: Path) -> IsolatedPaths:
@@ -33,6 +34,7 @@ class IsolatedPaths:
             workflows=resolved_root / "workflows",
             runs=resolved_root / "runs",
             skills=resolved_root / "skills",
+            policy_file=app_home / "policy.json",
         )
 
     def application_environment(self) -> dict[str, str]:
@@ -44,6 +46,7 @@ class IsolatedPaths:
             "BRIDGIC_AGENT_WORKFLOWS_ROOT": str(self.workflows),
             "BRIDGIC_AGENT_RUNS_ROOT": str(self.runs),
             "BRIDGIC_AGENT_SKILLS_ROOT": str(self.skills),
+            "AMPHI_POLICY_FILE": str(self.policy_file),
         }
 
     def process_environment(self) -> dict[str, str]:

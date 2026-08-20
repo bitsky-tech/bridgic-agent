@@ -41,14 +41,13 @@ def scripted_llm() -> Iterator[ScriptedLlm]:
 
 @pytest.fixture
 async def flow_app(test_sandbox: IsolatedPaths, scripted_llm: ScriptedLlm, monkeypatch: pytest.MonkeyPatch):
-    """Build the real Service and Agent wiring without external runtime services."""
-    from src.amphi_agent import SkillLibrary
+    """Run the real Service lifespan with only the external model scripted."""
     from src.amphi_agent.runtime._environment import (
         AppCommandEnvironmentSnapshot,
         app_command_environment,
     )
     from src.amphi_service._app import ServiceApp
-    from src.amphi_service.auth import LOCAL_USER_ID, seed_local_user
+    from src.amphi_service.auth import LOCAL_USER_ID
 
     command_environment = {
         **test_sandbox.process_environment(),
@@ -67,13 +66,10 @@ async def flow_app(test_sandbox: IsolatedPaths, scripted_llm: ScriptedLlm, monke
     monkeypatch.setattr(app_command_environment, "snapshot", lambda: command_snapshot)
 
     await Repository.close()
-    service: ServiceApp | None = None
-    try:
-        service = ServiceApp(bind_host="127.0.0.1", bind_port=0)
-        service.bind_shutdown(lambda: None)
-        await Repository.init_schema()
-        await seed_local_user()
-        await SkillLibrary(LOCAL_USER_ID).sync_builtins()
+    service = ServiceApp(bind_host="127.0.0.1", bind_port=0)
+    service.bind_shutdown(lambda: None)
+    await service.state.llms.set((LOCAL_USER_ID, FLOW_MODEL), cast(Any, scripted_llm))
+    async with service.app.router.lifespan_context(service.app):
         await UserRepository().set_active_provider(
             LOCAL_USER_ID,
             api_key="flow-test-key",
@@ -81,23 +77,7 @@ async def flow_app(test_sandbox: IsolatedPaths, scripted_llm: ScriptedLlm, monke
             protocol="openai",
             model=FLOW_MODEL,
         )
-        await service.state.llms.set((LOCAL_USER_ID, FLOW_MODEL), cast(Any, scripted_llm))
         yield service
-    finally:
-        try:
-            if service is not None:
-                try:
-                    await service.state.agent_env.stop()
-                finally:
-                    try:
-                        await service.state.scheduler.stop()
-                    finally:
-                        try:
-                            await service.state.invocations.shutdown()
-                        finally:
-                            await service.state.browser_host.shutdown()
-        finally:
-            await Repository.close()
 
 
 @pytest.fixture

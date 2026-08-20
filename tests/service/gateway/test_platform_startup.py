@@ -20,6 +20,7 @@ from src.amphi_service.server.supervisor._launchd import LABEL, LaunchdSuperviso
 from tests._support.sandbox import IsolatedPaths
 
 
+@pytest.mark.windows_runtime
 def test_launch_commands(test_sandbox: IsolatedPaths) -> None:
     """Source and packaged builds produce platform-correct Gateway commands.
 
@@ -148,6 +149,7 @@ def test_macos_launchd(test_sandbox: IsolatedPaths) -> None:
     assert definition["EnvironmentVariables"] == {"PATH": "/usr/local/bin"}
 
 
+@pytest.mark.windows_runtime
 def test_windows_run_key(test_sandbox: IsolatedPaths) -> None:
     """Windows login startup registers the windowless launcher without elevation.
 
@@ -207,6 +209,7 @@ def test_windows_run_key(test_sandbox: IsolatedPaths) -> None:
         ),
     ],
 )
+@pytest.mark.windows_runtime
 def test_detached_process(
     test_sandbox: IsolatedPaths,
     monkeypatch: pytest.MonkeyPatch,

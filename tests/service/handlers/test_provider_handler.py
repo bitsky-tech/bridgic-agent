@@ -1,4 +1,10 @@
+from typing import Any
+
 import httpx
+import pytest
+
+from src.amphi_service.handler import _providers_handler as providers_handler
+from src.amphi_service.protocol.llms import openai_llm as openai_module
 
 
 async def test_catalog(service_client: httpx.AsyncClient) -> None:
@@ -438,3 +444,101 @@ async def test_provider_validation(service_client: httpx.AsyncClient) -> None:
     response = await service_client.get("/me/providers")
     assert response.status_code == 200
     assert response.json() == []
+
+
+async def test_provider_network_contract(service_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider probing and discovery preserve routing, parsing, and secret boundaries.
+
+    Checks:
+    1. Connection testing routes the submitted model through the selected adapter.
+    2. Google model discovery builds native authentication and filters non-chat models.
+    3. Provider errors cannot echo the submitted API key back to the client.
+    """
+    probe: dict[str, Any] = {}
+
+    class ProbeLlm:
+        def __init__(self, **kwargs) -> None:
+            probe.update(kwargs)
+
+        async def achat(self, messages: list[Any]) -> object:
+            probe["messages"] = messages
+            return object()
+
+    monkeypatch.setattr(openai_module, "OpenAICompatLlm", ProbeLlm)
+    response = await service_client.post(
+        "/me/providers/test",
+        json={
+            "provider_id": "company-gateway",
+            "protocol": "openai",
+            "api_key": "probe-secret",
+            "base_url": "https://gateway.example.test/v1",
+            "model": "company-model",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert probe["api_key"] == "probe-secret"
+    assert probe["api_base"] == "https://gateway.example.test/v1"
+    assert probe["configuration"].model == "company-model"
+    assert len(probe["messages"]) == 1
+
+    real_async_client = httpx.AsyncClient
+    requests: list[httpx.Request] = []
+    reflected_secret = "reflected-provider-secret"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "generativelanguage.example.test":
+            return httpx.Response(200, json={
+                "models": [
+                    {
+                        "name": "models/gemini-chat",
+                        "displayName": "Gemini Chat",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/text-embedding",
+                        "displayName": "Embedding",
+                        "supportedGenerationMethods": ["embedContent"],
+                    },
+                ],
+            })
+        return httpx.Response(500, text=f"upstream echoed {reflected_secret}")
+
+    def client_factory(*_args, **_kwargs) -> httpx.AsyncClient:
+        return real_async_client(transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr(providers_handler.httpx, "AsyncClient", client_factory)
+
+    response = await service_client.post(
+        "/me/providers/fetch-models",
+        json={
+            "provider_id": "google",
+            "protocol": "openai",
+            "api_key": "google-secret",
+            "base_url": "https://generativelanguage.example.test",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "models": [{"id": "gemini-chat", "name": "Gemini Chat"}],
+    }
+    assert str(requests[-1].url) == (
+        "https://generativelanguage.example.test/v1beta/models?key=google-secret"
+    )
+    assert "authorization" not in requests[-1].headers
+
+    response = await service_client.post(
+        "/me/providers/fetch-models",
+        json={
+            "provider_id": "company-gateway",
+            "protocol": "openai",
+            "api_key": reflected_secret,
+            "base_url": "https://error.example.test/v1",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert reflected_secret not in response.text
+    assert "***" in response.json()["error"]

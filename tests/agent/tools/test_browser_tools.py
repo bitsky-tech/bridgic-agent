@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from src.amphi_agent._browser import SessionBrowser, _SessionBrowserClient
 from src.amphi_agent.tools import _browser as browser_module
 from src.amphi_agent.tools._browser import (
     browser_close,
@@ -153,17 +154,53 @@ async def test_browser_catalog(tool_harness: ToolHarness) -> None:
     """Final browser tool bridge:
 
     {
-      "public_tools": "every declared browser operation invoked",
-      "bridge": "each public tool reaches its matching browser method",
+      "public_tools": "every declared browser operation admitted",
+      "bridge": "each public tool crosses the real SessionBrowser boundary",
       "convenience_tools": ["scroll to text", "verify visible"]
     }
 
     Checks:
-    1. Every canonical browser operation has a callable public tool that reaches its matching method.
-    2. Every declared public browser tool is covered by this bridge check or a focused lifecycle check.
-    3. Convenience tools map to their intended lower-level browser operations.
+    1. Every mapped operation names a callable on the real Session browser client.
+    2. Every invoke-backed tool is admitted and matches the real browser client call signature.
+    3. Every declared public browser tool is covered by this bridge check or a focused lifecycle check.
+    4. Convenience tools map to their intended lower-level browser operations.
     """
-    browser = _RecordingBrowser()
+    class Client:
+        def __init__(self) -> None:
+            self._embedded = False
+            self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+        def __getattr__(self, method: str) -> Any:
+            async def invoke(*args: Any, **kwargs: Any) -> str:
+                inspect.signature(getattr(_SessionBrowserClient, method)).bind(
+                    None,
+                    *args,
+                    **kwargs,
+                )
+                self.calls.append((method, args, kwargs))
+                return f"{method} result"
+
+            return invoke
+
+        async def settle_page_events(self) -> bool:
+            return True
+
+        async def discard_prefetched_snapshot(self) -> None:
+            return None
+
+        async def settle_page_state(self, max_wait_seconds: float) -> bool:
+            return max_wait_seconds > 0
+
+    class Host:
+        def __init__(self, client: Client) -> None:
+            self.client = client
+
+        async def _client_for(self, browser: SessionBrowser) -> Client:
+            del browser
+            return self.client
+
+    client = Client()
+    browser = SessionBrowser(Host(client), "session-a")  # type: ignore[arg-type]
     tool_harness.context.browser = browser  # type: ignore[assignment]
     samples: dict[str, Any] = {
         "accept": True,
@@ -197,28 +234,34 @@ async def test_browser_catalog(tool_harness: ToolHarness) -> None:
     }
     executed: set[str] = set()
 
-    # Check 1: Every canonical browser operation reaches its matching method.
+    # Check 1: Each mapping names a real callable on the production browser client.
     for method, tool_name in browser_module._BRIDGIC_BROWSER_METHOD_TO_TOOL_NAME.items():
+        assert callable(getattr(_SessionBrowserClient, method, None))
         if tool_name == "browser_close":
             continue
+
+        # Check 2: Each tool crosses admission with arguments accepted by the real client method.
         operation = getattr(browser_module, tool_name)
         arguments = {
             name: samples[name]
             for name, parameter in inspect.signature(operation).parameters.items()
             if parameter.default is inspect.Parameter.empty
         }
-        assert await operation(**arguments) == f"{method} result"
-        assert browser.calls[-1][0] == method
+        call_count = len(client.calls)
+        assert (await operation(**arguments)).startswith(f"{method} result")
+        assert client.calls[call_count][0] == method
         executed.add(tool_name)
 
-    # Check 2: The catalogue has no untested public browser operation.
+    # Check 3: The catalogue has no untested public browser operation.
     executed.update({"browser_close", "load_browser_tools"})
-    assert executed | {"browser_scroll_to_text", "browser_verify_visible"} == set(
-        browser_module.BROWSER_TOOL_NAMES
-    )
+    covered = executed | {"browser_scroll_to_text", "browser_verify_visible"}
+    assert covered == set(browser_module.BROWSER_TOOL_NAMES)
+    assert covered == {spec.tool_name for spec in browser_module.browser_tool_specs}
 
-    # Check 3: Convenience tools reach their intended lower-level operations.
-    assert await browser_module.browser_scroll_to_text("Target") == "scroll_to_text result"
-    assert browser.calls[-1][0] == "scroll_to_text"
+    # Check 4: Convenience tools reach their intended lower-level operations.
+    call_count = len(client.calls)
+    assert (await browser_module.browser_scroll_to_text("Target")).startswith("scroll_to_text result")
+    assert client.calls[call_count][0] == "scroll_to_text"
+    call_count = len(client.calls)
     assert await browser_module.browser_verify_visible("ref-1") == "verify_element_state result"
-    assert browser.calls[-1][0] == "verify_element_state"
+    assert client.calls[call_count][0] == "verify_element_state"

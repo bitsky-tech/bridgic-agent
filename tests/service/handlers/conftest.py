@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 async def service_app(test_sandbox: IsolatedPaths) -> AsyncIterator["ServiceApp"]:
-    """Build one isolated production ServiceApp without running its lifespan."""
+    """Build one isolated production ServiceApp without running background services."""
     from src.amphi_agent import SkillLibrary
     from src.amphi_service._app import ServiceApp
     from src.amphi_service.auth import LOCAL_USER_ID, seed_local_user

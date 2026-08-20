@@ -1,4 +1,4 @@
-"""The bundled interpreter must never write bytecode into the app bundle.
+"""The bundled Python runtime must never write bytecode into the app bundle.
 
 macOS seals every file under a signed .app. CPython writing `__pycache__/*.pyc`
 next to the standard library it just imported adds files the seal does not
