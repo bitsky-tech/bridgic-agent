@@ -589,3 +589,22 @@ def test_build_parameters_strips_volatile_tail_flag_from_wire() -> None:
     assert len(wire) == 2 and wire[1]["content"].startswith("<runtime_state>")
     assert VOLATILE_TAIL_EXTRA not in wire[1], "internal flag leaked onto the wire"
     assert (messages[1].extras or {}).get(VOLATILE_TAIL_EXTRA) is True, "caller message must not be mutated"
+
+
+def test_sanitize_moonshot_platform_forces_supported_temperature() -> None:
+    """api.moonshot.cn (Kimi open platform) enforces temperature=1 on k2.6+ —
+    400 "invalid temperature: only 1 is allowed for this model" otherwise. Same
+    correction as the Kimi Code endpoint."""
+    src = {"model": "kimi-k2.6", "temperature": 0.0, "max_tokens": 8}
+    out = sanitize_openai_params(dict(src), base_url="https://api.moonshot.cn/v1")
+    assert out["temperature"] == 1
+    assert out["max_tokens"] == 8
+
+
+def test_unsupported_param_of_reads_moonshot_invalid_param_text() -> None:
+    """Moonshot's rejection wording ("invalid temperature: only 1 is allowed")
+    names the parameter after "invalid" — the generic heal must catch it for
+    relays that proxy Kimi models under other hosts."""
+    exc = _LiteLLMExc("invalid temperature: only 1 is allowed for this model")
+    assert unsupported_param_of(exc) == "temperature"
+    assert unsupported_param_of(_LiteLLMExc("invalid request id")) is None
