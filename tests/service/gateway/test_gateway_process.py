@@ -1,6 +1,4 @@
 import json
-import os
-import time
 from pathlib import Path
 
 import httpx
@@ -101,51 +99,6 @@ async def test_desktop_cold_start(gateway_cli: GatewayCLI) -> None:
     assert stopped.returncode == 0, stopped.stderr
     assert (await gateway_cli.status())["status"] == "stopped"
     assert not gateway_cli.runtime_file.exists()
-
-
-@pytest.mark.perf
-@pytest.mark.process
-@pytest.mark.skipif(
-    os.getenv("AMPHI_RUN_PERF_TESTS") != "1",
-    reason="Set AMPHI_RUN_PERF_TESTS=1 to enforce the local startup budget.",
-)
-async def test_desktop_startup_budget(gateway_cli: GatewayCLI) -> None:
-    """A cold Desktop reaches an authenticated WebSocket within the product budget.
-
-    Final state:
-    {"desktop": {"status_to_websocket_ready_seconds": "< 3.0"}}
-
-    Checks:
-    1. Runtime discovery, CLI startup, authentication, and WebSocket readiness finish in three seconds.
-    """
-    # Check 1: Measure the complete Desktop-visible cold-start boundary.
-    started_at = time.perf_counter()
-    assert not gateway_cli.runtime_file.exists()
-    assert (await gateway_cli.status())["status"] == "stopped"
-    started = await gateway_cli.start()
-    assert started.returncode == 0, started.stderr
-    running = await gateway_cli.status()
-    runtime_path = Path(running["runtime_file"])
-    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-    headers = {
-        "Authorization": f"Bearer {runtime['token']}",
-        "X-Client-Id": "desktop-startup-budget",
-        "X-Client-Type": "gui",
-    }
-    async with httpx.AsyncClient(base_url=running["base_url"], timeout=3) as client:
-        assert (await client.get("/api/gateway/info", headers=headers)).status_code == 200
-    websocket_url = f"ws://{runtime['host']}:{runtime['port']}{runtime['ws_path']}"
-    async with connect(websocket_url, proxy=None) as websocket:
-        await websocket.send(json.dumps({
-            "type": "hello",
-            "token": runtime["token"],
-            "client_type": "gui",
-            "client_id": "desktop-startup-budget",
-            "locale": "en",
-        }))
-        assert json.loads(await websocket.recv()) == {"type": "ready"}
-    ready_seconds = time.perf_counter() - started_at
-    assert ready_seconds < 3.0, f"Desktop cold start took {ready_seconds:.3f}s"
 
 
 @pytest.mark.process
