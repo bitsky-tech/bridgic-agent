@@ -46,8 +46,8 @@ async def test_run_lifecycle(service_client: httpx.AsyncClient, test_sandbox: Is
     work_dir = run_root / "background" / "work"
     result_dir.mkdir(parents=True)
     work_dir.mkdir(parents=True)
-    (result_dir / "report.md").write_text("# Complete report\n", encoding="utf-8")
-    (work_dir / "notes.txt").write_text("Intermediate notes\n", encoding="utf-8")
+    (result_dir / "report.md").write_bytes(b"# Complete report\n")
+    (work_dir / "notes.txt").write_bytes(b"Intermediate notes\n")
     outside = test_sandbox.root / "outside.txt"
     outside.write_text("private", encoding="utf-8")
     await repository.create_or_confirm_terminal(

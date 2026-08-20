@@ -21,6 +21,58 @@ current_tool_call_id: ContextVar[Optional[str]] = ContextVar("current_tool_call_
 current_execution_mode: ContextVar[Optional[str]] = ContextVar("current_execution_mode", default=None)
 
 
+def _create_windows_kill_job(pid: int) -> Optional[int]:
+    """Assign ``pid`` to a job that can terminate its complete process tree."""
+    if not _IS_WINDOWS:
+        return None
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    process = kernel32.OpenProcess(0x0001 | 0x0100, False, pid)
+    assigned = bool(
+        process
+        and kernel32.AssignProcessToJobObject(job, process)
+    )
+    if process:
+        kernel32.CloseHandle(process)
+    if not assigned:
+        kernel32.CloseHandle(job)
+        return None
+    return int(job)
+
+
+def _close_windows_kill_job(handle: Optional[int], *, terminate: bool) -> bool:
+    """Close a command job, optionally terminating every process assigned to it."""
+    if not _IS_WINDOWS or handle is None:
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    terminated = bool(kernel32.TerminateJobObject(handle, 1)) if terminate else False
+    kernel32.CloseHandle(handle)
+    return terminated
+
+
 def _decode_shell_output(data: bytes) -> str:
     """Decode shell output without discarding legacy Windows code-page bytes."""
     if not _IS_WINDOWS:
@@ -154,27 +206,35 @@ async def bash(command: str, cwd: str, timeout: int = DEFAULT_TIMEOUT_MS) -> str
         env=env,
         **spawn_options,
     )
+    windows_job = _create_windows_kill_job(proc.pid)
 
     async def kill_process_tree() -> None:
         """Kill the shell's complete process group and reap the shell."""
+        nonlocal windows_job
         try:
             if not _IS_WINDOWS:
                 os.killpg(proc.pid, signal.SIGKILL)
             elif proc.returncode is None:
-                try:
-                    killer = await asyncio.create_subprocess_exec(
-                        "taskkill.exe",
-                        "/PID",
-                        str(proc.pid),
-                        "/T",
-                        "/F",
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                        creationflags=_WINDOWS_CREATE_NO_WINDOW,
-                    )
-                    await killer.wait()
-                except OSError:
-                    proc.kill()
+                terminated_job = _close_windows_kill_job(
+                    windows_job,
+                    terminate=True,
+                )
+                windows_job = None
+                if not terminated_job:
+                    try:
+                        killer = await asyncio.create_subprocess_exec(
+                            "taskkill.exe",
+                            "/PID",
+                            str(proc.pid),
+                            "/T",
+                            "/F",
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                            creationflags=_WINDOWS_CREATE_NO_WINDOW,
+                        )
+                        await killer.wait()
+                    except OSError:
+                        proc.kill()
                 if proc.returncode is None:
                     proc.kill()
         except ProcessLookupError:
@@ -200,6 +260,9 @@ async def bash(command: str, cwd: str, timeout: int = DEFAULT_TIMEOUT_MS) -> str
     except asyncio.CancelledError:
         await kill_process_tree()
         raise
+    else:
+        _close_windows_kill_job(windows_job, terminate=False)
+        windows_job = None
 
     stdout = _decode_shell_output(stdout_bytes)
     stderr = _decode_shell_output(stderr_bytes)

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
+
+
+RECEIVE_TIMEOUT_SECONDS = 5 if os.name == "nt" else 2
 
 
 @dataclass(slots=True)
@@ -18,7 +22,9 @@ class WebSocketRecorder:
         await self.connection.send(json.dumps(message))
 
     async def receive(self) -> dict[str, Any]:
-        raw = await asyncio.wait_for(self.connection.recv(), timeout=2)
+        raw = await asyncio.wait_for(
+            self.connection.recv(), timeout=RECEIVE_TIMEOUT_SECONDS,
+        )
         message = json.loads(raw)
         self.messages.append(message)
         return message

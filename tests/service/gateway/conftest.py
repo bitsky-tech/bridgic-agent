@@ -59,6 +59,10 @@ class RunningGateway:
     def websocket_url(self) -> str:
         return f"ws://{self.runtime['host']}:{self.runtime['port']}{self.runtime['ws_path']}"
 
+    @property
+    def pid(self) -> int:
+        return int(self.runtime["pid"])
+
     def log_output(self) -> str:
         try:
             return self.log_file.read_text(encoding="utf-8", errors="replace")
@@ -277,9 +281,18 @@ async def running_gateway(test_sandbox: IsolatedPaths) -> AsyncIterator[RunningG
             candidate = json.loads(runtime_file.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             candidate = None
-        if isinstance(candidate, dict) and candidate.get("pid") == process.pid:
-            runtime = candidate
-            break
+        if isinstance(candidate, dict) and candidate.get("port") == port:
+            runtime_pid = candidate.get("pid")
+            if runtime_pid == process.pid or (
+                os.name == "nt" and isinstance(runtime_pid, int)
+            ):
+                # uv's Windows virtual-environment launcher remains as the
+                # parent while the base interpreter owns the server lock and
+                # registration. The per-test HOME and reserved port make this
+                # child registration unambiguous. POSIX keeps the stricter
+                # same-pid contract.
+                runtime = candidate
+                break
         await asyncio.sleep(0.025)
 
     if runtime is None:

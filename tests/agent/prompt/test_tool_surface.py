@@ -1,3 +1,4 @@
+import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -322,7 +323,7 @@ async def test_explore_skill(prompt_store: None) -> None:
 
     # Check 2: Explore restores the product-owned how-to Skill for implementation discovery.
     assert "- how-to (location:" in explore[0].content
-    assert how_to.skill_dir in explore[0].content
+    assert json.dumps(how_to.skill_dir, ensure_ascii=False) in explore[0].content
 
     # Check 3: Only Explore records the disabled Skill directory as model-visible.
     assert how_to.skill_dir not in main_ota.selected_skill_dirs

@@ -123,6 +123,6 @@ async def test_single_instance(running_gateway: RunningGateway) -> None:
     # Check 2: The rejected start does not replace or interrupt the original Gateway.
     assert running_gateway.process.poll() is None
     current = json.loads(running_gateway.runtime_file.read_text(encoding="utf-8"))
-    assert current["pid"] == running_gateway.process.pid
+    assert current["pid"] == running_gateway.pid
     async with httpx.AsyncClient(base_url=running_gateway.base_url, timeout=3) as client:
         assert (await client.get("/api/gateway/health")).status_code == 200

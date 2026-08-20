@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from pytest import MonkeyPatch
@@ -181,7 +182,7 @@ async def test_main_context(test_sandbox: IsolatedPaths, prompt_store: None) -> 
     assert "Daily context check" in dynamic
     assert "Context workflow" in dynamic
     assert "Prefer deterministic context fixtures." in dynamic
-    assert str(workspace.work_dir) in dynamic
+    assert json.dumps(str(workspace.work_dir), ensure_ascii=False) in dynamic
 
     # Check 3: An unavailable Browser contributes no dynamic Context block.
     assert "<browser>" not in dynamic
@@ -252,7 +253,8 @@ async def test_optional_context(test_sandbox: IsolatedPaths, prompt_store: None,
     assert "<workflow_results>" in dynamic
     assert f"Published context report result (run_id: {run_id}" in dynamic
     assert "status: completed, validation: passed" in dynamic
-    assert f'result path: "{run_root / "result"}"' in dynamic
+    result_path = json.dumps(str(run_root / "result"), ensure_ascii=False)
+    assert f"result path: {result_path}" in dynamic
     assert 'input: "Create the published report"' in dynamic
 
     # Check 2: Existing Browser tabs expose bounded metadata and identify the active tab.

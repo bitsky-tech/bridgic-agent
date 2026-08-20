@@ -22,10 +22,11 @@ async def test_file_lifecycle(tool_harness: ToolHarness) -> None:
     4. A later full write replaces the complete file without requiring another read.
     """
     target = tool_harness.workspace.work_dir / "notes" / "item.txt"
+    display_target = os.path.join("notes", "item.txt")
 
     # Check 1: A relative write creates parent directories under the Session work directory.
     created = await write_file("notes/item.txt", "Alpha\nBeta\n")
-    assert created == "Created notes/item.txt (11 bytes)."
+    assert created == f"Created {display_target} (11 bytes)."
     assert target.read_text(encoding="utf-8") == "Alpha\nBeta\n"
 
     # Check 2: Reading returns numbered content and records the file for a targeted edit.
@@ -34,12 +35,12 @@ async def test_file_lifecycle(tool_harness: ToolHarness) -> None:
 
     # Check 3: A targeted edit changes only the requested text in the persisted file.
     edited = await edit_file("notes/item.txt", "Beta", "Gamma")
-    assert edited == "Edited notes/item.txt: replaced 1 occurrence."
+    assert edited == f"Edited {display_target}: replaced 1 occurrence."
     assert target.read_text(encoding="utf-8") == "Alpha\nGamma\n"
 
     # Check 4: A later full write replaces the complete file without requiring another read.
     overwritten = await write_file("notes/item.txt", "Replacement")
-    assert overwritten == "Overwrote notes/item.txt (11 bytes)."
+    assert overwritten == f"Overwrote {display_target} (11 bytes)."
     assert target.read_text(encoding="utf-8") == "Replacement"
 
 
@@ -182,16 +183,19 @@ async def test_file_search(tool_harness: ToolHarness) -> None:
     os.utime(old_path, (now - 10, now - 10))
     os.utime(new_path, (now, now))
 
+    new_display = os.path.join("docs", "new.txt")
+    old_display = os.path.join("docs", "old.txt")
+
     # Check 1: Glob returns matching files newest first and excludes other extensions.
-    assert (await glob("*.txt", "docs")).splitlines() == ["docs/new.txt", "docs/old.txt"]
+    assert (await glob("*.txt", "docs")).splitlines() == [new_display, old_display]
 
     # Check 2: Grep supports file, count, and content projections with case-insensitive matching.
     files = set((await grep("needle", glob="**/*.txt", case_insensitive=True)).splitlines())
     counts = set((await grep("needle", glob="**/*.txt", output_mode="count", case_insensitive=True)).splitlines())
     content = set((await grep("needle", glob="**/*.txt", output_mode="content", case_insensitive=True)).splitlines())
-    assert files == {"docs/new.txt", "docs/old.txt"}
-    assert counts == {"docs/new.txt:1", "docs/old.txt:1"}
-    assert content == {"docs/new.txt:1:needle new", "docs/old.txt:1:Needle old"}
+    assert files == {new_display, old_display}
+    assert counts == {f"{new_display}:1", f"{old_display}:1"}
+    assert content == {f"{new_display}:1:needle new", f"{old_display}:1:Needle old"}
 
     # Check 3: Recursive Grep ignores hidden directories and honors its path glob.
     assert all(".hidden" not in result for result in files | counts | content)

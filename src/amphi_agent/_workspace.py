@@ -1363,7 +1363,11 @@ class Workspace:
             try:
                 WorkspaceEnvironment.prepare_app_environment()
             except BaseException as exc:  # noqa: BLE001 - delivered to the awaiter
-                deliver(lambda: None if future.done() else future.set_exception(exc))
+                deliver(
+                    lambda error=exc: (
+                        None if future.done() else future.set_exception(error)
+                    )
+                )
             else:
                 deliver(lambda: None if future.done() else future.set_result(None))
 

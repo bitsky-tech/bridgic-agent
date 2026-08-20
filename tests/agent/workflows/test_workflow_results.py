@@ -15,6 +15,7 @@ from tests._support.sandbox import IsolatedPaths
 
 
 USER_ID = "local"
+WINDOWS_ERROR_PRIVILEGE_NOT_HELD = 1314
 
 
 async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None) -> None:
@@ -128,7 +129,6 @@ async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None
         ))
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Creating symlinks requires optional Windows privileges")
 def test_result_links(test_sandbox: IsolatedPaths) -> None:
     """Final published-file boundary:
 
@@ -155,8 +155,16 @@ def test_result_links(test_sandbox: IsolatedPaths) -> None:
     outside_dir.mkdir()
     (outside_dir / "notes.txt").write_text("private notes\n", encoding="utf-8")
     (result / "report.md").write_text("safe report\n", encoding="utf-8")
-    (result / "secret-link.md").symlink_to(outside_file)
-    (work / "private-link").symlink_to(outside_dir, target_is_directory=True)
+    try:
+        (result / "secret-link.md").symlink_to(outside_file)
+        (work / "private-link").symlink_to(outside_dir, target_is_directory=True)
+    except OSError as exc:
+        if (
+            os.name == "nt"
+            and getattr(exc, "winerror", None) == WINDOWS_ERROR_PRIVILEGE_NOT_HELD
+        ):
+            pytest.skip(f"Windows symlink privileges are unavailable: {exc}")
+        raise
     run = WorkflowRun(
         run_id=run_id,
         workflow_id=workflow_id,

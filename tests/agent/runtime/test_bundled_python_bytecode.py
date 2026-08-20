@@ -31,9 +31,10 @@ from src.amphi_agent.runtime._resources import BundledRuntimeResources
 
 def test_isolated_probes_refuse_to_write_bytecode() -> None:
     """`-I` discards PYTHONPYCACHEPREFIX, so the switch has to be on the command."""
-    command = isolated_python_command(Path("/opt/py/bin/python"), "-c", "import pip")
+    executable = Path("/opt/py/bin/python")
+    command = isolated_python_command(executable, "-c", "import pip")
 
-    assert command[0] == "/opt/py/bin/python"
+    assert command[0] == str(executable)
     assert "-I" in command
     assert "-B" in command
     # The trailing arguments must stay in order and stay last.
