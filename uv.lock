@@ -375,7 +375,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "sqlmodel", specifier = ">=0.0.16" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.44" },
     { name = "websockets", specifier = ">=14.0" },
 ]
 
