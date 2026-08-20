@@ -188,6 +188,7 @@ class UvicornRunner:
                 # keep. The --reload path keeps its access log: it uses
                 # log_config() and writes to a terminal, not to the budget.
                 access_log=False,
+                ws="websockets-sansio",
             )
             server = GracefulServer(
                 config,
@@ -218,6 +219,7 @@ class UvicornRunner:
             log_level=options.log_level,
             log_config=log_config(),
             reload=True,
+            ws="websockets-sansio",
         )
 
 

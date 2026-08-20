@@ -30,7 +30,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "markdown-it-py>=4.0",
     "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
+    "uvicorn[standard]>=0.44",
     "python-multipart>=0.0.9",
     "httpx[http2]>=0.27",
     "brotli>=1.1.0",
@@ -81,7 +81,9 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "perf: list-endpoint perf baselines (opt-in via AMPHI_RUN_PERF_TESTS=1)",
+    "process: tests that launch the real application in a child process",
+    "live: tests that contact a real external provider (explicit opt-in required)",
+    "windows_runtime: backend runtime contracts that must also pass on native Windows",
 ]
 
 [tool.coverage.run]

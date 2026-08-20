@@ -811,11 +811,15 @@ function packageName(specifier) {{
   return version < 0 ? specifier : specifier.slice(0, version);
 }}
 
-function requestedPackages(args) {{
+function requestedPackages(args, stopAtCommand = false) {{
   const explicit = [];
   let command = null;
   for (let index = 0; index < args.length; index += 1) {{
     const argument = args[index];
+    if (argument === '--') {{
+      if (command === null && index + 1 < args.length) command = args[index + 1];
+      break;
+    }}
     if (argument === '--package' || argument === '-p') {{
       if (index + 1 < args.length) explicit.push(args[++index]);
       continue;
@@ -824,14 +828,42 @@ function requestedPackages(args) {{
       explicit.push(argument.slice('--package='.length));
       continue;
     }}
-    if (argument === '--') continue;
     if (argument === '--call' || argument === '-c' || argument === '--shell') {{
       index += 1;
       continue;
     }}
-    if (!argument.startsWith('-') && command === null) command = argument;
+    if (!argument.startsWith('-')) {{
+      if (command === null) command = argument;
+      if (stopAtCommand) break;
+    }}
   }}
   return explicit.length ? explicit : (command ? [command] : []);
+}}
+
+function withoutExecPackages(args, stopAtCommand = false) {{
+  const filtered = [];
+  for (let index = 0; index < args.length; index += 1) {{
+    const argument = args[index];
+    if (argument === '--') {{
+      filtered.push(...args.slice(index));
+      break;
+    }}
+    if (argument === '--package' || argument === '-p') {{
+      index += 1;
+      continue;
+    }}
+    if (argument.startsWith('--package=')) continue;
+    filtered.push(argument);
+    if (argument === '--call' || argument === '-c' || argument === '--shell') {{
+      if (index + 1 < args.length) filtered.push(args[++index]);
+      continue;
+    }}
+    if (!argument.startsWith('-') && stopAtCommand) {{
+      filtered.push(...args.slice(index + 1));
+      break;
+    }}
+  }}
+  return filtered;
 }}
 
 function isInstalled(specifier) {{
@@ -848,13 +880,14 @@ function isInstalled(specifier) {{
   return !requested || requested === '*' || requested === manifest.version;
 }}
 
-function installForExec(args, environment) {{
-  const missing = requestedPackages(args).filter((specifier) => !isInstalled(specifier));
+function installForExec(args, environment, stopAtCommand = false) {{
+  const missing = requestedPackages(args, stopAtCommand)
+    .filter((specifier) => !isInstalled(specifier));
   if (!missing.length) return 0;
   return runCli(NPM_CLI, ['install', '--global', '--no-save', ...missing], environment);
 }}
 
-function enforcedNpmArgs(args) {{
+function enforcedNpmArgs(args, includePrefix = true) {{
   const filtered = [];
   for (let index = 0; index < args.length; index += 1) {{
     const argument = args[index];
@@ -873,11 +906,23 @@ function enforcedNpmArgs(args) {{
     }}
     filtered.push(argument);
   }}
-  return ['--global', `--prefix=${{BASE}}`, `--cache=${{CACHE}}`, ...filtered];
+  const enforced = ['--global'];
+  if (includePrefix) enforced.push(`--prefix=${{BASE}}`);
+  enforced.push(`--cache=${{CACHE}}`);
+  return [...enforced, ...filtered];
 }}
 
 function npmCommand(args) {{
-  return args.find((argument) => !argument.startsWith('-')) || '';
+  for (let index = 0; index < args.length; index += 1) {{
+    const argument = args[index];
+    if (argument === '--package' || argument === '-p' || argument === '--call' ||
+        argument === '-c' || argument === '--shell') {{
+      index += 1;
+      continue;
+    }}
+    if (!argument.startsWith('-')) return argument;
+  }}
+  return '';
 }}
 
 function withInstallLock(operation) {{
@@ -894,19 +939,25 @@ function withInstallLock(operation) {{
 function run(mode, args) {{
   if (mode === 'npx') {{
     const installStatus = withInstallLock((environment) =>
-      installForExec(args, environment));
+      installForExec(args, environment, true));
     if (installStatus !== 0) return installStatus;
-    return runCli(NPX_CLI, args, commandEnvironment(null));
+    return runCli(NPX_CLI, withoutExecPackages(args, true), commandEnvironment(null));
   }}
 
-  const npmArgs = enforcedNpmArgs(args);
+  let npmArgs = enforcedNpmArgs(args);
   const command = npmCommand(npmArgs);
   if (command === 'exec' || command === 'x') {{
+    npmArgs = enforcedNpmArgs(args, false);
     const commandIndex = npmArgs.indexOf(command);
+    const execArgs = [
+      ...npmArgs.slice(0, commandIndex),
+      ...npmArgs.slice(commandIndex + 1),
+    ];
     const installStatus = withInstallLock((environment) =>
-      installForExec(npmArgs.slice(commandIndex + 1), environment));
+      installForExec(execArgs, environment));
     if (installStatus !== 0) return installStatus;
-    return runCli(NPM_CLI, npmArgs, commandEnvironment(null));
+    const forwardedArgs = withoutExecPackages(npmArgs);
+    return runCli(NPM_CLI, forwardedArgs, commandEnvironment(null));
   }}
 
   const serializedCommands = new Set([
