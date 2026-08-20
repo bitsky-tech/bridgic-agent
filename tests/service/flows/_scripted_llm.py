@@ -10,6 +10,7 @@ from typing import Any
 
 from bridgic.core.model.types import Message, Response, Role, TokenUsage
 
+from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
 from src.amphi_service.protocol.llms._streaming import StreamResult
 
 
@@ -137,7 +138,13 @@ class ScriptedLlm:
         if self._turns[0].match_last_role is None:
             turn = self._turns.popleft()
         else:
-            last_role = messages[-1].role if messages else None
+            def logical_last_role() -> Role | None:
+                for message in reversed(messages):
+                    if not (message.extras or {}).get(VOLATILE_TAIL_EXTRA):
+                        return message.role
+                return None
+
+            last_role = logical_last_role()
             index = next((
                 index for index, candidate in enumerate(self._turns)
                 if candidate.match_last_role is last_role

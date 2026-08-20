@@ -173,7 +173,7 @@ class GatewayCLI:
             "--port",
             str(self.port),
             "--log-level",
-            "warning",
+            "info",
             "--timeout",
             str(STARTUP_TIMEOUT_SECONDS),
             timeout=STARTUP_TIMEOUT_SECONDS + 5,

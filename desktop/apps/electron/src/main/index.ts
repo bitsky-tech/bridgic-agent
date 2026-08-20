@@ -348,6 +348,9 @@ function bootstrapPrimaryInstance(): void {
         quitApp: () => {
           void quitApp()
         },
+        // The tray has nowhere to render an error, but openDaemonLogs already
+        // logs every failure with its reason — repeating it here just doubled
+        // each line. The result is discarded on purpose.
         openLogs: () => {
           void openDaemonLogs()
         },

@@ -15,6 +15,7 @@ def isolated_provider_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         openai_llm._REJECTED_PARAMS,
         anthropic_llm._REJECTED_PARAMS,
         anthropic_llm._THINKING_TIERS,
+        anthropic_llm._CACHE_UNSUPPORTED,
     )
     for cache in caches:
         cache.clear()

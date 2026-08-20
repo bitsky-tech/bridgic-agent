@@ -111,6 +111,23 @@ class ProviderRepository(Repository[ProviderCredential]):
             await s.refresh(row)
             return row
 
+    async def clear_base_url(self, user_id: str, provider_id: str) -> None:
+        """Explicitly NULL a row's ``base_url``.
+
+        ``upsert`` treats ``base_url=None`` as "preserve" (so a re-POST without
+        a url doesn't wipe it), which means a mode switch that must FORGET the
+        old url needs this explicit call — e.g. api_key → Codex subscription,
+        where the api_key-era ``https://api.openai.com/v1`` would otherwise
+        survive and route Codex traffic to the wrong host.
+        """
+        async with self._session() as s:
+            row = await self._get_by(
+                s, ProviderCredential, user_id=user_id, provider_id=provider_id,
+            )
+            if row is not None and row.base_url is not None:
+                row.base_url = None
+                await s.commit()
+
     async def list_for_user(self, user_id: str) -> List[ProviderCredential]:
         """Return every provider credential owned by ``user_id``, oldest first."""
         async with self._session() as s:

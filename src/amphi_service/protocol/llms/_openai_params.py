@@ -25,7 +25,8 @@ _HEALABLE_PARAMS = REASONING_UNSUPPORTED | frozenset({
 _UNSUPPORTED_TEXT = re.compile(
     r"(?:don't|do not|does not) support [`']?(\w+)[`']?\s*="
     r"|Unsupported parameter:? [`']?(\w+)[`']?"
-    r"|[`'](\w+)[`'] is not supported",
+    r"|[`'](\w+)[`'] is not supported"
+    r"|invalid [`']?(\w+)[`']?:",
     re.IGNORECASE,
 )
 
@@ -49,6 +50,17 @@ def is_kimi_code_endpoint(base_url: Optional[str]) -> bool:
     host = (parsed.hostname or "").lower()
     path = parsed.path.rstrip("/").lower()
     return host == "api.kimi.com" and (path == "/coding" or path.startswith("/coding/"))
+
+
+def is_moonshot_endpoint(base_url: Optional[str]) -> bool:
+    """Return whether ``base_url`` targets the Kimi open platform (Moonshot).
+
+    Like Kimi Code, the platform enforces ``temperature=1`` on current models
+    (k2.6+ reject anything else with 400 "invalid temperature: only 1 is
+    allowed for this model").
+    """
+    host = (urlparse((base_url or "").strip()).hostname or "").lower()
+    return host == "api.moonshot.cn" or host.endswith(".moonshot.cn") or host.endswith(".moonshot.ai")
 
 
 def is_openai_reasoning_model(model: str) -> bool:
@@ -78,7 +90,7 @@ def sanitize_openai_params(params: Dict[str, Any], *, base_url: Optional[str]) -
     * On the official endpoint ``max_tokens`` is renamed for every model; other
       compatible endpoints pass non-reasoning models through untouched.
     """
-    if is_kimi_code_endpoint(base_url):
+    if is_kimi_code_endpoint(base_url) or is_moonshot_endpoint(base_url):
         out = dict(params)
         if "temperature" in out:
             out["temperature"] = 1

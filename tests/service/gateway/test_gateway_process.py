@@ -52,7 +52,10 @@ async def test_desktop_cold_start(gateway_cli: GatewayCLI) -> None:
     }
     assert runtime["token"]
     assert runtime["ws_path"] == "/ws"
-    assert runtime_path.with_name("server.log").is_file()
+    service_log = runtime_path.with_name("server.log")
+    assert Path(runtime["log_file"]) == service_log
+    assert service_log.is_file()
+    assert "[daemon-logging] started" in service_log.read_text(encoding="utf-8")
 
     client_id = "desktop-cold-start-gui"
     frontend_headers = {
@@ -93,6 +96,9 @@ async def test_desktop_cold_start(gateway_cli: GatewayCLI) -> None:
                 item["client_id"] == client_id and item["client_type"] == "gui"
                 for item in clients.json()
             )
+
+    # Access traffic must not consume the bounded application diagnostic log.
+    assert "GET /api/gateway/info" not in service_log.read_text(encoding="utf-8")
 
     # Check 5: The real stop command removes the process and its runtime registration.
     stopped = await gateway_cli.stop()

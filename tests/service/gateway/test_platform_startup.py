@@ -7,6 +7,8 @@ import pytest
 
 from src.amphi_service.server.supervisor import RunKeySupervisor, ServeCommand, ServerLaunchSpec
 from src.amphi_service.server.supervisor._base import (
+    CRASH_LOG_KEEP_BYTES,
+    CRASH_LOG_TRIM_BYTES,
     PYINSTALLER_RESET_ENVIRONMENT,
     WINDOWS_AUTOSTART_EXECUTABLE,
 )
@@ -267,3 +269,21 @@ def test_detached_process(
     # Check 3: The detached child keeps the exact Gateway command and working directory.
     assert captured["argv"] == spec.argv
     assert captured["cwd"] == spec.working_directory
+
+
+def test_detached_process_bounds_crash_output(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A new detached launch keeps only the newest part of an oversized crash log."""
+    executable = test_sandbox.root / "amphi"
+    executable.touch()
+    command = ServeCommand(executable=executable, frozen=True, platform="darwin")
+    log_path = test_sandbox.root / "daemon.stderr.log"
+    marker = b"newest traceback\n"
+    log_path.write_bytes(b"old\n" * (CRASH_LOG_TRIM_BYTES // 4 + 1) + marker)
+
+    monkeypatch.setattr(subprocess, "Popen", lambda _argv, **_options: SimpleNamespace(pid=4321))
+    supervisor = DetachedSupervisor(command=command, log_path=log_path, platform="darwin")
+    supervisor.start(command.serve("127.0.0.1", 7421))
+
+    retained = log_path.read_bytes()
+    assert len(retained) <= CRASH_LOG_KEEP_BYTES
+    assert retained.endswith(marker)

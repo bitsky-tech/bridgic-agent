@@ -2,13 +2,16 @@ import base64
 
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 from bridgic.core.model.types import Message, Role
+from bridgic.llms.openai import OpenAIConfiguration
 from google.genai import types
 
-from src.amphi_service.protocol.llms._openai_params import sanitize_openai_params
+from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+from src.amphi_service.protocol.llms._openai_params import sanitize_openai_params, unsupported_param_of
 from src.amphi_service.protocol.llms._streaming import convert_tools
 from src.amphi_service.protocol.llms.anthropic_llm import AnthropicConfiguration, AnthropicLlm
 from src.amphi_service.protocol.llms.codex_llm import CodexConfiguration, CodexResponsesLlm, parse_sse_event
 from src.amphi_service.protocol.llms.google_llm import GoogleConfiguration, GoogleLlm
+from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm
 
 
 def test_openai_parameter_rules_follow_the_model_and_endpoint() -> None:
@@ -30,6 +33,35 @@ def test_openai_parameter_rules_follow_the_model_and_endpoint() -> None:
     kimi = sanitize_openai_params(source, base_url="https://api.kimi.com/coding/v1")
     assert kimi["temperature"] == 1
     assert kimi["max_tokens"] == 128
+
+    moonshot_source = {"model": "kimi-k2.6", "temperature": 0.0, "max_tokens": 128}
+    moonshot = sanitize_openai_params(moonshot_source, base_url="https://api.moonshot.cn/v1")
+    assert moonshot["temperature"] == 1
+
+    class InvalidParameterError(RuntimeError):
+        body = {"error": {"message": "invalid temperature: only 1 is allowed"}}
+
+    assert unsupported_param_of(InvalidParameterError()) == "temperature"
+
+
+async def test_openai_wire_omits_the_volatile_cache_marker() -> None:
+    """Runtime state remains visible to the model without leaking its internal routing flag."""
+    tail_extras = {VOLATILE_TAIL_EXTRA: True}
+    messages = [
+        Message.from_text("go", role=Role.USER),
+        Message.from_text("<runtime_state>changed</runtime_state>", role=Role.USER, extras=tail_extras),
+    ]
+    configuration = OpenAIConfiguration(model="gpt-4o")
+    llm = OpenAICompatLlm(api_key="test-key", api_base="https://relay.example.test/v1", configuration=configuration)
+    try:
+        wire = llm._build_parameters(messages=messages)["messages"]
+    finally:
+        llm.client.close()
+        await llm.async_client.close()
+
+    assert wire[-1]["content"].startswith("<runtime_state>")
+    assert VOLATILE_TAIL_EXTRA not in wire[-1]
+    assert messages[-1].extras == {VOLATILE_TAIL_EXTRA: True}
 
 
 async def test_anthropic_wire_contract_preserves_tools_and_role_order() -> None:

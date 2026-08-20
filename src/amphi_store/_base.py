@@ -112,6 +112,16 @@ class Repository(Generic[T]):
                 sync_conn.execute(text(ddl))
 
         cls._migrate_legacy_workflow_runs(sync_conn)
+        # Repair rows written before the api_key→Codex switch cleared the stale
+        # base_url: Codex channels never legitimately carry one, and a leftover
+        # https://api.openai.com/v1 routes /codex/responses to a 404. Idempotent.
+        for table in ("provider_credentials", "users"):
+            rows = sync_conn.exec_driver_sql(f"PRAGMA table_info({table})").all()
+            if rows:
+                sync_conn.execute(text(
+                    f"UPDATE {table} SET base_url = NULL "
+                    "WHERE protocol = 'openai-codex' AND base_url IS NOT NULL"
+                ))
         sync_conn.execute(text(
             "INSERT OR IGNORE INTO session_workflow_runs "
             "(session_id, run_id, user_id, created_at) "

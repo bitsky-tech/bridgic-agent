@@ -5,6 +5,7 @@ import asyncio
 import httpx
 from bridgic.core.model.types import Role
 
+from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
 from tests.service.flows._scripted_llm import FLOW_MODEL, ScriptedLlm
 
 
@@ -111,6 +112,7 @@ async def test_continue_chat(flow_client: httpx.AsyncClient, scripted_llm: Scrip
         (message.role, message.content)
         for message in scripted_llm.turn_calls[1].messages
         if message.role is not Role.SYSTEM
+        and not (message.extras or {}).get(VOLATILE_TAIL_EXTRA)
     ]
     assert (Role.USER, "My name is Ada.") in prior_context
     assert (Role.AI, "I will remember that.") in prior_context

@@ -1,5 +1,6 @@
 import log from 'electron-log/main'
 import { amphiUserFile } from './paths'
+import { toConsoleLine, toLogLine } from './log-serialize'
 
 // All desktop-owned files live under one root (~/.bridgic/amphi —
 // see paths.ts). Redirect electron-log's default (~/Library/Logs/<app>/)
@@ -20,29 +21,22 @@ function resolveDebugMode(): boolean {
 
 export const isDebugMode = resolveDebugMode()
 
-// NDJSON file format — same shape for dev and prod so log tools can parse uniformly.
-log.transports.file.format = ({ message }) =>
-  [
-    JSON.stringify({
-      timestamp: message.date.toISOString(),
-      level: message.level,
-      scope: message.scope,
-      message: message.data,
-    }),
-  ]
+// NDJSON file format — same shape for dev and prod so log tools can parse
+// uniformly. The whole line is built inside toLogLine (never here) because
+// this callback runs before electron-log's own serialization transform and a
+// callback that throws is swallowed by Logger.processMessage — anything
+// evaluated in the argument list would be outside the safety net, which is
+// how the shell-env failure warning went missing in the first place.
+log.transports.file.format = ({ message }) => [toLogLine(message)]
 
 if (isDebugMode) {
   log.transports.file.level = 'debug'
   log.transports.file.maxSize = 5 * 1024 * 1024 // 5 MB
 
-  log.transports.console.format = ({ message }) => {
-    const scope = message.scope ? `[${message.scope}]` : ''
-    const level = message.level.toUpperCase().padEnd(5)
-    const data = message.data
-      .map((d: unknown) => (typeof d === 'object' ? JSON.stringify(d) : String(d)))
-      .join(' ')
-    return [`${message.date.toISOString()} ${level} ${scope} ${data}`]
-  }
+  // Built inside toConsoleLine for the same reason as the file format above:
+  // every field read here (the timestamp, the level) can throw, and a
+  // throwing console callback loses the line just as silently.
+  log.transports.console.format = ({ message }) => [toConsoleLine(message)]
   log.transports.console.level = 'debug'
 } else {
   // Production: `info` and above, so a user report carries the story and not
@@ -73,7 +67,9 @@ export const telemetryLog = log.scope('telemetry')
 
 /**
  * Path to the active log file. Available in both debug and prod modes (prod
- * keeps warn+error). Surfaced in the application menu via "View → Open Log".
+ * keeps info+). Exposed over IPC as `app:openLogFile`; no menu or UI entry
+ * calls it today — Settings → About reveals the DAEMON log via
+ * `backend:openLogs` instead, this one is the desktop process's own log.
  */
 export function getLogFilePath(): string | undefined {
   return log.transports.file.getFile()?.path

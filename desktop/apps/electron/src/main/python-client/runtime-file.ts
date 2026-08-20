@@ -51,6 +51,9 @@ export interface RuntimeFile {
   wsPath: string | null
   /** Daemon package version. */
   version: string | null
+  /** Where the daemon writes its structured log. Null on older daemons or
+   *  when the daemon's file logging is degraded. */
+  logFile: string | null
 }
 
 /** Default absolute path to runtime.json. */
@@ -115,6 +118,7 @@ export function readRuntimeFile(filePath: string = runtimeFilePath()): RuntimeFi
     lockFile: optStr(parsed['lock_file']),
     wsPath: optStr(parsed['ws_path']),
     version: optStr(parsed['version']),
+    logFile: optStr(parsed['log_file']),
   }
 }
 
@@ -178,5 +182,6 @@ export function buildEndpoint(
     startedAt: status.started_at,
     wsPath: fromRuntime?.wsPath ?? status.ws_path ?? null,
     runtimeFile: status.runtime_file,
+    logFile: fromRuntime?.logFile ?? status.log_file ?? null,
   }
 }

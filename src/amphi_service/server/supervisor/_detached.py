@@ -6,7 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ._base import ServeCommand, ServerLaunchSpec, SupervisorError
+from ._base import (
+    ServeCommand,
+    ServerLaunchSpec,
+    SupervisorError,
+    trim_oversized_log,
+)
 
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
 DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
@@ -21,7 +26,11 @@ class DetachedSupervisor:
     command : ServeCommand
         Command builder that also owns frozen-child environment isolation.
     log_path : Path
-        File receiving both standard output and standard error.
+        Crash-net file receiving both standard output and standard error —
+        output produced before or outside the daemon's own logging system
+        (import-failure tracebacks, stray prints). Structured logs go to
+        ``server.log`` via the daemon's rotating handler (see
+        ``amphi_service.server._logging``), never through this redirect.
     platform : str | None
         Platform override used by pure cross-platform tests.
     """
@@ -35,6 +44,7 @@ class DetachedSupervisor:
         """Start ``spec`` detached and return its process identifier."""
         try:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            trim_oversized_log(self.log_path)
             log_handle = self.log_path.open("ab", buffering=0)
         except OSError as exc:
             raise SupervisorError(

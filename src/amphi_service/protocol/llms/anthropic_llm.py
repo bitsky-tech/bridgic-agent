@@ -64,6 +64,25 @@ _THINKING_LADDER: Tuple[Optional[Dict[str, Any]], ...] = (
 )
 _THINKING_TIERS: Dict[Tuple[str, str], int] = {}
 
+# (base_url, model) pairs whose endpoint rejected ``cache_control`` — prompt
+# caching is skipped for them after the first 400 that names it. Standard
+# Anthropic endpoints (and new-api) accept it; this covers exotic relays.
+_CACHE_UNSUPPORTED: set = set()
+
+# Marker key on ``Message.extras`` identifying the per-round <runtime_state>
+# tail (set by the agent layer; value duplicated here to keep this module free
+# of agent imports). Blocks from such messages change every round, so the
+# rolling cache breakpoint must sit BEFORE them.
+_VOLATILE_TAIL_EXTRA = "volatile_tail"
+
+_EPHEMERAL_CACHE = {"type": "ephemeral"}
+
+# The API's cache lookback: at most 20 positions per breakpoint are checked for
+# an existing entry. A round adding more blocks than that would sail past the
+# previous round's entry, so a second message breakpoint sits this many stable
+# blocks before the rolling one (docs: "Add a second breakpoint closer").
+_CACHE_LOOKBACK_BLOCKS = 20
+
 # Substrings a thinking-config 400 carries (``thinking.display: Extra inputs…``,
 # ``thinking.type: Input should be…``, ``budget_tokens`` removed, …).
 _THINKING_REJECTION_HINTS: Tuple[str, ...] = ("thinking", "budget_tokens", "display", "adaptive")
@@ -326,14 +345,21 @@ class AnthropicLlm(BaseLlm):
         caller_thinking = bool(extra_body and "thinking" in extra_body)
         tier = _THINKING_TIERS.get(key, 0)
         max_tokens = int(params.get("max_tokens") or _DEFAULT_MAX_TOKENS)
+        # Prompt caching: mark up to three ephemeral breakpoints per attempt.
+        # The rolling one must exclude the <runtime_state> tail, whose blocks
+        # change every round — count them off the ORIGINAL message list.
+        cache_enabled = key not in _CACHE_UNSUPPORTED
+        volatile_blocks = _volatile_tail_block_count(messages)
 
         async def run_attempt(attempt_publish: Callable[..., None]) -> StreamResult:
-            nonlocal heal, tier
+            nonlocal heal, tier, cache_enabled
             while True:
                 attempt = (
                     params if caller_thinking
                     else _with_thinking(params, _thinking_for(tier, max_tokens))
                 )
+                if cache_enabled:
+                    attempt = _with_prompt_caching(attempt, volatile_blocks)
                 try:
                     result = await self._run_stream(attempt, attempt_publish)
                 except Exception as exc:  # noqa: BLE001 — parameter self-heal stays independent
@@ -349,6 +375,10 @@ class AnthropicLlm(BaseLlm):
                         and _thinking_rejected(exc)
                     ):
                         tier += 1
+                        continue
+                    if cache_enabled and _cache_rejected(exc):
+                        cache_enabled = False
+                        _CACHE_UNSUPPORTED.add(key)
                         continue
                     raise
                 if not caller_thinking:
@@ -567,6 +597,78 @@ def _with_thinking(
         out.pop(param, None)
     out["thinking"] = thinking
     return out
+
+
+def _cache_rejected(exc: Exception) -> bool:
+    """True when a 4xx names ``cache_control`` — drop caching and retry."""
+    status = getattr(exc, "status_code", None)
+    if status is not None and status not in (400, 422):
+        return False
+    return "cache_control" in _error_text(exc).lower().replace(" ", "_")
+
+
+def _volatile_tail_block_count(messages: List[Message]) -> int:
+    """Content blocks contributed by the trailing <runtime_state> messages.
+
+    The agent appends them LAST, so after conversion (and same-role folding)
+    they are exactly the last N blocks of the final wire message.
+    """
+    count = 0
+    for msg in reversed(messages):
+        if not (msg.extras or {}).get(_VOLATILE_TAIL_EXTRA):
+            break
+        count += len(msg.blocks)
+    return count
+
+
+def _with_prompt_caching(params: Dict[str, Any], volatile_blocks: int) -> Dict[str, Any]:
+    """A copy of ``params`` with up to FOUR ``cache_control`` breakpoints:
+    the system block, the last tool definition, the last STABLE content block
+    of the history (skipping the trailing volatile <runtime_state> blocks),
+    and — when the history is long enough — a second anchor one lookback
+    window earlier, so a round that appends more than ~20 blocks still finds
+    a cached prefix. Every touched container is copied — message blocks may be
+    shared with persisted extras (replayed thinking) and must not be mutated.
+    """
+    out = dict(params)
+    system = out.get("system")
+    if isinstance(system, str) and system:
+        out["system"] = [{"type": "text", "text": system, "cache_control": dict(_EPHEMERAL_CACHE)}]
+    tools = out.get("tools")
+    if tools:
+        out["tools"] = [*tools[:-1], {**tools[-1], "cache_control": dict(_EPHEMERAL_CACHE)}]
+    messages = out.get("messages")
+    if messages:
+        out["messages"] = [dict(m) for m in messages]
+        for skip in (volatile_blocks, volatile_blocks + _CACHE_LOOKBACK_BLOCKS):
+            _mark_stable_block(out["messages"], skip)
+    return out
+
+
+def _mark_stable_block(messages: List[Dict[str, Any]], skip: int) -> None:
+    """Set ``cache_control`` on the last cacheable block after skipping ``skip``
+    blocks from the end. Thinking blocks cannot carry ``cache_control`` (the
+    API rejects it) and are walked past; a block that already carries a marker
+    is left alone (keeps the total ≤ 4). No-op when the history is shorter
+    than ``skip``.
+    """
+    remaining = skip
+    for m_idx in range(len(messages) - 1, -1, -1):
+        content = messages[m_idx]["content"]
+        if remaining >= len(content):
+            remaining -= len(content)
+            continue
+        for idx in range(len(content) - 1 - remaining, -1, -1):
+            block = content[idx]
+            if block.get("type") in _THINKING_BLOCK_TYPES:
+                continue
+            if block.get("cache_control"):
+                return
+            new_content = list(content)
+            new_content[idx] = {**block, "cache_control": dict(_EPHEMERAL_CACHE)}
+            messages[m_idx] = {**messages[m_idx], "content": new_content}
+            return
+        remaining = 0  # every remaining block here was thinking — keep walking back
 
 
 _THINKING_BLOCK_TYPES = ("thinking", "redacted_thinking")

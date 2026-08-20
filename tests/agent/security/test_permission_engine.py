@@ -504,3 +504,22 @@ async def test_tool_surfaces(test_sandbox: "IsolatedPaths") -> None:
     # Check 4: Browser observation remains available without repeated safety review.
     assert verdicts[4].verdict == "allow"
     assert verdicts[4].capability == "network"
+
+
+async def test_permission_logs_redact_call_arguments(test_sandbox: "IsolatedPaths", caplog) -> None:
+    """Daemon diagnostics retain the decision while never recording command secrets."""
+    caplog.set_level("INFO", logger="src.amphi_agent.security._engine")
+    workspace = str(test_sandbox.sessions / "session" / ".work")
+    engine = PermissionEngine(workspace, mode=ExecutionMode.REQUEST)
+
+    await engine.evaluate([
+        _tool_call(
+            "bash",
+            command='curl -H "Authorization: Bearer sk-super-secret" https://example.test',
+        )
+    ])
+
+    assert "[permission]" in caplog.text
+    assert "bash" in caplog.text
+    assert "Authorization" not in caplog.text
+    assert "sk-super-secret" not in caplog.text
