@@ -480,6 +480,7 @@ async def test_provider_network_contract(service_client: httpx.AsyncClient, monk
     assert probe["api_key"] == "probe-secret"
     assert probe["api_base"] == "https://gateway.example.test/v1"
     assert probe["configuration"].model == "company-model"
+    assert probe["configuration"].max_tokens is None
     assert len(probe["messages"]) == 1
 
     real_async_client = httpx.AsyncClient

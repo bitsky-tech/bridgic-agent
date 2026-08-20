@@ -109,14 +109,14 @@ def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:
 
     {
       "openai": ["reasoning_content", "reasoning_items", "reasoning_details"],
-      "anthropic": ["thinking_blocks", "empty_follow_up_block"],
+      "anthropic": ["captured_thinking_blocks_only"],
       "google": ["thought_signatures"]
     }
 
     Checks:
     1. OpenAI-compatible reasoning captures survive on the exact Assistant Tool Call message.
-    2. Later Tool Call messages retain the empty reasoning carrier required by the active mode.
-    3. Anthropic thinking blocks and Google Tool Call signatures remain aligned for replay.
+    2. Later OpenAI Tool Call messages retain the empty reasoning carrier required by that wire.
+    3. Anthropic replays only signed captures, while Google signatures remain aligned.
     """
     worker = MainThink()
     context = AmphiContext(session=make_session(test_sandbox.sessions / "reasoning-replay"))
@@ -183,11 +183,7 @@ def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:
         "thinking": "Reasoning one",
         "signature": "anthropic-signature",
     }]
-    assert anthropic_messages[2].extras["thinking_blocks"] == [{
-        "type": "thinking",
-        "thinking": "",
-        "signature": "",
-    }]
+    assert "thinking_blocks" not in anthropic_messages[2].extras
 
     google_context = AmphiOTAContext(
         user_input="Continue the Google turn",

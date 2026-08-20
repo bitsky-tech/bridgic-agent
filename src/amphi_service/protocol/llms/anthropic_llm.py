@@ -43,6 +43,37 @@ _SAMPLING_PARAMS: Tuple[str, ...] = ("temperature", "top_p", "top_k")
 # Strip-and-retry ceiling — the param set is tiny, so this never loops.
 _MAX_SELF_HEAL_RETRIES = 4
 
+# Thinking shapes ``stream_turn`` tries in order; the first one the endpoint
+# accepts is remembered per (base_url, model) in ``_THINKING_TIERS``. Tier 0 is
+# what current models want: adaptive thinking with summarized text — ``display``
+# arrived with Opus 4.7 and defaults to "omitted" on Opus 4.7+/Sonnet 5/Opus 5/
+# Fable 5, i.e. thinking blocks with EMPTY text, so the UI never sees reasoning
+# without it. Tier 1 drops ``display`` (Opus 4.6 / Sonnet 4.6); tier 2 is the
+# pre-4.6 ``enabled`` + ``budget_tokens`` shape (budget derived from max_tokens at
+# request time); tier 3 sends no thinking at all. Relays (new-api) expose
+# arbitrary model names, so the tier is learned from the endpoint's 400s rather
+# than guessed from the id. Thinking tiers never carry temperature / top_p /
+# top_k (Anthropic: "`temperature` may only be set to 1 when thinking is
+# enabled"). Only the streaming agent path walks this ladder — ``chat`` /
+# ``achat`` (probe, safety classifier) never inject thinking.
+_THINKING_LADDER: Tuple[Optional[Dict[str, Any]], ...] = (
+    {"type": "adaptive", "display": "summarized"},
+    {"type": "adaptive"},
+    {"type": "enabled"},
+    None,
+)
+_THINKING_TIERS: Dict[Tuple[str, str], int] = {}
+
+# Substrings a thinking-config 400 carries (``thinking.display: Extra inputs…``,
+# ``thinking.type: Input should be…``, ``budget_tokens`` removed, …).
+_THINKING_REJECTION_HINTS: Tuple[str, ...] = ("thinking", "budget_tokens", "display", "adaptive")
+
+# ``budget_tokens`` bounds for the ``enabled`` tier: the API floor is 1024 and the
+# budget must stay below max_tokens; half of max_tokens capped at 4096 leaves the
+# answer room on the default 8K ceiling.
+_MIN_BUDGET_TOKENS = 1024
+_MAX_BUDGET_TOKENS = 4096
+
 
 class AnthropicConfiguration(BaseModel):
     """Per-request defaults for an :class:`AnthropicLlm` instance.
@@ -223,7 +254,11 @@ class AnthropicLlm(BaseLlm):
             return "".join(stream.text_stream)
 
     async def achat(self, messages: List[Message], **kwargs: Any) -> Any:  # noqa: D401
-        params = self._build_parameters(messages, stream=False)
+        # ``extra_body`` is how the safety classifier turns reasoning off for one
+        # call (``reasoning_off``); forward it like the OpenAI adapters do.
+        params = self._build_parameters(
+            messages, extra_body=kwargs.get("extra_body"), stream=False
+        )
         response = await self._acreate(params)
         return _anthropic_response_to_text(response)
 
@@ -286,20 +321,42 @@ class AnthropicLlm(BaseLlm):
 
         key = self._reject_key()
         heal = 0
+        # A caller-supplied ``thinking`` (extra_body) is sent as-is; otherwise walk
+        # the thinking ladder from the tier this endpoint last accepted.
+        caller_thinking = bool(extra_body and "thinking" in extra_body)
+        tier = _THINKING_TIERS.get(key, 0)
+        max_tokens = int(params.get("max_tokens") or _DEFAULT_MAX_TOKENS)
 
         async def run_attempt(attempt_publish: Callable[..., None]) -> StreamResult:
-            nonlocal heal
+            nonlocal heal, tier
             while True:
+                attempt = (
+                    params if caller_thinking
+                    else _with_thinking(params, _thinking_for(tier, max_tokens))
+                )
                 try:
-                    return await self._run_stream(params, attempt_publish)
+                    result = await self._run_stream(attempt, attempt_publish)
                 except Exception as exc:  # noqa: BLE001 — parameter self-heal stays independent
                     param = _deprecated_param_of(exc)
-                    if param is not None and param in params and heal < _MAX_SELF_HEAL_RETRIES:
+                    if param is not None and param in attempt and heal < _MAX_SELF_HEAL_RETRIES:
                         params.pop(param, None)
                         _REJECTED_PARAMS.setdefault(key, set()).add(param)
                         heal += 1
                         continue
+                    if (
+                        not caller_thinking
+                        and tier < len(_THINKING_LADDER) - 1
+                        and _thinking_rejected(exc)
+                    ):
+                        tier += 1
+                        continue
                     raise
+                if not caller_thinking:
+                    # Learned from success only: an exhausted ladder that still
+                    # fails (e.g. a bad replayed block) must not silently cost the
+                    # next turn its thinking.
+                    _THINKING_TIERS[key] = tier
+                return result
 
         return await stream_with_transport_retry(run_attempt, publish)
 
@@ -461,6 +518,55 @@ def _deprecated_param_of(exc: Exception) -> Optional[str]:
         if param in text:
             return param
     return None
+
+
+def _thinking_rejected(exc: Exception) -> bool:
+    """True when a 4xx names the thinking config (``thinking.display``,
+    ``thinking.type``, ``budget_tokens`` …) — the cue to step down the ladder.
+
+    Transport statuses (429 / 5xx) never count; an error with no status at all (a
+    relay-mangled body) is judged on its text alone.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is not None and status not in (400, 422):
+        return False
+    text = _error_text(exc).lower()
+    # "`temperature` may only be set to 1 when thinking is enabled" names thinking
+    # but complains about the sampling param — the tier itself is fine.
+    if any(param in text for param in _SAMPLING_PARAMS):
+        return False
+    return any(hint in text for hint in _THINKING_REJECTION_HINTS)
+
+
+def _thinking_for(tier: int, max_tokens: int) -> Optional[Dict[str, Any]]:
+    """The ``thinking`` request param for a ladder tier (None → send nothing).
+
+    The ``enabled`` tier needs ``budget_tokens`` ≥ 1024 and < max_tokens; when
+    max_tokens can't satisfy both, that tier degrades to no thinking.
+    """
+    shape = _THINKING_LADDER[tier]
+    if shape is None:
+        return None
+    if shape["type"] == "enabled":
+        budget = max(_MIN_BUDGET_TOKENS, min(_MAX_BUDGET_TOKENS, max_tokens // 2))
+        return {"type": "enabled", "budget_tokens": budget} if budget < max_tokens else None
+    return dict(shape)
+
+
+def _with_thinking(
+    params: Dict[str, Any], thinking: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """A copy of ``params`` for one attempt: ``thinking`` set (and the sampling
+    params dropped — Anthropic rejects temperature / top_p / top_k modifications
+    while thinking is on) or, for the no-thinking tier, ``thinking`` absent and
+    the sampling params left as configured."""
+    out = {k: v for k, v in params.items() if k != "thinking"}
+    if thinking is None:
+        return out
+    for param in _SAMPLING_PARAMS:
+        out.pop(param, None)
+    out["thinking"] = thinking
+    return out
 
 
 _THINKING_BLOCK_TYPES = ("thinking", "redacted_thinking")

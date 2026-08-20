@@ -11,7 +11,11 @@ from src.amphi_store import User
 def isolated_provider_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep provider caches and local credentials inside one test sandbox."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
-    caches = (openai_llm._REJECTED_PARAMS, anthropic_llm._REJECTED_PARAMS)
+    caches = (
+        openai_llm._REJECTED_PARAMS,
+        anthropic_llm._REJECTED_PARAMS,
+        anthropic_llm._THINKING_TIERS,
+    )
     for cache in caches:
         cache.clear()
     yield

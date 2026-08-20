@@ -11,7 +11,7 @@ from src.amphi_service.protocol.llms.codex_llm import CodexConfiguration, CodexR
 from src.amphi_service.protocol.llms.google_llm import GoogleConfiguration, GoogleLlm
 
 
-def test_openai_parameter_rules_follow_the_selected_endpoint() -> None:
+def test_openai_parameter_rules_follow_the_model_and_endpoint() -> None:
     source = {
         "model": "gpt-5.5",
         "temperature": 0.2,
@@ -22,7 +22,10 @@ def test_openai_parameter_rules_follow_the_selected_endpoint() -> None:
     assert official == {"model": "gpt-5.5", "max_completion_tokens": 128}
 
     compatible = sanitize_openai_params(source, base_url="https://api.deepseek.com/v1")
-    assert compatible is source
+    assert compatible == official
+
+    standard = {"model": "deepseek-chat", "temperature": 0.2, "max_tokens": 128}
+    assert sanitize_openai_params(standard, base_url="https://api.deepseek.com/v1") is standard
 
     kimi = sanitize_openai_params(source, base_url="https://api.kimi.com/coding/v1")
     assert kimi["temperature"] == 1

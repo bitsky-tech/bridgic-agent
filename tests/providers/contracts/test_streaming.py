@@ -5,8 +5,9 @@ from typing import Any
 import httpx
 import pytest
 from anthropic.types import RawContentBlockDeltaEvent, RawContentBlockStartEvent, RawContentBlockStopEvent
+from bridgic.core.model import ModelUnrecoverableError
 from bridgic.core.model.types import Message, Role
-from bridgic.llms.openai import OpenAIConfiguration
+from bridgic.llms.openai import OpenAIConfiguration, OpenAILlm
 from google.genai import types
 
 from src.amphi_service.protocol.llms._codex_credentials import CodexCreds
@@ -14,7 +15,7 @@ from src.amphi_service.protocol.llms._streaming import ModelNotFoundError, Strea
 from src.amphi_service.protocol.llms.anthropic_llm import AnthropicConfiguration, AnthropicLlm
 from src.amphi_service.protocol.llms.codex_llm import CodexConfiguration, CodexResponsesLlm
 from src.amphi_service.protocol.llms.google_llm import GoogleConfiguration, GoogleLlm
-from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm
+from src.amphi_service.protocol.llms.openai_llm import OpenAICompatLlm, _REJECTED_PARAMS
 
 
 def _events() -> tuple[list[tuple[str, dict[str, Any]]], Any]:
@@ -104,6 +105,45 @@ async def test_openai_stream_open_self_heals_and_caches_rejected_parameter(monke
         {"model": "gpt-test", "stream": True},
         {"model": "gpt-test", "stream": True},
     ]
+
+
+async def test_openai_chat_self_heals_relay_parameter_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider probes learn unsupported parameters even when a relay omits structured error fields."""
+    class RelayParameterError(RuntimeError):
+        def __init__(self) -> None:
+            message = "gpt models don't support temperature=0.0"
+            super().__init__(message)
+            self.body = {"error": {"code": "400", "message": message, "param": None}}
+
+    attempts: list[dict[str, Any]] = []
+
+    async def chat(_llm, messages, **kwargs):
+        params = _llm._build_parameters(messages=messages, **kwargs)
+        attempts.append(params)
+        if "temperature" in params:
+            raise ModelUnrecoverableError(
+                "chat failed",
+                operation="achat",
+                original_exception=RelayParameterError(),
+            )
+        return "pong"
+
+    monkeypatch.setattr(OpenAILlm, "achat", chat)
+    llm = OpenAICompatLlm(
+        api_key="test-key",
+        api_base="https://relay.example.test/v1",
+        configuration=OpenAIConfiguration(model="future-reasoner", temperature=0.0),
+    )
+    try:
+        result = await llm.achat([Message.from_text("ping", role=Role.USER)])
+    finally:
+        llm.client.close()
+        await llm.async_client.close()
+
+    assert result == "pong"
+    assert len(attempts) == 2
+    assert "temperature" in attempts[0] and "temperature" not in attempts[1]
+    assert _REJECTED_PARAMS[llm._reject_key()] == {"temperature"}
 
 
 async def test_openai_stream_open_translates_missing_model(monkeypatch: pytest.MonkeyPatch) -> None:

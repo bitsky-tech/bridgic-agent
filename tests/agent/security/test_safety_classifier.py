@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 from bridgic.core.model.types import Message, Response, Role
 
 from src.amphi_agent.security import ClassifyItem, LlmSafetyClassifier
+from src.amphi_agent.security._reasoning import reasoning_off
 
 if TYPE_CHECKING:
     from tests._support.sandbox import IsolatedPaths
@@ -312,3 +314,28 @@ async def test_reasoning_retry(test_sandbox: "IsolatedPaths") -> None:
     # Check 3: The successful retry remains the final safety decision instead of falling back to ask.
     assert verdicts[0].verdict == "allow"
     assert verdicts[0].reason == "Routine operation."
+
+
+def test_reasoning_overrides_follow_model_capabilities() -> None:
+    """Classifier calls disable reasoning when possible and minimize it otherwise."""
+    def policy(protocol: str, model: str) -> tuple[dict[str, object], str]:
+        llm = SimpleNamespace(
+            protocol=protocol,
+            configuration=SimpleNamespace(model=model),
+            api_base="https://relay.example.test/v1",
+        )
+        result = reasoning_off(llm)
+        return result.kwargs, result.status
+
+    assert policy("anthropic", "claude-sonnet-4-5") == ({}, "not_needed")
+    assert policy("anthropic", "claude-sonnet-5") == (
+        {"extra_body": {"thinking": {"type": "disabled"}}},
+        "disabled",
+    )
+    assert policy("anthropic", "claude-opus-5") == (
+        {"extra_body": {"output_config": {"effort": "low"}}},
+        "minimized",
+    )
+    assert policy("openai", "gpt-5.5") == ({"reasoning_effort": "none"}, "disabled")
+    assert policy("openai", "gpt-5-mini") == ({"reasoning_effort": "minimal"}, "minimized")
+    assert policy("openai", "gpt-5.2-chat-latest") == ({}, "not_needed")

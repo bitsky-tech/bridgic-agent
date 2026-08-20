@@ -321,8 +321,9 @@ class MeProviderTestHandler(BaseHandler):
                     configuration=AnthropicConfiguration(
                         model=body.model,
                         temperature=0.0,
-                        # 1 token cap — keeps the probe cheap. Anthropic
-                        # requires max_tokens; OpenAI accepts it.
+                        # 1 token cap — keeps the probe cheap. Anthropic requires
+                        # max_tokens, and the probe never enables thinking, so one
+                        # token always completes.
                         max_tokens=1,
                     ),
                 )
@@ -343,7 +344,11 @@ class MeProviderTestHandler(BaseHandler):
                     configuration=OpenAIConfiguration(
                         model=body.model,
                         temperature=0.0,
-                        max_tokens=1,
+                        # No token cap: reasoning models (gpt-5.x / o-series) spend
+                        # the budget on reasoning first, so a 1-token cap 400s with
+                        # "Could not finish the message ..." on every strict
+                        # upstream. A "ping" reply is short — no cap stays cheap.
+                        max_tokens=None,
                     ),
                 )
         except Exception as exc:  # noqa: BLE001 — surface ctor errors to UI
