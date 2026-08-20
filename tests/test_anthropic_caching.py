@@ -184,3 +184,60 @@ async def test_chat_paths_do_not_cache() -> None:
     assert not _breakpoints(calls[0])
     assert isinstance(calls[0].get("system", ""), str) or "system" not in calls[0]
     _reset()
+
+
+async def test_rolling_breakpoint_never_lands_on_a_thinking_block() -> None:
+    """cache_control is rejected on thinking blocks (official docs: they cannot
+    be cached directly). When the last stable message carries only thinking
+    blocks, the breakpoint must walk further back to a cacheable block."""
+    _reset()
+    seen: list = []
+    llm = _llm()
+    llm._run_stream = _fake_stream(seen)  # type: ignore[method-assign]
+
+    history = [
+        Message.from_text("persona", role=Role.SYSTEM),
+        Message.from_text("do the task", role=Role.USER),
+        # a thought-only assistant round: wire content is ONLY a thinking block
+        Message(role=Role.AI, blocks=[],
+                extras={"thinking_blocks": [{"type": "thinking", "thinking": "t", "signature": "S"}]}),
+        Message.from_text("<runtime_state>\nx\n</runtime_state>", role=Role.USER,
+                          extras={VOLATILE_TAIL_EXTRA: True}),
+    ]
+    await llm.stream_turn(history, _TOOLS, publish=lambda *a, **k: None)
+
+    marks = _breakpoints(seen[0])
+    assert not any(":thinking" in m for m in marks), marks
+    assert any(m.endswith(":text") and "messages[0]" in m for m in marks), marks
+    _reset()
+
+
+async def test_long_history_gets_a_second_lookback_breakpoint() -> None:
+    """The cache lookback window is 20 positions; a round that adds more blocks
+    than that would sail past the previous entry. The spare (4th) breakpoint sits
+    20 stable blocks before the rolling one so a hit anchor accumulates there."""
+    _reset()
+    seen: list = []
+    llm = _llm()
+    llm._run_stream = _fake_stream(seen)  # type: ignore[method-assign]
+
+    history: list[Message] = [Message.from_text("persona", role=Role.SYSTEM)]
+    for i in range(30):  # 30 alternating user/assistant text blocks
+        role = Role.USER if i % 2 == 0 else Role.AI
+        history.append(Message.from_text(f"m{i}", role=role))
+    history.append(Message.from_text("<runtime_state>\nx\n</runtime_state>",
+                                     role=Role.USER, extras={VOLATILE_TAIL_EXTRA: True}))
+
+    await llm.stream_turn(history, _TOOLS, publish=lambda *a, **k: None)
+
+    marks = _breakpoints(seen[0])
+    message_marks = [m for m in marks if m.startswith("messages[")]
+    assert len(message_marks) == 2, marks
+    assert len(marks) == 4, marks  # system + last tool + two message anchors
+
+    # And a SHORT history keeps a single message breakpoint (nothing 20 back).
+    seen.clear()
+    await llm.stream_turn(_history(), _TOOLS, publish=lambda *a, **k: None)
+    short_marks = [m for m in _breakpoints(seen[0]) if m.startswith("messages[")]
+    assert len(short_marks) == 1, short_marks
+    _reset()

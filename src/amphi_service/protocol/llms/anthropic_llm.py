@@ -77,6 +77,12 @@ _VOLATILE_TAIL_EXTRA = "volatile_tail"
 
 _EPHEMERAL_CACHE = {"type": "ephemeral"}
 
+# The API's cache lookback: at most 20 positions per breakpoint are checked for
+# an existing entry. A round adding more blocks than that would sail past the
+# previous round's entry, so a second message breakpoint sits this many stable
+# blocks before the rolling one (docs: "Add a second breakpoint closer").
+_CACHE_LOOKBACK_BLOCKS = 20
+
 # Substrings a thinking-config 400 carries (``thinking.display: Extra inputs…``,
 # ``thinking.type: Input should be…``, ``budget_tokens`` removed, …).
 _THINKING_REJECTION_HINTS: Tuple[str, ...] = ("thinking", "budget_tokens", "display", "adaptive")
@@ -616,11 +622,13 @@ def _volatile_tail_block_count(messages: List[Message]) -> int:
 
 
 def _with_prompt_caching(params: Dict[str, Any], volatile_blocks: int) -> Dict[str, Any]:
-    """A copy of ``params`` with up to three ``cache_control`` breakpoints:
-    the system block, the last tool definition, and the last STABLE content
-    block of the history (skipping the trailing volatile <runtime_state>
-    blocks). Every touched container is copied — message blocks may be shared
-    with persisted extras (replayed thinking) and must not be mutated.
+    """A copy of ``params`` with up to FOUR ``cache_control`` breakpoints:
+    the system block, the last tool definition, the last STABLE content block
+    of the history (skipping the trailing volatile <runtime_state> blocks),
+    and — when the history is long enough — a second anchor one lookback
+    window earlier, so a round that appends more than ~20 blocks still finds
+    a cached prefix. Every touched container is copied — message blocks may be
+    shared with persisted extras (replayed thinking) and must not be mutated.
     """
     out = dict(params)
     system = out.get("system")
@@ -632,17 +640,35 @@ def _with_prompt_caching(params: Dict[str, Any], volatile_blocks: int) -> Dict[s
     messages = out.get("messages")
     if messages:
         out["messages"] = [dict(m) for m in messages]
-        remaining = volatile_blocks
-        for msg in reversed(out["messages"]):
-            content = list(msg["content"])
-            if remaining >= len(content):
-                remaining -= len(content)
-                continue
-            idx = len(content) - 1 - remaining
-            content[idx] = {**content[idx], "cache_control": dict(_EPHEMERAL_CACHE)}
-            msg["content"] = content
-            break
+        for skip in (volatile_blocks, volatile_blocks + _CACHE_LOOKBACK_BLOCKS):
+            _mark_stable_block(out["messages"], skip)
     return out
+
+
+def _mark_stable_block(messages: List[Dict[str, Any]], skip: int) -> None:
+    """Set ``cache_control`` on the last cacheable block after skipping ``skip``
+    blocks from the end. Thinking blocks cannot carry ``cache_control`` (the
+    API rejects it) and are walked past; a block that already carries a marker
+    is left alone (keeps the total ≤ 4). No-op when the history is shorter
+    than ``skip``.
+    """
+    remaining = skip
+    for m_idx in range(len(messages) - 1, -1, -1):
+        content = messages[m_idx]["content"]
+        if remaining >= len(content):
+            remaining -= len(content)
+            continue
+        for idx in range(len(content) - 1 - remaining, -1, -1):
+            block = content[idx]
+            if block.get("type") in _THINKING_BLOCK_TYPES:
+                continue
+            if block.get("cache_control"):
+                return
+            new_content = list(content)
+            new_content[idx] = {**block, "cache_control": dict(_EPHEMERAL_CACHE)}
+            messages[m_idx] = {**messages[m_idx], "content": new_content}
+            return
+        remaining = 0  # every remaining block here was thinking — keep walking back
 
 
 _THINKING_BLOCK_TYPES = ("thinking", "redacted_thinking")
