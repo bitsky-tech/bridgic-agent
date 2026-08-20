@@ -263,11 +263,13 @@ def test_registration_write_is_atomic_and_private(tmp_path: Path) -> None:
             token="secret",
             lock_file=tmp_path / "gateway.lock",
             version="2.0.0",
+            log_file=tmp_path / "server.log",
         )
     finally:
         instance_lock.release()
 
     assert registration.read() == written
+    assert written.log_file == str(tmp_path / "server.log")
     if os.name != "nt":
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert list(path.parent.glob(".*.tmp")) == []
@@ -463,6 +465,9 @@ def test_manager_status_has_stopped_running_and_stale_states(tmp_path: Path) -> 
     assert running["status"] == "running"
     assert running["base_url"] == "http://127.0.0.1:7421"
     assert "token" not in running
+    # The log_file field is always present: the daemon reports its own log
+    # location, None meaning degraded / pre-log_file.
+    assert running["log_file"] is None
 
     registration.alive = False
     stale = manager.status().to_dict()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -25,6 +26,8 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     )
 
     class Registration:
+        path = tmp_path / "runtime.json"
+
         def write(self, *, instance_lock: Any, **values: Any) -> ServerInstance:
             assert instance_lock.held
             events.append(("write", values))
@@ -86,6 +89,13 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     monkeypatch.setattr(uvicorn_module.uvicorn, "Config", lambda *args, **kwargs: (args, kwargs))
     monkeypatch.setattr(uvicorn_module, "GracefulServer", Server)
     monkeypatch.setattr(uvicorn_module.os, "getpid", lambda: 1234)
+    monkeypatch.setattr(
+        uvicorn_module,
+        "configure_daemon_logging",
+        # A truthy return simulates a successful handler: the subsequent
+        # write must then advertise the same log path.
+        lambda log_path, **options: (events.append(("logging", log_path, options)), object())[1],
+    )
 
     UvicornRunner(
         registration=Registration(),
@@ -99,7 +109,14 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
     )
 
     assert events[0] == "lock"
+    # File logging must be wired after the lock but before the application
+    # is constructed — construction already logs.
     assert events[1] == (
+        "logging",
+        tmp_path / "server.log",
+        {"log_level": "debug"},
+    )
+    assert events[2] == (
         "service",
         {
             "bind_host": "127.0.0.1",
@@ -116,6 +133,7 @@ def test_uvicorn_runner_owns_lock_registration_and_cleanup(
         "lock_file": tmp_path / "gateway.lock",
         "ws_path": "/ws",
         "version": "1.2.3",
+        "log_file": tmp_path / "server.log",
     }
     assert any(
         isinstance(event, tuple) and event[0] == "bind_shutdown"
@@ -161,13 +179,141 @@ def test_uvicorn_reload_is_explicitly_unmanaged(
 
 @pytest.mark.asyncio
 async def test_lifecycle_hook_failure_is_only_swallowed_during_shutdown(
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     def fail() -> None:
         raise RuntimeError("hook broke")
 
-    await GracefulServer._run_hook(fail, swallow=True)
-    assert "hook broke" in capsys.readouterr().err
+    # Through logging (no longer print-to-stderr): supervisors redirect bare
+    # stderr into the crash-net file, which is not the file the GUI's
+    # "Open Logs" opens.
+    with caplog.at_level(logging.WARNING, logger=uvicorn_module.logger.name):
+        await GracefulServer._run_hook(fail, swallow=True)
+    assert "hook broke" in caplog.text
 
     with pytest.raises(RuntimeError, match="hook broke"):
         await GracefulServer._run_hook(fail, swallow=False)
+
+
+def test_reload_worker_inherits_the_requested_log_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--log-level debug must reach the reload worker's application loggers.
+
+    uvicorn hands the flag only to its own three uvicorn* loggers; the worker
+    is a separate process and never sees the parent's arguments. Calling
+    create_reload_app with no arguments pinned APP_LOGGER_NAMES at INFO — the
+    one mode where a developer asks for DEBUG by name showed no DEBUG at all.
+    """
+    applied: list[str] = []
+
+    class Unused:
+        def acquire(self) -> None:
+            raise AssertionError("reload must not acquire the daemon lock")
+
+    # setenv (not delenv): monkeypatch records the prior value, so teardown
+    # removes what the production code wrote — otherwise it leaks into
+    # later tests.
+    monkeypatch.setenv(uvicorn_module.RELOAD_LOG_LEVEL_ENV, "info")
+    monkeypatch.setattr(uvicorn_module.uvicorn, "run", lambda *args, **kwargs: None)
+    UvicornRunner(registration=Unused(), instance_lock=Unused()).run(
+        ServerOptions(host="0.0.0.0", port=9000, log_level="debug", reload=True)
+    )
+
+    monkeypatch.setattr(
+        uvicorn_module,
+        "configure_console_logging",
+        lambda **kwargs: applied.append(kwargs.get("log_level", "info")),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "ServiceApp",
+        lambda **_kwargs: SimpleNamespace(app=object()),
+    )
+
+    uvicorn_module.create_reload_app()
+
+    assert applied == ["debug"]
+
+
+def test_managed_daemon_does_not_write_access_logs_into_server_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """log_config=None lets uvicorn.access propagate to root's file handler.
+
+    The default dictConfig gives it its own handler with propagate=False, so
+    it never reached the application log; it would now compete with the
+    application's diagnostics for the same 5MB x 2 rotation budget.
+    """
+    captured: dict[str, Any] = {}
+
+    class _Config:
+        def __init__(self, _app: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    class _Server:
+        def __init__(self, config: Any, **_kwargs: Any) -> None:
+            self.config = config
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(uvicorn_module.uvicorn, "Config", _Config)
+    monkeypatch.setattr(uvicorn_module, "GracefulServer", _Server)
+    monkeypatch.setattr(
+        app_module,
+        "ServiceApp",
+        lambda **_kwargs: SimpleNamespace(
+            app=object(),
+            state=SimpleNamespace(
+                gateway=SimpleNamespace(
+                    started_at=0.0, ws_path="/ws", version="0",
+                ),
+                auth=SimpleNamespace(current_token="t"),
+            ),
+            pre_shutdown_hook=None,
+            bind_shutdown=lambda _cb: None,
+        ),
+    )
+
+    registration = SimpleNamespace(
+        path=tmp_path / "runtime.json",
+        write=lambda **_kwargs: None,
+        clear=lambda *_args, **_kwargs: None,
+    )
+    lock = SimpleNamespace(
+        acquire=lambda: None,
+        release=lambda: None,
+        path=tmp_path / "lock",
+    )
+    # Crash output left by a previous start: run() should leave a breadcrumb
+    # in server.log pointing at it.
+    crash_net = tmp_path / "daemon.stderr.log"
+    crash_net.write_bytes(b"Traceback (most recent call last):\n")
+
+    # configure_daemon_logging runs for real here and attaches a real handler
+    # to root; without removal, a file handler pointing into tmp_path leaks to
+    # every later test in the session.
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    try:
+        UvicornRunner(registration=registration, instance_lock=lock).run(
+            ServerOptions(host="127.0.0.1", port=9000, log_level="info", reload=False)
+        )
+
+        assert captured["log_config"] is None
+        assert captured["access_log"] is False
+
+        # Both the startup banner and the crash-net breadcrumb land in
+        # server.log (wiring check).
+        content = (tmp_path / "server.log").read_text(encoding="utf-8")
+        assert "[daemon-logging] started pid=" in content
+        assert f"crash net {crash_net} holds {crash_net.stat().st_size} bytes" in content
+    finally:
+        for handler in list(root.handlers):
+            if handler not in saved_handlers:
+                root.removeHandler(handler)
+                handler.close()
+        root.setLevel(saved_level)

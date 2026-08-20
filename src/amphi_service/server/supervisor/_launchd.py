@@ -11,12 +11,14 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from .._manager import RUNTIME_DIR_PARTS, STDERR_LOG_FILE, STDOUT_LOG_FILE
 from ._base import (
     AutostartStatus,
     AutostartSupervisor,
     ServerLaunchSpec,
     SupervisorError,
     UnsupportedSupervisor,
+    trim_oversized_log,
 )
 
 LABEL = "ai.bridgic.agent.daemon"
@@ -62,8 +64,16 @@ class LaunchdSupervisor(AutostartSupervisor):
 
     @property
     def log_directory(self) -> Path:
-        """Return the conventional per-user log directory."""
-        return self.home / "Library" / "Logs" / "Amphi"
+        """Return the crash-net log directory: the daemon runtime dir.
+
+        Historically ``~/Library/Logs/Amphi`` — a third log location nothing
+        else documented. The plist's stdout/stderr targets are only a crash
+        net now (structured logs go to ``server.log`` via the daemon's own
+        rotating handler), and they live beside runtime.json so every daemon
+        artifact is discoverable in one directory. Existing installs migrate
+        automatically: the plist is re-rendered on every start.
+        """
+        return self.home.joinpath(*RUNTIME_DIR_PARTS)
 
     @property
     def domain(self) -> str:
@@ -94,8 +104,8 @@ class LaunchdSupervisor(AutostartSupervisor):
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 30,
-            "StandardOutPath": str(self.log_directory / "daemon.stdout.log"),
-            "StandardErrorPath": str(self.log_directory / "daemon.stderr.log"),
+            "StandardOutPath": str(self.log_directory / STDOUT_LOG_FILE.name),
+            "StandardErrorPath": str(self.log_directory / STDERR_LOG_FILE.name),
         }
         if spec.environment:
             definition["EnvironmentVariables"] = dict(spec.environment)
@@ -124,10 +134,36 @@ class LaunchdSupervisor(AutostartSupervisor):
             ) from exc
         self._write_definition(self.render_plist(spec))
 
+    def _trim_crash_net(self) -> None:
+        """Trim the raw stdout/stderr files this supervisor points launchd at.
+
+        Callers MUST have booted the job out first: launchd holds these files
+        open for the life of the job, and truncating one underneath a live
+        descriptor that is not ``O_APPEND`` leaves the next write at its old
+        offset, producing a multi-megabyte hole of NULs.
+
+        This is a bound on ordinary growth, not a rotation: a daemon that
+        crash-loops under ``KeepAlive`` restarts without passing through any
+        of this module's entry points, and its appended tracebacks are not
+        trimmed until the next explicit start.
+        """
+        trim_oversized_log(self.log_directory / STDOUT_LOG_FILE.name)
+        trim_oversized_log(self.log_directory / STDERR_LOG_FILE.name)
+
     def enable(self, spec: ServerLaunchSpec) -> AutostartStatus:
         """Atomically install, reload, and start the LaunchAgent."""
         self._install_definition(spec)
         self._bootout()
+        # ``_bootout`` does not raise when launchctl refuses (a wedged job, a
+        # KeepAlive restart in flight), and trimming under a job that still
+        # holds the files open is exactly what its docstring forbids. Same
+        # guard as ``disable`` / ``deactivate``; this is the path every
+        # ``server start`` takes on macOS.
+        if self._is_loaded():
+            raise SupervisorError(
+                f"launchd job {self.target} remains loaded after bootout"
+            )
+        self._trim_crash_net()
         result = self._run(
             ("launchctl", "bootstrap", self.domain, str(self.plist_path))
         )

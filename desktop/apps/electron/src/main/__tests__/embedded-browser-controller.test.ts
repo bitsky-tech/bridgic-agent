@@ -22,6 +22,7 @@ function endpoint(): BackendEndpoint {
     startedAt: null,
     wsPath: null,
     runtimeFile: null,
+    logFile: null,
     clientId: 'desktop-client',
   }
 }

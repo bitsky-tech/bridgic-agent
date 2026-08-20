@@ -1,7 +1,7 @@
 import asyncio
+import logging
 import os
 import signal
-import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -98,6 +98,8 @@ from .i18n import locale_from_accept_language, use_locale
 # online" without per-client tokens.
 HEADER_CLIENT_ID = "X-Client-Id"
 HEADER_CLIENT_TYPE = "X-Client-Type"
+
+logger = logging.getLogger(__name__)
 
 
 ################################################################################################################
@@ -303,10 +305,7 @@ class ServiceApp:
                 try:
                     await self.state.llms.resolve(user, user.current_model)
                 except Exception as exc:  # noqa: BLE001 — best-effort pre-warm
-                    print(
-                        f"[lifespan] LLM pre-warm skipped: {exc}",
-                        file=sys.stderr,
-                    )
+                    logger.warning("[lifespan] LLM pre-warm skipped: %s", exc)
 
             await self.state.invocations.recover()
             await self.state.scheduler.start()
@@ -380,10 +379,7 @@ class ServiceApp:
                 ),
             )
         except Exception as exc:  # noqa: BLE001 — best-effort
-            print(
-                f"[ServiceApp] system.shutdown broadcast failed: {exc}",
-                file=sys.stderr,
-            )
+            logger.warning("[ServiceApp] system.shutdown broadcast failed: %s", exc)
         if grace > 0:
             await asyncio.sleep(grace)
 

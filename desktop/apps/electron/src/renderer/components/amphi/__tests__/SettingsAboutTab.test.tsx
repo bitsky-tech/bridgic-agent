@@ -48,12 +48,16 @@ let listener: UpdateListener | null = null
 const checkNow = mock<() => Promise<Outcome>>(async () => 'started')
 const getStatus = mock(async () => ({ isEnabled: true, stagedVersion: null as string | null }))
 const openExternal = mock<(url: string) => Promise<void>>(async () => {})
+type OpenLogsResult = { ok: true; path: string } | { ok: false; reason: string }
+const openLogs = mock<() => Promise<OpenLogsResult>>(async () => ({ ok: true, path: '/tmp/server.log' }))
 const writeText = mock<(text: string) => Promise<void>>(async () => {})
 
 beforeEach(() => {
   listener = null
   checkNow.mockClear()
   openExternal.mockClear()
+  openLogs.mockClear()
+  openLogs.mockImplementation(async () => ({ ok: true, path: '/tmp/server.log' }))
   writeText.mockClear()
   checkNow.mockImplementation(async () => 'started')
   getStatus.mockImplementation(async () => ({ isEnabled: true, stagedVersion: null }))
@@ -68,6 +72,7 @@ beforeEach(() => {
     },
     update: { checkNow, getStatus },
     app: { getVersion: async () => '0.1.11' },
+    backend: { openLogs },
     shell: { openExternal },
   }
   // happy-dom ships no clipboard; the copy button is unusable without one.
@@ -363,6 +368,33 @@ describe('SettingsAboutTab check button feedback', () => {
     await click()
 
     expect(host.textContent).toBe(during)
+    await cleanup()
+  })
+})
+
+describe('SettingsAboutTab logs row', () => {
+  // The only OTHER graphical entry point for daemon logs is a tray line that
+  // appears when the gateway is already failing; this row is the one a user
+  // can reach proactively, and the only one that exists at all on Windows.
+  it('reveals the daemon log folder from the About tab', async () => {
+    const { host, clickTestId, count, cleanup } = await mountAbout()
+    expect(count('about-open-logs')).toBe(1)
+
+    await clickTestId('about-open-logs')
+
+    expect(openLogs).toHaveBeenCalledTimes(1)
+    expect(count('about-logs-missing')).toBe(0)
+    void host
+    await cleanup()
+  })
+
+  it('says so when no log file could be found instead of doing nothing', async () => {
+    openLogs.mockImplementation(async () => ({ ok: false as const, reason: 'no daemon log found' }))
+    const { clickTestId, count, cleanup } = await mountAbout()
+
+    await clickTestId('about-open-logs')
+
+    expect(count('about-logs-missing')).toBe(1)
     await cleanup()
   })
 })

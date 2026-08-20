@@ -21,6 +21,7 @@ const ENDPOINT: BackendEndpoint = {
   startedAt: null,
   wsPath: '/ws',
   runtimeFile: null,
+  logFile: null,
   clientId: 'gui-test',
 }
 

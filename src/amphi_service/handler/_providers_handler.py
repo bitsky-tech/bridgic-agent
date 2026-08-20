@@ -1,7 +1,7 @@
 import asyncio
 import json
+import logging
 import secrets
-import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -803,16 +803,20 @@ _CODEX_OAUTH_TTL_SECONDS = 300.0
 # so the same channel slug carries either an API key or a Codex subscription.
 _CODEX_PROVIDER_ID = "openai"
 
+logger = logging.getLogger(__name__)
+
 
 def _log(msg: str) -> None:
-    """Lightweight stderr trace for the Codex OAuth flow.
+    """Trace for the Codex OAuth flow.
 
-    The daemon has no logging framework; the established convention is
-    ``print(..., file=sys.stderr, flush=True)`` (uvicorn redirects stderr into
-    ``server.log``). Used to time the status-finalize path (token exchange /
-    activation) so a slow sign-in is diagnosable from the log, not guessed at.
+    Goes through ``logging`` rather than ``print(file=sys.stderr)``: the
+    daemon configures a rotating ``server.log`` at startup (see
+    ``server._logging``), while raw stderr is redirected by the supervisor to
+    the crash-net file, which is not the file the GUI's "Open Logs" opens.
+    Used to time the status-finalize path (token exchange / activation) so a
+    slow sign-in is diagnosable from the log, not guessed at.
     """
-    print(f"[codex-oauth] {msg}", file=sys.stderr, flush=True)
+    logger.info("[codex-oauth] %s", msg)
 
 
 def _close_session(state: str) -> None:

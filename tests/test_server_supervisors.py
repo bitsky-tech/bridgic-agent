@@ -37,6 +37,27 @@ def completed(
     return subprocess.CompletedProcess(arguments, returncode, stdout, stderr)
 
 
+def _launchctl(
+    arguments: list[str],
+    loaded: dict[str, bool],
+) -> subprocess.CompletedProcess[str]:
+    """Minimal behavioral model of the real launchctl.
+
+    bootout unloads, bootstrap loads, and print answers "is it still there"
+    via its return code (113 when not loaded). A fake runner that always
+    returns 0 makes print say "still there" forever, which hides the guard in
+    enable that requires the job to be genuinely gone after bootout.
+    """
+    verb = arguments[1]
+    if verb == "bootout":
+        loaded["value"] = False
+    elif verb == "bootstrap":
+        loaded["value"] = True
+    elif verb == "print":
+        return completed(arguments, 0 if loaded["value"] else 113)
+    return completed(arguments, 0)
+
+
 def test_legacy_autostart_supervisor_fails_safe_for_config_only_operations() -> None:
     class LegacySupervisor(AutostartSupervisor):
         def enable(self, spec: ServerLaunchSpec) -> AutostartStatus:
@@ -227,6 +248,37 @@ def test_detached_supervisor_uses_platform_process_isolation(
     assert log_path.exists()
 
 
+def test_detached_supervisor_trims_an_oversized_crash_log_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The crash net only appends across lifecycles and cannot rotate at
+    runtime, so it is trimmed at start."""
+
+    class Process:
+        pid = 4321
+
+    monkeypatch.setattr(
+        _detached.subprocess,
+        "Popen",
+        lambda arguments, **options: Process(),
+    )
+    command = ServeCommand(executable=tmp_path / "amphi", frozen=True)
+    log_path = tmp_path / "daemon.stderr.log"
+    log_path.write_bytes(b"old\n" * (6 * 1024 * 1024 // 4) + b"newest traceback\n")
+
+    DetachedSupervisor(command, log_path, platform="darwin").start(
+        command.serve("127.0.0.1", 7421)
+    )
+
+    survived = log_path.read_bytes()
+    assert len(survived) <= 256 * 1024
+    # The tail is what survives: in a crash loop the newest traceback is the
+    # one under investigation.
+    assert survived.endswith(b"newest traceback\n")
+    assert survived.startswith(b"old\n")
+
+
 def test_detached_supervisor_wraps_process_launch_failures(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -270,11 +322,13 @@ def test_launchd_plist_has_foreground_keepalive_contract(tmp_path: Path) -> None
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 30,
+        # Crash net lives beside runtime.json now (single log directory),
+        # not under ~/Library/Logs/Amphi.
         "StandardOutPath": str(
-            tmp_path / "Library" / "Logs" / "Amphi" / "daemon.stdout.log"
+            tmp_path / ".bridgic" / "AmphiAgent" / "daemon.stdout.log"
         ),
         "StandardErrorPath": str(
-            tmp_path / "Library" / "Logs" / "Amphi" / "daemon.stderr.log"
+            tmp_path / ".bridgic" / "AmphiAgent" / "daemon.stderr.log"
         ),
     }
     assert definition["ProgramArguments"][3:5] == ["server", "serve"]
@@ -351,8 +405,80 @@ def test_detached_launch_ignores_the_spec_environment_snapshot(
     assert captured["env"] is None
 
 
+def test_launchd_trims_the_crash_net_only_after_booting_the_job_out(
+    tmp_path: Path,
+) -> None:
+    """launchd holds descriptors for both files for the life of the job.
+
+    Truncating before bootout — under a descriptor that is not O_APPEND —
+    leaves the next write at its old offset, producing a huge hole of NULs
+    that makes the file unreadable altogether.
+    """
+    sizes_at_bootout: dict[str, int] = {}
+    runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
+    runtime_dir.mkdir(parents=True)
+    stderr_log = runtime_dir / "daemon.stderr.log"
+    stderr_log.write_bytes(b"line\n" * (6 * 1024 * 1024 // 5))
+    original_size = stderr_log.stat().st_size
+
+    loaded = {"value": True}
+
+    def runner(arguments, **_options):
+        if arguments[1] == "bootout":
+            sizes_at_bootout["stderr"] = stderr_log.stat().st_size
+        return _launchctl(arguments, loaded)
+
+    supervisor = LaunchdSupervisor(
+        runner=runner,
+        platform="darwin",
+        home=tmp_path,
+        uid=502,
+    )
+    spec = ServeCommand(executable=tmp_path / "amphi", frozen=True).serve("127.0.0.1", 7421)
+
+    supervisor.enable(spec)
+
+    assert sizes_at_bootout["stderr"] == original_size
+    assert 0 < stderr_log.stat().st_size <= 256 * 1024
+
+
+def test_launchd_does_not_trim_when_the_job_survives_bootout(tmp_path: Path) -> None:
+    """If bootout failed to unload the job, trimming writes NUL holes — so
+    raising first is mandatory.
+
+    A failing launchctl bootout (wedged job / EPERM / a KeepAlive restart in
+    flight) does not raise; enable used to march straight on to the trim,
+    while disable/deactivate both check _is_loaded first.
+    """
+    runtime_dir = tmp_path / ".bridgic" / "AmphiAgent"
+    runtime_dir.mkdir(parents=True)
+    stderr_log = runtime_dir / "daemon.stderr.log"
+    stderr_log.write_bytes(b"line\n" * (6 * 1024 * 1024 // 5))
+    original_size = stderr_log.stat().st_size
+
+    def runner(arguments, **_options):
+        # bootout reports success, yet the job survives: print keeps
+        # returning 0.
+        return completed(arguments, 0)
+
+    supervisor = LaunchdSupervisor(
+        runner=runner,
+        platform="darwin",
+        home=tmp_path,
+        uid=502,
+    )
+    spec = ServeCommand(executable=tmp_path / "amphi", frozen=True).serve("127.0.0.1", 7421)
+
+    with pytest.raises(SupervisorError, match="remains loaded"):
+        supervisor.enable(spec)
+
+    assert stderr_log.stat().st_size == original_size
+
+
 def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
     calls: list[list[str]] = []
+
+    loaded = {"value": True}
 
     def runner(arguments, **options):
         calls.append(arguments)
@@ -362,7 +488,10 @@ def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
             "check": False,
             "timeout": LaunchdSupervisor.COMMAND_TIMEOUT,
         }
-        return completed(arguments, 0 if arguments[1] != "bootout" else 3)
+        if arguments[1] == "bootout":
+            loaded["value"] = False
+            return completed(arguments, 3)
+        return _launchctl(arguments, loaded)
 
     supervisor = LaunchdSupervisor(
         runner=runner,
@@ -386,6 +515,8 @@ def test_launchd_enable_writes_atomically_and_reloads(tmp_path: Path) -> None:
     )
     assert calls == [
         ["launchctl", "bootout", f"gui/502/{LABEL}"],
+        # Confirm the job is genuinely unloaded before trimming the crash net.
+        ["launchctl", "print", f"gui/502/{LABEL}"],
         [
             "launchctl",
             "bootstrap",

@@ -5,7 +5,8 @@
  *
  *   - `backend:snapshot`  → returns current PythonClient snapshot
  *   - `backend:restart`   → user-initiated restart
- *   - `backend:openLogs`  → reveal ~/.bridgic/AmphiAgent/server.log via shell
+ *   - `backend:openLogs`  → reveal the daemon log in the file manager (path
+ *     reported by the daemon, with guessed fallbacks — see daemon-log-path.ts)
  *   - `backend:autostartStatus` / `backend:setAutostart` → login autostart
  *
  * State broadcast happens at module load time: we subscribe to
@@ -13,20 +14,17 @@
  * `IPC.events.backendState`. Atoms in the renderer absorb this stream.
  */
 import { app, BrowserWindow, shell } from 'electron'
-import { existsSync } from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
+import { existsSync, statSync } from 'node:fs'
 import { IPC } from '../../shared/ipc-channels'
 import {
   APP_SLUG,
   APP_VERSION,
   AUTH_HEADER_NAME,
-  BACKEND_LOG_FILE_NAME,
-  BACKEND_RUNTIME_DIR_REL,
   CLIENT_ID_HEADER,
   CLIENT_TYPE_HEADER,
   GATEWAY_API_PATHS,
 } from '../../shared/app-meta'
+import { daemonLogCandidates, selectDaemonLog } from '../daemon-log-path'
 import { mainLog } from '../logger'
 import { pythonClient } from '../python-client'
 import {
@@ -150,7 +148,12 @@ export function registerBackendHandlers(): void {
  * exception handling (consistent with backend:openLogs' shape).
  */
 /**
- * Reveal the daemon log with the OS default handler.
+ * Reveal the daemon log in the file manager (not the OS default opener, same
+ * as app:openLogFile for main.log): the ranking below picks ONE file, but a
+ * user report usually needs its neighbours too — the rotated server.log.1/.2
+ * when the crash happened right before a rollover, and daemon.stderr.log next
+ * to a stale server.log when the mtime heuristic guessed wrong. Opening the
+ * directory makes every candidate visible instead of betting on one.
  *
  * Exported (not just the IPC handler body) because the tray's error line links
  * here too — the tray lives in main and has no renderer to route through.
@@ -158,18 +161,40 @@ export function registerBackendHandlers(): void {
 export async function openDaemonLogs(): Promise<
   { ok: true; path: string } | { ok: false; reason: string }
 > {
-  // `server.log` lives in the same dir as runtime.json. Prefer the exact
-  // path the daemon reported (`endpoint.runtimeFile` → its dirname) — the
-  // daemon owns its layout (e.g. ~/.bridgic/AmphiAgent/). Fall back to the
-  // legacy basename guess only when we have no live endpoint (daemon down).
-  const runtimeFile = pythonClient.snapshot().endpoint?.runtimeFile
-  const logPath = runtimeFile
-    ? path.join(path.dirname(runtimeFile), BACKEND_LOG_FILE_NAME)
-    : path.join(os.homedir(), BACKEND_RUNTIME_DIR_REL, BACKEND_LOG_FILE_NAME)
-  if (!existsSync(logPath)) {
-    return { ok: false as const, reason: `log file does not exist yet: ${logPath}` }
+  // Prefer the log path the daemon itself reported (runtime.json/status
+  // `log_file`); among the guessed fallbacks take the most recently written,
+  // so a stale server.log from an earlier good run cannot hide today's crash
+  // in daemon.stderr.log. See daemon-log-path.ts.
+  const endpoint = pythonClient.snapshot().endpoint
+  const candidates = daemonLogCandidates({
+    logFile: endpoint?.logFile,
+    runtimeFile: endpoint?.runtimeFile,
+  })
+  const logPath = selectDaemonLog(
+    candidates,
+    {
+      exists: existsSync,
+      modifiedAt: (candidate) => {
+        try {
+          return statSync(candidate).mtimeMs
+        } catch {
+          return 0
+        }
+      },
+    },
+    endpoint?.logFile,
+  )
+  if (!logPath) {
+    // Name everything we tried: this is the only signal a user gets when the
+    // button appears to do nothing, and the tray discards the return value.
+    const reason = `no daemon log found; tried: ${candidates.join(', ')}`
+    mainLog.warn(`[backend] ${reason}`)
+    return { ok: false as const, reason }
   }
-  await shell.openPath(logPath)
+  // showItemInFolder returns void — unlike openPath there is no failure
+  // signal to relay, and no "no handler registered for .log" mode to hit:
+  // every platform has a file manager.
+  shell.showItemInFolder(logPath)
   return { ok: true as const, path: logPath }
 }
 

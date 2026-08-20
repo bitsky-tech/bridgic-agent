@@ -374,3 +374,20 @@ async def test_no_audit_dir_disables_grants(tmp_path: Path) -> None:
     engine = PermissionEngine("/workspace", [], ExecutionMode.AUTO, _AlwaysAsk())
     v = await engine.evaluate([_call("bash", command="curl -sS https://api.test/ping")])
     assert v[0].verdict == "ask"
+
+
+async def test_decision_log_never_carries_call_arguments(caplog) -> None:
+    # With the daemon's root file handler, this INFO lands in server.log —
+    # the file the GUI's "Open Logs" opens and users paste into bug reports.
+    # Command text (tokens / passwords included) must never appear there;
+    # tool + verdict carry the diagnostic value.
+    caplog.set_level("INFO", logger="src.amphi_agent.security._engine")
+    engine = PermissionEngine("/workspace", [], ExecutionMode.REQUEST)
+    await engine.evaluate(
+        [_call("bash", command='curl -H "Authorization: Bearer sk-super-secret"  https://x/')]
+    )
+    text = caplog.text
+    assert "sk-super-secret" not in text
+    assert "Authorization" not in text
+    assert "[permission]" in text
+    assert "bash" in text

@@ -50,6 +50,7 @@ class _Manager:
         self.serve_result = True
         self.runtime_path = runtime_path
         self.autostart_definition = autostart_definition
+        self.stderr_log_path = runtime_path.parent / "daemon.stderr.log"
 
     def start(self, options: ServerOptions, *, timeout: float) -> Any:
         self.calls.append(("start", (options, timeout)))
@@ -140,7 +141,16 @@ def test_start_passes_all_options_to_the_manager(capsys) -> None:
             ),
         )
     ]
-    assert "Service started" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "Service started" in printed
+    # Supervisor owner and log path are the first two facts triage needs;
+    # the desktop records this line verbatim into its own log.
+    assert "supervisor: detached" in printed
+    # This double's instance has no log_file (an old daemon / degraded
+    # logging) — precisely when the crash-net location must be named instead
+    # of saying nothing.
+    assert "file logging unavailable" in printed
+    assert "daemon.stderr.log" in printed
 
 
 def test_stop_passes_timeout_and_force_to_the_manager(capsys) -> None:
