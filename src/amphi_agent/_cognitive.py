@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from bridgic.amphibious import CognitiveWorker, StepToolCall
+from bridgic.amphibious import CognitiveWorker, OTARecord, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -435,7 +435,7 @@ class MainThink(CognitiveWorker):
         return ("build", legacy_build_stage) if legacy_build_stage else None
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Project this Turn from the latest different stage in the same cognitive mode."""
+        """Project this Turn from the latest stage boundary, retaining its handoff."""
         stage_boundary = next((
             index
             for index in range(len(ota_context.ota_record) - 1, -1, -1)
@@ -448,8 +448,15 @@ class MainThink(CognitiveWorker):
         ), None)
         if stage_boundary is None:
             return ota_context, None
+        records = list(ota_context.ota_record[stage_boundary + 1:])
+        handoff = _view(ota_context.ota_record[stage_boundary], "observation_result")
+        if handoff:
+            # The boundary round belongs to the source stage, so its thought and
+            # tool activity stay trimmed. Its observation is the concise handoff
+            # deliberately stamped by ``switch`` for the newly active stage.
+            records.insert(0, OTARecord(observation_result=handoff))
         return ota_context.model_copy(update={
-            "ota_record": ota_context.ota_record[stage_boundary + 1:],
+            "ota_record": records,
         }), stage_boundary
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
