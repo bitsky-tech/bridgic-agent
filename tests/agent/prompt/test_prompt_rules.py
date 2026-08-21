@@ -10,6 +10,7 @@ from src.amphi_agent._prompt import (
     render_main_persona,
     render_stage_persona,
 )
+from src.amphi_service.i18n import use_locale
 from src.amphi_agent.tools import (
     request_accept_rule_tool,
     request_human_choice_tool,
@@ -75,6 +76,21 @@ def test_core_rules() -> None:
     # Check 4: Every rendered Persona resolves its internal tool and delegation placeholders.
     for persona in personas.values():
         assert "__AMPHI_" not in persona
+
+
+def test_ui_language_is_the_language_fallback() -> None:
+    """The language rule keys off the user's input, which some inputs cannot answer.
+
+    A URL dump, a pasted log, or a bare path carries no language signal at all, and the
+    model then falls back to its own bias — an English UI reading a Chinese reply. The
+    client already tells the backend which language its UI is in; the persona has to
+    carry that value so it can act as the tie-breaker.
+    """
+    for locale, expected in (("en", "English"), ("zh", "Chinese")):
+        with use_locale(locale):
+            personas = _personas()
+        for name in ("main", "child", "clarify", "explore", "generate", "verify"):
+            assert f"app UI language: {expected}" in personas[name], name
 
 
 def test_choice_contract() -> None:
