@@ -85,11 +85,15 @@ def test_ui_language_is_the_language_fallback() -> None:
     model then falls back to its own bias — an English UI reading a Chinese reply. The
     client already tells the backend which language its UI is in; the persona has to
     carry that value so it can act as the tie-breaker.
+
+    The Workflow Run personas need it most, not least: their anchor is the original
+    Workflow request, which a scheduled Run cannot see, while the one language signal
+    actually present — the Workflow source — is the one they are forbidden to follow.
     """
     for locale, expected in (("en", "English"), ("zh", "Chinese")):
         with use_locale(locale):
             personas = _personas()
-        for name in ("main", "child", "clarify", "explore", "generate", "verify"):
+        for name in personas:
             assert f"app UI language: {expected}" in personas[name], name
 
 
