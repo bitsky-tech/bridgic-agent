@@ -43,7 +43,7 @@ export function AgentDockEntry({
         />
       ) : null}
       <BridgicLogo size={18} />
-      <span className="max-w-[46px] truncate text-2xs font-medium leading-none">
+      <span className="max-w-[58px] truncate text-2xs font-medium leading-none tracking-tight">
         {t('session.resourcePanel.agent')}
       </span>
     </button>
