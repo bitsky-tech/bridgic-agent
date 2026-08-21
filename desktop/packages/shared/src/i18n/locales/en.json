@@ -385,11 +385,8 @@
     "building": "Building",
     "closeTaskSpec": "Close task specification",
     "collapse": "Collapse",
-    "completed": "Completed",
-    "inProgress": "In progress",
     "preparing": "Preparing",
     "preparingDescription": "Preparing the workflow build environment",
-    "progress": "Build progress",
     "stageDescriptions": {
       "clarify": "Align requirements and finalize the specification",
       "explore": "Explore the target environment structure",
@@ -2340,9 +2337,7 @@
       "title": "Task specification"
     }
   },
-  "workflowRunHeader": {
-    "closeDetails": "Close run details",
-    "collapse": "Collapse",
+  "workflowRunDetails": {
     "detail": {
       "awaiting": "Awaiting execution",
       "completed": "Completed",
@@ -2361,9 +2356,7 @@
     "overallProgress": "Overall progress",
     "phase": {
       "execute": "Execute",
-      "executeDescription": "Complete the task by following workflow steps",
-      "validate": "Validate",
-      "validateDescription": "Check whether run results meet expectations"
+      "validate": "Validate"
     },
     "phaseAria": "Workflow run phases",
     "progress": {
@@ -2377,7 +2370,6 @@
       "running": "Running",
       "stopped": "Stopped"
     },
-    "summary": "{{completed}} steps complete · {{calls}} calls",
     "title": "Workflow run",
     "toolCalls": "Tool calls",
     "unit": {

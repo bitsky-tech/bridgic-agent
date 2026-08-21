@@ -22,26 +22,14 @@ const {
   closeWorkflowRunDetailsAtom,
   openWorkflowRunDetailsAtom,
 } = await import('@/atoms/workflow-run-details')
-const {
-  WorkflowRunHeader,
-  WORKFLOW_RUN_COMPACT_HEADER_WIDTH,
-  WORKFLOW_RUN_EXPANDED_HEADER_WIDTH,
-  WORKFLOW_RUN_NARROW_HEADER_WIDTH,
-  WORKFLOW_RUN_NARROW_RESTORE_WIDTH,
-} = await import('../WorkflowRunHeader')
 const { WorkflowRunDetailsPane } = await import('../WorkflowRunDetailsPane')
 const { SESSION_STATUS_BAR_HEIGHT_PX } = await import('../SessionStatusBar')
 
-function WorkflowRunSurface() {
-  return (
-    <>
-      <WorkflowRunHeader />
-      <WorkflowRunDetailsPane />
-    </>
-  )
+function WorkflowRunDetailsSurface() {
+  return <WorkflowRunDetailsPane />
 }
 
-describe('WorkflowRunHeader', () => {
+describe('WorkflowRunDetailsPane', () => {
   it('stays running while the parent Turn is durably waiting for a Child', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -89,20 +77,20 @@ describe('WorkflowRunHeader', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <WorkflowRunSurface />
+          <WorkflowRunDetailsSurface />
         </Provider>,
       )
     })
+    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-waiting'))
 
     expect(host.textContent).toContain('运行中')
     expect(host.textContent).not.toContain('已停止')
-    expect(host.querySelector('[data-testid="workflow-run-details-trigger"]')).toBeNull()
 
     await act(async () => root.unmount())
     host.remove()
   })
 
-  it('keeps the full top progress visible and opens step details in the right pane', async () => {
+  it('shows step progress in the right pane without restoring a top rail', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -195,27 +183,11 @@ describe('WorkflowRunHeader', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <WorkflowRunSurface />
+          <WorkflowRunDetailsSurface />
         </Provider>,
       )
     })
 
-    expect(host.textContent).toContain('工作流')
-    expect(host.textContent).toContain('执行')
-    expect(host.textContent).toContain('2/3')
-    expect(host.textContent).toContain('筛选新闻')
-    expect(host.textContent).not.toContain('1 步完成 · 1 次调用')
-    expect(host.textContent).not.toContain('旧运行步骤')
-    expect(host.textContent).not.toContain('已确认最近三天的三条消息。')
-
-    const container = host.querySelector('[data-testid="workflow-run-status-bar"]') as HTMLElement
-    expect(container.className).toContain('relative')
-    expect(container.className).toContain('w-full')
-    expect(container.className).not.toContain('absolute')
-    expect(container.style.height).toBe(`${SESSION_STATUS_BAR_HEIGHT_PX}px`)
-    expect(host.querySelector('[data-testid="workflow-run-details-trigger"]')).toBeNull()
-    expect(host.querySelector('[data-testid="workflow-phase-rail"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="workflow-compact-phase-rail"]')).toBeNull()
     await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-current'))
 
     const details = host.querySelector<HTMLElement>('[data-testid="workflow-run-details-pane"]')!
@@ -228,8 +200,6 @@ describe('WorkflowRunHeader', () => {
     expect(detailsHeader.style.height).toBe(`${SESSION_STATUS_BAR_HEIGHT_PX}px`)
     expect(detailsHeader.nextElementSibling).toBe(detailsScroll)
     expect(detailsScroll.className).toContain('overflow-x-hidden')
-    expect(host.querySelector('[data-testid="workflow-compact-phase-rail"]')).toBeNull()
-    expect(host.querySelector('[data-testid="workflow-phase-rail"]')).not.toBeNull()
     expect(host.textContent).toContain('筛选新闻')
     const overview = host.querySelector<HTMLElement>('[data-testid="workflow-run-overview"]')!
     expect(overview.textContent).toContain('1/4')
@@ -276,175 +246,6 @@ describe('WorkflowRunHeader', () => {
 
     await act(async () => root.unmount())
     host.remove()
-  })
-
-  it('degrades only for a narrow header and keeps that choice independent from details', async () => {
-    const OriginalResizeObserver = globalThis.ResizeObserver
-    let resizeCallback: ResizeObserverCallback | undefined
-    let observedBox: ResizeObserverBoxOptions | undefined
-    globalThis.ResizeObserver = class {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback
-      }
-      observe(_target: Element, options?: ResizeObserverOptions) {
-        observedBox = options?.box
-      }
-      unobserve() {}
-      disconnect() {}
-    }
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    const store = createStore()
-    const sessionId = 'responsive-run-header'
-    store.set(activeSessionIdAtom, sessionId)
-    store.set(thinkingModeFamily(sessionId), { mode: 'run_workflow', stage: 'execute' })
-    store.set(workflowRunFamily(sessionId), {
-      workflowId: 'wf-responsive',
-      generation: 'gen-responsive',
-      workflowName: '响应式工作流',
-      sourceSessionId: sessionId,
-      phase: 'execute',
-      stepIndex: 0,
-      executionSteps: ['执行任务'],
-      validationSteps: ['验证结果'],
-    })
-    const resizeEntry = (borderWidth: number): ResizeObserverEntry => ({
-      target: host,
-      contentRect: { width: borderWidth - 16 } as DOMRectReadOnly,
-      borderBoxSize: [{ inlineSize: borderWidth, blockSize: 0 }],
-      contentBoxSize: [],
-      devicePixelContentBoxSize: [],
-    })
-
-    try {
-      await act(async () => {
-        root.render(
-          <Provider store={store}>
-            <WorkflowRunSurface />
-          </Provider>,
-        )
-      })
-
-      const belowCompact = WORKFLOW_RUN_COMPACT_HEADER_WIDTH - 20
-      const inHysteresis = WORKFLOW_RUN_COMPACT_HEADER_WIDTH + 12
-      const aboveExpanded = WORKFLOW_RUN_EXPANDED_HEADER_WIDTH + 8
-      expect(inHysteresis).toBeLessThan(WORKFLOW_RUN_EXPANDED_HEADER_WIDTH)
-      expect(observedBox).toBe('border-box')
-
-      await act(async () => {
-        resizeCallback?.([resizeEntry(belowCompact)], {} as ResizeObserver)
-      })
-      expect(host.querySelector('[data-testid="workflow-compact-phase-rail"]')).not.toBeNull()
-      expect(host.querySelector('[data-testid="workflow-phase-rail"]')).toBeNull()
-
-      await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-responsive'))
-      expect(host.querySelector('[data-testid="workflow-compact-phase-rail"]')).not.toBeNull()
-
-      await act(async () => {
-        resizeCallback?.([resizeEntry(inHysteresis)], {} as ResizeObserver)
-      })
-      expect(host.querySelector('[data-testid="workflow-compact-phase-rail"]')).not.toBeNull()
-
-      await act(async () => {
-        resizeCallback?.([resizeEntry(aboveExpanded)], {} as ResizeObserver)
-      })
-      expect(host.querySelector('[data-testid="workflow-phase-rail"]')).not.toBeNull()
-      expect(host.querySelector('[data-testid="workflow-compact-phase-rail"]')).toBeNull()
-
-      await act(async () => store.set(closeWorkflowRunDetailsAtom))
-      expect(host.querySelector('[data-testid="workflow-phase-rail"]')).not.toBeNull()
-
-      await act(async () => {
-        resizeCallback?.([resizeEntry(inHysteresis)], {} as ResizeObserver)
-      })
-      expect(host.querySelector('[data-testid="workflow-phase-rail"]')).not.toBeNull()
-    } finally {
-      await act(async () => root.unmount())
-      host.remove()
-      globalThis.ResizeObserver = OriginalResizeObserver
-    }
-  })
-
-  it('uses a non-overlapping narrow composition from 400px and restores compact with hysteresis', async () => {
-    const OriginalResizeObserver = globalThis.ResizeObserver
-    let resizeCallback: ResizeObserverCallback | undefined
-    globalThis.ResizeObserver = class {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    const store = createStore()
-    const sessionId = 'very-narrow-run-header'
-    store.set(activeSessionIdAtom, sessionId)
-    store.set(thinkingModeFamily(sessionId), { mode: 'run_workflow', stage: 'execute' })
-    store.set(workflowRunFamily(sessionId), {
-      workflowId: 'wf-narrow',
-      generation: 'gen-narrow',
-      workflowName: '很长的响应式工作流名称',
-      sourceSessionId: sessionId,
-      phase: 'execute',
-      stepIndex: 1,
-      executionSteps: ['第一步', '第二步', '第三步'],
-      validationSteps: ['验证结果'],
-    })
-    const resizeEntry = (width: number): ResizeObserverEntry => ({
-      target: host,
-      contentRect: { width } as DOMRectReadOnly,
-      borderBoxSize: [{ inlineSize: width, blockSize: 0 }],
-      contentBoxSize: [],
-      devicePixelContentBoxSize: [],
-    })
-
-    try {
-      await act(async () => {
-        root.render(<Provider store={store}><WorkflowRunHeader /></Provider>)
-      })
-
-      await act(async () => {
-        resizeCallback?.([resizeEntry(400)], {} as ResizeObserver)
-      })
-      const bar = host.querySelector<HTMLElement>('[data-testid="workflow-run-status-bar"]')!
-      const identity = host.querySelector<HTMLElement>('[data-testid="session-status-identity"]')!
-      const rail = host.querySelector<HTMLElement>('[data-testid="session-status-rail"]')!
-      const compactRail = host.querySelector<HTMLElement>('[data-testid="workflow-compact-phase-rail"]')!
-      expect(bar.dataset.density).toBe('narrow')
-      expect(identity.className).toContain('overflow-hidden')
-      expect(rail.className).toContain('shrink-0')
-      expect(compactRail.dataset.density).toBe('narrow')
-      expect(compactRail.className).toContain('w-28')
-      expect(compactRail.textContent).toContain('执行 · 2/3')
-      expect(host.querySelector<HTMLElement>('[data-testid="session-status-badge"]')?.className)
-        .toContain('hidden')
-      expect(host.querySelector('[data-testid="session-status-state"]')).toBeNull()
-      expect(host.textContent).not.toContain('很长的响应式工作流名称')
-
-      await act(async () => {
-        resizeCallback?.([
-          resizeEntry(WORKFLOW_RUN_NARROW_HEADER_WIDTH + 8),
-        ], {} as ResizeObserver)
-      })
-      expect(bar.dataset.density).toBe('narrow')
-
-      await act(async () => {
-        resizeCallback?.([
-          resizeEntry(WORKFLOW_RUN_NARROW_RESTORE_WIDTH),
-        ], {} as ResizeObserver)
-      })
-      expect(bar.dataset.density).toBe('compact')
-      expect(host.querySelector<HTMLElement>('[data-testid="workflow-compact-phase-rail"]')?.dataset.density)
-        .toBe('compact')
-    } finally {
-      await act(async () => root.unmount())
-      host.remove()
-      globalThis.ResizeObserver = OriginalResizeObserver
-    }
   })
 
   it('does not reuse an earlier generation before the current run reports its first step', async () => {
@@ -499,14 +300,14 @@ describe('WorkflowRunHeader', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <WorkflowRunSurface />
+          <WorkflowRunDetailsSurface />
         </Provider>,
       )
     })
 
+    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-new'))
     expect(host.textContent).toContain('新运行第一步')
     expect(host.textContent).not.toContain('旧运行第一步')
-    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-new'))
     expect(host.textContent).toContain('当前步')
     expect(host.textContent).not.toContain('旧运行结果')
 
@@ -592,17 +393,16 @@ describe('WorkflowRunHeader', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <WorkflowRunSurface />
+          <WorkflowRunDetailsSurface />
         </Provider>,
       )
     })
 
-    expect(host.textContent).toContain('执行 · 1/1')
+    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-boundary'))
     expect(host.textContent).toContain('执行阶段已完成，等待验证')
     expect(host.textContent).not.toContain('2/2')
     expect(host.textContent).not.toContain('正在初始化')
 
-    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-boundary'))
     let tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
     expect(tabs.find((tab) => tab.textContent?.includes('执行工作流'))?.textContent)
       .toContain('1/1 步完成')
@@ -641,10 +441,7 @@ describe('WorkflowRunHeader', () => {
       }])
     })
 
-    expect(host.textContent).toContain('验证 · 1/1')
     expect(host.textContent).toContain('验证阶段已完成，等待结束')
-    expect(host.querySelector('[data-testid="workflow-run-status-bar"]')?.textContent)
-      .not.toContain('2/2')
     tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
     expect(tabs.find((tab) => tab.textContent?.includes('验证结果'))?.textContent)
       .toContain('1/1 项完成')
@@ -696,15 +493,10 @@ describe('WorkflowRunHeader', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <WorkflowRunSurface />
+          <WorkflowRunDetailsSurface />
         </Provider>,
       )
     })
-
-    const rail = host.querySelector<HTMLElement>('[data-testid="workflow-phase-rail"]')!
-    expect(rail.textContent).toContain('执行')
-    expect(rail.textContent).not.toContain('验证')
-    expect(host.textContent).toContain('执行阶段已完成，等待结束')
 
     await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-execution-only'))
 
@@ -792,15 +584,15 @@ describe('WorkflowRunHeader', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <WorkflowRunSurface />
+          <WorkflowRunDetailsSurface />
         </Provider>,
       )
     })
 
+    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-validate'))
     expect(host.textContent).toContain('工作流')
     expect(host.textContent).toContain('验证')
     expect(host.textContent).toContain('2/3')
-    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-validate'))
 
     const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
     const executionTab = tabs.find((tab) => tab.textContent?.includes('执行工作流'))!

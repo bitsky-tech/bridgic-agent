@@ -1,11 +1,6 @@
 /**
- * Horizontal stage rail — pills of dot + stage name, strung together by fixed-width connector lines.
- *
- * The session header has two such rails (Build's four stages, Workflow run's two stages). They used to be two
- * independently evolving copies that had already drifted apart in four unintentional ways: pill padding
- * (px-2.5 / px-3), whether the pill was wrapped in a Tooltip, whether done/active styles used a helper or an
- * inline cn, and whether the transition carried ease-out. They were merged into one place, and while at it
- * unified on "the better half" of each difference (always a Tooltip, always the helper).
+ * Horizontal Build stage rail — pills of dot + stage name, strung together by
+ * fixed-width connector lines.
  *
  * Invariants:
  *   - The rail as a whole is **fixed width** and everything inside is `shrink-0`. The connector line used to be

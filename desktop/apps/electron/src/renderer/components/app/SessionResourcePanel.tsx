@@ -506,7 +506,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
         isModeAvailable={modeSurface !== null}
         modeAriaLabel={modeSurface === SessionModeSurfaceKind.Task
           ? t('focusMode.viewTaskSpec')
-          : t('workflowRunHeader.runDetails')}
+          : t('workflowRunDetails.runDetails')}
         onOpenMode={selectMode}
         railAriaLabel={t('session.resourcePanel.surfaceRailAria')}
         railRef={railRef}
