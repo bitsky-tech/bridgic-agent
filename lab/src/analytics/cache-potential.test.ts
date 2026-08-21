@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { PromptReconstruction } from '../api'
-import { analyzePromptCachePotential } from './cache-potential'
+import { analyzePromptCachePotential, estimatePromptTokens } from './cache-potential'
 
 function prompt(
   turnId: string,
@@ -47,6 +47,12 @@ function prompt(
 }
 
 describe('prompt cache reuse potential', () => {
+  test('estimates visible prompt text with the shared UTF-8 byte heuristic', () => {
+    expect(estimatePromptTokens('')).toBe(0)
+    expect(estimatePromptTokens('abcd')).toBe(1)
+    expect(estimatePromptTokens('中文')).toBe(2)
+  })
+
   test('treats the first same-model request as a cold start and reuses an unchanged prefix', () => {
     const result = analyzePromptCachePotential([
       prompt('turn-1', 0),

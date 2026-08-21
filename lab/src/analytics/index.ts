@@ -6,7 +6,7 @@ export {
   analyzeTurn,
   buildAnalyticsPanel,
 } from './compute'
-export { analyzePromptCachePotential } from './cache-potential'
+export { analyzePromptCachePotential, estimatePromptTokens } from './cache-potential'
 export type {
   PromptCacheFirstDifference,
   PromptCacheInvocationPotential,
