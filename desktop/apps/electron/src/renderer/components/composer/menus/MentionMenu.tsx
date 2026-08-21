@@ -137,7 +137,11 @@ function MentionMenuHeader({ state, q }: MentionMenuHeaderProps) {
           Esc
         </kbd>
       </div>
-      <div role="tablist" aria-label={t('mention.tablistLabel')} className="mt-2.5 grid grid-cols-5 gap-1 rounded-md bg-bg-hover p-1">
+      {/* Content-sized, never equal fifths: a fixed 440px menu split five ways leaves ~42px per
+          label, which fits CJK category names and clips every English one. Wrapping is the
+          graceful failure if a future label or locale still overruns the row — truncating a
+          filter chip down to "Sessio…" is not. */}
+      <div role="tablist" aria-label={t('mention.tablistLabel')} className="mt-2.5 flex flex-wrap gap-1 rounded-md bg-bg-hover p-1">
         {MENTION_SCOPES.map((scope) => (
           <button
             key={scope}
@@ -146,7 +150,7 @@ function MentionMenuHeader({ state, q }: MentionMenuHeaderProps) {
             aria-selected={state.scope === scope}
             onClick={() => state.setScope(scope)}
             className={cn(
-              'flex h-7 min-w-0 items-center justify-center gap-1 rounded px-2 text-xs font-medium text-text-tertiary transition-colors',
+              'flex h-7 min-w-0 shrink-0 items-center justify-center gap-1 rounded px-2 text-xs font-medium text-text-tertiary transition-colors',
               state.scope === scope && 'bg-bg-elevated text-text-primary shadow-sm',
             )}
           >
