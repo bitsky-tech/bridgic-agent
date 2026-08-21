@@ -271,6 +271,7 @@ class MainThink(CognitiveWorker):
         ota_context._current_record().think_scope = {
             "mode": status.mode,
             "stage": status.stage,
+            "session_history": "all_stages",
         }
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
@@ -1345,14 +1346,13 @@ class WorkflowRunThink(MainThink):
             umbrella,
         )
 
-        turn_context, stage_boundary = self._stage_turn_context(
+        turn_context, _ = self._stage_turn_context(
             ota_context,
             "run_workflow",
             self.workflow_stage,
         )
         messages = [Message.from_text(system, role=Role.SYSTEM)]
-        if self.workflow_stage == "execute" and stage_boundary is None:
-            messages += await self.session_messages_block(ota_context, context)
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(turn_context, context)
         return messages
@@ -1864,9 +1864,7 @@ class ClarifyThink(BuildThink):
             SYSTEM  clarify persona
                     + <context> containing transcript, skills, artifacts, memory,
                       Build workspace, and Session workspace
-            ...     persisted session messages in their native roles on initial
-                    entry from Main; omitted after another Build stage hands back
-                    to Clarify
+            ...     persisted session messages in their native roles
             USER    current user input
             ...     current-Clarify assistant and tool-result messages
 
@@ -1885,15 +1883,14 @@ class ClarifyThink(BuildThink):
             umbrella,
         )
 
-        turn_context, stage_boundary = self._stage_turn_context(
+        turn_context, _ = self._stage_turn_context(
             ota_context,
             "build",
             "clarify",
         )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
-        if stage_boundary is None:
-            messages += await self.session_messages_block(ota_context, context)
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(turn_context, context)
         return messages
@@ -2128,8 +2125,8 @@ class ExploreThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, task artifact, user input, and the current
-            Explore trace.
+            Persona, live context, Session history, task artifact, user input,
+            and the current Explore trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2152,6 +2149,7 @@ class ExploreThink(BuildThink):
         )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(turn_context, context)
         return messages
@@ -2227,8 +2225,8 @@ class GenerateThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, upstream artifacts, user input, and the
-            current Generate trace.
+            Persona, live context, Session history, upstream artifacts, user
+            input, and the current Generate trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2252,6 +2250,7 @@ class GenerateThink(BuildThink):
         )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(turn_context, context)
         return messages
@@ -2319,8 +2318,8 @@ class VerifyThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, upstream artifacts, user input, and the
-            current Verify trace.
+            Persona, live context, Session history, upstream artifacts, user
+            input, and the current Verify trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2345,6 +2344,7 @@ class VerifyThink(BuildThink):
         )
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(turn_context, context)
         return messages

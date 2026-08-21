@@ -168,7 +168,7 @@ describe("rebuildPrompt", () => {
     expect(replay?.content).toContain("`content` (1201 characters)");
   });
 
-  test("uses Build-stage context and intentionally omits Session history in Explore", () => {
+  test("preserves the historical Session-history policy for earlier scoped Explore records", () => {
     const previous = turn("turn-previous", 0, "previous-conversation", []);
     const current = turn("turn-current", 1, "Explore it", [{ think_scope: { mode: "build", stage: "explore" } }], {
       agentState: { think: { mode: "build", stage: "explore" } },
@@ -207,6 +207,46 @@ describe("rebuildPrompt", () => {
       availableRounds: 3,
       omittedByStage: 2,
       historyModel: "stage_scoped",
+    });
+  });
+
+  test("keeps Session history in every stage when the persisted scope opts in", () => {
+    const previous = turn("turn-previous", 0, "Past Session request", []);
+    const current = turn("turn-current", 1, "Build it", [
+      { think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" }, think_result: { step_content: "Clarify history" } },
+      { think_scope: { mode: "build", stage: "explore", session_history: "all_stages" }, think_result: { step_content: "Explore history" } },
+      { think_scope: { mode: "build", stage: "explore", session_history: "all_stages" } },
+    ], { agentState: { think: { mode: "build", stage: "explore" } } });
+
+    const result = rebuildPrompt(request([previous, current], current.id, 2));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain("Past Session request");
+    expect(contents).toContain("Explore history");
+    expect(contents).not.toContain("Clarify history");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
+      omittedByStage: false,
+      historyModel: "all_stages",
+    });
+  });
+
+  test("keeps Session history in marked Workflow Validate while cropping Execute trace", () => {
+    const previous = turn("turn-previous", 0, "Past Workflow request", []);
+    const current = turn("turn-workflow", 1, "Run it", [
+      { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Execute history" } },
+      { think_scope: { mode: "run_workflow", stage: "validate", session_history: "all_stages" }, think_result: { step_content: "Validate history" } },
+      { think_scope: { mode: "run_workflow", stage: "validate", session_history: "all_stages" } },
+    ], { agentState: { think: { mode: "run_workflow", stage: "validate" } } });
+
+    const result = rebuildPrompt(request([previous, current], current.id, 2));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain("Past Workflow request");
+    expect(contents).toContain("Validate history");
+    expect(contents).not.toContain("Execute history");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
+      omittedByStage: false,
+      historyModel: "all_stages",
     });
   });
 

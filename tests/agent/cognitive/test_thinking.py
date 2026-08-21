@@ -16,14 +16,18 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
       "visible_checkpoint": {"content": "Fresh answer", "reasoning": "Fresh reasoning"},
       "returned": {"content": "Fresh answer", "tool": "read_file"},
       "usage": {"input_tokens": 11, "output_tokens": 3, "spent_tokens": 14},
-      "think_scope": {"mode": "build", "stage": "generate"}
+      "think_scope": {
+        "mode": "build",
+        "stage": "generate",
+        "session_history": "all_stages"
+      }
     }
 
     Checks:
     1. A provider retry removes stale visible output before replacement deltas arrive.
     2. The completed call returns its final content and Tool Call while retaining provider captures.
     3. Usage reaches the Turn totals, worker meter, and live event stream once.
-    4. The open OTA record identifies the cognitive mode and stage that produced it.
+    4. The open OTA record identifies its cognitive scope and Session-history policy.
     """
     ota_context = AmphiOTAContext(
         user_input="Continue generating the workflow",
@@ -106,8 +110,12 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         ("usage", {"input_tokens": 11, "output_tokens": 3})
     ]
 
-    # Check 4: The open OTA record identifies the cognitive mode and stage that produced it.
-    assert record.think_scope == {"mode": "build", "stage": "generate"}
+    # Check 4: The open OTA record identifies its cognitive scope and Session-history policy.
+    assert record.think_scope == {
+        "mode": "build",
+        "stage": "generate",
+        "session_history": "all_stages",
+    }
 
 
 def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:

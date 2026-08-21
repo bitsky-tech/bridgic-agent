@@ -73,13 +73,19 @@ function formatPromptTime(value: string | null | undefined): string {
 interface PersistedThinkScope {
   mode: string;
   stage: string;
+  sessionHistory?: string;
 }
 
 function persistedThinkScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
   const scope = record(round.think_scope ?? round.thinkScope);
   const mode = typeof scope?.mode === "string" ? scope.mode : "";
   const stage = typeof scope?.stage === "string" ? scope.stage : "";
-  return mode && stage ? { mode, stage } : undefined;
+  const sessionHistory = typeof scope?.session_history === "string"
+    ? scope.session_history
+    : typeof scope?.sessionHistory === "string"
+      ? scope.sessionHistory
+      : undefined;
+  return mode && stage ? { mode, stage, ...(sessionHistory ? { sessionHistory } : {}) } : undefined;
 }
 
 function legacyBuildScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
@@ -132,7 +138,13 @@ function inferStage(input: PromptRebuildInput, turn: PromptTurnSnapshot): Prompt
   return input.session.parentSessionId ? "child" : "main";
 }
 
-function stageUsesSessionHistory(stage: PromptStage, usesStageScope: boolean, hasStageBoundary: boolean): boolean {
+function stageUsesSessionHistory(
+  stage: PromptStage,
+  usesStageScope: boolean,
+  hasStageBoundary: boolean,
+  allStageSessionHistory: boolean,
+): boolean {
+  if (allStageSessionHistory) return true;
   if (["explore", "generate", "verify"].includes(stage)) return false;
   if (!usesStageScope) return true;
   if (stage === "workflow_validate") return false;
@@ -143,23 +155,39 @@ function stageUsesSessionHistory(stage: PromptStage, usesStageScope: boolean, ha
 function projectStageRounds(
   turn: PromptTurnSnapshot,
   targetRoundIndex: number,
-): { rounds: Record<string, unknown>[]; usesStageScope: boolean; hasStageBoundary: boolean } {
+): {
+  rounds: Record<string, unknown>[];
+  usesStageScope: boolean;
+  hasStageBoundary: boolean;
+  allStageSessionHistory: boolean;
+} {
   const priorRounds = turn.otaRecords.slice(0, targetRoundIndex);
   // Only think_scope proves that this request was assembled by the new
   // stage-scoped backend. Legacy build_stage identifies the worker but does
   // not prove that the historical request cropped earlier Turn rounds.
   const targetScope = persistedThinkScope(turn.otaRecords[targetRoundIndex] ?? {});
   if (!targetScope || !["build", "run_workflow"].includes(targetScope.mode)) {
-    return { rounds: priorRounds, usesStageScope: false, hasStageBoundary: false };
+    return {
+      rounds: priorRounds,
+      usesStageScope: false,
+      hasStageBoundary: false,
+      allStageSessionHistory: false,
+    };
   }
+  const allStageSessionHistory = targetScope.sessionHistory === "all_stages";
 
   for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
     const scope = roundThinkScope(priorRounds[index] ?? {});
     if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
-      return { rounds: priorRounds.slice(index + 1), usesStageScope: true, hasStageBoundary: true };
+      return {
+        rounds: priorRounds.slice(index + 1),
+        usesStageScope: true,
+        hasStageBoundary: true,
+        allStageSessionHistory,
+      };
     }
   }
-  return { rounds: priorRounds, usesStageScope: true, hasStageBoundary: false };
+  return { rounds: priorRounds, usesStageScope: true, hasStageBoundary: false, allStageSessionHistory };
 }
 
 function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot): string {
@@ -682,6 +710,7 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     stage,
     stageProjection.usesStageScope,
     stageProjection.hasStageBoundary,
+    stageProjection.allStageSessionHistory,
   );
   const history = includeSessionHistory ? sessionHistoryMessages(tail) : [];
   messages.push(...history);
@@ -698,6 +727,7 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       includedTurns: tail.length,
       recordLimit: SESSION_MESSAGE_RECORD_LIMIT,
       omittedByStage: !includeSessionHistory,
+      historyModel: stageProjection.allStageSessionHistory ? "all_stages" : "stage_default",
     },
   ));
 
