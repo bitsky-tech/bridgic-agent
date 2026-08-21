@@ -46,6 +46,9 @@ describe('FocusModeHeader', () => {
     expect(statusBar.style.height).toBe(`${SESSION_STATUS_BAR_HEIGHT_PX}px`)
     expect(statusBar.textContent).not.toContain('任务说明书')
     expect(statusBar.querySelector('button')).toBeNull()
+    expect(statusBar.querySelector('section')?.className).toContain('grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]')
+    expect(statusBar.querySelector('[data-testid="session-status-rail"]')?.className).toContain('justify-self-center')
+    expect(statusBar.querySelector('[data-testid="session-status-state"]')?.className).toContain('justify-self-end')
     expect(host.querySelector('[data-testid="full-stage-rail"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="compact-stage-rail"]')).toBeNull()
     expect(host.querySelector('[data-testid="focus-mode-capsule"]')).toBeNull()
@@ -169,7 +172,16 @@ describe('FocusModeHeader', () => {
       await act(async () => {
         resizeCallback?.([resizeEntry(belowCompact, belowCompact - 16)], {} as ResizeObserver)
       })
-      expect(host.querySelector('[data-testid="compact-stage-rail"]')).not.toBeNull()
+      const compactRail = host.querySelector<HTMLElement>('[data-testid="compact-stage-rail"]')!
+      expect(compactRail).not.toBeNull()
+      expect(compactRail.textContent).toBe('探路2/4')
+      expect(compactRail.querySelector('svg')).toBeNull()
+
+      const compactMarkup = compactRail.innerHTML
+      await act(async () => {
+        compactRail.dispatchEvent(new MouseEvent('mouseenter'))
+      })
+      expect(compactRail.innerHTML).toBe(compactMarkup)
 
       await act(async () => {
         resizeCallback?.([resizeEntry(inHysteresis, inHysteresis - 16)], {} as ResizeObserver)

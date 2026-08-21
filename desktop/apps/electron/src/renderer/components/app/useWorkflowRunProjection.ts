@@ -69,7 +69,7 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
           (block) => block.phase === 'execute' && block.stepIndex === index,
         )
         executionSteps.push(
-          known?.title || t('workflowRunHeader.fallbackExecutionStep', { index: index + 1 }),
+          known?.title || t('workflowRunDetails.fallbackExecutionStep', { index: index + 1 }),
         )
       }
     }
@@ -80,7 +80,7 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
           (block) => block.phase === 'validate' && block.stepIndex === index,
         )
         validationSteps.push(
-          known?.title || t('workflowRunHeader.fallbackValidationStep', { index: index + 1 }),
+          known?.title || t('workflowRunDetails.fallbackValidationStep', { index: index + 1 }),
         )
       }
     }
@@ -94,21 +94,21 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
       (block) => block.phase === phase && block.stepIndex === currentStepIndex,
     )
     let currentTitle =
-      currentBlock?.title ?? phaseSteps[currentStepIndex] ?? t('workflowRunHeader.initializing')
+      currentBlock?.title ?? phaseSteps[currentStepIndex] ?? t('workflowRunDetails.initializing')
     if (stageComplete) {
       if (phase === 'validate') {
-        currentTitle = t('workflowRunHeader.validationCompleteAwaitingEnd')
+        currentTitle = t('workflowRunDetails.validationCompleteAwaitingEnd')
       } else if (validationSteps.length > 0) {
-        currentTitle = t('workflowRunHeader.executionCompleteAwaitingValidation')
+        currentTitle = t('workflowRunDetails.executionCompleteAwaitingValidation')
       } else {
-        currentTitle = t('workflowRunHeader.executionCompleteAwaitingEnd')
+        currentTitle = t('workflowRunDetails.executionCompleteAwaitingEnd')
       }
     }
 
     return {
       workflowId,
       generation,
-      workflowName: run?.workflowName ?? latest?.workflowName ?? t('workflowRunHeader.title'),
+      workflowName: run?.workflowName ?? latest?.workflowName ?? t('workflowRunDetails.title'),
       phase,
       stepIndex,
       stageComplete,

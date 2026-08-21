@@ -385,11 +385,8 @@
     "building": "构建中",
     "closeTaskSpec": "关闭任务说明书",
     "collapse": "收起",
-    "completed": "已完成",
-    "inProgress": "进行中",
     "preparing": "准备中",
     "preparingDescription": "正在准备工作流构建环境",
-    "progress": "构建进度",
     "stageDescriptions": {
       "clarify": "对齐需求，锁定说明书",
       "explore": "实地探查目标环境结构",
@@ -2340,9 +2337,7 @@
       "title": "任务说明书"
     }
   },
-  "workflowRunHeader": {
-    "closeDetails": "关闭运行详情",
-    "collapse": "收起",
+  "workflowRunDetails": {
     "detail": {
       "awaiting": "等待执行",
       "completed": "已完成",
@@ -2361,9 +2356,7 @@
     "overallProgress": "总进度",
     "phase": {
       "execute": "执行",
-      "executeDescription": "按工作流步骤完成任务",
-      "validate": "验证",
-      "validateDescription": "检查运行结果是否符合预期"
+      "validate": "验证"
     },
     "phaseAria": "工作流运行阶段",
     "progress": {
@@ -2377,7 +2370,6 @@
       "running": "运行中",
       "stopped": "已停止"
     },
-    "summary": "{{completed}} 步完成 · {{calls}} 次调用",
     "title": "工作流运行",
     "toolCalls": "工具调用",
     "unit": {

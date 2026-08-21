@@ -11,7 +11,6 @@ import {
   isFocusMode,
   loadSessionBriefAtom,
 } from '@/atoms/build'
-import { Icons } from '@/components/amphi/Icons'
 import { SessionStatusBar } from './SessionStatusBar'
 import { StageRail } from './StageRail'
 
@@ -46,14 +45,14 @@ export interface FocusStageRailProps {
   stage: string | null
   /** Whether the current session is streaming (breathing dot on the active node). */
   streaming: boolean
-  /** Narrow column (brief preview open) switches to compact: progress bar + hover to see all four stages. */
+  /** Narrow columns switch to a compact progress bar with the current stage. */
   compact?: boolean
 }
 
 /** Horizontal stage rail: task creation → explore → generate → verify, driven by the real thinking
  *  position (`stage`). When `stage` is outside the four segments (null / unknown), indexOf falls back
  *  to -1, all four are pending and there is no active node. With compact=true it collapses into a
- *  compact progress bar + hover overlay (CompactStageRail). */
+ *  compact progress bar (CompactStageRail). */
 export function FocusStageRail({ stage, streaming, compact = false }: FocusStageRailProps) {
   const { t } = useTranslation()
   const current = stage === null ? -1 : (BUILD_STAGES as readonly string[]).indexOf(stage)
@@ -71,20 +70,6 @@ export function FocusStageRail({ stage, streaming, compact = false }: FocusStage
   )
 }
 
-/** Three-state colouring for the circles — the full rail has moved to the shared `StageRail`, this is left for the compact hover overlay. */
-function stageDotClass(done: boolean, active: boolean): string {
-  if (done) return 'bg-brand-blue text-white'
-  if (active) return 'bg-bg-elevated text-text-accent border-[1.5px] border-brand-blue'
-  return 'bg-stage-track text-text-tertiary'
-}
-
-/** Three-state weight/colour for the stage name (same as above, only the compact overlay uses it). */
-function stageTextClass(done: boolean, active: boolean): string {
-  if (active) return 'font-semibold text-text-primary'
-  if (done) return 'font-medium text-text-primary'
-  return 'font-medium text-text-tertiary'
-}
-
 /** Background of one compact progress-bar segment (done/active/pending; a helper to avoid a nested ternary, §1.24). */
 function compactBarClass(done: boolean, active: boolean): string {
   if (done) return 'bg-brand-blue/50'
@@ -92,75 +77,9 @@ function compactBarClass(done: boolean, active: boolean): string {
   return 'bg-stage-track'
 }
 
-/** Contents of a stage dot in the hover overlay (done → check / active → breathing dot / pending → index). */
-function StageDotMark({ done, active, index }: { done: boolean; active: boolean; index: number }) {
-  if (done) return Icons.check(9)
-  if (active) return <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-pulse" />
-  return <span className="text-2xs font-bold">{index + 1}</span>
-}
-
-/** One row of the hover overlay: dot + stage name + status label + description. */
-function CompactStageRow({
-  stage,
-  done,
-  active,
-}: {
-  stage: (typeof BUILD_STAGES)[number]
-  done: boolean
-  active: boolean
-}) {
-  const { t } = useTranslation()
-  const index = (BUILD_STAGES as readonly string[]).indexOf(stage)
-  return (
-    <div className={cn('flex items-start gap-2.5 px-3 py-1.5 rounded-md', active && 'bg-accent-blue-subtle')}>
-      <span
-        className={cn(
-          'shrink-0 mt-px w-4 h-4 rounded-full flex items-center justify-center text-2xs font-bold',
-          stageDotClass(done, active),
-        )}
-      >
-        <StageDotMark done={done} active={active} index={index} />
-      </span>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className={cn('text-xs', stageTextClass(done, active))}>{t(`focusMode.stages.${stage}`)}</span>
-          {done && <span className="text-2xs text-text-accent font-semibold">{t('focusMode.completed')}</span>}
-          {active && <span className="text-2xs text-text-accent font-semibold">{t('focusMode.inProgress')}</span>}
-        </div>
-        <div className="text-xs text-text-tertiary leading-snug mt-px">{t(`focusMode.stageDescriptions.${stage}`)}</div>
-      </div>
-    </div>
-  )
-}
-
-/** Hover overlay: title + progress + the four-stage list (so a narrow column can still see everything at once). */
-function CompactStageHover({ current, streaming }: { current: number; streaming: boolean }) {
-  const { t } = useTranslation()
-  const total = BUILD_STAGES.length
-  return (
-    <div className="absolute top-[calc(100%+8px)] left-0 z-50 w-64 bg-bg-elevated border border-border-default rounded-lg shadow-md p-1.5 pt-3">
-      <div className="flex items-center gap-1.5 px-3 pb-2 mb-1 border-b border-border-subtle">
-        <span className="text-sm font-bold text-text-primary">{t('focusMode.progress')}</span>
-        <span className="text-xs text-text-tertiary font-mono">
-          {Math.min(current + 1, total)}/{total}
-        </span>
-        {streaming && (
-          <span className="ml-auto flex items-center gap-1 text-2xs font-semibold text-text-accent">
-            <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-pulse" /> {t('focusMode.inProgress')}
-          </span>
-        )}
-      </div>
-      {BUILD_STAGES.map((stage, i) => (
-        <CompactStageRow key={stage} stage={stage} done={i < current} active={i === current} />
-      ))}
-    </div>
-  )
-}
-
-/** Compact stage rail: progress bar + current stage name + N/total + ⌄; hovering shows the full four-stage overlay. */
+/** Compact stage rail: progress bar + current stage name + N/total. */
 function CompactStageRail({ current, streaming }: { current: number; streaming: boolean }) {
   const { t } = useTranslation()
-  const [hover, setHover] = useState(false)
   const total = BUILD_STAGES.length
   const labels = BUILD_STAGES.map((stage) => t(`focusMode.stages.${stage}`))
   const shownLabel = labels[Math.min(current, total - 1)] ?? ''
@@ -173,15 +92,11 @@ function CompactStageRail({ current, streaming }: { current: number; streaming: 
       // parent is `flex-1` (basis:0%), and flex-shrink is weighted by basis — a basis of 0 does not
       // participate in shrinking at all, it only claims "leftover space" and can be squeezed to nearly
       // zero when space is tight. So the constraint has to be absorbed by this rail itself.
-      className="relative flex min-w-0"
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className="flex min-w-0"
     >
       {/* min-w-0 propagates the shrink down to the stage name's truncate; overflow-hidden is the last
-          resort — when it gets so narrow that even progress bar + counter + arrow do not fit, we would
-          rather clip than overflow and cover the buttons. It sits on this level rather than on the outer
-          relative: the hover overlay is a **sibling** of this div and hangs off the outer element, so
-          clipping here does not clip the overlay away too. */}
+          resort — when it gets so narrow that even the progress bar and counter do not fit, clipping is
+          preferable to covering the buttons. */}
       <div className="flex items-center gap-2.5 py-0.5 min-w-0 overflow-hidden">
         <div className="flex gap-[3px] shrink-0">
           {BUILD_STAGES.map((stage, i) => (
@@ -203,10 +118,8 @@ function CompactStageRail({ current, streaming }: { current: number; streaming: 
           <span className="text-xs text-text-tertiary font-mono whitespace-nowrap shrink-0">
             {Math.min(current + 1, total)}/{total}
           </span>
-          <span className="flex text-text-tertiary shrink-0">{Icons.chevronDown(12)}</span>
         </div>
       </div>
-      {hover && <CompactStageHover current={current} streaming={streaming} />}
     </div>
   )
 }

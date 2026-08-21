@@ -2,43 +2,30 @@
  * Skeleton of the session status bar — the **only** implementation of "how the
  * top strip is laid out" in this project.
  *
- * The Build header (`FocusModeHeader`) and the Workflow run header
- * (`WorkflowRunHeader`) used to be two heavily duplicated copies. When fixing
- * "the stage rail covers the right-hand buttons", only the Workflow copy was
- * fixed (its comment spelled out the cause very clearly); the Build copy was
- * left untouched — it took two user screenshots to catch it. Once the skeleton
- * was converged there is a single place holding the layout invariants, so
- * "fix one, forget the other" cannot happen.
+ * Build is the only Session mode with a top status rail. Workflow execution
+ * reports progress in its transcript and optional right-side details pane.
  *
- * Three-column layout and each column's flex strategy (**this is the entire
- * point of this file**):
+ * Full-density layout (**this is the entire point of this file**):
  *
- *   [left flex-1 min-w-0]     [center flex-[1_0_auto]]   [right shrink-0]
- *   icon+title+badge / desc    stage rail (fixed width)   status + buttons
+ *   [left minmax(0, 1fr)]       [center auto]            [right minmax(0, 1fr)]
+ *   icon+title+badge / desc      fixed-width stage rail   status
  *
- *   - **The center column MUST be `flex-[1_0_auto]`, never `flex-1`**.
- *     `flex-1` has a basis of 0%, and flex-shrink is weighted by basis — a
- *     basis of 0 does not participate in shrinking, it only claims "leftover
- *     space", so under pressure it is computed as 0 wide. Everything inside
- *     the rail is `shrink-0 whitespace-nowrap`, so the whole rail overflows
- *     and covers the status text and buttons on the right (in the user's
- *     screenshots "④Validate" sat on top of "Building", and the compact rail's
- *     "2/4" sat on top of "Collapse" — both are this one cause).
- *   - **The left column absorbs the leftover** (`flex-1 min-w-0` plus internal
- *     truncate). The rail is fixed content: if it does not fit, the only
- *     option is to degrade it; the title is elastic content with truncate as a
- *     fallback — so the title is what should give way. It used to be the other
- *     way round: the title got a fixed basis (28rem) and the rail took the
- *     leftover, which is exactly why the rail got squeezed away.
+ *   - The equal outer tracks keep the rail's geometric center on the status
+ *     bar's center, regardless of the different widths of the identity and
+ *     status content. A flex layout with two independently sized outer columns
+ *     made the rail drift right as the header became wider.
+ *   - The left column truncates and the right column aligns to its outer edge.
+ *     Consumers switch to compact mode before either side can collide with the
+ *     fixed-width rail.
  *   - **`overflow-hidden` on the outer element** is the final backstop: when
  *     the left column has truncated as far as it can and still does not fit,
  *     we would rather clip than let content overflow and cover things.
  *   - The title and badge must be `shrink-0 whitespace-nowrap`, otherwise they
  *     blow out the left column while it shrinks.
  *
- * Not responsible for: the shape of the stage rail and its degradation (passed
- * in by the consumer via `rail`; Build swaps in a compact rail in narrow
- * containers), or the content and open/closed state of right-column detail panes.
+ * Compact density continues to use flex because its rail is intentionally
+ * shrinkable and the status column is omitted. This component is not
+ * responsible for the rail's internal shape or responsive thresholds.
  */
 
 import type { ReactNode, Ref } from 'react'
@@ -61,8 +48,6 @@ export interface SessionStatusBarProps {
   status?: ReactNode
   /** Compact mode: tighter horizontal padding and column gaps. */
   isCompact?: boolean
-  /** Narrow mode: preserve only the title and rail; the rail owns progress. */
-  isNarrow?: boolean
   /** Root node ref — used by consumers to measure width for responsive breakpoints. */
   rootRef?: Ref<HTMLDivElement>
   testId?: string
@@ -76,7 +61,6 @@ export function SessionStatusBar({
   rail,
   status,
   isCompact = false,
-  isNarrow = false,
   rootRef,
   testId,
 }: SessionStatusBarProps) {
@@ -88,12 +72,6 @@ export function SessionStatusBar({
     horizontalPadding = 'px-4'
     columnGap = 'gap-3'
   }
-  if (isNarrow) {
-    density = 'narrow'
-    horizontalPadding = 'px-3'
-    columnGap = 'gap-2'
-  }
-
   return (
     <div
       ref={rootRef}
@@ -107,12 +85,16 @@ export function SessionStatusBar({
     >
       <section
         className={cn(
-          'flex h-full min-w-0 items-center overflow-hidden',
+          'h-full min-w-0 items-center overflow-hidden',
+          isCompact ? 'flex' : 'grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]',
           columnGap,
         )}
       >
         <div
-          className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden"
+          className={cn(
+            'flex min-w-0 items-center gap-2.5 overflow-hidden',
+            isCompact && 'flex-1',
+          )}
           data-testid="session-status-identity"
         >
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[image:var(--brand-gradient)] text-white shadow-sm">
@@ -124,29 +106,30 @@ export function SessionStatusBar({
                 {title}
               </span>
               <span
-                className={cn('shrink-0', isNarrow && 'hidden')}
+                className="shrink-0"
                 data-testid="session-status-badge"
               >
                 {badge}
               </span>
             </div>
-            {!isNarrow && (
-              <Tooltip content={description} onlyWhenTruncated>
-                <div className="mt-0.5 truncate text-xs text-text-tertiary">{description}</div>
-              </Tooltip>
-            )}
+            <Tooltip content={description} onlyWhenTruncated>
+              <div className="mt-0.5 truncate text-xs text-text-tertiary">{description}</div>
+            </Tooltip>
           </div>
         </div>
 
         <div
-          className={cn(isNarrow ? 'shrink-0 overflow-hidden' : 'flex-[1_0_auto]')}
+          className={cn(
+            isCompact && 'flex-[1_0_auto]',
+            !isCompact && 'justify-self-center',
+          )}
           data-testid="session-status-rail"
         >
           {rail}
         </div>
 
         {!isCompact && status && (
-          <div className="flex shrink-0 items-center gap-2" data-testid="session-status-state">
+          <div className="flex shrink-0 items-center justify-self-end gap-2" data-testid="session-status-state">
             {status}
           </div>
         )}
