@@ -70,11 +70,47 @@ function formatPromptTime(value: string | null | undefined): string {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())} (UTC${sign}${two(Math.floor(absolute / 60))}:${two(absolute % 60)})`;
 }
 
+interface PersistedThinkScope {
+  mode: string;
+  stage: string;
+}
+
+function persistedThinkScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
+  const scope = record(round.think_scope ?? round.thinkScope);
+  const mode = typeof scope?.mode === "string" ? scope.mode : "";
+  const stage = typeof scope?.stage === "string" ? scope.stage : "";
+  return mode && stage ? { mode, stage } : undefined;
+}
+
+function legacyBuildScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
+  const stage = round.build_stage ?? round.buildStage;
+  return typeof stage === "string" && ["clarify", "explore", "generate", "verify"].includes(stage)
+    ? { mode: "build", stage }
+    : undefined;
+}
+
+function roundThinkScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
+  return persistedThinkScope(round) ?? legacyBuildScope(round);
+}
+
 function inferStage(input: PromptRebuildInput, turn: PromptTurnSnapshot): PromptStage {
   const target = turn.otaRecords[input.targetRoundIndex];
   if (!target) throw new PromptRebuildError("ROUND_NOT_FOUND", `Round ${input.targetRoundIndex} does not exist in Turn ${turn.id}.`);
-  const hasBuildMarker = Object.prototype.hasOwnProperty.call(target, "build_stage");
-  const buildStage = target.build_stage;
+  const thinkScope = persistedThinkScope(target);
+  if (thinkScope?.mode === "build" && ["clarify", "explore", "generate", "verify"].includes(thinkScope.stage)) {
+    return thinkScope.stage as PromptStage;
+  }
+  if (thinkScope?.mode === "run_workflow") {
+    return thinkScope.stage === "validate" ? "workflow_validate" : "workflow_execute";
+  }
+  if (thinkScope) {
+    return input.session.parentSessionId ? "child" : "main";
+  }
+
+  // Backward compatibility for records written before think_scope existed.
+  const hasBuildMarker = Object.prototype.hasOwnProperty.call(target, "build_stage")
+    || Object.prototype.hasOwnProperty.call(target, "buildStage");
+  const buildStage = target.build_stage ?? target.buildStage;
   if (typeof buildStage === "string" && ["clarify", "explore", "generate", "verify"].includes(buildStage)) {
     return buildStage as PromptStage;
   }
@@ -96,8 +132,34 @@ function inferStage(input: PromptRebuildInput, turn: PromptTurnSnapshot): Prompt
   return input.session.parentSessionId ? "child" : "main";
 }
 
-function stageUsesSessionHistory(stage: PromptStage): boolean {
-  return !["explore", "generate", "verify"].includes(stage);
+function stageUsesSessionHistory(stage: PromptStage, usesStageScope: boolean, hasStageBoundary: boolean): boolean {
+  if (["explore", "generate", "verify"].includes(stage)) return false;
+  if (!usesStageScope) return true;
+  if (stage === "workflow_validate") return false;
+  if (["clarify", "workflow_execute"].includes(stage)) return !hasStageBoundary;
+  return true;
+}
+
+function projectStageRounds(
+  turn: PromptTurnSnapshot,
+  targetRoundIndex: number,
+): { rounds: Record<string, unknown>[]; usesStageScope: boolean; hasStageBoundary: boolean } {
+  const priorRounds = turn.otaRecords.slice(0, targetRoundIndex);
+  // Only think_scope proves that this request was assembled by the new
+  // stage-scoped backend. Legacy build_stage identifies the worker but does
+  // not prove that the historical request cropped earlier Turn rounds.
+  const targetScope = persistedThinkScope(turn.otaRecords[targetRoundIndex] ?? {});
+  if (!targetScope || !["build", "run_workflow"].includes(targetScope.mode)) {
+    return { rounds: priorRounds, usesStageScope: false, hasStageBoundary: false };
+  }
+
+  for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
+    const scope = roundThinkScope(priorRounds[index] ?? {});
+    if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
+      return { rounds: priorRounds.slice(index + 1), usesStageScope: true, hasStageBoundary: true };
+    }
+  }
+  return { rounds: priorRounds, usesStageScope: true, hasStageBoundary: false };
 }
 
 function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot): string {
@@ -581,10 +643,13 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   }
 
   const stage = inferStage(input, target);
-  const stageLimitations = stage.startsWith("workflow_")
+  const targetRound = target.otaRecords[input.targetRoundIndex] ?? {};
+  const hasPersistedWorkflowScope = persistedThinkScope(targetRound)?.mode === "run_workflow";
+  const stageLimitations = stage.startsWith("workflow_") && !hasPersistedWorkflowScope
     ? ["Workflow stage is inferred from the Turn-level final agent_state because OTA records do not persist a per-round Workflow stage marker."]
     : [];
   const priorRounds = target.otaRecords.slice(0, input.targetRoundIndex);
+  const stageProjection = projectStageRounds(target, input.targetRoundIndex);
   const toolSurface = selectToolSurface(stage, target, priorRounds, input.toolCatalog);
   const persona = renderPersona(stage, toolSurface.tools.map((tool) => tool.name), input.personas);
   const tail = selectSessionTail(input.turns, target);
@@ -613,7 +678,12 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   ];
 
   const historyStart = messages.length;
-  const history = stageUsesSessionHistory(stage) ? sessionHistoryMessages(tail) : [];
+  const includeSessionHistory = stageUsesSessionHistory(
+    stage,
+    stageProjection.usesStageScope,
+    stageProjection.hasStageBoundary,
+  );
+  const history = includeSessionHistory ? sessionHistoryMessages(tail) : [];
   messages.push(...history);
   components.push(component(
     "session-history",
@@ -627,7 +697,7 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     {
       includedTurns: tail.length,
       recordLimit: SESSION_MESSAGE_RECORD_LIMIT,
-      omittedByStage: !stageUsesSessionHistory(stage),
+      omittedByStage: !includeSessionHistory,
     },
   ));
 
@@ -653,7 +723,7 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   ));
 
   const turnStart = messages.length;
-  const turnMessages = currentTurnMessages(priorRounds, toolSurface.tools);
+  const turnMessages = currentTurnMessages(stageProjection.rounds, toolSurface.tools);
   messages.push(...turnMessages);
   components.push(component(
     "current-turn",
@@ -664,7 +734,12 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     ["session_turns.ota_records"],
     "reconstructed",
     [],
-    { completedRounds: priorRounds.length },
+    {
+      completedRounds: stageProjection.rounds.length,
+      availableRounds: priorRounds.length,
+      omittedByStage: priorRounds.length - stageProjection.rounds.length,
+      historyModel: stageProjection.usesStageScope ? "stage_scoped" : "legacy_full_turn",
+    },
   ));
 
   components.push(component(

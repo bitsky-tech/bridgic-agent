@@ -170,7 +170,7 @@ export const zhCN = {
   'prompt.block.tools': '工具定义',
   'prompt.block.toolsDescription': '与原生 Message 列表并列发送的函数工具定义。',
   'prompt.caveat.personaRevision': 'Persona 与当前固定 Prompt 快照一致，但 state.db 没有记录这个历史 Turn 当时使用的代码版本。',
-  'prompt.caveat.workflowStage': 'state.db 没有可靠的逐 Round Workflow 阶段标记，因此这里的阶段来自推断。',
+  'prompt.caveat.workflowStage': '这条旧记录没有逐 Round Workflow 阶段标记，因此这里的阶段来自推断。',
   'prompt.caveat.workDirectory': '历史工作目录没有被采集，只能根据 Session 工作区推断。',
   'prompt.caveat.mounts': '这个 Round 当时挂载的路径未持久化，挂载列表可能不完整。',
   'prompt.caveat.runtimeEnvironment': '当时的操作系统、Shell、Node 与 Python 环境没有被持久化。',

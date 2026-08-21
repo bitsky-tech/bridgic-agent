@@ -168,7 +168,7 @@ export const en = {
   'prompt.block.tools': 'Tool definitions',
   'prompt.block.toolsDescription': 'Function definitions sent separately alongside the native message list.',
   'prompt.caveat.personaRevision': 'The persona matches the current pinned prompt snapshot, but state.db does not record the code revision used by this historical Turn.',
-  'prompt.caveat.workflowStage': 'state.db has no reliable per-Round Workflow stage marker, so this stage was inferred.',
+  'prompt.caveat.workflowStage': 'This older record has no per-Round Workflow stage marker, so this stage was inferred.',
   'prompt.caveat.workDirectory': 'The historical work directory was not captured and was inferred from the Session workspace.',
   'prompt.caveat.mounts': 'The exact mounted paths at this Round were not persisted; the mount list may be incomplete.',
   'prompt.caveat.runtimeEnvironment': 'The historical OS, shell, Node, and Python environment was not persisted.',
