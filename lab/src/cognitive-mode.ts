@@ -40,12 +40,41 @@ function workflowStageFromResult(round: OtaRound): WorkflowCognitiveStage | null
   return null
 }
 
+function persistedThinkScope(round: OtaRound): { mode: string; stage: string } | null {
+  const scope = object(round.raw.think_scope ?? round.raw.thinkScope)
+  const mode = string(scope?.mode)
+  const stage = string(scope?.stage)
+  return mode && stage ? { mode, stage } : null
+}
+
 /** Resolve the cognitive worker that produced one persisted OTA round. */
 export function resolveRoundCognitiveMode(round: OtaRound, context: CognitiveModeContext): CognitiveModeDescriptor {
   if (context.parentSessionId) {
     return { id: 'child-agent', mode: 'normal', stage: 'child' }
   }
 
+  // Current backends persist the exact cognitive worker on every OTA round.
+  // Prefer it over the Turn-level state, which only describes the final round.
+  const thinkScope = persistedThinkScope(round)
+  if (thinkScope) {
+    const persistedBuildStage = thinkScope.mode === 'build'
+      ? buildStage(thinkScope.stage)
+      : null
+    if (persistedBuildStage) {
+      return { id: `build-${persistedBuildStage}`, mode: 'build', stage: persistedBuildStage }
+    }
+    if (thinkScope.mode === 'run_workflow'
+      && (thinkScope.stage === 'execute' || thinkScope.stage === 'validate')) {
+      return {
+        id: `workflow-${thinkScope.stage}`,
+        mode: 'run_workflow',
+        stage: thinkScope.stage,
+      }
+    }
+    return { id: 'general-agent', mode: 'normal', stage: 'main' }
+  }
+
+  // Backward compatibility for records written before think_scope existed.
   const rawBuildStage = round.raw.build_stage ?? round.raw.buildStage
   const persistedBuildStage = buildStage(rawBuildStage)
   if (persistedBuildStage) {

@@ -43,13 +43,34 @@ describe('resolveRoundCognitiveMode', () => {
   })
 
   test.each(['clarify', 'explore', 'generate', 'verify'] as const)(
-    'uses the per-round Build marker for %s',
+    'uses the per-round think_scope marker for Build %s',
     (stage) => {
-      expect(resolveRoundCognitiveMode(round({ build_stage: stage }), {
+      expect(resolveRoundCognitiveMode(round({ think_scope: { mode: 'build', stage } }), {
         agentState: { think: { mode: 'build', stage: 'verify' } },
       })).toEqual({ id: `build-${stage}`, mode: 'build', stage })
     },
   )
+
+  test.each(['execute', 'validate'] as const)(
+    'uses the per-round think_scope marker for Workflow %s',
+    (stage) => {
+      expect(resolveRoundCognitiveMode(round({ think_scope: { mode: 'run_workflow', stage } }), {
+        agentState: { think: { mode: 'run_workflow', stage: 'validate' } },
+      })).toEqual({ id: `workflow-${stage}`, mode: 'run_workflow', stage })
+    },
+  )
+
+  test('does not apply a later Turn-level mode to a scoped normal round', () => {
+    expect(resolveRoundCognitiveMode(round({ think_scope: { mode: 'normal', stage: 'main' } }), {
+      agentState: { think: { mode: 'build', stage: 'explore' } },
+    })).toEqual({ id: 'general-agent', mode: 'normal', stage: 'main' })
+  })
+
+  test('keeps supporting the legacy per-round Build marker', () => {
+    expect(resolveRoundCognitiveMode(round({ build_stage: 'generate' }), {
+      agentState: { think: { mode: 'build', stage: 'verify' } },
+    })).toEqual({ id: 'build-generate', mode: 'build', stage: 'generate' })
+  })
 
   test('does not apply a later Turn-level Build stage to a marked normal round', () => {
     expect(resolveRoundCognitiveMode(round({ build_stage: null }), {

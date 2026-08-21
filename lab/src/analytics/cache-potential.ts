@@ -172,9 +172,15 @@ function commonPrefixLength(left: string, right: string): number {
   return index
 }
 
-function estimatedTokens(text: string, reusable = false): number {
+export function estimatePromptTokens(text: string): number {
   const bytes = new TextEncoder().encode(text).byteLength
-  return reusable ? Math.floor(bytes / 4) : Math.max(1, Math.ceil(bytes / 4))
+  return bytes === 0 ? 0 : Math.ceil(bytes / 4)
+}
+
+function estimatedTokens(text: string, reusable = false): number {
+  if (!reusable) return estimatePromptTokens(text)
+  const bytes = new TextEncoder().encode(text).byteLength
+  return Math.floor(bytes / 4)
 }
 
 function differenceAt(request: LinearRequest, offset: number): PromptCacheFirstDifference | null {

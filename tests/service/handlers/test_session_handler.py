@@ -3,7 +3,8 @@ from pathlib import Path
 import httpx
 
 from src.amphi_service.auth import LOCAL_USER_ID
-from src.amphi_store import SessionTurnRepository, TurnStatus, UserInput
+from src.amphi_service.handler._session_handler import _turn_messages
+from src.amphi_store import SessionTurnRecord, SessionTurnRepository, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
 
 
@@ -11,6 +12,52 @@ async def create_session(service_client: httpx.AsyncClient, model: str = "test-m
     response = await service_client.post("/sessions", json={"model": model})
     assert response.status_code == 201
     return response.json()
+
+
+def test_think_scope_projects_build_stage_boundaries() -> None:
+    """Generic cognitive scopes preserve the existing Build-stage message projection."""
+    turn = SessionTurnRecord(
+        id="turn-think-scope",
+        user_id=LOCAL_USER_ID,
+        session_id="session-think-scope",
+        session_ordinal=0,
+        user_input=UserInput(text="Build a workflow"),
+        ota_records=[
+            {
+                "think_scope": {"mode": "normal", "stage": "main"},
+                "think_result": {"step_content": "Entering Build", "tool_calls": []},
+            },
+            {
+                "think_scope": {"mode": "build", "stage": "clarify"},
+                "think_result": {"step_content": "Clarifying", "tool_calls": []},
+            },
+            {
+                "think_scope": {"mode": "build", "stage": "explore"},
+                "think_result": {"step_content": "Exploring", "tool_calls": []},
+            },
+            {
+                "think_scope": {"mode": "normal", "stage": "main"},
+                "think_result": {"step_content": "Build paused", "tool_calls": []},
+            },
+        ],
+        agent_state={"think": {"mode": "normal", "stage": "main"}},
+        status=TurnStatus.COMPLETED,
+    )
+
+    messages = _turn_messages(
+        turn.session_id,
+        0,
+        turn,
+        0,
+        is_last=True,
+        subagents={},
+        show_pending_interaction=True,
+    )
+    assert [
+        block["stage"]
+        for block in messages[0]["blocks"]
+        if block.get("type") == "build_stage"
+    ] == ["clarify", "explore", None]
 
 
 async def test_create_session(service_client: httpx.AsyncClient, test_sandbox: IsolatedPaths) -> None:

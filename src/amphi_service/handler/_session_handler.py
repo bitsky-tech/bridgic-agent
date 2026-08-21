@@ -669,12 +669,22 @@ def _turn_messages(
         entered_workflow = False
         workflow_report_index: Optional[int] = None
         workflow_report_terminal = False
-        # Every new cognitive round records its source Build stage before thinking.
-        # Consecutive rounds in one Build stage share a heading; a different
-        # stage starts a new ordered section, while leaving Build emits a hidden
-        # boundary so subsequent Main content is not folded under Verify.
-        if isinstance(round_, dict) and "build_stage" in round_:
-            build_stage = str(round_.get("build_stage") or "").strip() or None
+        # Every new cognitive round records its source mode and stage before
+        # thinking. Build rounds project that generic scope into the existing UI
+        # headings; older persisted rounds retain the legacy build_stage field.
+        if isinstance(round_, dict) and (
+            isinstance(round_.get("think_scope"), dict)
+            or "build_stage" in round_
+        ):
+            scope = round_.get("think_scope")
+            if isinstance(scope, dict):
+                build_stage = (
+                    str(scope.get("stage") or "").strip() or None
+                    if scope.get("mode") == "build"
+                    else None
+                )
+            else:
+                build_stage = str(round_.get("build_stage") or "").strip() or None
             if build_stage != active_build_stage:
                 if build_stage is not None or active_build_stage is not None:
                     blocks.append({"type": "build_stage", "stage": build_stage})

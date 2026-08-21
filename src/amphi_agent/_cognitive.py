@@ -266,12 +266,13 @@ class MainThink(CognitiveWorker):
     # The main worker's observe-think-act agent loop
     ############################################################################
     async def thinking(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Dict[str, Any]], str]:
-        # Persist the source Build unit before it can switch stages. Explicit
-        # None closes a Build section; an absent field identifies old records.
+        # Persist the source cognitive scope before this round can switch state.
         status = ota_context.think_status
-        ota_context._current_record().build_stage = (
-            status.stage if isinstance(status, BuildStageState) else None
-        )
+        ota_context._current_record().think_scope = {
+            "mode": status.mode,
+            "stage": status.stage,
+            "session_history": "all_stages",
+        }
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
@@ -421,6 +422,35 @@ class MainThink(CognitiveWorker):
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
         messages += self.turn_messages_block(ota_context, context)
         return messages
+
+    @staticmethod
+    def _record_think_scope(record: Any) -> Optional[Tuple[str, str]]:
+        """Return one round's cognitive mode and stage, including legacy Build records."""
+        scope = _view(record, "think_scope")
+        mode = str(_view(scope, "mode") or "").strip()
+        stage = str(_view(scope, "stage") or "").strip()
+        if mode and stage:
+            return mode, stage
+        legacy_build_stage = str(_view(record, "build_stage") or "").strip()
+        return ("build", legacy_build_stage) if legacy_build_stage else None
+
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Project this Turn from the latest different stage in the same cognitive mode."""
+        stage_boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (scope := self._record_think_scope(ota_context.ota_record[index]))
+                is not None
+                and scope[0] == mode
+                and scope[1] != stage
+            )
+        ), None)
+        if stage_boundary is None:
+            return ota_context, None
+        return ota_context.model_copy(update={
+            "ota_record": ota_context.ota_record[stage_boundary + 1:],
+        }), stage_boundary
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
         """Render Main context from the most stable prefix to live round state."""
@@ -1316,10 +1346,15 @@ class WorkflowRunThink(MainThink):
             umbrella,
         )
 
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "run_workflow",
+            self.workflow_stage,
+        )
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
@@ -1819,7 +1854,8 @@ class ClarifyThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, conversation, user input, and turn trace.
+            Persona, live context, stage-scoped conversation, user input, and
+            turn trace.
 
         Notes
         -----
@@ -1830,7 +1866,7 @@ class ClarifyThink(BuildThink):
                       Build workspace, and Session workspace
             ...     persisted session messages in their native roles
             USER    current user input
-            ...     current-turn assistant and tool-result messages
+            ...     current-Clarify assistant and tool-result messages
 
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
@@ -1847,10 +1883,16 @@ class ClarifyThink(BuildThink):
             umbrella,
         )
 
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "clarify",
+        )
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
@@ -2083,7 +2125,8 @@ class ExploreThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, task artifact, user input, and turn trace.
+            Persona, live context, Session history, task artifact, user input,
+            and the current Explore trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2099,9 +2142,16 @@ class ExploreThink(BuildThink):
             umbrella,
         )
 
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "explore",
+        )
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
@@ -2175,7 +2225,8 @@ class GenerateThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, upstream artifacts, user input, and turn trace.
+            Persona, live context, Session history, upstream artifacts, user
+            input, and the current Generate trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2192,9 +2243,16 @@ class GenerateThink(BuildThink):
             umbrella,
         )
 
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "generate",
+        )
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(
@@ -2260,7 +2318,8 @@ class VerifyThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, upstream artifacts, user input, and turn trace.
+            Persona, live context, Session history, upstream artifacts, user
+            input, and the current Verify trace.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -2278,9 +2337,16 @@ class VerifyThink(BuildThink):
             umbrella,
         )
 
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "verify",
+        )
+
         messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
         messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
-        messages += self.turn_messages_block(ota_context, context)
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(

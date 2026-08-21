@@ -34,7 +34,7 @@ import {
   type TurnDetail,
   type TurnSummary,
 } from './api'
-import { analyzePromptCachePotential } from './analytics'
+import { analyzePromptCachePotential, estimatePromptTokens } from './analytics'
 import { resolveRoundCognitiveMode, type CognitiveModeDescriptor } from './cognitive-mode'
 import {
   PromptCacheCompareModal,
@@ -523,7 +523,13 @@ function SessionSidebar({
   )
 }
 
-function RunSummary({ session }: { session: SessionTrace }) {
+function RunSummary({
+  session,
+  estimatedInputTokens,
+}: {
+  session: SessionTrace
+  estimatedInputTokens: number | null
+}) {
   const { formatNumber, t } = useI18n()
   const roundCountKey = session.rounds.length === 1 ? 'run.roundCountOne' : 'run.roundCountMany'
 
@@ -548,8 +554,12 @@ function RunSummary({ session }: { session: SessionTrace }) {
         </div>
         <div className="run-summary-actions">
           <div className="run-token-summary" aria-label={t('tokens.usage')}>
-            <span><small>{t('tokens.input')}</small>{formatNumber(session.inputTokens)}</span>
-            <span><small>{t('tokens.output')}</small>{formatNumber(session.outputTokens)}</span>
+            <span><small>{t('tokens.inputActual')}</small>{formatNumber(session.inputTokens)}</span>
+            <span>
+              <small>{t('tokens.inputEstimated')}</small>
+              {estimatedInputTokens === null ? '—' : `≈ ${formatNumber(estimatedInputTokens)}`}
+            </span>
+            <span><small>{t('tokens.outputActual')}</small>{formatNumber(session.outputTokens)}</span>
           </div>
         </div>
       </div>
@@ -664,6 +674,7 @@ function TraceWorkspace({
   prompt,
   promptLoading,
   promptError,
+  estimatedInputTokens,
   activeDetailTab,
   onDetailTabChange,
 }: {
@@ -676,13 +687,14 @@ function TraceWorkspace({
   prompt: PromptReconstruction | null
   promptLoading: boolean
   promptError: string | null
+  estimatedInputTokens: number | null
   activeDetailTab: InspectorTab
   onDetailTabChange: (tab: InspectorTab) => void
 }) {
   const { t } = useI18n()
   return (
     <main className="trace-workspace">
-      <RunSummary session={session} />
+      <RunSummary session={session} estimatedInputTokens={estimatedInputTokens} />
       <TurnRail turns={turns} selectedTurnId={selectedTurnId} onSelectTurn={onSelectTurn} />
       <div className="trace-scroll-area">
         <div className="stage-divider">
@@ -821,9 +833,11 @@ function PromptPanel({
     roles: roleLabels,
   }
   const turnHistoryBlock = messageBlocks.find((block) => block.kind === 'current_turn')
-  const componentSizes = messageBlocks.map((block) => block.characterCount)
-  const totalSize = componentSizes.reduce((total, size) => total + size, 0)
-  const componentPercents = componentSizes.map((size) => totalSize > 0 ? size / totalSize * 100 : 0)
+  const componentTokenEstimates = messageBlocks.map((block) => estimatePromptTokens(block.text))
+  const totalEstimatedTokens = componentTokenEstimates.reduce((total, tokens) => total + tokens, 0)
+  const componentPercents = componentTokenEstimates.map((tokens) => (
+    totalEstimatedTokens > 0 ? tokens / totalEstimatedTokens * 100 : 0
+  ))
   const percentLabel = (value: number) => value > 0 && value < 1 ? '<1%' : `${Math.round(value)}%`
   const copyPromptText = typeof navigator !== 'undefined' && navigator.clipboard?.writeText
     ? (text: string) => navigator.clipboard.writeText(text)
@@ -852,7 +866,7 @@ function PromptPanel({
       <section className="inspector-section">
         <div className="section-label-row">
           <span className="section-label">{t('prompt.messageComposition')}</span>
-          <span className="composition-size-note">{t('prompt.characterMeasure')}</span>
+          <span className="composition-size-note">{t('prompt.tokenEstimateMeasure')}</span>
         </div>
         <div className="composition-bar" aria-label={t('prompt.componentProportions')}>
           {messageBlocks.map((block, index) => (
@@ -869,7 +883,7 @@ function PromptPanel({
               <i className={`legend-dot composition-${index + 1}`} />
               <b>{block.label}</b>
               {percentLabel(componentPercents[index] ?? 0)}
-              <code>{formatNumber(block.characterCount)}</code>
+              <code>≈ {formatNumber(componentTokenEstimates[index] ?? 0)}</code>
             </span>
           ))}
         </div>
@@ -1286,16 +1300,21 @@ export function AnalysisPanel({
           <section className="analysis-section analysis-section-card analysis-section-tokens">
             <div className="analysis-section-title">
               <span><Binary size={14} aria-hidden="true" />{t('analysis.tokens')}</span>
-              <span className="metric-availability is-available">{t('analysis.persisted')}</span>
+              <span className="metric-availability is-available">{t('analysis.actualAndEstimated')}</span>
             </div>
-            <div className="analysis-kpi-grid">
+            <div className="analysis-kpi-grid analysis-kpi-grid-three">
               <div className="analysis-kpi analysis-kpi-primary">
-                <small>{t('analysis.inputTokens')}</small>
+                <small>{t('tokens.inputActual')}</small>
                 <strong>{formatNumber(selected.inputTokens)}</strong>
                 <span>{t('analysis.persisted')}</span>
               </div>
               <div className="analysis-kpi">
-                <small>{t('analysis.outputTokens')}</small>
+                <small>{t('tokens.inputEstimated')}</small>
+                <strong>{selected.estimatedInputTokens === null ? '—' : `≈ ${formatNumber(selected.estimatedInputTokens)}`}</strong>
+                <span>{t('analysis.reconstructedEstimate')}</span>
+              </div>
+              <div className="analysis-kpi">
+                <small>{t('tokens.outputActual')}</small>
                 <strong>{formatNumber(selected.outputTokens)}</strong>
                 <span>{t('analysis.persisted')}</span>
               </div>
@@ -1682,6 +1701,7 @@ function AgentLoopLab() {
           prompt={prompt}
           promptLoading={promptLoading}
           promptError={promptError}
+          estimatedInputTokens={promptPotentialRows.find((row) => row.turnId === selectedTurnId)?.estimatedInputTokens ?? null}
           activeDetailTab={activeInspectorTab}
           onDetailTabChange={setActiveInspectorTab}
         />
