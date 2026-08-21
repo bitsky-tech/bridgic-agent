@@ -104,7 +104,8 @@ endpoint. Click "New Session", optionally pick a workspace, then chat.
 | `bun run lint` | ESLint over apps/packages/scripts. |
 | `bun run test` | bun:test unit tests (scoped to apps/packages/scripts). |
 | `bun run start` | Build + run the production-bundled Electron. |
-| `bun run dist:mac` | Run prebuild + electron-builder → .pkg + updater .zip. |
+| `bun run dist:mac` | Run prebuild + electron-builder → arm64 .pkg + updater .zip. |
+| `bun run dist:mac:x64` | The same for Intel; a release carries both architectures. |
 | `bun run dist:win` | Run prebuild + electron-builder → .exe (NSIS). |
 | `bun run dist:linux` | Run prebuild + electron-builder → .deb. |
 
@@ -115,13 +116,13 @@ plus pinned uv, Python, and Node runtimes. Agent commands therefore do not
 depend on host Python/Node or download an interpreter on first use.
 
 ```bash
-# macOS/Linux: build the standalone bundle (launcher → ../dist/amphi/amphi)
+# 1. macOS/Linux: build the standalone bundle (launcher → ../dist/amphi/amphi)
 cd .. && bash build/build-pyinstaller.sh
 
 # Windows PowerShell equivalent (CLI + windowless login shim → ..\dist\amphi\):
 # cd ..; .\build\build-pyinstaller.ps1
 
-# Back in desktop/, run the platform target. `prebuild:fetch-amphi`
+# 2. Back in desktop/, run the platform target. `prebuild:fetch-amphi`
 #    copies the daemon into apps/electron/resources/bin/, and
 #    the remaining prebuild steps prepare uv_runtime/, python_runtime/,
 #    and node_runtime/.

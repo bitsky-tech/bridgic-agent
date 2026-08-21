@@ -263,6 +263,60 @@ long-term recall is not yet part of normal Agent execution.
 - Durable Sessions and artifacts are implemented today; automatic long-term
   memory recall is not.
 
+## Releasing
+
+Installers are built and published by the `Package` workflow
+(`.github/workflows/package.yml`); its header comment carries the full
+rationale. Only two things reach that workflow — a tag push and a manual run.
+Ordinary pushes and pull requests build nothing.
+
+**A tag is a delivery, not a checkpoint.** A normal release becomes
+`/releases/latest`, which is exactly the endpoint every installed client
+resolves on its next update check. GitHub excludes prereleases from it, so a
+prerelease reaches no one automatically.
+
+### Publish a release
+
+The version lives in four files, and the workflow refuses a tag that disagrees
+with `desktop/package.json` — artifacts are named from that file, so a mismatch
+publishes a release no client can update to. One command writes all four:
+
+```bash
+bun --cwd=desktop run set-version 0.1.3
+git commit -am "chore: release 0.1.3"
+git tag 0.1.3 && git push origin 0.1.3
+```
+
+Tags are bare semver with no `v` prefix:
+
+| Tag | Result |
+| --- | --- |
+| `0.1.3` | Normal release, delivered to installed clients. |
+| `0.1.3-rc1` | Prerelease — any tag containing `-` is one. |
+| `v0.1.3` | Matches no trigger; nothing runs. |
+
+A tag push always builds the full matrix — macOS arm64, macOS x64, and Windows
+x64 — and always runs the Windows installer smoke suite.
+
+### Build without releasing
+
+Run the workflow by hand (Actions -> Package -> Run workflow) for an internal
+build:
+
+| Input | Default | Effect |
+| --- | --- | --- |
+| `release_tag` | empty | Empty publishes a prerelease under `nightly-<UTC yyyymmdd-hhmm>`. A bare semver publishes a normal release under that tag instead. |
+| `platform` | `all` | `all`, `macos` (arm64 only), `macos-intel`, or `windows`. |
+| `smoke` | off | The Windows installer E2E suite (~25 min). Required when `installer.nsh`, `test-installer.ps1`, or `electron-builder.yml` changed. |
+
+A nightly skips both release guards. Setting `release_tag` does not: the
+version must match, and `platform` must stay `all`, because the two macOS
+update manifests are merged only when every platform job succeeds — a narrowed
+run publishes a release no installed client can consume.
+
+Releases accumulate and nothing expires them; prune with
+`gh release delete <tag> --cleanup-tag`.
+
 ## License
 
 The source is licensed under the
