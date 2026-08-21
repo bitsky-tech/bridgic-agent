@@ -75,6 +75,8 @@ export interface CenterWorkflowsProps {
   onDeleteWorkflow?: (workflow: { id: string; name: string }) => void
   /** One-click creation of a scheduled task from a workflow (via a real new session that is pre-filled, with an @mention of that workflow seeded into the description area). */
   onScheduleWorkflow?: (workflow: { id: string; name: string }) => void
+  /** Opens a new session pre-filled with /build — the only way to create a workflow. */
+  onNewWorkflow?: () => void
 }
 
 export function CenterWorkflows({
@@ -86,6 +88,7 @@ export function CenterWorkflows({
   onExportWorkflow,
   onDeleteWorkflow,
   onScheduleWorkflow,
+  onNewWorkflow,
 }: CenterWorkflowsProps) {
   const { t } = useTranslation()
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -150,8 +153,11 @@ export function CenterWorkflows({
             onChange={setQuery}
             placeholder={t('center.workflows.searchPlaceholder')}
           />
-          <Btn variant="primary" size="md" onClick={() => importInputRef.current?.click()}>
+          <Btn size="md" onClick={() => importInputRef.current?.click()}>
             {Icons.download(14)} {t('center.common.import')}
+          </Btn>
+          <Btn variant="primary" size="md" data-testid="workflows-new" onClick={onNewWorkflow}>
+            {Icons.plus(14)} {t('center.workflows.newWorkflow')}
           </Btn>
         </>
       }
