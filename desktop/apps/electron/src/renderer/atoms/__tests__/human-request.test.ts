@@ -86,7 +86,7 @@ describe('acceptanceRuleQuestions', () => {
   it('uses the stable option id instead of a localized acceptance label', () => {
     expect(resolveAcceptanceReviewSubmission(
       ['A completed report exists'],
-      [{ question: 'A completed report exists', answer: 'Adopt', optionId: 'accept' }],
+      [{ question: 'A completed report exists', answer: 'Keep', optionId: 'accept' }],
     )).toEqual({
       mode: 'criteria',
       decisions: ['accept'],
@@ -100,8 +100,8 @@ describe('acceptanceRuleQuestions', () => {
       ['A completed report exists', 'The report has a summary'],
       [
         // Typed into the Other field — no optionId travels, only the text.
-        { question: 'A completed report exists', answer: 'Adopt' },
-        { question: 'The report has a summary', answer: 'Do not adopt' },
+        { question: 'A completed report exists', answer: 'Keep' },
+        { question: 'The report has a summary', answer: 'Drop' },
       ],
     )).toEqual({
       mode: 'criteria',

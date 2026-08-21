@@ -19,7 +19,7 @@ import { bootPendingAtom } from '@/atoms/sessions'
 import { ComposerTarget, activeNavAtom, ModalKind, openModalAtom } from '@/atoms/amphi'
 import { scheduleDetailIdAtom, schedulesAtom } from '@/atoms/schedules'
 import { openScheduleSessionAtom } from '@/atoms/schedule-session'
-import { runWorkflowAtom } from '@/atoms/workflow-session'
+import { openBuildSessionAtom, runWorkflowAtom } from '@/atoms/workflow-session'
 import { ScheduleTemplateMode } from '@/lib/scheduleTemplate'
 import {
   deleteWorkflowAtom,
@@ -110,6 +110,7 @@ export function CenterView() {
   const openModal = useSetAtom(openModalAtom)
   const openScheduleSession = useSetAtom(openScheduleSessionAtom)
   const runWorkflow = useSetAtom(runWorkflowAtom)
+  const openBuildSession = useSetAtom(openBuildSessionAtom)
   const marketCards = useAtomValue(workflowMarketAtom)
   const refreshMarket = useSetAtom(refreshWorkflowMarketAtom)
   const locale = useAtomValue(localeAtom)
@@ -157,6 +158,7 @@ export function CenterView() {
           if (confirmed) await deleteWorkflow({ workflowId: id, name })
         }}
         onScheduleWorkflow={(workflow) => openScheduleSession({ mode: ScheduleTemplateMode.Create, workflow })}
+        onNewWorkflow={() => openBuildSession()}
       />
     )
   }

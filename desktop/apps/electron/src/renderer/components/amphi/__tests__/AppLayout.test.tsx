@@ -100,7 +100,7 @@ describe('AppLayout focused right pane', () => {
 
     const busyDock = host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')
     expect(busyDock?.dataset.contentOpen).toBe('false')
-    expect(busyDock?.style.width).toBe('54px')
+    expect(busyDock?.style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
 
     await act(async () => {
@@ -108,7 +108,7 @@ describe('AppLayout focused right pane', () => {
     })
     const restoredDock = host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')
     expect(restoredDock?.dataset.contentOpen).toBe('false')
-    expect(restoredDock?.style.width).toBe('54px')
+    expect(restoredDock?.style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
 
     await act(async () => root.unmount())
@@ -153,7 +153,7 @@ describe('AppLayout focused right pane', () => {
     const collapsedDock = host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')
     expect(collapsedDock).not.toBeNull()
     expect(collapsedDock?.dataset.contentOpen).toBe('false')
-    expect(collapsedDock?.style.width).toBe('54px')
+    expect(collapsedDock?.style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
     expect(host.querySelector('[data-testid="layout-right-content"]')).not.toBeNull()
     const rightToggle = () => host.querySelector<HTMLButtonElement>(
       '[data-testid="toggle-right-panel"]',
@@ -164,14 +164,14 @@ describe('AppLayout focused right pane', () => {
     await act(async () => store.set(openWorkflowRunDetailsAtom))
     const openDock = host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')
     expect(openDock?.dataset.contentOpen).toBe('true')
-    expect(openDock?.style.width).not.toBe('54px')
+    expect(openDock?.style.width).not.toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     expect(rightToggle()?.getAttribute('aria-expanded')).toBe('true')
 
     await act(async () => store.set(closeWorkflowRunDetailsAtom))
     const restoredDock = host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')
     expect(restoredDock?.dataset.contentOpen).toBe('false')
-    expect(restoredDock?.style.width).toBe('54px')
+    expect(restoredDock?.style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
     expect(host.querySelector('[data-testid="layout-right-content"]')).not.toBeNull()
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     expect(rightToggle()?.getAttribute('aria-expanded')).toBe('false')
@@ -271,15 +271,15 @@ describe('AppLayout focused right pane', () => {
       )
     })
     const dock = () => host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')
-    expect(dock()?.style.width).toBe('54px')
+    expect(dock()?.style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
 
     await act(async () => store.set(setRightPanelCollapsedAtom, false))
     expect(dock()?.dataset.contentOpen).toBe('true')
-    expect(dock()?.style.width).not.toBe('54px')
+    expect(dock()?.style.width).not.toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
 
     await act(async () => store.set(setRightPanelCollapsedAtom, true))
     expect(dock()?.dataset.contentOpen).toBe('false')
-    expect(dock()?.style.width).toBe('54px')
+    expect(dock()?.style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
 
     await act(async () => root.unmount())
     host.remove()
@@ -292,7 +292,7 @@ describe('AppLayout focused right pane', () => {
       layout: {
         ...DEFAULT_SETTINGS.layout,
         rightPanelCollapsed: true,
-        rightPanelWidth: 400,
+        rightPanelWidth: 380,
       },
     })
     const host = document.createElement('div')
@@ -308,7 +308,7 @@ describe('AppLayout focused right pane', () => {
     })
     const dock = () => host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')!
     const stage = () => host.querySelector<HTMLElement>('[data-testid="session-right-dock-stage"]')!
-    const rememberedTotal = 400 + RIGHT_PANEL_RAIL_WIDTH
+    const rememberedTotal = 380 + RIGHT_PANEL_RAIL_WIDTH
     expect(dock().className).not.toContain('overflow-hidden')
     expect(host.querySelector('[data-testid="session-right-dock-clip"]')?.className)
       .toContain('overflow-hidden')
@@ -322,7 +322,7 @@ describe('AppLayout focused right pane', () => {
     await act(async () => store.set(setRightPanelCollapsedAtom, true))
     expect(dock().style.width).toBe(`${RIGHT_PANEL_RAIL_WIDTH}px`)
     expect(stage().style.width).toBe(`${rememberedTotal}px`)
-    expect(store.get(settingsAtom).layout.rightPanelWidth).toBe(400)
+    expect(store.get(settingsAtom).layout.rightPanelWidth).toBe(380)
 
     await act(async () => root.unmount())
     host.remove()
@@ -417,7 +417,7 @@ describe('AppLayout focused right pane', () => {
     const store = createStore()
     store.set(settingsAtom, {
       ...DEFAULT_SETTINGS,
-      layout: { ...DEFAULT_SETTINGS.layout, rightPanelWidth: 400 },
+      layout: { ...DEFAULT_SETTINGS.layout, rightPanelWidth: 380 },
     })
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -436,7 +436,7 @@ describe('AppLayout focused right pane', () => {
       handle.dispatchEvent(pointerEvent('pointerdown', 600))
       handle.dispatchEvent(pointerEvent('pointermove', 640))
     })
-    const resizedTotal = 400 + RIGHT_PANEL_RAIL_WIDTH - 40
+    const resizedTotal = 380 + RIGHT_PANEL_RAIL_WIDTH - 40
     expect(host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')?.style.width)
       .toBe(`${resizedTotal}px`)
     expect(host.querySelector<HTMLElement>('[data-testid="session-right-dock-stage"]')?.style.width)
@@ -454,7 +454,7 @@ describe('AppLayout focused right pane', () => {
     const store = createStore()
     store.set(settingsAtom, {
       ...DEFAULT_SETTINGS,
-      layout: { ...DEFAULT_SETTINGS.layout, rightPanelWidth: 400 },
+      layout: { ...DEFAULT_SETTINGS.layout, rightPanelWidth: 380 },
     })
     store.set(activeSessionIdAtom, 'layout-width-a')
     store.set(rememberRightPanelStateAtom, 'layout-width-a')
@@ -473,7 +473,7 @@ describe('AppLayout focused right pane', () => {
       )
     })
     const dock = () => host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')!
-    const initialTotal = 400 + RIGHT_PANEL_RAIL_WIDTH
+    const initialTotal = 380 + RIGHT_PANEL_RAIL_WIDTH
     const resizedTotal = initialTotal - 40
     expect(dock().style.width).toBe(`${initialTotal}px`)
 
@@ -498,15 +498,15 @@ describe('AppLayout focused right pane', () => {
       committedHandle.dispatchEvent(pointerEvent('pointermove', 640))
       committedHandle.dispatchEvent(pointerEvent('pointerup', 640))
     })
-    expect(store.get(rightPanelWidthAtom)).toBe(360)
+    expect(store.get(rightPanelWidthAtom)).toBe(340)
     expect(dock().style.width).toBe(`${resizedTotal}px`)
 
     await act(async () => store.set(activeSessionIdAtom, 'layout-width-b'))
-    expect(store.get(rightPanelWidthAtom)).toBe(400)
+    expect(store.get(rightPanelWidthAtom)).toBe(380)
     expect(dock().style.width).toBe(`${initialTotal}px`)
 
     await act(async () => store.set(activeSessionIdAtom, 'layout-width-a'))
-    expect(store.get(rightPanelWidthAtom)).toBe(360)
+    expect(store.get(rightPanelWidthAtom)).toBe(340)
     expect(dock().style.width).toBe(`${resizedTotal}px`)
 
     await act(async () => root.unmount())

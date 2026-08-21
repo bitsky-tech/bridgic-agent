@@ -20,7 +20,7 @@
 
 export const SETTINGS_VERSION = 3
 /** Persistent Session dock rail excluded from saved content widths since v3. */
-export const RIGHT_PANEL_RAIL_WIDTH = 54
+export const RIGHT_PANEL_RAIL_WIDTH = 68
 
 /**
  * UI zoom — the semantics of Electron's `webContents.setZoomLevel`: 0 = 100%,

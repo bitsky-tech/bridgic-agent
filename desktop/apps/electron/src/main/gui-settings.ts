@@ -25,7 +25,6 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   DEFAULT_SETTINGS,
-  RIGHT_PANEL_RAIL_WIDTH,
   SETTINGS_VERSION,
   clampZoomLevel,
   type GuiSettings,
@@ -257,20 +256,24 @@ const migrations: Record<number, MigrationStep> = {
   // honest; otherwise every user file keeps a slice no code will ever read.
   2: ({ font: _font, ...rest }) => ({ ...rest, zoomLevel: 0 }),
   // 2 → 3: saved right widths now describe content only; the fixed rail is added by layout.
+  // The subtrahend is frozen at the rail width v2 blobs were measured against, NOT the live
+  // RIGHT_PANEL_RAIL_WIDTH: a migration restates history, so following the current constant
+  // would resize every upgrading user's panel by however much the rail was later redesigned.
   3: (prev) => {
+    const V2_RAIL_WIDTH = 54
     const layout = prev.layout
     if (layout === null || typeof layout !== 'object' || Array.isArray(layout)) return prev
     const nextLayout = { ...(layout as Record<string, unknown>) }
     if (typeof nextLayout.rightPanelWidth === 'number') {
       nextLayout.rightPanelWidth = Math.max(
         320,
-        Math.round(nextLayout.rightPanelWidth) - RIGHT_PANEL_RAIL_WIDTH,
+        Math.round(nextLayout.rightPanelWidth) - V2_RAIL_WIDTH,
       )
     }
     if (typeof nextLayout.browserPanelWidth === 'number') {
       nextLayout.browserPanelWidth = Math.max(
         0,
-        Math.round(nextLayout.browserPanelWidth) - RIGHT_PANEL_RAIL_WIDTH,
+        Math.round(nextLayout.browserPanelWidth) - V2_RAIL_WIDTH,
       )
     }
     return { ...prev, layout: nextLayout }

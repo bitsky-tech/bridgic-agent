@@ -16,9 +16,11 @@ import {
   browserExpandedAtom,
 } from '@/atoms/browser'
 import { viewedSessionIdAtom } from '@/atoms/amphi'
+import { isBlankTabUrl } from '@/lib/browserTabUrl'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
 import { Icons } from '@/components/amphi/Icons'
+import { BridgicLogo } from '@/components/amphi/Primitives'
 import { useBrowserOverflowReminder } from '@/hooks/useBrowserOverflowReminder'
 import { useEmbeddedBrowserSurfaceEligible } from '@/hooks/useEmbeddedBrowserSurfaceEligible'
 import { BrowserExpandControl } from './BrowserExpandControl'
@@ -70,10 +72,13 @@ export function EmbeddedBrowserPanel({
     () => browserSession?.tabs.find((tab) => tab.tabId === browserSession.activeTabId) ?? null,
     [browserSession],
   )
+  // A blank tab has nothing worth compositing, so the renderer paints its own
+  // new tab page over the parked native surface instead.
+  const blankTab = activeTab !== null && isBlankTabUrl(activeTab.url)
   const nativeSurfaceEligible = useEmbeddedBrowserSurfaceEligible(
     presentationVisible,
     activeTab,
-  )
+  ) && !blankTab
   const {
     dismissReminder: dismissOverflowReminder,
     onPresentationReady,
@@ -174,6 +179,7 @@ export function EmbeddedBrowserPanel({
             detail={t('session.browser.crashedDetail')}
           />
         )}
+        {blankTab && !activeTab?.crashed && <BrowserNewTabPage />}
       </div>
     </div>
   )
@@ -332,9 +338,11 @@ function BrowserToolbar({
   const { t } = useTranslation()
   const [addressDraft, setAddressDraft] = useState<{ tabId: string; value: string } | null>(null)
   const activeTabId = activeTab?.tabId ?? ''
+  // A blank tab reads as an empty field so its placeholder can invite an address.
+  const tabAddress = isBlankTabUrl(activeTab?.url) ? '' : activeTab?.url ?? ''
   const address = addressDraft?.tabId === activeTabId
     ? addressDraft.value
-    : activeTab?.url ?? ''
+    : tabAddress
 
   const submitAddress = (event: FormEvent) => {
     event.preventDefault()
@@ -436,6 +444,29 @@ function ChromeButton({
   )
 }
 
+/** Branded stand-in for the blank native page the agent and the user both start from. */
+function BrowserNewTabPage() {
+  const { t } = useTranslation()
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center bg-bg-app px-8 text-center"
+      data-testid="browser-new-tab-page"
+    >
+      <div className="max-w-xs">
+        <div className="flex justify-center">
+          <BridgicLogo size={48} />
+        </div>
+        <div className="mt-4 text-sm font-medium text-text-primary">
+          {t('session.browser.newTabPageTitle')}
+        </div>
+        <div className="mt-1.5 text-xs leading-5 text-text-tertiary">
+          {t('session.browser.newTabPageDetail')}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BrowserCanvasNotice({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-bg-app text-center">
@@ -448,8 +479,10 @@ function BrowserCanvasNotice({ title, detail }: { title: string; detail: string 
 }
 
 function tabTitle(tab: EmbeddedBrowserTabInfo, newTabLabel: string): string {
+  // Checked before the reported title because Chromium titles a blank page
+  // with its own URL, which would otherwise surface as the tab label.
+  if (isBlankTabUrl(tab.url)) return newTabLabel
   if (tab.title.trim()) return tab.title.trim()
-  if (!tab.url || tab.url === 'about:blank') return newTabLabel
   try {
     return new URL(tab.url).hostname || tab.url
   } catch {

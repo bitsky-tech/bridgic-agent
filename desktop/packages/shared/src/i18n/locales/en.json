@@ -142,6 +142,7 @@
         "noMatchTitle": "No matching workflows",
         "title": "No workflows yet"
       },
+      "newWorkflow": "New workflow",
       "noDesc": "No description",
       "rename": {
         "action": "Rename",
@@ -182,6 +183,7 @@
     "title": "Comments ({{count}})"
   },
   "common": {
+    "buildInputPlaceholder": "Describe the task to build into a workflow…",
     "cancel": "Cancel",
     "confirm": "Confirm",
     "delete": "Delete",
@@ -247,7 +249,7 @@
       "empty": "No matching commands or capabilities",
       "group": {
         "command": "Commands",
-        "schedule": "Schedules",
+        "schedule": "Scheduled",
         "skill": "Skills",
         "workflow": "Workflows"
       },
@@ -439,10 +441,10 @@
   },
   "humanRequest": {
     "acceptance": {
-      "accept": "Adopt",
-      "acceptDesc": "Keep this as a completion criterion for the run result.",
+      "accept": "Keep",
+      "acceptDesc": "Use this to judge the run result.",
       "criteriaConfirmed": "Completion criteria aligned",
-      "desc": "Accept or reject each item, or write an alternative completion criterion under “Other”.",
+      "desc": "Keep or drop each one, or write your own under “Other”.",
       "executionOnly": "No completion criteria",
       "executionOnlyConfirmed": "No completion criteria selected",
       "executionOnlyHint": "Run the workflow only",
@@ -454,14 +456,14 @@
       "next": "Next item",
       "otherPlaceholder": "Enter an alternative completion criterion…",
       "position": "Item {{current}} of {{total}}",
-      "reject": "Do not adopt",
-      "rejectDesc": "Remove this and do not use it to judge the run result.",
+      "reject": "Drop",
+      "rejectDesc": "Don't use this to judge the run result.",
       "singleDone": "Completion criterion handled",
       "singlePending": "Final result pending",
       "standardN": "Criterion {{n}}",
       "submit": "Confirm and continue",
       "suggestionCount": "{{n}} suggestions",
-      "title": "How do we call this done"
+      "title": "What counts as done?"
     },
     "answerRemaining": "Answer the remaining {{n}} →",
     "collapse": "Collapse",
@@ -472,7 +474,7 @@
       "buildTitle": "Your choice is needed",
       "permissionSummary": "{{n}} operations awaiting confirmation",
       "permissionTitle": "Your authorization is needed",
-      "taskSummary": "Confirming moves on to the exploration stage; you can also preview it first or request changes",
+      "taskSummary": "Confirm to start exploring, or preview and request changes first",
       "taskTitle": "Please confirm the task specification",
       "workflowSummary": "Decide whether to save the result of this build",
       "workflowTitle": "Please confirm the workflow"
@@ -682,7 +684,7 @@
       "workflows": "No workflows are available to reference yet"
     },
     "footer": {
-      "reference": "Reference",
+      "reference": "Insert",
       "select": "Select",
       "switchScope": "Switch category"
     },
@@ -707,14 +709,14 @@
     },
     "scope": {
       "all": "All",
-      "schedules": "Schedules",
-      "sessionFiles": "Session files",
-      "workflowRuns": "Run results",
+      "schedules": "Scheduled",
+      "sessionFiles": "Files",
+      "workflowRuns": "Runs",
       "workflows": "Workflows"
     },
     "searchingFor": "Searching “{{query}}”",
     "section": {
-      "schedules": "Schedules",
+      "schedules": "Scheduled",
       "sessionFiles": "Session files",
       "workflowRuns": "Run results",
       "workflows": "Workflows"
@@ -1433,7 +1435,7 @@
       "runWorkflow": "Run workflow “{{name}}”",
       "updateLead": "Help me update scheduled task (ID {{id}}). Task: "
     },
-    "title": "Schedules"
+    "title": "Scheduled"
   },
   "scrollControls": {
     "toBottom": "Back to bottom",
@@ -1462,6 +1464,8 @@
       "launchFailed": "Failed to open: {{message}}",
       "launchTitle": "Open browser",
       "newTab": "New tab",
+      "newTabPageDetail": "Enter a URL to start browsing, or let Bridgic drive the page for you.",
+      "newTabPageTitle": "Bridgic Browser",
       "overflowReminder": "Wide page",
       "overflowReminderAction": "Expand",
       "overflowReminderAnnouncement": "This page is wider than the current view. Expand the browser to see more",
@@ -1576,8 +1580,8 @@
       "output": "Session resources",
       "preparingMode": "Switching view…",
       "resources": "Resources",
-      "results": "Run records",
-      "schedules": "Schedules",
+      "results": "Runs",
+      "schedules": "Scheduled",
       "surfaceRailAria": "Session side panel",
       "title": "Session resources",
       "typeTabsAria": "Session resource types",
@@ -1651,7 +1655,7 @@
         "filterAria": "Schedule status filter",
         "noMatch": "No schedules match “{{query}}”",
         "searchPlaceholder": "Search schedule names or descriptions…",
-        "title": "Schedules"
+        "title": "Scheduled"
       },
       "workflows": {
         "built": "Ready",
@@ -1750,7 +1754,7 @@
     },
     "nav": {
       "assets": "My assets",
-      "schedules": "Schedules",
+      "schedules": "Scheduled",
       "skills": "Skills",
       "workflows": "Workflows"
     },
@@ -1917,7 +1921,7 @@
     "fileName": "task-specification.md",
     "instructions": {
       "archived": "Build complete. This read-only confirmation snapshot was saved with the workflow.",
-      "comment": "Select any document text to leave multiple comments, then send them together as one message from the left.",
+      "comment": "Select text to comment. Comments are batched — send them all at once from the composer.",
       "diff": "Comparing the previous confirmed version with this revision: green is added, red is removed. Select text to comment.",
       "editing": "Edit the Markdown source. Saving writes it directly to the file and notifies the agent.",
       "original": "This is the original task definition saved when editing began. It switches to a diff after Clarify completes."

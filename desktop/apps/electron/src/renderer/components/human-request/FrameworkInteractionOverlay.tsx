@@ -134,7 +134,7 @@ export function FrameworkInteractionOverlay() {
           <span className="flex text-text-accent">{presentation.icon}</span>
           <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold text-text-primary">{presentation.title}</div>
-            <div className="mt-0.5 truncate text-xs text-text-secondary">{presentation.summary}</div>
+            <div className="mt-0.5 line-clamp-2 text-xs text-text-secondary">{presentation.summary}</div>
           </div>
           <button
             type="button"

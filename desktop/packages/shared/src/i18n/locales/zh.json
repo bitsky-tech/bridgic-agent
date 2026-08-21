@@ -142,6 +142,7 @@
         "noMatchTitle": "没有匹配的工作流",
         "title": "暂无工作流"
       },
+      "newWorkflow": "新建工作流",
       "noDesc": "暂无描述",
       "rename": {
         "action": "改名",
@@ -182,6 +183,7 @@
     "title": "评论（{{count}}）"
   },
   "common": {
+    "buildInputPlaceholder": "描述你想构建成工作流的任务…",
     "cancel": "取消",
     "confirm": "确定",
     "delete": "删除",
@@ -1462,6 +1464,8 @@
       "launchFailed": "打开失败：{{message}}",
       "launchTitle": "打开浏览器",
       "newTab": "新建标签页",
+      "newTabPageDetail": "输入网址开始浏览，或直接让 Bridgic 代你操作页面。",
+      "newTabPageTitle": "Bridgic 浏览器",
       "overflowReminder": "页面较宽",
       "overflowReminderAction": "展开",
       "overflowReminderAnnouncement": "当前页面较宽，可以展开浏览器查看得更完整",

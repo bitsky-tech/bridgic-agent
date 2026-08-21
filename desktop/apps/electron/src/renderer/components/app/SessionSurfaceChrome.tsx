@@ -162,7 +162,12 @@ export function SurfaceRailButton({
       )}>
         {icon}
       </span>
-      <span className="max-w-[46px] truncate text-2xs font-medium leading-none">{label}</span>
+      {/* 58px is the button's real content box (rail 68 − mx-0.5 4 − dock border 2 − p-px 2 −
+          this button's own border 2). It has to be stated explicitly: `truncate` needs a
+          definite width, and a flex column's `items-center` lets an oversized child overflow
+          instead of clamping it. `tracking-tight` buys back the last couple of pixels so the
+          English labels fit without widening the rail or shortening the product's vocabulary. */}
+      <span className="max-w-[58px] truncate text-2xs font-medium leading-none tracking-tight">{label}</span>
     </button>
   )
 }
@@ -193,7 +198,7 @@ export function SessionSurfaceRail({
     <div
       ref={railRef}
       className={cn(
-        'flex h-full min-h-0 w-[54px] shrink-0 flex-col overflow-y-auto overscroll-contain border-l py-2',
+        'flex h-full min-h-0 w-[68px] shrink-0 flex-col overflow-y-auto overscroll-contain border-l py-2',
         'transition-[background-color,border-color] duration-200 ease-out motion-reduce:transition-none',
         isContentOpen
           ? 'border-border-subtle bg-bg-hover/70'
@@ -204,7 +209,10 @@ export function SessionSurfaceRail({
     >
       <div
         className={cn(
-          'mx-1 my-auto flex shrink-0 flex-col overflow-hidden rounded-xl border p-0.5',
+          // Inset and padding are kept minimal on purpose: every pixel spent on chrome
+          // here is a pixel the labels lose, and the longest of them ("Workflows") needs
+          // ~56px of the rail's 68. See SurfaceRailButton for the resulting label budget.
+          'mx-0.5 my-auto flex shrink-0 flex-col overflow-hidden rounded-xl border p-px',
           'transition-[background-color,border-color,box-shadow] duration-200 ease-out motion-reduce:transition-none',
           isContentOpen
             ? 'border-transparent bg-transparent shadow-none'

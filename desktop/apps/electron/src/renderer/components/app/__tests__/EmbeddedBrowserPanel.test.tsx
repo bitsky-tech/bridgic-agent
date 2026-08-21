@@ -34,6 +34,7 @@ const {
   BROWSER_DOCK_MIN,
   browserDockGeometry,
 } = await import('../../amphi/AppLayout')
+const { RIGHT_PANEL_RAIL_WIDTH } = await import('@/atoms/layout')
 const {
   RESIZE_COLLAPSE_DWELL_MS,
   ResizeHandle,
@@ -1091,15 +1092,82 @@ describe('EmbeddedBrowserPanel', () => {
 
     await act(async () => root.unmount())
   })
+
+  it('replaces the native surface with a branded new tab page while the active tab is blank', async () => {
+    const calls = browserApiCalls()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-blank')
+    store.set(embeddedBrowserSnapshotAtom, {
+      sessions: [{
+        sessionId: 'session-blank',
+        activeTabId: 'tab-a',
+        // Chromium reports the literal URL as the title of a blank page.
+        tabs: [tab({ title: 'about:blank', url: 'about:blank' })],
+      }],
+    })
+
+    await act(async () => {
+      root.render(withZhTranslation(
+        <Provider store={store}><EmbeddedBrowserPanel presentationVisible /></Provider>,
+      ))
+    })
+    const canvas = host.querySelector<HTMLElement>('[data-testid="browser-canvas"]')!
+    canvas.getBoundingClientRect = () => ({
+      x: 420,
+      y: 96,
+      width: 640,
+      height: 600,
+      top: 96,
+      right: 1060,
+      bottom: 696,
+      left: 420,
+      toJSON: () => ({}),
+    })
+    await act(async () => {
+      animationFrame?.(0)
+      await flushMicrotasks()
+    })
+    expect(host.querySelector('[data-testid="browser-new-tab-page"]')).not.toBeNull()
+    expect(calls).not.toContain('setVisible:true')
+    const address = host.querySelector<HTMLInputElement>('[data-testid="browser-address"]')!
+    expect(address.value).toBe('')
+    expect(address.disabled).toBe(false)
+    const tabStrip = host.querySelector<HTMLElement>('[data-testid="browser-tab-strip"]')!
+    expect(tabStrip.textContent).toContain('新建标签页')
+    expect(tabStrip.textContent).not.toContain('about:blank')
+
+    await act(async () => {
+      store.set(setEmbeddedBrowserSnapshotAtom, {
+        sessions: [{
+          sessionId: 'session-blank',
+          activeTabId: 'tab-a',
+          tabs: [tab({ url: 'https://example.com/docs' })],
+        }],
+      })
+      await flushMicrotasks()
+    })
+    await act(async () => {
+      animationFrame?.(0)
+      await flushMicrotasks()
+    })
+    expect(host.querySelector('[data-testid="browser-new-tab-page"]')).toBeNull()
+    expect(calls.at(-1)).toBe('setVisible:true')
+    expect(address.value).toBe('https://example.com/docs')
+
+    await act(async () => root.unmount())
+  })
 })
 
 describe('browser workbench layout', () => {
   it('keeps the fixed surface rail outside the persisted browser canvas width', () => {
-    expect(browserDockGeometry(1600, null)).toEqual({ width: BROWSER_DOCK_MIN + 54, min: BROWSER_DOCK_MIN + 54, max: 1180 })
-    expect(browserDockGeometry(1000, null)).toEqual({ width: 574, min: BROWSER_DOCK_MIN + 54, max: 600 })
+    expect(browserDockGeometry(1600, null)).toEqual({ width: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, min: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 1180 })
+    expect(browserDockGeometry(1000, null)).toEqual({ width: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, min: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 600 })
     expect(browserDockGeometry(700, null)).toEqual({ width: 420, min: 420, max: 420 })
     expect(browserDockGeometry(400, null)).toEqual({ width: 240, min: 240, max: 240 })
-    expect(browserDockGeometry(1600, 640)).toEqual({ width: 694, min: BROWSER_DOCK_MIN + 54, max: 1180 })
+    expect(browserDockGeometry(1600, 640)).toEqual({ width: 640 + RIGHT_PANEL_RAIL_WIDTH, min: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 1180 })
   })
 
   it('normalizes addresses without treating ordinary search text as a host', () => {

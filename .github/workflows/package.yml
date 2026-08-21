@@ -105,7 +105,8 @@ on:
         type: string
         default: ""
   push:
-    # Project tags are bare semver, no `v` prefix (see desktop §G.2).
+    # Project tags are bare semver, no `v` prefix (see "Releasing" in
+    # ../../README.md).
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
       - "[0-9]+.[0-9]+.[0-9]+-*"

@@ -66,6 +66,32 @@ export const runWorkflowAtom = atom(
   },
 )
 
+/** Open a guided new Session seeded with `/build`, the entry point the Workflows
+ *  page advertises but never offered a button for. The command rides as a slash
+ *  token rather than literal "/build " text: only the token survives the composer's
+ *  DOM round-trip and reaches the daemon as a command. */
+export const openBuildSessionAtom = atom(null, (_get, set) => {
+  set(closeModalAtom)
+  set(selectNavAtom, NavKey.Home)
+  const focusFieldId = 'build-task-input'
+  const sessionId = set(newSessionAtom)
+  set(setPendingComposerSeedAtom, {
+    sessionId,
+    segments: [
+      { type: 'slash', id: 'build', label: i18n.t('composer.command.build.label') },
+      { type: 'text', value: ' ' },
+      {
+        type: 'field',
+        id: focusFieldId,
+        placeholder: i18n.t('common.buildInputPlaceholder'),
+        value: '',
+      },
+    ],
+    focusFieldId,
+  })
+  set(setPendingComposerFocusAtom, true)
+})
+
 /** Insert a completed Workflow result reference in the requested composer. */
 export const useWorkflowResultAtom = atom(
   null,
