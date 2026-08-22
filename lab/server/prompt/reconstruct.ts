@@ -160,7 +160,7 @@ function projectStageRounds(
   usesStageScope: boolean;
   hasStageBoundary: boolean;
   allStageSessionHistory: boolean;
-  resumeRoundCount: number;
+  switchRoundCount: number;
 } {
   const priorRounds = turn.otaRecords.slice(0, targetRoundIndex);
   // Only think_scope proves that this request was assembled by the new
@@ -173,14 +173,44 @@ function projectStageRounds(
       usesStageScope: false,
       hasStageBoundary: false,
       allStageSessionHistory: false,
-      resumeRoundCount: 0,
+      switchRoundCount: 0,
     };
   }
   const allStageSessionHistory = targetScope.sessionHistory === "all_stages";
 
+  if (targetScope.mode === "run_workflow") {
+    for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
+      const scope = roundThinkScope(priorRounds[index] ?? {});
+      if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
+        return {
+          rounds: priorRounds.slice(index + 1),
+          usesStageScope: true,
+          hasStageBoundary: true,
+          allStageSessionHistory,
+          switchRoundCount: 0,
+        };
+      }
+    }
+    return {
+      rounds: priorRounds,
+      usesStageScope: true,
+      hasStageBoundary: false,
+      allStageSessionHistory,
+      switchRoundCount: 0,
+    };
+  }
+
+  const switchesToTarget = (round: Record<string, unknown>): boolean => actionSteps(round).some((step) => {
+    if (step.tool_name !== "switch" || step.success === false) return false;
+    const argumentsRecord = record(step.tool_arguments) ?? {};
+    const resultRecord = record(step.tool_result) ?? {};
+    return String(resultRecord.stage ?? argumentsRecord.stage ?? "") === targetScope.stage;
+  });
+
   const scopes = priorRounds.map((round) => roundThinkScope(round));
   const projected: Record<string, unknown>[] = [];
-  let resumeRoundCount = 0;
+  let switchRoundCount = 0;
+  let transitionCount = 0;
   priorRounds.forEach((round, index) => {
     const scope = scopes[index];
     if (scope?.mode === targetScope.mode && scope.stage === targetScope.stage) {
@@ -190,17 +220,20 @@ function projectStageRounds(
     const nextScope = index + 1 < scopes.length ? scopes[index + 1] : targetScope;
     if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage
       && nextScope?.mode === targetScope.mode && nextScope.stage === targetScope.stage) {
-      projected.push(round);
-      resumeRoundCount += 1;
+      transitionCount += 1;
+      if (switchesToTarget(round)) {
+        projected.push(round);
+        switchRoundCount += 1;
+      }
     }
   });
-  if (resumeRoundCount) {
+  if (transitionCount) {
     return {
       rounds: projected,
       usesStageScope: true,
       hasStageBoundary: true,
       allStageSessionHistory,
-      resumeRoundCount,
+      switchRoundCount,
     };
   }
   return {
@@ -208,7 +241,7 @@ function projectStageRounds(
     usesStageScope: true,
     hasStageBoundary: false,
     allStageSessionHistory,
-    resumeRoundCount: 0,
+    switchRoundCount: 0,
   };
 }
 
@@ -791,8 +824,8 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       availableRounds: priorRounds.length,
       omittedByStage: priorRounds.length - stageProjection.rounds.length,
       historyModel: stageProjection.usesStageScope ? "stage_scoped" : "legacy_full_turn",
-      retainedBoundaryRound: stageProjection.hasStageBoundary,
-      retainedResumeRounds: stageProjection.resumeRoundCount,
+      retainedBoundaryRound: stageProjection.switchRoundCount > 0,
+      retainedSwitchRounds: stageProjection.switchRoundCount,
     },
   ));
 

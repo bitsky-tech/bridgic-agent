@@ -435,28 +435,8 @@ class MainThink(CognitiveWorker):
         return ("build", legacy_build_stage) if legacy_build_stage else None
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Resume this stage's existing Turn history across stage switches."""
-        records = ota_context.ota_record
-        scopes = [self._record_think_scope(record) for record in records]
-        projected: List[Any] = []
-        resumes: List[int] = []
-        target_scope = (mode, stage)
-        for index, (record, scope) in enumerate(zip(records, scopes)):
-            if scope == target_scope:
-                projected.append(record)
-                continue
-            next_scope = scopes[index + 1] if index + 1 < len(scopes) else None
-            if scope is not None and scope[0] == mode and scope[1] != stage and next_scope == target_scope:
-                projected.append(record)
-                resumes.append(index)
-        if not resumes:
-            return ota_context, None
-        return ota_context.model_copy(update={
-            # Stage history survives re-entry. A switch continues the existing
-            # target-stage trace by appending the completed transition round;
-            # intermediate work owned by other stages remains excluded.
-            "ota_record": projected,
-        }), resumes[-1]
+        """Return the full current-Turn trace unless a specialized worker projects it."""
+        return ota_context, None
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
         """Render Main context from the most stable prefix to live round state."""
@@ -1336,6 +1316,24 @@ class WorkflowRunThink(MainThink):
         | {"report_workflow_step"}
     )
 
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Keep only the active automatic Workflow stage's trace."""
+        boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (scope := self._record_think_scope(ota_context.ota_record[index]))
+                is not None
+                and scope[0] == mode
+                and scope[1] != stage
+            )
+        ), None)
+        if boundary is None:
+            return ota_context, None
+        return ota_context.model_copy(update={
+            "ota_record": list(ota_context.ota_record[boundary + 1:]),
+        }), boundary
+
     async def assemble_messages(
         self,
         ota_context: AmphiOTAContext,
@@ -1631,12 +1629,13 @@ class ValidateThink(WorkflowRunThink):
 # Build thinking chain — stage workers (same mechanics as MainThink, different frame)
 ################################################################################################################
 class BuildThink(MainThink):
-    """Provide shared capabilities without owning stage-specific behavior.
+    """Provide the shared history policy and capabilities for Build stages.
 
     Notes
     -----
     Concrete Thinks keep their own prompt assembly and legality checks. This
-    base only centralizes stable build paths, artifact rendering and tool access.
+    base centralizes Build history projection, stable paths, artifact rendering,
+    and tool access.
     """
 
     allowed_tools: frozenset[str] = (
@@ -1654,6 +1653,43 @@ class BuildThink(MainThink):
             "update_schedule",
         })
     )
+
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Resume the selected Build stage and append only explicit switch rounds."""
+        def switches_to_target(record: Any) -> bool:
+            steps = _view(_view(record, "action_result"), "results") or []
+            for step in steps:
+                if _view(step, "tool_name") != "switch" or _view(step, "success") is False:
+                    continue
+                arguments = _view(step, "tool_arguments") or {}
+                result = _view(step, "tool_result") or {}
+                if str(_view(result, "stage") or _view(arguments, "stage") or "") == stage:
+                    return True
+            return False
+
+        records = ota_context.ota_record
+        scopes = [self._record_think_scope(record) for record in records]
+        projected: List[Any] = []
+        transitions: List[int] = []
+        target_scope = (mode, stage)
+        for index, (record, scope) in enumerate(zip(records, scopes)):
+            if scope == target_scope:
+                projected.append(record)
+                continue
+            next_scope = scopes[index + 1] if index + 1 < len(scopes) else None
+            if scope is None or scope[0] != mode or scope[1] == stage or next_scope != target_scope:
+                continue
+            transitions.append(index)
+            if switches_to_target(record):
+                projected.append(record)
+        if not transitions:
+            return ota_context, None
+        return ota_context.model_copy(update={
+            # Build stages retain their own prior trace. Only an explicit switch
+            # contributes its completed source-stage round to the target trace;
+            # automatic transitions keep their completion round in the source.
+            "ota_record": projected,
+        }), transitions[-1]
 
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render the Build-stage persona with its exact current ToolSurface."""
