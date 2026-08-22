@@ -146,7 +146,11 @@ export function Landing({ needsModelConfig = false, onConfigureModel, marketCard
         <BridgicLogo size={32} />
         <span className="text-2xl font-bold text-text-primary">{APP_PRODUCT_NAME}</span>
       </div>
-      <p className="text-md text-text-secondary mb-8 text-center max-w-[420px] leading-[1.6]">
+      {/* Capped at the composer's 640px, not the 420px it used to be: at 15px the Chinese
+          tagline measures ~430px (a 6-char `/build` chip plus 25 full-width glyphs), so it
+          wrapped to a second line with plenty of window left over, while the shorter English
+          one fit. The cap still holds — a narrow window wraps it as before. */}
+      <p className="text-md text-text-secondary mb-8 text-center max-w-[640px] leading-[1.6]">
         <Trans
           i18nKey="landing.tagline"
           components={{
