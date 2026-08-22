@@ -160,6 +160,7 @@ function projectStageRounds(
   usesStageScope: boolean;
   hasStageBoundary: boolean;
   allStageSessionHistory: boolean;
+  switchRoundCount: number;
 } {
   const priorRounds = turn.otaRecords.slice(0, targetRoundIndex);
   // Only think_scope proves that this request was assembled by the new
@@ -172,22 +173,76 @@ function projectStageRounds(
       usesStageScope: false,
       hasStageBoundary: false,
       allStageSessionHistory: false,
+      switchRoundCount: 0,
     };
   }
   const allStageSessionHistory = targetScope.sessionHistory === "all_stages";
 
-  for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
-    const scope = roundThinkScope(priorRounds[index] ?? {});
-    if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
-      return {
-        rounds: priorRounds.slice(index + 1),
-        usesStageScope: true,
-        hasStageBoundary: true,
-        allStageSessionHistory,
-      };
+  if (targetScope.mode === "run_workflow") {
+    for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
+      const scope = roundThinkScope(priorRounds[index] ?? {});
+      if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
+        return {
+          rounds: priorRounds.slice(index + 1),
+          usesStageScope: true,
+          hasStageBoundary: true,
+          allStageSessionHistory,
+          switchRoundCount: 0,
+        };
+      }
     }
+    return {
+      rounds: priorRounds,
+      usesStageScope: true,
+      hasStageBoundary: false,
+      allStageSessionHistory,
+      switchRoundCount: 0,
+    };
   }
-  return { rounds: priorRounds, usesStageScope: true, hasStageBoundary: false, allStageSessionHistory };
+
+  const switchesToTarget = (round: Record<string, unknown>): boolean => actionSteps(round).some((step) => {
+    if (step.tool_name !== "switch" || step.success === false) return false;
+    const argumentsRecord = record(step.tool_arguments) ?? {};
+    const resultRecord = record(step.tool_result) ?? {};
+    return String(resultRecord.stage ?? argumentsRecord.stage ?? "") === targetScope.stage;
+  });
+
+  const scopes = priorRounds.map((round) => roundThinkScope(round));
+  const projected: Record<string, unknown>[] = [];
+  let switchRoundCount = 0;
+  let transitionCount = 0;
+  priorRounds.forEach((round, index) => {
+    const scope = scopes[index];
+    if (scope?.mode === targetScope.mode && scope.stage === targetScope.stage) {
+      projected.push(round);
+      return;
+    }
+    const nextScope = index + 1 < scopes.length ? scopes[index + 1] : targetScope;
+    if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage
+      && nextScope?.mode === targetScope.mode && nextScope.stage === targetScope.stage) {
+      transitionCount += 1;
+      if (switchesToTarget(round)) {
+        projected.push(round);
+        switchRoundCount += 1;
+      }
+    }
+  });
+  if (transitionCount) {
+    return {
+      rounds: projected,
+      usesStageScope: true,
+      hasStageBoundary: true,
+      allStageSessionHistory,
+      switchRoundCount,
+    };
+  }
+  return {
+    rounds: priorRounds,
+    usesStageScope: true,
+    hasStageBoundary: false,
+    allStageSessionHistory,
+    switchRoundCount: 0,
+  };
 }
 
 function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot): string {
@@ -260,7 +315,7 @@ function toolResultContent(step: Record<string, unknown>): string {
   if (step.error || step.success === false) return `failed: ${String(step.error ?? "tool failed")}`;
   if (step.tool_result === null || step.tool_result === undefined) return "(no output)";
   if (step.tool_result === "") return "(awaiting the user's answer)";
-  return String(step.tool_result);
+  return typeof step.tool_result === "string" ? step.tool_result : safeStringify(step.tool_result);
 }
 
 function toolCallArguments(call: Record<string, unknown>): Record<string, unknown> {
@@ -769,6 +824,8 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       availableRounds: priorRounds.length,
       omittedByStage: priorRounds.length - stageProjection.rounds.length,
       historyModel: stageProjection.usesStageScope ? "stage_scoped" : "legacy_full_turn",
+      retainedBoundaryRound: stageProjection.switchRoundCount > 0,
+      retainedSwitchRounds: stageProjection.switchRoundCount,
     },
   ));
 

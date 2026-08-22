@@ -116,7 +116,7 @@ async def test_message_scopes() -> None:
 
 
 async def test_workflow_stage_message_scope() -> None:
-    """Validate drops Execute history while Execute sections retain their shared stage trace."""
+    """Automatic Workflow stages keep only their own trace."""
     class ContextFreeWorkflowThink(WorkflowThink):
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
@@ -140,13 +140,15 @@ async def test_workflow_stage_message_scope() -> None:
         prompt_time=PROMPT_TIME,
         state={"think": {**workflow_state, "stage": "validate", "step_index": 0}},
         ota_record=[
-            record("execute", "Execution history"),
+            record("execute", "Older execution history"),
+            record("execute", "Final execution handoff"),
             record("validate", "Validation progress"),
         ],
     )
     validate_messages = await ContextFreeValidateThink().assemble_messages(validate_ota, _context())
     validate_contents = [message.content for message in validate_messages]
-    assert "Execution history" not in validate_contents
+    assert "Older execution history" not in validate_contents
+    assert "Final execution handoff" not in validate_contents
     assert "Past request" in validate_contents
     assert "Past answer" in validate_contents
     assert "Validation progress" in validate_contents
@@ -168,8 +170,8 @@ async def test_workflow_stage_message_scope() -> None:
     assert "Second execution section" in execute_contents
 
 
-async def test_build_stage_message_scope_uses_generic_marker() -> None:
-    """Build stage isolation trims source activity but retains the switch handoff."""
+async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
+    """Build stages resume their history and retain only explicit switch transitions."""
     def record(mode: str, stage: str, content: str, observation: str = "") -> OTARecord:
         round_ = OTARecord(
             think_result={"step_content": content, "tool_calls": []},
@@ -178,17 +180,47 @@ async def test_build_stage_message_scope_uses_generic_marker() -> None:
         round_.think_scope = {"mode": mode, "stage": stage}
         return round_
 
+    def switch_record(source_stage: str, target_stage: str, content: str, reason: str) -> OTARecord:
+        call_id = f"call-{source_stage}-to-{target_stage}"
+        round_ = record(
+            "build",
+            source_stage,
+            content,
+            f"[stage handoff] `build/{source_stage}` → `build/{target_stage}`\n{reason}",
+        )
+        round_.think_result = {
+            "step_content": content,
+            "tool_calls": [{
+                "call_id": call_id,
+                "tool": "switch",
+                "tool_arguments": [
+                    {"name": "stage", "value": target_stage},
+                    {"name": "reason", "value": reason},
+                ],
+            }],
+        }
+        round_.action_result = ActionResult(results=[ActionStepResult(
+            tool_id=call_id,
+            tool_name="switch",
+            tool_arguments={"stage": target_stage, "reason": reason},
+            tool_result={"stage": target_stage, "reason": reason},
+        )])
+        return round_
+
+    clarify_confirmation = record("build", "clarify", "Clarify confirmation history")
+    clarify_confirmation.action_result = ActionResult(results=[ActionStepResult(
+        tool_id="call-task-confirm",
+        tool_name="request_human_task_confirm",
+        tool_arguments={},
+        tool_result={"status": "confirmed"},
+    )])
+
     explore_ota = AmphiOTAContext(
         user_input="Build the workflow",
         prompt_time=PROMPT_TIME,
         state={"think": {"mode": "build", "stage": "explore"}},
         ota_record=[
-            record(
-                "build",
-                "clarify",
-                "Clarify history",
-                "[stage handoff] `build/clarify` → `build/explore`\nRequirements are settled.",
-            ),
+            clarify_confirmation,
             record("build", "explore", "Explore progress"),
         ],
     )
@@ -196,18 +228,23 @@ async def test_build_stage_message_scope_uses_generic_marker() -> None:
         message.content
         for message in await ExploreThink().assemble_messages(explore_ota, _context())
     ]
-    assert "Clarify history" not in explore_contents
+    assert "Clarify confirmation history" not in explore_contents
     assert "Past request" in explore_contents
     assert "Past answer" in explore_contents
-    assert any("Requirements are settled." in content for content in explore_contents)
     assert "Explore progress" in explore_contents
 
+    explore_to_clarify = switch_record(
+        "explore",
+        "clarify",
+        "Explore needs clarification",
+        "A required decision is missing from task.md.",
+    )
     clarify_ota = AmphiOTAContext(
         user_input="Build the workflow",
         prompt_time=PROMPT_TIME,
         state={"think": {"mode": "build", "stage": "clarify"}},
         ota_record=[
-            record("build", "explore", "Explore history"),
+            explore_to_clarify,
             record("build", "clarify", "Clarify progress"),
         ],
     )
@@ -217,33 +254,77 @@ async def test_build_stage_message_scope_uses_generic_marker() -> None:
     ]
     assert "Past request" in clarify_contents
     assert "Past answer" in clarify_contents
-    assert "Explore history" not in clarify_contents
+    assert "Explore needs clarification" in clarify_contents
     assert "Clarify progress" in clarify_contents
 
     generate_ota = AmphiOTAContext(
         user_input="Build the workflow",
         prompt_time=PROMPT_TIME,
         state={"think": {"mode": "build", "stage": "generate"}},
-        ota_record=[
-            record("build", "generate", "Earlier generation history"),
-            record(
-                "build",
-                "verify",
-                "Verification history",
-                "[stage handoff] `build/verify` → `build/generate`\n"
-                "The generated script mishandles empty input; fix that case and rerun validation.",
-            ),
-            record("build", "generate", "Generate retry progress"),
-        ],
+        ota_record=[],
     )
-    generate_contents = [
-        message.content
-        for message in await GenerateThink().assemble_messages(generate_ota, _context())
+    switch_reason = "The generated script mishandles empty input; fix that case and rerun validation."
+    first_generation_handoff = switch_record(
+        "generate",
+        "verify",
+        "Earlier generation history",
+        "The first implementation is ready for verification.",
+    )
+    verification_round = switch_record("verify", "generate", "Verification history", switch_reason)
+    generate_ota.ota_record = [
+        first_generation_handoff,
+        record("build", "verify", "Verification intermediate work"),
+        verification_round,
+        record("build", "generate", "Generate retry progress"),
     ]
-    assert "Earlier generation history" not in generate_contents
-    assert "Verification history" not in generate_contents
+    generate_messages = await GenerateThink().assemble_messages(generate_ota, _context())
+    generate_contents = [message.content for message in generate_messages]
+    assert "Earlier generation history" in generate_contents
+    assert "Verification intermediate work" not in generate_contents
+    assert "Verification history" in generate_contents
     assert any("mishandles empty input" in content for content in generate_contents)
     assert "Generate retry progress" in generate_contents
+    switch_call = next(
+        block
+        for message in generate_messages
+        for block in message.blocks
+        if getattr(block, "id", None) == "call-verify-to-generate"
+    )
+    assert switch_call.id == "call-verify-to-generate"
+    assert switch_call.arguments == {"stage": "generate", "reason": switch_reason}
+    switch_result = next(
+        block
+        for message in generate_messages
+        for block in message.blocks
+        if getattr(block, "id", None) == "call-verify-to-generate" and hasattr(block, "content")
+    )
+    assert switch_reason in switch_result.content
+
+    generation_handoff = switch_record(
+        "generate",
+        "verify",
+        "Generate retry completed",
+        "The corrected implementation is ready for verification.",
+    )
+    verify_again_ota = AmphiOTAContext(
+        user_input="Build the workflow",
+        prompt_time=PROMPT_TIME,
+        state={"think": {"mode": "build", "stage": "verify"}},
+        ota_record=[
+            *generate_ota.ota_record,
+            generation_handoff,
+            record("build", "verify", "Second verification progress"),
+        ],
+    )
+    verify_again_contents = [
+        message.content
+        for message in await VerifyThink().assemble_messages(verify_again_ota, _context())
+    ]
+    assert "Verification intermediate work" in verify_again_contents
+    assert "Verification history" in verify_again_contents
+    assert "Generate retry progress" not in verify_again_contents
+    assert "Generate retry completed" in verify_again_contents
+    assert "Second verification progress" in verify_again_contents
 
 
 async def test_build_dispatch() -> None:
