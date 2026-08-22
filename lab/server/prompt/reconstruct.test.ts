@@ -201,12 +201,73 @@ describe("rebuildPrompt", () => {
     expect(result.stage).toBe("generate");
     expect(contents).toContain("Generate history");
     expect(contents).not.toContain("Clarify history");
-    expect(contents).not.toContain("Explore history");
+    expect(contents).toContain("Explore history");
     expect(result.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
-      completedRounds: 1,
+      completedRounds: 2,
       availableRounds: 3,
-      omittedByStage: 2,
+      omittedByStage: 1,
       historyModel: "stage_scoped",
+      retainedBoundaryRound: true,
+    });
+  });
+
+  test("resumes a stage's earlier Turn history and appends the completed switch round", () => {
+    const reason = "Rewrite the redundant implementation.";
+    const handoff = "[stage handoff] `build/verify` → `build/generate`\nRewrite the redundant implementation.";
+    const current = turn("turn-current", 0, "Return to Generate", [
+      { think_scope: { mode: "build", stage: "generate" }, think_result: { step_content: "Earlier Generate history" } },
+      { think_scope: { mode: "build", stage: "verify" }, think_result: { step_content: "Verify intermediate work" } },
+      {
+        think_scope: { mode: "build", stage: "verify" },
+        think_result: {
+          step_content: "Verify found redundant code",
+          tool_calls: [{ call_id: "switch-call", tool: "switch", tool_arguments: [{ name: "stage", value: "generate" }, { name: "reason", value: reason }] }],
+        },
+        action_result: {
+          results: [{ tool_id: "switch-call", tool_name: "switch", tool_arguments: { stage: "generate", reason }, success: true, tool_result: { stage: "generate", reason } }],
+        },
+        observation_result: handoff,
+      },
+      { think_scope: { mode: "build", stage: "generate" }, think_result: { step_content: "Generate retry history" } },
+      { think_scope: { mode: "build", stage: "verify" } },
+    ], { agentState: { think: { mode: "build", stage: "generate" } } });
+
+    const result = rebuildPrompt(request([current], current.id, 3));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(result.stage).toBe("generate");
+    expect(contents).toContain(handoff);
+    expect(contents).toContain("Earlier Generate history");
+    expect(contents).not.toContain("Verify intermediate work");
+    expect(contents).toContain("Verify found redundant code");
+    expect(result.messages.find((message) => message.toolCalls?.[0]?.id === "switch-call")?.toolCalls?.[0]).toMatchObject({
+      name: "switch",
+      arguments: { stage: "generate", reason },
+    });
+    const switchResult = result.messages.find((message) => message.toolCallId === "switch-call");
+    expect(switchResult?.role).toBe("tool");
+    expect(switchResult?.content).toContain(reason);
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
+      completedRounds: 2,
+      availableRounds: 3,
+      omittedByStage: 1,
+      historyModel: "stage_scoped",
+      retainedBoundaryRound: true,
+      retainedResumeRounds: 1,
+    });
+
+    const verifyResult = rebuildPrompt(request([current], current.id, 4));
+    const verifyContents = verifyResult.messages.map((message) => message.content ?? "");
+    expect(verifyResult.stage).toBe("verify");
+    expect(verifyContents).toContain("Verify intermediate work");
+    expect(verifyContents).toContain("Verify found redundant code");
+    expect(verifyContents).toContain("Generate retry history");
+    expect(verifyResult.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
+      completedRounds: 4,
+      availableRounds: 4,
+      omittedByStage: 0,
+      historyModel: "stage_scoped",
+      retainedResumeRounds: 2,
     });
   });
 
@@ -223,27 +284,29 @@ describe("rebuildPrompt", () => {
 
     expect(contents).toContain("Past Session request");
     expect(contents).toContain("Explore history");
-    expect(contents).not.toContain("Clarify history");
+    expect(contents).toContain("Clarify history");
     expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
       omittedByStage: false,
       historyModel: "all_stages",
     });
   });
 
-  test("keeps Session history in marked Workflow Validate while cropping Execute trace", () => {
+  test("keeps Session history and the final Execute boundary in marked Workflow Validate", () => {
     const previous = turn("turn-previous", 0, "Past Workflow request", []);
     const current = turn("turn-workflow", 1, "Run it", [
-      { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Execute history" } },
+      { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Older Execute history" } },
+      { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Final Execute handoff" } },
       { think_scope: { mode: "run_workflow", stage: "validate", session_history: "all_stages" }, think_result: { step_content: "Validate history" } },
       { think_scope: { mode: "run_workflow", stage: "validate", session_history: "all_stages" } },
     ], { agentState: { think: { mode: "run_workflow", stage: "validate" } } });
 
-    const result = rebuildPrompt(request([previous, current], current.id, 2));
+    const result = rebuildPrompt(request([previous, current], current.id, 3));
     const contents = result.messages.map((message) => message.content ?? "");
 
     expect(contents).toContain("Past Workflow request");
     expect(contents).toContain("Validate history");
-    expect(contents).not.toContain("Execute history");
+    expect(contents).toContain("Final Execute handoff");
+    expect(contents).not.toContain("Older Execute history");
     expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
       omittedByStage: false,
       historyModel: "all_stages",
@@ -271,7 +334,7 @@ describe("rebuildPrompt", () => {
     });
   });
 
-  test("uses persisted Workflow scope and drops Execute history in Validate", () => {
+  test("uses persisted Workflow scope and retains the final Execute boundary in Validate", () => {
     const previous = turn("turn-previous", 0, "previous-conversation", []);
     const current = turn("turn-workflow", 1, "Run it", [
       { think_scope: { mode: "run_workflow", stage: "execute" }, think_result: { step_content: "Execute history" } },
@@ -284,7 +347,7 @@ describe("rebuildPrompt", () => {
 
     expect(result.stage).toBe("workflow_validate");
     expect(contents).toContain("Validate history");
-    expect(contents).not.toContain("Execute history");
+    expect(contents).toContain("Execute history");
     expect(contents).not.toContain("previous-conversation");
     expect(result.fidelity.limitations.some((item) => item.includes("Workflow stage is inferred"))).toBe(false);
   });

@@ -160,6 +160,7 @@ function projectStageRounds(
   usesStageScope: boolean;
   hasStageBoundary: boolean;
   allStageSessionHistory: boolean;
+  resumeRoundCount: number;
 } {
   const priorRounds = turn.otaRecords.slice(0, targetRoundIndex);
   // Only think_scope proves that this request was assembled by the new
@@ -172,22 +173,43 @@ function projectStageRounds(
       usesStageScope: false,
       hasStageBoundary: false,
       allStageSessionHistory: false,
+      resumeRoundCount: 0,
     };
   }
   const allStageSessionHistory = targetScope.sessionHistory === "all_stages";
 
-  for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
-    const scope = roundThinkScope(priorRounds[index] ?? {});
-    if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
-      return {
-        rounds: priorRounds.slice(index + 1),
-        usesStageScope: true,
-        hasStageBoundary: true,
-        allStageSessionHistory,
-      };
+  const scopes = priorRounds.map((round) => roundThinkScope(round));
+  const projected: Record<string, unknown>[] = [];
+  let resumeRoundCount = 0;
+  priorRounds.forEach((round, index) => {
+    const scope = scopes[index];
+    if (scope?.mode === targetScope.mode && scope.stage === targetScope.stage) {
+      projected.push(round);
+      return;
     }
+    const nextScope = index + 1 < scopes.length ? scopes[index + 1] : targetScope;
+    if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage
+      && nextScope?.mode === targetScope.mode && nextScope.stage === targetScope.stage) {
+      projected.push(round);
+      resumeRoundCount += 1;
+    }
+  });
+  if (resumeRoundCount) {
+    return {
+      rounds: projected,
+      usesStageScope: true,
+      hasStageBoundary: true,
+      allStageSessionHistory,
+      resumeRoundCount,
+    };
   }
-  return { rounds: priorRounds, usesStageScope: true, hasStageBoundary: false, allStageSessionHistory };
+  return {
+    rounds: priorRounds,
+    usesStageScope: true,
+    hasStageBoundary: false,
+    allStageSessionHistory,
+    resumeRoundCount: 0,
+  };
 }
 
 function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot): string {
@@ -260,7 +282,7 @@ function toolResultContent(step: Record<string, unknown>): string {
   if (step.error || step.success === false) return `failed: ${String(step.error ?? "tool failed")}`;
   if (step.tool_result === null || step.tool_result === undefined) return "(no output)";
   if (step.tool_result === "") return "(awaiting the user's answer)";
-  return String(step.tool_result);
+  return typeof step.tool_result === "string" ? step.tool_result : safeStringify(step.tool_result);
 }
 
 function toolCallArguments(call: Record<string, unknown>): Record<string, unknown> {
@@ -769,6 +791,8 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       availableRounds: priorRounds.length,
       omittedByStage: priorRounds.length - stageProjection.rounds.length,
       historyModel: stageProjection.usesStageScope ? "stage_scoped" : "legacy_full_turn",
+      retainedBoundaryRound: stageProjection.hasStageBoundary,
+      retainedResumeRounds: stageProjection.resumeRoundCount,
     },
   ));
 
