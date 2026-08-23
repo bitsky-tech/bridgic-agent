@@ -8,7 +8,10 @@
  * composer's overflow clipping; keydown inside is stopped so it won't reach the
  * composer's send/menu handlers. Registers kind `'sched-freq'`.
  *
- * Positioning invariant: the popover **must land entirely inside the viewport**. The
+ * Positioning invariant: the popover **must land entirely inside the region the
+ * renderer actually paints** — inside the viewport, and to the left of the embedded
+ * Browser's native surface, which composites above this page and would swallow any
+ * overlapping part outright. It narrows before it overflows either edge. The
  * chip lives inside the composer and the composer is pinned to the bottom of the window,
  * so "always open downward" inevitably pushes the popover past the bottom edge of the
  * screen — the user simply cannot click it (we actually hit this).
@@ -32,8 +35,9 @@ import {
   type CronState,
 } from '@/lib/cron'
 import { Icons } from '@/components/amphi'
+import { useOverlayRightLimit } from '@/hooks/useOverlayRightLimit'
 import { throttleRaf } from '@/lib/throttleRaf'
-import { computePopoverPos, POPOVER_WIDTH, type PopoverPos } from './popoverPos'
+import { computePopoverPos, type PopoverPos } from './popoverPos'
 import { registerWidget, WidgetKind, type WidgetViewProps } from './registry'
 
 const buildPeriodOpts = (t: TFunction): { value: CronPeriod; label: string }[] => [
@@ -235,13 +239,21 @@ function PeriodFields({ st, set }: { st: CronState; set: (k: keyof CronState, v:
   return <div className="flex flex-wrap items-center gap-x-2 gap-y-2.5">{timeFields}</div>
 }
 
-const viewportSize = () => ({ width: window.innerWidth, height: window.innerHeight })
+// `rightLimit` comes from the caller (`useOverlayRightLimit`): the embedded
+// Browser paints over this page, and the popover keeps to its left rather than
+// blanking the browser for a dropdown.
+const viewportSize = (rightLimit: number) => ({
+  width: window.innerWidth,
+  height: window.innerHeight,
+  rightLimit,
+})
 
 /** Whether two positions are equivalent — used to skip pointless re-renders while scrolling. */
 function samePos(a: PopoverPos | null, b: PopoverPos): boolean {
   return (
     a != null
     && a.left === b.left
+    && a.width === b.width
     && a.top === b.top
     && a.bottom === b.bottom
     && a.maxHeight === b.maxHeight
@@ -258,6 +270,7 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
   const [pos, setPos] = useState<PopoverPos | null>(null)
   const chipRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  const rightLimit = useOverlayRightLimit()
 
   const cron = buildCron(st)
 
@@ -273,7 +286,7 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
   // intermediate state and nothing has to be hidden on the first frame.
   const toggle = () => {
     const anchor = chipRef.current?.getBoundingClientRect()
-    if (anchor) setPos(computePopoverPos(anchor, viewportSize()))
+    if (anchor) setPos(computePopoverPos(anchor, viewportSize(rightLimit)))
     setOpen((o) => !o)
   }
 
@@ -287,12 +300,16 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
     const place = () => {
       const anchor = chipRef.current?.getBoundingClientRect()
       if (!anchor) return
-      const next = computePopoverPos(anchor, viewportSize())
+      const next = computePopoverPos(anchor, viewportSize(rightLimit))
       // Skip setState when the value did not change: scroll fires once per frame, and
       // setting blindly would re-render the whole popover (Sel + PeriodFields + preview)
       // every frame.
       setPos((prev) => (samePos(prev, next) ? prev : next))
     }
+    // Re-place immediately, not only on the listeners below: `rightLimit` changes
+    // when the browser appears or its dock is resized, and an already-open popover
+    // would otherwise sink underneath the native view it was placed to avoid.
+    place()
     const schedulePlace = throttleRaf(place)
     // scroll uses the capture phase: what scrolls is an ancestor container (composer /
     // message list), and the event does not bubble to window.
@@ -303,7 +320,7 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
       window.removeEventListener('resize', schedulePlace)
       window.removeEventListener('scroll', schedulePlace, true)
     }
-  }, [open])
+  }, [open, rightLimit])
 
   // Close on outside mousedown / Esc while open.
   useEffect(() => {
@@ -346,18 +363,17 @@ export function SchedFreqWidget({ value, onChange }: WidgetViewProps) {
             ref={popoverRef}
             onKeyDown={(e) => e.stopPropagation()}
             className="fixed z-[110] overflow-y-auto bg-bg-modal border border-border-default rounded-xl shadow-modal p-4 flex flex-col gap-4"
-            // width comes from POPOVER_WIDTH instead of a hard-coded `w-[420px]`:
-            // computePopoverPos clamps the left offset against that same constant, so
-            // writing it twice would drift silently — widen it without updating the
-            // constant and the popover's right edge runs off screen when the chip sits
-            // near the right side, while the unit tests stay green.
+            // Width is part of the placement, not a class: computePopoverPos narrows it
+            // when the free column cannot hold POPOVER_WIDTH, and it clamps `left` against
+            // whatever width it settled on. Writing the width here as well would drift
+            // silently from the offset it was clamped with.
             //
             // Exactly one of top / bottom is set: opening upward must anchor via bottom,
             // otherwise positioning would depend on the popover height (see the infinite
             // loop in the popoverPos.ts header). maxHeight is always present, so
             // overflowing content scrolls inside the popover instead of overturning the
             // placement.
-            style={{ width: POPOVER_WIDTH, ...pos }}
+            style={{ ...pos }}
           >
             {/* Frequency mode */}
             <div className="flex items-center gap-2.5">

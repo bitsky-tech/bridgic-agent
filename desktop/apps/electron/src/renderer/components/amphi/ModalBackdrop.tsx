@@ -11,7 +11,7 @@
  * not wrap this component simply has no backdrop, so missing an update is
  * physically impossible.
  *
- * Four invariants (understand why before changing anything):
+ * Six invariants (understand why before changing anything):
  *
  *   1. **Portal to body**. An `absolute` backdrop only covers the nearest
  *      positioned ancestor — a dialog opened from inside the composer would
@@ -55,13 +55,22 @@
  *      pair — unlike `click` — also fires for the right and middle buttons: without the
  *      filter, right-clicking the dim area (reaching for a paste menu and missing the
  *      input) would dismiss the dialog.
+ *   6. **Mounting blocks the native Browser surface.** The embedded Browser is
+ *      an Electron `WebContentsView` composited above this page, so no z-index
+ *      reaches over it: the native view must hide before a dialog can be seen.
+ *      Owning that here rather than in each consumer is the same trade as the
+ *      backdrop itself — a dialog that does not wrap this component simply has
+ *      no backdrop, so forgetting the blocker is physically impossible. The
+ *      blocker is keyed per instance so a stacked dialog closing does not
+ *      uncover the browser over the one still open.
  *
  * Not responsible for: closing on Esc (consumers use `useEscapeToClose`
  * themselves), or content layout and animation.
  */
 
 import { createPortal } from 'react-dom'
-import { useRef, type ReactNode } from 'react'
+import { useId, useRef, type ReactNode } from 'react'
+import { useBrowserSurfaceBlocker } from '@/hooks/useBrowserSurfaceBlocker'
 import { cn } from '@/lib/cn'
 
 export interface ModalBackdropProps {
@@ -89,6 +98,9 @@ export function ModalBackdrop({
 }: ModalBackdropProps) {
   // Where the current press started; see invariant 5 in the file header.
   const pressedOnBackdrop = useRef(false)
+  // Invariant 6, see the file header. Per-instance id: stacked dialogs must not
+  // release each other's blocker.
+  useBrowserSurfaceBlocker(useId(), true)
   return createPortal(
     <div
       data-testid={testId}

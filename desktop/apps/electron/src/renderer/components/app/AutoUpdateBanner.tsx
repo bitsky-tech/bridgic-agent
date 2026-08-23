@@ -23,6 +23,12 @@
  *     "scheduled" card auto-dismisses after a few seconds; if the poll were
  *     keyed off the visible card, that dismissal would silently cancel the very
  *     thing the card just promised.
+ *   - **The card steps around the embedded Browser, it does not blank it.** That
+ *     native view composites above this page, so the card was invisible under it
+ *     until it started dodging. Hiding the view instead (what a modal dialog
+ *     does) is wrong here: this card is deliberately non-blocking and can sit in
+ *     the corner indefinitely, so the page behind it would stay blank for as
+ *     long as the user ignored the card.
  *   - Exactly ONE control cancels the update, and it is on the ready card. The
  *     acknowledgement cards only close themselves — an "cancel" button on the
  *     scheduled card cannot be read unambiguously (cancel the schedule, or
@@ -41,7 +47,9 @@ import {
   updateCardReopenAtom,
 } from '@/atoms/update'
 import { rlog } from '@/lib/logger'
+import { useBrowserSurfaceBlocker } from '@/hooks/useBrowserSurfaceBlocker'
 import { useCountdownDismiss } from '@/hooks/useCountdownDismiss'
+import { useOverlayRightLimit } from '@/hooks/useOverlayRightLimit'
 import { Btn, Card } from '@/components/amphi'
 
 /** How often the parked update re-checks whether the agent went idle. */
@@ -49,6 +57,12 @@ const IDLE_POLL_MS = 10_000
 
 /** How long an acknowledgement card stays up before closing itself. */
 const AUTO_DISMISS_SECONDS = 5
+
+/** Gap from whichever edge the card is currently hugging (matches `bottom-4`). */
+const EDGE_GAP_PX = 16
+
+/** Card's widest form (matches `max-w-[380px]`); the width it needs to step aside into. */
+const CARD_WIDTH_PX = 380
 
 /**
  * Consecutive idle readings required before a parked update installs itself.
@@ -116,6 +130,27 @@ export function AutoUpdateBanner() {
   const beginHandover = useSetAtom(beginUpdateHandoverAtom)
   const fetchAgentActivity = useSetAtom(fetchAgentActivityAtom)
   const endHandover = useSetAtom(endUpdateHandoverAtom)
+  // Bottom-right is exactly where the embedded Browser's native view sits, and
+  // that view composites above this page — `z-50` buys nothing against it. The
+  // card steps left of the surface rather than blocking it: this card is not
+  // modal and can sit there for as long as the user ignores it, and blanking a
+  // whole web page behind it would read as a bug rather than as a decision.
+  const rightLimit = useOverlayRightLimit()
+  // Expanded Browser leaves only the sidebar's width beside the surface — none
+  // at all with the sidebar collapsed — so there is nowhere to step to and the
+  // card falls back to hiding the view instead.
+  //
+  // A latch (`squeezed ||`), measured ONLY while not already hiding the view:
+  // blocking clears the rect, so re-deciding from the rect would unblock →
+  // re-measure → block, every frame. Adjusted during render rather than in an
+  // effect so the blocker below acts on the decision in the same commit. The
+  // cost of the latch is that un-expanding the browser while a card is up
+  // leaves it blocked until the card closes.
+  const [squeezed, setSqueezed] = useState(false)
+  const nextSqueezed = view !== null
+    && (squeezed || rightLimit - EDGE_GAP_PX * 2 < CARD_WIDTH_PX)
+  if (nextSqueezed !== squeezed) setSqueezed(nextSqueezed)
+  useBrowserSurfaceBlocker('auto-update-banner', nextSqueezed)
 
   useEffect(() => {
     return window.api.events.onAutoUpdate((event) => {
@@ -224,7 +259,19 @@ export function AutoUpdateBanner() {
   return (
     <>
       {view !== null && (
-        <div className="fixed bottom-4 right-4 z-50 max-w-[380px]">
+        <div
+          className="fixed bottom-4 z-50 max-w-[380px] transition-[right] duration-200 ease-out motion-reduce:transition-none"
+          // Viewport-derived offset — the §1.22 dynamic-value exception. Animated
+          // rather than snapped: the browser opening under a card the user is
+          // already reading should look like the card making room, not like it
+          // being thrown across the window.
+          style={{
+            right: nextSqueezed
+              ? EDGE_GAP_PX
+              : Math.max(EDGE_GAP_PX, window.innerWidth - rightLimit + EDGE_GAP_PX),
+          }}
+          data-testid="auto-update-banner"
+        >
           <BannerBody
             view={view}
             installing={installing}

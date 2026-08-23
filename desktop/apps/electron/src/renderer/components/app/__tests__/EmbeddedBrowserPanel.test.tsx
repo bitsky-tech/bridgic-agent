@@ -16,13 +16,14 @@ const {
   browserExpandedAtom,
   browserSurfaceBlockedAtom,
   embeddedBrowserSnapshotAtom,
+  nativeSurfaceRectAtom,
   setEmbeddedBrowserSnapshotAtom,
   setBrowserSurfaceBlockerAtom,
 } = await import('@/atoms/browser')
 const {
   BROWSER_OVERFLOW_INSPECTION_DELAY_MS,
 } = await import('@/hooks/useBrowserOverflowReminder')
-const { closeIssueReportAtom, openIssueReportAtom } = await import('@/atoms/issue-report')
+const { ModalBackdrop } = await import('@/components/amphi/ModalBackdrop')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const {
   EmbeddedBrowserPanel,
@@ -1020,7 +1021,10 @@ describe('EmbeddedBrowserPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('hides the native browser while issue feedback is open and restores it after closing', async () => {
+  // Not tied to one feature any more: every dialog reaches the native surface
+  // through `ModalBackdrop`, so this covers the whole class at the seam that
+  // matters instead of standing in for it with the issue-report atom.
+  it('hides the native browser while a dialog is open and restores it after closing', async () => {
     const calls = browserApiCalls()
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -1030,9 +1034,15 @@ describe('EmbeddedBrowserPanel', () => {
     store.set(embeddedBrowserSnapshotAtom, {
       sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
     })
+    const renderWithDialog = (dialogOpen: boolean) => withZhTranslation(
+      <Provider store={store}>
+        <EmbeddedBrowserPanel />
+        {dialogOpen ? <ModalBackdrop><span>dialog</span></ModalBackdrop> : null}
+      </Provider>,
+    )
 
     await act(async () => {
-      root.render(withZhTranslation(<Provider store={store}><EmbeddedBrowserPanel /></Provider>))
+      root.render(renderWithDialog(false))
     })
     const canvas = host.querySelector<HTMLElement>('[data-testid="browser-canvas"]')!
     canvas.getBoundingClientRect = () => ({
@@ -1054,13 +1064,13 @@ describe('EmbeddedBrowserPanel', () => {
     expect(calls.at(-1)).toBe('setVisible:true')
 
     await act(async () => {
-      store.set(openIssueReportAtom, { source: 'renderer' })
+      root.render(renderWithDialog(true))
       await Promise.resolve()
     })
     expect(calls.at(-1)).toBe('setVisible:false')
 
     await act(async () => {
-      store.set(closeIssueReportAtom)
+      root.render(renderWithDialog(false))
       await Promise.resolve()
     })
     await act(async () => {
@@ -1071,6 +1081,50 @@ describe('EmbeddedBrowserPanel', () => {
     expect(calls.at(-1)).toBe('setVisible:true')
 
     await act(async () => root.unmount())
+  })
+
+  // Overlays that dodge the native view instead of blocking it (the update card,
+  // the sched-freq popover) read this rect. It has to track the same measurement
+  // that goes over IPC, or they dodge to the wrong place — or, worse, sit under a
+  // view they believe is not there.
+  it('publishes the native surface rect while presenting, and clears it when it stops', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-a')
+    store.set(embeddedBrowserSnapshotAtom, {
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+    })
+
+    await act(async () => {
+      root.render(withZhTranslation(<Provider store={store}><EmbeddedBrowserPanel /></Provider>))
+    })
+    expect(store.get(nativeSurfaceRectAtom)).toBeNull()
+
+    const canvas = host.querySelector<HTMLElement>('[data-testid="browser-canvas"]')!
+    canvas.getBoundingClientRect = () => ({
+      x: 420,
+      y: 96,
+      width: 640,
+      height: 600,
+      top: 96,
+      right: 1060,
+      bottom: 696,
+      left: 420,
+      toJSON: () => ({}),
+    })
+    await act(async () => {
+      animationFrame?.(0)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(store.get(nativeSurfaceRectAtom)).toEqual({ x: 420, y: 96, width: 640, height: 600 })
+
+    // Unmounting is the panel's own "the view is gone" path; leaving a stale rect
+    // behind would keep every overlay dodging an empty rectangle forever.
+    await act(async () => root.unmount())
+    expect(store.get(nativeSurfaceRectAtom)).toBeNull()
   })
 
   it('shows a renderer-owned empty state when a Session has no active tab', async () => {
