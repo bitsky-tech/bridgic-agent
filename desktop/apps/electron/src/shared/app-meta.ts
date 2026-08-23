@@ -84,7 +84,7 @@ export const APP_BUNDLE_ID = 'ai.bridgic.agent'
 export const APP_DEEPLINK_SCHEME = 'amphi'
 
 /** App version — keep in sync with root and apps/electron package.json. */
-export const APP_VERSION = '0.1.2'
+export const APP_VERSION = '0.1.3'
 
 /** GitHub page used for user-confirmed issue reports from the desktop app. */
 export const APP_NEW_ISSUE_URL = 'https://github.com/bitsky-tech/bridgic-agent/issues/new'
