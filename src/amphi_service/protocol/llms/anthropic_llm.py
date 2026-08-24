@@ -179,8 +179,8 @@ class AnthropicLlm(BaseLlm):
                 # omits them; Anthropic also requires thinking before other blocks.
                 content = _thinking_blocks_of(msg) + content
             # Anthropic requires strict user/assistant alternation; fold any
-            # consecutive same-role messages into one (e.g. a failed turn keeps
-            # the user's question with no reply → two user messages in a row).
+            # consecutive same-role messages into one (e.g. a failed Turn's
+            # partial Agent content followed by its derived failure marker).
             if api_messages and api_messages[-1]["role"] == role:
                 api_messages[-1]["content"].extend(content)
             else:

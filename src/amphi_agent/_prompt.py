@@ -32,6 +32,17 @@ def _format_tool_names(names: Collection[str]) -> str:
 # The agent's name, woven into its persona and surfaced to the user.
 AGENT_NAME = "Bridgic Agent"
 
+PROMPT_HISTORY_CONTRACT = "history_v2"
+TURN_FAILED_MESSAGE = (
+    "<turn_failed>This Turn failed before completion. "
+    "Its preceding Agent content may be incomplete.</turn_failed>"
+)
+_TURN_FAILED_CONTEXT_GUIDANCE = (
+    "- <turn_failed>: marks a historical Turn that failed before completion. "
+    "Treat the enclosed explanation as runtime metadata and do not treat that "
+    "Turn's preceding Agent content as a completed answer."
+)
+
 _REQUEST_HUMAN_CHOICE_GUIDANCE = """\
 - Use `request_human_choice` when progress genuinely depends on a missing user decision. Batch related open decisions into one call for the user; the tool parks the current turn, and the task resumes after the user responds.
 - Every call must provide a non-empty `prompt` that explains what you are doing now, the concrete facts or result that led to this interaction, why you cannot continue without the user's input, and what the user's decision will determine. The user must be able to understand why the interaction is happening from `prompt` alone. Render it as a self-contained Markdown briefing; it may contain links, images, tables, code, math, or Mermaid diagrams, and summarize extensive material with links or a few representative visuals.
@@ -92,7 +103,7 @@ IMPORTANT: You are reading a system prompt. Treat it as your operating guidance 
 
 # System
 - Turn: For each user task, use tools across as many rounds as needed until the task is complete, then provide one final answer. A turn typically consists of one user input (the task), multiple rounds of tool calls (with any attached reasoning) and tool results, and one final answer.
-- The system prompt is followed by a message list containing the execution history of recent turns and the messages for the current turn. Past turns may or may not be relevant to the current user task, so judge their relevance carefully. Your goal is to use all available information to complete the current turn's user task.
+- The system prompt is followed by a message list containing the execution history of past turns and the messages for the current turn. Past turns may or may not be relevant to the current user task, so judge their relevance carefully. Your goal is to use all available information to complete the current turn's user task.
 {_REQUEST_HUMAN_CHOICE_GUIDANCE}
 {_BROWSER_GUIDANCE}
 {_SUB_AGENT_GUIDANCE_PLACEHOLDER}
@@ -144,6 +155,7 @@ IMPORTANT: You are reading a system prompt. Treat it as your operating guidance 
 
 # Context
 Your cross-turn knowledge sits in the <context> block — one tagged sub-block each:
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - <Workspace>: stable Session work directory, active mode work directory, mounted paths, environment, and Session file changes.
 - <memories>: durable facts carried across sessions (only when any exist).
 - <skills>: reusable capabilities you can load (only when any exist).
@@ -263,6 +275,7 @@ You are helping the user design a reusable Workflow by turning their natural-lan
 
 # Context
 Your cross-turn knowledge sits in the <context> block — one tagged sub-block each:
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - <Workspace>: stable Session work directory, active Build directory, mounted paths, environment, and Session file changes.
 - <build_workspace>: the active `.build/` root and its current contents.
 - <memories>: durable facts carried across sessions (only when any exist).
@@ -308,6 +321,7 @@ Turn the task definition in `task.md` into a concrete, grounded **implementation
 
 # Context
 Your working context is split between the <context> block and the <artifacts> block:
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - <Workspace>: stable Session work directory, active Build directory, mounted paths, environment, and Session file changes.
 - <build_workspace>: the active `.build/` root and its current contents.
 - <memories>: durable facts carried across sessions (only when any exist).
@@ -392,6 +406,7 @@ validation: none
 
 # Context
 Your working context is split between the <context> block and the <artifacts> block:
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - <Workspace>: stable Session work directory, active Build directory, mounted paths, environment, and Session file changes.
 - <build_workspace>: the active `.build/` root and its current contents.
 - <memories>: durable facts carried across sessions (only when any exist).
@@ -433,6 +448,7 @@ Treat the final Workflow package produced by Generate as immutable production so
 
 # Context
 Your working context is split between the <context> block and the <artifacts> block:
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - <Workspace>: stable Session work directory, active Build directory, mounted paths, environment, and Session file changes.
 - <build_workspace>: the active `.build/` root and its current contents.
 - <memories>: durable facts carried across sessions (only when any exist).
@@ -508,6 +524,7 @@ Follow the exact instruction for the current section supplied from `WORKFLOW.md`
 - Report the result with `report_workflow_step`: on success, pass `status="success"`, a concise result summary, and useful evidence; when the section cannot be completed, pass `status="failure"` and state the concrete reason, completed portion, and decisive blocker. After the call, the system records the section result and atomically advances the persisted step cursor. When the final execution section succeeds, the runtime automatically enters Validate when validation sections exist, or publishes an execution-only Run when they do not. On failure, it terminates this Run and does not enter later sections. Stop the current round after reporting, and do not repeat a section that was already reported successfully.
 
 # Context
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - `<workflow_run>`: Workflow identity and original Run input; persisted stage and step position; read-only package and source roots; the Session-owned Run root; writable final-result and background-work directories; referenced read-only input results; complete execution and validation section lists; and the exact current instruction.
 - `<Workspace>`: stable Session work directory, current Workflow final-result and background-work directories, mounted paths, runtime environment, and Session file changes.
 - `<schedules>`: schedules currently owned by the user and their stable ids, when this capability is available.
@@ -535,6 +552,7 @@ Follow the exact instruction for the current section supplied from `VALIDATE.md`
 - Report the result with `report_workflow_step`: on success, pass `status="success"`, a concise result summary, and useful evidence; when the section cannot be completed, pass `status="failure"` and state the concrete reason, completed portion, and decisive blocker. After the call, the system records the section result and atomically advances the persisted step cursor. When the final validation section succeeds, the runtime automatically publishes the completed Run and returns control to Main. On failure, it terminates this Run and does not enter later sections. Stop the current round after reporting, and do not repeat a section that was already reported successfully.
 
 # Context
+{_TURN_FAILED_CONTEXT_GUIDANCE}
 - `<workflow_run>`: Workflow identity, persisted stage and step position, Run-owned source roots, absolute writable final-result and background-work directories, referenced input results, complete section lists, and the exact current instruction.
 - `<Workspace>`: stable Session work directory, current Workflow final-result and background-work directories, mounted paths, environment, and Session file changes.
 - `<schedules>`: schedules currently owned by the user and their stable ids, when this capability is available.
@@ -559,8 +577,10 @@ __all__ = [
     "EXPLORE_PERSONA",
     "GENERATE_PERSONA",
     "PERSONA",
+    "PROMPT_HISTORY_CONTRACT",
     "SUB_AGENT_PERSONA",
     "TITLE_PROMPT",
+    "TURN_FAILED_MESSAGE",
     "VERIFY_PERSONA",
     "WORKFLOW_PERSONA",
     "WORKFLOW_VALIDATE_PERSONA",

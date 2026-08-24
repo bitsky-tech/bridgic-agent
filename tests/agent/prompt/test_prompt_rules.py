@@ -46,7 +46,8 @@ def test_core_rules() -> None:
     1. Every Persona retains the security boundary and system-prompt secrecy rule.
     2. Main retains language, untrusted-content, denial, and verification principles.
     3. Build and Workflow Personas retain language, tool priority, and owned completion rules.
-    4. Every rendered Persona resolves its internal tool and delegation placeholders.
+    4. Every rendered Persona explains the failed-Turn marker in its Context section.
+    5. Every rendered Persona resolves its internal tool and delegation placeholders.
     """
     personas = _personas()
 
@@ -73,7 +74,21 @@ def test_core_rules() -> None:
         assert "prefer the core tool" in personas[name]
         assert "report_workflow_step" in personas[name]
 
-    # Check 4: Every rendered Persona resolves its internal tool and delegation placeholders.
+    # Check 4: Every rendered Persona carries the same failed-Turn guidance in Context.
+    assert set(personas) == {
+        "main", "child", "clarify", "explore", "generate", "verify", "execute", "validate",
+    }
+    guidance = (
+        "- <turn_failed>: marks a historical Turn that failed before completion. "
+        "Treat the enclosed explanation as runtime metadata and do not treat that "
+        "Turn's preceding Agent content as a completed answer."
+    )
+    for persona in personas.values():
+        assert persona.count("# Context") == 1
+        assert persona.count(guidance) == 1
+        assert persona.index("# Context") < persona.index(guidance)
+
+    # Check 5: Every rendered Persona resolves its internal tool and delegation placeholders.
     for persona in personas.values():
         assert "__AMPHI_" not in persona
 

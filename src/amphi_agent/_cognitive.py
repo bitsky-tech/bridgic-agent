@@ -10,7 +10,7 @@ from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
 from ..amphi_service.i18n import DEFAULT_LOCALE, backend_i18n, detect_locale
-from ..amphi_store import SessionTurnRecord
+from ..amphi_store import SessionTurnRecord, TurnStatus
 from ._context import AmphiContext, AmphiOTAContext, _view
 from ._skills import Skill, SkillGroup
 from ._prompt import (
@@ -18,7 +18,9 @@ from ._prompt import (
     EXPLORE_PERSONA,
     GENERATE_PERSONA,
     PERSONA,
+    PROMPT_HISTORY_CONTRACT,
     SUB_AGENT_PERSONA,
+    TURN_FAILED_MESSAGE,
     VERIFY_PERSONA,
     WORKFLOW_PERSONA,
     WORKFLOW_VALIDATE_PERSONA,
@@ -54,7 +56,6 @@ __all__ = [
     "render_input",
 ]
 
-SESSION_MESSAGE_RECORD_LIMIT = 100
 logger = logging.getLogger(__name__)
 # Marker on ``Message.extras`` for the per-round <runtime_state> USER tail: live
 # state (changed files, browser tabs) that must stay OUT of the cacheable request
@@ -163,8 +164,8 @@ def _shell_environment_summary(workspace: Optional[Any]) -> str:
 def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> str:
     """A raw turn input → prompt text, blocks inlined in order (mention → its
     ALREADY-resolved mount-gated path, else ``@label``). Pure: no DB, no mutation —
-    the one renderer shared by sync routing (``init_state``) and the async
-    ``user_input_block`` (which resolves ``path_map`` first, then delegates here)."""
+    the one renderer shared by sync routing (``init_state``), current input, and
+    persisted Session history. Cognitive callers resolve ``path_map`` first."""
     if isinstance(user_input, str):
         return user_input
     read_input = (
@@ -272,6 +273,7 @@ class MainThink(CognitiveWorker):
             "mode": status.mode,
             "stage": status.stage,
             "session_history": "all_stages",
+            "prompt_contract": PROMPT_HISTORY_CONTRACT,
         }
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
@@ -387,7 +389,7 @@ class MainThink(CognitiveWorker):
                     </Workspace>
                     </context>
 
-            # past turns (session_messages_block): bounded OTA replay
+            # past turns (session_messages_block): persisted OTA replay
             USER:  what python version is acme-api on?
             AI:    ToolCall(id=call_0, name=read_file, args={"path": "pyproject.toml"})
             TOOL:  (call_0) "[project]\nrequires-python = '>=3.13'"
@@ -785,43 +787,27 @@ class MainThink(CognitiveWorker):
         return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
 
     async def session_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Past Turns replayed as bounded native user, assistant, and tool messages."""
-        return self._session_tail_messages(context.session.get_all())
+        """Replay all past Turns as native user, assistant, and tool messages."""
+        return self._session_messages(context.session.get_all(), context)
 
-    def _session_tail_messages(
-        self,
-        turns: Sequence[SessionTurnRecord],
-    ) -> List[Message]:
-        """Recent persisted OTAs as native messages.
-
-        Select complete turns from newest to oldest while the total number of
-        stored OTA records stays within ``SESSION_MESSAGE_RECORD_LIMIT``; then
-        replay them oldest-first as USER input, historical AI tool calls, TOOL
-        results, and the final answer round.
-        """
-        selected: List[SessionTurnRecord] = []
-        record_total = 0
-        for turn in reversed(turns):
-            ota = turn.ota_context_dump()
-            record_count = len(ota.get("ota_record") or [])
-            if record_total + record_count > SESSION_MESSAGE_RECORD_LIMIT:
-                break
-            selected.append(turn)
-            record_total += record_count
-
+    def _session_messages(self, turns: Sequence[SessionTurnRecord], context: AmphiContext) -> List[Message]:
+        """Replay persisted Turns oldest-first without history truncation."""
         messages: List[Message] = []
-        for turn_index, turn in enumerate(reversed(selected)):
+        for turn_index, turn in enumerate(turns):
             ota = turn.ota_context_dump()
-            messages.append(Message.from_text(turn.user_input.text, role=Role.USER))
-            if ota.get("turn_error"):
-                continue  # keep the question; the failed agent reply is withheld
+            messages.append(Message.from_text(
+                self._render_user_input(turn.user_input, context),
+                role=Role.USER,
+            ))
             messages.extend(self._ota_messages(ota, turn_index))
+            if turn.status == TurnStatus.FAILED:
+                messages.append(Message.from_text(TURN_FAILED_MESSAGE, role=Role.AI))
         return messages
 
     def _ota_messages(self, ota: Dict[str, Any], turn_index: int) -> List[Message]:
         """One persisted OTA dump as AI/tool messages; intentionally separate from
-        ``turn_messages_block`` because session replay is whole-OTA, bounded by
-        persisted record count, and driven by ``think_result.tool_calls``.
+        ``turn_messages_block`` because session replay is whole-OTA and driven by
+        ``think_result.tool_calls``.
 
         Native tool replay is atomic: every call must have a persisted result.
         Interrupted rounds fall back to their visible text so a cancelled Turn
@@ -926,12 +912,14 @@ class MainThink(CognitiveWorker):
                 messages.append(Message.from_text(question, role=Role.AI))
         return messages
 
-    async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """This turn's request rendered to prompt text — resolves the session's
-        ownership-gated mount table (the async concern), then delegates to the pure
-        ``render_input``. Single source for the block→text containment logic."""
-        user_input = ota_context.user_input
-        mention_ids = [b.id for b in getattr(user_input, "blocks", None) or [] if b.type == "mention"]
+    def _render_user_input(self, user_input: Any, context: AmphiContext) -> str:
+        """Render one current or persisted input with live, ownership-gated paths."""
+        blocks = _view(user_input, "blocks") or []
+        mention_ids = [
+            str(_view(block, "id"))
+            for block in blocks
+            if _view(block, "type") == "mention" and _view(block, "id")
+        ]
         workspace = context.workspace
         path_map = (
             workspace.reference_map(mention_ids)
@@ -940,13 +928,18 @@ class MainThink(CognitiveWorker):
         )
         workflow_runs = context.workflow_runs
         if workflow_runs is not None:
-            for block in getattr(user_input, "blocks", None) or []:
-                if block.type != "mention" or getattr(block, "group", None) != "WorkflowRun":
+            for block in blocks:
+                if _view(block, "type") != "mention" or _view(block, "group") != "WorkflowRun":
                     continue
-                run = workflow_runs.get(block.id)
+                block_id = str(_view(block, "id") or "")
+                run = workflow_runs.get(block_id)
                 if run is not None and run.is_published:
-                    path_map[block.id] = str(run.result_dir)
+                    path_map[block_id] = str(run.result_dir)
         return render_input(user_input, path_map)
+
+    async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Render this Turn's request through the shared structured-input path."""
+        return self._render_user_input(ota_context.user_input, context)
 
     async def current_user_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Append volatile runtime metadata after this Invocation's user request."""

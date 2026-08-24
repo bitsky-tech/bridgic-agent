@@ -6,9 +6,11 @@ const python = String.raw`
 import importlib.util
 import json
 import sys
+from pathlib import Path
 
-source_path = sys.argv[1]
-spec = importlib.util.spec_from_file_location("bridgic_prompt_snapshot", source_path)
+source_path = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(source_path.parents[2]))
+spec = importlib.util.spec_from_file_location("src.amphi_agent._prompt_snapshot", source_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
@@ -22,6 +24,8 @@ json.dump({
     "workflowExecute": module.WORKFLOW_PERSONA,
     "workflowValidate": module.WORKFLOW_VALIDATE_PERSONA,
     "subAgentGuidance": module._SUB_AGENT_GUIDANCE,
+    "promptHistoryContract": module.PROMPT_HISTORY_CONTRACT,
+    "turnFailedMessage": module.TURN_FAILED_MESSAGE,
 }, sys.stdout, ensure_ascii=False)
 `;
 

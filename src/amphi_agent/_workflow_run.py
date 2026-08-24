@@ -505,12 +505,17 @@ class WorkflowRunLibrary:
                 result.append(run_id)
         return tuple(dict.fromkeys(result))
 
-    async def load(self, user_input: object = None) -> "WorkflowRunLibrary":
-        """Load recent terminal results plus results referenced by this input."""
+    async def load(self, *user_inputs: object) -> "WorkflowRunLibrary":
+        """Load recent terminal results plus results referenced by every input."""
         self.run_workflow = None
         rows = await self._repo.list_for_user(self._user_id, limit=100)
         known = {row.id for row in rows}
-        for run_id in self.referenced_run_ids(user_input):
+        referenced_ids = tuple(dict.fromkeys(
+            run_id
+            for user_input in user_inputs
+            for run_id in self.referenced_run_ids(user_input)
+        ))
+        for run_id in referenced_ids:
             if run_id in known:
                 continue
             row = await self._repo.get(self._user_id, run_id)

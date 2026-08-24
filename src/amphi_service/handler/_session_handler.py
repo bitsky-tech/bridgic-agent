@@ -487,8 +487,8 @@ def _error_message(
     execution_mode: Optional[str] = None,
 ) -> dict:
     """A failed agent turn → an assistant error bubble — mirrors the live
-    ``error`` frame (``error`` set, no text). Shown in the transcript; the turn
-    is kept OUT of the LLM context (see session_messages_block in _cognitive.py)."""
+    ``error`` frame (``error`` set, no text). The UI shows this internal error
+    separately; persisted Agent messages from the failed Turn remain in context."""
     error_message = {
         "id": f"{session_id}:{idx}.err",
         "turnId": turn_id,

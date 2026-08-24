@@ -1,7 +1,7 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { selectToolSurface } from "./catalog";
-import { renderPersona } from "./personas";
+import { PROMPT_HISTORY_CONTRACT, renderPersona, TURN_FAILED_MESSAGE } from "./personas";
 import type {
   NativePromptMessage,
   NativeToolCall,
@@ -18,8 +18,8 @@ import type {
 } from "./types";
 import { PromptRebuildError } from "./types";
 
-const SESSION_MESSAGE_RECORD_LIMIT = 100;
 const MAX_ARG_VALUE_CHARS = 1_200;
+const LEGACY_SESSION_MESSAGE_RECORD_LIMIT = 100;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -86,6 +86,12 @@ function persistedThinkScope(round: Record<string, unknown>): PersistedThinkScop
       ? scope.sessionHistory
       : undefined;
   return mode && stage ? { mode, stage, ...(sessionHistory ? { sessionHistory } : {}) } : undefined;
+}
+
+function promptHistoryContract(round: Record<string, unknown>): string | undefined {
+  const scope = record(round.think_scope ?? round.thinkScope);
+  const value = scope?.prompt_contract ?? scope?.promptContract;
+  return typeof value === "string" && value ? value : undefined;
 }
 
 function legacyBuildScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
@@ -248,7 +254,12 @@ function projectStageRounds(
 function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot): string {
   const blocks = userInput.blocks ?? [];
   if (!blocks.length) return userInput.text;
-  const paths = context?.referencePaths ?? {};
+  const paths = {
+    ...(context?.referencePaths ?? {}),
+    ...Object.fromEntries((context?.workflowResults ?? []).flatMap((run) =>
+      run.resultDir ? [[run.runId, run.resultDir]] : [],
+    )),
+  };
   const parts: string[] = [];
   for (const block of blocks) {
     if (block.type === "text") {
@@ -291,18 +302,41 @@ function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot
   return parts.join("");
 }
 
-function selectSessionTail(turns: PromptTurnSnapshot[], target: PromptTurnSnapshot): PromptTurnSnapshot[] {
+function workflowRunReferenceIds(userInputs: PromptUserInput[]): string[] {
+  return unique(userInputs.flatMap((userInput) =>
+    (userInput.blocks ?? [])
+      .filter((block) => block.type === "mention" && block.group === "WorkflowRun")
+      .map((block) => String(block.id ?? "")),
+  ));
+}
+
+function hasLocalizedSlashIntent(userInputs: PromptUserInput[]): boolean {
+  return userInputs.some((userInput) =>
+    (userInput.blocks ?? []).some((block) =>
+      block.type === "slash"
+      && ((block.id === "build" && block.resource == null) || block.resource === "workflow"),
+    ),
+  );
+}
+
+function selectSessionHistory(
+  turns: PromptTurnSnapshot[],
+  target: PromptTurnSnapshot,
+  contract?: string,
+): PromptTurnSnapshot[] {
   const before = turns
     .filter((turn) => turn.sessionId === target.sessionId && turn.sessionOrdinal < target.sessionOrdinal)
     .sort((left, right) => left.sessionOrdinal - right.sessionOrdinal);
+  if (contract === PROMPT_HISTORY_CONTRACT) return before;
+
   const selected: PromptTurnSnapshot[] = [];
-  let count = 0;
+  let recordCount = 0;
   for (let index = before.length - 1; index >= 0; index -= 1) {
     const turn = before[index];
     if (!turn) continue;
-    if (count + turn.otaRecords.length > SESSION_MESSAGE_RECORD_LIMIT) break;
+    if (recordCount + turn.otaRecords.length > LEGACY_SESSION_MESSAGE_RECORD_LIMIT) break;
     selected.push(turn);
-    count += turn.otaRecords.length;
+    recordCount += turn.otaRecords.length;
   }
   return selected.reverse();
 }
@@ -400,12 +434,23 @@ function historicalOtaMessages(turn: PromptTurnSnapshot, turnIndex: number): Nat
   return messages;
 }
 
-function sessionHistoryMessages(turns: PromptTurnSnapshot[]): NativePromptMessage[] {
+function sessionHistoryMessages(
+  turns: PromptTurnSnapshot[],
+  context?: PromptContextSnapshot,
+  contract?: string,
+): NativePromptMessage[] {
+  const historyV2 = contract === PROMPT_HISTORY_CONTRACT;
   const messages: NativePromptMessage[] = [];
   turns.forEach((turn, turnIndex) => {
-    messages.push({ role: "user", content: turn.userInput.text });
-    if (turn.error && turn.status === "failed") return;
+    messages.push({
+      role: "user",
+      content: historyV2 ? renderInput(turn.userInput, context) : turn.userInput.text,
+    });
+    if (!historyV2 && turn.status?.toLowerCase() === "failed" && turn.error) return;
     messages.push(...historicalOtaMessages(turn, turnIndex));
+    if (historyV2 && turn.status?.toLowerCase() === "failed") {
+      messages.push({ role: "assistant", content: TURN_FAILED_MESSAGE });
+    }
   });
   return messages;
 }
@@ -603,7 +648,6 @@ function renderContext(
   input: PromptRebuildInput,
   target: PromptTurnSnapshot,
   stage: PromptStage,
-  sessionTail: PromptTurnSnapshot[],
 ): ContextBuildResult {
   const snapshot = input.context;
   const blocks: string[] = [];
@@ -734,12 +778,27 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   const priorRounds = target.otaRecords.slice(0, input.targetRoundIndex);
   const stageProjection = projectStageRounds(target, input.targetRoundIndex);
   const toolSurface = selectToolSurface(stage, target, priorRounds, input.toolCatalog);
-  const persona = renderPersona(stage, toolSurface.tools.map((tool) => tool.name), input.personas);
-  const tail = selectSessionTail(input.turns, target);
-  const context = renderContext(input, target, stage, tail);
+  const persona = renderPersona(
+    stage,
+    toolSurface.tools.map((tool) => tool.name),
+    input.personas,
+    input.uiLanguage,
+  );
+  const historyContract = promptHistoryContract(targetRound);
+  const historyTurns = selectSessionHistory(input.turns, target, historyContract);
+  const context = renderContext(input, target, stage);
   const system = `${persona.content}\n\n${context.content}`;
 
   const messages: NativePromptMessage[] = [{ role: "system", content: system }];
+  const personaLimitations = [
+    ...(persona.usesInjectedSnapshot
+      ? []
+      : [`The complete Persona template is byte-equivalent to ${persona.version}; state.db does not record which backend source revision produced this historical Turn.`]),
+    ...(input.uiLanguage
+      ? []
+      : ["The request-scoped UI language is not persisted; the Lab used the default Chinese fallback."]),
+    ...stageLimitations,
+  ];
   const components: PromptComponent[] = [
     component(
       "persona",
@@ -748,14 +807,14 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       persona.content,
       [0],
       [`Lab persona snapshot ${persona.version}`],
-      "reconstructed",
-      [
-        ...(persona.usesInjectedSnapshot
-          ? []
-          : [`The complete persona is byte-equivalent to ${persona.version}; state.db does not record which backend source revision produced this historical Turn.`]),
-        ...stageLimitations,
-      ],
-      { stage, version: persona.version, completeSnapshot: persona.completeSnapshot },
+      input.uiLanguage ? "reconstructed" : "partial",
+      personaLimitations,
+      {
+        stage,
+        version: persona.version,
+        completeSnapshot: persona.completeSnapshot,
+        uiLanguage: input.uiLanguage ?? "Chinese (fallback)",
+      },
     ),
     component("context", "context", "Context umbrella", context.content, [0], context.sources, context.fidelity, context.limitations),
   ];
@@ -767,22 +826,53 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     stageProjection.hasStageBoundary,
     stageProjection.allStageSessionHistory,
   );
-  const history = includeSessionHistory ? sessionHistoryMessages(tail) : [];
+  const history = includeSessionHistory
+    ? sessionHistoryMessages(historyTurns, input.context, historyContract)
+    : [];
+  const resolvedReferenceIds = new Set([
+    ...Object.keys(input.context?.referencePaths ?? {}),
+    ...(input.context?.workflowResults ?? []).flatMap((run) => run.resultDir ? [run.runId] : []),
+  ]);
+  const unresolvedHistoryRunIds = includeSessionHistory && historyContract === PROMPT_HISTORY_CONTRACT
+    ? workflowRunReferenceIds(historyTurns.map((turn) => turn.userInput))
+      .filter((runId) => !resolvedReferenceIds.has(runId))
+    : [];
+  const historyLimitations: string[] = [];
+  if (historyContract && historyContract !== PROMPT_HISTORY_CONTRACT) {
+    historyLimitations.push(
+      `Unsupported prompt history contract ${historyContract}; Session history was projected with legacy semantics.`,
+    );
+  }
+  if (unresolvedHistoryRunIds.length) {
+    historyLimitations.push(
+      `WorkflowRun mention paths were unavailable for: ${unresolvedHistoryRunIds.join(", ")}.`,
+    );
+  }
+  if (
+    includeSessionHistory
+    && historyContract === PROMPT_HISTORY_CONTRACT
+    && hasLocalizedSlashIntent(historyTurns.map((turn) => turn.userInput))
+  ) {
+    historyLimitations.push("Localized slash-command intent prose is approximated by the Lab copy.");
+  }
   messages.push(...history);
   components.push(component(
     "session-history",
     "session_history",
-    "Bounded Session history",
+    "Session history",
     undefined,
     history.map((_, index) => historyStart + index),
     ["session_turns.user_input", "session_turns.ota_records"],
-    "reconstructed",
-    [],
+    historyLimitations.length ? "partial" : "reconstructed",
+    historyLimitations,
     {
-      includedTurns: tail.length,
-      recordLimit: SESSION_MESSAGE_RECORD_LIMIT,
+      includedTurns: historyTurns.length,
       omittedByStage: !includeSessionHistory,
       historyModel: stageProjection.allStageSessionHistory ? "all_stages" : "stage_default",
+      promptContract: historyContract ?? "legacy",
+      ...(historyContract === PROMPT_HISTORY_CONTRACT
+        ? {}
+        : { recordLimit: LEGACY_SESSION_MESSAGE_RECORD_LIMIT }),
     },
   ));
 
@@ -793,8 +883,15 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   const inputLimitations = input.promptTime
     ? []
     : ["prompt_time is excluded from persistence; the Lab inferred it from Turn creation time rather than the original Invocation clock snapshot."];
-  if (target.userInput.blocks?.some((block) => block.type === "slash" && ["build"].includes(String(block.id)))) {
+  if (hasLocalizedSlashIntent([target.userInput])) {
     inputLimitations.push("Localized slash-command intent prose is approximated by the Lab copy.");
+  }
+  const unresolvedCurrentRunIds = workflowRunReferenceIds([target.userInput])
+    .filter((runId) => !resolvedReferenceIds.has(runId));
+  if (unresolvedCurrentRunIds.length) {
+    inputLimitations.push(
+      `WorkflowRun mention paths were unavailable for: ${unresolvedCurrentRunIds.join(", ")}.`,
+    );
   }
   components.push(component(
     "current-input",

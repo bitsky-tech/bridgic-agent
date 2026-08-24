@@ -57,7 +57,7 @@ state, lazy-tool flags, and model metadata. It should order the rows by
 - optional `workspace` and `context` snapshots for mounts, runtime environment,
   Skills, memories, schedules, Workflows, browser tabs, Build artifacts, and an
   active Workflow Run.
-- optional exact `toolCatalog`, `personas`, and `promptTime` snapshots. When
+- optional exact `toolCatalog`, `personas`, `uiLanguage`, and `promptTime` snapshots. When
   omitted, the Lab uses its own maintained copies and reports the limitation.
 
 The server-level `prompt-adapter.ts` already maps `TurnDetail` to this contract. API code
@@ -70,8 +70,11 @@ normally should not assemble the contract by hand.
 - `messages`: native system/user/assistant/tool messages with tool-call ids,
   arguments, results, and persisted reasoning extras.
 - `tools`: ordered visible tool names and schema summaries for that round.
-- `components`: persona, context, bounded Session history, current input,
-  prior-round replay, and tool-surface breakdown with message indexes.
+- `components`: persona, context, contract-aware Session history, current input,
+  prior-round replay, and tool-surface breakdown with message indexes. Rounds
+  marked `prompt_contract: history_v2` use complete history, structured inputs,
+  and failed-Turn markers; older unversioned rounds retain the legacy 100-record
+  text replay and failed-reply withholding rules.
 - `fidelity`: a score and explicit limitations for information not historically
   persisted in `state.db`.
 
@@ -83,9 +86,10 @@ than `targetRoundIndex` appear in the current-Turn message block.
 
 All eight runtime personas are copied in full to `personas.generated.ts`:
 normal Main, Child, all four Build stages, and both Workflow Run stages. The
-generated module records the source `_prompt.py` SHA-256. `personas.test.ts`
-checks that hash and compares every rendered persona byte-for-byte with the
-Python renderer, including conditional Child delegation guidance.
+generated module records the source `_prompt.py` SHA-256 and the shared
+failed-Turn marker. `personas.test.ts` checks that hash and compares every
+rendered persona byte-for-byte with the Python renderer in both UI languages,
+including conditional Child delegation guidance.
 
 After intentionally changing `src/amphi_agent/_prompt.py`, refresh the Lab copy
 from the repository root with:

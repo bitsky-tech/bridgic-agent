@@ -4,9 +4,11 @@ import { resolve } from "node:path";
 import {
   PERSONA_SOURCE_SHA256,
   PERSONA_SOURCE_VERSION,
+  PROMPT_HISTORY_CONTRACT,
   renderPersona,
+  TURN_FAILED_MESSAGE,
 } from "./personas";
-import type { PromptStage } from "./types";
+import type { PromptStage, PromptUiLanguage } from "./types";
 
 const sourcePath = resolve(import.meta.dir, "../../../src/amphi_agent/_prompt.py");
 const stages: PromptStage[] = [
@@ -20,33 +22,49 @@ const stages: PromptStage[] = [
   "workflow_validate",
 ];
 
-function pythonPersonas(toolNames: string[]): Record<PromptStage, string> {
+interface PythonPromptSnapshot {
+  personas: Record<PromptStage, string>;
+  promptHistoryContract: string;
+  turnFailedMessage: string;
+}
+
+function pythonPromptSnapshot(toolNames: string[], locale: "zh" | "en"): PythonPromptSnapshot {
   const script = String.raw`
 import importlib.util
 import json
 import sys
+from pathlib import Path
 
-source_path = sys.argv[1]
+source_path = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(source_path.parents[2]))
 tool_names = json.loads(sys.argv[2])
-spec = importlib.util.spec_from_file_location("bridgic_prompt_parity", source_path)
+locale = sys.argv[3]
+from src.amphi_service.i18n import use_locale
+spec = importlib.util.spec_from_file_location("src.amphi_agent._prompt_parity", source_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(module)
+with use_locale(locale):
+    personas = {
+        "main": module.render_main_persona(tool_names, template=module.PERSONA).strip(),
+        "child": module.render_main_persona(tool_names, template=module.SUB_AGENT_PERSONA).strip(),
+        "clarify": module.render_stage_persona(tool_names, template=module.CLARIFY_PERSONA).strip(),
+        "explore": module.render_stage_persona(tool_names, template=module.EXPLORE_PERSONA).strip(),
+        "generate": module.render_stage_persona(tool_names, template=module.GENERATE_PERSONA).strip(),
+        "verify": module.render_stage_persona(tool_names, template=module.VERIFY_PERSONA).strip(),
+        "workflow_execute": module.render_stage_persona(tool_names, template=module.WORKFLOW_PERSONA).strip(),
+        "workflow_validate": module.render_stage_persona(tool_names, template=module.WORKFLOW_VALIDATE_PERSONA).strip(),
+    }
 result = {
-    "main": module.render_main_persona(tool_names, template=module.PERSONA).strip(),
-    "child": module.render_main_persona(tool_names, template=module.SUB_AGENT_PERSONA).strip(),
-    "clarify": module.render_stage_persona(tool_names, template=module.CLARIFY_PERSONA).strip(),
-    "explore": module.render_stage_persona(tool_names, template=module.EXPLORE_PERSONA).strip(),
-    "generate": module.render_stage_persona(tool_names, template=module.GENERATE_PERSONA).strip(),
-    "verify": module.render_stage_persona(tool_names, template=module.VERIFY_PERSONA).strip(),
-    "workflow_execute": module.render_stage_persona(tool_names, template=module.WORKFLOW_PERSONA).strip(),
-    "workflow_validate": module.render_stage_persona(tool_names, template=module.WORKFLOW_VALIDATE_PERSONA).strip(),
+    "personas": personas,
+    "promptHistoryContract": module.PROMPT_HISTORY_CONTRACT,
+    "turnFailedMessage": module.TURN_FAILED_MESSAGE,
 }
 json.dump(result, sys.stdout, ensure_ascii=False)
 `;
-  const process = Bun.spawnSync(["python3", "-c", script, sourcePath, JSON.stringify(toolNames)]);
+  const process = Bun.spawnSync(["python3", "-c", script, sourcePath, JSON.stringify(toolNames), locale]);
   if (process.exitCode !== 0) throw new Error(process.stderr.toString());
-  return JSON.parse(process.stdout.toString()) as Record<PromptStage, string>;
+  return JSON.parse(process.stdout.toString()) as PythonPromptSnapshot;
 }
 
 describe("persona source snapshot", () => {
@@ -61,15 +79,22 @@ describe("persona source snapshot", () => {
     ["read_file", "run_subagent"],
     ["read_file", "run_subagent", "start_subagent"],
   ]) {
-    test(`renders all eight personas byte-for-byte like Python for ${toolNames.join(", ")}`, () => {
-      const expected = pythonPersonas(toolNames);
-      for (const stage of stages) {
-        const actual = renderPersona(stage, toolNames);
-        expect(actual.content).toBe(expected[stage]);
-        expect(actual.completeSnapshot).toBe(true);
-        expect(actual.content).not.toContain("__AMPHI_");
-      }
-    });
+    for (const { locale, uiLanguage } of [
+      { locale: "zh", uiLanguage: "Chinese" },
+      { locale: "en", uiLanguage: "English" },
+    ] as const satisfies readonly { locale: "zh" | "en"; uiLanguage: PromptUiLanguage }[]) {
+      test(`renders all eight personas byte-for-byte like Python for ${toolNames.join(", ")} (${locale})`, () => {
+        const expected = pythonPromptSnapshot(toolNames, locale);
+        expect(String(PROMPT_HISTORY_CONTRACT)).toBe(expected.promptHistoryContract);
+        expect(String(TURN_FAILED_MESSAGE)).toBe(expected.turnFailedMessage);
+        for (const stage of stages) {
+          const actual = renderPersona(stage, toolNames, undefined, uiLanguage);
+          expect(actual.content).toBe(expected.personas[stage]);
+          expect(actual.completeSnapshot).toBe(true);
+          expect(actual.content).not.toContain("__AMPHI_");
+        }
+      });
+    }
   }
 
   test("keeps the expected stage identities as a golden structural guard", () => {

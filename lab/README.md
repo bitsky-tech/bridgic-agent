@@ -58,7 +58,7 @@ Prompt assembly is implemented independently in TypeScript under `server/prompt/
 ```text
 messages:
   SYSTEM (persona + context)
-  → bounded prior Session messages
+  → prior Session messages
   → current user input + inferred current_time
   → completed OTA rounds before the selected round
 

@@ -2,6 +2,7 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export type PromptRole = "system" | "user" | "assistant" | "tool";
+export type PromptUiLanguage = "Chinese" | "English";
 export type PromptStage =
   | "main"
   | "child"
@@ -205,6 +206,8 @@ export interface PromptRebuildInput {
   context?: PromptContextSnapshot;
   toolCatalog?: PromptToolSchemaSnapshot[];
   personas?: PromptPersonaSnapshot;
+  /** Exact request-scoped UI language when captured; otherwise the Lab uses its documented fallback. */
+  uiLanguage?: PromptUiLanguage;
   /** Exact persisted value when known; otherwise the Lab infers it from Turn creation time. */
   promptTime?: string;
 }

@@ -9,9 +9,8 @@ _INLINE_MAX = 160  # arg values longer than this (or multi-line) drop to a fence
 _DOC_HEADER = (
     "# Session history\n\n"
     "A full, round-by-round record of every turn in this session — each tool "
-    "call and its complete output included. The conversation in your context "
-    "keeps only each turn's question and final answer; read here for the detail "
-    "in between."
+    "call and its complete output included. This durable Markdown projection "
+    "can be read directly whenever inspecting the transcript as a file is useful."
 )
 
 
@@ -34,8 +33,8 @@ def _render_turn(index: int, user_text: str, ota: Dict[str, Any]) -> str:
     """One ``(user, OTA dump)`` pair → a ``## Turn n`` section.
 
     Replays every round (not just the final answer): a round's thought, then each
-    tool call it made with that call's full result. A failed turn (``turn_error``)
-    ends with the failure — kept here even though it never feeds the model.
+    tool call it made with that call's full result. A failed turn keeps its Agent
+    trace and ends with the internal failure annotation in this transcript.
     """
     lines: List[str] = [f"## Turn {index}", "", f"**User:** {user_text}".rstrip()]
     for round_ in ota.get("ota_record") or []:

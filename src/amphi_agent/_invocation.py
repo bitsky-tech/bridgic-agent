@@ -742,7 +742,10 @@ class AgentInvocation:
             skills, workflows, workflow_runs, schedules, mounts = await asyncio.gather(
                 SkillLibrary(user.id).load(),
                 workflows.load(),
-                workflow_runs.load(user_input),
+                workflow_runs.load(
+                    user_input,
+                    *(turn.user_input for turn in previous_turns),
+                ),
                 ScheduleLibrary(user.id, mutable=root.kind is not SessionKind.SCHEDULED).load(),
                 load_mounts(),
             )

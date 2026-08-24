@@ -19,7 +19,8 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
       "think_scope": {
         "mode": "build",
         "stage": "generate",
-        "session_history": "all_stages"
+        "session_history": "all_stages",
+        "prompt_contract": "history_v2"
       }
     }
 
@@ -45,6 +46,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     class RetryingLlm:
         def __init__(self) -> None:
             self.after_retry: tuple[Any, str] | None = None
+            self.scope_at_call: dict[str, Any] | None = None
 
         async def stream_turn(
             self,
@@ -54,6 +56,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
             publish: Any,
             extra_body: dict[str, Any] | None = None,
         ) -> StreamResult:
+            self.scope_at_call = dict(ota_context.ota_record[-1].think_scope or {})
             publish("reasoning", text="Stale reasoning")
             publish("token", text="Stale answer")
             publish("model_retry")
@@ -111,11 +114,14 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     ]
 
     # Check 4: The open OTA record identifies its cognitive scope and Session-history policy.
-    assert record.think_scope == {
+    expected_scope = {
         "mode": "build",
         "stage": "generate",
         "session_history": "all_stages",
+        "prompt_contract": "history_v2",
     }
+    assert llm.scope_at_call == expected_scope
+    assert record.think_scope == expected_scope
 
 
 def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:
