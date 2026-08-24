@@ -328,7 +328,7 @@ describe('Workflow output cards', () => {
     await act(async () => root.unmount())
   })
 
-  it('uses a completed right-panel result in the current conversation', async () => {
+  it('uses completed and failed right-panel results in the current conversation', async () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-existing')
     let previewCount = 0
@@ -364,6 +364,32 @@ describe('Workflow output cards', () => {
     expect(store.get(pendingComposerInsertsAtom)[0]?.[0]).toMatchObject({
       type: 'mention',
       id: 'wfr-report',
+      group: 'WorkflowRun',
+    })
+
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <WorkflowRunResultCard
+            run={{
+              ...run,
+              id: 'wfr-report-failed',
+              status: 'failed',
+              validation_status: 'failed',
+            }}
+            onPreview={() => { previewCount += 1 }}
+          />
+        </Provider>,
+      )
+    })
+    const useFailedResult = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('使用结果'))
+    await act(async () => useFailedResult?.click())
+
+    expect(previewCount).toBe(0)
+    expect(store.get(pendingComposerInsertsAtom)[1]?.[0]).toMatchObject({
+      type: 'mention',
+      id: 'wfr-report-failed',
       group: 'WorkflowRun',
     })
 
@@ -479,7 +505,16 @@ describe('Workflow output cards', () => {
     expect(host.textContent).toContain('工作流执行失败')
     expect(host.textContent).toContain('本次运行已结束')
     expect(host.textContent).toContain('查看失败详情')
-    expect(host.textContent).not.toContain('引用结果')
+    expect(host.textContent).toContain('引用结果')
+
+    const reuseFailedResult = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('引用结果'))
+    await act(async () => reuseFailedResult?.click())
+    expect(store.get(pendingComposerInsertsAtom)[0]?.[0]).toMatchObject({
+      type: 'mention',
+      id: 'wfr-report',
+      group: 'WorkflowRun',
+    })
 
     await act(async () => root.unmount())
   })

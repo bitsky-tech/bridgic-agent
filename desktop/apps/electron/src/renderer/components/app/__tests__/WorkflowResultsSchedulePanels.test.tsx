@@ -70,7 +70,7 @@ async function flushEffects() {
 }
 
 describe('WorkflowResultsPanel', () => {
-  it('separates Session/all results, filters failed runs and references a completed result in place', async () => {
+  it('separates Session/all results, filters failed runs and references terminal results in place', async () => {
     const store = readyStore()
     store.set(activeSessionIdAtom, 'session-results')
     const completed = {
@@ -140,6 +140,17 @@ describe('WorkflowResultsPanel', () => {
     })
     expect(host.querySelector('[data-testid="workflow-result-run-completed"]')).toBeNull()
     expect(host.querySelector('[data-testid="workflow-result-run-failed"]')).not.toBeNull()
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(
+        '[data-testid="workflow-result-reference-run-failed"]',
+      )?.click()
+    })
+    expect(store.get(pendingComposerInsertsAtom).at(-1)?.[0]).toMatchObject({
+      type: 'mention',
+      id: 'run-failed',
+      group: 'WorkflowRun',
+    })
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-testid="workflow-result-view-run-failed"]')?.click()
