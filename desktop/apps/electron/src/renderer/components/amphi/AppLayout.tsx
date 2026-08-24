@@ -54,9 +54,9 @@ export interface AppLayoutProps {
   center: ReactNode
   right?: ReactNode
   rightCollapsed?: boolean
-  /** Browser uses a wider independent dock instead of the output-panel width. */
-  rightKind?: 'panel' | 'browser'
-  /** Expanded browser owns the complete work area beside the sidebar. */
+  /** Canvas tools use a wider independent dock instead of the output-panel width. */
+  rightKind?: 'panel' | 'browser' | 'presentation'
+  /** An expanded canvas tool owns the complete work area beside the sidebar. */
   rightExpanded?: boolean
   /** When false, render the custom TopBar chrome (the app default). */
   titleBar?: boolean
@@ -90,7 +90,7 @@ export function AppLayout({
   const [dragSidebarW, setDragSidebarW] = useState<number | null>(null)
   const [dragRight, setDragRight] = useState<{
     sessionId: string | null
-    kind: 'panel' | 'browser'
+    kind: 'panel' | 'browser' | 'presentation'
     width: number | null
   }>({ sessionId, kind: rightKind, width: null })
   if (dragRight.sessionId !== sessionId || dragRight.kind !== rightKind) {
@@ -122,11 +122,12 @@ export function AppLayout({
     ? browserDockWidth
     : Math.max(0, dragRightW - RIGHT_PANEL_RAIL_WIDTH)
   const browserGeometry = browserDockGeometry(availableWorkWidth, preferredBrowserContentWidth)
-  const effectiveRightW = rightKind === 'browser'
+  const isCanvasDock = rightKind === 'browser' || rightKind === 'presentation'
+  const effectiveRightW = isCanvasDock
     ? browserGeometry.width
     : Math.min(dragRightW ?? rightPanelWidth + RIGHT_PANEL_RAIL_WIDTH, rightMax)
-  const effectiveRightMin = rightKind === 'browser' ? browserGeometry.min : panelMin
-  const effectiveRightMax = rightKind === 'browser' ? browserGeometry.max : rightMax
+  const effectiveRightMin = isCanvasDock ? browserGeometry.min : panelMin
+  const effectiveRightMax = isCanvasDock ? browserGeometry.max : rightMax
 
   // Session context controls whether the dock exists; user collapse controls
   // only its content. Focused mode panes temporarily force that content open.
@@ -139,7 +140,7 @@ export function AppLayout({
   const rightStageW = expandRight ? null : effectiveRightW
 
   const persistDockWidth = (totalWidth: number) => {
-    if (rightKind === 'browser') {
+    if (isCanvasDock) {
       setBrowserDockWidth(Math.max(0, totalWidth - RIGHT_PANEL_RAIL_WIDTH))
     } else {
       persistRightWidth(totalWidth - RIGHT_PANEL_RAIL_WIDTH)

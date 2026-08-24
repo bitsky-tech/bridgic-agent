@@ -52,6 +52,11 @@ license in the offered set applies to this distribution.
                  --> ELECTED: Apache License 2.0
                  https://github.com/astral-sh/uv
 
+  JSZip          offered as "MIT OR GPL-3.0-or-later"
+                 --> ELECTED: MIT License
+                 The GPL license does not apply to this distribution.
+                 https://github.com/Stuk/jszip
+
 
 --------------------------------------------------------------------------------
 2. Mozilla Public License 2.0 components — source availability

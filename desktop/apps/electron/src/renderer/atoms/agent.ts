@@ -68,6 +68,7 @@ import {
   purgeBrowserAttentionAtom,
 } from './browser-attention'
 import { purgeFilesAttentionAtom } from './files-attention'
+import { purgePresentationSessionAtom } from './presentation'
 import {
   notifySessionWorkbenchActivityAtom,
   purgeSessionWorkbenchStateAtom,
@@ -570,6 +571,7 @@ export const purgeSessionAtom = atom(null, (get, set, id: string) => {
   set(clearSessionHumanRequestAtom, id)
   set(purgeBrowserAttentionAtom, id)
   set(purgeFilesAttentionAtom, id)
+  set(purgePresentationSessionAtom, id)
   set(purgeSessionWorkbenchStateAtom, id)
   // build.ts owns the brief family; dynamic import keeps the dep acyclic.
   void import('./build').then((m) => m.purgeBuildState(id))

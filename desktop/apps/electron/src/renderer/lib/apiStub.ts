@@ -169,6 +169,7 @@ export function installApiStub(): void {
       setWatchDirs: async () => {},
       // No disk in a non-Electron context — accept + drop.
       writeFile: async () => {},
+      writePresentation: async () => {},
       writeWorkflowArchive: async () => {},
       writeWorkflowRunArchive: async () => {},
     },

@@ -61,6 +61,12 @@ export const Icons = {
       <path d="M9 2v3h3M5.2 9l1.6 1.6 3.4-3.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  presentation: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <rect x="2" y="2.5" width="12" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M5 14h6M8 11.5V14M4.5 5.2h3.6M4.5 7.4h6.8" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  ),
   folder: (s = 16) => (
     <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
       <path d="M2 4v8a1 1 0 001 1h10a1 1 0 001-1V6a1 1 0 00-1-1H8L6.5 3H3a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.5" />

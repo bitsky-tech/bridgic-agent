@@ -128,6 +128,8 @@ const api: ElectronAPI = {
     searchDir: (req) => ipcRenderer.invoke(IPC.fs.searchDir, req),
     setWatchDirs: (paths) => ipcRenderer.invoke(IPC.fs.setWatchDirs, paths),
     writeFile: (absPath, content) => ipcRenderer.invoke(IPC.fs.writeFile, absPath, content),
+    writePresentation: (absPath, content) =>
+      ipcRenderer.invoke(IPC.fs.writePresentation, absPath, content),
     writeWorkflowArchive: (absPath, content) =>
       ipcRenderer.invoke(IPC.fs.writeWorkflowArchive, absPath, content),
     writeWorkflowRunArchive: (absPath, content) =>

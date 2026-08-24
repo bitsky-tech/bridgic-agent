@@ -183,7 +183,7 @@ async function mountPanel(store: ReturnType<typeof createStore>) {
 }
 
 describe('SessionResourcePanel', () => {
-  it('keeps one permanent Bridgic launcher above four undivided independent tools', async () => {
+  it('keeps one permanent Bridgic launcher above five undivided independent tools', async () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-tools')
     const { host, root } = await mountPanel(store)
@@ -203,11 +203,12 @@ describe('SessionResourcePanel', () => {
       'session-workbench-files',
       'session-workbench-workflows',
       'session-workbench-results',
+      'session-workbench-presentation',
       'session-workbench-browser',
     ])
     const toolList = host.querySelector('[data-testid="session-workbench-files"]')?.parentElement
-    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(4)
-    expect(toolList?.children).toHaveLength(4)
+    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(5)
+    expect(toolList?.children).toHaveLength(5)
 
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     const files = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
@@ -226,6 +227,7 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="workflow-library-panel"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="workflow-results-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="schedule-workbench-tool"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="presentation-workbench-panel"]')).not.toBeNull()
 
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
@@ -665,6 +667,7 @@ describe('SessionResourcePanel', () => {
         'session-workbench-files',
         'session-workbench-workflows',
         'session-workbench-results',
+        'session-workbench-presentation',
         'session-workbench-browser',
       ])
 

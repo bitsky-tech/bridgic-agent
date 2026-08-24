@@ -40,6 +40,16 @@ export function registerFsHandlers(): void {
     writeFileSync(absPath, content, { encoding: 'utf-8' })
   })
   loggedHandle(
+    IPC.fs.writePresentation,
+    async (_event, absPath: string, content: Uint8Array): Promise<void> => {
+      if (!path.isAbsolute(absPath) || path.extname(absPath).toLowerCase() !== '.pptx') {
+        throw new Error('Presentation export path must end with .pptx')
+      }
+      await writeFile(absPath, content)
+    },
+    { transformLogArgs: redactLocalPathLogArgs },
+  )
+  loggedHandle(
     IPC.fs.writeWorkflowArchive,
     async (_event, absPath: string, content: Uint8Array): Promise<void> => {
       if (!path.isAbsolute(absPath) || !absPath.toLowerCase().endsWith('.amphi-workflow')) {

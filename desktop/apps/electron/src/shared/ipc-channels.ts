@@ -176,6 +176,7 @@ export const IPC = {
     // manually editing the requirements spec). Main strictly validates that the
     // path lands only inside that Build workspace, guarding against out-of-bounds writes.
     writeFile: 'fs:writeFile',
+    writePresentation: 'fs:writePresentation',
     writeWorkflowArchive: 'fs:writeWorkflowArchive',
     writeWorkflowRunArchive: 'fs:writeWorkflowRunArchive',
   },

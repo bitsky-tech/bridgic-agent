@@ -8,6 +8,7 @@ import {
   sessionWorkbenchSurfaceAtom,
 } from '@/atoms/browser'
 import { sessionFocusPaneOpenAtom } from '@/atoms/session-focus-pane-view'
+import { presentationExpandedAtom } from '@/atoms/presentation'
 import { AppLayout } from '@/components/amphi'
 
 export interface AppWorkspaceLayoutProps {
@@ -25,9 +26,15 @@ export interface AppWorkspaceLayoutProps {
 export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutProps) {
   const showSessionDock = useAtomValue(showRightPanelAtom)
   const browserExpanded = useAtomValue(browserExpandedAtom)
+  const presentationExpanded = useAtomValue(presentationExpandedAtom)
   const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
   const focusPaneOpen = useAtomValue(sessionFocusPaneOpenAtom)
   const browserLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Browser
+  const presentationLayout = !focusPaneOpen
+    && workbenchSurface === SessionWorkbenchSurface.Presentation
+  let rightKind: 'panel' | 'browser' | 'presentation' = 'panel'
+  if (browserLayout) rightKind = 'browser'
+  else if (presentationLayout) rightKind = 'presentation'
 
   return (
     <AppLayout
@@ -36,8 +43,9 @@ export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutPr
       left={left}
       center={center}
       right={right}
-      rightKind={browserLayout ? 'browser' : 'panel'}
-      rightExpanded={browserLayout && browserExpanded}
+      rightKind={rightKind}
+      rightExpanded={(browserLayout && browserExpanded)
+        || (presentationLayout && presentationExpanded)}
     />
   )
 }

@@ -426,6 +426,8 @@ export interface ElectronAPI {
      *  (the user manually editing the requirements spec). Main strictly validates
      *  the path before writing and rejects anything out of bounds. */
     writeFile(absPath: string, content: string): Promise<void>
+    /** Write an exported PowerPoint file to the path chosen in the native save dialog. */
+    writePresentation(absPath: string, content: Uint8Array): Promise<void>
     /** Write an exported Workflow package to the path chosen in the native save dialog. */
     writeWorkflowArchive(absPath: string, content: Uint8Array): Promise<void>
     /** Write an exported Workflow Run ZIP to the path chosen in the native save dialog. */

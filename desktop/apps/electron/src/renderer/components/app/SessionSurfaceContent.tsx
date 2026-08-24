@@ -2,6 +2,7 @@
 import { SessionWorkbenchSurface } from '@/atoms/browser'
 import { SessionModeSurfaceKind } from '@/atoms/session-focus-pane-view'
 import { EmbeddedBrowserPanel } from './EmbeddedBrowserPanel'
+import { PresentationWorkbenchPanel } from './PresentationWorkbenchPanel'
 import { ScheduleWorkbenchPanel } from './ScheduleWorkbenchPanel'
 import { SessionFilesPanel } from './SessionFilesPanel'
 import {
@@ -65,6 +66,13 @@ export function SessionSurfaceContent({
         testId="session-workbench-schedules-content"
       >
         <ScheduleWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Schedules)} />
+      </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={isToolActive(SessionWorkbenchSurface.Presentation)}
+        labelledBy="session-workbench-presentation-tab"
+        testId="session-workbench-presentation-content"
+      >
+        <PresentationWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Presentation)} />
       </WorkbenchSurface>
 
       <div
