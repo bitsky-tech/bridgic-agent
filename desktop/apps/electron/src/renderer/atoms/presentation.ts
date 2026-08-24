@@ -50,9 +50,15 @@ export interface PresentationSlide {
 }
 
 export interface PresentationDocument {
+  id: string
   title: string
   slides: PresentationSlide[]
   selectedSlideId: string
+}
+
+export interface PresentationWorkspace {
+  activeDocumentId: string
+  documents: PresentationDocument[]
 }
 
 type SessionStateUpdate<T> = T | ((current: T) => T)
@@ -84,6 +90,7 @@ export function createInitialPresentationDocument(): PresentationDocument {
     ['03', 'Create momentum', 'End with a decision that is easy to understand.', '#2F8B78'],
   ] as const
   return {
+    id: createPresentationId('presentation'),
     title: 'Ideas that move forward',
     selectedSlideId: titleSlideId,
     slides: [
@@ -241,26 +248,67 @@ export function createInitialPresentationDocument(): PresentationDocument {
   }
 }
 
-const fallbackPresentationDocument = createInitialPresentationDocument()
-const presentationDocumentsBySessionAtom = atom<ReadonlyMap<string, PresentationDocument>>(new Map())
+export function createBlankPresentationDocument(title: string, slideName = 'Slide 1'): PresentationDocument {
+  const slide = createBlankPresentationSlide(slideName)
+  return {
+    id: createPresentationId('presentation'),
+    title,
+    slides: [slide],
+    selectedSlideId: slide.id,
+  }
+}
+
+export function createInitialPresentationWorkspace(): PresentationWorkspace {
+  const document = createInitialPresentationDocument()
+  return {
+    activeDocumentId: document.id,
+    documents: [document],
+  }
+}
+
+const fallbackPresentationWorkspace = createInitialPresentationWorkspace()
+const fallbackPresentationDocument = fallbackPresentationWorkspace.documents[0]!
+const presentationWorkspacesBySessionAtom = atom<ReadonlyMap<string, PresentationWorkspace>>(new Map())
 const expandedPresentationSessionsAtom = atom<ReadonlySet<string>>(new Set<string>())
 
-/** The viewed Session's editable presentation document. */
-export const currentPresentationDocumentAtom = atom(
+/** Every open presentation tab owned by the viewed Session. */
+export const currentPresentationWorkspaceAtom = atom(
   (get) => {
     const sessionId = get(viewedSessionIdAtom)
     return sessionId
-      ? get(presentationDocumentsBySessionAtom).get(sessionId) ?? fallbackPresentationDocument
-      : fallbackPresentationDocument
+      ? get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace
+      : fallbackPresentationWorkspace
   },
-  (get, set, update: SessionStateUpdate<PresentationDocument>) => {
+  (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
     const sessionId = get(viewedSessionIdAtom)
     if (!sessionId) return
+    const current = get(currentPresentationWorkspaceAtom)
+    const next = typeof update === 'function' ? update(current) : update
+    const workspaces = new Map(get(presentationWorkspacesBySessionAtom))
+    workspaces.set(sessionId, next)
+    set(presentationWorkspacesBySessionAtom, workspaces)
+  },
+)
+
+/** The active presentation tab's editable document. */
+export const currentPresentationDocumentAtom = atom(
+  (get) => {
+    const workspace = get(currentPresentationWorkspaceAtom)
+    return workspace.documents.find((document) => document.id === workspace.activeDocumentId)
+      ?? workspace.documents[0]
+      ?? fallbackPresentationDocument
+  },
+  (get, set, update: SessionStateUpdate<PresentationDocument>) => {
+    const workspace = get(currentPresentationWorkspaceAtom)
     const current = get(currentPresentationDocumentAtom)
     const next = typeof update === 'function' ? update(current) : update
-    const documents = new Map(get(presentationDocumentsBySessionAtom))
-    documents.set(sessionId, next)
-    set(presentationDocumentsBySessionAtom, documents)
+    const hasActiveDocument = workspace.documents.some((document) => document.id === current.id)
+    set(currentPresentationWorkspaceAtom, {
+      activeDocumentId: next.id,
+      documents: hasActiveDocument
+        ? workspace.documents.map((document) => document.id === current.id ? next : document)
+        : [...workspace.documents, next],
+    })
   },
 )
 
@@ -286,11 +334,11 @@ export const presentationExpandedAtom = atom(
 
 /** Drop presentation state when its owning Session is deleted. */
 export const purgePresentationSessionAtom = atom(null, (get, set, sessionId: string) => {
-  const documents = get(presentationDocumentsBySessionAtom)
-  if (documents.has(sessionId)) {
-    const nextDocuments = new Map(documents)
-    nextDocuments.delete(sessionId)
-    set(presentationDocumentsBySessionAtom, nextDocuments)
+  const workspaces = get(presentationWorkspacesBySessionAtom)
+  if (workspaces.has(sessionId)) {
+    const nextWorkspaces = new Map(workspaces)
+    nextWorkspaces.delete(sessionId)
+    set(presentationWorkspacesBySessionAtom, nextWorkspaces)
   }
   const expandedSessions = get(expandedPresentationSessionsAtom)
   if (expandedSessions.has(sessionId)) {

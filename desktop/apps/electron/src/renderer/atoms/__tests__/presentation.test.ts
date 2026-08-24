@@ -2,8 +2,10 @@ import { describe, expect, it } from 'bun:test'
 import { createStore } from 'jotai'
 import { activeSessionIdAtom } from '../sessions'
 import {
+  createBlankPresentationDocument,
   createInitialPresentationDocument,
   currentPresentationDocumentAtom,
+  currentPresentationWorkspaceAtom,
   presentationExpandedAtom,
   purgePresentationSessionAtom,
 } from '../presentation'
@@ -41,5 +43,34 @@ describe('presentation atoms', () => {
 
     expect(store.get(currentPresentationDocumentAtom).title).not.toBe('Delete me')
     expect(store.get(presentationExpandedAtom)).toBe(false)
+  })
+
+  it('keeps multiple open presentations independent within one Session', () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-tabs')
+    const firstWorkspace = store.get(currentPresentationWorkspaceAtom)
+    const firstDocument = firstWorkspace.documents[0]!
+    const secondDocument = createBlankPresentationDocument('Second deck')
+
+    store.set(currentPresentationWorkspaceAtom, {
+      activeDocumentId: secondDocument.id,
+      documents: [...firstWorkspace.documents, secondDocument],
+    })
+    store.set(currentPresentationDocumentAtom, {
+      ...store.get(currentPresentationDocumentAtom),
+      title: 'Edited second deck',
+    })
+
+    const withEditedSecond = store.get(currentPresentationWorkspaceAtom)
+    store.set(currentPresentationWorkspaceAtom, {
+      ...withEditedSecond,
+      activeDocumentId: firstDocument.id,
+    })
+
+    expect(store.get(currentPresentationDocumentAtom).id).toBe(firstDocument.id)
+    expect(store.get(currentPresentationDocumentAtom).title).toBe(firstDocument.title)
+    expect(store.get(currentPresentationWorkspaceAtom).documents.find((item) => (
+      item.id === secondDocument.id
+    ))?.title).toBe('Edited second deck')
   })
 })

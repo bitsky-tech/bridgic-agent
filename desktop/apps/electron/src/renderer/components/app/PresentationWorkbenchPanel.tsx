@@ -21,8 +21,6 @@ import {
   Minimize2,
   MonitorPlay,
   MousePointer2,
-  PanelLeftClose,
-  PanelLeftOpen,
   Play,
   Rows3,
   Save,
@@ -34,9 +32,11 @@ import {
 import {
   PRESENTATION_HEIGHT,
   PRESENTATION_WIDTH,
+  createBlankPresentationDocument,
   createBlankPresentationSlide,
   createPresentationId,
   currentPresentationDocumentAtom,
+  currentPresentationWorkspaceAtom,
   presentationExpandedAtom,
   type PresentationDocument,
   type PresentationElement,
@@ -68,6 +68,7 @@ function isTextElement(element: PresentationElement): element is PresentationTex
 export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
   const sessionId = useAtomValue(viewedSessionIdAtom)
+  const [workspace, setWorkspace] = useAtom(currentPresentationWorkspaceAtom)
   const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
@@ -172,7 +173,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [sessionId])
+  }, [document.id, sessionId])
 
   useEffect(() => {
     const root = rootRef.current
@@ -395,6 +396,33 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     setSelectedElementId(null)
     const current = documentRef.current
     commitDocument({ ...current, selectedSlideId: slideId }, false)
+  }
+
+  const addPresentation = () => {
+    const nextIndex = workspace.documents.length + 1
+    const nextDocument = createBlankPresentationDocument(
+      t('session.presentation.untitledDocument', { index: nextIndex }),
+      t('session.presentation.slideName', { index: 1 }),
+    )
+    setWorkspace({
+      activeDocumentId: nextDocument.id,
+      documents: [...workspace.documents, nextDocument],
+    })
+  }
+
+  const selectPresentation = (documentId: string) => {
+    if (documentId === workspace.activeDocumentId) return
+    setWorkspace({ ...workspace, activeDocumentId: documentId })
+  }
+
+  const closePresentation = (documentId: string) => {
+    if (workspace.documents.length <= 1) return
+    const closedIndex = workspace.documents.findIndex((item) => item.id === documentId)
+    const documents = workspace.documents.filter((item) => item.id !== documentId)
+    const activeDocumentId = documentId === workspace.activeDocumentId
+      ? documents[Math.min(Math.max(0, closedIndex), documents.length - 1)]!.id
+      : workspace.activeDocumentId
+    setWorkspace({ activeDocumentId, documents })
   }
 
   const addSlide = () => {
@@ -623,6 +651,69 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-bg-app text-text-primary"
       data-testid="presentation-workbench-panel"
     >
+      <div className="flex h-10 shrink-0 items-end border-b border-border-subtle/70 bg-bg-app px-1.5 pt-1">
+        <div
+          role="tablist"
+          aria-label={t('session.presentation.documentTabs')}
+          className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
+          data-testid="presentation-document-tabs"
+        >
+          {workspace.documents.map((item) => {
+            const isActive = item.id === workspace.activeDocumentId
+            const fileName = item.title.toLowerCase().endsWith('.pptx')
+              ? item.title
+              : `${item.title}.pptx`
+            return (
+              <div
+                key={item.id}
+                className={cn(
+                  'group flex h-8 min-w-[132px] max-w-[220px] shrink-0 items-center rounded-t-lg border px-1 transition-colors',
+                  isActive
+                    ? 'border-border-subtle border-b-bg-surface bg-bg-surface text-text-primary shadow-[0_-1px_8px_rgba(24,24,35,0.035)]'
+                    : 'border-transparent text-text-tertiary hover:bg-bg-hover/80 hover:text-text-secondary',
+                )}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  title={fileName}
+                  onClick={() => selectPresentation(item.id)}
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
+                  data-testid="presentation-document-tab"
+                >
+                  <span className={cn('shrink-0', isActive ? 'text-[#D97706]' : 'text-text-tertiary')}>
+                    <PresentationMark />
+                  </span>
+                  <span className="truncate">{fileName}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={t('session.presentation.closeDocument', { name: fileName })}
+                  title={t('session.presentation.closeDocument', { name: fileName })}
+                  disabled={workspace.documents.length <= 1}
+                  onClick={() => closePresentation(item.id)}
+                  className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100 disabled:cursor-default disabled:opacity-20"
+                  data-testid="presentation-close-document"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            )
+          })}
+          <button
+            type="button"
+            aria-label={t('session.presentation.newDocument')}
+            title={t('session.presentation.newDocument')}
+            onClick={addPresentation}
+            className="mb-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+            data-testid="presentation-add-document"
+          >
+            <PlusIcon />
+          </button>
+        </div>
+      </div>
+
       <header className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border-subtle/65 bg-bg-surface px-2.5 shadow-[0_1px_8px_rgba(24,24,35,0.035)]">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#F59E0B]/14 text-[#D97706]">
           <PresentationMark />
@@ -692,10 +783,10 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       />
 
       <div className="flex min-h-0 flex-1 bg-[#ECEEF2] dark:bg-[#26272D]">
-        <div className="relative shrink-0">
+        <div className="h-full shrink-0">
           <aside
             className={cn(
-              'shrink-0 overflow-hidden bg-bg-surface/88 transition-[width,border-color] duration-200 ease-out',
+              'h-full shrink-0 overflow-hidden bg-bg-surface transition-[width,border-color] duration-200 ease-out',
               filmstripCollapsed
                 ? 'w-0 border-r border-transparent'
                 : cn('border-r border-border-subtle/70', compact ? 'w-[118px]' : 'w-[166px]'),
@@ -705,13 +796,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           >
             {!filmstripCollapsed ? (
               <div className={cn('flex h-full flex-col', compact ? 'w-[118px]' : 'w-[166px]')}>
-                <div className="border-b border-border-subtle/55 p-2">
-                  <button type="button" onClick={addSlide} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border-default bg-bg-surface text-xs font-medium text-text-secondary shadow-sm hover:bg-bg-hover hover:text-text-primary">
-                    <PlusIcon />
-                    {t('session.presentation.addPage')}
-                  </button>
-                </div>
-                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-3">
                   {document.slides.map((slide, index) => (
                     <button
                       type="button"
@@ -728,7 +813,10 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
                     </button>
                   ))}
                 </div>
-                <div className="grid grid-cols-3 gap-1 border-t border-border-subtle/60 bg-bg-surface/75 p-2">
+                <div
+                  className="mt-auto grid h-11 shrink-0 grid-cols-3 gap-1 border-t border-border-subtle/60 bg-bg-surface px-2 py-1.5"
+                  data-testid="presentation-filmstrip-footer"
+                >
                   <MiniButton label={t('session.presentation.newSlide')} onClick={addSlide}><PlusIcon /></MiniButton>
                   <MiniButton label={t('session.presentation.duplicateSlide')} onClick={duplicateSlide}><DuplicateIcon /></MiniButton>
                   <MiniButton label={t('session.presentation.deleteSlide')} onClick={deleteSlide} disabled={document.slides.length <= 1}><TrashIcon /></MiniButton>
@@ -736,16 +824,6 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
               </div>
             ) : null}
           </aside>
-          <button
-            type="button"
-            data-testid="presentation-toggle-filmstrip"
-            aria-label={t(filmstripCollapsed ? 'session.presentation.expandSlides' : 'session.presentation.collapseSlides')}
-            aria-pressed={!filmstripCollapsed}
-            onClick={() => setFilmstripCollapsed((value) => !value)}
-            className="absolute -right-3 top-2 z-20 flex size-6 items-center justify-center rounded-full border border-border-default bg-bg-elevated text-text-tertiary shadow-sm hover:text-text-primary"
-          >
-            {filmstripCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
-          </button>
         </div>
 
         <section className="flex min-w-0 flex-1 flex-col">

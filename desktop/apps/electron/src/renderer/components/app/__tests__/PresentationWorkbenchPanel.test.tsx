@@ -7,7 +7,7 @@ GlobalRegistrator.register()
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
-const { currentPresentationDocumentAtom } = await import('@/atoms/presentation')
+const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
@@ -48,14 +48,19 @@ describe('PresentationWorkbenchPanel', () => {
   it('collapses the filmstrip and exposes Office-style text formatting controls', async () => {
     const { host, root, store } = await mountPanel()
     const filmstrip = host.querySelector<HTMLElement>('aside')!
-    const collapse = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-filmstrip"]')!
 
     expect(filmstrip.getAttribute('aria-hidden')).toBe('false')
+    expect(host.querySelector('[data-testid="presentation-toggle-filmstrip"]')).toBeNull()
+    const view = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-view"]')!
+    await act(async () => view.click())
+    const collapse = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-filmstrip"]')!
     await act(async () => collapse.click())
     expect(filmstrip.getAttribute('aria-hidden')).toBe('true')
     expect(filmstrip.className).toContain('w-0')
     expect(collapse.getAttribute('aria-pressed')).toBe('false')
 
+    const home = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-home"]')!
+    await act(async () => home.click())
     const addText = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
     await act(async () => addText.click())
 
@@ -91,7 +96,7 @@ describe('PresentationWorkbenchPanel', () => {
   it('offers a complete ribbon and stores notes, transitions, and animation choices', async () => {
     const { host, root, store } = await mountPanel()
 
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(8)
+    expect(host.querySelectorAll('[data-testid^="presentation-tab-"]')).toHaveLength(8)
     expect(host.querySelector('[data-testid="presentation-tab-home"]')?.getAttribute('aria-selected')).toBe('true')
 
     const notes = host.querySelector<HTMLTextAreaElement>('[data-testid="presentation-notes"]')!
@@ -121,6 +126,34 @@ describe('PresentationWorkbenchPanel', () => {
     const document = store.get(currentPresentationDocumentAtom)
     const selectedSlide = document.slides.find((slide) => slide.id === document.selectedSlideId)!
     expect(selectedSlide.elements.at(-1)?.animation).toBe('fade')
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens multiple presentation tabs and keeps the filmstrip controls at the bottom', async () => {
+    const { host, root, store } = await mountPanel()
+
+    expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(1)
+    const aside = host.querySelector<HTMLElement>('aside')!
+    const filmstripFooter = host.querySelector<HTMLElement>('[data-testid="presentation-filmstrip-footer"]')!
+    expect(aside.className).toContain('h-full')
+    expect(filmstripFooter.className).toContain('mt-auto')
+
+    const addDocument = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-document"]')!
+    await act(async () => addDocument.click())
+
+    expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(2)
+    const workspace = store.get(currentPresentationWorkspaceAtom)
+    expect(workspace.documents).toHaveLength(2)
+    expect(store.get(currentPresentationDocumentAtom).id).toBe(workspace.activeDocumentId)
+
+    const tabs = host.querySelectorAll<HTMLButtonElement>('[data-testid="presentation-document-tab"]')
+    await act(async () => tabs[0]?.click())
+    expect(store.get(currentPresentationWorkspaceAtom).activeDocumentId).toBe(workspace.documents[0]!.id)
+
+    const closeButtons = host.querySelectorAll<HTMLButtonElement>('[data-testid="presentation-close-document"]')
+    await act(async () => closeButtons[1]?.click())
+    expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(1)
 
     await act(async () => root.unmount())
   })
