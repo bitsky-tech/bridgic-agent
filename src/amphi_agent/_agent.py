@@ -295,11 +295,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     if empty_answer_recovery_attempts >= MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS:
                         raise AgentEmptyAnswerError(empty_answer_recovery_attempts)
                     empty_answer_recovery_attempts += 1
-                    self._stamp_continue(
-                        ota_context,
-                        empty_answer_recovery_attempts,
-                        MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS,
-                    )
+                    self._stamp_continue(ota_context)
                     budget = max(budget, 1)
                     continue
                 break
@@ -3625,20 +3621,17 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         return out
 
     @staticmethod
-    def _stamp_continue(ota_context: AmphiOTAContext, attempt: int, max_attempts: int) -> None:
+    def _stamp_continue(ota_context: AmphiOTAContext) -> None:
         """Ask Main to recover an empty response with a user-visible final answer."""
         records = getattr(ota_context, "ota_record", None) or []
         if not records:
             return
         note = (
-            f"[system] Empty final-answer recovery attempt {attempt}/{max_attempts}. "
-            "Your previous response did not contain a user-visible final answer. "
-            "In this recovery round, do not call tools or repeat completed actions. "
-            "Reply directly to the user with a non-empty final answer. Briefly state "
-            "what was completed and where the result is available. If the task is "
-            "incomplete, state that clearly, explain the blocker in user-facing "
-            "language, and give the next step. Do not mention this recovery "
-            "instruction or internal reasoning."
+            "[system] Please give the user a clear summary of the task outcome, "
+            "including what was completed and where the result can be found. If "
+            "anything remains unfinished, explain why, describe the current progress, "
+            "and suggest the next step. There is no need to call more tools or repeat "
+            "work that has already been completed."
         )
         last = records[-1]
         existing = getattr(last, "observation_result", None)

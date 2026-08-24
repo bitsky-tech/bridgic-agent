@@ -197,7 +197,7 @@ async def test_failed_turn(flow_client: httpx.AsyncClient, scripted_llm: Scripte
     3. A later request can recover by appending a successful Turn.
     """
     raw_error = "Provider unavailable at https://internal.invalid; token=sk-private"
-    public_error = "The Agent encountered an internal error while running. Please try again later."
+    public_error = "Something went wrong while handling this task. Try again, or wait a moment if it keeps happening."
     scripted_llm.enqueue_error(RuntimeError(raw_error))
     session_id = await create_session(flow_client)
 

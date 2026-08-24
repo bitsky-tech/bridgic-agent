@@ -120,25 +120,16 @@ class PublicAgentError:
 
         codex_auth = next((item for item in errors if isinstance(item, CodexAuthError)), None)
         if codex_auth is not None:
-            return cls(
-                code=codex_auth.code,
-                message=str(codex_auth),
-                retryable=not codex_auth.relogin_required,
-                action="relogin" if codex_auth.relogin_required else "retry",
-            )
+            if codex_auth.relogin_required:
+                return cls._localized(codex_auth.code, "agent.error.login_required", False, "relogin")
+            if codex_auth.code == "codex_rate_limited":
+                return cls._localized(codex_auth.code, "agent.error.rate_limited", True, "retry")
+            return cls._localized(codex_auth.code, "agent.error.provider_unavailable", True, "retry")
 
         if cls._has_code(errors, cls._CONTEXT_CODES) or cls._has_marker(errors, cls._CONTEXT_MARKERS):
             return cls._localized("context_too_large", "agent.error.context_too_large", False, "new_session")
 
-        if cls._matches(errors, is_model_not_found_error):
-            known = next((item for item in errors if isinstance(item, ModelNotFoundError)), None)
-            if known is not None and str(known).strip():
-                return cls(
-                    code="model_not_found",
-                    message=str(known).strip(),
-                    retryable=False,
-                    action="open_model_settings",
-                )
+        if any(isinstance(item, ModelNotFoundError) for item in errors) or cls._matches(errors, is_model_not_found_error):
             return cls._localized("model_not_found", "agent.error.model_not_found", False, "open_model_settings")
 
         if (

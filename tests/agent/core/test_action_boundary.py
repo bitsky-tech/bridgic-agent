@@ -297,18 +297,18 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
     loop = agent.on_agent(ota_context, context)
     first = await anext(loop)
     assert first.name == "main"
-    for attempt in range(1, 4):
+    for _attempt in range(3):
         ota_context.ota_record.append(OTARecord(
             think_result=ThinkResult(step_content="", tool_calls=[]),
         ))
         continuation = await loop.asend("")
 
-        # Check 1: Every permitted empty answer gets a numbered, action-bounded recovery round.
+        # Check 1: Every permitted empty answer gets a clear, action-bounded recovery round.
         assert continuation.name == "main"
         guidance = ota_context.ota_record[-1].observation_result
-        assert f"recovery attempt {attempt}/3" in guidance
-        assert "do not call tools" in guidance
-        assert "non-empty final answer" in guidance
+        assert "clear summary of the task outcome" in guidance
+        assert "where the result can be found" in guidance
+        assert "There is no need to call more tools" in guidance
 
     ota_context.ota_record.append(OTARecord(
         think_result=ThinkResult(step_content="Delivered answer", tool_calls=[]),

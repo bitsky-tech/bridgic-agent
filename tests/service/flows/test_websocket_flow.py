@@ -93,9 +93,8 @@ async def test_chat_runtime_error_is_presented_safely(flow_client: AsyncClient, 
         "token=sk-private; type=upstream_error"
     )
     public_error = (
-        "This conversation or task exceeds the selected model's context limit. "
-        "Reduce the input, shorten the conversation history, or start a new "
-        "conversation and try again."
+        "This conversation has too much content for the current model. "
+        "Shorten it or start a new conversation and try again."
     )
     scripted_llm.enqueue_error(ContextLimitError(raw_error))
     session_id = await create_session(flow_client)

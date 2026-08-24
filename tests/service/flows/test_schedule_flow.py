@@ -234,6 +234,6 @@ async def test_failed_notification(flow_client: AsyncClient, flow_socket: WsReco
     assert run["can_continue"] is True
     transcript = (await flow_client.get(f"/sessions/{run['session_id']}/messages")).json()
     assert transcript["messages"][-1]["error"] == (
-        "The Agent encountered an internal error while running. Please try again later."
+        "Something went wrong while handling this task. Try again, or wait a moment if it keeps happening."
     )
     assert raw_error not in transcript["messages"][-1]["error"]
