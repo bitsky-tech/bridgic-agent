@@ -18,7 +18,7 @@ GlobalRegistrator.register()
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-const { atom } = await import('jotai')
+const { atom, getDefaultStore } = await import('jotai')
 // The activity probe is a Jotai write atom talking to the daemon; there is no
 // daemon here, so swap the module before the component imports it. `mock.module`
 // must run before that import for the substitution to take.
@@ -36,6 +36,7 @@ mock.module('@/atoms/update', () => {
   }
 })
 
+const { browserSurfaceBlockedAtom, setNativeSurfaceRectAtom } = await import('@/atoms/browser')
 const { AutoUpdateBanner, nextView } = await import('../AutoUpdateBanner')
 
 /** Drive the mocked probe: mirrors what `GET /api/agent/status` would answer. */
@@ -264,5 +265,83 @@ describe('AutoUpdateBanner', () => {
 
     expect(installNow).toHaveBeenCalledTimes(1)
     await cleanup()
+  })
+
+  it('steps left of the embedded Browser instead of sitting under it', async () => {
+    // The card is anchored bottom-right — exactly where the Browser's
+    // WebContentsView sits. That view composites above this page, so `z-50` buys
+    // nothing: staying put means the card is invisible except for the sliver
+    // beside the dock rail. It moves rather than hiding the view, because it is
+    // non-modal and can sit in the corner for as long as the user ignores it.
+    const store = getDefaultStore()
+    const { host, emit, cleanup } = await mountBanner()
+    const cardRight = () => (
+      host.querySelector<HTMLElement>('[data-testid="auto-update-banner"]')?.style.right
+    )
+
+    await emit({ type: 'downloaded', info: { version: '2.1.0' } })
+    expect(cardRight()).toBe('16px')
+
+    // The browser opens while the card is already up — the common case, and the
+    // one a position measured once at mount would get wrong.
+    await act(async () => {
+      store.set(setNativeSurfaceRectAtom, {
+        x: window.innerWidth - 500,
+        y: 100,
+        width: 420,
+        height: 400,
+      })
+    })
+    expect(cardRight()).toBe('516px')
+
+    // Browser closes → the card reclaims the corner.
+    await act(async () => { store.set(setNativeSurfaceRectAtom, null) })
+    expect(cardRight()).toBe('16px')
+
+    await cleanup()
+  })
+
+  it('does not hide the browser when there is room to step aside', async () => {
+    // Blanking a whole web page to make room for a corner card reads as a bug.
+    // Blocking the surface is the fallback, not the default.
+    const store = getDefaultStore()
+    const { emit, cleanup } = await mountBanner()
+
+    await emit({ type: 'downloaded', info: { version: '2.1.0' } })
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(false)
+
+    await act(async () => {
+      store.set(setNativeSurfaceRectAtom, {
+        x: window.innerWidth - 500, y: 100, width: 420, height: 400,
+      })
+    })
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(false)
+
+    await act(async () => { store.set(setNativeSurfaceRectAtom, null) })
+    await cleanup()
+  })
+
+  it('falls back to hiding the browser when nothing is left to step into', async () => {
+    // Expanded Browser: the surface starts at the sidebar's edge, so the free
+    // column is far narrower than the card. Stepping aside there would push the
+    // card off-screen or straight back under the view.
+    const store = getDefaultStore()
+    const { host, emit, cleanup } = await mountBanner()
+    await act(async () => {
+      store.set(setNativeSurfaceRectAtom, { x: 200, y: 40, width: 900, height: 700 })
+    })
+
+    await emit({ type: 'downloaded', info: { version: '2.1.0' } })
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(true)
+    // Blocked, so it stays in its natural corner rather than dodging a view
+    // that is no longer there.
+    expect(
+      host.querySelector<HTMLElement>('[data-testid="auto-update-banner"]')?.style.right,
+    ).toBe('16px')
+
+    // Closing the card must release the surface — the browser is unusable until it does.
+    await cleanup()
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(false)
+    await act(async () => { store.set(setNativeSurfaceRectAtom, null) })
   })
 })

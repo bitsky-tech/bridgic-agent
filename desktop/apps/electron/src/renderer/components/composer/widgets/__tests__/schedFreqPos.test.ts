@@ -22,7 +22,7 @@ describe('computePopoverPos', () => {
     // 反馈环就构造不出来。签名变了(比如有人加回 popoverHeight 参数)这里会红。
     expect(computePopoverPos.length).toBe(2)
     const pos = computePopoverPos({ top: 100, bottom: 124, left: 300 }, VIEWPORT)
-    expect(Object.keys(pos).sort()).toEqual(['left', 'maxHeight', 'top'])
+    expect(Object.keys(pos).sort()).toEqual(['left', 'maxHeight', 'top', 'width'])
   })
 
   it('opens downward when below is the roomier side', () => {
@@ -68,6 +68,33 @@ describe('computePopoverPos', () => {
   it('clamps left to the right edge when the chip sits far right', () => {
     const pos = computePopoverPos({ top: 100, bottom: 124, left: 1200 }, VIEWPORT)
     expect(pos.left).toBe(VIEWPORT.width - POPOVER_WIDTH - 8)
+  })
+
+  // The embedded Browser is an Electron WebContentsView composited above the page:
+  // anything the popover puts past its left edge is not dimmed or clipped, it is
+  // simply invisible. `rightLimit` is that edge.
+  it('stops at the native Browser surface instead of sliding under it', () => {
+    const withBrowser = { width: 1280, height: 800, rightLimit: 900 }
+    const pos = computePopoverPos({ top: 100, bottom: 124, left: 700 }, withBrowser)
+    expect(pos.width).toBe(POPOVER_WIDTH)
+    expect(pos.left + pos.width).toBeLessThanOrEqual(withBrowser.rightLimit)
+  })
+
+  it('narrows rather than hiding when the free column cannot fit the full width', () => {
+    // Reachable on an ordinary window: dragging the browser dock to its widest
+    // leaves the centre column under 420px. The picker's fields already wrap, so
+    // a narrower popover degrades gracefully — sliding under the browser does not.
+    const squeezed = { width: 1280, height: 800, rightLimit: 300 }
+    const pos = computePopoverPos({ top: 100, bottom: 124, left: 120 }, squeezed)
+    expect(pos.width).toBeLessThan(POPOVER_WIDTH)
+    expect(pos.left).toBeGreaterThanOrEqual(8)
+    expect(pos.left + pos.width).toBeLessThanOrEqual(squeezed.rightLimit)
+  })
+
+  it('falls back to the viewport when no native surface is on screen', () => {
+    const pos = computePopoverPos({ top: 100, bottom: 124, left: 1200 }, VIEWPORT)
+    expect(pos.width).toBe(POPOVER_WIDTH)
+    expect(pos.left + pos.width).toBeLessThanOrEqual(VIEWPORT.width)
   })
 
   it('never returns a negative maxHeight in a degenerate viewport', () => {

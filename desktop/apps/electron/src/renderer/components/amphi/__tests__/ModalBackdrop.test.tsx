@@ -24,6 +24,8 @@ afterAll(async () => {
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { getDefaultStore } = await import('jotai')
+const { browserSurfaceBlockedAtom } = await import('@/atoms/browser')
 const { ModalBackdrop } = await import('../ModalBackdrop')
 
 /** 挂载到一个**独立**容器,好证明遮罩确实 portal 到了 body 而不是留在原地。 */
@@ -179,5 +181,49 @@ describe('ModalBackdrop', () => {
     // 容器已让位,暗色层铺满容器即可;它若还带自己的 top 偏移就是让位做了两遍。
     expect(backdropOf().querySelector('div')!.className).toContain('inset-0')
     await cleanup()
+  })
+
+  // The embedded Browser is an Electron WebContentsView composited ABOVE this
+  // page, so no z-index puts a dialog in front of it: the native view has to
+  // hide first. Owning that here is what makes every ModalBackdrop consumer
+  // immune by construction — the same reasoning as the backdrop itself (a
+  // dialog that does not wrap this component has no backdrop at all, so
+  // forgetting is impossible).
+  it('hides the native Browser surface for as long as it is mounted', async () => {
+    const store = getDefaultStore()
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(false)
+
+    const { cleanup } = await mount(
+      <ModalBackdrop data-testid="bd"><span data-testid="card">x</span></ModalBackdrop>,
+    )
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(true)
+
+    await cleanup()
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(false)
+  })
+
+  it('gives every overlay its own blocker, so closing the top dialog does not uncover the browser under the one below', async () => {
+    const store = getDefaultStore()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const Stack = ({ second }: { second: boolean }) => (
+      <>
+        <ModalBackdrop data-testid="bd"><span>x</span></ModalBackdrop>
+        {second ? <ModalBackdrop data-testid="bd2"><span>y</span></ModalBackdrop> : null}
+      </>
+    )
+
+    await act(async () => { root.render(<Stack second />) })
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(true)
+
+    // A shared blocker key would release here and let the native view paint
+    // over the dialog that is still open (settings → confirm → dismiss).
+    await act(async () => { root.render(<Stack second={false} />) })
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(true)
+
+    await act(async () => { root.unmount() })
+    host.remove()
+    expect(store.get(browserSurfaceBlockedAtom)).toBe(false)
   })
 })

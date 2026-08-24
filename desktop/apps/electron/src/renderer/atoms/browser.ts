@@ -1,5 +1,5 @@
 import { atom } from 'jotai'
-import type { EmbeddedBrowserSnapshot } from '@shared/types'
+import type { EmbeddedBrowserBounds, EmbeddedBrowserSnapshot } from '@shared/types'
 import { viewedSessionIdAtom } from './navigation'
 import {
   rightPanelCollapsedAtom,
@@ -73,6 +73,34 @@ export const setBrowserSurfaceBlockerAtom = atom(
     if (next.size !== current.size || ![...next].every((source) => current.has(source))) {
       set(browserSurfaceBlockersAtom, next)
     }
+  },
+)
+
+const nativeSurfaceRect = atom<EmbeddedBrowserBounds | null>(null)
+
+/**
+ * Where the native WebContentsView is currently drawn, or null when nothing is.
+ *
+ * The renderer cannot paint inside this rectangle — Electron composites the view
+ * above the page, so an overlay that lands there is invisible rather than merely
+ * dimmed. A dialog answers that by blocking the surface outright; a small
+ * corner card or dropdown reads this and steps aside instead, which is why this
+ * is a live rect and not a boolean.
+ */
+export const nativeSurfaceRectAtom = atom((get) => get(nativeSurfaceRect))
+
+/** Publish the surface rect from the panel that measures it; null once it is gone. */
+export const setNativeSurfaceRectAtom = atom(
+  null,
+  (get, set, rect: EmbeddedBrowserBounds | null) => {
+    const current = get(nativeSurfaceRect)
+    if (current === rect) return
+    if (
+      current !== null && rect !== null
+      && current.x === rect.x && current.y === rect.y
+      && current.width === rect.width && current.height === rect.height
+    ) return
+    set(nativeSurfaceRect, rect)
   },
 )
 

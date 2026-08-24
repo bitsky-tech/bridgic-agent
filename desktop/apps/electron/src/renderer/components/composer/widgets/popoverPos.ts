@@ -23,7 +23,7 @@
  * Merging would first require unifying the alignment axis, which is a separate change.
  */
 
-/** Popover width — consumers set `width` from it, and the left-offset math uses it too. */
+/** Popover width when there is room for it; narrower when the free column cannot fit it. */
 export const POPOVER_WIDTH = 420
 /** Breathing gap between the anchor and the popover. */
 export const POPOVER_GAP = 6
@@ -37,10 +37,18 @@ export interface PopoverAnchor {
   left: number
 }
 
-/** Viewport size (`window.innerWidth/innerHeight`). */
+/** Viewport size (`window.innerWidth/innerHeight`), plus how far right the renderer may paint. */
 export interface Viewport {
   width: number
   height: number
+  /**
+   * Right-most x this popover may occupy; defaults to `width`.
+   *
+   * The embedded Browser is an Electron `WebContentsView` composited ABOVE the
+   * page, so anything placed past its left edge is not dimmed or clipped — it is
+   * invisible. Callers pass that edge here (see `lib/overlayBounds.ts`).
+   */
+  rightLimit?: number
 }
 
 /**
@@ -52,6 +60,8 @@ export interface Viewport {
  */
 export interface PopoverPos {
   left: number
+  /** `POPOVER_WIDTH`, or narrower when that is all the free column can hold. */
+  width: number
   top?: number
   bottom?: number
   /** Headroom on that side; content that overflows scrolls inside the popover. */
@@ -71,16 +81,22 @@ export interface PopoverPos {
  * @param viewport current viewport size
  */
 export function computePopoverPos(anchor: PopoverAnchor, viewport: Viewport): PopoverPos {
+  const rightLimit = Math.min(viewport.rightLimit ?? viewport.width, viewport.width)
+  // Narrow before overflowing: the picker's fields already wrap, so a shorter
+  // popover stays usable, whereas the overflowing part would be swallowed whole
+  // by the native Browser surface (or run off the window).
+  const width = Math.max(0, Math.min(POPOVER_WIDTH, rightLimit - VIEWPORT_MARGIN * 2))
   // Horizontal: never hand back a negative left offset (or one smaller than the margin), even when the window is narrower than the popover.
   const left = Math.max(
     VIEWPORT_MARGIN,
-    Math.min(anchor.left, viewport.width - POPOVER_WIDTH - VIEWPORT_MARGIN),
+    Math.min(anchor.left, rightLimit - width - VIEWPORT_MARGIN),
   )
   const spaceAbove = anchor.top - VIEWPORT_MARGIN
   const spaceBelow = viewport.height - anchor.bottom - VIEWPORT_MARGIN
   if (spaceAbove >= spaceBelow) {
     return {
       left,
+      width,
       // Grow upward from the anchor's top edge — use bottom rather than top so no measuring is needed.
       bottom: viewport.height - anchor.top + POPOVER_GAP,
       maxHeight: Math.max(0, spaceAbove - POPOVER_GAP),
@@ -88,6 +104,7 @@ export function computePopoverPos(anchor: PopoverAnchor, viewport: Viewport): Po
   }
   return {
     left,
+    width,
     top: anchor.bottom + POPOVER_GAP,
     maxHeight: Math.max(0, spaceBelow - POPOVER_GAP),
   }
