@@ -13,6 +13,7 @@ import Download from 'yet-another-react-lightbox/plugins/download'
 import Fullscreen from 'yet-another-react-lightbox/plugins/fullscreen'
 import 'yet-another-react-lightbox/styles.css'
 import { closeImageAtom, lightboxItemAtom } from '@/atoms/lightbox'
+import { useBrowserSurfaceBlocker } from '@/hooks/useBrowserSurfaceBlocker'
 import { rlog } from '@/lib/logger'
 
 /**
@@ -34,6 +35,10 @@ export function ImageLightbox() {
   const item = useAtomValue(lightboxItemAtom)
   const close = useSetAtom(closeImageAtom)
   const isOpen = item !== null
+  // YARL owns its own portal, so this is the one overlay that cannot inherit the
+  // blocker from `ModalBackdrop` — same reason the traffic lights are handled by
+  // hand below. Without it the embedded Browser's native view paints over the image.
+  useBrowserSurfaceBlocker('image-lightbox', isOpen)
   // external-system sync: the traffic lights are native controls drawn above the web content, so a
   // full-screen backdrop cannot cover them — only the window itself can hide them.
   useEffect(() => {

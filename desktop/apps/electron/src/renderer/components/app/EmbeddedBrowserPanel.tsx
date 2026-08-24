@@ -14,6 +14,7 @@ import type { EmbeddedBrowserSessionInfo, EmbeddedBrowserTabInfo } from '@shared
 import {
   activeEmbeddedBrowserSessionAtom,
   browserExpandedAtom,
+  setNativeSurfaceRectAtom,
 } from '@/atoms/browser'
 import { viewedSessionIdAtom } from '@/atoms/amphi'
 import { isBlankTabUrl } from '@/lib/browserTabUrl'
@@ -515,6 +516,10 @@ function useNativeBrowserSurface(
   onPresentationHideFailed?: () => void,
 ): void {
   const hiddenAcknowledgementRequested = onPresentationHidden !== undefined
+  // Publishing the rect alongside every setVisible/setBounds keeps renderer
+  // overlays that dodge the native view (rather than hiding it) in step with
+  // what Electron was actually told — see `nativeSurfaceRectAtom`.
+  const publishSurfaceRect = useSetAtom(setNativeSurfaceRectAtom)
   const hiddenRef = useRef(hidden)
   const onPresentationReadyRef = useRef(onPresentationReady)
   const onPresentationHiddenRef = useRef(onPresentationHidden)
@@ -546,6 +551,12 @@ function useNativeBrowserSurface(
       }
       return
     }
+    // AFTER the round trip, mirroring the show path's "before". Both orderings
+    // pick the same safe side: an overlay may sit clear of a view that is gone
+    // (harmless), never on top of one that is still there. Publishing null up
+    // front would hand overlays the corner back while a failed hide left the
+    // view on screen — the exact occlusion this rect exists to prevent.
+    publishSurfaceRect(null)
     if (
       hiddenRef.current
       && presentationRevisionRef.current === presentationRevision
@@ -559,7 +570,7 @@ function useNativeBrowserSurface(
       confirmedHiddenRevisionRef.current = presentationRevision
       onPresentationHiddenRef.current?.()
     }
-  }, [])
+  }, [publishSurfaceRect])
 
   useLayoutEffect(() => {
     onPresentationReadyRef.current = onPresentationReady
@@ -572,6 +583,7 @@ function useNativeBrowserSurface(
     lifecycleRevisionRef.current = lifecycleRevision
     const viewport = viewportRef.current
     if (!sessionId || !viewport) {
+      publishSurfaceRect(null)
       void window.api.browser.setVisible(false)
       return () => {
         if (lifecycleRevisionRef.current === lifecycleRevision) {
@@ -604,8 +616,12 @@ function useNativeBrowserSurface(
           }
           if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
             await window.api.browser.setVisible(false)
+            publishSurfaceRect(null)
             continue
           }
+          // Published before the IPC round trip, not after: an overlay that steps
+          // aside must have moved by the time the view actually appears.
+          publishSurfaceRect(bounds)
           await window.api.browser.setBounds(bounds)
           if (disposed) return
           if (hiddenRef.current) {
@@ -729,10 +745,11 @@ function useNativeBrowserSurface(
       window.removeEventListener('scroll', scheduleMeasure, true)
       window.visualViewport?.removeEventListener('resize', scheduleMeasure)
       window.visualViewport?.removeEventListener('scroll', scheduleMeasure)
+      publishSurfaceRect(null)
       void window.api.browser.setVisible(false)
       void window.api.browser.activateSession(null)
     }
-  }, [hideNativeSurface, sessionId, viewportRef])
+  }, [hideNativeSurface, publishSurfaceRect, sessionId, viewportRef])
 
   useLayoutEffect(() => {
     hiddenRef.current = hidden
