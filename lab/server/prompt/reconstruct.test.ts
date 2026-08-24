@@ -10,22 +10,12 @@ function turn(
   otaRecords: Record<string, unknown>[],
   overrides: Partial<PromptTurnSnapshot> = {},
 ): PromptTurnSnapshot {
-  const records = otaRecords.map((round) => {
-    const rawScope = round.think_scope;
-    const scope = rawScope && typeof rawScope === "object" && !Array.isArray(rawScope)
-      ? rawScope as Record<string, unknown>
-      : {};
-    return {
-      ...round,
-      think_scope: { prompt_contract: "history_v2", ...scope },
-    };
-  });
   return {
     id,
     sessionId: "session-1",
     sessionOrdinal: ordinal,
     userInput: { text },
-    otaRecords: records,
+    otaRecords,
     agentState: { think: { mode: "normal", stage: "main" } },
     createdAt: "2026-08-18T01:02:00Z",
     model: "gpt-test",
@@ -132,77 +122,6 @@ describe("rebuildPrompt", () => {
     expect(contents).toContain("recent-should-remain");
     expect(contents).toContain("old-should-remain");
     expect(result.components.find((item) => item.id === "session-history")?.metadata?.includedTurns).toBe(2);
-    expect(result.components.find((item) => item.id === "session-history")?.metadata?.recordLimit).toBeUndefined();
-    expect(result.components.find((item) => item.id === "session-history")?.metadata?.promptContract).toBe("history_v2");
-  });
-
-  test("uses the legacy bounded text replay when the prompt contract is absent", () => {
-    const old = turn("turn-old", 0, "old-should-be-omitted", Array.from({ length: 60 }, () => ({})));
-    const recent = turn("turn-recent", 1, "recent-should-remain", Array.from({ length: 50 }, () => ({})));
-    const failed = turn("turn-failed", 2, "failed-question", [{
-      think_result: { step_content: "legacy-failed-reply", tool_calls: [] },
-    }], { status: "failed", error: "Provider unavailable" });
-    const current = turn("turn-current", 3, "current", [{}]);
-    const targetScope = current.otaRecords[0]?.think_scope as Record<string, unknown>;
-    delete targetScope.prompt_contract;
-
-    const result = rebuildPrompt(request([old, recent, failed, current], current.id, 0));
-    const contents = result.messages.map((message) => message.content ?? "");
-    const historyComponent = result.components.find((item) => item.id === "session-history");
-
-    expect(contents).toContain("failed-question");
-    expect(contents).toContain("recent-should-remain");
-    expect(contents).not.toContain("legacy-failed-reply");
-    expect(contents).not.toContain("old-should-be-omitted");
-    expect(result.messages.slice(1).some((message) => message.content?.includes("<turn_failed>"))).toBe(false);
-    expect(JSON.stringify(result.messages)).not.toContain("Provider unavailable");
-    expect(historyComponent?.metadata).toMatchObject({
-      promptContract: "legacy",
-      recordLimit: 100,
-    });
-  });
-
-  test("marks an unknown future prompt contract as unsupported", () => {
-    const previous = turn("turn-previous", 0, "previous", []);
-    const current = turn("turn-current", 1, "current", [{}]);
-    const targetScope = current.otaRecords[0]?.think_scope as Record<string, unknown>;
-    targetScope.prompt_contract = "history_v_next";
-
-    const result = rebuildPrompt(request([previous, current], current.id, 0));
-    const historyComponent = result.components.find((item) => item.id === "session-history");
-
-    expect(historyComponent?.fidelity).toBe("partial");
-    expect(historyComponent?.limitations).toContain(
-      "Unsupported prompt history contract history_v_next; Session history was projected with legacy semantics.",
-    );
-    expect(historyComponent?.metadata?.promptContract).toBe("history_v_next");
-  });
-
-  test("selects the history contract from the exact target round", () => {
-    const failed = turn("turn-failed", 0, "failed-question", [{
-      think_result: { step_content: "partial-failed-reply", tool_calls: [] },
-    }], { status: "failed", error: "Provider unavailable" });
-    const current = turn("turn-current", 1, "current", [{}, {}]);
-    const legacyScope = current.otaRecords[0]?.think_scope as Record<string, unknown>;
-    delete legacyScope.prompt_contract;
-
-    const legacy = rebuildPrompt(request([failed, current], current.id, 0));
-    const v2 = rebuildPrompt(request([failed, current], current.id, 1));
-    const legacyHistory = legacy.messages.slice(1).map((message) => message.content ?? "");
-    const v2History = v2.messages.slice(1).map((message) => message.content ?? "");
-    const marker = "<turn_failed>This Turn failed before completion. "
-      + "Its preceding Agent content may be incomplete.</turn_failed>";
-
-    expect(legacyHistory).not.toContain("partial-failed-reply");
-    expect(legacyHistory).not.toContain(marker);
-    expect(legacy.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
-      promptContract: "legacy",
-      recordLimit: 100,
-    });
-    expect(v2History).toContain("partial-failed-reply");
-    expect(v2History).toContain(marker);
-    expect(v2.components.find((item) => item.id === "session-history")?.metadata?.promptContract).toBe("history_v2");
-    expect(v2.components.find((item) => item.id === "session-history")?.metadata?.recordLimit).toBeUndefined();
   });
 
   test("renders persisted structured inputs in Session history", () => {
@@ -273,6 +192,7 @@ describe("rebuildPrompt", () => {
     const marker = "<turn_failed>This Turn failed before completion. "
       + "Its preceding Agent content may be incomplete.</turn_failed>";
     expect(contents).toContain(marker);
+    expect(contents.filter((content) => content === marker)).toHaveLength(1);
     expect(contents.indexOf(marker)).toBe(contents.indexOf("Partial response before failure") + 1);
     expect(contents).not.toContain("Provider unavailable");
     expect(JSON.stringify(result.messages)).not.toContain("Provider unavailable");

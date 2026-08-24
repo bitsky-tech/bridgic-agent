@@ -32,7 +32,6 @@ def _format_tool_names(names: Collection[str]) -> str:
 # The agent's name, woven into its persona and surfaced to the user.
 AGENT_NAME = "Bridgic Agent"
 
-PROMPT_HISTORY_CONTRACT = "history_v2"
 TURN_FAILED_MESSAGE = (
     "<turn_failed>This Turn failed before completion. "
     "Its preceding Agent content may be incomplete.</turn_failed>"
@@ -577,7 +576,6 @@ __all__ = [
     "EXPLORE_PERSONA",
     "GENERATE_PERSONA",
     "PERSONA",
-    "PROMPT_HISTORY_CONTRACT",
     "SUB_AGENT_PERSONA",
     "TITLE_PROMPT",
     "TURN_FAILED_MESSAGE",

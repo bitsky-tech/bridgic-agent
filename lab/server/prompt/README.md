@@ -70,11 +70,9 @@ normally should not assemble the contract by hand.
 - `messages`: native system/user/assistant/tool messages with tool-call ids,
   arguments, results, and persisted reasoning extras.
 - `tools`: ordered visible tool names and schema summaries for that round.
-- `components`: persona, context, contract-aware Session history, current input,
-  prior-round replay, and tool-surface breakdown with message indexes. Rounds
-  marked `prompt_contract: history_v2` use complete history, structured inputs,
-  and failed-Turn markers; older unversioned rounds retain the legacy 100-record
-  text replay and failed-reply withholding rules.
+- `components`: persona, context, Session history, current input, prior-round
+  replay, and tool-surface breakdown with message indexes. Session history uses
+  complete history, structured inputs, and failed-Turn markers.
 - `fidelity`: a score and explicit limitations for information not historically
   persisted in `state.db`.
 

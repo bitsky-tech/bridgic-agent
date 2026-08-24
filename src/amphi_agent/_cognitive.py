@@ -18,7 +18,6 @@ from ._prompt import (
     EXPLORE_PERSONA,
     GENERATE_PERSONA,
     PERSONA,
-    PROMPT_HISTORY_CONTRACT,
     SUB_AGENT_PERSONA,
     TURN_FAILED_MESSAGE,
     VERIFY_PERSONA,
@@ -273,7 +272,6 @@ class MainThink(CognitiveWorker):
             "mode": status.mode,
             "stage": status.stage,
             "session_history": "all_stages",
-            "prompt_contract": PROMPT_HISTORY_CONTRACT,
         }
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)

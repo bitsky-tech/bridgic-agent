@@ -25,7 +25,6 @@ export const DEFAULT_PERSONAS: Required<Omit<PromptPersonaSnapshot, "version">> 
 };
 
 export { PERSONA_SOURCE_SHA256, PERSONA_SOURCE_VERSION };
-export const PROMPT_HISTORY_CONTRACT = PERSONA_SOURCE_SNAPSHOT.promptHistoryContract;
 export const TURN_FAILED_MESSAGE = PERSONA_SOURCE_SNAPSHOT.turnFailedMessage;
 
 export interface RenderedPersona {

@@ -1,7 +1,7 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { selectToolSurface } from "./catalog";
-import { PROMPT_HISTORY_CONTRACT, renderPersona, TURN_FAILED_MESSAGE } from "./personas";
+import { renderPersona, TURN_FAILED_MESSAGE } from "./personas";
 import type {
   NativePromptMessage,
   NativeToolCall,
@@ -19,7 +19,6 @@ import type {
 import { PromptRebuildError } from "./types";
 
 const MAX_ARG_VALUE_CHARS = 1_200;
-const LEGACY_SESSION_MESSAGE_RECORD_LIMIT = 100;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -86,12 +85,6 @@ function persistedThinkScope(round: Record<string, unknown>): PersistedThinkScop
       ? scope.sessionHistory
       : undefined;
   return mode && stage ? { mode, stage, ...(sessionHistory ? { sessionHistory } : {}) } : undefined;
-}
-
-function promptHistoryContract(round: Record<string, unknown>): string | undefined {
-  const scope = record(round.think_scope ?? round.thinkScope);
-  const value = scope?.prompt_contract ?? scope?.promptContract;
-  return typeof value === "string" && value ? value : undefined;
 }
 
 function legacyBuildScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
@@ -319,26 +312,10 @@ function hasLocalizedSlashIntent(userInputs: PromptUserInput[]): boolean {
   );
 }
 
-function selectSessionHistory(
-  turns: PromptTurnSnapshot[],
-  target: PromptTurnSnapshot,
-  contract?: string,
-): PromptTurnSnapshot[] {
-  const before = turns
+function selectSessionHistory(turns: PromptTurnSnapshot[], target: PromptTurnSnapshot): PromptTurnSnapshot[] {
+  return turns
     .filter((turn) => turn.sessionId === target.sessionId && turn.sessionOrdinal < target.sessionOrdinal)
     .sort((left, right) => left.sessionOrdinal - right.sessionOrdinal);
-  if (contract === PROMPT_HISTORY_CONTRACT) return before;
-
-  const selected: PromptTurnSnapshot[] = [];
-  let recordCount = 0;
-  for (let index = before.length - 1; index >= 0; index -= 1) {
-    const turn = before[index];
-    if (!turn) continue;
-    if (recordCount + turn.otaRecords.length > LEGACY_SESSION_MESSAGE_RECORD_LIMIT) break;
-    selected.push(turn);
-    recordCount += turn.otaRecords.length;
-  }
-  return selected.reverse();
 }
 
 function actionSteps(round: Record<string, unknown>): Record<string, unknown>[] {
@@ -434,21 +411,15 @@ function historicalOtaMessages(turn: PromptTurnSnapshot, turnIndex: number): Nat
   return messages;
 }
 
-function sessionHistoryMessages(
-  turns: PromptTurnSnapshot[],
-  context?: PromptContextSnapshot,
-  contract?: string,
-): NativePromptMessage[] {
-  const historyV2 = contract === PROMPT_HISTORY_CONTRACT;
+function sessionHistoryMessages(turns: PromptTurnSnapshot[], context?: PromptContextSnapshot): NativePromptMessage[] {
   const messages: NativePromptMessage[] = [];
   turns.forEach((turn, turnIndex) => {
     messages.push({
       role: "user",
-      content: historyV2 ? renderInput(turn.userInput, context) : turn.userInput.text,
+      content: renderInput(turn.userInput, context),
     });
-    if (!historyV2 && turn.status?.toLowerCase() === "failed" && turn.error) return;
     messages.push(...historicalOtaMessages(turn, turnIndex));
-    if (historyV2 && turn.status?.toLowerCase() === "failed") {
+    if (turn.status?.toLowerCase() === "failed") {
       messages.push({ role: "assistant", content: TURN_FAILED_MESSAGE });
     }
   });
@@ -784,8 +755,7 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     input.personas,
     input.uiLanguage,
   );
-  const historyContract = promptHistoryContract(targetRound);
-  const historyTurns = selectSessionHistory(input.turns, target, historyContract);
+  const historyTurns = selectSessionHistory(input.turns, target);
   const context = renderContext(input, target, stage);
   const system = `${persona.content}\n\n${context.content}`;
 
@@ -827,22 +797,17 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     stageProjection.allStageSessionHistory,
   );
   const history = includeSessionHistory
-    ? sessionHistoryMessages(historyTurns, input.context, historyContract)
+    ? sessionHistoryMessages(historyTurns, input.context)
     : [];
   const resolvedReferenceIds = new Set([
     ...Object.keys(input.context?.referencePaths ?? {}),
     ...(input.context?.workflowResults ?? []).flatMap((run) => run.resultDir ? [run.runId] : []),
   ]);
-  const unresolvedHistoryRunIds = includeSessionHistory && historyContract === PROMPT_HISTORY_CONTRACT
+  const unresolvedHistoryRunIds = includeSessionHistory
     ? workflowRunReferenceIds(historyTurns.map((turn) => turn.userInput))
       .filter((runId) => !resolvedReferenceIds.has(runId))
     : [];
   const historyLimitations: string[] = [];
-  if (historyContract && historyContract !== PROMPT_HISTORY_CONTRACT) {
-    historyLimitations.push(
-      `Unsupported prompt history contract ${historyContract}; Session history was projected with legacy semantics.`,
-    );
-  }
   if (unresolvedHistoryRunIds.length) {
     historyLimitations.push(
       `WorkflowRun mention paths were unavailable for: ${unresolvedHistoryRunIds.join(", ")}.`,
@@ -850,7 +815,6 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   }
   if (
     includeSessionHistory
-    && historyContract === PROMPT_HISTORY_CONTRACT
     && hasLocalizedSlashIntent(historyTurns.map((turn) => turn.userInput))
   ) {
     historyLimitations.push("Localized slash-command intent prose is approximated by the Lab copy.");
@@ -869,10 +833,6 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       includedTurns: historyTurns.length,
       omittedByStage: !includeSessionHistory,
       historyModel: stageProjection.allStageSessionHistory ? "all_stages" : "stage_default",
-      promptContract: historyContract ?? "legacy",
-      ...(historyContract === PROMPT_HISTORY_CONTRACT
-        ? {}
-        : { recordLimit: LEGACY_SESSION_MESSAGE_RECORD_LIMIT }),
     },
   ));
 

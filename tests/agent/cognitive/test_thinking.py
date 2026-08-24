@@ -19,8 +19,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
       "think_scope": {
         "mode": "build",
         "stage": "generate",
-        "session_history": "all_stages",
-        "prompt_contract": "history_v2"
+        "session_history": "all_stages"
       }
     }
 
@@ -118,7 +117,6 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         "mode": "build",
         "stage": "generate",
         "session_history": "all_stages",
-        "prompt_contract": "history_v2",
     }
     assert llm.scope_at_call == expected_scope
     assert record.think_scope == expected_scope

@@ -24,7 +24,6 @@ json.dump({
     "workflowExecute": module.WORKFLOW_PERSONA,
     "workflowValidate": module.WORKFLOW_VALIDATE_PERSONA,
     "subAgentGuidance": module._SUB_AGENT_GUIDANCE,
-    "promptHistoryContract": module.PROMPT_HISTORY_CONTRACT,
     "turnFailedMessage": module.TURN_FAILED_MESSAGE,
 }, sys.stdout, ensure_ascii=False)
 `;

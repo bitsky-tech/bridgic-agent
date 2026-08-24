@@ -146,7 +146,7 @@ export const en = {
   'prompt.block.context': 'Dynamic context',
   'prompt.block.contextDescription': 'The dynamic blocks wrapped inside the System message’s <context> section.',
   'prompt.block.sessionHistory': 'Session history',
-  'prompt.block.sessionHistoryDescription': 'Bounded native USER / ASSISTANT / TOOL replay from earlier Turns.',
+  'prompt.block.sessionHistoryDescription': 'Complete native USER / ASSISTANT / TOOL replay from earlier Turns.',
   'prompt.block.currentInput': 'Current input',
   'prompt.block.currentInputDescription': 'The current user input plus the <current_time> block.',
   'prompt.block.currentTurn': 'Turn history',

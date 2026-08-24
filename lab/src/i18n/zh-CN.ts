@@ -148,7 +148,7 @@ export const zhCN = {
   'prompt.block.context': '动态 Context',
   'prompt.block.contextDescription': '组合在 System 消息 <context> 区域内的动态上下文 Block。',
   'prompt.block.sessionHistory': 'Session 历史',
-  'prompt.block.sessionHistoryDescription': '从更早 Turn 有界回放的原生 USER / ASSISTANT / TOOL 消息。',
+  'prompt.block.sessionHistoryDescription': '从更早 Turn 完整回放的原生 USER / ASSISTANT / TOOL 消息。',
   'prompt.block.currentInput': '当前输入',
   'prompt.block.currentInputDescription': '当前用户输入，以及附加的 <current_time> Block。',
   'prompt.block.currentTurn': 'Turn 历史',

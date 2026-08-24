@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import {
   PERSONA_SOURCE_SHA256,
   PERSONA_SOURCE_VERSION,
-  PROMPT_HISTORY_CONTRACT,
   renderPersona,
   TURN_FAILED_MESSAGE,
 } from "./personas";
@@ -24,7 +23,6 @@ const stages: PromptStage[] = [
 
 interface PythonPromptSnapshot {
   personas: Record<PromptStage, string>;
-  promptHistoryContract: string;
   turnFailedMessage: string;
 }
 
@@ -57,7 +55,6 @@ with use_locale(locale):
     }
 result = {
     "personas": personas,
-    "promptHistoryContract": module.PROMPT_HISTORY_CONTRACT,
     "turnFailedMessage": module.TURN_FAILED_MESSAGE,
 }
 json.dump(result, sys.stdout, ensure_ascii=False)
@@ -85,7 +82,6 @@ describe("persona source snapshot", () => {
     ] as const satisfies readonly { locale: "zh" | "en"; uiLanguage: PromptUiLanguage }[]) {
       test(`renders all eight personas byte-for-byte like Python for ${toolNames.join(", ")} (${locale})`, () => {
         const expected = pythonPromptSnapshot(toolNames, locale);
-        expect(String(PROMPT_HISTORY_CONTRACT)).toBe(expected.promptHistoryContract);
         expect(String(TURN_FAILED_MESSAGE)).toBe(expected.turnFailedMessage);
         for (const stage of stages) {
           const actual = renderPersona(stage, toolNames, undefined, uiLanguage);
