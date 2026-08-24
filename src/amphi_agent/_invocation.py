@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 from ._agent import AmphiAgent
 from ._browser import BrowserHost
 from ._context import AmphiContext, AmphiOTAContext
+from ._error import PublicAgentError
 from ._memory import Memory
 from ._schedules import ScheduleLibrary
 from ._session import Session
@@ -285,19 +286,8 @@ class AgentInvocation:
 
     @staticmethod
     def _error_message(exc: BaseException) -> str:
-        """Format an exception without losing an otherwise hidden direct cause."""
-        message = str(exc).strip()
-        formatted = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
-        cause = exc.__cause__
-        if cause is None:
-            return formatted
-        cause_message = str(cause).strip()
-        cause_detail = (
-            f"{type(cause).__name__}: {cause_message}"
-            if cause_message
-            else type(cause).__name__
-        )
-        return formatted if cause_detail in formatted else f"{formatted} (caused by {cause_detail})"
+        """Return only the protocol-compatible display text for a failure."""
+        return PublicAgentError.from_exception(exc).message
 
     ############################################################################
     # Invoke Agent
@@ -444,7 +434,7 @@ class AgentInvocation:
                 publisher.finish(CancelledEvent())
                 raise
             except CodexAuthError as exc:
-                publisher.finish(ErrorEvent(message=str(exc)))
+                publisher.finish(ErrorEvent(message=self._error_message(exc)))
                 if record.parent_session_id is None:
                     self._system_events.publish_nowait(SessionCompletedEvent(session_id=record.id))
                 raise
@@ -970,7 +960,7 @@ class AgentInvocation:
             checkpoint = self._minimal_recovery_checkpoint(ota_context)
             if outcome is not None:
                 outcome = None
-                error = str(exc)
+                error = self._error_message(exc)
                 trace_error = exc
 
         input_tokens = (

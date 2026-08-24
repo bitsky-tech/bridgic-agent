@@ -195,7 +195,7 @@ async def test_failed_notification(flow_client: AsyncClient, flow_socket: WsReco
     {
       "notification": {"kind": "failed", "schedule": "Failing report"},
       "schedule": {"status": "active", "running": false, "needs_action": 0},
-      "run": {"status": "completed", "turn_error": "Scheduled provider unavailable"}
+      "run": {"status": "completed", "turn_error": "safe public message"}
     }
 
     Checks:
@@ -204,7 +204,8 @@ async def test_failed_notification(flow_client: AsyncClient, flow_socket: WsReco
     3. The Schedule remains active while its run history retains the failure.
     """
     await subscribe_system(flow_socket)
-    scripted_llm.enqueue_error(RuntimeError("Scheduled provider unavailable"))
+    raw_error = "Scheduled provider unavailable at https://internal.invalid; token=sk-private"
+    scripted_llm.enqueue_error(RuntimeError(raw_error))
     schedule_id = await create_schedule(
         flow_client,
         "Failing report",
@@ -232,4 +233,7 @@ async def test_failed_notification(flow_client: AsyncClient, flow_socket: WsReco
     assert run["status"] == "completed"
     assert run["can_continue"] is True
     transcript = (await flow_client.get(f"/sessions/{run['session_id']}/messages")).json()
-    assert "Scheduled provider unavailable" in transcript["messages"][-1]["error"]
+    assert transcript["messages"][-1]["error"] == (
+        "Something went wrong while handling this task. Try again, or wait a moment if it keeps happening."
+    )
+    assert raw_error not in transcript["messages"][-1]["error"]

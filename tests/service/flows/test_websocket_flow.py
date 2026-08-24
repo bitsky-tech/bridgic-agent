@@ -82,6 +82,48 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     assert messages[-1]["finalAnswer"] == "Hello Ada."
 
 
+async def test_chat_runtime_error_is_presented_safely(flow_client: AsyncClient, flow_socket: WebSocketRecorder, scripted_llm: ScriptedLlm) -> None:
+    """A provider payload becomes one safe live and durable terminal error."""
+    class ContextLimitError(RuntimeError):
+        status_code = 400
+        code = "context_length_exceeded"
+
+    raw_error = (
+        "Error code: 400 - context window exceeded at https://internal.invalid; "
+        "token=sk-private; type=upstream_error"
+    )
+    public_error = (
+        "This conversation has too much content for the current model. "
+        "Shorten it or start a new conversation and try again."
+    )
+    scripted_llm.enqueue_error(ContextLimitError(raw_error))
+    session_id = await create_session(flow_client)
+
+    await subscribe(flow_socket, f"session:{session_id}", "system")
+    await flow_socket.send({
+        "type": "chat",
+        "session_id": session_id,
+        "input": "Continue the oversized workflow.",
+    })
+    assert (await flow_socket.receive_until("ack", for_type="chat"))["session_id"] == session_id
+
+    error = await flow_socket.receive_until("error", session_id=session_id)
+    await flow_socket.receive_until("session.completed", session_id=session_id)
+    assert error["message"] == public_error
+    assert raw_error not in error["message"]
+    assert "ContextLimitError" not in error["message"]
+    assert [
+        message["type"]
+        for message in flow_socket.messages
+        if message.get("session_id") == session_id
+        and message.get("type") in {"error", "final", "cancelled"}
+    ] == ["error"]
+
+    messages = (await flow_client.get(f"/sessions/{session_id}/messages")).json()["messages"]
+    assert messages[-1]["error"] == public_error
+    assert raw_error not in messages[-1]["error"]
+
+
 async def test_attempt_replay(flow_client: AsyncClient, flow_socket: WebSocketRecorder, scripted_llm: ScriptedLlm):
     """Final replay state:
 
