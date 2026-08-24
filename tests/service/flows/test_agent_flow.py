@@ -186,17 +186,19 @@ async def test_failed_turn(flow_client: httpx.AsyncClient, scripted_llm: Scripte
     """Final recovery state:
 
     {
-      "first_turn": {"status": "failed", "error": "Provider unavailable"},
+      "first_turn": {"status": "failed", "error": "safe public message"},
       "second_turn": {"status": "completed", "answer": "Recovered."},
       "agent": {"running": false}
     }
 
     Checks:
     1. A provider failure returns an HTTP failure and persists a failed Turn.
-    2. The failed transcript exposes the error without leaving an active task.
+    2. The failed transcript exposes only the safe error without leaving an active task.
     3. A later request can recover by appending a successful Turn.
     """
-    scripted_llm.enqueue_error(RuntimeError("Provider unavailable"))
+    raw_error = "Provider unavailable at https://internal.invalid; token=sk-private"
+    public_error = "The Agent encountered an internal error while running. Please try again later."
+    scripted_llm.enqueue_error(RuntimeError(raw_error))
     session_id = await create_session(flow_client)
 
     # Check 1: The failed provider call crosses the HTTP boundary as a server error.
@@ -208,12 +210,14 @@ async def test_failed_turn(flow_client: httpx.AsyncClient, scripted_llm: Scripte
     status = await flow_client.get(f"/api/agent/sessions/{session_id}/run")
     assert status.status_code == 200
     assert status.json()["status"] == "failed"
-    assert "Provider unavailable" in status.json()["error"]
+    assert status.json()["error"] == public_error
+    assert raw_error not in status.json()["error"]
 
     # Check 2: The failed Turn remains visible and the Invocation task is drained.
     response = await flow_client.get(f"/sessions/{session_id}/messages")
     assert response.status_code == 200
-    assert "Provider unavailable" in response.json()["messages"][-1]["error"]
+    assert response.json()["messages"][-1]["error"] == public_error
+    assert raw_error not in response.json()["messages"][-1]["error"]
     assert (await flow_client.get("/api/agent/status")).json() == {"running": False}
 
     # Check 3: The same Session accepts a later successful Turn.

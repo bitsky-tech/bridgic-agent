@@ -564,6 +564,66 @@ class BackendI18n:
             "zh": "未找到用户 {user_id!r} 的 Codex 登录信息。完成 Codex 订阅授权后重试(POST /me/providers/openai-codex/oauth/start)。",
             "en": "No Codex credentials for user {user_id!r}. Complete Codex subscription authorization and try again (POST /me/providers/openai-codex/oauth/start).",
         },
+        "agent.error.context_too_large": {
+            "zh": "当前会话或任务内容已超过所选模型的上下文上限。请减少输入、压缩会话历史，或新建会话后重试。",
+            "en": "This conversation or task exceeds the selected model's context limit. Reduce the input, shorten the conversation history, or start a new conversation and try again.",
+        },
+        "agent.error.model_not_found": {
+            "zh": "当前选择的模型不存在或不可用。请检查模型设置，或选择其他模型后重试。",
+            "en": "The selected model does not exist or is unavailable. Check the model settings or select another model and try again.",
+        },
+        "agent.error.quota_exhausted": {
+            "zh": "模型服务配额已用尽。请等待配额恢复，或切换其他模型或供应商。",
+            "en": "The model service quota has been exhausted. Wait for it to reset or switch to another model or provider.",
+        },
+        "agent.error.rate_limited": {
+            "zh": "模型服务当前请求过于频繁。请稍后重试。",
+            "en": "The model service is receiving too many requests. Please try again later.",
+        },
+        "agent.error.authentication_failed": {
+            "zh": "模型服务认证失败。请检查 API Key 或重新登录后再试。",
+            "en": "Authentication with the model service failed. Check the API key or sign in again and retry.",
+        },
+        "agent.error.content_rejected": {
+            "zh": "当前输入未通过模型服务的内容安全检查。请调整内容后重试。",
+            "en": "The input was rejected by the model service's content safety checks. Adjust the content and try again.",
+        },
+        "agent.error.permission_denied": {
+            "zh": "当前账号无权使用所选模型。请检查账号权限，或切换其他模型。",
+            "en": "The current account cannot use the selected model. Check the account permissions or switch to another model.",
+        },
+        "agent.error.model_or_endpoint_not_found": {
+            "zh": "找不到所选模型或模型服务地址。请检查模型 ID 和 Base URL 设置。",
+            "en": "The selected model or model service endpoint could not be found. Check the model ID and Base URL settings.",
+        },
+        "agent.error.request_rejected": {
+            "zh": "模型服务拒绝了本次请求。请调整输入或模型设置后重试。",
+            "en": "The model service rejected this request. Adjust the input or model settings and try again.",
+        },
+        "agent.error.stream_interrupted": {
+            "zh": "模型响应传输中断。请重试；如果持续发生，请检查网络或代理设置。",
+            "en": "The model response stream was interrupted. Retry, and check the network or proxy settings if the problem continues.",
+        },
+        "agent.error.request_timeout": {
+            "zh": "模型响应超时。请重试，或检查网络和代理设置。",
+            "en": "The model response timed out. Retry or check the network and proxy settings.",
+        },
+        "agent.error.network_unreachable": {
+            "zh": "无法连接模型服务。请检查网络、代理或 Base URL 后重试。",
+            "en": "Unable to connect to the model service. Check the network, proxy, or Base URL and try again.",
+        },
+        "agent.error.provider_unavailable": {
+            "zh": "模型服务暂时不可用。请稍后重试，或切换其他模型。",
+            "en": "The model service is temporarily unavailable. Try again later or switch to another model.",
+        },
+        "agent.error.trace_too_large": {
+            "zh": "本次执行产生的过程数据过多，无法安全保存。请缩小任务范围后重试。",
+            "en": "This run produced too much intermediate data to save safely. Reduce the task scope and try again.",
+        },
+        "agent.error.internal": {
+            "zh": "Agent 执行过程中出现内部错误。请稍后重试。",
+            "en": "The Agent encountered an internal error while running. Please try again later.",
+        },
         "agent.describe.system_prompt": {
             "zh": "你在向不懂命令行的普通用户解释 Agent 即将执行的操作。把每条工具调用用一句简短中文说明它实际会做什么：说人话、聚焦效果，不要罗列参数或术语。\n只输出 JSON 数组并与输入顺序一一对应，每项格式为\n{{\"index\": 序号, \"summary\": \"一句中文说明\"}}，不要输出其他内容。\n",
             "en": "Explain each pending Agent tool call to a non-technical user in one short plain-English sentence. State what it will do in practical terms; do not list parameters or jargon.\nOutput only a JSON array in the same order as the input. Each item must be {{\"index\": number, \"summary\": \"one concise English sentence\"}}. Do not output anything else.\n",

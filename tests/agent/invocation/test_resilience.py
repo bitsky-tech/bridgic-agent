@@ -230,7 +230,8 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
         assert failed is not None
         assert failed.status is TurnStatus.FAILED
         assert failed.final_answer is None
-        assert "OTA context exceeded" in (failed.error or "")
+        assert failed.error == "本次执行产生的过程数据过多，无法安全保存。请缩小任务范围后重试。"
+        assert "OTA context exceeded" not in failed.error
 
         # Check 2: The fallback contains no oversized trace or stale dynamic tool surface.
         assert failed.ota_records == []
