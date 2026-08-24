@@ -457,6 +457,7 @@ export function WorkflowRunResultCard({
 }) {
   const { t, i18n } = useTranslation()
   const completed = run.status === 'completed'
+  const reusable = completed || run.status === 'failed'
   const insertWorkflowResult = useSetAtom(useWorkflowResultAtom)
   return (
     <Card className="cursor-pointer border-l-2 border-l-brand-blue" onClick={onPreview}>
@@ -495,7 +496,7 @@ export function WorkflowRunResultCard({
               {completed ? t('rightPanel.runCompleted') : t('rightPanel.runFailed')}
             </span>
           </div>
-          {completed ? (
+          {reusable ? (
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}

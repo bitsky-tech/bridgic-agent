@@ -138,6 +138,7 @@ export function WorkflowRunDetailModal({
   const subtitle = detail
     ? `${formatWorkflowRunShortTimestamp(detail.created_at, i18n.language)} · ${detail.id}`
     : runId
+  const referenceable = detail?.status === 'completed' || detail?.status === 'failed'
 
   return (
     <Modal
@@ -180,7 +181,7 @@ export function WorkflowRunDetailModal({
           initialFilePath={initialFilePath}
           detailError={detailError}
           onRetryDetail={() => setDetailReloadKey((key) => key + 1)}
-          onReference={detail.status === 'completed' ? () => referenceRun(detail) : undefined}
+          onReference={referenceable ? () => referenceRun(detail) : undefined}
           referenceLabel={
             composerTarget === ComposerTarget.NewSession ? t('workflow.runDetail.useInNewSession') : t('workflow.common.useResult')
           }

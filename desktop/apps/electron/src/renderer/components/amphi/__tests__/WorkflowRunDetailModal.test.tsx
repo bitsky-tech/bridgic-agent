@@ -196,8 +196,16 @@ describe('WorkflowRunDetailModal', () => {
     await act(async () => root.unmount())
   })
 
-  it('inserts a Workflow Run reference for continuing the conversation', async () => {
-    const run = { ...deletedWorkflowRun, id: 'wfr-live-source', workflow_id: 'wf-live', workflow_name: '可用工作流', files: [] }
+  it('inserts a failed Workflow Run reference for continuing the conversation', async () => {
+    const run = {
+      ...deletedWorkflowRun,
+      id: 'wfr-live-source',
+      workflow_id: 'wf-live',
+      workflow_name: '可用工作流',
+      status: 'failed' as const,
+      validation_status: 'failed' as const,
+      files: [],
+    }
     const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString()
       const pathname = new URL(url).pathname
