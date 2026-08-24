@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from src.amphi_agent._error import PublicAgentError
+from src.amphi_agent._error import AgentEmptyAnswerError, AgentException, PublicAgentError
 from src.amphi_service.i18n import use_locale
 from src.amphi_service.protocol.llms._codex_credentials import CodexAuthError
 
@@ -15,6 +15,22 @@ class ProviderError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.code = code
+
+
+def test_agent_empty_answer_has_a_specific_safe_public_error() -> None:
+    error = AgentEmptyAnswerError(recovery_attempts=3)
+
+    public = PublicAgentError.from_exception(error)
+
+    assert isinstance(error, AgentException)
+    assert error.recovery_attempts == 3
+    assert public == PublicAgentError(
+        code="empty_answer",
+        message="模型连续多次未能生成可展示的最终回复，本次执行已停止。请重试；如果问题持续发生，请切换其他模型。",
+        retryable=True,
+        action="retry",
+    )
+    assert str(error) not in public.message
 
 
 def test_context_limit_unwraps_framework_error_without_exposing_provider_details() -> None:

@@ -10,6 +10,7 @@ from bridgic.amphibious._type import ThinkResult
 from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
+from src.amphi_agent._error import AgentEmptyAnswerError
 from src.amphi_agent._state import CallVerdict, RoundPermission
 from src.amphi_agent.security import Permission
 from src.amphi_agent.tools import request_human_choice_tool, run_subagent_tool
@@ -279,15 +280,15 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
     """Final empty-answer handling:
 
     {
-      "first_empty": "one continuation with a recovery instruction",
+      "empty_answer": "up to three continuations with recovery instructions",
       "next_visible_answer": "Delivered answer",
-      "second_empty": "RuntimeError"
+      "fourth_empty": "AgentEmptyAnswerError"
     }
 
     Checks:
-    1. One empty Main response stamps recovery guidance and dispatches another Main round.
-    2. A visible continuation becomes the Turn result after the one allowed retry.
-    3. Two consecutive empty responses fail explicitly instead of looping silently.
+    1. Three empty Main responses each dispatch another Main round with stronger guidance.
+    2. A visible third continuation becomes the Turn result.
+    3. A fourth consecutive empty response fails with the typed Agent exception.
     """
     context = _context(test_sandbox.sessions / SESSION_ID)
     agent = AmphiAgent()
@@ -295,23 +296,26 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
     ota_context = AmphiOTAContext(user_input="Provide a visible answer", stream=stream)
     loop = agent.on_agent(ota_context, context)
     first = await anext(loop)
-    ota_context.ota_record.append(OTARecord(
-        think_result=ThinkResult(step_content="", tool_calls=[]),
-    ))
-
-    second = await loop.asend("")
-
-    # Check 1: One empty Main response stamps recovery guidance and dispatches another Main round.
     assert first.name == "main"
-    assert second.name == "main"
-    assert "last response was empty" in ota_context.ota_record[-1].observation_result
+    for attempt in range(1, 4):
+        ota_context.ota_record.append(OTARecord(
+            think_result=ThinkResult(step_content="", tool_calls=[]),
+        ))
+        continuation = await loop.asend("")
+
+        # Check 1: Every permitted empty answer gets a numbered, action-bounded recovery round.
+        assert continuation.name == "main"
+        guidance = ota_context.ota_record[-1].observation_result
+        assert f"recovery attempt {attempt}/3" in guidance
+        assert "do not call tools" in guidance
+        assert "non-empty final answer" in guidance
 
     ota_context.ota_record.append(OTARecord(
         think_result=ThinkResult(step_content="Delivered answer", tool_calls=[]),
     ))
     returned = await loop.asend("Delivered answer")
 
-    # Check 2: A visible continuation becomes the Turn result after the one allowed retry.
+    # Check 2: A visible answer is accepted after all three recovery rounds were available.
     assert returned.value == "Delivered answer"
     await loop.aclose()
 
@@ -319,14 +323,15 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
     failing_ota = AmphiOTAContext(user_input="Do not return an empty answer", stream=stream)
     failing_loop = failing_agent.on_agent(failing_ota, context)
     await anext(failing_loop)
-    failing_ota.ota_record.append(OTARecord(
-        think_result=ThinkResult(step_content="", tool_calls=[]),
-    ))
-    await failing_loop.asend("")
+    for _attempt in range(3):
+        failing_ota.ota_record.append(OTARecord(
+            think_result=ThinkResult(step_content="", tool_calls=[]),
+        ))
+        await failing_loop.asend("")
     failing_ota.ota_record.append(OTARecord(
         think_result=ThinkResult(step_content="", tool_calls=[]),
     ))
 
-    # Check 3: Two consecutive empty responses fail explicitly instead of looping silently.
-    with pytest.raises(RuntimeError, match="empty answer after continuation"):
+    # Check 3: The fourth empty answer fails explicitly with its recognized Agent exception.
+    with pytest.raises(AgentEmptyAnswerError, match="after 3 recovery attempts"):
         await failing_loop.asend("")

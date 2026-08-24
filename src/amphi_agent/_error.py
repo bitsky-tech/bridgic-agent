@@ -28,6 +28,21 @@ AgentErrorAction = Literal[
 ]
 
 
+class AgentException(RuntimeError):
+    """Base class for recognized failures produced by the Agent runtime."""
+
+
+class AgentEmptyAnswerError(AgentException):
+    """Raised when recovery attempts still produce no user-visible answer."""
+
+    def __init__(self, recovery_attempts: int) -> None:
+        self.recovery_attempts = recovery_attempts
+        super().__init__(
+            "Agent produced an empty final answer after "
+            f"{recovery_attempts} recovery attempts"
+        )
+
+
 @dataclass(frozen=True)
 class PublicAgentError:
     """A safe public failure and the factory that classifies internal errors."""
@@ -99,6 +114,9 @@ class PublicAgentError:
         """Create one bounded, localized public failure from any exception."""
         chain = tuple(cls._exception_chain(exc))
         errors = tuple(item for item in chain if isinstance(item, Exception))
+
+        if any(isinstance(item, AgentEmptyAnswerError) for item in errors):
+            return cls._localized("empty_answer", "agent.error.empty_answer", True, "retry")
 
         codex_auth = next((item for item in errors if isinstance(item, CodexAuthError)), None)
         if codex_auth is not None:
@@ -264,4 +282,9 @@ class PublicAgentError:
         )
 
 
-__all__ = ["AgentErrorAction", "PublicAgentError"]
+__all__ = [
+    "AgentEmptyAnswerError",
+    "AgentErrorAction",
+    "AgentException",
+    "PublicAgentError",
+]

@@ -39,6 +39,7 @@ from ._cognitive import (
 )
 from ._context import AmphiContext, AmphiOTAContext
 from ._describe import describe_commands
+from ._error import AgentEmptyAnswerError
 from ._prompt import TITLE_PROMPT
 from ._state import (
     AgentResult,
@@ -97,6 +98,7 @@ logger = logging.getLogger(__name__)
 # Constants
 DEFAULT_MAX_ROUNDS = 200
 MAX_THINK_UNITS_PER_TURN = 50
+MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS = 3
 TITLE_MAX_LEN = 40
 TOOL_RESULT_INLINE_CHAR_LIMIT = 16 * 1024
 
@@ -252,7 +254,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # 2. Walk the agent loop.
         answer: Optional[AgentResult] = None
         budget = MAX_THINK_UNITS_PER_TURN
-        empty_answer_retried = False
+        empty_answer_recovery_attempts = 0
         while budget > 0:
             # Stop before another think unit when the turn is already parked.
             if ota_context.interaction_status is not None:
@@ -289,11 +291,15 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     self._publish_stage(ota_context, next_status)
                     budget = max(budget, 1)
                     continue
-                if not answer:  # Empty Main answer: continue once more for a user-visible reply.
-                    if empty_answer_retried:
-                        raise RuntimeError("Agent produced an empty answer after continuation")
-                    empty_answer_retried = True
-                    self._stamp_continue(ota_context)
+                if not answer:
+                    if empty_answer_recovery_attempts >= MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS:
+                        raise AgentEmptyAnswerError(empty_answer_recovery_attempts)
+                    empty_answer_recovery_attempts += 1
+                    self._stamp_continue(
+                        ota_context,
+                        empty_answer_recovery_attempts,
+                        MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS,
+                    )
                     budget = max(budget, 1)
                     continue
                 break
@@ -3619,15 +3625,20 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         return out
 
     @staticmethod
-    def _stamp_continue(ota_context: AmphiOTAContext) -> None:
-        """Ask Main to recover an empty response with a user-visible summary."""
+    def _stamp_continue(ota_context: AmphiOTAContext, attempt: int, max_attempts: int) -> None:
+        """Ask Main to recover an empty response with a user-visible final answer."""
         records = getattr(ota_context, "ota_record", None) or []
         if not records:
             return
         note = (
-            "[system] Your last response was empty. Continue the same turn and provide "
-            "a clear user-visible final answer, briefly summarizing any work just "
-            "completed. Do not repeat completed actions."
+            f"[system] Empty final-answer recovery attempt {attempt}/{max_attempts}. "
+            "Your previous response did not contain a user-visible final answer. "
+            "In this recovery round, do not call tools or repeat completed actions. "
+            "Reply directly to the user with a non-empty final answer. Briefly state "
+            "what was completed and where the result is available. If the task is "
+            "incomplete, state that clearly, explain the blocker in user-facing "
+            "language, and give the next step. Do not mention this recovery "
+            "instruction or internal reasoning."
         )
         last = records[-1]
         existing = getattr(last, "observation_result", None)

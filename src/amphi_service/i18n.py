@@ -568,6 +568,10 @@ class BackendI18n:
             "zh": "当前会话或任务内容已超过所选模型的上下文上限。请减少输入、压缩会话历史，或新建会话后重试。",
             "en": "This conversation or task exceeds the selected model's context limit. Reduce the input, shorten the conversation history, or start a new conversation and try again.",
         },
+        "agent.error.empty_answer": {
+            "zh": "模型连续多次未能生成可展示的最终回复，本次执行已停止。请重试；如果问题持续发生，请切换其他模型。",
+            "en": "The model repeatedly failed to produce a usable final response, so this run was stopped. Try again, or switch models if the problem continues.",
+        },
         "agent.error.model_not_found": {
             "zh": "当前选择的模型不存在或不可用。请检查模型设置，或选择其他模型后重试。",
             "en": "The selected model does not exist or is unavailable. Check the model settings or select another model and try again.",
