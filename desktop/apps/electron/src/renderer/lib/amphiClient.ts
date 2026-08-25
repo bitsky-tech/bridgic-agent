@@ -268,9 +268,22 @@ export interface VersionResponse {
 // `api_key_set: bool` to signal "configured / not". OAuth flow endpoints
 // return 501 today; we don't expose them here until they ship.
 
+export interface ModelLimits {
+  context?: number
+  input?: number
+  output?: number
+  source?: 'provider' | 'models_dev' | 'manual'
+  source_provider_id?: string
+  source_model_id?: string
+}
+
 export interface ProviderModelInfo {
   id: string
+  name: string
   vision?: boolean
+  tool_call?: boolean
+  reasoning?: boolean
+  limits?: ModelLimits
 }
 
 /** Static catalog entry from `GET /providers`.
@@ -314,6 +327,7 @@ export interface ConfiguredProvider {
   protocol: 'openai' | 'anthropic' | 'openai-codex'
   display_name: string | null
   available_models: string[]
+  model_limits: Record<string, ModelLimits>
 }
 
 /** Body for `POST /me/providers/{provider_id}/toggle` — flip is_enabled. */
@@ -364,6 +378,13 @@ export interface FetchedModel {
   id: string
   /** Provider-supplied label; falls back to `id` when none is advertised. */
   name: string
+  vision?: boolean | null
+  tool_call?: boolean | null
+  reasoning?: boolean | null
+  limits?: ModelLimits
+  limits_source?: 'provider' | 'models_dev' | 'unknown'
+  source_provider_id?: string
+  source_model_id?: string
 }
 
 /** Response from `POST /me/providers/fetch-models` — always HTTP 200.
@@ -394,6 +415,7 @@ export interface AddProviderBody {
   protocol?: 'openai' | 'anthropic' | 'openai-codex'
   display_name?: string | null
   models?: string[]
+  model_limits?: Record<string, ModelLimits>
 }
 
 /** Body for `POST /me/active-model`. */

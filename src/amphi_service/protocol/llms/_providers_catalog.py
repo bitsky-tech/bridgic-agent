@@ -1,139 +1,192 @@
-"""Built-in provider presets exposed to clients and LLM routing code."""
+"""Read the bundled models.dev snapshot and apply Amphi product policy."""
 
-from typing import Dict, List
+from __future__ import annotations
 
-PROVIDER_CATALOG: List[dict] = [
-    {
-        "id": "openai",
-        "display_name": "OpenAI",
-        "protocol": "openai",
-        "default_base_url": "https://api.openai.com/v1",
-        # OAuth here = ChatGPT subscription (Codex). Choosing it switches the
-        # channel to protocol 'openai-codex' + the Codex endpoint at activation
-        # time; API Key stays on the standard OpenAI protocol/endpoint.
-        # Default to oauth — the subscription mode is the recommended path (matches
-        # the "Recommended" badge); API Key is the manual fallback.
-        "auth_modes": ["oauth", "api_key"],
-        "default_auth_mode": "oauth",
-        "models": [
-            {"id": "gpt-5.5", "vision": True},
-            {"id": "gpt-5.4-mini", "vision": True},
-            {"id": "gpt-5.4-nano", "vision": True},
-        ],
-    },
-    {
-        "id": "anthropic",
-        "display_name": "Anthropic",
-        "protocol": "anthropic",
-        "default_base_url": "https://api.anthropic.com",
-        "auth_modes": ["oauth", "api_key"],
-        "default_auth_mode": "oauth",
-        "models": [
-            {"id": "claude-opus-4-8", "vision": True},
-            {"id": "claude-sonnet-4-6", "vision": True},
-            {"id": "claude-haiku-4-5", "vision": True},
-        ],
-    },
-    {
-        "id": "deepseek",
-        "display_name": "DeepSeek",
-        "protocol": "openai",
-        "default_base_url": "https://api.deepseek.com",
-        "auth_modes": ["api_key"],
-        "default_auth_mode": "api_key",
-        "models": [
-            {"id": "deepseek-v4-pro", "vision": False},
-            {"id": "deepseek-v4-flash", "vision": False},
-        ],
-    },
-    {
-        "id": "kimi",
-        "display_name": "Kimi Code",
-        "protocol": "openai",
-        "default_base_url": "https://api.kimi.com/coding/v1",
-        "auth_modes": ["api_key"],
-        "default_auth_mode": "api_key",
-        "models": [
-            {"id": "kimi-for-coding", "vision": True},
-            {"id": "k3", "vision": True},
-            {"id": "kimi-for-coding-highspeed", "vision": True},
-        ],
-    },
-    {
-        "id": "google",
-        "display_name": "Google",
-        # Native Gemini path (google-genai SDK), NOT the OpenAI-compat shim —
-        # required so function-calling thought_signatures round-trip (the compat
-        # endpoint drops them → 400). default_base_url mirrors the SDK's own
-        # default request endpoint (display only; empty also works).
-        "protocol": "google",
-        "default_base_url": "https://generativelanguage.googleapis.com/",
-        "auth_modes": ["api_key"],
-        "default_auth_mode": "api_key",
-        "models": [
-            {"id": "gemini-2.5-pro", "vision": True},
-            {"id": "gemini-2.5-flash", "vision": True},
-            {"id": "gemini-2.5-flash-lite", "vision": True},
-        ],
-    },
-    {
-        "id": "glm",
-        "display_name": "GLM (Zhipu)",
-        "protocol": "openai",
-        "default_base_url": "https://open.bigmodel.cn/api/paas/v4/",
-        "auth_modes": ["api_key"],
-        "default_auth_mode": "api_key",
-        "models": [
-            {"id": "glm-4.6", "vision": False},
-            {"id": "glm-4.5-air", "vision": False},
-            {"id": "glm-4.6v", "vision": True},
-        ],
-    },
-    {
-        "id": "openrouter",
-        "display_name": "OpenRouter",
-        "protocol": "openai",
-        "default_base_url": "https://openrouter.ai/api/v1",
-        "auth_modes": ["api_key"],
-        "default_auth_mode": "api_key",
-        # Prefer the free models (``:free``, all of which support function calling) to
-        # cut spend; the free tier has upstream rate limits, and the adapter already
-        # backs off and retries on 429. Switch to a paid model when more capability is
-        # needed.
-        "models": [
-            {"id": "openai/gpt-oss-120b:free", "vision": False},
-            {"id": "qwen/qwen3-coder:free", "vision": False},
-            {"id": "meta-llama/llama-3.3-70b-instruct:free", "vision": False},
-        ],
-    },
-]
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# Quick lookup by id — retained for any consumer that wants O(1) catalog
-# membership check (handlers no longer use it for validation, but it
-# stays exported so external clients querying the wire shape can reuse it).
+from ._provider_policies import PROVIDER_POLICIES, PROVIDER_POLICIES_BY_ID
+
+
+_RAW_CATALOG_PATH = Path(__file__).with_name("_models_dev_catalog.json")
+
+
+def _load_raw_catalog() -> Dict[str, dict]:
+    try:
+        payload = json.loads(_RAW_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Packaged model catalog is unavailable: {_RAW_CATALOG_PATH}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Packaged model catalog must be a provider map")
+    return payload
+
+
+_RAW_PROVIDERS = _load_raw_catalog()
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _source_provider_id(provider_id: str) -> str:
+    if provider_id == "openai-codex":
+        return "openai"
+    policy = PROVIDER_POLICIES_BY_ID.get(provider_id)
+    if policy is not None:
+        return policy["source_provider_id"]
+    return provider_id
+
+
+def _source_model(provider_id: str, model_id: str) -> tuple[str, Optional[dict]]:
+    source_provider_id = _source_provider_id(provider_id)
+    provider = _RAW_PROVIDERS.get(source_provider_id)
+    if not isinstance(provider, dict):
+        return model_id, None
+    models = provider.get("models")
+    if not isinstance(models, dict):
+        return model_id, None
+
+    model = models.get(model_id)
+    if isinstance(model, dict):
+        return model_id, model
+    if source_provider_id == "openrouter" and model_id.endswith(":free"):
+        base_model_id = model_id[: -len(":free")]
+        model = models.get(base_model_id)
+        if isinstance(model, dict):
+            return base_model_id, model
+    return model_id, None
+
+
+def catalog_model(provider_id: str, model_id: str) -> Optional[dict]:
+    """Normalize one provider/model pair from the bundled raw snapshot."""
+    source_model_id, raw = _source_model(provider_id, model_id)
+    if raw is None:
+        return None
+    raw_limits = raw.get("limit")
+    raw_limits = raw_limits if isinstance(raw_limits, dict) else {}
+    limits = {
+        key: value
+        for key in ("context", "input", "output")
+        if (value := _positive_int(raw_limits.get(key))) is not None
+    }
+    modalities = raw.get("modalities")
+    modalities = modalities if isinstance(modalities, dict) else {}
+    input_modalities = modalities.get("input")
+    input_modalities = input_modalities if isinstance(input_modalities, list) else []
+    name = raw.get("name")
+    return {
+        "id": model_id,
+        "name": name if isinstance(name, str) and name else model_id,
+        "vision": "image" in input_modalities,
+        "tool_call": raw.get("tool_call") is True,
+        "reasoning": raw.get("reasoning") is True,
+        "limits": limits,
+        "limits_source": "models_dev",
+        "source_provider_id": _source_provider_id(provider_id),
+        "source_model_id": source_model_id,
+    }
+
+
+def catalog_model_limits(provider_id: str, model_id: str) -> Optional[dict]:
+    """Return token ceilings from the bundled snapshot for database storage."""
+    model = catalog_model(provider_id, model_id)
+    if model is None or not model["limits"]:
+        return None
+    return {
+        **model["limits"],
+        "source": "models_dev",
+        "source_provider_id": model["source_provider_id"],
+        "source_model_id": model["source_model_id"],
+    }
+
+
+def resolve_model_limits(provider_id: str, model_id: str, submitted: Optional[dict] = None) -> Optional[dict]:
+    """Resolve provider, packaged, then manual limits for one selected model."""
+    packaged = catalog_model_limits(provider_id, model_id)
+    incoming = submitted if isinstance(submitted, dict) else {}
+    source = incoming.get("source")
+
+    incoming_limits = {
+        key: value
+        for key in ("context", "input", "output")
+        if (value := _positive_int(incoming.get(key))) is not None
+    }
+    if source == "provider" and incoming_limits:
+        base = packaged or {}
+        return {
+            **base,
+            **incoming_limits,
+            "source": "provider",
+            "source_provider_id": incoming.get("source_provider_id") or _source_provider_id(provider_id),
+            "source_model_id": incoming.get("source_model_id") or model_id,
+        }
+    if packaged is not None:
+        return packaged
+    if incoming_limits:
+        resolved = {
+            **incoming_limits,
+            "source": source if source in {"provider", "models_dev", "manual"} else "manual",
+        }
+        if incoming.get("source_provider_id"):
+            resolved["source_provider_id"] = incoming["source_provider_id"]
+        if incoming.get("source_model_id"):
+            resolved["source_model_id"] = incoming["source_model_id"]
+        return resolved
+    return None
+
+
+def _provider_entry(policy: dict) -> dict:
+    models = []
+    for model_id in policy["default_model_ids"]:
+        model = catalog_model(policy["id"], model_id)
+        if model is None:
+            raise RuntimeError(
+                f"Default model {policy['id']}/{model_id} is absent from the packaged catalog"
+            )
+        models.append({
+            "id": model["id"],
+            "name": model["name"],
+            "vision": model["vision"],
+            "tool_call": model["tool_call"],
+            "reasoning": model["reasoning"],
+            "limits": model["limits"],
+        })
+    return {
+        "id": policy["id"],
+        "display_name": policy["display_name"],
+        "protocol": policy["protocol"],
+        "default_base_url": policy["default_base_url"],
+        "auth_modes": list(policy["auth_modes"]),
+        "default_auth_mode": policy["default_auth_mode"],
+        "models": models,
+    }
+
+
+PROVIDER_CATALOG: List[dict] = [_provider_entry(policy) for policy in PROVIDER_POLICIES]
 PROVIDER_CATALOG_BY_ID: Dict[str, dict] = {
     entry["id"]: entry for entry in PROVIDER_CATALOG
 }
-
-# Vendors hidden from ``GET /providers``. The entry stays in the catalog above
-# so in-process prefill lookups (PROVIDER_CATALOG_BY_ID), protocol dispatch,
-# and already-saved user channels keep resolving — only the wire loses it.
-#
-# Scope: every API client reads GET /providers, so the vendor disappears from
-# all of them. What stays reachable is the Anthropic *protocol*: the GUI's
-# custom-protocol → the "Anthropic compatible" card, and any
-# saved channel using it.
-HIDDEN_PROVIDER_IDS: frozenset = frozenset({"anthropic"})
+HIDDEN_PROVIDER_IDS: frozenset[str] = frozenset(
+    policy["id"] for policy in PROVIDER_POLICIES if policy.get("hidden") is True
+)
 
 
 def visible_catalog() -> List[dict]:
-    """The catalog as served on the wire, minus ``HIDDEN_PROVIDER_IDS``."""
-    return [e for e in PROVIDER_CATALOG if e["id"] not in HIDDEN_PROVIDER_IDS]
+    """Return product-visible provider presets backed by the raw snapshot."""
+    return [entry for entry in PROVIDER_CATALOG if entry["id"] not in HIDDEN_PROVIDER_IDS]
 
 
 __all__ = [
+    "HIDDEN_PROVIDER_IDS",
     "PROVIDER_CATALOG",
     "PROVIDER_CATALOG_BY_ID",
-    "HIDDEN_PROVIDER_IDS",
+    "catalog_model",
+    "catalog_model_limits",
+    "resolve_model_limits",
     "visible_catalog",
 ]

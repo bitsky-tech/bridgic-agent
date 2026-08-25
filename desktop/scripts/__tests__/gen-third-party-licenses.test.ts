@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  collectRuntimeEntries,
   dedupeEntries,
   findLicenseText,
   formatLicenseDocument,
@@ -33,6 +34,14 @@ function tmpDir(): string {
 afterEach(() => {
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true })
   tmpDirs = []
+})
+
+describe('collectRuntimeEntries', () => {
+  it('attributes the packaged models.dev snapshot with its MIT text', () => {
+    const entry = collectRuntimeEntries().find((item) => item.name === 'models.dev catalog snapshot')
+    expect(entry?.license).toBe('MIT')
+    expect(entry?.text).toContain('Copyright (c) 2025 models.dev')
+  })
 })
 
 describe('packagesFromSourcemapSources', () => {

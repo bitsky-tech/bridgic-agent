@@ -966,9 +966,12 @@
       "modelCount": "{{n}} 个模型",
       "models": {
         "add": "添加",
+        "context": "上下文：{{n}} tokens",
+        "contextPlaceholder": "上下文窗口 tokens（可选）",
         "empty": "暂无模型 —— picker 将不显示该渠道。请添加至少一个 model id。",
         "loaded": "已加载 {{n}} 个模型",
         "placeholder": "输入 model id 后按 Enter 添加，例如 gpt-4o-mini",
+        "output": "输出：{{n}} tokens",
         "remove": "移除",
         "removeAria": "移除 {{model}}",
         "summary": "{{n}} 个 · 这里是模型选择器唯一显示源",

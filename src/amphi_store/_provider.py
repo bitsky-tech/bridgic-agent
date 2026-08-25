@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import Column, UniqueConstraint
 from sqlmodel import Field, SQLModel
@@ -48,6 +48,11 @@ class ProviderCredential(SQLModel, table=True):
         sa_column=Column(JsonType),
         description="Picker whitelist of model ids.",
     )
+    model_limits: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        sa_column=Column(JsonType),
+        description="Normalized token ceilings keyed by selected model id.",
+    )
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -65,6 +70,7 @@ class ProviderRepository(Repository[ProviderCredential]):
         protocol: Optional[str] = None,
         display_name: Optional[str] = None,
         models: Optional[List[str]] = None,
+        model_limits: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> ProviderCredential:
         """Insert or update one provider credential; return the row.
 
@@ -72,13 +78,25 @@ class ProviderRepository(Repository[ProviderCredential]):
         (so a re-POST without a key doesn't wipe it); ``auth_mode`` always
         overwrites. ``is_active`` is preserved.
 
-        ``protocol`` / ``display_name`` / ``models`` are Phase-2 additions:
+        ``protocol`` / ``display_name`` / ``models`` / ``model_limits`` are additions:
         - ``protocol``: None preserves existing; insert defaults to "openai".
         - ``display_name``: None preserves existing; nullable column so users
           can clear via explicit "".
         - ``models``: None preserves existing; insert defaults to [] (the
           ``enabled_models`` column stores the list directly).
+        - ``model_limits``: None preserves metadata for retained models; values
+          for models removed from the whitelist are discarded.
         """
+        def normalized_limits(values: Any, selected_models: List[str]) -> Dict[str, Dict[str, Any]]:
+            if not isinstance(values, dict):
+                return {}
+            selected = set(selected_models)
+            return {
+                model_id: dict(value)
+                for model_id, value in values.items()
+                if model_id in selected and isinstance(value, dict) and value
+            }
+
         async with self._session() as s:
             row = await self._get_by(
                 s, ProviderCredential, user_id=user_id, provider_id=provider_id,
@@ -93,6 +111,7 @@ class ProviderRepository(Repository[ProviderCredential]):
                     protocol=protocol or "openai",
                     display_name=display_name,
                     enabled_models=models or [],
+                    model_limits=normalized_limits(model_limits, models or []),
                 )
                 s.add(row)
             else:
@@ -107,6 +126,12 @@ class ProviderRepository(Repository[ProviderCredential]):
                     row.display_name = display_name
                 if models is not None:
                     row.enabled_models = models
+                if models is not None or model_limits is not None:
+                    selected_models = (
+                        models if models is not None else row.enabled_models
+                    )
+                    values = model_limits if model_limits is not None else row.model_limits
+                    row.model_limits = normalized_limits(values, selected_models)
             await s.commit()
             await s.refresh(row)
             return row

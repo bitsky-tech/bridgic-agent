@@ -51,6 +51,7 @@
 import { atom, type Getter, type Setter } from 'jotai'
 import {
   type ConfiguredProvider,
+  type ModelLimits,
   type ProviderCatalogEntry,
   type FetchModelsResult,
   type TestProviderResult,
@@ -323,6 +324,7 @@ export interface AddProviderInput {
   protocol?: 'openai' | 'anthropic'
   displayName?: string | null
   models?: string[]
+  modelLimits?: Record<string, ModelLimits>
 }
 
 export const addProviderAtom = atom(
@@ -346,6 +348,7 @@ export const addProviderAtom = atom(
         protocol: input.protocol,
         display_name: input.displayName,
         models: input.models,
+        model_limits: input.modelLimits,
       })
       await set(hydrateModelsAtom)
       set(_lastActionError, null)
@@ -397,6 +400,7 @@ export const addProviderAtom = atom(
 /** Input to {@link setCodexModelsAtom}. */
 export interface SetCodexModelsInput {
   models: string[]
+  modelLimits: Record<string, ModelLimits>
 }
 
 /**
@@ -426,6 +430,7 @@ export const setCodexModelsAtom = atom(
         // api_key omitted → backend upsert preserves the (absent) Codex key.
         display_name: 'OpenAI',
         models: input.models,
+        model_limits: input.modelLimits,
       })
       await set(hydrateModelsAtom)
       set(_lastActionError, null)

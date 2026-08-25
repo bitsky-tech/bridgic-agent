@@ -87,6 +87,8 @@ class Repository(Generic[T]):
          "ALTER TABLE sessions ADD COLUMN subagent_mode VARCHAR"),
         ("schedules", "locale",
          "ALTER TABLE schedules ADD COLUMN locale VARCHAR"),
+        ("provider_credentials", "model_limits",
+         "ALTER TABLE provider_credentials ADD COLUMN model_limits TEXT NOT NULL DEFAULT '{}'"),
     )
     @classmethod
     async def init_schema(cls) -> None:

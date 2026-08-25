@@ -966,9 +966,12 @@
       "modelCount": "{{n}} models",
       "models": {
         "add": "Add",
+        "context": "Context: {{n}} tokens",
+        "contextPlaceholder": "Context-window tokens (optional)",
         "empty": "No models — this provider will not appear in the picker. Add at least one model ID.",
         "loaded": "Loaded {{n}} models",
         "placeholder": "Enter a model ID and press Enter to add, e.g. gpt-4o-mini",
+        "output": "Output: {{n}} tokens",
         "remove": "Remove",
         "removeAria": "Remove {{model}}",
         "summary": "{{n}} · This is the model selector’s only display source",

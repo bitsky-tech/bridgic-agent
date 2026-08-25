@@ -14,6 +14,9 @@ from ._providers_catalog import (
     HIDDEN_PROVIDER_IDS,
     PROVIDER_CATALOG,
     PROVIDER_CATALOG_BY_ID,
+    catalog_model,
+    catalog_model_limits,
+    resolve_model_limits,
     visible_catalog,
 )
 
@@ -22,5 +25,8 @@ __all__ = [
     "PROVIDER_CATALOG",
     "PROVIDER_CATALOG_BY_ID",
     "build_llm",
+    "catalog_model",
+    "catalog_model_limits",
+    "resolve_model_limits",
     "visible_catalog",
 ]

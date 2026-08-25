@@ -39,7 +39,7 @@ import {
   useLocalCodexAtom,
   type ProviderPreset,
 } from '@/atoms/models'
-import type { ConfiguredProvider, FetchedModel } from '@/lib/amphiClient'
+import type { ConfiguredProvider, FetchedModel, ModelLimits } from '@/lib/amphiClient'
 import {
   backendEndpointAtom,
   backendErrorAtom,
@@ -803,6 +803,7 @@ function ModelEdit({
     protocol: currentConfig.protocol === 'openai-codex' ? 'openai' : currentConfig.protocol,
     baseUrl: currentConfig.base_url ?? '',
     models: currentConfig.available_models,
+    modelLimits: currentConfig.model_limits,
     authMode: currentConfig.auth_mode,
   }
   return (
@@ -840,6 +841,7 @@ function CodexOAuthBody({
   onDone,
   authorized,
   initialModels,
+  initialModelLimits,
 }: {
   providerId: string
   onDone: () => void
@@ -848,6 +850,7 @@ function CodexOAuthBody({
   authorized: boolean
   /** The channel's current model list — user-editable in the authorized state. */
   initialModels: string[]
+  initialModelLimits: Record<string, ModelLimits>
 }) {
   const { t } = useTranslation()
   const startCodexOAuth = useSetAtom(startCodexOAuthAtom)
@@ -944,7 +947,10 @@ function CodexOAuthBody({
     return (
       <div className="flex flex-col gap-3">
         <div className="text-xs text-status-success leading-[1.5]">✓ {t('modals.model.oauth.authorized')}</div>
-        <CodexModelsEditor initialModels={initialModels} />
+        <CodexModelsEditor
+          initialModels={initialModels}
+          initialModelLimits={initialModelLimits}
+        />
         <Btn size="md" variant="ghost" onClick={busy === 'oauth' ? handleCancelAuth : handleAuthorize}>
           {busy === 'oauth' ? `✕ ${t('modals.model.oauth.cancel')}` : t('modals.model.oauth.reauthorize')}
         </Btn>
@@ -1018,10 +1024,17 @@ function CodexOAuthBody({
  * ~/.codex token nor the activation state, only enabled_models). It is its own subcomponent to isolate
  * its state and keep `CodexOAuthBody` under the useState soft cap (§1.31).
  */
-function CodexModelsEditor({ initialModels }: { initialModels: string[] }) {
+function CodexModelsEditor({
+  initialModels,
+  initialModelLimits,
+}: {
+  initialModels: string[]
+  initialModelLimits: Record<string, ModelLimits>
+}) {
   const { t } = useTranslation()
   const setCodexModels = useSetAtom(setCodexModelsAtom)
   const [models, setModels] = useState<string[]>(initialModels)
+  const [modelLimits, setModelLimits] = useState<Record<string, ModelLimits>>(initialModelLimits)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1032,7 +1045,7 @@ function CodexModelsEditor({ initialModels }: { initialModels: string[] }) {
     setError(null)
     setSaved(false)
     try {
-      await setCodexModels({ models })
+      await setCodexModels({ models, modelLimits })
       setSaved(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -1046,10 +1059,12 @@ function CodexModelsEditor({ initialModels }: { initialModels: string[] }) {
     <div className="flex flex-col gap-2">
       <ModelsListEditor
         models={models}
+        modelLimits={modelLimits}
         onChange={(next) => {
           setModels(next)
           setSaved(false)
         }}
+        onModelLimitsChange={setModelLimits}
         // Subscription channel: providerId is fixed to 'openai' (Codex hangs off that slug) and apiKey is left
         // empty — seeing protocol='openai-codex', the backend returns the static catalog directly without reading credentials or making a request.
         fetchSource={{ providerId: 'openai', protocol: 'openai-codex', apiKey: '' }}
@@ -1099,7 +1114,7 @@ function ChannelCredentialForm({
   titlePrefix: string
 }) {
   const { t } = useTranslation()
-  // Phase 2 statefulness: all 5 form fields. Initial values come from the
+  // Form state starts from the selected provider preset or stored channel.
   // caller (catalog preset for built-in vendors, blank for custom-protocol).
   // The parent passes `key={preset.providerId}` so switching preset remounts
   // and useState initial-value resolves cleanly — no useEffect for derived
@@ -1115,6 +1130,7 @@ function ChannelCredentialForm({
   const [protocol, setProtocol] = useState<'openai' | 'anthropic'>(initial.protocol)
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl)
   const [models, setModels] = useState<string[]>(initial.models)
+  const [modelLimits, setModelLimits] = useState<Record<string, ModelLimits>>(initial.modelLimits)
   const [apiKey, setApiKey] = useState(initialApiKey)
   const [showKey, setShowKey] = useState(false)
   // The authentication method only appears for hasOAuth vendors. When editing, the configured auth_mode
@@ -1143,8 +1159,9 @@ function ChannelCredentialForm({
       apiKey.trim() !== initialApiKey.trim() ||
       modelDraft.trim().length > 0 ||
       models.length !== initial.models.length ||
-      models.some((m, i) => m !== initial.models[i]),
-    [displayName, protocol, baseUrl, apiKey, initialApiKey, modelDraft, models, initial],
+      models.some((m, i) => m !== initial.models[i]) ||
+      JSON.stringify(modelLimits) !== JSON.stringify(initial.modelLimits),
+    [displayName, protocol, baseUrl, apiKey, initialApiKey, modelDraft, models, modelLimits, initial],
   )
   // external-system sync: publish the form's dirty state to SettingsModal so it can intercept closing /
   // tab switches (§1.12, cross-component goes through an atom). This is not the §1.17
@@ -1284,6 +1301,11 @@ function ChannelCredentialForm({
           ? null
           : displayName.trim() || null,
         models,
+        modelLimits: Object.fromEntries(
+          models
+            .filter((modelId) => modelLimits[modelId] !== undefined)
+            .map((modelId) => [modelId, modelLimits[modelId]!]),
+        ),
       })
       onDone()
     } catch (err) {
@@ -1395,6 +1417,7 @@ function ChannelCredentialForm({
                 onDone={onDone}
                 authorized={mode === 'edit' && initial.authMode === 'oauth'}
                 initialModels={initial.models}
+                initialModelLimits={initial.modelLimits}
               />
             </AuthRadioCard>
             <AuthRadioCard
@@ -1457,7 +1480,9 @@ function ChannelCredentialForm({
       {/* Available model list — the user's allow-list, and the picker's only display source */}
       <ModelsListEditor
         models={models}
+        modelLimits={modelLimits}
         onChange={setModels}
+        onModelLimitsChange={setModelLimits}
         onDraftChange={setModelDraft}
         fetchSource={{
           providerId: slugForSave,
@@ -1596,14 +1621,14 @@ type FetchModelsState =
 
 /** Optional-models area — models that were fetched but not yet enabled; clicking one adds it to the allow-list.
  *
- *  The fetch result is **not persisted**: `enabled_models` is still a `string[]` allow-list, and this is
- *  only a component-local candidate list. Reopening the form requires fetching again, in exchange for zero schema change. */
+ *  The complete fetch result remains component-local. Once a model is selected, its limits are copied into
+ *  the small `model_limits` map that is saved beside the `enabled_models` allow-list. */
 export interface FetchedModelsPickerProps {
   /** The complete fetched list (the authoritative source). */
   fetched: FetchedModel[]
   /** The already-enabled model ids, used to exclude them from the optional area. */
   enabled: string[]
-  onAdd: (id: string) => void
+  onAdd: (model: FetchedModel) => void
 }
 
 /** Optional model list + keyword filtering (OpenAI can return 100+ entries at once, which is unusable without a filter). */
@@ -1641,16 +1666,21 @@ function FetchedModelsPicker({ fetched, enabled, onAdd }: FetchedModelsPickerPro
           <button
             key={m.id}
             type="button"
-            onClick={() => onAdd(m.id)}
+            onClick={() => onAdd(m)}
             className="flex items-center justify-between px-3 py-1.5 rounded-md border border-transparent bg-bg-hover hover:border-brand-blue text-left"
             data-testid={`fetched-model-${m.id}`}
           >
             <span className="text-xs text-text-primary font-mono truncate">{m.id}</span>
-            {m.name !== m.id && (
-              <span className="text-xs text-text-tertiary truncate ml-2 flex-shrink-0">
-                {m.name}
-              </span>
-            )}
+            <span className="ml-2 flex flex-shrink-0 items-center gap-2 text-xs text-text-tertiary">
+              {m.name !== m.id && <span className="max-w-48 truncate">{m.name}</span>}
+              {(m.limits?.context || m.limits?.input) && (
+                <span>
+                  {t('modals.model.models.context', {
+                    n: formatTokenLimit(m.limits.context ?? m.limits.input!),
+                  })}
+                </span>
+              )}
+            </span>
           </button>
         ))}
         {candidates.length === 0 && (
@@ -1673,6 +1703,24 @@ function pickFetchHint(t: ReturnType<typeof useTranslation>['t'], canFetch: bool
   return t('modals.model.fetch.missingApiKeyHint')
 }
 
+/** Convert transient fetch metadata into the small shape persisted with a selected model. */
+function fetchedModelLimits(model: FetchedModel): ModelLimits | null {
+  const { context, input, output } = model.limits ?? {}
+  if (context === undefined && input === undefined && output === undefined) return null
+  return {
+    ...(context === undefined ? {} : { context }),
+    ...(input === undefined ? {} : { input }),
+    ...(output === undefined ? {} : { output }),
+    source: model.limits_source === 'provider' ? 'provider' : 'models_dev',
+    ...(model.source_provider_id ? { source_provider_id: model.source_provider_id } : {}),
+    ...(model.source_model_id ? { source_model_id: model.source_model_id } : {}),
+  }
+}
+
+function formatTokenLimit(value: number): string {
+  return new Intl.NumberFormat().format(value)
+}
+
 /** Inline editor for the model whitelist. Backed by a `string[]` model array
  *  the parent owns; we render rows + an input that appends on Enter or click.
  *  Empty state shows a hint so the user knows the picker will be empty until
@@ -1684,12 +1732,16 @@ function pickFetchHint(t: ReturnType<typeof useTranslation>['t'], canFetch: bool
  *  `models[0]`): the flow becomes enter key → fetch list → tick → test. */
 function ModelsListEditor({
   models,
+  modelLimits,
   onChange,
+  onModelLimitsChange,
   onDraftChange,
   fetchSource,
 }: {
   models: string[]
+  modelLimits: Record<string, ModelLimits>
   onChange: (next: string[]) => void
+  onModelLimitsChange: (next: Record<string, ModelLimits>) => void
   /** Report uncommitted input-box content so the parent form can count it toward dirty (not merged automatically, only used for the unsaved prompt). */
   onDraftChange?: (draft: string) => void
   /** When absent, "fetch from provider" is not rendered (a Codex OAuth channel has no usable api_key). */
@@ -1723,6 +1775,19 @@ function ModelsListEditor({
     Boolean(fetchSource)
     && (isSubscription || Boolean(fetchSource?.apiKey.trim()))
     && fetchState.kind !== 'fetching'
+  const mergeFetchedLimits = (fetchedModels: FetchedModel[], selectedIds: string[]) => {
+    const selected = new Set(selectedIds)
+    let changed = false
+    const next = { ...modelLimits }
+    for (const model of fetchedModels) {
+      if (!selected.has(model.id)) continue
+      const limits = fetchedModelLimits(model)
+      if (!limits) continue
+      if (JSON.stringify(next[model.id]) !== JSON.stringify(limits)) changed = true
+      next[model.id] = limits
+    }
+    if (changed) onModelLimitsChange(next)
+  }
   const handleFetch = async () => {
     if (!fetchSource || !canFetch) return
     setFetchState({ kind: 'fetching' })
@@ -1739,12 +1804,36 @@ function ModelsListEditor({
       const fetchedIds = result.models.map((m) => m.id)
       const fetchedSet = new Set(fetchedIds)
       const manualKept = models.filter((m) => !fetchedSet.has(m))
-      onChange([...manualKept, ...fetchedIds])
+      const selectedModels = [...manualKept, ...fetchedIds]
+      onChange(selectedModels)
+      mergeFetchedLimits(result.models, selectedModels)
+    } else {
+      mergeFetchedLimits(result.models, models)
     }
   }
-  const addModel = (id: string) => {
-    if (models.includes(id)) return
-    onChange([...models, id])
+  const addModel = (model: FetchedModel) => {
+    if (models.includes(model.id)) return
+    onChange([...models, model.id])
+    const limits = fetchedModelLimits(model)
+    if (limits) onModelLimitsChange({ ...modelLimits, [model.id]: limits })
+  }
+  const removeModel = (id: string) => {
+    onChange(models.filter((model) => model !== id))
+    if (modelLimits[id] === undefined) return
+    const next = { ...modelLimits }
+    delete next[id]
+    onModelLimitsChange(next)
+  }
+  const setManualContextLimit = (id: string, value: string) => {
+    const context = Number.parseInt(value, 10)
+    if (!Number.isSafeInteger(context) || context <= 0) {
+      if (modelLimits[id] === undefined) return
+      const next = { ...modelLimits }
+      delete next[id]
+      onModelLimitsChange(next)
+      return
+    }
+    onModelLimitsChange({ ...modelLimits, [id]: { context, source: 'manual' } })
   }
   // Write the draft and report it to the parent form at the same time (counting toward dirty); nothing is merged into models automatically here.
   const setDraftReport = (v: string) => {
@@ -1805,11 +1894,34 @@ function ModelsListEditor({
               className="flex items-center justify-between px-3 py-2 rounded-md bg-bg-hover border border-border-subtle"
               data-testid={`model-row-${m}`}
             >
-              <span className="text-xs text-text-primary font-mono truncate">{m}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-text-primary font-mono truncate">{m}</div>
+                {modelLimits[m]?.source !== 'manual' && (modelLimits[m]?.context || modelLimits[m]?.input) ? (
+                  <div className="mt-0.5 text-[11px] text-text-tertiary">
+                    {t('modals.model.models.context', {
+                      n: formatTokenLimit(modelLimits[m]?.context ?? modelLimits[m]!.input!),
+                    })}
+                    {modelLimits[m]?.output
+                      ? ` · ${t('modals.model.models.output', { n: formatTokenLimit(modelLimits[m]!.output!) })}`
+                      : ''}
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={modelLimits[m]?.source === 'manual' ? (modelLimits[m]?.context ?? '') : ''}
+                    onChange={(event) => setManualContextLimit(m, event.target.value)}
+                    placeholder={t('modals.model.models.contextPlaceholder')}
+                    className="mt-1 h-7 w-44 rounded border border-border-default bg-bg-primary px-2 text-[11px] text-text-primary"
+                    data-testid={`model-context-${m}`}
+                  />
+                )}
+              </div>
               <Tooltip content={t('modals.model.models.remove')}>
                 <button
                   type="button"
-                  onClick={() => onChange(models.filter((x) => x !== m))}
+                  onClick={() => removeModel(m)}
                   className="text-text-tertiary hover:text-status-error flex-shrink-0 ml-2 cursor-pointer"
                   aria-label={t('modals.model.models.removeAria', { model: m })}
                 >

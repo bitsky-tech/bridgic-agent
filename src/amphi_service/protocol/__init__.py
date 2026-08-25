@@ -62,6 +62,7 @@ from ._schemas import (
     CreateMountRequest,
     CredentialsRequest,
     FetchModelsRequest,
+    ModelLimits,
     SetActiveModelRequest,
     SetExecutionModeRequest,
     SetModelRequest,
@@ -132,6 +133,7 @@ __all__ = [
     "PatchScheduleRequest",
     # Providers (multi-provider)
     "AddProviderRequest",
+    "ModelLimits",
     "SetActiveModelRequest",
     "ToggleProviderRequest",
     "TestProviderRequest",

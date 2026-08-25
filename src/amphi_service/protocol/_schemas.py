@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -128,6 +128,19 @@ class CreateMemoryRequest(BaseModel):
 
 
 # Providers (``/providers`` + ``/me/providers``)
+class ModelLimits(BaseModel):
+    """Normalized token ceilings persisted for one selected model."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    context: Optional[int] = Field(default=None, gt=0)
+    input: Optional[int] = Field(default=None, gt=0)
+    output: Optional[int] = Field(default=None, gt=0)
+    source: Literal["provider", "models_dev", "manual"] = "manual"
+    source_provider_id: Optional[str] = None
+    source_model_id: Optional[str] = None
+
+
 class AddProviderRequest(BaseModel):
     """Body of ``POST /me/providers`` — add / update a provider credential.
 
@@ -162,6 +175,10 @@ class AddProviderRequest(BaseModel):
         default=None,
         description="Whitelist of model ids exposed to the picker. None preserves "
         "existing on update; insert defaults to [].",
+    )
+    model_limits: Optional[Dict[str, ModelLimits]] = Field(
+        default=None,
+        description="Token ceilings keyed by selected model id. None preserves existing values.",
     )
 
 
@@ -270,6 +287,7 @@ __all__ = [
     "CredentialsRequest",
     "CreateMemoryRequest",
     "AddProviderRequest",
+    "ModelLimits",
     "SetActiveModelRequest",
     "RenameWorkflowRequest",
     "WorkflowFile",
