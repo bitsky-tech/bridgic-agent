@@ -41,6 +41,12 @@ export interface TooltipProps {
   onlyWhenTruncated?: boolean
   /** Delay from hover to appearance, 300ms by default (native title is ~1s and not adjustable). */
   delayMs?: number
+  /** Show without the standard opacity animation for dense picker grids and other rapid-scan UIs. */
+  instant?: boolean
+  /** Optional visual treatment for product-specific dense toolbars. */
+  appearance?: 'default' | 'presentation'
+  /** Force the bubble below the target when a toolbar should read top-to-bottom. */
+  placement?: 'auto' | 'bottom'
 }
 
 interface TipPos {
@@ -61,6 +67,9 @@ export function Tooltip({
   children,
   onlyWhenTruncated = false,
   delayMs = 300,
+  instant = false,
+  appearance = 'default',
+  placement = 'auto',
 }: TooltipProps) {
   const [pos, setPos] = useState<TipPos | null>(null)
   const timerRef = useRef<number | null>(null)
@@ -111,11 +120,10 @@ export function Tooltip({
       if (!(target instanceof HTMLElement)) return
       if (onlyWhenTruncated && target.scrollWidth <= target.clientWidth) return
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
-      timerRef.current = window.setTimeout(() => {
-        timerRef.current = null
+      const show = (): void => {
         const rect = target.getBoundingClientRect()
         // 44px ≈ one-line bubble height + GAP: flip below when it does not fit above.
-        const below = rect.top < 44
+        const below = placement === 'bottom' || rect.top < 44
         setPos({
           left: Math.min(
             Math.max(rect.left + rect.width / 2, EDGE),
@@ -124,9 +132,17 @@ export function Tooltip({
           top: below ? rect.bottom + GAP : rect.top - GAP,
           below,
         })
+      }
+      if (delayMs <= 0) {
+        show()
+        return
+      }
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        show()
       }, delayMs)
     },
-    [delayMs, onlyWhenTruncated],
+    [delayMs, onlyWhenTruncated, placement],
   )
 
   // Empty content → pass through unchanged, zero overhead. (Placed after all hooks so the hook order stays stable.)
@@ -154,11 +170,13 @@ export function Tooltip({
               // w-max: size to the content (rather than to the available width when pinned against an edge)
               // so a short label stays on one line instead of going vertical; anything longer is then wrapped
               // by max-w-[320px].
-              'pointer-events-none fixed z-[200] w-max max-w-[320px] -translate-x-1/2 select-none',
-              'rounded-md border border-border-default bg-bg-input px-2 py-1 shadow-md',
-              'text-xs leading-[1.5] text-text-secondary whitespace-pre-line break-words',
+              'pointer-events-none fixed z-[1100] w-max max-w-[320px] -translate-x-1/2 select-none',
+              'whitespace-pre-line break-words',
+              appearance === 'presentation'
+                ? 'rounded-md border border-border-subtle bg-bg-elevated px-2.5 py-1.5 text-[11px] font-medium leading-4 text-text-primary shadow-[0_4px_14px_rgba(25,24,38,0.14)]'
+                : 'rounded-md border border-border-default bg-bg-input px-2 py-1 text-xs leading-[1.5] text-text-secondary shadow-md',
               // Pure opacity fade-in — enter/pop cannot be used, their transform would override the positioning translate above.
-              'animate-fade',
+              !instant && 'animate-fade',
               !pos.below && '-translate-y-full',
             )}
             // left/top are viewport coordinates computed at runtime — the §1.22 dynamic-value exception.

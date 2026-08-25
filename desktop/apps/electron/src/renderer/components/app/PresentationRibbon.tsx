@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
@@ -66,11 +66,14 @@ import {
 import type {
   PresentationAnimationEffect,
   PresentationElement,
+  PresentationShapeType,
   PresentationSlide,
   PresentationTextElement,
   PresentationTransition,
 } from '@/atoms/presentation'
+import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import { getPresentationShapeName, isPresentationLineShape, presentationShapeCategories } from '@/lib/presentationShapes'
 
 export type PresentationRibbonTab =
   | 'home'
@@ -94,7 +97,7 @@ interface PresentationRibbonProps {
   selectedText: PresentationTextElement | null
   toolbarActions: ReactNode
   onActiveTabChange: (tab: PresentationRibbonTab) => void
-  onAddShape: (type: 'rect' | 'ellipse') => void
+  onAddShape: (type: PresentationShapeType) => void
   onAddSlide: () => void
   onAddText: (kind: 'title' | 'body') => void
   onApplyFormat: (elementId: string, patch: Partial<PresentationElement>) => void
@@ -401,7 +404,7 @@ export function PresentationRibbon({
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.textAndShapes')}>
               <RibbonAction dropdown icon={Type} label={t('session.presentation.textBox')} onClick={() => onAddText('body')} testId="presentation-add-text" />
-              <RibbonAction dropdown icon={Shapes} label={t('session.presentation.shapes')} onClick={() => onAddShape('rect')} />
+              <ShapePickerButton onAddShape={onAddShape} />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.content')}>
               <RibbonAction icon={Image} label={t('session.presentation.image')} onClick={() => runMock(t('session.presentation.image'))} />
@@ -420,20 +423,20 @@ export function PresentationRibbon({
             <RibbonGroup label={t('session.presentation.quickThemes')} wide>
               <div className="flex h-full items-center gap-1 px-1">
                 {slideThemes.map((theme) => (
-                  <button
-                    key={theme.background}
-                    type="button"
-                    title={t(theme.label)}
-                    aria-label={t(theme.label)}
-                    aria-pressed={currentSlide?.background === theme.background}
-                    onClick={() => onSlideChange({ background: theme.background })}
-                    className={cn(
-                      'grid h-14 w-[88px] grid-cols-4 gap-0.5 rounded-md border border-border-subtle bg-bg-surface p-1 shadow-sm transition-transform hover:-translate-y-0.5',
-                      currentSlide?.background === theme.background && 'ring-2 ring-brand-purple ring-offset-1 ring-offset-bg-app',
-                    )}
-                  >
-                    {theme.colors.map((color) => <span key={color} className="rounded-[1px]" style={{ backgroundColor: color }} />)}
-                  </button>
+                  <PresentationTooltip key={theme.background} content={t(theme.label)}>
+                    <button
+                      type="button"
+                      aria-label={t(theme.label)}
+                      aria-pressed={currentSlide?.background === theme.background}
+                      onClick={() => onSlideChange({ background: theme.background })}
+                      className={cn(
+                        'grid h-14 w-[88px] grid-cols-4 gap-0.5 rounded-md border border-border-subtle bg-bg-surface p-1 shadow-sm transition-transform hover:-translate-y-0.5',
+                        currentSlide?.background === theme.background && 'ring-2 ring-brand-purple ring-offset-1 ring-offset-bg-app',
+                      )}
+                    >
+                      {theme.colors.map((color) => <span key={color} className="rounded-[1px]" style={{ backgroundColor: color }} />)}
+                    </button>
+                  </PresentationTooltip>
                 ))}
               </div>
             </RibbonGroup>
@@ -595,7 +598,7 @@ function HistoryControls({ canRedo, canUndo, formatPainterActive, onClearFormat,
 }
 
 function InsertControls({ onAddShape, onAddSlide, onAddText }: {
-  onAddShape: (type: 'rect' | 'ellipse') => void
+  onAddShape: (type: PresentationShapeType) => void
   onAddSlide: () => void
   onAddText: (kind: 'title' | 'body') => void
 }) {
@@ -604,7 +607,7 @@ function InsertControls({ onAddShape, onAddSlide, onAddText }: {
     <div className="flex h-full items-center">
       <RibbonAction icon={FilePlus2} label={t('session.presentation.newSlide')} onClick={onAddSlide} />
       <RibbonAction icon={Type} label={t('session.presentation.textBox')} onClick={() => onAddText('body')} testId="presentation-add-text" />
-      <RibbonAction icon={Shapes} label={t('session.presentation.shapes')} onClick={() => onAddShape('rect')} />
+      <ShapePickerButton onAddShape={onAddShape} />
     </div>
   )
 }
@@ -632,8 +635,8 @@ function FontControls({ selectedText, compact, onUpdateElement }: {
         >
           <option value="Aptos">Aptos</option>
           <option value="Aptos Display">Aptos Display</option>
-          <option value="Source Han Serif SC">思源宋体</option>
-          <option value="Source Han Sans SC">思源黑体</option>
+          <option value="Source Han Serif SC">Source Han Serif SC</option>
+          <option value="Source Han Sans SC">Source Han Sans SC</option>
           <option value="Arial">Arial</option>
           <option value="Helvetica">Helvetica</option>
           <option value="Georgia">Georgia</option>
@@ -752,11 +755,13 @@ function ColorButton({ color, disabled, icon, label, onChange }: {
   onChange: (color: string) => void
 }) {
   return (
-    <label className={cn('relative flex size-6 cursor-pointer items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover', disabled && 'pointer-events-none opacity-35')} title={label} aria-label={label}>
-      {icon}
-      <span className="absolute inset-x-1 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: color }} />
-      <input type="color" className="sr-only" disabled={disabled} value={color} onChange={(event) => onChange(event.target.value)} />
-    </label>
+    <PresentationTooltip content={label}>
+      <label className={cn('relative flex size-6 cursor-pointer items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover', disabled && 'pointer-events-none opacity-35')} aria-label={label}>
+        {icon}
+        <span className="absolute inset-x-1 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: color }} />
+        <input type="color" className="sr-only" disabled={disabled} value={color} onChange={(event) => onChange(event.target.value)} />
+      </label>
+    </PresentationTooltip>
   )
 }
 
@@ -768,7 +773,7 @@ function RibbonColorAction({ color, disabled, icon: Icon, label, onChange }: {
   onChange: (color: string) => void
 }) {
   return (
-    <label className={cn('relative flex h-[58px] min-w-[52px] cursor-pointer flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] font-medium text-text-secondary hover:bg-bg-hover', disabled && 'pointer-events-none opacity-35')} title={label} aria-label={label}>
+    <label className={cn('relative flex h-[58px] min-w-[52px] cursor-pointer flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] font-medium text-text-secondary hover:bg-bg-hover', disabled && 'pointer-events-none opacity-35')} aria-label={label}>
       <span className="relative"><Icon className="size-[19px]" strokeWidth={1.65} /><span className="absolute -bottom-1 inset-x-0 h-0.5 rounded-full" style={{ backgroundColor: color }} /></span>
       <span>{label}</span>
       <input type="color" className="sr-only" disabled={disabled} value={color} onChange={(event) => onChange(event.target.value)} />
@@ -852,7 +857,7 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
   canRedo: boolean
   canUndo: boolean
   formatPainterActive: boolean
-  onAddShape: (type: 'rect' | 'ellipse') => void
+  onAddShape: (type: PresentationShapeType) => void
   onAddText: (kind: 'title' | 'body') => void
   onCopyFormat: () => void
   onMock: (label: string) => void
@@ -863,7 +868,7 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
   selectedElement: PresentationElement | null
 }) {
   const { t } = useTranslation()
-  const shape = selectedElement?.type === 'rect' || selectedElement?.type === 'ellipse' ? selectedElement : null
+  const shape = selectedElement?.type !== 'text' ? selectedElement : null
   const text = selectedElement?.type === 'text' ? selectedElement : null
   const presets = ['#20202B', '#4D7CFE', '#E17B47', '#74777F', '#F2B91F', '#54A8DC', '#64A45B']
   const applyPreset = (color: string) => {
@@ -882,13 +887,13 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.insert')}>
         <RibbonAction dropdown icon={Type} label={t('session.presentation.textBox')} onClick={() => onAddText('body')} />
-        <RibbonAction dropdown icon={Shapes} label={t('session.presentation.shapes')} onClick={() => onAddShape('rect')} />
+        <ShapePickerButton onAddShape={onAddShape} />
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.shapeStyles')} wide>
         <div className="flex items-center gap-1 px-1">
           {presets.map((color) => (
             <button key={color} type="button" disabled={!selectedElement} onClick={() => applyPreset(color)} aria-label={t('session.presentation.applyStyle')} className="flex h-12 w-10 items-center justify-center rounded-md border border-border-subtle bg-bg-surface disabled:opacity-35">
-              <span className="flex size-7 items-center justify-center rounded border-2 text-sm" style={{ borderColor: color }}>文</span>
+              <span className="flex size-7 items-center justify-center rounded border-2 text-sm" style={{ borderColor: color }}>A</span>
             </button>
           ))}
         </div>
@@ -929,12 +934,73 @@ function RibbonTail({ onFindText, onMock }: { onFindText: (query: string) => voi
   return (
     <div className="sticky right-0 z-10 ml-auto flex shrink-0 items-center gap-0.5 border-l border-border-subtle/70 bg-bg-app/95 px-1 shadow-[-8px_0_12px_rgba(29,26,48,0.03)]">
       <SearchControl iconOnly onFindText={onFindText} />
-      <button type="button" aria-label={t('session.presentation.collapseRibbon')} title={t('session.presentation.collapseRibbon')} onClick={() => onMock(t('session.presentation.collapseRibbon'))} className="flex size-8 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover"><ChevronsUpDown className="size-4" /></button>
+      <PresentationTooltip content={t('session.presentation.collapseRibbon')}>
+        <button type="button" aria-label={t('session.presentation.collapseRibbon')} onClick={() => onMock(t('session.presentation.collapseRibbon'))} className="flex size-8 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover"><ChevronsUpDown className="size-4" /></button>
+      </PresentationTooltip>
     </div>
   )
 }
 
-function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, testId }: { children: ReactNode; icon: LucideIcon; iconOnly?: boolean; label: string; testId?: string }) {
+function ShapePickerButton({ onAddShape }: { onAddShape: (type: PresentationShapeType) => void }) {
+  const { i18n, t } = useTranslation()
+  const language = i18n.resolvedLanguage ?? i18n.language
+  return (
+    <CompactRibbonMenu
+      icon={Shapes}
+      label={t('session.presentation.shapes')}
+      panelClassName="items-start rounded-lg p-2.5"
+      testId="presentation-shape-picker"
+    >
+      {(close) => (
+        <div className="max-h-[min(620px,70vh)] w-[398px] overflow-y-auto pr-1.5" data-testid="presentation-shape-gallery">
+          {presentationShapeCategories.map((category) => (
+            <section key={category.id} className="mb-3.5 last:mb-0" aria-label={language.startsWith('zh') ? category.name.zh : category.name.en}>
+              <h3 className="mb-1.5 px-1 text-[11px] font-normal leading-4 text-text-tertiary">
+                {language.startsWith('zh') ? category.name.zh : category.name.en}
+              </h3>
+              <div className="grid grid-cols-10 gap-x-1 gap-y-1.5">
+                {category.shapes.map((definition) => {
+                  const name = getPresentationShapeName(definition.type, language)
+                  const lineShape = definition.strokeOnly || isPresentationLineShape(definition.type)
+                  return (
+                    <Tooltip key={definition.type} content={name} delayMs={0} appearance="presentation">
+                      <button
+                        type="button"
+                        aria-label={name}
+                        data-testid={`presentation-shape-${definition.type}`}
+                        onClick={() => {
+                          onAddShape(definition.type)
+                          close()
+                        }}
+                        className="flex size-[34px] items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-purple/35"
+                      >
+                        <svg viewBox="0 0 100 100" className="size-6 overflow-visible" aria-hidden="true">
+                          <path
+                            d={definition.path}
+                            fill="none"
+                            fillRule="evenodd"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={lineShape ? 5.5 : 4.5}
+                          />
+                        </svg>
+                      </button>
+                    </Tooltip>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+    </CompactRibbonMenu>
+  )
+}
+
+type CompactRibbonMenuChildren = ReactNode | ((close: () => void) => ReactNode)
+
+function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, panelClassName, testId }: { children: CompactRibbonMenuChildren; icon: LucideIcon; iconOnly?: boolean; label: string; panelClassName?: string; testId?: string }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 8, top: 8 })
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -943,7 +1009,8 @@ function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, test
     if (!open) return
     const close = (event: PointerEvent) => {
       const target = event.target
-      if (target instanceof Node && (buttonRef.current?.contains(target) || document.querySelector('[data-presentation-ribbon-menu]')?.contains(target))) return
+      const insideOpenMenu = target instanceof Node && Array.from(document.querySelectorAll('[data-presentation-ribbon-menu]')).some((menu) => menu.contains(target))
+      if (target instanceof Node && (buttonRef.current?.contains(target) || insideOpenMenu)) return
       setOpen(false)
     }
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -960,7 +1027,7 @@ function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, test
   const menu = open ? createPortal(
     <div
       data-presentation-ribbon-menu
-      className="fixed z-[1000] flex min-h-[76px] min-w-[220px] items-stretch rounded-xl border border-border-default bg-bg-elevated p-2 shadow-xl"
+      className={cn('fixed z-[1000] flex min-h-[76px] min-w-[220px] items-stretch rounded-xl border border-border-default bg-bg-elevated p-2 shadow-xl', panelClassName)}
       style={{
         left: position.left,
         top: position.top,
@@ -968,41 +1035,45 @@ function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, test
       role="dialog"
       aria-label={label}
     >
-      {children}
+      {typeof children === 'function' ? children(() => setOpen(false)) : children}
     </div>,
     document.body,
   ) : null
 
+  const trigger = (
+    <button
+      ref={buttonRef}
+      type="button"
+      aria-expanded={open}
+      aria-label={label}
+      data-testid={testId}
+      onClick={() => {
+        if (open) {
+          setOpen(false)
+          return
+        }
+        const rect = buttonRef.current?.getBoundingClientRect()
+        if (rect) {
+          setPosition({
+            left: Math.max(8, Math.min(rect.left, window.innerWidth - 420)),
+            top: rect.bottom + 6,
+          })
+        }
+        setOpen(true)
+      }}
+      className={cn(
+        iconOnly ? 'flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary' : 'flex h-[58px] min-w-[58px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+        open && 'bg-brand-purple/10 text-brand-purple',
+      )}
+    >
+      <span className="flex items-center gap-0.5"><Icon className={iconOnly ? 'size-4' : 'size-[19px]'} strokeWidth={1.65} />{iconOnly ? null : <span className="text-[8px]">▾</span>}</span>
+      {iconOnly ? null : <span>{label}</span>}
+    </button>
+  )
+
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-expanded={open}
-        aria-label={label}
-        data-testid={testId}
-        onClick={() => {
-          if (open) {
-            setOpen(false)
-            return
-          }
-          const rect = buttonRef.current?.getBoundingClientRect()
-          if (rect) {
-            setPosition({
-              left: Math.max(8, Math.min(rect.left, window.innerWidth - 420)),
-              top: rect.bottom + 6,
-            })
-          }
-          setOpen(true)
-        }}
-        className={cn(
-          iconOnly ? 'flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary' : 'flex h-[58px] min-w-[58px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary',
-          open && 'bg-brand-purple/10 text-brand-purple',
-        )}
-      >
-        <span className="flex items-center gap-0.5"><Icon className={iconOnly ? 'size-4' : 'size-[19px]'} strokeWidth={1.65} />{iconOnly ? null : <span className="text-[8px]">▾</span>}</span>
-        {iconOnly ? null : <span>{label}</span>}
-      </button>
+      {iconOnly ? <PresentationTooltip content={open ? null : label}>{trigger}</PresentationTooltip> : trigger}
       {menu}
     </>
   )
@@ -1054,7 +1125,6 @@ function RibbonAction({ active, badge, disabled, dropdown, icon: Icon, label, on
   return (
     <button
       type="button"
-      title={label}
       aria-label={label}
       aria-pressed={active}
       data-testid={testId}
@@ -1081,22 +1151,27 @@ function FormatButton({ children, disabled, label, onClick, pressed, testId }: {
   testId?: string
 }) {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={pressed}
-      data-testid={testId}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'flex size-6 items-center justify-center rounded-md text-xs text-text-secondary hover:bg-bg-hover disabled:opacity-35',
-        pressed && 'bg-brand-purple/12 text-brand-purple',
-      )}
-    >
-      {children}
-    </button>
+    <PresentationTooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={pressed}
+        data-testid={testId}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          'flex size-6 items-center justify-center rounded-md text-xs text-text-secondary hover:bg-bg-hover disabled:opacity-35',
+          pressed && 'bg-brand-purple/12 text-brand-purple',
+        )}
+      >
+        {children}
+      </button>
+    </PresentationTooltip>
   )
+}
+
+function PresentationTooltip({ children, content }: { children: ReactElement; content: ReactNode }) {
+  return <Tooltip appearance="presentation" content={content} delayMs={0} placement="bottom">{children}</Tooltip>
 }
 
 function EffectButton({ active, disabled, icon: Icon, label, onClick, testId }: { active: boolean; disabled?: boolean; icon: LucideIcon; label: string; onClick: () => void; testId?: string }) {

@@ -39,7 +39,7 @@ async function mountPanel() {
         <PresentationWorkbenchPanel active={false} />
       </Provider>,
     )
-    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 20))
   })
   return { host, root, store }
 }
@@ -174,6 +174,13 @@ describe('PresentationWorkbenchPanel', () => {
     const bold = document.querySelector<HTMLButtonElement>('[data-testid="presentation-bold"]')!
     await act(async () => bold.click())
 
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (!host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.disabled) break
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)))
+    }
+    if (host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.disabled) {
+      await act(async () => addText.click())
+    }
     const formatPainter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')!
     expect(formatPainter.disabled).toBe(false)
     await act(async () => formatPainter.click())
@@ -239,6 +246,41 @@ describe('PresentationWorkbenchPanel', () => {
     const closeButtons = host.querySelectorAll<HTMLButtonElement>('[data-testid="presentation-close-document"]')
     await act(async () => closeButtons[1]?.click())
     expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(1)
+
+    await act(async () => root.unmount())
+  })
+
+  it('inserts a real shape from the categorized shape gallery', async () => {
+    const { host, root, store } = await mountPanel()
+    const insert = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-insert"]')!
+    await act(async () => insert.click())
+    const picker = host.querySelector<HTMLButtonElement>('[data-testid="presentation-shape-picker"]')!
+    await act(async () => picker.click())
+
+    const gallery = document.querySelector<HTMLElement>('[data-testid="presentation-shape-gallery"]')!
+    expect(gallery).not.toBeNull()
+    expect(gallery.querySelectorAll<HTMLButtonElement>('[data-testid^="presentation-shape-"]').length).toBeGreaterThan(75)
+    expect(gallery.querySelector('section[aria-label="基本形状"]')).not.toBeNull()
+    expect(gallery.querySelector('section[aria-label="箭头总汇"]')).not.toBeNull()
+    expect(gallery.querySelector('section[aria-label="流程图"]')).not.toBeNull()
+
+    const heart = gallery.querySelector<HTMLButtonElement>('[data-testid="presentation-shape-heart"]')!
+    expect(heart.hasAttribute('title')).toBe(false)
+    await act(async () => {
+      heart.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe('心形')
+    await act(async () => heart.click())
+    const presentation = store.get(currentPresentationDocumentAtom)
+    const slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    const inserted = slide.elements.at(-1)
+    expect(inserted?.type).toBe('heart')
+    if (inserted?.type === 'heart') {
+      expect(inserted.width).toBeGreaterThan(0)
+      expect(inserted.height).toBeGreaterThan(0)
+      expect(inserted.fill).toBe('#8B7CFF')
+    }
 
     await act(async () => root.unmount())
   })

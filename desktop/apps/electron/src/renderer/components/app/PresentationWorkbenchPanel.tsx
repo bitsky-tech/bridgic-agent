@@ -5,6 +5,7 @@ import {
   useState,
   type ChangeEvent,
   type FormEvent,
+  type ReactElement,
   type ReactNode,
 } from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
@@ -38,12 +39,20 @@ import {
   stripPresentationListMarkers,
   type PresentationDocument,
   type PresentationElement,
+  type PresentationShapeElement,
+  type PresentationShapeType,
   type PresentationSlide,
   type PresentationTextElement,
 } from '@/atoms/presentation'
 import { setRightPanelCollapsedAtom } from '@/atoms/layout'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
+import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import {
+  getPresentationShapeDefinition,
+  getPresentationShapeSize,
+  isPresentationLineShape,
+} from '@/lib/presentationShapes'
 import {
   PresentationRibbon,
   type PresentationRibbonTab,
@@ -298,14 +307,14 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           strokeWidth: element.borderWidth,
           shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
         })
-      } else {
+      } else if (element.type === 'rect' || element.type === 'roundRect') {
         object = new fabric.Rect({
           left: element.x,
           top: element.y,
           width: element.width,
           height: element.height,
-          rx: element.radius ?? 0,
-          ry: element.radius ?? 0,
+          rx: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
+          ry: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
           angle: element.rotation,
           originX: 'left',
           originY: 'top',
@@ -314,6 +323,29 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           strokeWidth: element.borderWidth,
           shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
         })
+      } else {
+        const definition = getPresentationShapeDefinition(element.type)
+        const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
+        const path = new fabric.Path(definition.path, {
+          left: element.x,
+          top: element.y,
+          angle: element.rotation,
+          originX: 'left',
+          originY: 'top',
+          fill: strokeOnly ? 'transparent' : element.fill,
+          fillRule: 'evenodd',
+          stroke: element.borderColor,
+          strokeWidth: strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth,
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+          strokeUniform: true,
+          shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
+        })
+        path.set({
+          scaleX: element.width / Math.max(1, path.width ?? 1),
+          scaleY: element.height / Math.max(1, path.height ?? 1),
+        })
+        object = path
       }
       object.set({
         borderColor: '#6957D9',
@@ -511,19 +543,21 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     replaceCurrentSlide({ ...currentSlide, elements: [...currentSlide.elements, element] })
   }
 
-  const addShape = (type: 'rect' | 'ellipse') => {
+  const addShape = (type: PresentationShapeType) => {
     if (!currentSlide) return
-    const element: PresentationElement = {
+    const size = getPresentationShapeSize(type)
+    const lineShape = isPresentationLineShape(type)
+    const element: PresentationShapeElement = {
       id: createPresentationId('shape'),
       type,
-      x: 390,
-      y: 245,
-      width: type === 'ellipse' ? 220 : 300,
-      height: type === 'ellipse' ? 220 : 180,
+      x: Math.round((PRESENTATION_WIDTH - size.width) / 2),
+      y: Math.round((PRESENTATION_HEIGHT - size.height) / 2),
+      width: size.width,
+      height: size.height,
       rotation: 0,
-      fill: '#8B7CFF',
+      fill: lineShape ? 'transparent' : '#8B7CFF',
       borderColor: '#6957D9',
-      borderWidth: 0,
+      borderWidth: lineShape ? 3 : 1,
       radius: type === 'rect' ? 18 : undefined,
     }
     setSelectedElementId(element.id)
@@ -730,31 +764,33 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
                     : 'border-transparent text-text-tertiary hover:bg-bg-hover/80 hover:text-text-secondary',
                 )}
               >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  title={fileName}
-                  onClick={() => selectPresentation(item.id)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
-                  data-testid="presentation-document-tab"
-                >
-                  <span className={cn('shrink-0', isActive ? 'text-[#D97706]' : 'text-text-tertiary')}>
-                    <PresentationMark />
-                  </span>
-                  <span className="truncate">{fileName}</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label={t('session.presentation.closeDocument', { name: fileName })}
-                  title={t('session.presentation.closeDocument', { name: fileName })}
-                  disabled={workspace.documents.length <= 1}
-                  onClick={() => closePresentation(item.id)}
-                  className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100 disabled:cursor-default disabled:opacity-20"
-                  data-testid="presentation-close-document"
-                >
-                  <X className="size-3" />
-                </button>
+                <PresentationControlTooltip content={fileName} placement="bottom">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    onClick={() => selectPresentation(item.id)}
+                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
+                    data-testid="presentation-document-tab"
+                  >
+                    <span className={cn('shrink-0', isActive ? 'text-[#D97706]' : 'text-text-tertiary')}>
+                      <PresentationMark />
+                    </span>
+                    <span className="truncate">{fileName}</span>
+                  </button>
+                </PresentationControlTooltip>
+                <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: fileName })} placement="bottom">
+                  <button
+                    type="button"
+                    aria-label={t('session.presentation.closeDocument', { name: fileName })}
+                    disabled={workspace.documents.length <= 1}
+                    onClick={() => closePresentation(item.id)}
+                    className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100 disabled:cursor-default disabled:opacity-20"
+                    data-testid="presentation-close-document"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </PresentationControlTooltip>
               </div>
             )
           })}
@@ -961,21 +997,22 @@ function HeaderButton({ children, disabled, label, onClick, pressed, testId }: {
   testId?: string
 }) {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={pressed}
-      disabled={disabled}
-      onClick={onClick}
-      data-testid={testId}
-      className={cn(
-        'flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30',
-        pressed && 'bg-brand-purple/10 text-brand-purple',
-      )}
-    >
-      {children}
-    </button>
+    <PresentationControlTooltip content={label} placement="bottom">
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={pressed}
+        disabled={disabled}
+        onClick={onClick}
+        data-testid={testId}
+        className={cn(
+          'flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30',
+          pressed && 'bg-brand-purple/10 text-brand-purple',
+        )}
+      >
+        {children}
+      </button>
+    </PresentationControlTooltip>
   )
 }
 
@@ -986,19 +1023,20 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
   onClick?: () => void
 }) {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        'flex size-6 items-center justify-center rounded text-text-tertiary hover:bg-bg-hover hover:text-text-primary',
-        active && 'bg-bg-selected text-text-secondary',
-      )}
-    >
-      {children}
-    </button>
+    <PresentationControlTooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active}
+        onClick={onClick}
+        className={cn(
+          'flex size-6 items-center justify-center rounded text-text-tertiary hover:bg-bg-hover hover:text-text-primary',
+          active && 'bg-bg-selected text-text-secondary',
+        )}
+      >
+        {children}
+      </button>
+    </PresentationControlTooltip>
   )
 }
 
@@ -1215,27 +1253,58 @@ function SlidePreview({ slide, width, selected, presentation = false }: { slide:
             >
               {formatPresentationText(element)}
             </span>
-          ) : (
-            <span
-              key={element.id}
-              className="absolute block"
-              style={{
-                left: element.x,
-                top: element.y,
-                width: element.width,
-                height: element.height,
-                transform: `rotate(${element.rotation}deg)`,
-                transformOrigin: 'top left',
-                backgroundColor: element.fill,
-                border: element.borderWidth ? `${element.borderWidth}px solid ${element.borderColor}` : undefined,
-                borderRadius: element.type === 'ellipse' ? '50%' : element.radius,
-                boxShadow: element.shadow ? '5px 6px 12px rgba(20, 20, 32, 0.22)' : undefined,
-              }}
-            />
-          )
+          ) : <SlideShapePreview key={element.id} element={element} />
         ))}
       </span>
     </span>
+  )
+}
+
+function SlideShapePreview({ element }: { element: PresentationShapeElement }) {
+  const definition = getPresentationShapeDefinition(element.type)
+  const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
+  const shape = element.type === 'rect' || element.type === 'roundRect' ? (
+    <rect
+      x="0"
+      y="0"
+      width="100"
+      height="100"
+      rx={element.type === 'roundRect' ? 12 : Math.min(50, ((element.radius ?? 0) / element.width) * 100)}
+      ry={element.type === 'roundRect' ? 12 : Math.min(50, ((element.radius ?? 0) / element.height) * 100)}
+      fill={element.fill}
+      stroke={element.borderColor}
+      strokeWidth={element.borderWidth}
+      vectorEffect="non-scaling-stroke"
+    />
+  ) : (
+    <path
+      d={definition.path}
+      fill={strokeOnly ? 'none' : element.fill}
+      fillRule="evenodd"
+      stroke={element.borderColor}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth}
+      vectorEffect="non-scaling-stroke"
+    />
+  )
+  return (
+    <svg
+      className="absolute block overflow-visible"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      style={{
+        left: element.x,
+        top: element.y,
+        width: element.width,
+        height: element.height,
+        transform: `rotate(${element.rotation}deg)`,
+        transformOrigin: 'top left',
+        filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
+      }}
+    >
+      {shape}
+    </svg>
   )
 }
 
@@ -1246,17 +1315,22 @@ function MiniButton({ children, disabled, label, onClick }: {
   onClick: () => void
 }) {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex h-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary disabled:opacity-30"
-    >
-      {children}
-    </button>
+    <PresentationControlTooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        className="flex h-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary disabled:opacity-30"
+      >
+        {children}
+      </button>
+    </PresentationControlTooltip>
   )
+}
+
+function PresentationControlTooltip({ children, content, placement = 'auto' }: { children: ReactElement; content: ReactNode; placement?: 'auto' | 'bottom' }) {
+  return <Tooltip appearance="presentation" content={content} delayMs={0} placement={placement}>{children}</Tooltip>
 }
 
 function NumberField({ label, min, value, onChange }: {

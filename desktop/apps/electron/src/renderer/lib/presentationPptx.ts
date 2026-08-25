@@ -4,6 +4,7 @@ import {
   PRESENTATION_WIDTH,
   type PresentationDocument,
 } from '@/atoms/presentation'
+import { getPresentationLineEnds, isPresentationLineShape } from '@/lib/presentationShapes'
 
 const SLIDE_WIDTH_INCHES = 13.333
 const SLIDE_HEIGHT_INCHES = 7.5
@@ -68,9 +69,11 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
         })
         continue
       }
-      let shapeType = pptx.ShapeType.rect
-      if (element.type === 'ellipse') shapeType = pptx.ShapeType.ellipse
-      else if ((element.radius ?? 0) > 0) shapeType = pptx.ShapeType.roundRect
+      let shapeType: PptxGenJS.ShapeType
+      if (isPresentationLineShape(element.type)) shapeType = pptx.ShapeType.line
+      else if (element.type === 'rect' && (element.radius ?? 0) > 0) shapeType = pptx.ShapeType.roundRect
+      else shapeType = pptx.ShapeType[element.type as keyof typeof pptx.ShapeType]
+      const lineShape = isPresentationLineShape(element.type)
       slide.addShape(
         shapeType,
         {
@@ -79,11 +82,12 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
-          fill: { color: withoutHash(element.fill) },
+          fill: lineShape ? { color: 'FFFFFF', transparency: 100 } : { color: withoutHash(element.fill) },
           line: {
             color: withoutHash(element.borderColor),
-            width: element.borderWidth,
-            transparency: element.borderWidth === 0 ? 100 : 0,
+            width: lineShape ? Math.max(1, element.borderWidth) : element.borderWidth,
+            transparency: !lineShape && element.borderWidth === 0 ? 100 : 0,
+            ...getPresentationLineEnds(element.type),
           },
           shadow: element.shadow
             ? { type: 'outer', color: '20202B', opacity: 0.22, blur: 3, angle: 45, offset: 2 }

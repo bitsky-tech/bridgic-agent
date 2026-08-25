@@ -19,6 +19,32 @@ describe('createPresentationPptx', () => {
       title.listStyle = 'bullet'
       title.shadow = true
     }
+    document.slides[0]?.elements.push(
+      {
+        id: 'heart-shape',
+        type: 'heart',
+        x: 900,
+        y: 480,
+        width: 180,
+        height: 160,
+        rotation: 0,
+        fill: '#E85D75',
+        borderColor: '#B02A45',
+        borderWidth: 2,
+      },
+      {
+        id: 'double-arrow-line',
+        type: 'lineDoubleArrow',
+        x: 820,
+        y: 650,
+        width: 260,
+        height: 20,
+        rotation: 0,
+        fill: 'transparent',
+        borderColor: '#8B7CFF',
+        borderWidth: 3,
+      },
+    )
     const bytes = await createPresentationPptx(document)
 
     expect(bytes[0]).toBe(0x50)
@@ -37,6 +63,9 @@ describe('createPresentationPptx', () => {
     expect(firstSlideXml).toContain('<a:highlight>')
     expect(firstSlideXml).toContain('<a:buChar')
     expect(firstSlideXml).toContain(' baseline="30000"')
+    expect(firstSlideXml).toContain('prst="heart"')
+    expect(firstSlideXml).toContain('<a:headEnd type="arrow"')
+    expect(firstSlideXml).toContain('<a:tailEnd type="arrow"')
     const firstNotesXml = await archive.file('ppt/notesSlides/notesSlide1.xml')?.async('text')
     expect(firstNotesXml).toContain('Speaker note exported from Bridgic.')
   })
