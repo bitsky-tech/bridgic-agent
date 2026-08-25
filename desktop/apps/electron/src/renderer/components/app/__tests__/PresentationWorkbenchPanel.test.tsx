@@ -127,7 +127,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => insert.click())
     const insertActions = ['空白页面', '文本框', '形状', '图片', '音频', '视频', '表格', '链接', '图表', '页脚']
     const actionLabels = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).map((button) => button.getAttribute('aria-label'))
-    expect(insertActions.every((label) => actionLabels.includes(label))).toBe(true)
+    expect(insertActions.filter((label) => !actionLabels.includes(label))).toEqual([])
 
     const notes = host.querySelector<HTMLTextAreaElement>('[data-testid="presentation-notes"]')!
     await act(async () => {
@@ -140,9 +140,50 @@ describe('PresentationWorkbenchPanel', () => {
 
     const transitions = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-transitions"]')!
     await act(async () => transitions.click())
+    expect(host.querySelectorAll('[data-testid^="presentation-transition-"]').length).toBeGreaterThanOrEqual(10)
     const fadeTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-fade"]')!
     await act(async () => fadeTransition.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toBe('fade')
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
+      effect: 'fade',
+      durationMs: 500,
+    })
+
+    const duration = host.querySelector<HTMLInputElement>('input[aria-label="持续时间"]')!
+    await act(async () => {
+      const view = duration.ownerDocument.defaultView!
+      Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '1.2')
+      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+    })
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_200)
+
+    const options = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-options"]')!
+    await act(async () => options.click())
+    const throughBlack = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-through-black"]')!
+    await act(async () => throughBlack.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.throughBlack).toBe(true)
+
+    const applyToAll = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-apply-all"]')!
+    await act(async () => applyToAll.click())
+    expect(store.get(currentPresentationDocumentAtom).slides.every((slide) => (
+      slide.transition?.effect === 'fade'
+      && slide.transition.durationMs === 1_200
+      && slide.transition.throughBlack === true
+    ))).toBe(true)
+
+    const gallery = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-gallery"]')!
+    await act(async () => gallery.click())
+    const cube = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-gallery-cube"]')!
+    await act(async () => cube.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
+      effect: 'cube',
+      durationMs: 1_200,
+      direction: 'left',
+    })
+
+    await act(async () => options.click())
+    const fromTop = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-direction-up"]')!
+    await act(async () => fromTop.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.direction).toBe('up')
 
     const home = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-home"]')!
     await act(async () => home.click())
@@ -229,9 +270,10 @@ describe('PresentationWorkbenchPanel', () => {
     const documentTabs = host.querySelector<HTMLElement>('[data-testid="presentation-document-tabs"]')!
     const expandPanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-expanded"]')!
     const closePanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-close-panel"]')!
-    expect(addDocument.parentElement).toBe(documentTabs.parentElement)
-    expect(expandPanel.parentElement).toBe(documentTabs.parentElement)
-    expect(closePanel.parentElement).toBe(documentTabs.parentElement)
+    const documentHeader = documentTabs.parentElement!
+    expect(documentHeader.contains(addDocument)).toBe(true)
+    expect(documentHeader.contains(expandPanel)).toBe(true)
+    expect(documentHeader.contains(closePanel)).toBe(true)
     await act(async () => addDocument.click())
 
     expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(2)

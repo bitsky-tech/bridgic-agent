@@ -1,11 +1,21 @@
 import { atom } from 'jotai'
+import { createDefaultPresentationTransition } from '@/lib/presentationTransitions'
 import { viewedSessionIdAtom } from './navigation'
 
 export const PRESENTATION_WIDTH = 1280
 export const PRESENTATION_HEIGHT = 720
 
 export type PresentationAnimationEffect = 'none' | 'appear' | 'fade' | 'flyIn' | 'zoom'
-export type PresentationTransition = 'none' | 'fade' | 'push' | 'wipe'
+export type PresentationTransitionEffect = 'none' | 'cut' | 'fade' | 'push' | 'wipe' | 'reveal' | 'cover' | 'zoom' | 'flip' | 'cube'
+export type PresentationTransitionDirection = 'left' | 'right' | 'up' | 'down' | 'in' | 'out'
+
+export interface PresentationTransition {
+  effect: PresentationTransitionEffect
+  durationMs: number
+  direction?: PresentationTransitionDirection
+  throughBlack?: boolean
+}
+
 export type PresentationShapeType =
   | 'line'
   | 'lineArrow'
@@ -159,7 +169,7 @@ export interface PresentationSlide {
   background: string
   elements: PresentationElement[]
   notes?: string
-  transition?: PresentationTransition
+  transition: PresentationTransition
 }
 
 export interface PresentationDocument {
@@ -190,7 +200,7 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
     background: '#FFFFFF',
     elements: [],
     notes: '',
-    transition: 'none',
+    transition: createDefaultPresentationTransition(),
   }
 }
 
@@ -211,6 +221,7 @@ export function createInitialPresentationDocument(): PresentationDocument {
         id: titleSlideId,
         name: 'Cover',
         background: '#17182B',
+        transition: createDefaultPresentationTransition(),
         elements: [
           {
             id: createPresentationId('shape'),
@@ -276,6 +287,7 @@ export function createInitialPresentationDocument(): PresentationDocument {
         id: overviewSlideId,
         name: 'Key points',
         background: '#F7F6F2',
+        transition: createDefaultPresentationTransition(),
         elements: [
           {
             id: createPresentationId('text'),

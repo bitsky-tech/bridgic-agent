@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { createStore } from 'jotai'
 import { activeSessionIdAtom } from '../sessions'
 import {
+  createBlankPresentationSlide,
   createBlankPresentationDocument,
   createInitialPresentationDocument,
   currentPresentationDocumentAtom,
@@ -13,6 +14,13 @@ import {
 } from '../presentation'
 
 describe('presentation atoms', () => {
+  it('gives every generated slide an explicit no-transition default', () => {
+    expect(createBlankPresentationSlide('Blank').transition).toEqual({ effect: 'none', durationMs: 500 })
+    expect(createInitialPresentationDocument().slides.every((slide) => (
+      slide.transition.effect === 'none' && slide.transition.durationMs === 500
+    ))).toBe(true)
+  })
+
   it('formats list markers for display without polluting editable text', () => {
     const document = createInitialPresentationDocument()
     const element = document.slides[0]?.elements.find((item) => item.type === 'text')

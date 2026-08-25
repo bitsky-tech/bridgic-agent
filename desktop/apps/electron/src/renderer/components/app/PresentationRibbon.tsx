@@ -70,10 +70,18 @@ import type {
   PresentationSlide,
   PresentationTextElement,
   PresentationTransition,
+  PresentationTransitionDirection,
+  PresentationTransitionEffect,
 } from '@/atoms/presentation'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { getPresentationShapeName, isPresentationLineShape, presentationShapeCategories } from '@/lib/presentationShapes'
+import {
+  changePresentationTransitionEffect,
+  getPresentationTransitionDefinition,
+  normalizePresentationTransition,
+  presentationTransitionDefinitions,
+} from '@/lib/presentationTransitions'
 
 export type PresentationRibbonTab =
   | 'home'
@@ -100,6 +108,7 @@ interface PresentationRibbonProps {
   onAddShape: (type: PresentationShapeType) => void
   onAddSlide: () => void
   onAddText: (kind: 'title' | 'body') => void
+  onApplyTransitionToAll: () => void
   onApplyFormat: (elementId: string, patch: Partial<PresentationElement>) => void
   onFindText: (query: string) => void
   onMoveElement: (direction: 'front' | 'back') => void
@@ -134,17 +143,27 @@ const slideThemes = [
   { background: '#F7F1E4', colors: ['#6B451C', '#F2F0E9', '#F4B183', '#FFD18E', '#D69E58', '#A5A18B', '#737373', '#A9D18E'], label: 'session.presentation.themeLavender' },
 ]
 
-const transitions: Array<{ id?: PresentationTransition; label: string; icon: LucideIcon }> = [
-  { id: 'none', label: 'session.presentation.effectNone', icon: Square },
-  { id: 'fade', label: 'session.presentation.effectFadeThrough', icon: Blend },
-  { id: 'push', label: 'session.presentation.effectPush', icon: ArrowUpToLine },
-  { id: 'wipe', label: 'session.presentation.effectCut', icon: Columns3 },
-  { label: 'session.presentation.effectReveal', icon: ArrowDownToLine },
-  { label: 'session.presentation.effectCover', icon: Layers3 },
-  { label: 'session.presentation.effectZoom', icon: ZoomIn },
-  { label: 'session.presentation.effectFlip', icon: FlipHorizontal2 },
-  { label: 'session.presentation.effectCube', icon: Box },
-]
+const transitionIcons: Record<PresentationTransitionEffect, LucideIcon> = {
+  none: Square,
+  cut: Eraser,
+  fade: Blend,
+  push: ArrowUpToLine,
+  wipe: Columns3,
+  reveal: ArrowDownToLine,
+  cover: Layers3,
+  zoom: ZoomIn,
+  flip: FlipHorizontal2,
+  cube: Box,
+}
+
+const transitionDirectionLabelKeys: Record<PresentationTransitionDirection, string> = {
+  left: 'session.presentation.directionLeft',
+  right: 'session.presentation.directionRight',
+  up: 'session.presentation.directionUp',
+  down: 'session.presentation.directionDown',
+  in: 'session.presentation.directionIn',
+  out: 'session.presentation.directionOut',
+}
 
 const entranceAnimations: Array<{ id?: PresentationAnimationEffect; label: string; icon: LucideIcon }> = [
   { id: 'appear', label: 'session.presentation.effectAppear', icon: Sparkles },
@@ -169,6 +188,7 @@ export function PresentationRibbon({
   onAddShape,
   onAddSlide,
   onAddText,
+  onApplyTransitionToAll,
   onApplyFormat,
   onFindText,
   onMoveElement,
@@ -186,7 +206,6 @@ export function PresentationRibbon({
 }: PresentationRibbonProps) {
   const { t } = useTranslation()
   const [mockNotice, setMockNotice] = useState<string | null>(null)
-  const [transitionDuration, setTransitionDuration] = useState(0.5)
   const [viewOptions, setViewOptions] = useState({ gridlines: false, guides: false, notes: false, ruler: false, smartSnap: true })
   const [formatPainter, setFormatPainter] = useState<{
     sourceId: string
@@ -202,6 +221,16 @@ export function PresentationRibbon({
   }, [mockNotice])
 
   const runMock = (label: string) => setMockNotice(t('session.presentation.mockNotice', { feature: label }))
+  const transition = normalizePresentationTransition(currentSlide?.transition)
+  const transitionDefinition = getPresentationTransitionDefinition(transition.effect)
+  const updateTransition = (patch: Partial<typeof transition>) => {
+    if (!currentSlide) return
+    onSlideChange({ transition: normalizePresentationTransition({ ...transition, ...patch }) })
+  }
+  const selectTransition = (effect: PresentationTransitionEffect) => {
+    if (!currentSlide) return
+    onSlideChange({ transition: changePresentationTransitionEffect(transition, effect) })
+  }
 
   useEffect(() => {
     if (!formatPainter || !selectedElement || selectedElement.id === formatPainter.sourceId) return
@@ -461,25 +490,79 @@ export function PresentationRibbon({
         {activeTab === 'transitions' ? (
           <>
             <RibbonGroup label={t('session.presentation.preview')}>
-              <RibbonAction dropdown icon={Eye} label={t('session.presentation.previewEffect')} onClick={onPreviewTransition} disabled={!currentSlide || currentSlide.transition === 'none'} />
+              <RibbonAction icon={Eye} label={t('session.presentation.previewEffect')} onClick={onPreviewTransition} disabled={!currentSlide || transition.effect === 'none'} testId="presentation-preview-transition" />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.transitionEffects')} wide>
-              {transitions.map((effect) => (
+              {presentationTransitionDefinitions.map((definition) => (
                 <EffectButton
-                  key={effect.label}
-                  active={Boolean(effect.id && (currentSlide?.transition ?? 'none') === effect.id)}
-                  icon={effect.icon}
-                  label={t(effect.label)}
-                  onClick={() => effect.id ? onSlideChange({ transition: effect.id }) : runMock(t(effect.label))}
-                  testId={effect.id ? `presentation-transition-${effect.id}` : undefined}
+                  key={definition.effect}
+                  active={transition.effect === definition.effect}
+                  disabled={!currentSlide}
+                  icon={transitionIcons[definition.effect]}
+                  label={t(definition.labelKey)}
+                  onClick={() => selectTransition(definition.effect)}
+                  testId={`presentation-transition-${definition.effect}`}
                 />
               ))}
-              <RibbonAction dropdown icon={GalleryHorizontal} label={t('session.presentation.transitionGallery')} onClick={() => runMock(t('session.presentation.transitionGallery'))} />
+              <CompactRibbonMenu icon={GalleryHorizontal} label={t('session.presentation.transitionGallery')} testId="presentation-transition-gallery">
+                {(close) => (
+                  <div className="grid w-[380px] grid-cols-5 gap-1.5" data-testid="presentation-transition-gallery-panel">
+                    {presentationTransitionDefinitions.map((definition) => (
+                      <EffectButton
+                        key={definition.effect}
+                        active={transition.effect === definition.effect}
+                        disabled={!currentSlide}
+                        icon={transitionIcons[definition.effect]}
+                        label={t(definition.labelKey)}
+                        onClick={() => {
+                          selectTransition(definition.effect)
+                          close()
+                        }}
+                        testId={`presentation-transition-gallery-${definition.effect}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </CompactRibbonMenu>
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.transitionSettings')}>
-              <RibbonAction dropdown icon={PanelTop} label={t('session.presentation.effectOptions')} onClick={() => runMock(t('session.presentation.effectOptions'))} />
-              <RibbonNumberInput icon={Clock3} label={t('session.presentation.duration')} max={20} min={0.1} step={0.1} suffix="s" value={transitionDuration} onChange={setTransitionDuration} />
-              <RibbonAction icon={Layers3} label={t('session.presentation.applyToAll')} onClick={() => runMock(t('session.presentation.applyToAll'))} />
+              <CompactRibbonMenu
+                disabled={!currentSlide || (transitionDefinition.directions.length === 0 && !transitionDefinition.supportsThroughBlack)}
+                icon={PanelTop}
+                label={t('session.presentation.effectOptions')}
+                testId="presentation-transition-options"
+              >
+                {(close) => (
+                  <TransitionOptions
+                    transition={transition}
+                    onChange={(patch) => {
+                      updateTransition(patch)
+                      close()
+                    }}
+                  />
+                )}
+              </CompactRibbonMenu>
+              <RibbonNumberInput
+                disabled={!currentSlide || transition.effect === 'none'}
+                icon={Clock3}
+                label={t('session.presentation.duration')}
+                max={20}
+                min={0.1}
+                step={0.1}
+                suffix="s"
+                value={transition.durationMs / 1000}
+                onChange={(value) => updateTransition({ durationMs: Math.round(value * 1000) })}
+              />
+              <RibbonAction
+                disabled={!currentSlide}
+                icon={Layers3}
+                label={t('session.presentation.applyToAll')}
+                onClick={() => {
+                  onApplyTransitionToAll()
+                  setMockNotice(t('session.presentation.transitionAppliedToAll'))
+                }}
+                testId="presentation-transition-apply-all"
+              />
             </RibbonGroup>
           </>
         ) : null}
@@ -941,6 +1024,65 @@ function RibbonTail({ onFindText, onMock }: { onFindText: (query: string) => voi
   )
 }
 
+function TransitionOptions({ onChange, transition }: {
+  onChange: (patch: Partial<PresentationTransition>) => void
+  transition: PresentationTransition
+}) {
+  const { t } = useTranslation()
+  const definition = getPresentationTransitionDefinition(transition.effect)
+  return (
+    <div className="flex min-w-[220px] flex-col gap-2 p-1" data-testid="presentation-transition-options-panel">
+      {definition.directions.length > 0 ? (
+        <div className="grid grid-cols-2 gap-1">
+          {definition.directions.map((direction) => (
+            <button
+              key={direction}
+              type="button"
+              aria-pressed={transition.direction === direction}
+              data-testid={`presentation-transition-direction-${direction}`}
+              onClick={() => onChange({ direction })}
+              className={cn(
+                'h-8 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+                transition.direction === direction && 'bg-brand-purple/10 font-medium text-brand-purple',
+              )}
+            >
+              {t(transitionDirectionLabelKeys[direction])}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {definition.supportsThroughBlack ? (
+        <div className="grid grid-cols-2 gap-1 border-t border-border-subtle pt-2">
+          <button
+            type="button"
+            aria-pressed={!transition.throughBlack}
+            data-testid="presentation-transition-direct"
+            onClick={() => onChange({ throughBlack: false })}
+            className={cn(
+              'h-8 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+              !transition.throughBlack && 'bg-brand-purple/10 font-medium text-brand-purple',
+            )}
+          >
+            {t('session.presentation.transitionDirect')}
+          </button>
+          <button
+            type="button"
+            aria-pressed={Boolean(transition.throughBlack)}
+            data-testid="presentation-transition-through-black"
+            onClick={() => onChange({ throughBlack: true })}
+            className={cn(
+              'h-8 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+              transition.throughBlack && 'bg-brand-purple/10 font-medium text-brand-purple',
+            )}
+          >
+            {t('session.presentation.transitionThroughBlack')}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ShapePickerButton({ onAddShape }: { onAddShape: (type: PresentationShapeType) => void }) {
   const { i18n, t } = useTranslation()
   const language = i18n.resolvedLanguage ?? i18n.language
@@ -1000,7 +1142,7 @@ function ShapePickerButton({ onAddShape }: { onAddShape: (type: PresentationShap
 
 type CompactRibbonMenuChildren = ReactNode | ((close: () => void) => ReactNode)
 
-function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, panelClassName, testId }: { children: CompactRibbonMenuChildren; icon: LucideIcon; iconOnly?: boolean; label: string; panelClassName?: string; testId?: string }) {
+function CompactRibbonMenu({ children, disabled = false, icon: Icon, iconOnly = false, label, panelClassName, testId }: { children: CompactRibbonMenuChildren; disabled?: boolean; icon: LucideIcon; iconOnly?: boolean; label: string; panelClassName?: string; testId?: string }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 8, top: 8 })
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -1047,7 +1189,9 @@ function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, pane
       aria-expanded={open}
       aria-label={label}
       data-testid={testId}
+      disabled={disabled}
       onClick={() => {
+        if (disabled) return
         if (open) {
           setOpen(false)
           return
@@ -1064,6 +1208,7 @@ function CompactRibbonMenu({ children, icon: Icon, iconOnly = false, label, pane
       className={cn(
         iconOnly ? 'flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary' : 'flex h-[58px] min-w-[58px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary',
         open && 'bg-brand-purple/10 text-brand-purple',
+        disabled && 'cursor-not-allowed opacity-35',
       )}
     >
       <span className="flex items-center gap-0.5"><Icon className={iconOnly ? 'size-4' : 'size-[19px]'} strokeWidth={1.65} />{iconOnly ? null : <span className="text-[8px]">▾</span>}</span>

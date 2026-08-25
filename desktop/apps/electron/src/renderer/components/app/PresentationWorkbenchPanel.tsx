@@ -43,11 +43,13 @@ import {
   type PresentationShapeType,
   type PresentationSlide,
   type PresentationTextElement,
+  type PresentationTransition,
 } from '@/atoms/presentation'
 import { setRightPanelCollapsedAtom } from '@/atoms/layout'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import { normalizePresentationTransition } from '@/lib/presentationTransitions'
 import {
   getPresentationShapeDefinition,
   getPresentationShapeSize,
@@ -57,12 +59,34 @@ import {
   PresentationRibbon,
   type PresentationRibbonTab,
 } from './PresentationRibbon'
+import {
+  PresentationTransitionPlayer,
+  type PresentationTransitionPlaybackDirection,
+} from './PresentationTransitionPlayer'
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
 }
 
 type ExportState = 'idle' | 'exporting' | 'saved' | 'error'
+
+interface SlideshowTransitionRun {
+  direction: PresentationTransitionPlaybackDirection
+  fromIndex: number
+  runKey: number
+  toIndex: number
+}
+
+interface TransitionPreviewRun {
+  runKey: number
+  slideId: string
+}
+
+interface SlideshowTransitionView extends SlideshowTransitionRun {
+  currentSlide: PresentationSlide
+  previousSlide: PresentationSlide
+  transition: PresentationTransition
+}
 
 function cloneDocument(document: PresentationDocument): PresentationDocument {
   return structuredClone(document)
@@ -91,11 +115,12 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const [ribbonTab, setRibbonTab] = useState<PresentationRibbonTab>('home')
   const [slideshowOpen, setSlideshowOpen] = useState(false)
   const [slideshowIndex, setSlideshowIndex] = useState(0)
+  const [slideshowTransition, setSlideshowTransition] = useState<SlideshowTransitionRun | null>(null)
+  const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
   const [exportState, setExportState] = useState<ExportState>('idle')
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
-  const canvasFrameRef = useRef<HTMLDivElement>(null)
   const canvasElementRef = useRef<HTMLCanvasElement>(null)
   const canvasRef = useRef<FabricCanvas | null>(null)
   const fabricModuleRef = useRef<typeof import('fabric') | null>(null)
@@ -104,6 +129,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const selectedElementIdRef = useRef<string | null>(null)
   const pastRef = useRef<PresentationDocument[]>([])
   const futureRef = useRef<PresentationDocument[]>([])
+  const transitionRunIdRef = useRef(0)
 
   const currentSlide = document.slides.find((slide) => slide.id === document.selectedSlideId)
     ?? document.slides[0]
@@ -185,11 +211,24 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     pastRef.current = []
     futureRef.current = []
     const timer = window.setTimeout(() => {
+      setSlideshowOpen(false)
+      setSlideshowTransition(null)
+      setTransitionPreviewRun(null)
       setSelectedElementId(null)
       setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
     return () => window.clearTimeout(timer)
   }, [document.id, sessionId])
+
+  useEffect(() => {
+    if (active) return
+    const timer = window.setTimeout(() => {
+      setSlideshowOpen(false)
+      setSlideshowTransition(null)
+      setTransitionPreviewRun(null)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [active])
 
   useEffect(() => {
     const root = rootRef.current
@@ -392,7 +431,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   }, [replaceCurrentSlide])
 
   useEffect(() => {
-    if (!active) return
+    if (!active || slideshowOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target
       if (target instanceof HTMLElement && (
@@ -415,26 +454,54 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [active, deleteSelectedElement, redo, undo])
+  }, [active, deleteSelectedElement, redo, slideshowOpen, undo])
+
+  const goToSlideshowIndex = useCallback((requestedIndex: number) => {
+    if (slideshowTransition) return
+    const slides = documentRef.current.slides
+    const toIndex = Math.max(0, Math.min(slides.length - 1, requestedIndex))
+    if (toIndex === slideshowIndex) return
+    const transition = normalizePresentationTransition(slides[toIndex]?.transition)
+    if (transition.effect === 'none' || (transition.effect === 'cut' && !transition.throughBlack)) {
+      setSlideshowIndex(toIndex)
+      return
+    }
+    transitionRunIdRef.current += 1
+    setSlideshowTransition({
+      direction: toIndex > slideshowIndex ? 'forward' : 'backward',
+      fromIndex: slideshowIndex,
+      runKey: transitionRunIdRef.current,
+      toIndex,
+    })
+  }, [slideshowIndex, slideshowTransition])
 
   useEffect(() => {
-    if (!slideshowOpen) return
+    if (!active || !slideshowOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSlideshowOpen(false)
+      const target = event.target
+      const spaceActivatesControl = event.key === ' '
+        && target instanceof HTMLElement
+        && Boolean(target.closest('button, a, input, textarea, select'))
+      if (spaceActivatesControl) return
+      if (event.key === 'Escape') {
+        setSlideshowOpen(false)
+        setSlideshowTransition(null)
+      }
       else if (event.key === 'ArrowRight' || event.key === ' ') {
         event.preventDefault()
-        setSlideshowIndex((index) => Math.min(document.slides.length - 1, index + 1))
+        goToSlideshowIndex(slideshowIndex + 1)
       } else if (event.key === 'ArrowLeft') {
         event.preventDefault()
-        setSlideshowIndex((index) => Math.max(0, index - 1))
+        goToSlideshowIndex(slideshowIndex - 1)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [document.slides.length, slideshowOpen])
+  }, [active, goToSlideshowIndex, slideshowIndex, slideshowOpen])
 
   const selectSlide = (slideId: string) => {
     setSelectedElementId(null)
+    setTransitionPreviewRun(null)
     const current = documentRef.current
     commitDocument({ ...current, selectedSlideId: slideId }, false)
   }
@@ -605,6 +672,20 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     }, false)
   }
 
+  const applyCurrentTransitionToAll = () => {
+    const current = documentRef.current
+    const selectedSlide = current.slides.find((slide) => slide.id === current.selectedSlideId)
+    if (!selectedSlide) return
+    const transition = normalizePresentationTransition(selectedSlide.transition)
+    commitDocument({
+      ...current,
+      slides: current.slides.map((slide) => ({
+        ...slide,
+        transition: { ...transition },
+      })),
+    })
+  }
+
   const updateSlideBackground = (event: ChangeEvent<HTMLInputElement>) => {
     updateCurrentSlide({ background: event.target.value })
   }
@@ -622,12 +703,10 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   }
 
   const previewTransition = () => {
-    const frame = canvasFrameRef.current
-    const transition = currentSlide?.transition ?? 'none'
-    if (!frame || transition === 'none') return
-    frame.style.animation = 'none'
-    void frame.offsetWidth
-    frame.style.animation = `presentation-${transition} 520ms cubic-bezier(0.22, 1, 0.36, 1)`
+    const transition = normalizePresentationTransition(currentSlide?.transition)
+    if (!currentSlide || transition.effect === 'none') return
+    transitionRunIdRef.current += 1
+    setTransitionPreviewRun({ runKey: transitionRunIdRef.current, slideId: currentSlide.id })
   }
 
   const previewSelectedAnimation = () => {
@@ -674,11 +753,15 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
 
   const startSlideshow = () => {
     const index = documentRef.current.slides.findIndex((slide) => slide.id === documentRef.current.selectedSlideId)
+    setTransitionPreviewRun(null)
+    setSlideshowTransition(null)
     setSlideshowIndex(Math.max(0, index))
     setSlideshowOpen(true)
   }
 
   const startSlideshowFromBeginning = () => {
+    setTransitionPreviewRun(null)
+    setSlideshowTransition(null)
     setSlideshowIndex(0)
     setSlideshowOpen(true)
   }
@@ -734,7 +817,26 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   else if (exportState === 'saved') exportLabel = t('session.presentation.exported')
   else if (exportState === 'error') exportLabel = t('session.presentation.exportFailed')
 
-  const slideshowSlide = document.slides[slideshowIndex] ?? currentSlide
+  const currentSlideIndex = currentSlide
+    ? document.slides.findIndex((slide) => slide.id === currentSlide.id)
+    : -1
+  const transitionPreviewPreviousSlide = currentSlideIndex > 0
+    ? document.slides[currentSlideIndex - 1]
+    : undefined
+  const slideshowTargetIndex = slideshowTransition?.toIndex ?? slideshowIndex
+  const slideshowSlide = document.slides[slideshowTargetIndex] ?? currentSlide
+  const slideshowTransitionCurrentSlide = slideshowTransition
+    ? document.slides[slideshowTransition.toIndex]
+    : undefined
+  const slideshowTransitionPreviousSlide = slideshowTransition
+    ? document.slides[slideshowTransition.fromIndex]
+    : undefined
+  const slideshowTransitionView = slideshowTransition && slideshowTransitionCurrentSlide && slideshowTransitionPreviousSlide ? {
+    ...slideshowTransition,
+    currentSlide: slideshowTransitionCurrentSlide,
+    previousSlide: slideshowTransitionPreviousSlide,
+    transition: normalizePresentationTransition(slideshowTransitionCurrentSlide.transition),
+  } : null
 
   return (
     <div
@@ -854,6 +956,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         onAddShape={addShape}
         onAddSlide={addSlide}
         onAddText={addText}
+        onApplyTransitionToAll={applyCurrentTransitionToAll}
         onApplyFormat={patchElement}
         onFindText={findText}
         onMoveElement={moveSelectedElement}
@@ -918,13 +1021,26 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           <div className="flex min-h-0 flex-1">
             <main ref={stageRef} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_36%,#F5F6F8_0%,#E4E6EB_78%)] dark:bg-[radial-gradient(circle_at_50%_36%,#35363D_0%,#25262C_82%)]">
               <div
-                ref={canvasFrameRef}
                 className="relative shrink-0 overflow-hidden ring-1 ring-black/5 shadow-[0_24px_62px_rgba(30,27,48,0.18),0_3px_12px_rgba(30,27,48,0.1)] dark:ring-white/10"
                 style={{ width: PRESENTATION_WIDTH * canvasScale, height: PRESENTATION_HEIGHT * canvasScale }}
               >
                 <div className="absolute left-0 top-0 origin-top-left" style={{ width: PRESENTATION_WIDTH, height: PRESENTATION_HEIGHT, transform: `scale(${canvasScale})` }}>
                   <canvas ref={canvasElementRef} aria-label={t('session.presentation.canvasAria')} />
                 </div>
+                {transitionPreviewRun && currentSlide && transitionPreviewRun.slideId === currentSlide.id ? (
+                  <div className="absolute inset-0 z-20">
+                    <PresentationTransitionPlayer
+                      previous={transitionPreviewPreviousSlide
+                        ? <SlidePreview slide={transitionPreviewPreviousSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />
+                        : <span className="block size-full bg-black" />}
+                      current={<SlidePreview slide={currentSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />}
+                      transition={normalizePresentationTransition(currentSlide.transition)}
+                      runKey={transitionPreviewRun.runKey}
+                      onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
+                      className="size-full"
+                    />
+                  </div>
+                ) : null}
               </div>
               {active && canvasGeneration === 0 ? (
                 <span className="absolute rounded-full bg-bg-elevated px-3 py-1.5 text-xs text-text-secondary shadow-sm">{t('session.presentation.loadingCanvas')}</span>
@@ -975,12 +1091,21 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
 
       {slideshowOpen && slideshowSlide ? (
         <SlideshowOverlay
-          current={slideshowIndex + 1}
+          current={slideshowTargetIndex + 1}
           slide={slideshowSlide}
+          transitionRun={slideshowTransitionView}
           total={document.slides.length}
-          onClose={() => setSlideshowOpen(false)}
-          onNext={() => setSlideshowIndex((index) => Math.min(document.slides.length - 1, index + 1))}
-          onPrevious={() => setSlideshowIndex((index) => Math.max(0, index - 1))}
+          onClose={() => {
+            setSlideshowOpen(false)
+            setSlideshowTransition(null)
+          }}
+          onNext={() => goToSlideshowIndex(slideshowIndex + 1)}
+          onPrevious={() => goToSlideshowIndex(slideshowIndex - 1)}
+          onTransitionComplete={() => {
+            if (!slideshowTransition) return
+            setSlideshowIndex(slideshowTransition.toIndex)
+            setSlideshowTransition(null)
+          }}
         />
       ) : null}
       <span className="sr-only" aria-live="polite">{exportState === 'saved' ? t('session.presentation.exported') : ''}</span>
@@ -1040,13 +1165,15 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
   )
 }
 
-function SlideshowOverlay({ current, onClose, onNext, onPrevious, slide, total }: {
+function SlideshowOverlay({ current, onClose, onNext, onPrevious, onTransitionComplete, slide, total, transitionRun }: {
   current: number
   onClose: () => void
   onNext: () => void
   onPrevious: () => void
+  onTransitionComplete: () => void
   slide: PresentationSlide
   total: number
+  transitionRun: SlideshowTransitionView | null
 }) {
   const { t } = useTranslation()
   return (
@@ -1056,12 +1183,24 @@ function SlideshowOverlay({ current, onClose, onNext, onPrevious, slide, total }
         <button type="button" onClick={onClose} aria-label={t('session.presentation.closeSlideshow')} className="flex size-8 items-center justify-center rounded-full bg-white/10 text-white/75 hover:bg-white/15 hover:text-white"><X className="size-4" /></button>
       </div>
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto py-4">
-        <SlidePreview slide={slide} width={960} selected={false} presentation />
+        <div className="relative h-[540px] w-[960px] shrink-0">
+          {transitionRun ? (
+            <PresentationTransitionPlayer
+              previous={<SlidePreview slide={transitionRun.previousSlide} width={960} selected={false} presentation />}
+              current={<SlidePreview slide={transitionRun.currentSlide} width={960} selected={false} presentation />}
+              transition={transitionRun.transition}
+              runKey={transitionRun.runKey}
+              direction={transitionRun.direction}
+              onComplete={onTransitionComplete}
+              className="size-full"
+            />
+          ) : <SlidePreview slide={slide} width={960} selected={false} presentation />}
+        </div>
       </div>
       <div className="flex h-10 shrink-0 items-center justify-center gap-4">
-        <button type="button" disabled={current <= 1} onClick={onPrevious} aria-label={t('session.presentation.previousSlide')} className="flex size-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/15 disabled:opacity-25"><ChevronLeft className="size-4" /></button>
+        <button type="button" disabled={current <= 1 || Boolean(transitionRun)} onClick={onPrevious} aria-label={t('session.presentation.previousSlide')} className="flex size-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/15 disabled:opacity-25"><ChevronLeft className="size-4" /></button>
         <span className="min-w-16 text-center text-xs text-white/70">{current} / {total}</span>
-        <button type="button" disabled={current >= total} onClick={onNext} aria-label={t('session.presentation.nextSlide')} className="flex size-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/15 disabled:opacity-25"><ChevronRight className="size-4" /></button>
+        <button type="button" disabled={current >= total || Boolean(transitionRun)} onClick={onNext} aria-label={t('session.presentation.nextSlide')} className="flex size-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/15 disabled:opacity-25"><ChevronRight className="size-4" /></button>
       </div>
     </div>
   )

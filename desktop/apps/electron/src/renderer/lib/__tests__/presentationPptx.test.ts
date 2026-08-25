@@ -1,13 +1,37 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
-import { createInitialPresentationDocument } from '@/atoms/presentation'
+import {
+  createBlankPresentationSlide,
+  createInitialPresentationDocument,
+  type PresentationTransition,
+} from '@/atoms/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 
 describe('createPresentationPptx', () => {
+  async function exportTransitionSlides(transitions: PresentationTransition[]): Promise<JSZip> {
+    const document = createInitialPresentationDocument()
+    document.slides = transitions.map((transition, index) => ({
+      ...createBlankPresentationSlide(`Transition ${index + 1}`),
+      id: `transition-slide-${index + 1}`,
+      transition,
+    }))
+    document.selectedSlideId = document.slides[0]!.id
+    return JSZip.loadAsync(await createPresentationPptx(document))
+  }
+
+  async function readSlideXml(archive: JSZip, slideNumber: number): Promise<string> {
+    const slide = archive.file(`ppt/slides/slide${slideNumber}.xml`)
+    if (!slide) throw new Error(`Missing slide ${slideNumber}`)
+    return slide.async('text')
+  }
+
   it('exports every slide into a valid PowerPoint Open XML archive', async () => {
     const document = createInitialPresentationDocument()
     const title = document.slides[0]?.elements.find((element) => element.type === 'text')
-    if (document.slides[0]) document.slides[0].notes = 'Speaker note exported from Bridgic.'
+    if (document.slides[0]) {
+      document.slides[0].notes = 'Speaker note exported from Bridgic.'
+      document.slides[0].transition = { effect: 'fade', durationMs: 500 }
+    }
     if (title?.type === 'text') {
       title.italic = true
       title.underline = true
@@ -68,5 +92,64 @@ describe('createPresentationPptx', () => {
     expect(firstSlideXml).toContain('<a:tailEnd type="arrow"')
     const firstNotesXml = await archive.file('ppt/notesSlides/notesSlide1.xml')?.async('text')
     expect(firstNotesXml).toContain('Speaker note exported from Bridgic.')
+  })
+
+  it('writes standard transitions with exact duration, fallback speed, direction, and through-black options', async () => {
+    const archive = await exportTransitionSlides([
+      { effect: 'none', durationMs: 500 },
+      { effect: 'cut', durationMs: 250, throughBlack: true },
+      { effect: 'fade', durationMs: 750 },
+      { effect: 'push', durationMs: 1_500, direction: 'right' },
+      { effect: 'wipe', durationMs: 500, direction: 'up' },
+      { effect: 'cover', durationMs: 1_000, direction: 'down' },
+      { effect: 'zoom', durationMs: 600, direction: 'out' },
+    ])
+
+    const noneXml = await readSlideXml(archive, 1)
+    const cutXml = await readSlideXml(archive, 2)
+    const fadeXml = await readSlideXml(archive, 3)
+    const pushXml = await readSlideXml(archive, 4)
+    const wipeXml = await readSlideXml(archive, 5)
+    const coverXml = await readSlideXml(archive, 6)
+    const zoomXml = await readSlideXml(archive, 7)
+
+    expect(noneXml).not.toContain('<p:transition')
+    expect(noneXml).not.toContain('xmlns:p14=')
+    expect(cutXml).toContain('xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"')
+    expect(cutXml).toContain('xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"')
+    expect(cutXml).toContain('mc:Ignorable="p14"')
+    expect(cutXml).toContain('<p:transition spd="fast" p14:dur="250"><p:cut thruBlk="1"/></p:transition>')
+    expect(fadeXml).toContain('<p:transition spd="med" p14:dur="750"><p:fade/></p:transition>')
+    expect(pushXml).toContain('<p:transition spd="slow" p14:dur="1500"><p:push dir="l"/></p:transition>')
+    expect(wipeXml).toContain('<p:transition spd="fast" p14:dur="500"><p:wipe dir="d"/></p:transition>')
+    expect(coverXml).toContain('<p:transition spd="med" p14:dur="1000"><p:cover dir="u"/></p:transition>')
+    expect(zoomXml).toContain('<p:transition spd="med" p14:dur="600"><p:zoom dir="out"/></p:transition>')
+    expect(cutXml).not.toContain('<mc:AlternateContent>')
+    expect(cutXml.indexOf('</p:clrMapOvr>')).toBeLessThan(cutXml.indexOf('<p:transition'))
+    expect(cutXml.indexOf('<p:transition')).toBeLessThan(cutXml.indexOf('</p:sld>'))
+  })
+
+  it('wraps Office extension transitions with a standard fade fallback', async () => {
+    const archive = await exportTransitionSlides([
+      { effect: 'reveal', durationMs: 1_500, direction: 'right', throughBlack: true },
+      { effect: 'flip', durationMs: 900, direction: 'left' },
+      { effect: 'cube', durationMs: 500, direction: 'down' },
+    ])
+
+    const revealXml = await readSlideXml(archive, 1)
+    const flipXml = await readSlideXml(archive, 2)
+    const cubeXml = await readSlideXml(archive, 3)
+
+    expect(revealXml).toContain('<mc:AlternateContent><mc:Choice Requires="p14">')
+    expect(revealXml).toContain('<p:transition spd="slow" p14:dur="1500"><p14:reveal dir="l" thruBlk="1"/></p:transition>')
+    expect(revealXml).toContain('<mc:Fallback><p:transition spd="slow"><p:fade thruBlk="1"/></p:transition></mc:Fallback>')
+    expect(flipXml).toContain('<p:transition spd="med" p14:dur="900"><p14:flip dir="r"/></p:transition>')
+    expect(flipXml).toContain('<mc:Fallback><p:transition spd="med"><p:fade/></p:transition></mc:Fallback>')
+    // PowerPoint serializes the cube-style effect as the Office 2010 prism extension.
+    expect(cubeXml).toContain('<p14:prism dir="u" isContent="0" isInverted="0"/>')
+    expect(cubeXml).not.toContain('<p14:cube')
+    expect(cubeXml).toContain('<mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback>')
+    expect(cubeXml.indexOf('</p:clrMapOvr>')).toBeLessThan(cubeXml.indexOf('<mc:AlternateContent>'))
+    expect(cubeXml.indexOf('<mc:AlternateContent>')).toBeLessThan(cubeXml.indexOf('</p:sld>'))
   })
 })
