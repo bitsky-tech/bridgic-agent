@@ -176,7 +176,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => cutTransition.click())
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
       effect: 'cut',
-      durationMs: 500,
+      durationMs: 1_000,
     })
     expect(transitionAnimationCalls.length).toBeGreaterThan(animationCountBeforeCut)
 
@@ -189,12 +189,13 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => fadeTransition.click())
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
       effect: 'fade',
-      durationMs: 500,
+      durationMs: 1_000,
     })
     expect(transitionAnimationCalls.length).toBeGreaterThan(animationCountBeforeSelection)
     expect(host.querySelector('[data-testid="presentation-transition-player"]')).not.toBeNull()
 
     const duration = host.querySelector<HTMLInputElement>('input[aria-label="持续时间"]')!
+    expect(duration.value).toBe('1')
     await act(async () => {
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '1.2')

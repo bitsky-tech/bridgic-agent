@@ -8,7 +8,10 @@ import {
   type PresentationTransitionDirection,
 } from '@/atoms/presentation'
 import { getPresentationLineEnds, isPresentationLineShape } from '@/lib/presentationShapes'
-import { normalizePresentationTransition } from '@/lib/presentationTransitions'
+import {
+  DEFAULT_PRESENTATION_TRANSITION_DURATION_MS,
+  normalizePresentationTransition,
+} from '@/lib/presentationTransitions'
 
 const SLIDE_WIDTH_INCHES = 13.333
 const SLIDE_HEIGHT_INCHES = 7.5
@@ -29,7 +32,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     const transitionDuration = (transition: PresentationTransition): number => (
       Number.isFinite(transition.durationMs) && transition.durationMs >= 0
         ? Math.round(transition.durationMs)
-        : 500
+        : DEFAULT_PRESENTATION_TRANSITION_DURATION_MS
     )
     const transitionSpeed = (durationMs: number): 'fast' | 'med' | 'slow' => {
       if (durationMs <= 500) return 'fast'

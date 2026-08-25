@@ -15,9 +15,9 @@ import {
 
 describe('presentation atoms', () => {
   it('gives every generated slide an explicit no-transition default', () => {
-    expect(createBlankPresentationSlide('Blank').transition).toEqual({ effect: 'none', durationMs: 500 })
+    expect(createBlankPresentationSlide('Blank').transition).toEqual({ effect: 'none', durationMs: 1_000 })
     expect(createInitialPresentationDocument().slides.every((slide) => (
-      slide.transition.effect === 'none' && slide.transition.durationMs === 500
+      slide.transition.effect === 'none' && slide.transition.durationMs === 1_000
     ))).toBe(true)
   })
 

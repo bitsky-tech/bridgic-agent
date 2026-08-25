@@ -38,8 +38,8 @@ describe('presentation transitions', () => {
   })
 
   it('creates and normalizes transitions into complete safe values', () => {
-    expect(createDefaultPresentationTransition()).toEqual({ effect: 'none', durationMs: 500 })
-    expect(normalizePresentationTransition('push')).toEqual({ effect: 'push', durationMs: 500, direction: 'left' })
+    expect(createDefaultPresentationTransition()).toEqual({ effect: 'none', durationMs: 1_000 })
+    expect(normalizePresentationTransition('push')).toEqual({ effect: 'push', durationMs: 1_000, direction: 'left' })
     expect(normalizePresentationTransition({ effect: 'wipe', durationMs: 49, direction: 'right' })).toEqual({
       effect: 'wipe',
       durationMs: 100,
@@ -58,6 +58,10 @@ describe('presentation transitions', () => {
   })
 
   it('preserves duration while changing effects and resets incompatible options', () => {
+    expect(changePresentationTransitionEffect(undefined, 'fade')).toEqual({
+      effect: 'fade',
+      durationMs: 1_000,
+    })
     expect(changePresentationTransitionEffect({
       effect: 'push',
       durationMs: 1_250,

@@ -29,9 +29,11 @@ interface MovementVector {
   y: -1 | 0 | 1
 }
 
-const DEFAULT_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
+const MOTION_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
+const LINEAR_EASING = 'linear'
 const CUT_PREVIEW_DURATION_MS = 180
 const CUT_PREVIEW_SWITCH_OFFSET = 0.7
+const FACE_SWITCH_OFFSET = 0.5
 
 function getMovementVector(direction: PresentationTransitionDirection | undefined, playbackDirection: PresentationTransitionPlaybackDirection): MovementVector {
   // Cardinal directions identify the edge the incoming slide starts from, matching
@@ -73,11 +75,12 @@ function getRotation(vector: MovementVector): { property: 'rotateX' | 'rotateY';
   return { property: 'rotateX', degrees: vector.y * -90 }
 }
 
-function getTransformOrigin(vector: MovementVector, incoming: boolean): string {
-  if (vector.x < 0) return incoming ? 'left center' : 'right center'
-  if (vector.x > 0) return incoming ? 'right center' : 'left center'
-  if (vector.y < 0) return incoming ? 'center top' : 'center bottom'
-  return incoming ? 'center bottom' : 'center top'
+function getCubeTransformOrigin(vector: MovementVector, face: 'incoming' | 'outgoing'): string {
+  const incoming = face === 'incoming'
+  if (vector.x < 0) return incoming ? 'right center' : 'left center'
+  if (vector.x > 0) return incoming ? 'left center' : 'right center'
+  if (vector.y < 0) return incoming ? 'center bottom' : 'center top'
+  return incoming ? 'center top' : 'center bottom'
 }
 
 /**
@@ -89,7 +92,7 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
   const base = {
     previous: [] as Keyframe[],
     current: [] as Keyframe[],
-    options: { duration, easing: DEFAULT_EASING, fill: 'both' } satisfies KeyframeAnimationOptions,
+    options: { duration, easing: MOTION_EASING, fill: 'both' } satisfies KeyframeAnimationOptions,
     previousZIndex: 1,
     currentZIndex: 2,
     immediate: duration === 0,
@@ -116,7 +119,7 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
           { opacity: 1, offset: CUT_PREVIEW_SWITCH_OFFSET },
           { opacity: 1, offset: 1 },
         ],
-        options: { ...base.options, duration: CUT_PREVIEW_DURATION_MS, easing: 'linear' },
+        options: { ...base.options, duration: CUT_PREVIEW_DURATION_MS, easing: LINEAR_EASING },
         immediate: false,
       }
     }
@@ -124,43 +127,54 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
       ...base,
       previous: [
         { opacity: 1, offset: 0 },
-        { opacity: 1, offset: 0.44 },
+        { opacity: 1, offset: 0.45 },
         { opacity: 0, offset: 0.45 },
         { opacity: 0, offset: 1 },
       ],
       current: [
         { opacity: 0, offset: 0 },
         { opacity: 0, offset: 0.55 },
-        { opacity: 1, offset: 0.56 },
+        { opacity: 1, offset: 0.55 },
         { opacity: 1, offset: 1 },
       ],
-      options: { ...base.options, easing: 'linear' },
+      options: { ...base.options, easing: LINEAR_EASING },
     }
   }
 
   if (transition.effect === 'fade') {
     return {
       ...base,
+      // A fully opaque outgoing layer keeps a direct cross-fade from dimming at 50%.
       previous: transition.throughBlack
         ? [{ opacity: 1, offset: 0 }, { opacity: 0, offset: 0.5 }, { opacity: 0, offset: 1 }]
-        : [{ opacity: 1 }, { opacity: 0 }],
+        : [],
       current: transition.throughBlack
         ? [{ opacity: 0, offset: 0 }, { opacity: 0, offset: 0.5 }, { opacity: 1, offset: 1 }]
         : [{ opacity: 0 }, { opacity: 1 }],
-      options: { ...base.options, easing: 'linear' },
+      options: { ...base.options, easing: LINEAR_EASING },
     }
   }
 
   if (transition.effect === 'zoom') {
+    // Keep the complete slide visible while it grows or shrinks. A clip-path here
+    // exposes isolated text fragments at intermediate frames instead of a slide.
     const zoomsIn = (transition.direction !== 'out') !== (playbackDirection === 'backward')
+    if (zoomsIn) {
+      return {
+        ...base,
+        current: [
+          { transform: 'scale(0.06)', transformOrigin: 'center center' },
+          { transform: 'scale(1)', transformOrigin: 'center center' },
+        ],
+      }
+    }
     return {
       ...base,
-      previous: zoomsIn
-        ? [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(1.12)' }]
-        : [{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(0.82)' }],
-      current: zoomsIn
-        ? [{ opacity: 0.15, transform: 'scale(0.72)' }, { opacity: 1, transform: 'scale(1)' }]
-        : [{ opacity: 0.15, transform: 'scale(1.18)' }, { opacity: 1, transform: 'scale(1)' }],
+      previous: [
+        { transform: 'scale(1)', transformOrigin: 'center center' },
+        { transform: 'scale(0.06)', transformOrigin: 'center center' },
+      ],
+      previousZIndex: 3,
     }
   }
 
@@ -179,6 +193,7 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
     return {
       ...base,
       current: [{ clipPath: getWipeStart(vector) }, { clipPath: 'inset(0 0 0 0)' }],
+      options: { ...base.options, easing: LINEAR_EASING },
     }
   }
 
@@ -194,16 +209,16 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
       return {
         ...base,
         previous: [
-          { transform: 'translate3d(0, 0, 0)', offset: 0 },
-          { transform: translate(vector, 100), offset: 0.45 },
-          { transform: translate(vector, 100), offset: 1 },
+          { opacity: 1, transform: 'translate3d(0, 0, 0)', offset: 0, easing: MOTION_EASING },
+          { opacity: 0, transform: translate(vector, 100), offset: FACE_SWITCH_OFFSET },
+          { opacity: 0, transform: translate(vector, 100), offset: 1 },
         ],
         current: [
           { opacity: 0, offset: 0 },
-          { opacity: 0, offset: 0.55 },
-          { opacity: 1, offset: 0.56 },
+          { opacity: 0, offset: FACE_SWITCH_OFFSET, easing: MOTION_EASING },
           { opacity: 1, offset: 1 },
         ],
+        options: { ...base.options, easing: LINEAR_EASING },
         previousZIndex: 3,
       }
     }
@@ -217,45 +232,53 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
   const rotation = getRotation(vector)
   const previousRotation = `${rotation.property}(${rotation.degrees}deg)`
   const currentRotation = `${rotation.property}(${-rotation.degrees}deg)`
+  const restRotation = `${rotation.property}(0deg)`
 
   if (transition.effect === 'flip') {
     return {
       ...base,
       previous: [
-        { opacity: 1, transform: 'perspective(1200px) rotateX(0deg) rotateY(0deg)', backfaceVisibility: 'hidden' },
-        { opacity: 0, transform: `perspective(1200px) ${previousRotation}`, backfaceVisibility: 'hidden' },
+        { opacity: 1, transform: restRotation, transformOrigin: 'center center', offset: 0, easing: MOTION_EASING },
+        { opacity: 1, transform: previousRotation, transformOrigin: 'center center', offset: FACE_SWITCH_OFFSET },
+        { opacity: 0, transform: previousRotation, transformOrigin: 'center center', offset: FACE_SWITCH_OFFSET },
+        { opacity: 0, transform: previousRotation, transformOrigin: 'center center', offset: 1 },
       ],
       current: [
-        { opacity: 0, transform: `perspective(1200px) ${currentRotation}`, backfaceVisibility: 'hidden' },
-        { opacity: 1, transform: 'perspective(1200px) rotateX(0deg) rotateY(0deg)', backfaceVisibility: 'hidden' },
+        { opacity: 0, transform: currentRotation, transformOrigin: 'center center', offset: 0 },
+        { opacity: 0, transform: currentRotation, transformOrigin: 'center center', offset: FACE_SWITCH_OFFSET },
+        { opacity: 1, transform: currentRotation, transformOrigin: 'center center', offset: FACE_SWITCH_OFFSET, easing: MOTION_EASING },
+        { opacity: 1, transform: restRotation, transformOrigin: 'center center', offset: 1 },
       ],
+      options: { ...base.options, easing: LINEAR_EASING },
     }
   }
 
   return {
     ...base,
+    // Edge hinges already supply the directional travel. Adding translateX/Y here
+    // shifts each face twice and makes the two cube faces drift past one another.
     previous: [
       {
-        transform: 'perspective(1200px) translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg)',
-        transformOrigin: getTransformOrigin(vector, false),
-        backfaceVisibility: 'hidden',
+        filter: 'brightness(1)',
+        transform: restRotation,
+        transformOrigin: getCubeTransformOrigin(vector, 'outgoing'),
       },
       {
-        transform: `perspective(1200px) ${translate(vector, 50)} ${previousRotation}`,
-        transformOrigin: getTransformOrigin(vector, false),
-        backfaceVisibility: 'hidden',
+        filter: 'brightness(0.72)',
+        transform: previousRotation,
+        transformOrigin: getCubeTransformOrigin(vector, 'outgoing'),
       },
     ],
     current: [
       {
-        transform: `perspective(1200px) ${translate(incomingStart, 50)} ${currentRotation}`,
-        transformOrigin: getTransformOrigin(vector, true),
-        backfaceVisibility: 'hidden',
+        filter: 'brightness(0.72)',
+        transform: currentRotation,
+        transformOrigin: getCubeTransformOrigin(vector, 'incoming'),
       },
       {
-        transform: 'perspective(1200px) translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg)',
-        transformOrigin: getTransformOrigin(vector, true),
-        backfaceVisibility: 'hidden',
+        filter: 'brightness(1)',
+        transform: restRotation,
+        transformOrigin: getCubeTransformOrigin(vector, 'incoming'),
       },
     ],
   }
@@ -268,12 +291,14 @@ function prefersReducedMotion(): boolean {
 }
 
 const layerStyle: CSSProperties = {
+  backfaceVisibility: 'hidden',
   position: 'absolute',
   inset: 0,
   width: '100%',
   height: '100%',
   overflow: 'hidden',
-  willChange: 'transform, opacity, clip-path',
+  transformStyle: 'preserve-3d',
+  willChange: 'transform, opacity, clip-path, filter',
 }
 
 export function PresentationTransitionPlayer({ previous, current, transition, runKey, direction = 'forward', mode = 'playback', onComplete, className }: PresentationTransitionPlayerProps) {
@@ -377,6 +402,8 @@ export function PresentationTransitionPlayer({ previous, current, transition, ru
         overflow: 'hidden',
         isolation: 'isolate',
         backgroundColor: transition.throughBlack ? '#000000' : undefined,
+        perspective: transition.effect === 'flip' || transition.effect === 'cube' ? '1200px' : undefined,
+        perspectiveOrigin: 'center center',
       }}
     >
       <div

@@ -4,7 +4,7 @@ import type {
   PresentationTransitionEffect,
 } from '@/atoms/presentation'
 
-export const DEFAULT_PRESENTATION_TRANSITION_DURATION_MS = 500
+export const DEFAULT_PRESENTATION_TRANSITION_DURATION_MS = 1_000
 export const MIN_PRESENTATION_TRANSITION_DURATION_MS = 100
 export const MAX_PRESENTATION_TRANSITION_DURATION_MS = 20_000
 
