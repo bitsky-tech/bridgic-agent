@@ -7,6 +7,7 @@ GlobalRegistrator.register()
 const { act, createElement } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
+const { contextUsageFamily } = await import('@/atoms/agent')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { ContextUsagePill, formatContextTokens } = await import('../ContextUsagePill')
 
@@ -36,6 +37,38 @@ describe('ContextUsagePill', () => {
     })
 
     expect(host.innerHTML).toBe('')
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('shows provider-reported cache hits in the usage detail', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'cached-session')
+    store.set(contextUsageFamily('cached-session'), {
+      modelId: 'gpt-test',
+      inputTokens: 60,
+      outputTokens: 10,
+      cachedInputTokens: 42,
+      usedTokens: 70,
+      usableTokens: 100,
+      percentage: 70,
+      source: 'provider',
+    })
+
+    await act(async () => {
+      root.render(createElement(Provider, { store }, createElement(ContextUsagePill)))
+    })
+    const trigger = host.querySelector<HTMLElement>('[aria-label]')
+    expect(trigger).not.toBeNull()
+    await act(async () => {
+      trigger?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      await new Promise(resolve => setTimeout(resolve, 320))
+    })
+
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain('42')
     await act(async () => root.unmount())
     host.remove()
   })

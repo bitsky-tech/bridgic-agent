@@ -221,14 +221,15 @@
       }
     },
     "contextUsage": {
+      "cached": "缓存命中 {{cached}} 个输入 token",
       "estimatedDetail": "当前模型没有返回精确用量，Bridgic 正在使用偏保守的估算。显示值可能会略高于实际占用。",
       "label": "上下文占用",
       "pending": "待重算",
       "pendingDetail": "不同模型计算 token 的方式不同。使用所选模型完成下一次运行后，这里的占比会重新计算。",
       "providerDetail": "该用量由当前模型返回。",
       "remaining": "预计还可使用 {{remaining}} token",
-      "unknownCapacity": "当前约使用 {{used}} token，但还不知道这个模型的上下文窗口容量。在模型设置中补充容量后即可显示占比。",
       "unavailable": "下一次模型调用后会显示上下文用量；只有已知上下文窗口容量时才能计算占比。",
+      "unknownCapacity": "当前约使用 {{used}} token，但还不知道这个模型的上下文窗口容量。在模型设置中补充容量后即可显示占比。",
       "used": "已使用 {{used}} / {{capacity}} token"
     },
     "emptySession": "请先创建或选择一个会话",
@@ -981,8 +982,8 @@
         "contextPlaceholder": "上下文窗口 tokens（可选）",
         "empty": "暂无模型 —— picker 将不显示该渠道。请添加至少一个 model id。",
         "loaded": "已加载 {{n}} 个模型",
-        "placeholder": "输入 model id 后按 Enter 添加，例如 gpt-4o-mini",
         "output": "输出：{{n}} tokens",
+        "placeholder": "输入 model id 后按 Enter 添加，例如 gpt-4o-mini",
         "remove": "移除",
         "removeAria": "移除 {{model}}",
         "summary": "{{n}} 个 · 这里是模型选择器唯一显示源",

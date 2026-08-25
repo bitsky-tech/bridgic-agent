@@ -167,6 +167,7 @@ class Repository(Generic[T]):
                 "output_tokens": max(0, int(output_tokens or 0)),
                 "occupied_input_tokens": 0,
                 "occupied_output_tokens": 0,
+                "cached_input_tokens": None,
                 "used_tokens": 0,
                 "usable_tokens": None,
                 "percentage": None,

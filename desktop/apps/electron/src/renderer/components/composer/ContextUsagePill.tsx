@@ -36,6 +36,11 @@ export function ContextUsagePill() {
   }
 
   let detail = t('composer.contextUsage.unavailable')
+  const cacheDetail = usage.cachedInputTokens !== null
+    ? t('composer.contextUsage.cached', {
+        cached: formatContextTokens(usage.cachedInputTokens),
+      })
+    : null
   if (pendingRecalculation) {
     detail = t('composer.contextUsage.pendingDetail')
   } else if (usage.usableTokens !== null) {
@@ -46,19 +51,21 @@ export function ContextUsagePill() {
         capacity: formatContextTokens(usage.usableTokens),
       }),
       t('composer.contextUsage.remaining', { remaining: formatContextTokens(remaining) }),
+      cacheDetail,
       usage.source === 'estimated'
         ? t('composer.contextUsage.estimatedDetail')
         : t('composer.contextUsage.providerDetail'),
-    ].join('\n')
+    ].filter(Boolean).join('\n')
   } else {
     detail = [
       t('composer.contextUsage.unknownCapacity', {
         used: formatContextTokens(usage.usedTokens),
       }),
+      cacheDetail,
       usage.source === 'estimated'
         ? t('composer.contextUsage.estimatedDetail')
         : t('composer.contextUsage.providerDetail'),
-    ].join('\n')
+    ].filter(Boolean).join('\n')
   }
 
   return (

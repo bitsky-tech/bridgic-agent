@@ -143,36 +143,15 @@ class LoopAbortEvent(TurnEvent):
 
 
 @dataclass(frozen=True)
-class UsageEvent(TurnEvent):
-    """Token usage reported by one completed LLM call within the turn.
-
-    Emitted per model call (a turn makes several — one per observe-think-act
-    round, across every stage it walks), so a client can show cost accruing live.
-    ``input_tokens`` is the prompt cost, ``output_tokens`` the generation
-    cost of that single call; :class:`FinalEvent` carries the turn totals.
-    """
-
-    name: ClassVar[str] = "usage"
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-    def payload(self) -> Dict[str, Any]:
-        return {
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-        }
-
-
-@dataclass(frozen=True)
 class ContextUsageEvent(TurnEvent):
-    """One model call's post-response context-window occupancy projection."""
+    """One model call's context occupancy and optional cache-read count."""
 
     name: ClassVar[str] = "context_usage"
 
     model_id: str
     input_tokens: int
     output_tokens: int
+    cached_input_tokens: Optional[int]
     used_tokens: int
     usable_tokens: Optional[int]
     percentage: Optional[float]
@@ -183,6 +162,7 @@ class ContextUsageEvent(TurnEvent):
             "model_id": self.model_id,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "cached_input_tokens": self.cached_input_tokens,
             "used_tokens": self.used_tokens,
             "usable_tokens": self.usable_tokens,
             "percentage": self.percentage,
@@ -455,7 +435,7 @@ class FinalEvent(TurnEvent):
 
     ``tokens_spent`` is the turn total (``input_tokens + output_tokens``);
     the split is carried alongside so a client can attribute prompt vs
-    generation cost without summing the per-call :class:`UsageEvent`\\ s.
+    generation cost.
     """
 
     name: ClassVar[str] = "final"
@@ -635,7 +615,6 @@ __all__ = [
     "ToolEvent",
     "ToolResultEvent",
     "LoopAbortEvent",
-    "UsageEvent",
     "ContextUsageEvent",
     "StageEvent",
     "WorkflowProgressEvent",

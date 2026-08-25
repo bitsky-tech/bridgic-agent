@@ -121,6 +121,7 @@ export interface ContextUsageSnapshot {
   modelId: string
   inputTokens: number
   outputTokens: number
+  cachedInputTokens: number | null
   usedTokens: number
   usableTokens: number | null
   percentage: number | null

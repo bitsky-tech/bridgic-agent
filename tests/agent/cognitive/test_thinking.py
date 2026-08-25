@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink
@@ -15,7 +16,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     {
       "visible_checkpoint": {"content": "Fresh answer", "reasoning": "Fresh reasoning"},
       "returned": {"content": "Fresh answer", "tool": "read_file"},
-      "usage": {"input_tokens": 11, "output_tokens": 3, "spent_tokens": 14},
+      "usage": {"input_tokens": 11, "output_tokens": 3, "cached_input_tokens": 5, "spent_tokens": 14},
       "think_scope": {
         "mode": "build",
         "stage": "generate",
@@ -26,7 +27,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     Checks:
     1. A provider retry removes stale visible output before replacement deltas arrive.
     2. The completed call returns its final content and Tool Call while retaining provider captures.
-    3. Usage reaches the Turn totals, worker meter, and live event stream once.
+    3. Usage reaches the Turn totals, worker meter, and context event stream once.
     4. The open OTA record identifies its cognitive scope and Session-history policy.
     """
     ota_context = AmphiOTAContext(
@@ -111,20 +112,19 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     }]
     assert record.reasoning_items == [{"id": "reasoning-live"}]
 
-    # Check 3: Usage reaches the Turn totals, worker meter, and live event stream once.
+    # Check 3: Usage reaches the Turn totals, worker meter, and context event stream once.
     assert (
         ota_context.context_usage.input_tokens,
         ota_context.context_usage.output_tokens,
-    ) == (11, 3)
+        ota_context.context_usage.cached_input_tokens,
+    ) == (11, 3, 5)
     assert worker.spent_tokens == 14
-    assert [event for event in stream.events if event[0] == "usage"] == [
-        ("usage", {"input_tokens": 11, "output_tokens": 3})
-    ]
     assert [event for event in stream.events if event[0] == "context_usage"] == [
         ("context_usage", {
             "model_id": "test-model",
             "input_tokens": 11,
             "output_tokens": 3,
+            "cached_input_tokens": 5,
             "used_tokens": 14,
             "usable_tokens": 80,
             "percentage": 17.5,
@@ -141,6 +141,33 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     }
     assert llm.scope_at_call == expected_scope
     assert record.think_scope == expected_scope
+
+
+@pytest.mark.parametrize(("usage", "expected"), [
+    (
+        {
+            "prompt_tokens": 20,
+            "completion_tokens": 4,
+            "prompt_tokens_details": {"cached_tokens": 12},
+        },
+        (20, 4, 12),
+    ),
+    (
+        SimpleNamespace(
+            input_tokens=30,
+            output_tokens=6,
+            input_tokens_details=SimpleNamespace(cached_tokens=18),
+        ),
+        (30, 6, 18),
+    ),
+    (
+        {"input_tokens": 9, "output_tokens": 2, "cached_input_tokens": 7},
+        (9, 2, 7),
+    ),
+])
+def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tuple[int, int, int]) -> None:
+    """Provider-specific cache details converge on one latest-call count."""
+    assert MainThink._usage_values(usage) == expected
 
 
 async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox: IsolatedPaths) -> None:

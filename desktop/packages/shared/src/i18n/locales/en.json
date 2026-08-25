@@ -221,14 +221,15 @@
       }
     },
     "contextUsage": {
+      "cached": "Cache hit: {{cached}} input tokens",
       "estimatedDetail": "This model did not return exact usage, so Bridgic is using a deliberately conservative estimate. The displayed value may be slightly higher than the actual usage.",
       "label": "Context usage",
       "pending": "Recalculate",
       "pendingDetail": "Different models count tokens differently. This percentage will be recalculated after the next run with the selected model.",
       "providerDetail": "Usage was reported by the current model.",
       "remaining": "About {{remaining}} tokens remain",
-      "unknownCapacity": "About {{used}} tokens are in use, but this model's context-window capacity is unknown. Add the capacity in model settings to see a percentage.",
       "unavailable": "Context usage will appear after the next model call. A percentage requires a known context-window capacity.",
+      "unknownCapacity": "About {{used}} tokens are in use, but this model's context-window capacity is unknown. Add the capacity in model settings to see a percentage.",
       "used": "Used {{used}} of {{capacity}} tokens"
     },
     "emptySession": "Create or select a session first",
@@ -981,8 +982,8 @@
         "contextPlaceholder": "Context-window tokens (optional)",
         "empty": "No models — this provider will not appear in the picker. Add at least one model ID.",
         "loaded": "Loaded {{n}} models",
-        "placeholder": "Enter a model ID and press Enter to add, e.g. gpt-4o-mini",
         "output": "Output: {{n}} tokens",
+        "placeholder": "Enter a model ID and press Enter to add, e.g. gpt-4o-mini",
         "remove": "Remove",
         "removeAria": "Remove {{model}}",
         "summary": "{{n}} · This is the model selector’s only display source",

@@ -26,14 +26,14 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     """Final client state:
 
     {
-      "events": ["stage", "reasoning", "token", "token", "usage", "context_usage", "final"],
+      "events": ["stage", "reasoning", "token", "token", "context_usage", "final"],
       "final": {"answer": "Hello Ada.", "tokens_spent": 10},
       "system": {"type": "session.completed"}
     }
 
     Checks:
     1. WebSocket hello and subscription expose one authenticated Session stream.
-    2. A chat emits structured reasoning, token, usage, and final events in one attempt.
+    2. A chat emits structured reasoning, token, context usage, and final events in one attempt.
     3. The system topic announces completion and REST reloads the same final answer.
     """
     scripted_llm.enqueue_text(
@@ -80,16 +80,13 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     assert [message["text"] for message in session_events if message["type"] == "reasoning"] == [
         "Recall the name.",
     ]
-    assert [
-        (message["input_tokens"], message["output_tokens"])
-        for message in session_events if message["type"] == "usage"
-    ] == [(7, 3)]
     context_usage = [
         message for message in session_events if message["type"] == "context_usage"
     ]
     assert len(context_usage) == 1
     assert context_usage[0]["model_id"] == FLOW_MODEL
     assert context_usage[0]["used_tokens"] == 10
+    assert context_usage[0]["cached_input_tokens"] is None
     assert context_usage[0]["usable_tokens"] == 80
     assert context_usage[0]["percentage"] == 12.5
     assert context_usage[0]["source"] == "provider"
@@ -105,6 +102,7 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
         "model_id": FLOW_MODEL,
         "input_tokens": 7,
         "output_tokens": 3,
+        "cached_input_tokens": None,
         "used_tokens": 10,
         "usable_tokens": 80,
         "percentage": 12.5,

@@ -698,6 +698,7 @@ const contextUsageSnapshotSchema = z.object({
   model_id: z.string(),
   input_tokens: z.number(),
   output_tokens: z.number(),
+  cached_input_tokens: z.number().int().nonnegative().nullable().default(null),
   used_tokens: z.number(),
   usable_tokens: z.number().nullable(),
   percentage: z.number().nullable(),
@@ -1341,6 +1342,7 @@ export class AmphiClient {
         model_id: string
         input_tokens: number
         output_tokens: number
+        cached_input_tokens: number | null
         used_tokens: number
         usable_tokens: number | null
         percentage: number | null
@@ -1390,6 +1392,7 @@ export class AmphiClient {
             modelId: res.context_usage.model_id,
             inputTokens: res.context_usage.input_tokens,
             outputTokens: res.context_usage.output_tokens,
+            cachedInputTokens: res.context_usage.cached_input_tokens,
             usedTokens: res.context_usage.used_tokens,
             usableTokens: res.context_usage.usable_tokens,
             percentage: res.context_usage.percentage,

@@ -1135,6 +1135,11 @@ def _context_usage(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
             "output_tokens": int(
                 usage.get("occupied_output_tokens", usage.get("output_tokens")) or 0
             ),
+            "cached_input_tokens": (
+                int(usage["cached_input_tokens"])
+                if usage.get("cached_input_tokens") is not None
+                else None
+            ),
             "used_tokens": int(usage.get("used_tokens") or 0),
             "usable_tokens": usage.get("usable_tokens"),
             "percentage": usage.get("percentage"),

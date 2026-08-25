@@ -318,15 +318,7 @@ class MainThink(CognitiveWorker):
             extra_body=self.extra_body,
             context=context,
         )
-        input_tokens, output_tokens = self._record_usage(ota_context, result.usage)
-        self._record_context_usage(
-            ota_context,
-            context,
-            result,
-            request_estimate,
-            input_tokens,
-            output_tokens,
-        )
+        self._record_model_usage(ota_context, context, result, request_estimate)
         record = ota_context._current_record()
         for key, value in result.capture.items():
             setattr(record, key, value)
@@ -406,16 +398,17 @@ class MainThink(CognitiveWorker):
         # TODO: Compact the oldest complete Session Turn prefix while preserving the current Turn and Tool pairs.
         pass
 
-    def _record_context_usage(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        result: Any,
-        request_estimate: int,
-        provider_input_tokens: int,
-        provider_output_tokens: int,
-    ) -> None:
-        """Publish the latest context occupancy, falling back to a conservative estimate."""
+    def _record_model_usage(self, ota_context: AmphiOTAContext, context: AmphiContext, result: Any, request_estimate: int) -> None:
+        """Record one model call's totals, context occupancy, and cache usage."""
+        provider_input_tokens, provider_output_tokens, cached_input_tokens = self._usage_values(
+            result.usage
+        )
+        previous = ota_context.context_usage
+        total_input_tokens = previous.input_tokens + provider_input_tokens
+        total_output_tokens = previous.output_tokens + provider_output_tokens
+        if provider_input_tokens or provider_output_tokens:
+            self.spent_tokens += provider_input_tokens + provider_output_tokens
+
         estimated_output = self._estimate_result_tokens(result)
         has_provider_input = provider_input_tokens > 0
         input_tokens = provider_input_tokens if has_provider_input else request_estimate
@@ -433,10 +426,11 @@ class MainThink(CognitiveWorker):
         )
         snapshot = ContextUsageSnapshot(
             model_id=context.llm_provider.model_id,
-            input_tokens=ota_context.context_usage.input_tokens,
-            output_tokens=ota_context.context_usage.output_tokens,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
             occupied_input_tokens=input_tokens,
             occupied_output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
             used_tokens=used_tokens,
             usable_tokens=usable_tokens,
             percentage=percentage,
@@ -451,6 +445,7 @@ class MainThink(CognitiveWorker):
                 model_id=snapshot.model_id,
                 input_tokens=snapshot.occupied_input_tokens,
                 output_tokens=snapshot.occupied_output_tokens,
+                cached_input_tokens=snapshot.cached_input_tokens,
                 used_tokens=snapshot.used_tokens,
                 usable_tokens=snapshot.usable_tokens,
                 percentage=snapshot.percentage,
@@ -1373,11 +1368,19 @@ class MainThink(CognitiveWorker):
         return skills.data() if skills is not None else {}
 
     @staticmethod
-    def _usage_pair(usage: Any) -> Tuple[int, int]:
-        """``(input_tokens, output_tokens)`` from a provider usage OBJECT or DICT."""
+    def _usage_values(usage: Any) -> Tuple[int, int, Optional[int]]:
+        """Normalize provider usage to input, output, and cache-read tokens."""
         if usage is None:
-            return 0, 0
+            return 0, 0, None
         get = usage.get if isinstance(usage, dict) else (lambda k: getattr(usage, k, None))
+
+        def nested_value(container: Any, key: str) -> Any:
+            if container is None:
+                return None
+            if isinstance(container, dict):
+                return container.get(key)
+            return getattr(container, key, None)
+
         inp = get("prompt_tokens")
         if inp is None:
             inp = get("input_tokens")
@@ -1390,25 +1393,21 @@ class MainThink(CognitiveWorker):
         out = get("completion_tokens")
         if out is None:
             out = get("output_tokens")
-        return int(inp or 0), int(out or 0)
-
-    def _record_usage(self, ota_context: AmphiOTAContext, usage: Any) -> Tuple[int, int]:
-        """Fold one call's usage into the turn (no-op when zero / missing):
-        1. add to ``self.spent_tokens`` (the per-worker meter the automa folds up).
-        2. accumulate token totals in ``ota_context.context_usage``.
-        3. publish a live ``usage`` event so the client sees per-call cost.
-        """
-        inp, out = self._usage_pair(usage)
-        if not (inp or out):
-            return inp, out
-        self.spent_tokens += inp + out
-        ota_context.context_usage.input_tokens += inp
-        ota_context.context_usage.output_tokens += out
-        stream = getattr(ota_context, "stream", None)
-        if stream is not None:
-            stream.publish("usage", input_tokens=inp, output_tokens=out)
-        return inp, out
-
+        cached = get("cached_input_tokens")
+        if cached is None:
+            cached = get("cache_read_input_tokens")
+        if cached is None:
+            cached = nested_value(get("prompt_tokens_details"), "cached_tokens")
+        if cached is None:
+            cached = nested_value(get("input_tokens_details"), "cached_tokens")
+        input_tokens = max(0, int(inp or 0))
+        output_tokens = max(0, int(out or 0))
+        cached_input_tokens = (
+            min(input_tokens, max(0, int(cached)))
+            if cached is not None
+            else None
+        )
+        return input_tokens, output_tokens, cached_input_tokens
 
 ################################################################################################################
 # Child Agent — an isolated normal-mode worker with its own role and tool surface

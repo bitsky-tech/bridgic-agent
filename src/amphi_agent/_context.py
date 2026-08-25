@@ -29,13 +29,14 @@ __all__ = ["AmphiOTAContext", "AmphiContext", "ContextUsageSnapshot"]
 
 
 class ContextUsageSnapshot(BaseModel):
-    """Provider-reported Turn totals plus the latest call's context occupancy."""
+    """Turn totals plus the latest call's context occupancy and cache-read count."""
 
     model_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     occupied_input_tokens: int = 0
     occupied_output_tokens: int = 0
+    cached_input_tokens: Optional[int] = None
     used_tokens: int = 0
     usable_tokens: Optional[int] = None
     percentage: Optional[float] = None
