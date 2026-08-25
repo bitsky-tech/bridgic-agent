@@ -197,11 +197,66 @@ describe('PresentationWorkbenchPanel', () => {
     const duration = host.querySelector<HTMLInputElement>('input[aria-label="持续时间"]')!
     expect(duration.value).toBe('1')
     await act(async () => {
+      duration.focus()
+      const view = duration.ownerDocument.defaultView!
+      Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '')
+      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+    })
+    expect(duration.value).toBe('')
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_000)
+    await act(async () => duration.blur())
+    expect(duration.value).toBe('1')
+
+    await act(async () => {
+      duration.focus()
+      const view = duration.ownerDocument.defaultView!
+      Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '')
+      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+      store.set(currentPresentationDocumentAtom, (current) => ({
+        ...current,
+        slides: current.slides.map((slide) => slide.id === current.selectedSlideId
+          ? { ...slide, transition: { ...slide.transition, durationMs: 1_800 } }
+          : slide),
+      }))
+    })
+    expect(duration.value).toBe('')
+    await act(async () => {
+      const view = duration.ownerDocument.defaultView!
+      duration.dispatchEvent(new view.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }))
+    })
+    expect(duration.ownerDocument.activeElement).not.toBe(duration)
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_800)
+    expect(duration.value).toBe('1.8')
+
+    await act(async () => {
+      duration.focus()
+      const view = duration.ownerDocument.defaultView!
+      Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '0.01')
+      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+    })
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(100)
+    await act(async () => duration.blur())
+    expect(duration.value).toBe('0.1')
+
+    await act(async () => {
+      duration.focus()
+      const view = duration.ownerDocument.defaultView!
+      Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '30')
+      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+    })
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(20_000)
+    await act(async () => duration.blur())
+    expect(duration.value).toBe('20')
+
+    await act(async () => {
+      duration.focus()
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '1.2')
       duration.dispatchEvent(new view.Event('input', { bubbles: true }))
     })
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_200)
+    await act(async () => duration.blur())
+    expect(duration.value).toBe('1.2')
 
     const options = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-options"]')!
     await act(async () => options.click())

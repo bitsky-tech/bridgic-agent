@@ -31,8 +31,9 @@ interface MovementVector {
 
 const MOTION_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
 const LINEAR_EASING = 'linear'
-const CUT_PREVIEW_DURATION_MS = 180
-const CUT_PREVIEW_SWITCH_OFFSET = 0.7
+const CUT_PREVIEW_MIN_DURATION_MS = 400
+const CUT_PREVIEW_MAX_DURATION_MS = 1_000
+const CUT_PREVIEW_SWITCH_OFFSET = 0.5
 const FACE_SWITCH_OFFSET = 0.5
 
 function getMovementVector(direction: PresentationTransitionDirection | undefined, playbackDirection: PresentationTransitionPlaybackDirection): MovementVector {
@@ -105,6 +106,10 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
   if (transition.effect === 'cut') {
     if (!transition.throughBlack) {
       if (mode !== 'preview') return { ...base, immediate: true }
+      const previewDuration = Math.min(
+        CUT_PREVIEW_MAX_DURATION_MS,
+        Math.max(CUT_PREVIEW_MIN_DURATION_MS, duration),
+      )
       return {
         ...base,
         previous: [
@@ -119,7 +124,7 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
           { opacity: 1, offset: CUT_PREVIEW_SWITCH_OFFSET },
           { opacity: 1, offset: 1 },
         ],
-        options: { ...base.options, duration: CUT_PREVIEW_DURATION_MS, easing: LINEAR_EASING },
+        options: { ...base.options, duration: previewDuration, easing: LINEAR_EASING },
         immediate: false,
       }
     }

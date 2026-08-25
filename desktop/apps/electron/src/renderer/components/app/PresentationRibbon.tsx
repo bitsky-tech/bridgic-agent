@@ -882,6 +882,21 @@ function RibbonColorAction({ color, disabled, icon: Icon, label, onChange }: {
   )
 }
 
+function formatRibbonNumberInputValue(value: number): string {
+  return Number.isFinite(value) ? String(Number(value.toFixed(2))) : ''
+}
+
+function parseRibbonNumberInputValue(raw: string): number | null {
+  if (!raw.trim()) return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
+function clampRibbonNumberInputValue(value: number, min?: number, max?: number): number {
+  const aboveMinimum = min === undefined ? value : Math.max(min, value)
+  return max === undefined ? aboveMinimum : Math.min(max, aboveMinimum)
+}
+
 function RibbonNumberInput({ disabled, icon: Icon, label, max, min, onChange, step = 1, suffix, value }: {
   disabled?: boolean
   icon: LucideIcon
@@ -893,11 +908,20 @@ function RibbonNumberInput({ disabled, icon: Icon, label, max, min, onChange, st
   suffix?: string
   value: number
 }) {
+  const [draft, setDraft] = useState(() => formatRibbonNumberInputValue(value))
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (inputRef.current === document.activeElement) return
+    setDraft(formatRibbonNumberInputValue(value))
+  }, [value])
+
   return (
     <label className={cn('flex h-[58px] min-w-[72px] flex-col items-center justify-center gap-1 rounded-lg px-1 text-[10px] text-text-secondary', disabled && 'opacity-35')}>
       <span className="flex items-center gap-1"><Icon className="size-4" />{label}</span>
       <span className="relative">
         <input
+          ref={inputRef}
           aria-label={label}
           className="h-6 w-16 rounded border border-border-subtle bg-bg-surface px-1 pr-4 text-center text-[10px] outline-none focus:border-brand-purple"
           disabled={disabled}
@@ -905,10 +929,21 @@ function RibbonNumberInput({ disabled, icon: Icon, label, max, min, onChange, st
           min={min}
           step={step}
           type="number"
-          value={Number(value.toFixed(2))}
+          value={draft}
+          onBlur={() => {
+            setDraft(formatRibbonNumberInputValue(value))
+          }}
           onChange={(event) => {
-            const next = Number(event.target.value)
-            if (Number.isFinite(next)) onChange(next)
+            const raw = event.target.value
+            setDraft(raw)
+            const next = parseRibbonNumberInputValue(raw)
+            if (next === null) return
+            onChange(clampRibbonNumberInputValue(next, min, max))
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return
+            event.preventDefault()
+            event.currentTarget.blur()
           }}
         />
         {suffix ? <span className="pointer-events-none absolute right-1 top-1 text-[9px] text-text-tertiary">{suffix}</span> : null}

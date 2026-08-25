@@ -200,21 +200,49 @@ describe('createPresentationTransitionKeyframes', () => {
     expect(wipe.options.easing).toBe('linear')
   })
 
-  it('keeps a plain cut immediate for playback and makes it discrete and perceptible for preview', () => {
-    const cut = transition({ effect: 'cut' })
+  it('keeps a plain cut immediate for playback and holds both preview slides around a midpoint switch', () => {
+    const cut = transition({ effect: 'cut', durationMs: 1_000 })
     const playbackCut = createPresentationTransitionKeyframes(cut)
     const previewCut = createPresentationTransitionKeyframes(cut, 'forward', 'preview')
 
     expect(playbackCut.immediate).toBe(true)
     expect(playbackCut.previous).toHaveLength(0)
     expect(previewCut.immediate).toBe(false)
-    expect(previewCut.options.duration).toBe(180)
+    expect(previewCut.options.duration).toBe(1_000)
+    expect(previewCut.previous[0]).toEqual({ opacity: 1, offset: 0 })
     expect(previewCut.previous[1]?.offset).toBe(previewCut.previous[2]?.offset)
+    expect(previewCut.previous[1]?.offset).toBe(0.5)
     expect(previewCut.previous[1]?.opacity).toBe(1)
     expect(previewCut.previous[2]?.opacity).toBe(0)
+    expect(previewCut.previous[3]).toEqual({ opacity: 0, offset: 1 })
+    expect(previewCut.current[0]).toEqual({ opacity: 0, offset: 0 })
     expect(previewCut.current[1]?.offset).toBe(previewCut.current[2]?.offset)
+    expect(previewCut.current[1]?.offset).toBe(0.5)
     expect(previewCut.current[1]?.opacity).toBe(0)
     expect(previewCut.current[2]?.opacity).toBe(1)
+    expect(previewCut.current[3]).toEqual({ opacity: 1, offset: 1 })
+  })
+
+  it('clamps a plain cut preview duration without changing its slideshow duration semantics', () => {
+    const shortPreview = createPresentationTransitionKeyframes(
+      transition({ effect: 'cut', durationMs: 100 }),
+      'forward',
+      'preview',
+    )
+    const longPreview = createPresentationTransitionKeyframes(
+      transition({ effect: 'cut', durationMs: 20_000 }),
+      'forward',
+      'preview',
+    )
+    const longPlayback = createPresentationTransitionKeyframes(
+      transition({ effect: 'cut', durationMs: 20_000 }),
+    )
+
+    expect(shortPreview.options.duration).toBe(400)
+    expect(longPreview.options.duration).toBe(1_000)
+    expect(longPlayback.immediate).toBe(true)
+    expect(longPlayback.previous).toHaveLength(0)
+    expect(longPlayback.current).toHaveLength(0)
   })
 })
 
@@ -302,13 +330,15 @@ describe('PresentationTransitionPlayer', () => {
   it('plays a plain cut through discrete WAAPI keyframes only in preview mode', async () => {
     let completed = 0
     const { root } = mountPlayer({
-      transition: transition({ effect: 'cut' }),
+      transition: transition({ effect: 'cut', durationMs: 1_000 }),
       mode: 'preview',
       onComplete: () => { completed += 1 },
     })
 
     expect(animationCalls).toHaveLength(2)
+    expect(animationCalls[0]?.options.duration).toBe(1_000)
     expect(animationCalls[0]?.keyframes[1]?.offset).toBe(animationCalls[0]?.keyframes[2]?.offset)
+    expect(animationCalls[0]?.keyframes[1]?.offset).toBe(0.5)
     expect(animationCalls[0]?.keyframes[1]?.opacity).toBe(1)
     expect(animationCalls[0]?.keyframes[2]?.opacity).toBe(0)
     expect(animationCalls[1]?.keyframes[1]?.opacity).toBe(0)
