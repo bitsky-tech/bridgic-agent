@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -39,16 +40,37 @@ import {
   stripPresentationListMarkers,
   type PresentationDocument,
   type PresentationElement,
+  type PresentationHyperlink,
+  type PresentationImageElement,
+  type PresentationMediaElement,
   type PresentationShapeElement,
   type PresentationShapeType,
   type PresentationSlide,
+  type PresentationTableElement,
   type PresentationTextElement,
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { setRightPanelCollapsedAtom } from '@/atoms/layout'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
+import { requestExternalLinkAtom } from '@/atoms/external-link'
+import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import {
+  createPresentationChartElement,
+  createPresentationFooter,
+  createPresentationImageElement,
+  createPresentationMediaElement,
+  createPresentationTableElement,
+  createPresentationUrlHyperlink,
+  isPresentationChartElement,
+  isPresentationImageElement,
+  isPresentationMediaElement,
+  isPresentationShapeElement,
+  isPresentationTableElement,
+  isPresentationTextElement,
+  normalizePresentationFileSource,
+} from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
 import {
   getPresentationShapeDefinition,
@@ -56,9 +78,19 @@ import {
   isPresentationLineShape,
 } from '@/lib/presentationShapes'
 import {
+  PresentationInsertDialogs,
+  type PresentationInsertDialogKind,
+  type PresentationInsertDialogValue,
+} from './PresentationInsertDialogs'
+import {
   PresentationRibbon,
   type PresentationRibbonTab,
 } from './PresentationRibbon'
+import {
+  getPresentationChartRange,
+  getPresentationChartValueRatio,
+  PresentationSlidePreview,
+} from './PresentationSlidePreview'
 import {
   PresentationTransitionPlayer,
   type PresentationTransitionPlaybackDirection,
@@ -89,12 +121,653 @@ interface SlideshowTransitionView extends SlideshowTransitionRun {
   transition: PresentationTransition
 }
 
-function cloneDocument(document: PresentationDocument): PresentationDocument {
-  return structuredClone(document)
+export const PRESENTATION_HISTORY_MAX_ENTRIES = 50
+export const PRESENTATION_HISTORY_MAX_BYTES = 192 * 1024 * 1024
+
+export interface PresentationHistoryEntry {
+  document: PresentationDocument
+  estimatedBytes: number
 }
 
-function isTextElement(element: PresentationElement): element is PresentationTextElement {
-  return element.type === 'text'
+/** Estimate retained JS heap without serializing large embedded data URLs. */
+export function estimatePresentationDocumentBytes(document: PresentationDocument): number {
+  const seen = new Set<object>()
+  let bytes = 0
+
+  const visit = (value: unknown) => {
+    if (value === null || value === undefined) {
+      bytes += 4
+      return
+    }
+    if (typeof value === 'string') {
+      // UTF-16 is deliberately conservative; data URLs are ASCII but can still be
+      // promoted internally, and the budget should remain safe across runtimes.
+      bytes += value.length * 2
+      return
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      bytes += 8
+      return
+    }
+    if (typeof value !== 'object' || seen.has(value)) return
+    seen.add(value)
+    bytes += Array.isArray(value) ? 24 : 32
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item)
+      return
+    }
+    for (const [key, item] of Object.entries(value)) {
+      bytes += key.length * 2
+      visit(item)
+    }
+  }
+
+  visit(document)
+  return bytes
+}
+
+function cloneDocument(document: PresentationDocument): PresentationDocument {
+  // structuredClone would duplicate every Base64 payload for every undo step.
+  // Strip the immutable payloads while cloning the mutable model, then reattach
+  // the original strings by index so snapshots cannot mutate one another.
+  const payloads = document.slides.map((slide) => slide.elements.map((element) => (
+    isPresentationImageElement(element) || isPresentationMediaElement(element)
+      ? element.source.dataUrl
+      : null
+  )))
+  const payloadFreeDocument: PresentationDocument = {
+    ...document,
+    slides: document.slides.map((slide) => ({
+      ...slide,
+      elements: slide.elements.map((element) => (
+        isPresentationImageElement(element) || isPresentationMediaElement(element)
+          ? { ...element, source: { ...element.source, dataUrl: '' } }
+          : element
+      )),
+    })),
+  }
+  const cloned = structuredClone(payloadFreeDocument)
+  cloned.slides.forEach((slide, slideIndex) => {
+    slide.elements.forEach((element, elementIndex) => {
+      const dataUrl = payloads[slideIndex]?.[elementIndex]
+      if (dataUrl !== null && dataUrl !== undefined && (
+        isPresentationImageElement(element) || isPresentationMediaElement(element)
+      )) {
+        element.source.dataUrl = dataUrl
+      }
+    })
+  })
+  return cloned
+}
+
+export function createPresentationHistoryEntry(document: PresentationDocument, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry | null {
+  const estimatedBytes = estimatePresentationDocumentBytes(document)
+  if (estimatedBytes > maxBytes) return null
+  return { document: cloneDocument(document), estimatedBytes }
+}
+
+/** Keep the newest contiguous history segment within both entry and byte limits. */
+export function trimPresentationHistoryEntries(entries: readonly PresentationHistoryEntry[], maxEntries = PRESENTATION_HISTORY_MAX_ENTRIES, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry[] {
+  const kept: PresentationHistoryEntry[] = []
+  let retainedBytes = 0
+  for (let index = entries.length - 1; index >= 0 && kept.length < Math.max(0, maxEntries); index -= 1) {
+    const entry = entries[index]!
+    if (entry.estimatedBytes > maxBytes - retainedBytes) break
+    kept.unshift(entry)
+    retainedBytes += entry.estimatedBytes
+  }
+  return kept
+}
+
+function trimPresentationHistoryPair(past: PresentationHistoryEntry[], future: PresentationHistoryEntry[]): void {
+  let entryCount = past.length + future.length
+  let retainedBytes = [...past, ...future].reduce((sum, entry) => sum + entry.estimatedBytes, 0)
+  while (entryCount > PRESENTATION_HISTORY_MAX_ENTRIES || retainedBytes > PRESENTATION_HISTORY_MAX_BYTES) {
+    // Prefer discarding the oldest undo state. Once none remain, discard the
+    // farthest redo state (future[0]); the nearest redo lives at the end.
+    const removed = past.length > 0 ? past.shift() : future.shift()
+    if (!removed) break
+    entryCount -= 1
+    retainedBytes -= removed.estimatedBytes
+  }
+}
+
+export function isPresentationRotationLocked(element: PresentationElement): boolean {
+  return isPresentationMediaElement(element)
+    || isPresentationTableElement(element)
+    || isPresentationChartElement(element)
+}
+
+export type PresentationSlideshowKeyAction = 'close' | 'next' | 'previous' | null
+
+export function resolvePresentationSlideshowKeyAction(target: EventTarget | null, key: string): PresentationSlideshowKeyAction {
+  if (key === 'Escape') return 'close'
+  const element = target instanceof HTMLElement ? target : null
+  const mediaHasFocus = Boolean(element?.closest('audio, video'))
+  if (mediaHasFocus && (key === ' ' || key === 'ArrowLeft' || key === 'ArrowRight')) return null
+  if (key === ' ' && element?.closest('button, a, input, textarea, select')) return null
+  if (key === 'ArrowRight' || key === ' ') return 'next'
+  if (key === 'ArrowLeft') return 'previous'
+  return null
+}
+
+interface PresentationInsertDialogState {
+  kind: PresentationInsertDialogKind
+  elementId?: string
+}
+
+interface PresentationFileInsertionTarget {
+  documentId: string
+  generation: number
+  sessionId: string | null
+  slideId: string
+}
+
+const MAX_PRESENTATION_IMAGE_BYTES = 20 * 1024 * 1024
+const MAX_PRESENTATION_MEDIA_BYTES = 60 * 1024 * 1024
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('The selected file could not be encoded'))
+    }, { once: true })
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('The selected file could not be read')), { once: true })
+    reader.addEventListener('abort', () => reject(new Error('The selected file read was cancelled')), { once: true })
+    reader.readAsDataURL(file)
+  })
+}
+
+async function presentationImageSize(file: File): Promise<{ width: number; height: number } | null | undefined> {
+  // happy-dom and older runtimes do not expose createImageBitmap. In Chromium,
+  // a decode failure means the selected file is not a usable image and should
+  // not be committed to the document or exported as corrupt media.
+  if (typeof createImageBitmap !== 'function') return undefined
+  try {
+    const bitmap = await createImageBitmap(file)
+    const size = bitmap.width > 0 && bitmap.height > 0
+      ? { width: bitmap.width, height: bitmap.height }
+      : null
+    bitmap.close()
+    return size
+  } catch {
+    return null
+  }
+}
+
+type FabricModule = typeof import('fabric')
+
+function fitFabricGroupToElement(group: FabricObject, element: PresentationElement): FabricObject {
+  group.set({
+    left: element.x,
+    top: element.y,
+    angle: isPresentationRotationLocked(element) ? 0 : element.rotation,
+    originX: 'left',
+    originY: 'top',
+    scaleX: element.width / Math.max(1, group.width ?? element.width),
+    scaleY: element.height / Math.max(1, group.height ?? element.height),
+  })
+  return group
+}
+
+function createMediaFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  const background = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width: element.width,
+    height: element.height,
+    rx: Math.min(18, element.height * 0.18),
+    ry: Math.min(18, element.height * 0.18),
+    fill: element.type === 'video' ? '#171923' : '#252737',
+    stroke: '#44475A',
+    strokeWidth: 1,
+  })
+  const buttonSize = Math.min(68, element.height * 0.58)
+  const button = new fabric.Circle({
+    left: Math.max(16, element.height * 0.18),
+    top: (element.height - buttonSize) / 2,
+    radius: buttonSize / 2,
+    fill: 'rgba(255,255,255,0.14)',
+  })
+  const symbol = new fabric.Text(element.type === 'video' ? '▶' : '♫', {
+    left: button.left + (buttonSize / 2),
+    top: button.top + (buttonSize / 2),
+    originX: 'center',
+    originY: 'center',
+    fill: '#FFFFFF',
+    fontSize: Math.max(20, buttonSize * 0.44),
+    fontFamily: 'Arial',
+  })
+  const fileName = new fabric.Textbox(element.source.fileName, {
+    left: button.left + buttonSize + 20,
+    top: Math.max(10, (element.height - 32) / 2),
+    width: Math.max(60, element.width - button.left - buttonSize - 40),
+    height: 40,
+    fill: '#FFFFFF',
+    fontSize: Math.min(24, Math.max(14, element.height * 0.25)),
+    fontFamily: 'Aptos',
+    fontWeight: 500,
+  })
+  return fitFabricGroupToElement(new fabric.Group([background, button, symbol, fileName]), element)
+}
+
+function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
+  const rows = Math.max(1, element.cells.length)
+  const columns = Math.max(1, ...element.cells.map((row) => row.length))
+  const cellWidth = element.width / columns
+  const cellHeight = element.height / rows
+  const objects: FabricObject[] = []
+  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const header = element.headerRow && rowIndex === 0
+      objects.push(new fabric.Rect({
+        left: columnIndex * cellWidth,
+        top: rowIndex * cellHeight,
+        width: cellWidth,
+        height: cellHeight,
+        fill: header ? element.headerFill : element.bodyFill,
+        stroke: element.borderColor,
+        strokeWidth: 1,
+      }))
+      objects.push(new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
+        left: (columnIndex * cellWidth) + 10,
+        top: (rowIndex * cellHeight) + Math.max(4, (cellHeight - element.fontSize * 1.25) / 2),
+        width: Math.max(12, cellWidth - 20),
+        height: Math.max(12, cellHeight - 8),
+        fill: header ? '#FFFFFF' : element.textColor,
+        fontFamily: 'Aptos',
+        fontSize: element.fontSize,
+        fontWeight: header ? 600 : 400,
+        textAlign: 'left',
+      }))
+    }
+  }
+  return fitFabricGroupToElement(new fabric.Group(objects), element)
+}
+
+function chartPolarPoint(cx: number, cy: number, radius: number, angle: number): { x: number; y: number } {
+  const radians = (angle - 90) * (Math.PI / 180)
+  return { x: cx + (radius * Math.cos(radians)), y: cy + (radius * Math.sin(radians)) }
+}
+
+function chartPieSlicePath(cx: number, cy: number, radius: number, start: number, end: number, innerRadius: number): string {
+  const startPoint = chartPolarPoint(cx, cy, radius, end)
+  const endPoint = chartPolarPoint(cx, cy, radius, start)
+  const largeArc = end - start > 180 ? 1 : 0
+  if (innerRadius <= 0) {
+    return `M ${cx} ${cy} L ${startPoint.x} ${startPoint.y} A ${radius} ${radius} 0 ${largeArc} 0 ${endPoint.x} ${endPoint.y} Z`
+  }
+  const innerStart = chartPolarPoint(cx, cy, innerRadius, end)
+  const innerEnd = chartPolarPoint(cx, cy, innerRadius, start)
+  return `M ${startPoint.x} ${startPoint.y} A ${radius} ${radius} 0 ${largeArc} 0 ${endPoint.x} ${endPoint.y} L ${innerEnd.x} ${innerEnd.y} A ${innerRadius} ${innerRadius} 0 ${largeArc} 1 ${innerStart.x} ${innerStart.y} Z`
+}
+
+function createChartFabricObject(fabric: FabricModule, element: Extract<PresentationElement, { type: 'chart' }>): FabricObject {
+  const objects: FabricObject[] = [new fabric.Rect({
+    left: 0,
+    top: 0,
+    width: element.width,
+    height: element.height,
+    fill: '#FFFFFF',
+    stroke: '#E3E4EA',
+    strokeWidth: 1,
+  })]
+  const titleHeight = element.title ? 46 : 14
+  const legendHeight = element.showLegend ? 42 : 10
+  if (element.title) {
+    objects.push(new fabric.Textbox(element.title, {
+      left: 36,
+      top: 10,
+      width: element.width - 72,
+      height: 30,
+      fill: '#20202B',
+      fontFamily: 'Aptos Display',
+      fontSize: 20,
+      fontWeight: 600,
+      textAlign: 'center',
+    }))
+  }
+  const plotX = element.chartType === 'bar' ? 110 : 54
+  const plotY = titleHeight
+  const plotWidth = Math.max(80, element.width - plotX - 28)
+  const plotHeight = Math.max(60, element.height - titleHeight - legendHeight - 34)
+  if (element.chartType === 'pie' || element.chartType === 'doughnut') {
+    const values = element.series[0]?.values.map((value) => Math.max(0, value)) ?? []
+    const total = Math.max(1, values.reduce((sum, value) => sum + value, 0))
+    const radius = Math.min(plotWidth, plotHeight) * 0.42
+    const cx = plotX + (plotWidth / 2)
+    const cy = plotY + (plotHeight / 2)
+    const positiveValues = values.filter((value) => value > 0)
+    if (positiveValues.length === 1) {
+      const positiveIndex = values.findIndex((value) => value > 0)
+      objects.push(new fabric.Circle({
+        left: cx - radius,
+        top: cy - radius,
+        radius,
+        fill: element.colors[positiveIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+      }))
+      if (element.chartType === 'doughnut') {
+        objects.push(new fabric.Circle({ left: cx - (radius * 0.56), top: cy - (radius * 0.56), radius: radius * 0.56, fill: '#FFFFFF' }))
+      }
+    } else if (positiveValues.length > 1) {
+      let angle = 0
+      values.forEach((value, index) => {
+        const start = angle
+        angle += (value / total) * 360
+        if (angle <= start) return
+        objects.push(new fabric.Path(chartPieSlicePath(cx, cy, radius, start, angle, element.chartType === 'doughnut' ? radius * 0.56 : 0), {
+          fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
+          stroke: '#FFFFFF',
+          strokeWidth: 2,
+        }))
+      })
+    }
+  } else if (element.chartType === 'bar') {
+    const categoryCount = Math.max(1, element.categories.length)
+    const seriesCount = Math.max(1, element.series.length)
+    const range = getPresentationChartRange(element.series)
+    const valueX = (value: number) => plotX + (getPresentationChartValueRatio(value, range) * plotWidth)
+    const zeroX = valueX(0)
+    const groupHeight = plotHeight / categoryCount
+    const barHeight = Math.max(3, (groupHeight - 8) / seriesCount)
+    objects.push(new fabric.Line([zeroX, plotY, zeroX, plotY + plotHeight], { stroke: '#AEB0BA', strokeWidth: 1.5 }))
+    element.categories.forEach((category, categoryIndex) => {
+      objects.push(new fabric.Textbox(category, {
+        left: 6,
+        top: plotY + (categoryIndex * groupHeight) + (groupHeight / 2) - 9,
+        width: plotX - 18,
+        height: 20,
+        fill: '#666571',
+        fontFamily: 'Aptos',
+        fontSize: 12,
+        textAlign: 'right',
+      }))
+      element.series.forEach((series, seriesIndex) => {
+        const value = series.values[categoryIndex] ?? 0
+        const valuePosition = valueX(value)
+        objects.push(new fabric.Rect({
+          left: Math.min(valuePosition, zeroX),
+          top: plotY + (categoryIndex * groupHeight) + 4 + (seriesIndex * barHeight),
+          width: Math.abs(valuePosition - zeroX),
+          height: Math.max(2, barHeight - 2),
+          rx: 2,
+          ry: 2,
+          fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+        }))
+      })
+    })
+  } else {
+    const categoryCount = Math.max(1, element.categories.length)
+    const range = getPresentationChartRange(element.series)
+    const valueY = (value: number) => plotY + ((1 - getPresentationChartValueRatio(value, range)) * plotHeight)
+    const zeroY = valueY(0)
+    for (let gridIndex = 0; gridIndex <= 4; gridIndex += 1) {
+      const y = plotY + ((plotHeight / 4) * gridIndex)
+      objects.push(new fabric.Line([plotX, y, plotX + plotWidth, y], { stroke: '#E9EAF0', strokeWidth: 1 }))
+    }
+    objects.push(new fabric.Line([plotX, zeroY, plotX + plotWidth, zeroY], { stroke: '#AEB0BA', strokeWidth: 1.5 }))
+    if (element.chartType === 'line') {
+      element.series.forEach((series, seriesIndex) => {
+        const points = element.categories.map((_, categoryIndex) => ({
+          x: plotX + ((categoryIndex + 0.5) / categoryCount) * plotWidth,
+          y: valueY(series.values[categoryIndex] ?? 0),
+        }))
+        objects.push(new fabric.Polyline(points, {
+          fill: 'transparent',
+          stroke: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+          strokeWidth: 4,
+          strokeLineCap: 'round',
+          strokeLineJoin: 'round',
+        }))
+      })
+    } else {
+      const groupWidth = plotWidth / categoryCount
+      const seriesCount = Math.max(1, element.series.length)
+      const gap = Math.min(8, groupWidth * 0.08)
+      const barWidth = Math.max(2, (groupWidth - (gap * 2)) / seriesCount)
+      element.categories.forEach((_, categoryIndex) => {
+        element.series.forEach((series, seriesIndex) => {
+          const value = series.values[categoryIndex] ?? 0
+          const valuePosition = valueY(value)
+          const height = Math.abs(valuePosition - zeroY)
+          objects.push(new fabric.Rect({
+            left: plotX + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth),
+            top: Math.min(valuePosition, zeroY),
+            width: Math.max(1, barWidth - 2),
+            height,
+            rx: 2,
+            ry: 2,
+            fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+          }))
+        })
+      })
+    }
+    element.categories.forEach((category, categoryIndex) => {
+      objects.push(new fabric.Textbox(category, {
+        left: plotX + (categoryIndex * (plotWidth / categoryCount)),
+        top: plotY + plotHeight + 7,
+        width: plotWidth / categoryCount,
+        height: 20,
+        fill: '#666571',
+        fontFamily: 'Aptos',
+        fontSize: 12,
+        textAlign: 'center',
+      }))
+    })
+  }
+  if (element.showLegend) {
+    const labels = element.chartType === 'pie' || element.chartType === 'doughnut'
+      ? element.categories
+      : element.series.map((series) => series.name)
+    const itemWidth = Math.min(150, element.width / Math.max(1, labels.length))
+    const startX = (element.width - (labels.length * itemWidth)) / 2
+    labels.forEach((label, index) => {
+      objects.push(new fabric.Rect({
+        left: startX + (index * itemWidth),
+        top: element.height - 25,
+        width: 10,
+        height: 10,
+        rx: 2,
+        ry: 2,
+        fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
+      }))
+      objects.push(new fabric.Textbox(label, {
+        left: startX + (index * itemWidth) + 15,
+        top: element.height - 29,
+        width: itemWidth - 18,
+        height: 18,
+        fill: '#666571',
+        fontFamily: 'Aptos',
+        fontSize: 11,
+      }))
+    })
+  }
+  return fitFabricGroupToElement(new fabric.Group(objects), element)
+}
+
+function createShapeFabricObject(fabric: FabricModule, element: PresentationShapeElement): FabricObject {
+  const shadow = element.shadow
+    ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 })
+    : undefined
+  if (element.type === 'ellipse') {
+    return new fabric.Ellipse({
+      left: element.x,
+      top: element.y,
+      rx: element.width / 2,
+      ry: element.height / 2,
+      angle: element.rotation,
+      originX: 'left',
+      originY: 'top',
+      fill: element.fill,
+      stroke: element.borderColor,
+      strokeWidth: element.borderWidth,
+      shadow,
+    })
+  }
+  if (element.type === 'rect' || element.type === 'roundRect') {
+    return new fabric.Rect({
+      left: element.x,
+      top: element.y,
+      width: element.width,
+      height: element.height,
+      rx: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
+      ry: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
+      angle: element.rotation,
+      originX: 'left',
+      originY: 'top',
+      fill: element.fill,
+      stroke: element.borderColor,
+      strokeWidth: element.borderWidth,
+      shadow,
+    })
+  }
+  const definition = getPresentationShapeDefinition(element.type)
+  const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
+  const path = new fabric.Path(definition.path, {
+    left: element.x,
+    top: element.y,
+    angle: element.rotation,
+    originX: 'left',
+    originY: 'top',
+    fill: strokeOnly ? 'transparent' : element.fill,
+    fillRule: 'evenodd',
+    stroke: element.borderColor,
+    strokeWidth: strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth,
+    strokeLineCap: 'round',
+    strokeLineJoin: 'round',
+    strokeUniform: true,
+    shadow,
+  })
+  path.set({
+    scaleX: element.width / Math.max(1, path.width ?? 1),
+    scaleY: element.height / Math.max(1, path.height ?? 1),
+  })
+  return path
+}
+
+async function createPresentationFabricObject(
+  fabric: FabricModule,
+  element: PresentationElement,
+  onTextEdit: (object: FabricObject) => void,
+): Promise<FabricObject> {
+  if (isPresentationTextElement(element)) {
+    const textbox = new fabric.Textbox(formatPresentationText(element), {
+      left: element.x,
+      top: element.y,
+      width: element.width,
+      angle: element.rotation,
+      originX: 'left',
+      originY: 'top',
+      fill: element.hyperlink ? '#2563EB' : element.color,
+      fontFamily: element.fontFamily,
+      fontSize: element.fontSize,
+      fontWeight: element.fontWeight,
+      fontStyle: element.italic ? 'italic' : 'normal',
+      lineHeight: element.lineHeight ?? 1.08,
+      textAlign: element.align,
+      underline: Boolean(element.underline || element.hyperlink),
+      linethrough: Boolean(element.strikethrough),
+      textBackgroundColor: element.highlightColor ?? '',
+      charSpacing: element.characterSpacing ?? 0,
+      padding: (element.indentLevel ?? 0) * 16,
+      shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.28)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
+      splitByGrapheme: false,
+    })
+    if (element.baseline === 'superscript') textbox.setSuperscript(0, textbox.text.length)
+    if (element.baseline === 'subscript') textbox.setSubscript(0, textbox.text.length)
+    textbox.on('editing:exited', () => onTextEdit(textbox))
+    return textbox
+  }
+  if (isPresentationShapeElement(element)) return createShapeFabricObject(fabric, element)
+  if (isPresentationImageElement(element)) {
+    try {
+      const image = await fabric.FabricImage.fromURL(element.source.dataUrl)
+      const naturalWidth = Math.max(1, image.width ?? element.width)
+      const naturalHeight = Math.max(1, image.height ?? element.height)
+      const frame = new fabric.Rect({
+        left: 0,
+        top: 0,
+        width: element.width,
+        height: element.height,
+        fill: 'rgba(0,0,0,0)',
+        strokeWidth: 0,
+      })
+      if (element.fit === 'cover') {
+        const scale = Math.max(element.width / naturalWidth, element.height / naturalHeight)
+        const cropWidth = element.width / scale
+        const cropHeight = element.height / scale
+        image.set({
+          left: 0,
+          top: 0,
+          width: cropWidth,
+          height: cropHeight,
+          cropX: Math.max(0, (naturalWidth - cropWidth) / 2),
+          cropY: Math.max(0, (naturalHeight - cropHeight) / 2),
+          scaleX: scale,
+          scaleY: scale,
+        })
+      } else {
+        const scale = Math.min(element.width / naturalWidth, element.height / naturalHeight)
+        image.set({
+          left: (element.width - (naturalWidth * scale)) / 2,
+          top: (element.height - (naturalHeight * scale)) / 2,
+          scaleX: scale,
+          scaleY: scale,
+        })
+      }
+      const group = fitFabricGroupToElement(new fabric.Group([frame, image]), element)
+      group.set({
+        shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
+      })
+      return group
+    } catch {
+      const fallback: PresentationMediaElement = {
+        ...element,
+        type: 'video',
+        autoplay: false,
+        loop: false,
+        muted: true,
+      }
+      return createMediaFabricObject(fabric, fallback)
+    }
+  }
+  if (isPresentationMediaElement(element)) return createMediaFabricObject(fabric, element)
+  if (isPresentationTableElement(element)) return createTableFabricObject(fabric, element)
+  if (isPresentationChartElement(element)) return createChartFabricObject(fabric, element)
+  throw new Error(`Unsupported presentation element: ${(element as { type?: string }).type ?? 'unknown'}`)
+}
+
+function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlide, slideNumber: number): FabricObject[] {
+  if (!slide.footer) return []
+  const objects: FabricObject[] = []
+  const style = {
+    fill: '#666571',
+    fontFamily: 'Aptos',
+    fontSize: 12,
+    selectable: false,
+    evented: false,
+    originX: 'left' as const,
+    originY: 'top' as const,
+  }
+  if (slide.footer.text) objects.push(new fabric.Text(slide.footer.text, { ...style, left: 32, top: 686 }))
+  if (slide.footer.showDate) {
+    objects.push(new fabric.Text(new Intl.DateTimeFormat().format(new Date()), {
+      ...style,
+      left: PRESENTATION_WIDTH / 2,
+      top: 686,
+      originX: 'center',
+    }))
+  }
+  if (slide.footer.showSlideNumber) {
+    objects.push(new fabric.Text(String(slideNumber), {
+      ...style,
+      left: PRESENTATION_WIDTH - 32,
+      top: 686,
+      originX: 'right',
+    }))
+  }
+  return objects
 }
 
 /** A focused PowerPoint-style editor embedded in the Session workbench. */
@@ -105,6 +778,8 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
+  const requestExternalLink = useSetAtom(requestExternalLinkAtom)
+  const showToast = useSetAtom(showToastAtom)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
   const [canvasGeneration, setCanvasGeneration] = useState(0)
   const [canvasScale, setCanvasScale] = useState(0.4)
@@ -120,29 +795,44 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
   const [exportState, setExportState] = useState<ExportState>('idle')
+  const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasElementRef = useRef<HTMLCanvasElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<FabricCanvas | null>(null)
   const fabricModuleRef = useRef<typeof import('fabric') | null>(null)
   const objectIdsRef = useRef(new WeakMap<FabricObject, string>())
   const documentRef = useRef(document)
   const selectedElementIdRef = useRef<string | null>(null)
-  const pastRef = useRef<PresentationDocument[]>([])
-  const futureRef = useRef<PresentationDocument[]>([])
+  const pastRef = useRef<PresentationHistoryEntry[]>([])
+  const futureRef = useRef<PresentationHistoryEntry[]>([])
   const transitionRunIdRef = useRef(0)
+  const fileInsertionTargetRef = useRef<PresentationFileInsertionTarget>({
+    documentId: document.id,
+    generation: 0,
+    sessionId,
+    slideId: document.selectedSlideId,
+  })
 
   const currentSlide = document.slides.find((slide) => slide.id === document.selectedSlideId)
     ?? document.slides[0]
   const selectedElement = currentSlide?.elements.find((element) => (
     element.id === selectedElementId
   )) ?? null
-  const selectedText = selectedElement && isTextElement(selectedElement) ? selectedElement : null
+  const selectedText = selectedElement && isPresentationTextElement(selectedElement) ? selectedElement : null
 
   const commitDocument = useCallback((next: PresentationDocument, recordHistory = true) => {
     const current = documentRef.current
     if (recordHistory) {
-      pastRef.current = [...pastRef.current, cloneDocument(current)].slice(-50)
+      const entry = createPresentationHistoryEntry(current)
+      // An oversized state is an undo barrier. Keeping older entries would make
+      // Undo skip the latest change and restore an unrelated document state.
+      pastRef.current = entry
+        ? trimPresentationHistoryEntries([...pastRef.current, entry])
+        : []
       futureRef.current = []
     }
     documentRef.current = next
@@ -175,6 +865,10 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const syncFabricObject = useCallback((object: FabricObject) => {
     const elementId = objectIdsRef.current.get(object)
     if (!elementId) return
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const element = slide?.elements.find((item) => item.id === elementId)
+    if (!element) return
     const scaleX = object.scaleX ?? 1
     const scaleY = object.scaleY ?? 1
     const patch: Partial<PresentationElement> = {
@@ -182,13 +876,10 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       y: Math.round(object.top),
       width: Math.max(8, Math.round((object.width ?? 0) * scaleX)),
       height: Math.max(8, Math.round((object.height ?? 0) * scaleY)),
-      rotation: Math.round(object.angle ?? 0),
+      ...(isPresentationRotationLocked(element) ? {} : { rotation: Math.round(object.angle ?? 0) }),
     }
     if ('text' in object && typeof object.text === 'string') {
-      const current = documentRef.current
-      const slide = current.slides.find((item) => item.id === current.selectedSlideId)
-      const element = slide?.elements.find((item) => item.id === elementId)
-      const text = element?.type === 'text'
+      const text = element.type === 'text'
         ? stripPresentationListMarkers(object.text, element.listStyle)
         : object.text
       Object.assign(patch, { text })
@@ -196,9 +887,26 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     patchElement(elementId, patch)
   }, [patchElement])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     documentRef.current = document
-  }, [document])
+    const previous = fileInsertionTargetRef.current
+    const targetChanged = previous.sessionId !== sessionId
+      || previous.documentId !== document.id
+      || previous.slideId !== document.selectedSlideId
+    fileInsertionTargetRef.current = {
+      documentId: document.id,
+      generation: targetChanged ? previous.generation + 1 : previous.generation,
+      sessionId,
+      slideId: document.selectedSlideId,
+    }
+  }, [document, sessionId])
+
+  useEffect(() => () => {
+    fileInsertionTargetRef.current = {
+      ...fileInsertionTargetRef.current,
+      generation: fileInsertionTargetRef.current.generation + 1,
+    }
+  }, [])
 
   useEffect(() => {
     selectedElementIdRef.current = selectedElementId
@@ -215,6 +923,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setSlideshowOpen(false)
       setSlideshowTransition(null)
       setTransitionPreviewRun(null)
+      setInsertDialog(null)
       setSelectedElementId(null)
       setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
@@ -227,6 +936,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setSlideshowOpen(false)
       setSlideshowTransition(null)
       setTransitionPreviewRun(null)
+      setInsertDialog(null)
     }, 0)
     return () => window.clearTimeout(timer)
   }, [active])
@@ -283,6 +993,16 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       canvas.on('object:modified', (event) => {
         if (event.target) syncFabricObjectRef.current(event.target)
       })
+      canvas.on('mouse:dblclick', (event) => {
+        const elementId = event.target ? objectIdsRef.current.get(event.target) : undefined
+        if (!elementId) return
+        const current = documentRef.current
+        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const element = slide?.elements.find((item) => item.id === elementId)
+        if (!element || (!isPresentationTableElement(element) && !isPresentationChartElement(element))) return
+        setSelectedElementId(element.id)
+        setInsertDialog({ kind: element.type, elementId: element.id })
+      })
       setCanvasGeneration((value) => value + 1)
     })
     return () => {
@@ -299,123 +1019,63 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     const canvas = canvasRef.current
     const fabric = fabricModuleRef.current
     if (!active || !canvas || !fabric || !currentSlide) return
+    let cancelled = false
     const activeElementId = selectedElementIdRef.current
     canvas.clear()
     canvas.backgroundColor = currentSlide.background
     objectIdsRef.current = new WeakMap()
-    let activeObject: FabricObject | null = null
-    for (const element of currentSlide.elements) {
-      let object: FabricObject
-      if (element.type === 'text') {
-        const textbox = new fabric.Textbox(formatPresentationText(element), {
-          left: element.x,
-          top: element.y,
-          width: element.width,
-          angle: element.rotation,
-          originX: 'left',
-          originY: 'top',
-          fill: element.color,
-          fontFamily: element.fontFamily,
-          fontSize: element.fontSize,
-          fontWeight: element.fontWeight,
-          fontStyle: element.italic ? 'italic' : 'normal',
-          lineHeight: element.lineHeight ?? 1.08,
-          textAlign: element.align,
-          underline: Boolean(element.underline),
-          linethrough: Boolean(element.strikethrough),
-          textBackgroundColor: element.highlightColor ?? '',
-          charSpacing: element.characterSpacing ?? 0,
-          padding: (element.indentLevel ?? 0) * 16,
-          shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.28)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
-          splitByGrapheme: false,
+    void Promise.all(currentSlide.elements.map(async (element) => ({
+      element,
+      object: await createPresentationFabricObject(fabric, element, (object) => syncFabricObjectRef.current(object)),
+    }))).then((entries) => {
+      if (cancelled || canvasRef.current !== canvas) return
+      let activeObject: FabricObject | null = null
+      for (const { element, object } of entries) {
+        object.set({
+          borderColor: '#6957D9',
+          cornerColor: '#FFFFFF',
+          cornerStrokeColor: '#6957D9',
+          cornerStyle: 'circle',
+          cornerSize: 11,
+          transparentCorners: false,
+          objectCaching: false,
+          lockRotation: isPresentationRotationLocked(element),
+          hoverCursor: element.hyperlink ? 'pointer' : 'move',
         })
-        if (element.baseline === 'superscript') textbox.setSuperscript(0, textbox.text.length)
-        if (element.baseline === 'subscript') textbox.setSubscript(0, textbox.text.length)
-        textbox.on('editing:exited', () => syncFabricObjectRef.current(textbox))
-        object = textbox
-      } else if (element.type === 'ellipse') {
-        object = new fabric.Ellipse({
-          left: element.x,
-          top: element.y,
-          rx: element.width / 2,
-          ry: element.height / 2,
-          angle: element.rotation,
-          originX: 'left',
-          originY: 'top',
-          fill: element.fill,
-          stroke: element.borderColor,
-          strokeWidth: element.borderWidth,
-          shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
-        })
-      } else if (element.type === 'rect' || element.type === 'roundRect') {
-        object = new fabric.Rect({
-          left: element.x,
-          top: element.y,
-          width: element.width,
-          height: element.height,
-          rx: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
-          ry: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
-          angle: element.rotation,
-          originX: 'left',
-          originY: 'top',
-          fill: element.fill,
-          stroke: element.borderColor,
-          strokeWidth: element.borderWidth,
-          shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
-        })
-      } else {
-        const definition = getPresentationShapeDefinition(element.type)
-        const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
-        const path = new fabric.Path(definition.path, {
-          left: element.x,
-          top: element.y,
-          angle: element.rotation,
-          originX: 'left',
-          originY: 'top',
-          fill: strokeOnly ? 'transparent' : element.fill,
-          fillRule: 'evenodd',
-          stroke: element.borderColor,
-          strokeWidth: strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth,
-          strokeLineCap: 'round',
-          strokeLineJoin: 'round',
-          strokeUniform: true,
-          shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
-        })
-        path.set({
-          scaleX: element.width / Math.max(1, path.width ?? 1),
-          scaleY: element.height / Math.max(1, path.height ?? 1),
-        })
-        object = path
+        objectIdsRef.current.set(object, element.id)
+        canvas.add(object)
+        if (element.id === activeElementId) activeObject = object
       }
-      object.set({
-        borderColor: '#6957D9',
-        cornerColor: '#FFFFFF',
-        cornerStrokeColor: '#6957D9',
-        cornerStyle: 'circle',
-        cornerSize: 11,
-        transparentCorners: false,
-        objectCaching: false,
-      })
-      objectIdsRef.current.set(object, element.id)
-      canvas.add(object)
-      if (element.id === activeElementId) activeObject = object
+      const slideNumber = documentRef.current.slides.findIndex((slide) => slide.id === currentSlide.id) + 1
+      createFooterFabricObjects(fabric, currentSlide, Math.max(1, slideNumber)).forEach((object) => canvas.add(object))
+      if (activeObject) canvas.setActiveObject(activeObject)
+      canvas.requestRenderAll()
+    }).catch(() => {
+      if (!cancelled) canvas.requestRenderAll()
+    })
+    return () => {
+      cancelled = true
     }
-    if (activeObject) canvas.setActiveObject(activeObject)
-    canvas.requestRenderAll()
   }, [active, canvasGeneration, currentSlide])
 
   const undo = useCallback(() => {
     const previous = pastRef.current.pop()
     if (!previous) return
-    futureRef.current.push(cloneDocument(documentRef.current))
-    commitDocument(previous, false)
+    const current = createPresentationHistoryEntry(documentRef.current)
+    if (current) futureRef.current.push(current)
+    else futureRef.current = []
+    trimPresentationHistoryPair(pastRef.current, futureRef.current)
+    commitDocument(previous.document, false)
   }, [commitDocument])
 
   const redo = useCallback(() => {
     const next = futureRef.current.pop()
     if (!next) return
-    pastRef.current.push(cloneDocument(documentRef.current))
-    commitDocument(next, false)
+    const current = createPresentationHistoryEntry(documentRef.current)
+    if (current) pastRef.current.push(current)
+    else pastRef.current = []
+    trimPresentationHistoryPair(pastRef.current, futureRef.current)
+    commitDocument(next.document, false)
   }, [commitDocument])
 
   const deleteSelectedElement = useCallback(() => {
@@ -476,22 +1136,28 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     })
   }, [slideshowIndex, slideshowTransition])
 
+  const activateSlideshowHyperlink = useCallback((hyperlink: PresentationHyperlink) => {
+    if (hyperlink.type === 'slide') {
+      const index = documentRef.current.slides.findIndex((slide) => slide.id === hyperlink.slideId)
+      if (index >= 0) goToSlideshowIndex(index)
+      return
+    }
+    void requestExternalLink(hyperlink.url).then((open) => {
+      if (open) return window.api.shell.openExternal(hyperlink.url)
+    })
+  }, [goToSlideshowIndex, requestExternalLink])
+
   useEffect(() => {
     if (!active || !slideshowOpen) return
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target
-      const spaceActivatesControl = event.key === ' '
-        && target instanceof HTMLElement
-        && Boolean(target.closest('button, a, input, textarea, select'))
-      if (spaceActivatesControl) return
-      if (event.key === 'Escape') {
+      const action = resolvePresentationSlideshowKeyAction(event.target, event.key)
+      if (action === 'close') {
         setSlideshowOpen(false)
         setSlideshowTransition(null)
-      }
-      else if (event.key === 'ArrowRight' || event.key === ' ') {
+      } else if (action === 'next') {
         event.preventDefault()
         goToSlideshowIndex(slideshowIndex + 1)
-      } else if (event.key === 'ArrowLeft') {
+      } else if (action === 'previous') {
         event.preventDefault()
         goToSlideshowIndex(slideshowIndex - 1)
       }
@@ -556,7 +1222,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       name: t('session.presentation.slideCopy', { name: currentSlide.name }),
       elements: currentSlide.elements.map((element) => ({
         ...element,
-        id: createPresentationId(element.type === 'text' ? 'text' : 'shape'),
+        id: createPresentationId(element.type),
       })),
     }
     const index = current.slides.findIndex((slide) => slide.id === currentSlide.id)
@@ -632,8 +1298,179 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     replaceCurrentSlide({ ...currentSlide, elements: [...currentSlide.elements, element] })
   }
 
+  const appendElement = (element: PresentationElement) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    setSelectedElementId(element.id)
+    replaceCurrentSlide({ ...slide, elements: [...slide.elements, element] })
+  }
+
+  const insertFile = async (kind: 'image' | 'audio' | 'video', event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    const target = { ...fileInsertionTargetRef.current }
+    const maxBytes = kind === 'image' ? MAX_PRESENTATION_IMAGE_BYTES : MAX_PRESENTATION_MEDIA_BYTES
+    if (file.size > maxBytes) {
+      showToast(t('session.presentation.insertDialog.fileTooLarge', { size: Math.round(maxBytes / 1024 / 1024) }))
+      return
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      const source = normalizePresentationFileSource(kind, {
+        dataUrl,
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+      })
+      if (!source) throw new Error('Unsupported presentation media format')
+      let element: PresentationElement
+      if (kind === 'image') {
+        const image = createPresentationImageElement(source)
+        const size = await presentationImageSize(file)
+        if (size === null) throw new Error('The selected image could not be decoded')
+        if (size) {
+          const scale = Math.min(640 / size.width, 420 / size.height)
+          const width = Math.max(32, Math.round(size.width * scale))
+          const height = Math.max(32, Math.round(size.height * scale))
+          element = {
+            ...image,
+            x: Math.round((PRESENTATION_WIDTH - width) / 2),
+            y: Math.round((PRESENTATION_HEIGHT - height) / 2),
+            width,
+            height,
+          }
+        } else {
+          element = image
+        }
+      } else {
+        element = createPresentationMediaElement(kind, source)
+      }
+      const currentTarget = fileInsertionTargetRef.current
+      if (target.generation !== currentTarget.generation
+        || target.sessionId !== currentTarget.sessionId
+        || target.documentId !== currentTarget.documentId
+        || target.slideId !== currentTarget.slideId) {
+        showToast(t('session.common.cancelled'))
+        return
+      }
+      appendElement(element)
+    } catch {
+      showToast(t('session.presentation.insertDialog.fileReadError'))
+    }
+  }
+
+  const openLinkDialog = () => {
+    const linkable = selectedElement && (
+      isPresentationTextElement(selectedElement)
+      || isPresentationShapeElement(selectedElement)
+      || isPresentationImageElement(selectedElement)
+    ) ? selectedElement : null
+    setInsertDialog({ kind: 'link', ...(linkable ? { elementId: linkable.id } : {}) })
+  }
+
+  const submitInsertDialog = (value: PresentationInsertDialogValue) => {
+    const state = insertDialog
+    if (!state) return
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const existing = state.elementId
+      ? slide.elements.find((element) => element.id === state.elementId)
+      : undefined
+
+    if (value.kind === 'table') {
+      if (existing && isPresentationTableElement(existing)) {
+        patchElement(existing.id, { cells: value.cells.map((row) => [...row]) } as Partial<PresentationTableElement>)
+      } else {
+        appendElement(createPresentationTableElement(value.cells))
+      }
+    } else if (value.kind === 'chart') {
+      if (existing && isPresentationChartElement(existing)) {
+        patchElement(existing.id, {
+          chartType: value.chartType,
+          title: value.title || undefined,
+          categories: [...value.categories],
+          series: value.series.map((series) => ({ name: series.name, values: [...series.values] })),
+        } as Partial<typeof existing>)
+      } else {
+        const element = createPresentationChartElement(value.chartType)
+        appendElement({
+          ...element,
+          title: value.title || undefined,
+          categories: [...value.categories],
+          series: value.series.map((series) => ({ name: series.name, values: [...series.values] })),
+        })
+      }
+    } else if (value.kind === 'link') {
+      let hyperlink: PresentationHyperlink | null = null
+      if (value.targetType === 'url') {
+        hyperlink = createPresentationUrlHyperlink(value.url, value.tooltip)
+      } else if (current.slides.some((item) => item.id === value.slideId)) {
+        hyperlink = { type: 'slide', slideId: value.slideId, ...(value.tooltip ? { tooltip: value.tooltip } : {}) }
+      }
+      if (!hyperlink) {
+        showToast(t('session.presentation.insertDialog.linkError'))
+        return
+      }
+      if (existing && (
+        isPresentationTextElement(existing)
+        || isPresentationShapeElement(existing)
+        || isPresentationImageElement(existing)
+      )) {
+        patchElement(existing.id, {
+          hyperlink,
+          ...(isPresentationTextElement(existing) ? { text: value.label } : {}),
+        } as Partial<PresentationElement>)
+      } else {
+        const width = 560
+        const height = 54
+        const element: PresentationTextElement = {
+          id: createPresentationId('text'),
+          type: 'text',
+          x: Math.round((PRESENTATION_WIDTH - width) / 2),
+          y: Math.round((PRESENTATION_HEIGHT - height) / 2),
+          width,
+          height,
+          rotation: 0,
+          text: value.label,
+          fontSize: 26,
+          fontFamily: 'Aptos',
+          fontWeight: 400,
+          underline: true,
+          color: '#2563EB',
+          align: 'center',
+          hyperlink,
+        }
+        appendElement(element)
+      }
+    } else {
+      const footer = {
+        ...createPresentationFooter(value.text),
+        showDate: value.showDate,
+        showSlideNumber: value.showSlideNumber,
+      }
+      if (value.applyAll) {
+        commitDocument({
+          ...current,
+          slides: current.slides.map((item) => ({ ...item, footer: { ...footer } })),
+        })
+      } else {
+        replaceCurrentSlide({ ...slide, footer })
+      }
+    }
+    setInsertDialog(null)
+  }
+
   const updateSelectedElement = (patch: Partial<PresentationElement>) => {
-    if (selectedElement) patchElement(selectedElement.id, patch)
+    if (!selectedElement) return
+    if (isPresentationRotationLocked(selectedElement) && 'rotation' in patch) {
+      const { rotation: _ignoredRotation, ...supportedPatch } = patch
+      if (Object.keys(supportedPatch).length > 0) patchElement(selectedElement.id, supportedPatch)
+      return
+    }
+    patchElement(selectedElement.id, patch)
   }
 
   const moveSelectedElement = (direction: 'front' | 'back') => {
@@ -819,6 +1656,47 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
 
   const previewWidth = compact ? 78 : 126
   const exportedPath = exportedPaths[document.id]
+  const insertDialogElement = insertDialog?.elementId
+    ? currentSlide?.elements.find((element) => element.id === insertDialog.elementId)
+    : undefined
+  let insertDialogInitialValue: PresentationInsertDialogValue | null = null
+  if (insertDialog?.kind === 'table' && insertDialogElement && isPresentationTableElement(insertDialogElement)) {
+    insertDialogInitialValue = {
+      kind: 'table',
+      rows: insertDialogElement.cells.length,
+      columns: Math.max(1, ...insertDialogElement.cells.map((row) => row.length)),
+      cells: insertDialogElement.cells.map((row) => [...row]),
+    }
+  } else if (insertDialog?.kind === 'chart' && insertDialogElement && isPresentationChartElement(insertDialogElement)) {
+    insertDialogInitialValue = {
+      kind: 'chart',
+      chartType: insertDialogElement.chartType,
+      title: insertDialogElement.title ?? '',
+      categories: [...insertDialogElement.categories],
+      series: insertDialogElement.series.map((series) => ({ name: series.name, values: [...series.values] })),
+    }
+  } else if (insertDialog?.kind === 'link') {
+    const hyperlink = insertDialogElement?.hyperlink
+    let label = t('session.presentation.link')
+    if (insertDialogElement && isPresentationTextElement(insertDialogElement)) label = insertDialogElement.text
+    else if (insertDialogElement && isPresentationImageElement(insertDialogElement)) label = insertDialogElement.altText
+    insertDialogInitialValue = {
+      kind: 'link',
+      targetType: hyperlink?.type ?? 'url',
+      url: hyperlink?.type === 'url' ? hyperlink.url : 'https://',
+      slideId: hyperlink?.type === 'slide' ? hyperlink.slideId : document.slides[0]?.id ?? '',
+      label,
+      tooltip: hyperlink?.tooltip ?? '',
+    }
+  } else if (insertDialog?.kind === 'footer') {
+    insertDialogInitialValue = {
+      kind: 'footer',
+      text: currentSlide?.footer?.text ?? '',
+      showDate: currentSlide?.footer?.showDate ?? false,
+      showSlideNumber: currentSlide?.footer?.showSlideNumber ?? true,
+      applyAll: true,
+    }
+  }
   let exportLabel = t('session.presentation.export')
   if (exportState === 'exporting') exportLabel = t('session.presentation.exporting')
   else if (exportState === 'saved') exportLabel = t('session.presentation.exported')
@@ -966,6 +1844,13 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         onApplyTransitionToAll={applyCurrentTransitionToAll}
         onApplyFormat={patchElement}
         onFindText={findText}
+        onInsertAudio={() => audioInputRef.current?.click()}
+        onInsertChart={() => setInsertDialog({ kind: 'chart' })}
+        onInsertFooter={() => setInsertDialog({ kind: 'footer' })}
+        onInsertImage={() => imageInputRef.current?.click()}
+        onInsertLink={openLinkDialog}
+        onInsertTable={() => setInsertDialog({ kind: 'table' })}
+        onInsertVideo={() => videoInputRef.current?.click()}
         onMoveElement={moveSelectedElement}
         onPreviewAnimation={previewSelectedAnimation}
         onPreviewTransition={previewTransition}
@@ -1007,7 +1892,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
                       aria-label={t('session.presentation.slideAria', { index: index + 1, name: slide.name })}
                     >
                       <span className={cn('w-4 shrink-0 pt-0.5 text-right text-2xs text-text-tertiary', slide.id === currentSlide?.id && 'font-semibold text-brand-purple')}>{index + 1}</span>
-                      <SlidePreview slide={slide} width={previewWidth} selected={slide.id === currentSlide?.id} />
+                      <PresentationSlidePreview slide={slide} slideNumber={index + 1} width={previewWidth} selected={slide.id === currentSlide?.id} />
                     </button>
                   ))}
                 </div>
@@ -1038,9 +1923,9 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
                   <div className="absolute inset-0 z-20">
                     <PresentationTransitionPlayer
                       previous={transitionPreviewPreviousSlide
-                        ? <SlidePreview slide={transitionPreviewPreviousSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />
+                        ? <PresentationSlidePreview slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />
                         : <span className="block size-full bg-black" />}
-                      current={<SlidePreview slide={currentSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />}
+                      current={<PresentationSlidePreview slide={currentSlide} slideNumber={currentSlideIndex + 1} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />}
                       transition={transitionPreviewRun.transition}
                       runKey={transitionPreviewRun.runKey}
                       onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
@@ -1061,6 +1946,11 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
               <PresentationInspector
                 currentSlide={currentSlide}
                 selectedElement={selectedElement}
+                onEditElement={(element) => {
+                  if (isPresentationTableElement(element) || isPresentationChartElement(element)) {
+                    setInsertDialog({ kind: element.type, elementId: element.id })
+                  }
+                }}
                 onElementChange={updateSelectedElement}
                 onSlideBackgroundChange={updateSlideBackground}
               />
@@ -1096,12 +1986,45 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         </section>
       </div>
 
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/svg+xml"
+        className="hidden"
+        data-testid="presentation-image-input"
+        onChange={(event) => void insertFile('image', event)}
+      />
+      <input
+        ref={audioInputRef}
+        type="file"
+        accept="audio/mpeg,audio/wav,audio/mp4,audio/ogg"
+        className="hidden"
+        data-testid="presentation-audio-input"
+        onChange={(event) => void insertFile('audio', event)}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/mp4,video/webm,video/quicktime"
+        className="hidden"
+        data-testid="presentation-video-input"
+        onChange={(event) => void insertFile('video', event)}
+      />
+      <PresentationInsertDialogs
+        open={insertDialog?.kind ?? null}
+        initialValue={insertDialogInitialValue}
+        slides={document.slides.map((slide) => ({ id: slide.id, name: slide.name }))}
+        onClose={() => setInsertDialog(null)}
+        onSubmit={submitInsertDialog}
+      />
+
       {slideshowOpen && slideshowSlide ? (
         <SlideshowOverlay
           current={slideshowTargetIndex + 1}
           slide={slideshowSlide}
           transitionRun={slideshowTransitionView}
           total={document.slides.length}
+          onActivateHyperlink={activateSlideshowHyperlink}
           onClose={() => {
             setSlideshowOpen(false)
             setSlideshowTransition(null)
@@ -1172,8 +2095,9 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
   )
 }
 
-function SlideshowOverlay({ current, onClose, onNext, onPrevious, onTransitionComplete, slide, total, transitionRun }: {
+function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, slide, total, transitionRun }: {
   current: number
+  onActivateHyperlink: (hyperlink: PresentationHyperlink) => void
   onClose: () => void
   onNext: () => void
   onPrevious: () => void
@@ -1193,15 +2117,15 @@ function SlideshowOverlay({ current, onClose, onNext, onPrevious, onTransitionCo
         <div className="relative h-[540px] w-[960px] shrink-0">
           {transitionRun ? (
             <PresentationTransitionPlayer
-              previous={<SlidePreview slide={transitionRun.previousSlide} width={960} selected={false} presentation />}
-              current={<SlidePreview slide={transitionRun.currentSlide} width={960} selected={false} presentation />}
+              previous={<PresentationSlidePreview slide={transitionRun.previousSlide} slideNumber={transitionRun.fromIndex + 1} width={960} selected={false} presentation suppressMediaPlayback onActivateHyperlink={onActivateHyperlink} />}
+              current={<PresentationSlidePreview slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} width={960} selected={false} presentation suppressMediaPlayback onActivateHyperlink={onActivateHyperlink} />}
               transition={transitionRun.transition}
               runKey={transitionRun.runKey}
               direction={transitionRun.direction}
               onComplete={onTransitionComplete}
               className="size-full"
             />
-          ) : <SlidePreview slide={slide} width={960} selected={false} presentation />}
+          ) : <PresentationSlidePreview slide={slide} slideNumber={current} width={960} selected={false} presentation onActivateHyperlink={onActivateHyperlink} />}
         </div>
       </div>
       <div className="flex h-10 shrink-0 items-center justify-center gap-4">
@@ -1264,11 +2188,13 @@ function AnimationInspector({ onClose, onElementChange, selectedElement }: {
 function PresentationInspector({
   currentSlide,
   selectedElement,
+  onEditElement,
   onElementChange,
   onSlideBackgroundChange,
 }: {
   currentSlide: PresentationSlide | undefined
   selectedElement: PresentationElement | null
+  onEditElement: (element: PresentationElement) => void
   onElementChange: (patch: Partial<PresentationElement>) => void
   onSlideBackgroundChange: (event: ChangeEvent<HTMLInputElement>) => void
 }) {
@@ -1280,14 +2206,21 @@ function PresentationInspector({
       </h3>
       {selectedElement ? (
         <div className="space-y-3">
-          <ColorField
-            label={t(isTextElement(selectedElement) ? 'session.presentation.textColor' : 'session.presentation.fill')}
-            value={isTextElement(selectedElement) ? selectedElement.color : selectedElement.fill}
-            onChange={(value) => onElementChange(isTextElement(selectedElement)
-              ? { color: value }
-              : { fill: value })}
-          />
-          {isTextElement(selectedElement) ? (
+          {isPresentationTextElement(selectedElement) ? (
+            <ColorField
+              label={t('session.presentation.textColor')}
+              value={selectedElement.color}
+              onChange={(value) => onElementChange({ color: value })}
+            />
+          ) : null}
+          {isPresentationShapeElement(selectedElement) ? (
+            <ColorField
+              label={t('session.presentation.fill')}
+              value={selectedElement.fill}
+              onChange={(value) => onElementChange({ fill: value })}
+            />
+          ) : null}
+          {isPresentationTextElement(selectedElement) ? (
             <div className="grid grid-cols-[1fr_72px] gap-2">
               <label className="block min-w-0 text-2xs font-medium text-text-tertiary">
                 {t('session.presentation.fontFamily')}
@@ -1313,17 +2246,96 @@ function PresentationInspector({
               />
             </div>
           ) : null}
+          {isPresentationImageElement(selectedElement) ? (
+            <div className="space-y-2">
+              <label className="block text-2xs font-medium text-text-tertiary">
+                {t('session.presentation.insertDialog.imageFit')}
+                <select
+                  value={selectedElement.fit}
+                  onChange={(event) => onElementChange({ fit: event.target.value as PresentationImageElement['fit'] } as Partial<PresentationImageElement>)}
+                  className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-1.5 text-xs text-text-primary outline-none focus:border-brand-purple"
+                >
+                  <option value="contain">{t('session.presentation.insertDialog.contain')}</option>
+                  <option value="cover">{t('session.presentation.insertDialog.cover')}</option>
+                </select>
+              </label>
+              <label className="block text-2xs font-medium text-text-tertiary">
+                {t('session.presentation.insertDialog.imageAltText')}
+                <input
+                  value={selectedElement.altText}
+                  onChange={(event) => onElementChange({ altText: event.target.value } as Partial<PresentationImageElement>)}
+                  className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-2 text-xs text-text-primary outline-none focus:border-brand-purple"
+                />
+              </label>
+            </div>
+          ) : null}
+          {isPresentationMediaElement(selectedElement) ? (
+            <div className="space-y-2 rounded-md border border-border-subtle bg-bg-app/55 p-2">
+              <InspectorCheckbox
+                checked={selectedElement.autoplay}
+                label={t('session.presentation.insertDialog.autoplay')}
+                onChange={(checked) => onElementChange({ autoplay: checked } as Partial<PresentationMediaElement>)}
+              />
+              <InspectorCheckbox
+                checked={selectedElement.loop}
+                label={t('session.presentation.insertDialog.loop')}
+                onChange={(checked) => onElementChange({ loop: checked } as Partial<PresentationMediaElement>)}
+              />
+              <InspectorCheckbox
+                checked={selectedElement.muted}
+                label={t('session.presentation.insertDialog.muted')}
+                onChange={(checked) => onElementChange({ muted: checked } as Partial<PresentationMediaElement>)}
+              />
+              <p className="text-[10px] leading-4 text-text-tertiary">
+                {t('session.presentation.insertDialog.playbackSettingsAppOnly')}
+              </p>
+            </div>
+          ) : null}
+          {isPresentationTableElement(selectedElement) ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <ColorField label={t('session.presentation.insertDialog.headerFill')} value={selectedElement.headerFill} onChange={(value) => onElementChange({ headerFill: value } as Partial<PresentationTableElement>)} />
+                <ColorField label={t('session.presentation.insertDialog.bodyFill')} value={selectedElement.bodyFill} onChange={(value) => onElementChange({ bodyFill: value } as Partial<PresentationTableElement>)} />
+              </div>
+              <button type="button" onClick={() => onEditElement(selectedElement)} className="h-8 w-full rounded-md border border-border-default text-xs font-medium text-text-secondary hover:bg-bg-hover">
+                {t('session.presentation.insertDialog.editData')}
+              </button>
+            </div>
+          ) : null}
+          {isPresentationChartElement(selectedElement) ? (
+            <div className="space-y-2">
+              <InspectorCheckbox
+                checked={selectedElement.showLegend}
+                label={t('session.presentation.insertDialog.showLegend')}
+                onChange={(checked) => onElementChange({ showLegend: checked } as Partial<typeof selectedElement>)}
+              />
+              <button type="button" onClick={() => onEditElement(selectedElement)} className="h-8 w-full rounded-md border border-border-default text-xs font-medium text-text-secondary hover:bg-bg-hover">
+                {t('session.presentation.insertDialog.editData')}
+              </button>
+            </div>
+          ) : null}
+          {selectedElement.hyperlink ? (
+            <button
+              type="button"
+              onClick={() => onElementChange({ hyperlink: undefined })}
+              className="h-8 w-full rounded-md border border-border-default text-xs font-medium text-text-secondary hover:bg-bg-hover"
+            >
+              {t('session.presentation.insertDialog.removeLink')}
+            </button>
+          ) : null}
           <div className="grid grid-cols-2 gap-2">
             <NumberField label="X" value={selectedElement.x} onChange={(value) => onElementChange({ x: value })} />
             <NumberField label="Y" value={selectedElement.y} onChange={(value) => onElementChange({ y: value })} />
             <NumberField label={t('session.presentation.width')} value={selectedElement.width} min={8} onChange={(value) => onElementChange({ width: value })} />
             <NumberField label={t('session.presentation.height')} value={selectedElement.height} min={8} onChange={(value) => onElementChange({ height: value })} />
           </div>
-          <NumberField
-            label={t('session.presentation.rotation')}
-            value={selectedElement.rotation}
-            onChange={(value) => onElementChange({ rotation: value })}
-          />
+          {!isPresentationRotationLocked(selectedElement) ? (
+            <NumberField
+              label={t('session.presentation.rotation')}
+              value={selectedElement.rotation}
+              onChange={(value) => onElementChange({ rotation: value })}
+            />
+          ) : null}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1344,113 +2356,6 @@ function PresentationInspector({
         </div>
       )}
     </aside>
-  )
-}
-
-function SlidePreview({ slide, width, selected, presentation = false }: { slide: PresentationSlide; width: number; selected: boolean; presentation?: boolean }) {
-  const scale = width / PRESENTATION_WIDTH
-  return (
-    <span
-      className={cn(
-        'relative block shrink-0 overflow-hidden bg-white',
-        presentation ? 'rounded-sm shadow-[0_24px_72px_rgba(0,0,0,0.5)]' : 'rounded border shadow-sm',
-        !presentation && (selected ? 'border-brand-purple ring-1 ring-brand-purple/25' : 'border-border-default'),
-      )}
-      style={{ width, height: width * (PRESENTATION_HEIGHT / PRESENTATION_WIDTH) }}
-      aria-hidden="true"
-    >
-      <span
-        className="absolute left-0 top-0 block origin-top-left overflow-hidden"
-        style={{
-          width: PRESENTATION_WIDTH,
-          height: PRESENTATION_HEIGHT,
-          transform: `scale(${scale})`,
-          backgroundColor: slide.background,
-        }}
-      >
-        {slide.elements.map((element) => (
-          element.type === 'text' ? (
-            <span
-              key={element.id}
-              className="absolute block whitespace-pre-wrap overflow-hidden"
-              style={{
-                left: element.x,
-                top: element.y,
-                width: element.width,
-                height: element.height,
-                transform: `rotate(${element.rotation}deg)`,
-                transformOrigin: 'top left',
-                color: element.color,
-                fontFamily: element.fontFamily,
-                fontSize: element.fontSize,
-                fontWeight: element.fontWeight,
-                fontStyle: element.italic ? 'italic' : 'normal',
-                lineHeight: element.lineHeight ?? 1.08,
-                textAlign: element.align,
-                textDecoration: [
-                  element.underline ? 'underline' : '',
-                  element.strikethrough ? 'line-through' : '',
-                ].filter(Boolean).join(' ') || undefined,
-                textShadow: element.shadow ? '5px 6px 12px rgba(20, 20, 32, 0.28)' : undefined,
-                backgroundColor: element.highlightColor,
-                letterSpacing: `${(element.characterSpacing ?? 0) / 1000}em`,
-                paddingLeft: (element.indentLevel ?? 0) * 16,
-              }}
-            >
-              {formatPresentationText(element)}
-            </span>
-          ) : <SlideShapePreview key={element.id} element={element} />
-        ))}
-      </span>
-    </span>
-  )
-}
-
-function SlideShapePreview({ element }: { element: PresentationShapeElement }) {
-  const definition = getPresentationShapeDefinition(element.type)
-  const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
-  const shape = element.type === 'rect' || element.type === 'roundRect' ? (
-    <rect
-      x="0"
-      y="0"
-      width="100"
-      height="100"
-      rx={element.type === 'roundRect' ? 12 : Math.min(50, ((element.radius ?? 0) / element.width) * 100)}
-      ry={element.type === 'roundRect' ? 12 : Math.min(50, ((element.radius ?? 0) / element.height) * 100)}
-      fill={element.fill}
-      stroke={element.borderColor}
-      strokeWidth={element.borderWidth}
-      vectorEffect="non-scaling-stroke"
-    />
-  ) : (
-    <path
-      d={definition.path}
-      fill={strokeOnly ? 'none' : element.fill}
-      fillRule="evenodd"
-      stroke={element.borderColor}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth}
-      vectorEffect="non-scaling-stroke"
-    />
-  )
-  return (
-    <svg
-      className="absolute block overflow-visible"
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      style={{
-        left: element.x,
-        top: element.y,
-        width: element.width,
-        height: element.height,
-        transform: `rotate(${element.rotation}deg)`,
-        transformOrigin: 'top left',
-        filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
-      }}
-    >
-      {shape}
-    </svg>
   )
 }
 
@@ -1477,6 +2382,24 @@ function MiniButton({ children, disabled, label, onClick }: {
 
 function PresentationControlTooltip({ children, content, placement = 'auto' }: { children: ReactElement; content: ReactNode; placement?: 'auto' | 'bottom' }) {
   return <Tooltip appearance="presentation" content={content} delayMs={0} placement={placement}>{children}</Tooltip>
+}
+
+function InspectorCheckbox({ checked, label, onChange }: {
+  checked: boolean
+  label: string
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs text-text-secondary">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="size-3.5 accent-brand-purple"
+      />
+      {label}
+    </label>
+  )
 }
 
 function NumberField({ label, min, value, onChange }: {

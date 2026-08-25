@@ -75,6 +75,7 @@ import type {
 } from '@/atoms/presentation'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import { isPresentationShapeElement } from '@/lib/presentationInsert'
 import { getPresentationShapeName, isPresentationLineShape, presentationShapeCategories } from '@/lib/presentationShapes'
 import {
   changePresentationTransitionEffect,
@@ -111,6 +112,13 @@ interface PresentationRibbonProps {
   onApplyTransitionToAll: () => void
   onApplyFormat: (elementId: string, patch: Partial<PresentationElement>) => void
   onFindText: (query: string) => void
+  onInsertAudio: () => void
+  onInsertChart: () => void
+  onInsertFooter: () => void
+  onInsertImage: () => void
+  onInsertLink: () => void
+  onInsertTable: () => void
+  onInsertVideo: () => void
   onMoveElement: (direction: 'front' | 'back') => void
   onPreviewAnimation: () => void
   onPreviewTransition: (transitionOverride?: PresentationTransition) => void
@@ -199,6 +207,13 @@ export function PresentationRibbon({
   onApplyTransitionToAll,
   onApplyFormat,
   onFindText,
+  onInsertAudio,
+  onInsertChart,
+  onInsertFooter,
+  onInsertImage,
+  onInsertLink,
+  onInsertTable,
+  onInsertVideo,
   onMoveElement,
   onPreviewAnimation,
   onPreviewTransition,
@@ -246,9 +261,12 @@ export function PresentationRibbon({
 
   useEffect(() => {
     if (!formatPainter || !selectedElement || selectedElement.id === formatPainter.sourceId) return
+    let targetType: 'text' | 'shape' | null = null
+    if (selectedElement.type === 'text') targetType = 'text'
+    else if (isPresentationShapeElement(selectedElement)) targetType = 'shape'
+    if (!targetType) return
     if (appliedFormatTargetRef.current === selectedElement.id) return
     appliedFormatTargetRef.current = selectedElement.id
-    const targetType = selectedElement.type === 'text' ? 'text' : 'shape'
     if (targetType === formatPainter.sourceType) onApplyFormat(selectedElement.id, formatPainter.patch)
     queueMicrotask(() => {
       appliedFormatTargetRef.current = null
@@ -300,6 +318,7 @@ export function PresentationRibbon({
       })
       return
     }
+    if (!isPresentationShapeElement(selectedElement)) return
     setFormatPainter({
       sourceId: selectedElement.id,
       sourceType: 'shape',
@@ -335,6 +354,7 @@ export function PresentationRibbon({
       })
       return
     }
+    if (!isPresentationShapeElement(selectedElement)) return
     onUpdateElement({
       fill: '#8B7CFF',
       borderColor: '#6957D9',
@@ -389,7 +409,7 @@ export function PresentationRibbon({
                 onCopyFormat={copySelectedFormat}
                 onRedo={onRedo}
                 onUndo={onUndo}
-                selected={Boolean(selectedElement)}
+                selected={Boolean(selectedElement && (selectedElement.type === 'text' || isPresentationShapeElement(selectedElement)))}
               />
               <CompactRibbonMenu icon={PlusCircle} label={t('session.presentation.insert')} testId="presentation-compact-insert">
                 <InsertControls onAddShape={onAddShape} onAddSlide={onAddSlide} onAddText={onAddText} />
@@ -417,7 +437,7 @@ export function PresentationRibbon({
                 onCopyFormat={copySelectedFormat}
                 onRedo={onRedo}
                 onUndo={onUndo}
-                selected={Boolean(selectedElement)}
+                selected={Boolean(selectedElement && (selectedElement.type === 'text' || isPresentationShapeElement(selectedElement)))}
               />
               <RibbonGroup label={t('session.presentation.insert')}>
                 <InsertControls onAddShape={onAddShape} onAddSlide={onAddSlide} onAddText={onAddText} />
@@ -448,13 +468,13 @@ export function PresentationRibbon({
               <ShapePickerButton onAddShape={onAddShape} />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.content')}>
-              <RibbonAction icon={Image} label={t('session.presentation.image')} onClick={() => runMock(t('session.presentation.image'))} />
-              <RibbonAction icon={AudioLines} label={t('session.presentation.audio')} onClick={() => runMock(t('session.presentation.audio'))} />
-              <RibbonAction icon={Video} label={t('session.presentation.video')} onClick={() => runMock(t('session.presentation.video'))} />
-              <RibbonAction dropdown icon={Table2} label={t('session.presentation.table')} onClick={() => runMock(t('session.presentation.table'))} />
-              <RibbonAction icon={Link2} label={t('session.presentation.link')} onClick={() => runMock(t('session.presentation.link'))} />
-              <RibbonAction dropdown icon={BarChart3} label={t('session.presentation.chart')} onClick={() => runMock(t('session.presentation.chart'))} />
-              <RibbonAction icon={StickyNote} label={t('session.presentation.footer')} onClick={() => runMock(t('session.presentation.footer'))} />
+              <RibbonAction icon={Image} label={t('session.presentation.image')} onClick={onInsertImage} testId="presentation-insert-image" />
+              <RibbonAction icon={AudioLines} label={t('session.presentation.audio')} onClick={onInsertAudio} testId="presentation-insert-audio" />
+              <RibbonAction icon={Video} label={t('session.presentation.video')} onClick={onInsertVideo} testId="presentation-insert-video" />
+              <RibbonAction icon={Table2} label={t('session.presentation.table')} onClick={onInsertTable} testId="presentation-insert-table" />
+              <RibbonAction icon={Link2} label={t('session.presentation.link')} onClick={onInsertLink} testId="presentation-insert-link" />
+              <RibbonAction icon={BarChart3} label={t('session.presentation.chart')} onClick={onInsertChart} testId="presentation-insert-chart" />
+              <RibbonAction icon={StickyNote} label={t('session.presentation.footer')} onClick={onInsertFooter} testId="presentation-insert-footer" />
             </RibbonGroup>
           </>
         ) : null}
@@ -832,7 +852,7 @@ function ObjectControls({ inspectorOpen, selectedElement, onMoveElement, onToggl
   onUpdateElement: (patch: Partial<PresentationElement>) => void
 }) {
   const { t } = useTranslation()
-  const shape = selectedElement && selectedElement.type !== 'text' ? selectedElement : null
+  const shape = selectedElement && isPresentationShapeElement(selectedElement) ? selectedElement : null
   return (
     <div className="grid grid-cols-4 content-center gap-0.5 px-1">
       <FormatButton label={t('session.presentation.bringToFront')} disabled={!selectedElement} onClick={() => onMoveElement('front')}><BringToFront className="size-4" /></FormatButton>
@@ -1003,20 +1023,20 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
   selectedElement: PresentationElement | null
 }) {
   const { t } = useTranslation()
-  const shape = selectedElement?.type !== 'text' ? selectedElement : null
+  const shape = selectedElement && isPresentationShapeElement(selectedElement) ? selectedElement : null
   const text = selectedElement?.type === 'text' ? selectedElement : null
   const presets = ['#20202B', '#4D7CFE', '#E17B47', '#74777F', '#F2B91F', '#54A8DC', '#64A45B']
   const applyPreset = (color: string) => {
     if (!selectedElement) return
     if (selectedElement.type === 'text') onUpdateElement({ color })
-    else onUpdateElement({ borderColor: color, borderWidth: Math.max(1, selectedElement.borderWidth) })
+    else if (isPresentationShapeElement(selectedElement)) onUpdateElement({ borderColor: color, borderWidth: Math.max(1, selectedElement.borderWidth) })
   }
   return (
     <>
       <RibbonGroup label={t('session.presentation.history')}>
         <div className="grid grid-cols-2 gap-0.5 px-1">
           <FormatButton disabled={!canUndo} label={t('session.presentation.undo')} onClick={onUndo}><Undo2 className="size-4" /></FormatButton>
-          <FormatButton disabled={!selectedElement} label={t('session.presentation.formatPainter')} onClick={onCopyFormat} pressed={formatPainterActive}><Paintbrush className="size-4" /></FormatButton>
+          <FormatButton disabled={!text && !shape} label={t('session.presentation.formatPainter')} onClick={onCopyFormat} pressed={formatPainterActive}><Paintbrush className="size-4" /></FormatButton>
           <FormatButton disabled={!canRedo} label={t('session.presentation.redo')} onClick={onRedo}><Redo2 className="size-4" /></FormatButton>
         </div>
       </RibbonGroup>
@@ -1027,7 +1047,7 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
       <RibbonGroup label={t('session.presentation.shapeStyles')} wide>
         <div className="flex items-center gap-1 px-1">
           {presets.map((color) => (
-            <button key={color} type="button" disabled={!selectedElement} onClick={() => applyPreset(color)} aria-label={t('session.presentation.applyStyle')} className="flex h-12 w-10 items-center justify-center rounded-md border border-border-subtle bg-bg-surface disabled:opacity-35">
+            <button key={color} type="button" disabled={!text && !shape} onClick={() => applyPreset(color)} aria-label={t('session.presentation.applyStyle')} className="flex h-12 w-10 items-center justify-center rounded-md border border-border-subtle bg-bg-surface disabled:opacity-35">
               <span className="flex size-7 items-center justify-center rounded border-2 text-sm" style={{ borderColor: color }}>A</span>
             </button>
           ))}

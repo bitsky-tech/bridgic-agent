@@ -9,6 +9,16 @@ export type PresentationAnimationEffect = 'none' | 'appear' | 'fade' | 'flyIn' |
 export type PresentationTransitionEffect = 'none' | 'fade' | 'push' | 'wipe' | 'reveal' | 'cover' | 'zoom' | 'flip' | 'cube'
 export type PresentationTransitionDirection = 'left' | 'right' | 'up' | 'down' | 'in' | 'out'
 
+export type PresentationHyperlink =
+  | { type: 'url'; url: string; tooltip?: string }
+  | { type: 'slide'; slideId: string; tooltip?: string }
+
+export interface PresentationFileSource {
+  dataUrl: string
+  fileName: string
+  mimeType: string
+}
+
 export interface PresentationTransition {
   effect: PresentationTransitionEffect
   durationMs: number
@@ -113,6 +123,7 @@ export interface PresentationElementBase {
   animation?: PresentationAnimationEffect
   animationDuration?: number
   shadow?: boolean
+  hyperlink?: PresentationHyperlink
 }
 
 export interface PresentationTextElement extends PresentationElementBase {
@@ -142,7 +153,72 @@ export interface PresentationShapeElement extends PresentationElementBase {
   radius?: number
 }
 
-export type PresentationElement = PresentationTextElement | PresentationShapeElement
+export interface PresentationImageElement extends PresentationElementBase {
+  type: 'image'
+  source: PresentationFileSource
+  altText: string
+  fit: 'contain' | 'cover'
+}
+
+export interface PresentationAudioElement extends PresentationElementBase {
+  type: 'audio'
+  source: PresentationFileSource
+  autoplay: boolean
+  loop: boolean
+  muted: boolean
+}
+
+export interface PresentationVideoElement extends PresentationElementBase {
+  type: 'video'
+  source: PresentationFileSource
+  autoplay: boolean
+  loop: boolean
+  muted: boolean
+}
+
+export type PresentationMediaElement = PresentationAudioElement | PresentationVideoElement
+
+export interface PresentationTableElement extends PresentationElementBase {
+  type: 'table'
+  cells: string[][]
+  headerRow: boolean
+  headerFill: string
+  bodyFill: string
+  textColor: string
+  borderColor: string
+  fontSize: number
+}
+
+export type PresentationChartType = 'column' | 'bar' | 'line' | 'pie' | 'doughnut'
+
+export interface PresentationChartSeries {
+  name: string
+  values: number[]
+}
+
+export interface PresentationChartElement extends PresentationElementBase {
+  type: 'chart'
+  chartType: PresentationChartType
+  categories: string[]
+  series: PresentationChartSeries[]
+  showLegend: boolean
+  title?: string
+  colors: string[]
+}
+
+export type PresentationElement =
+  | PresentationTextElement
+  | PresentationShapeElement
+  | PresentationImageElement
+  | PresentationMediaElement
+  | PresentationTableElement
+  | PresentationChartElement
+
+export interface PresentationFooter {
+  text: string
+  showDate: boolean
+  showSlideNumber: boolean
+}
 
 /** Add visual list markers while keeping the underlying editable text marker-free. */
 export function formatPresentationText(element: PresentationTextElement): string {
@@ -169,6 +245,7 @@ export interface PresentationSlide {
   background: string
   elements: PresentationElement[]
   notes?: string
+  footer?: PresentationFooter
   transition: PresentationTransition
 }
 

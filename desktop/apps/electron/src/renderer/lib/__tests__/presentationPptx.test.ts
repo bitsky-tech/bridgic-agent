@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import {
   createBlankPresentationSlide,
   createInitialPresentationDocument,
+  type PresentationElement,
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { createPresentationPptx } from '../presentationPptx'
@@ -92,6 +93,248 @@ describe('createPresentationPptx', () => {
     expect(firstSlideXml).toContain('<a:tailEnd type="arrow"')
     const firstNotesXml = await archive.file('ppt/notesSlides/notesSlide1.xml')?.async('text')
     expect(firstNotesXml).toContain('Speaker note exported from Bridgic.')
+  })
+
+  it('exports hyperlinks, embedded media, editable tables and charts, and slide footers', async () => {
+    const document = createInitialPresentationDocument()
+    const sourceSlide = document.slides[0]!
+    const targetSlide = document.slides[1]!
+    const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5QAAAABJRU5ErkJggg=='
+    const chartTypes = ['column', 'bar', 'line', 'pie', 'doughnut'] as const
+    const elements: PresentationElement[] = [
+      {
+        id: 'linked-text',
+        type: 'text',
+        x: 30,
+        y: 30,
+        width: 240,
+        height: 50,
+        rotation: 0,
+        text: 'External link',
+        fontSize: 20,
+        fontFamily: 'Aptos',
+        fontWeight: 600,
+        color: '#20202B',
+        align: 'left',
+        hyperlink: {
+          type: 'url',
+          url: 'https://example.com/docs?a=1&b=2',
+          tooltip: 'Read the docs',
+        },
+      },
+      {
+        id: 'linked-shape',
+        type: 'rect',
+        x: 285,
+        y: 30,
+        width: 100,
+        height: 50,
+        rotation: 0,
+        fill: '#6957D9',
+        borderColor: '#4433AA',
+        borderWidth: 1,
+        hyperlink: { type: 'slide', slideId: targetSlide.id, tooltip: 'Next slide' },
+      },
+      {
+        id: 'linked-image',
+        type: 'image',
+        x: 400,
+        y: 30,
+        width: 120,
+        height: 80,
+        rotation: 15,
+        source: { dataUrl: pngDataUrl, fileName: 'pixel.png', mimeType: 'image/png' },
+        altText: 'Tiny preview',
+        fit: 'cover',
+        hyperlink: { type: 'url', url: 'https://example.com/image?a=1&b=2' },
+      },
+      {
+        id: 'contained-image',
+        type: 'image',
+        x: 530,
+        y: 30,
+        width: 50,
+        height: 80,
+        rotation: 0,
+        source: { dataUrl: pngDataUrl, fileName: 'contained.png', mimeType: 'image/png' },
+        altText: 'Contained preview',
+        fit: 'contain',
+      },
+      {
+        id: 'embedded-audio',
+        type: 'audio',
+        x: 30,
+        y: 120,
+        width: 260,
+        height: 60,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
+          fileName: 'sample.mp3',
+          mimeType: 'audio/mpeg',
+        },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
+        id: 'embedded-video',
+        type: 'video',
+        x: 310,
+        y: 120,
+        width: 260,
+        height: 145,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+          fileName: 'sample.mp4',
+          mimeType: 'video/mp4',
+        },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
+        id: 'editable-table',
+        type: 'table',
+        x: 590,
+        y: 30,
+        width: 640,
+        height: 220,
+        rotation: 0,
+        cells: [
+          ['Name', 'Q1', 'Q2'],
+          ['North', '12', '18'],
+          ['South', '9', '14'],
+        ],
+        headerRow: true,
+        headerFill: '#6957D9',
+        bodyFill: '#FFFFFF',
+        textColor: '#20202B',
+        borderColor: '#D8D9E0',
+        fontSize: 14,
+      },
+      ...chartTypes.map((chartType, index): PresentationElement => ({
+        id: `editable-chart-${chartType}`,
+        type: 'chart',
+        chartType,
+        x: 30 + index * 245,
+        y: 290,
+        width: 225,
+        height: 300,
+        rotation: 0,
+        categories: ['Jan', 'Feb', 'Mar'],
+        series: [
+          { name: 'Revenue', values: [12, 19, 15] },
+          { name: 'Costs', values: [8, 11, 10] },
+          { name: 'Margin', values: [4, 8, 5] },
+        ],
+        showLegend: true,
+        title: `${chartType} chart`,
+        colors: ['#6957D9', '#2F8B78'],
+      })),
+    ]
+    sourceSlide.elements = elements
+    sourceSlide.transition = { effect: 'fade', durationMs: 750 }
+    sourceSlide.footer = {
+      text: 'Bridgic confidential',
+      showDate: true,
+      showSlideNumber: true,
+    }
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const slideXml = await readSlideXml(archive, 1)
+    const slideRelationships = await archive.file('ppt/slides/_rels/slide1.xml.rels')?.async('text')
+    if (!slideRelationships) throw new Error('Missing slide relationships')
+
+    expect(slideXml).toContain('descr="Tiny preview"')
+    expect(slideXml).toContain('descr="Contained preview"')
+    expect(slideXml).toContain('rot="900000"')
+    expect(slideXml).toMatch(/<a:srcRect l="0" r="0" t="\d+" b="\d+"\/>/)
+    expect(slideXml).toMatch(/<a:srcRect l="0" r="0" t="-\d+" b="-\d+"\/>/)
+    expect(slideXml).toContain('<a:tbl>')
+    expect(slideXml).toContain('<a:audioFile')
+    expect(slideXml).toContain('<a:videoFile')
+    expect(slideXml).toContain('<p:transition spd="med" p14:dur="750"><p:fade/></p:transition>')
+    expect(slideXml).toContain('Bridgic confidential')
+    expect(slideXml).toContain(new Intl.DateTimeFormat().format(new Date()))
+    expect(slideXml).toContain('type="slidenum"')
+    expect(slideRelationships).toContain('relationships/image')
+    expect(slideRelationships).toContain('relationships/audio')
+    expect(slideRelationships).toContain('relationships/video')
+    expect(slideRelationships).toContain('relationships/chart')
+    expect(slideRelationships).toContain('relationships/hyperlink')
+    expect(slideRelationships).toContain('Target="https://example.com/docs?a=1&amp;b=2"')
+    expect(slideRelationships).toContain('Target="https://example.com/image?a=1&amp;b=2"')
+    expect(slideRelationships).toContain('Target="slide2.xml"')
+    expect(slideRelationships.match(/TargetMode="External"/g)?.length).toBe(2)
+
+    const mediaPaths = Object.keys(archive.files).filter((path) => path.startsWith('ppt/media/') && !path.endsWith('/'))
+    expect(mediaPaths.some((path) => path.endsWith('.png'))).toBe(true)
+    expect(mediaPaths.some((path) => path.endsWith('.mp3'))).toBe(true)
+    expect(mediaPaths.some((path) => path.endsWith('.mp4'))).toBe(true)
+    await Promise.all(mediaPaths.map(async (path) => {
+      expect((await archive.file(path)?.async('uint8array'))?.length).toBeGreaterThan(0)
+    }))
+
+    const chartPaths = Object.keys(archive.files).filter((path) => /^ppt\/charts\/chart\d+\.xml$/.test(path))
+    const embeddingPaths = Object.keys(archive.files).filter((path) => /^ppt\/embeddings\/.*\.xlsx$/.test(path))
+    expect(chartPaths).toHaveLength(chartTypes.length)
+    expect(embeddingPaths).toHaveLength(chartTypes.length)
+    const chartXmlFiles = await Promise.all(chartPaths.map(async (path) => archive.file(path)!.async('text')))
+    const chartXml = chartXmlFiles.join('\n')
+    expect(chartXml).toContain('<c:barDir val="col"/>')
+    expect(chartXml).toContain('<c:barDir val="bar"/>')
+    expect(chartXml).toContain('<c:lineChart>')
+    expect(chartXml).toContain('<c:pieChart>')
+    expect(chartXml).toContain('<c:doughnutChart>')
+    for (const pieFamilyXml of chartXmlFiles.filter((xml) => xml.includes('<c:pieChart>') || xml.includes('<c:doughnutChart>'))) {
+      expect(pieFamilyXml.match(/<a:srgbClr val="6957D9"\/>/g)?.length).toBeGreaterThanOrEqual(2)
+      expect(pieFamilyXml).toContain('<a:srgbClr val="2F8B78"/>')
+    }
+    await Promise.all(embeddingPaths.map(async (path) => {
+      expect((await archive.file(path)?.async('uint8array'))?.length).toBeGreaterThan(0)
+    }))
+  })
+
+  it('skips malformed legacy elements and dangling hyperlinks without failing export', async () => {
+    const document = createInitialPresentationDocument()
+    const elements = document.slides[0]!.elements as unknown[]
+    elements.push(
+      { id: 'legacy-object', type: 'legacyWidget', x: 10, y: 10, width: 100, height: 100, rotation: 0 },
+      {
+        id: 'broken-image',
+        type: 'image',
+        x: 10,
+        y: 10,
+        width: 100,
+        height: 100,
+        rotation: 0,
+        source: { dataUrl: 'not-a-data-url', fileName: 'broken.png', mimeType: 'image/png' },
+        altText: 'Broken image',
+        fit: 'contain',
+      },
+      {
+        id: 'dangling-shape-link',
+        type: 'rect',
+        x: 10,
+        y: 10,
+        width: 100,
+        height: 100,
+        rotation: 0,
+        fill: '#FFFFFF',
+        borderColor: '#000000',
+        borderWidth: 1,
+        hyperlink: { type: 'slide', slideId: 'missing-slide' },
+      },
+    )
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const slideXml = await readSlideXml(archive, 1)
+    const relationships = await archive.file('ppt/slides/_rels/slide1.xml.rels')?.async('text')
+    expect(slideXml).not.toContain('legacyWidget')
+    expect(slideXml).not.toContain('Broken image')
+    expect(relationships).not.toContain('missing-slide')
   })
 
   it('writes standard transitions with exact duration, fallback speed, direction, and through-black options', async () => {

@@ -16,9 +16,11 @@ import {
 describe('presentation atoms', () => {
   it('gives every generated slide an explicit no-transition default', () => {
     expect(createBlankPresentationSlide('Blank').transition).toEqual({ effect: 'none', durationMs: 1_000 })
-    expect(createInitialPresentationDocument().slides.every((slide) => (
+    const initialDocument = createInitialPresentationDocument()
+    expect(initialDocument.slides.every((slide) => (
       slide.transition.effect === 'none' && slide.transition.durationMs === 1_000
     ))).toBe(true)
+    expect(initialDocument.slides.every((slide) => slide.footer === undefined)).toBe(true)
   })
 
   it('formats list markers for display without polluting editable text', () => {
