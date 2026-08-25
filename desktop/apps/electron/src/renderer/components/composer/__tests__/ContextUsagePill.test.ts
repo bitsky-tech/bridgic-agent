@@ -1,0 +1,42 @@
+import { afterAll, describe, expect, it } from 'bun:test'
+import { GlobalRegistrator } from '@happy-dom/global-registrator'
+
+GlobalRegistrator.register()
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const { act, createElement } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { createStore, Provider } = await import('jotai')
+const { activeSessionIdAtom } = await import('@/atoms/sessions')
+const { ContextUsagePill, formatContextTokens } = await import('../ContextUsagePill')
+
+afterAll(async () => {
+  await GlobalRegistrator.unregister()
+})
+
+describe('formatContextTokens', () => {
+  it('keeps the compact context indicator readable', () => {
+    expect(formatContextTokens(999)).toBe('999')
+    expect(formatContextTokens(12_345)).toBe('12.3k')
+    expect(formatContextTokens(128_000)).toBe('128k')
+    expect(formatContextTokens(1_250_000)).toBe('1.3m')
+  })
+})
+
+describe('ContextUsagePill', () => {
+  it('renders nothing before the session has a context snapshot', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'new-session')
+
+    await act(async () => {
+      root.render(createElement(Provider, { store }, createElement(ContextUsagePill)))
+    })
+
+    expect(host.innerHTML).toBe('')
+    await act(async () => root.unmount())
+    host.remove()
+  })
+})

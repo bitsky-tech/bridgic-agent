@@ -3,7 +3,7 @@ from typing import Any
 
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 
-from src.amphi_agent import AmphiContext, AmphiOTAContext, MainThink
+from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive._harness import make_session
@@ -83,7 +83,13 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     ota_context.stream = stream
     llm = RetryingLlm()
     worker = MainThink(llm)
-    context = AmphiContext(session=make_session(test_sandbox.sessions / "live-round"))
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "live-round"),
+        llm_provider=LlmProvider(
+            model_id="test-model",
+            model_limits={"context": 100, "output": 20},
+        ),
+    )
 
     calls, content = await worker.thinking(ota_context, context)
     record = ota_context.ota_record[-1]
@@ -106,11 +112,26 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     assert record.reasoning_items == [{"id": "reasoning-live"}]
 
     # Check 3: Usage reaches the Turn totals, worker meter, and live event stream once.
-    assert (ota_context.input_tokens, ota_context.output_tokens) == (11, 3)
+    assert (
+        ota_context.context_usage.input_tokens,
+        ota_context.context_usage.output_tokens,
+    ) == (11, 3)
     assert worker.spent_tokens == 14
     assert [event for event in stream.events if event[0] == "usage"] == [
         ("usage", {"input_tokens": 11, "output_tokens": 3})
     ]
+    assert [event for event in stream.events if event[0] == "context_usage"] == [
+        ("context_usage", {
+            "model_id": "test-model",
+            "input_tokens": 11,
+            "output_tokens": 3,
+            "used_tokens": 14,
+            "usable_tokens": 80,
+            "percentage": 17.5,
+            "source": "provider",
+        })
+    ]
+    assert ota_context.context_usage.used_tokens == 14
 
     # Check 4: The open OTA record identifies its cognitive scope and Session-history policy.
     expected_scope = {
@@ -120,6 +141,72 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     }
     assert llm.scope_at_call == expected_scope
     assert record.think_scope == expected_scope
+
+
+async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox: IsolatedPaths) -> None:
+    """Missing provider usage still produces an estimated context snapshot."""
+    class MissingUsageLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            return StreamResult(tool_calls=[], content="Estimated answer", usage=None)
+
+    class EventStream:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        def publish(self, event: str, **payload: Any) -> None:
+            self.events.append((event, payload))
+
+    stream = EventStream()
+    ota_context = AmphiOTAContext(user_input="Estimate this", stream=stream, ota_record=[OTARecord()])
+    worker = MainThink(MissingUsageLlm())
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "estimated-usage"),
+        llm_provider=LlmProvider(
+            model_id="usage-less-model",
+            model_limits={"input": 1_000_000},
+        ),
+    )
+
+    await worker.thinking(ota_context, context)
+
+    events = [payload for event, payload in stream.events if event == "context_usage"]
+    assert len(events) == 1
+    assert events[0]["source"] == "estimated"
+    assert events[0]["model_id"] == "usage-less-model"
+    assert events[0]["input_tokens"] > 0
+    assert events[0]["output_tokens"] > 0
+    assert events[0]["used_tokens"] == events[0]["input_tokens"] + events[0]["output_tokens"]
+    assert ota_context.context_usage.input_tokens == 0
+    assert ota_context.context_usage.output_tokens == 0
+    assert ota_context.context_usage.occupied_input_tokens == events[0]["input_tokens"]
+    assert ota_context.context_usage.occupied_output_tokens == events[0]["output_tokens"]
+
+
+async def test_context_threshold_enters_the_compaction_hook(test_sandbox: IsolatedPaths) -> None:
+    """An over-threshold preflight invokes compaction without changing messages yet."""
+    class ProbeThink(MainThink):
+        compacted = False
+
+        async def compact_messages(self, messages, tools, context):
+            self.compacted = True
+            return None
+
+    worker = ProbeThink()
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "compaction-threshold"),
+        llm_provider=LlmProvider(
+            model_id="small-model",
+            model_limits={"input": 1},
+        ),
+    )
+    messages = await worker.assemble_messages(AmphiOTAContext(user_input="large request"), context)
+
+    ota_context = AmphiOTAContext(user_input="large request")
+    prepared, estimate = await worker._prepare_context_window(messages, [], ota_context, context)
+
+    assert worker.compacted is True
+    assert prepared == messages
+    assert estimate > 1
 
 
 def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:

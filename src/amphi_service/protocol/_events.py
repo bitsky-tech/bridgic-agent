@@ -165,6 +165,32 @@ class UsageEvent(TurnEvent):
 
 
 @dataclass(frozen=True)
+class ContextUsageEvent(TurnEvent):
+    """One model call's post-response context-window occupancy projection."""
+
+    name: ClassVar[str] = "context_usage"
+
+    model_id: str
+    input_tokens: int
+    output_tokens: int
+    used_tokens: int
+    usable_tokens: Optional[int]
+    percentage: Optional[float]
+    source: Literal["provider", "estimated"]
+
+    def payload(self) -> Dict[str, Any]:
+        return {
+            "model_id": self.model_id,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "used_tokens": self.used_tokens,
+            "usable_tokens": self.usable_tokens,
+            "percentage": self.percentage,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
 class StageEvent(TurnEvent):
     """The turn's thinking position moved — the two-layer think loop's position.
 
@@ -610,6 +636,7 @@ __all__ = [
     "ToolResultEvent",
     "LoopAbortEvent",
     "UsageEvent",
+    "ContextUsageEvent",
     "StageEvent",
     "WorkflowProgressEvent",
     "TitleEvent",

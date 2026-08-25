@@ -220,6 +220,17 @@
         "label": "新建调度"
       }
     },
+    "contextUsage": {
+      "estimatedDetail": "当前模型没有返回精确用量，Bridgic 正在使用偏保守的估算。显示值可能会略高于实际占用。",
+      "label": "上下文占用",
+      "pending": "待重算",
+      "pendingDetail": "不同模型计算 token 的方式不同。使用所选模型完成下一次运行后，这里的占比会重新计算。",
+      "providerDetail": "该用量由当前模型返回。",
+      "remaining": "预计还可使用 {{remaining}} token",
+      "unknownCapacity": "当前约使用 {{used}} token，但还不知道这个模型的上下文窗口容量。在模型设置中补充容量后即可显示占比。",
+      "unavailable": "下一次模型调用后会显示上下文用量；只有已知上下文窗口容量时才能计算占比。",
+      "used": "已使用 {{used}} / {{capacity}} token"
+    },
     "emptySession": "请先创建或选择一个会话",
     "model": {
       "clearSearch": "清除搜索",
@@ -1984,6 +1995,7 @@
     "expand": "展开"
   },
   "toast": {
+    "modelContextRecalculation": "已切换到 {{model}}。不同模型计算 token 的方式不同，上下文占比将在下一次运行后重新计算。",
     "scheduleAllRunsStopRequested": "已请求停止「{{name}}」的全部运行",
     "scheduleDeleted": "已删除「{{name}}」",
     "schedulePaused": "已暂停「{{name}}」",

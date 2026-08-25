@@ -258,6 +258,7 @@ class SessionMessagesHandler(BaseHandler):
             ),
             "has_more": has_more,
             "next_before": turns[0].session_ordinal if turns else None,
+            "context_usage": _context_usage(turns) if is_tail_page else None,
             # The trailing turn's thinking position and active Workflow card.
             "thinking_mode": _thinking_mode(turns) if is_tail_page else None,
             "workflow_run": (
@@ -1112,6 +1113,34 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
     if think.get("mode") == "build" and think.get("workflow_id"):
         position["workflow_id"] = think["workflow_id"]
     return position
+
+
+def _context_usage(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any]]:
+    """Latest durable context occupancy, shaped like the live stream event."""
+    for turn in reversed(turns):
+        usage = turn.context_usage
+        if not isinstance(usage, dict):
+            continue
+        if not isinstance(usage.get("model_id"), str):
+            continue
+        if usage.get("source") not in {"provider", "estimated"}:
+            continue
+        if int(usage.get("used_tokens") or 0) <= 0:
+            continue
+        return {
+            "model_id": usage["model_id"],
+            "input_tokens": int(
+                usage.get("occupied_input_tokens", usage.get("input_tokens")) or 0
+            ),
+            "output_tokens": int(
+                usage.get("occupied_output_tokens", usage.get("output_tokens")) or 0
+            ),
+            "used_tokens": int(usage.get("used_tokens") or 0),
+            "usable_tokens": usage.get("usable_tokens"),
+            "percentage": usage.get("percentage"),
+            "source": usage["source"],
+        }
+    return None
 
 
 def _pending_request(turns: Sequence[SessionTurnRecord]) -> Optional[dict]:

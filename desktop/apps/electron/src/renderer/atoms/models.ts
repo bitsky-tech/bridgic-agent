@@ -59,6 +59,7 @@ import {
 import { buildAmphiClient } from './backend'
 import { i18n } from '../lib/i18n'
 import { rlog } from '../lib/logger'
+import { showToastAtom } from './toast'
 
 /**
  * Pure display meta + form presets + base-URL normalization live in
@@ -622,6 +623,7 @@ export const useLocalCodexAtom = atom(
 export const setActiveModelAtom = atom(
   null,
   async (get, set, input: { providerId: string; modelId: string }) => {
+    const previous = get(activeModelAtom)
     const client = buildAmphiClient(get)
     if (!client) {
       const msg = i18n.t('error.backendNotReady')
@@ -635,6 +637,9 @@ export const setActiveModelAtom = atom(
       })
       await set(hydrateModelsAtom)
       set(_lastActionError, null)
+      if (previous && (previous.providerId !== input.providerId || previous.modelId !== input.modelId)) {
+        set(showToastAtom, i18n.t('toast.modelContextRecalculation', { model: input.modelId }))
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       rlog.error('[models] set active model failed', err)

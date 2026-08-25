@@ -5,7 +5,7 @@ import pytest
 from bridgic.amphibious import OTARecord
 from pydantic import ValidationError
 
-from src.amphi_agent import AmphiOTAContext
+from src.amphi_agent import AmphiOTAContext, ContextUsageSnapshot
 from src.amphi_agent._state import (
     AgentState,
     AwaitingBuildConfirm,
@@ -62,6 +62,15 @@ def test_state_round_trip() -> None:
     assert isinstance(ota_context.think_status, WorkflowStageState)
     assert ota_context.interaction_status is None
     assert ota_context.subagent_status is None
+
+
+def test_context_usage_is_the_single_token_state() -> None:
+    """OTA contexts always own one snapshot instead of parallel token fields."""
+    ota_context = AmphiOTAContext()
+
+    assert ota_context.context_usage == ContextUsageSnapshot()
+    assert "input_tokens" not in AmphiOTAContext.model_fields
+    assert "output_tokens" not in AmphiOTAContext.model_fields
 
 
 def test_child_identities() -> None:

@@ -29,8 +29,11 @@ async def seed_turns(session_id: str, token_pairs: Sequence[tuple[int, int]]) ->
             status=TurnStatus.COMPLETED,
             final_answer=f"Answer {ordinal}",
             error=None,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            context_usage={
+                "model_id": "test-model",
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
             model="test-model",
             execution_mode="normal",
         )
@@ -100,6 +103,7 @@ async def test_reset(service_client: httpx.AsyncClient) -> None:
         "pending_request": None,
         "has_more": False,
         "next_before": None,
+        "context_usage": None,
         "thinking_mode": None,
         "workflow_run": None,
         "children": [],

@@ -81,6 +81,37 @@ describe('translateTurnEvent', () => {
     })
   })
 
+  it('maps context usage into the renderer snapshot shape', () => {
+    const { events, warnings } = run([{
+      event: 'context_usage',
+      data: {
+        model_id: 'gpt-test',
+        input_tokens: 60,
+        output_tokens: 10,
+        used_tokens: 70,
+        usable_tokens: 100,
+        percentage: 70,
+        source: 'provider',
+      },
+    }])
+    expect(warnings).toEqual([])
+    expect(events).toEqual([
+      { type: 'message_start', messageId: 'm1', role: 'assistant' },
+      {
+        type: 'context_usage',
+        usage: {
+          modelId: 'gpt-test',
+          inputTokens: 60,
+          outputTokens: 10,
+          usedTokens: 70,
+          usableTokens: 100,
+          percentage: 70,
+          source: 'provider',
+        },
+      },
+    ])
+  })
+
   it('drops empty token text (no text_delta)', () => {
     const { events } = run([{ event: 'token', data: { text: '' } }])
     expect(types(events)).toEqual(['message_start'])

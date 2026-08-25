@@ -44,6 +44,7 @@ import type {
   AgentMessage,
   AgentTurnStatus,
   AskUserQuestion,
+  ContextUsageSnapshot,
   PermissionItem,
   SubAgentMode,
   ThinkPosition,
@@ -693,6 +694,15 @@ const workflowRunFileContentSchema = z.object({
   content: z.string().nullable(),
   truncated: z.boolean().default(false),
 }).passthrough()
+const contextUsageSnapshotSchema = z.object({
+  model_id: z.string(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  used_tokens: z.number(),
+  usable_tokens: z.number().nullable(),
+  percentage: z.number().nullable(),
+  source: z.enum(['provider', 'estimated']),
+})
 const sessionMessagesSchema = z
   .object({
     messages: z.array(z.object({
@@ -704,6 +714,7 @@ const sessionMessagesSchema = z
     // Cursor-pagination envelope (absent on older daemons → no more history).
     has_more: z.boolean().optional(),
     next_before: z.number().nullable().optional(),
+    context_usage: contextUsageSnapshotSchema.nullable().optional(),
     // The suspended session's unanswered ask (banner rehydration); absent /
     // null on idle sessions and older daemons.
     pending_request: z
@@ -805,6 +816,8 @@ export interface SessionTranscript {
   hasMore: boolean
   /** Cursor for the next page (before_ordinal); meaningless when hasMore=false. */
   nextBefore: number | null
+  /** Latest durable context-window occupancy; null before the first model response. */
+  contextUsage: ContextUsageSnapshot | null
   pendingRequest: {
     kind?: string
     prompt?: string
@@ -1324,6 +1337,15 @@ export class AmphiClient {
       messages: AgentMessage[]
       has_more?: boolean
       next_before?: number | null
+      context_usage?: {
+        model_id: string
+        input_tokens: number
+        output_tokens: number
+        used_tokens: number
+        usable_tokens: number | null
+        percentage: number | null
+        source: 'provider' | 'estimated'
+      } | null
       pending_request?: {
         kind?: string
         prompt?: string
@@ -1363,6 +1385,17 @@ export class AmphiClient {
       messages: res.messages,
       hasMore: res.has_more ?? false,
       nextBefore: res.next_before ?? null,
+      contextUsage: res.context_usage
+        ? {
+            modelId: res.context_usage.model_id,
+            inputTokens: res.context_usage.input_tokens,
+            outputTokens: res.context_usage.output_tokens,
+            usedTokens: res.context_usage.used_tokens,
+            usableTokens: res.context_usage.usable_tokens,
+            percentage: res.context_usage.percentage,
+            source: res.context_usage.source,
+          }
+        : null,
       pendingRequest: pending
         ? {
             kind: pending.kind,

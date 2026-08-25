@@ -116,6 +116,17 @@ export interface WorkflowRunState {
   validationSteps: string[]
 }
 
+/** Latest model-call context-window occupancy for one Session. */
+export interface ContextUsageSnapshot {
+  modelId: string
+  inputTokens: number
+  outputTokens: number
+  usedTokens: number
+  usableTokens: number | null
+  percentage: number | null
+  source: 'provider' | 'estimated'
+}
+
 /**
  * Daemon → renderer agent event union. Produced by `translateTurnEvent` from
  * the daemon's WS `TurnEvent` frames; every variant is handled by the reducer.
@@ -133,6 +144,7 @@ export type AgentEvent =
       discardTextChars: number
       discardReasoningChars: number
     }
+  | { type: 'context_usage'; usage: ContextUsageSnapshot }
   | {
       type: 'tool_call'
       messageId: string

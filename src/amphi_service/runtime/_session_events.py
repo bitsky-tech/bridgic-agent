@@ -5,6 +5,7 @@ from typing import Any, AsyncIterator, ClassVar, Deque, Dict, Optional, Set, Typ
 from ..protocol import (
     AcceptRuleRequestEvent,
     BuildConfirmRequestEvent,
+    ContextUsageEvent,
     HumanRequestEvent,
     LoopAbortEvent,
     ModelRetryEvent,
@@ -49,6 +50,7 @@ class SessionEventBroker:
             ToolResultEvent.name: ToolResultEvent,
             LoopAbortEvent.name: LoopAbortEvent,
             UsageEvent.name: UsageEvent,
+            ContextUsageEvent.name: ContextUsageEvent,
             StageEvent.name: StageEvent,
             WorkflowProgressEvent.name: WorkflowProgressEvent,
             WorkflowResultEvent.name: WorkflowResultEvent,

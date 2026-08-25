@@ -1,11 +1,12 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 from bridgic.amphibious import Context, OTAContext
 
 from ._browser import SessionBrowser
 from ._session import Session
 from ._memory import Memory
+from ._llm_provider import LlmProvider
 from ._schedules import ScheduleLibrary
 from ._skills import SkillLibrary
 from ._state import AgentState
@@ -19,12 +20,27 @@ if TYPE_CHECKING:
 else:
     AgentInvocation = Any
 
-__all__ = ["AmphiOTAContext", "AmphiContext"]
+__all__ = ["AmphiOTAContext", "AmphiContext", "ContextUsageSnapshot"]
 
 
 ################################################################################################################
 # Small loop — one arun's observe-think-act working context
 ################################################################################################################
+
+
+class ContextUsageSnapshot(BaseModel):
+    """Provider-reported Turn totals plus the latest call's context occupancy."""
+
+    model_id: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    occupied_input_tokens: int = 0
+    occupied_output_tokens: int = 0
+    used_tokens: int = 0
+    usable_tokens: Optional[int] = None
+    percentage: Optional[float] = None
+    source: Literal["provider", "estimated"] = "estimated"
+    estimated_occupied_tokens: int = 0
 
 
 class AmphiOTAContext(OTAContext):
@@ -38,9 +54,7 @@ class AmphiOTAContext(OTAContext):
     skills_tool_loaded: bool = False
     selected_skill_dirs: List[str] = Field(default_factory=list, exclude=True)
     prompt_time: str = Field(default="", exclude=True)
-
-    input_tokens: int = 0
-    output_tokens: int = 0
+    context_usage: ContextUsageSnapshot = Field(default_factory=ContextUsageSnapshot)
 
     ############################################################################
     # Pipeline state — ``self.state`` is the authority; these are views onto it
@@ -98,6 +112,7 @@ class AmphiContext(Context):
     workspace: Optional[Workspace] = None
     browser: Optional[SessionBrowser] = None
     invocations: Optional[AgentInvocation] = None
+    llm_provider: LlmProvider = Field(default_factory=LlmProvider)
     # User/trusted-Invocation base mode; the active Think may override it at admission time.
     execution_mode: str = "auto"
 

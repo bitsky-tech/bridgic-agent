@@ -53,6 +53,15 @@ const modelRetryDataSchema = z.object({
   discard_text_chars: z.number().int().nonnegative().default(0),
   discard_reasoning_chars: z.number().int().nonnegative().default(0),
 })
+const contextUsageDataSchema = z.object({
+  model_id: z.string(),
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  used_tokens: z.number().int().nonnegative(),
+  usable_tokens: z.number().int().positive().nullable(),
+  percentage: z.number().nonnegative().nullable(),
+  source: z.enum(['provider', 'estimated']),
+})
 const toolDataSchema = z.object({
   tool_id: z.string().optional(),
   name: z.string().optional(),
@@ -215,6 +224,24 @@ export function translateTurnEvent(
         delaySeconds: r.data.delay_seconds,
         discardTextChars: r.data.discard_text_chars,
         discardReasoningChars: r.data.discard_reasoning_chars,
+      })
+      return { events, state: next }
+    }
+    case TURN_EVENT.ContextUsage: {
+      const r = contextUsageDataSchema.safeParse(frame.data)
+      if (!r.success)
+        return { events, state: next, warning: 'context_usage payload invalid — skipped' }
+      events.push({
+        type: 'context_usage',
+        usage: {
+          modelId: r.data.model_id,
+          inputTokens: r.data.input_tokens,
+          outputTokens: r.data.output_tokens,
+          usedTokens: r.data.used_tokens,
+          usableTokens: r.data.usable_tokens,
+          percentage: r.data.percentage,
+          source: r.data.source,
+        },
       })
       return { events, state: next }
     }

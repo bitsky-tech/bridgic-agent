@@ -89,6 +89,8 @@ class Repository(Generic[T]):
          "ALTER TABLE schedules ADD COLUMN locale VARCHAR"),
         ("provider_credentials", "model_limits",
          "ALTER TABLE provider_credentials ADD COLUMN model_limits TEXT NOT NULL DEFAULT '{}'"),
+        ("session_turns", "context_usage",
+         "ALTER TABLE session_turns ADD COLUMN context_usage TEXT NOT NULL DEFAULT '{}'"),
     )
     @classmethod
     async def init_schema(cls) -> None:
@@ -113,6 +115,7 @@ class Repository(Generic[T]):
             if existing and column not in existing:
                 sync_conn.execute(text(ddl))
 
+        cls._migrate_session_turn_usage(sync_conn)
         cls._migrate_legacy_workflow_runs(sync_conn)
         # Repair rows written before the api_key→Codex switch cleared the stale
         # base_url: Codex channels never legitimately carry one, and a leftover
@@ -133,6 +136,54 @@ class Repository(Generic[T]):
             "ON sessions.id = workflow_runs.source_session_id "
             "AND sessions.user_id = workflow_runs.user_id"
         ))
+
+    @staticmethod
+    def _migrate_session_turn_usage(sync_conn: Any) -> None:
+        """Move legacy Turn token columns into the structured usage snapshot."""
+        from sqlalchemy import text
+
+        rows = sync_conn.exec_driver_sql("PRAGMA table_info(session_turns)").all()
+        columns = {row[1] for row in rows}
+        legacy_columns = columns & {"input_tokens", "output_tokens"}
+        if not legacy_columns:
+            return
+
+        input_expression = "input_tokens" if "input_tokens" in columns else "0"
+        output_expression = "output_tokens" if "output_tokens" in columns else "0"
+        stored_rows = sync_conn.exec_driver_sql(
+            "SELECT id, model, context_usage, "
+            f"{input_expression}, {output_expression} FROM session_turns"
+        ).all()
+        for turn_id, model, raw_usage, input_tokens, output_tokens in stored_rows:
+            try:
+                existing_usage = json.loads(raw_usage) if raw_usage else {}
+            except (json.JSONDecodeError, TypeError):
+                existing_usage = {}
+            if not isinstance(existing_usage, dict):
+                existing_usage = {}
+            usage = {
+                "model_id": model or "",
+                "input_tokens": max(0, int(input_tokens or 0)),
+                "output_tokens": max(0, int(output_tokens or 0)),
+                "occupied_input_tokens": 0,
+                "occupied_output_tokens": 0,
+                "used_tokens": 0,
+                "usable_tokens": None,
+                "percentage": None,
+                "source": "estimated",
+                "estimated_occupied_tokens": 0,
+                **existing_usage,
+            }
+            sync_conn.execute(
+                text("UPDATE session_turns SET context_usage = :usage WHERE id = :turn_id"),
+                {"usage": json.dumps(usage, ensure_ascii=False), "turn_id": turn_id},
+            )
+
+        for column in ("input_tokens", "output_tokens"):
+            if column in legacy_columns:
+                sync_conn.exec_driver_sql(
+                    f"ALTER TABLE session_turns DROP COLUMN {column}"
+                )
 
     @staticmethod
     def _migrate_legacy_workflow_runs(sync_conn: Any) -> None:

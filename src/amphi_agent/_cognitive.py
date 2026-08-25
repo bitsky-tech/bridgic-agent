@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from bridgic.core.model.types import Message, Role
 
 from ..amphi_service.i18n import DEFAULT_LOCALE, backend_i18n, detect_locale
 from ..amphi_store import SessionTurnRecord, TurnStatus
-from ._context import AmphiContext, AmphiOTAContext, _view
+from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot, _view
 from ._skills import Skill, SkillGroup
 from ._prompt import (
     CLARIFY_PERSONA,
@@ -61,6 +62,9 @@ logger = logging.getLogger(__name__)
 # prefix. Adapters treat it specially (Anthropic: no cache breakpoint on or after
 # it; OpenAI: the flag is stripped before the wire) and it is never persisted.
 VOLATILE_TAIL_EXTRA = "volatile_tail"
+CONTEXT_COMPACTION_PROVIDER_THRESHOLD = 0.80
+CONTEXT_COMPACTION_ESTIMATED_THRESHOLD = 0.70
+
 
 CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
     "bash",
@@ -276,6 +280,7 @@ class MainThink(CognitiveWorker):
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
+        messages, request_estimate = await self._prepare_context_window(messages, tools, ota_context, context)
         stream = ota_context.stream
         def publish(event: str, **payload: Any) -> None:
             # Keep the in-flight model output on the open OTA round. A user may
@@ -313,11 +318,144 @@ class MainThink(CognitiveWorker):
             extra_body=self.extra_body,
             context=context,
         )
-        self._record_usage(ota_context, result.usage)
+        input_tokens, output_tokens = self._record_usage(ota_context, result.usage)
+        self._record_context_usage(
+            ota_context,
+            context,
+            result,
+            request_estimate,
+            input_tokens,
+            output_tokens,
+        )
         record = ota_context._current_record()
         for key, value in result.capture.items():
             setattr(record, key, value)
         return result.tool_calls, result.content
+
+    @staticmethod
+    def _estimate_request_tokens(messages: Sequence[Message], tools: Sequence[Any]) -> int:
+        """Conservatively estimate final request tokens when no provider counter exists."""
+        def dump(value: Any) -> Any:
+            model_dump = getattr(value, "model_dump", None)
+            return model_dump(mode="json") if callable(model_dump) else value
+
+        payload = {
+            "messages": [dump(message) for message in messages],
+            "tools": [dump(tool) for tool in tools],
+        }
+        byte_count = len(json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8"))
+        return max(1, math.ceil(byte_count / 2) + len(messages) * 12 + len(tools) * 64 + 256)
+
+    @staticmethod
+    def _estimate_result_tokens(result: Any) -> int:
+        """Estimate assistant text and Tool Calls that will enter the next prompt."""
+        payload = {
+            "content": getattr(result, "content", ""),
+            "tool_calls": getattr(result, "tool_calls", []),
+        }
+        byte_count = len(json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8"))
+        return max(1, math.ceil(byte_count / 2))
+
+    def _project_context_usage(self, ota_context: AmphiOTAContext, request_estimate: int, model_id: str) -> Tuple[int, str]:
+        """Combine the last measured occupancy with newly estimated prompt growth."""
+        previous = ota_context.context_usage
+        if previous.used_tokens <= 0 or previous.model_id != model_id:
+            return request_estimate, "estimated"
+        growth = max(0, request_estimate - previous.estimated_occupied_tokens)
+        scale = max(1.0, previous.used_tokens / max(1, previous.estimated_occupied_tokens))
+        projected = previous.used_tokens + math.ceil(growth * scale)
+        return max(request_estimate, projected), previous.source
+
+    async def _prepare_context_window(self, messages: List[Message], tools: List[Any], ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Message], int]:
+        """Run the shared preflight after every worker has assembled its final request."""
+        request_estimate = self._estimate_request_tokens(messages, tools)
+        usable_tokens = context.llm_provider.input_capacity()
+        model_id = context.llm_provider.model_id
+        projected_tokens, source = self._project_context_usage(ota_context, request_estimate, model_id)
+        if usable_tokens is not None:
+            threshold = (
+                CONTEXT_COMPACTION_PROVIDER_THRESHOLD
+                if source == "provider"
+                else CONTEXT_COMPACTION_ESTIMATED_THRESHOLD
+            )
+            if projected_tokens / usable_tokens >= threshold:
+                logger.debug(
+                    "Context compaction threshold reached for %s: projected=%s usable=%s source=%s",
+                    model_id or "(unknown model)",
+                    projected_tokens,
+                    usable_tokens,
+                    source,
+                )
+                compacted = await self.compact_messages(messages, tools, context)
+                if compacted is not None:
+                    messages = compacted
+                    request_estimate = self._estimate_request_tokens(messages, tools)
+        return messages, request_estimate
+
+    async def compact_messages(self, messages: List[Message], tools: List[Any], context: AmphiContext) -> Optional[List[Message]]:
+        # TODO: Compact the oldest complete Session Turn prefix while preserving the current Turn and Tool pairs.
+        pass
+
+    def _record_context_usage(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        result: Any,
+        request_estimate: int,
+        provider_input_tokens: int,
+        provider_output_tokens: int,
+    ) -> None:
+        """Publish the latest context occupancy, falling back to a conservative estimate."""
+        estimated_output = self._estimate_result_tokens(result)
+        has_provider_input = provider_input_tokens > 0
+        input_tokens = provider_input_tokens if has_provider_input else request_estimate
+        output_tokens = provider_output_tokens if provider_output_tokens > 0 else estimated_output
+        source = (
+            "provider"
+            if has_provider_input and provider_output_tokens > 0
+            else "estimated"
+        )
+        used_tokens = input_tokens + output_tokens
+        usable_tokens = context.llm_provider.input_capacity()
+        percentage = (
+            round(used_tokens / usable_tokens * 100, 1)
+            if usable_tokens is not None else None
+        )
+        snapshot = ContextUsageSnapshot(
+            model_id=context.llm_provider.model_id,
+            input_tokens=ota_context.context_usage.input_tokens,
+            output_tokens=ota_context.context_usage.output_tokens,
+            occupied_input_tokens=input_tokens,
+            occupied_output_tokens=output_tokens,
+            used_tokens=used_tokens,
+            usable_tokens=usable_tokens,
+            percentage=percentage,
+            source=source,
+            estimated_occupied_tokens=request_estimate + estimated_output,
+        )
+        ota_context.context_usage = snapshot
+        stream = getattr(ota_context, "stream", None)
+        if stream is not None:
+            stream.publish(
+                "context_usage",
+                model_id=snapshot.model_id,
+                input_tokens=snapshot.occupied_input_tokens,
+                output_tokens=snapshot.occupied_output_tokens,
+                used_tokens=snapshot.used_tokens,
+                usable_tokens=snapshot.usable_tokens,
+                percentage=snapshot.percentage,
+                source=snapshot.source,
+            )
 
     ############################################################################
     # Dynamic prompt assembly
@@ -1254,21 +1392,22 @@ class MainThink(CognitiveWorker):
             out = get("output_tokens")
         return int(inp or 0), int(out or 0)
 
-    def _record_usage(self, ota_context: AmphiOTAContext, usage: Any) -> None:
+    def _record_usage(self, ota_context: AmphiOTAContext, usage: Any) -> Tuple[int, int]:
         """Fold one call's usage into the turn (no-op when zero / missing):
         1. add to ``self.spent_tokens`` (the per-worker meter the automa folds up).
-        2. accumulate ``ota_context.input_tokens`` / ``output_tokens`` (turn totals).
+        2. accumulate token totals in ``ota_context.context_usage``.
         3. publish a live ``usage`` event so the client sees per-call cost.
         """
         inp, out = self._usage_pair(usage)
         if not (inp or out):
-            return
+            return inp, out
         self.spent_tokens += inp + out
-        ota_context.input_tokens += inp
-        ota_context.output_tokens += out
+        ota_context.context_usage.input_tokens += inp
+        ota_context.context_usage.output_tokens += out
         stream = getattr(ota_context, "stream", None)
         if stream is not None:
             stream.publish("usage", input_tokens=inp, output_tokens=out)
+        return inp, out
 
 
 ################################################################################################################

@@ -25,7 +25,7 @@ from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
 from ._browser import BrowserHost
 from ._cognitive import MainThink
 from ._prompt import AGENT_NAME
-from ._context import AmphiContext, AmphiOTAContext
+from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._invocation import (
     AgentInvocation,
     AppEnvironmentStatus,
@@ -40,6 +40,7 @@ from ._invocation import (
 )
 from ._session import Session
 from ._memory import DEFAULT_RECALL_LIMIT, Memory, MemoryItem
+from ._llm_provider import LlmProvider
 from ._schedules import Schedule, ScheduleLibrary
 from ._skills import Skill, SkillGroup, SkillSource, SkillLibrary
 from ._workflow_run import WorkflowRun, WorkflowRunLibrary
@@ -49,6 +50,7 @@ __all__ = [
     # contexts
     "AmphiOTAContext",
     "AmphiContext",
+    "ContextUsageSnapshot",
     # cognitive / agent
     "MainThink",
     "AGENT_NAME",
@@ -71,6 +73,8 @@ __all__ = [
     "MemoryItem",
     "Memory",
     "DEFAULT_RECALL_LIMIT",
+    # model provider
+    "LlmProvider",
     # schedules
     "Schedule",
     "ScheduleLibrary",

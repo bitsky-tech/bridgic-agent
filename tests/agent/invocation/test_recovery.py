@@ -85,8 +85,11 @@ async def test_recover_parent(agent_store: None, agent_model: str, test_sandbox:
             status=status,
             final_answer=final_answer,
             error=error,
-            input_tokens=2,
-            output_tokens=1,
+            context_usage={
+                "model_id": agent_model,
+                "input_tokens": 2,
+                "output_tokens": 1,
+            },
             model=agent_model,
             execution_mode="auto",
             max_rounds=8,
@@ -277,8 +280,7 @@ async def test_delete_parked_tree(agent_store: None, test_sandbox: IsolatedPaths
         status=TurnStatus.AWAITING_SUBAGENTS,
         final_answer=None,
         error=None,
-        input_tokens=1,
-        output_tokens=1,
+        context_usage={"input_tokens": 1, "output_tokens": 1},
     )
     child_turn = await turns.append_result(
         USER_ID,
@@ -299,8 +301,7 @@ async def test_delete_parked_tree(agent_store: None, test_sandbox: IsolatedPaths
         status=TurnStatus.AWAITING_HUMAN,
         final_answer=None,
         error=None,
-        input_tokens=1,
-        output_tokens=1,
+        context_usage={"input_tokens": 1, "output_tokens": 1},
     )
     parent_mount = await mounts.create(
         parent.id,

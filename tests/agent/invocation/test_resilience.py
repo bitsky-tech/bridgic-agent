@@ -82,8 +82,11 @@ async def test_cancel_parked_tree(agent_store: None, agent_model: str, test_sand
         status=TurnStatus.AWAITING_SUBAGENTS,
         final_answer=None,
         error=None,
-        input_tokens=2,
-        output_tokens=1,
+        context_usage={
+            "model_id": agent_model,
+            "input_tokens": 2,
+            "output_tokens": 1,
+        },
         model=agent_model,
     )
     child_turn = await turns.append_result(
@@ -105,8 +108,11 @@ async def test_cancel_parked_tree(agent_store: None, agent_model: str, test_sand
         status=TurnStatus.AWAITING_HUMAN,
         final_answer=None,
         error=None,
-        input_tokens=3,
-        output_tokens=1,
+        context_usage={
+            "model_id": agent_model,
+            "input_tokens": 3,
+            "output_tokens": 1,
+        },
         model=agent_model,
     )
     await sessions.update_turn_projection(
