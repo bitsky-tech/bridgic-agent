@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 from functools import cache
 from pathlib import Path
@@ -16,10 +15,9 @@ from typing import MutableMapping, Optional
 
 from filelock import FileLock, Timeout as FileLockTimeout
 
-from ._errors import BundledRuntimeUnavailable
+from ._errors import BundledRuntimeUnavailable, EnvNotReady
 from ._probe import (
     BaseProbe,
-    UnreadableBaseGuard,
     is_directory,
     is_regular_file,
     probe_base,
@@ -354,7 +352,6 @@ class BundledNodeBaseRuntime:
         self._process_lock = threading.Lock()
         self._node_fingerprint: Optional[tuple[Path, str]] = None
         self._ready = False
-        self._unreadable = UnreadableBaseGuard()
 
     @property
     def modules_dir(self) -> Path:
@@ -390,12 +387,9 @@ class BundledNodeBaseRuntime:
         Path, optional
             Shared base root, or ``None`` when no packaged Node exists.
 
-        Raises
-        ------
-        EnvNotReady
-            While the existing base cannot be read. Rebuilding is only ever the
-            answer to a base that reads as broken; one that stays unreadable
-            past :data:`~._probe.QUARANTINE_GRACE_SEC` is moved aside instead.
+        Existing package directories are never replaced to answer a runtime
+        update. Identity, resolver, and npm shims are refreshed in place while
+        node_modules and package commands remain untouched.
         """
         node = self.node_runtime.executable()
         if node is None:
@@ -414,30 +408,24 @@ class BundledNodeBaseRuntime:
         expected_files = self._expected_files(npm_cli, npx_cli)
 
         with self._process_lock:
-            try:
-                # An unreadable base falls through to the locked path rather
-                # than raising here: moving one aside is only safe while
-                # holding the cross-process lock.
-                if (
-                    self._ready
-                    and not self.cache.is_symlink()
-                    and self.cache.is_dir()
-                    and self._probe_available(self.root, identity, expected_files).usable
-                ):
-                    return self.root
-                parent = self._prepare_parent()
-                try:
-                    with FileLock(parent / ".base.lock", timeout=self.PREPARE_TIMEOUT_SEC):
-                        self._recover_interrupted_install(identity)
-                        self._prepare_base(identity, expected_files)
-                except FileLockTimeout as exc:
-                    raise RuntimeError(
-                        "Timed out waiting for the shared Node base"
-                    ) from exc
-                self._ready = True
+            if (
+                self._ready
+                and not self.cache.is_symlink()
+                and self.cache.is_dir()
+                and self._probe_available(self.root, identity, expected_files).usable
+            ):
                 return self.root
-            finally:
-                self._unreadable.close_round()
+            parent = self._prepare_parent()
+            try:
+                with FileLock(parent / ".base.lock", timeout=self.PREPARE_TIMEOUT_SEC):
+                    self._recover_interrupted_install()
+                    self._prepare_base(identity, expected_files)
+            except FileLockTimeout as exc:
+                raise RuntimeError(
+                    "Timed out waiting for the shared Node base"
+                ) from exc
+            self._ready = True
+            return self.root
 
     def _prepare_base(
         self,
@@ -445,21 +433,21 @@ class BundledNodeBaseRuntime:
         expected_files: dict[Path, str],
     ) -> None:
         """Bring the base up to ``identity`` and ``expected_files`` in place."""
-        if not self._settle(self._probe_compatible(self.root, identity)).usable:
-            self._create(identity, expected_files)
-            return
-        if self._settle(
-            self._probe_support_files(self.root, expected_files)
-        ).usable:
-            return
-        # Settling may have moved the whole base aside, and refreshing shims
-        # into a root that is no longer there would leave a husk holding
-        # nothing but the shims -- returned as ready, with every installed
-        # package gone from the environment it claims to be.
-        if self._probe_compatible(self.root, identity).usable:
+        compatible = self._probe_compatible(self.root, identity)
+        if compatible.unreadable:
+            raise EnvNotReady(compatible.path, compatible.error)
+        if not compatible.usable:
+            self._ensure_layout()
             self._refresh_support_files(expected_files)
-        else:
-            self._create(identity, expected_files)
+            self._write_manifest(identity)
+            if not self._probe_available(self.root, identity, expected_files).usable:
+                raise RuntimeError("Failed to prepare the shared Node base")
+            return
+        support = self._probe_support_files(self.root, expected_files)
+        if support.unreadable:
+            raise EnvNotReady(support.path, support.error)
+        if not support.usable:
+            self._refresh_support_files(expected_files)
 
     def apply(self, target: MutableMapping[str, str]) -> None:
         """Inject packaged Node and the shared dependency base into a command."""
@@ -490,68 +478,26 @@ class BundledNodeBaseRuntime:
         """Forget process-local readiness without deleting the shared base."""
         self._node_fingerprint = None
         self._ready = False
-        self._unreadable.forget()
 
-    def _create(
-        self,
-        identity: dict[str, object],
-        expected_files: dict[Path, str],
-    ) -> None:
-        stage = Path(tempfile.mkdtemp(prefix=".base.stage.", dir=self.root.parent))
-        backup: Optional[Path] = None
-        try:
-            self._stage_files(stage, identity, expected_files)
-            if not self._probe_available(stage, identity, expected_files).usable:
-                raise RuntimeError("Failed to prepare the shared Node base")
-            if self.root.exists() or self.root.is_symlink():
-                backup = Path(tempfile.mkdtemp(prefix=".base.backup.", dir=self.root.parent))
-                backup.rmdir()
-                os.replace(self.root, backup)
-            try:
-                os.replace(stage, self.root)
-            except BaseException:
-                if backup is not None:
-                    preserved_backup = backup
-                    try:
-                        os.replace(backup, self.root)
-                    except BaseException:
-                        backup = None
-                        logger.exception(
-                            "Failed to restore the previous Node base; backup preserved at %s",
-                            preserved_backup,
-                        )
-                        raise
-                    else:
-                        backup = None
-                raise
-            if backup is not None:
-                self._remove(backup)
-                backup = None
-        finally:
-            self._remove(stage)
-            if backup is not None:
-                self._remove(backup)
-
-    def _stage_files(
-        self,
-        stage: Path,
-        identity: dict[str, object],
-        expected_files: dict[Path, str],
-    ) -> None:
-        modules_relative = self.modules_dir.relative_to(self.root)
-        bin_relative = self.bin_dir.relative_to(self.root)
-        (stage / modules_relative).mkdir(parents=True, exist_ok=True)
-        (stage / bin_relative).mkdir(parents=True, exist_ok=True)
-        for relative, content in expected_files.items():
-            destination = stage / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(content, encoding="utf-8", newline="")
-            if not self._is_windows() and relative.parent.name == "bin":
-                destination.chmod(0o755)
-        (stage / self.MANIFEST_NAME).write_text(
-            json.dumps(identity, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
+    def _ensure_layout(self) -> None:
+        directories = (
+            self.root,
+            self.root / ".amphi",
+            self.shim_dir,
+            self.modules_dir,
+            self.bin_dir,
         )
+        for directory in directories:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Cannot repair the shared Node base at {directory}; preserving existing files"
+                ) from exc
+            if not is_directory(directory):
+                raise RuntimeError(
+                    f"The shared Node path at {directory} is not a directory; preserving it unchanged"
+                )
 
     def _refresh_support_files(self, expected_files: dict[Path, str]) -> None:
         for relative, content in expected_files.items():
@@ -567,6 +513,20 @@ class BundledNodeBaseRuntime:
                 os.replace(temporary, destination)
             finally:
                 temporary.unlink(missing_ok=True)
+
+    def _write_manifest(self, identity: dict[str, object]) -> None:
+        destination = self.root / self.MANIFEST_NAME
+        temporary = destination.with_name(
+            f".{destination.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+        )
+        try:
+            temporary.write_text(
+                json.dumps(identity, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _runtime_identity(self, node: Path) -> dict[str, object]:
         resolved_node = node.expanduser().resolve()
@@ -1008,40 +968,35 @@ if (require.main === module) {{
             raise RuntimeError("The app-level npm cache is unavailable")
         return parent
 
-    def _recover_interrupted_install(
-        self,
-        identity: dict[str, object],
-    ) -> None:
+    def _recover_interrupted_install(self) -> None:
+        """Recover the last complete base without deleting any saved environment."""
         for stage in self.root.parent.glob(".base.stage.*"):
             self._remove(stage)
         backups = sorted(self.root.parent.glob(".base.backup.*"), reverse=True)
-        if self._settle(self._probe_compatible(self.root, identity)).usable:
-            for backup in backups:
-                self._remove(backup)
+        try:
+            self.root.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise EnvNotReady(self.root, exc) from exc
+        else:
             return
-        probes = {
-            backup: self._probe_compatible(backup, identity) for backup in backups
-        }
-        reusable = next(
-            (backup for backup, probe in probes.items() if probe.usable),
-            None,
-        )
-        if reusable is not None:
-            self._remove(self.root)
-            os.replace(reusable, self.root)
-        for backup, probe in probes.items():
-            # A backup nobody could read may be the last intact copy, so it
-            # waits for a round that can actually tell what it holds.
-            if backup != reusable and not probe.unreadable:
-                self._remove(backup)
-
-    def _settle(self, probe: BaseProbe) -> BaseProbe:
-        """Return a root verdict to act on, moving a stuck base aside.
-
-        Only ever applied to :attr:`root`. A backup that reads as unreadable may
-        be the last intact copy, so it keeps waiting for a round that can tell.
-        """
-        return self._unreadable.settle(probe)
+        blocked_backup: Optional[tuple[Path, OSError]] = None
+        for backup in backups:
+            try:
+                if not is_directory(backup):
+                    continue
+                os.replace(backup, self.root)
+            except OSError as exc:
+                blocked_backup = (backup, exc)
+                continue
+            logger.warning(
+                "Restored the preserved Node base from %s; it will be migrated in place",
+                backup,
+            )
+            return
+        if blocked_backup is not None:
+            raise EnvNotReady(*blocked_backup)
 
     def _probe_available(
         self,
@@ -1061,8 +1016,8 @@ if (require.main === module) {{
 
         A directory whose DACL stopped granting the running user denies every
         read inside it, so an intact base reads as missing. The probe reports
-        that as unreadable rather than folding it into "broken", which is the
-        verdict every caller answers with a rebuild.
+        that as unreadable rather than folding it into "broken". Callers wait
+        for access to return; they never quarantine or replace the directory.
         """
         return probe_base(root, lambda: self._inspect_compatible(root, identity))
 
