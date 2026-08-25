@@ -10,12 +10,15 @@ import {
   type PresentationTransitionDirection,
 } from '@/atoms/presentation'
 import {
+  hasValidPresentationMediaSignature,
   isPresentationChartElement,
   isPresentationImageElement,
   isPresentationMediaElement,
   isPresentationShapeElement,
   isPresentationTableElement,
   isPresentationTextElement,
+  normalizePresentationFileSource,
+  type PresentationFileKind,
 } from '@/lib/presentationInsert'
 import { getPresentationLineEnds, isPresentationLineShape } from '@/lib/presentationShapes'
 import {
@@ -59,10 +62,18 @@ function presentationColor(value: unknown, fallback: string): string {
   return fallback
 }
 
-function isBase64DataUrl(value: unknown, kind: 'image' | 'audio' | 'video'): value is string {
-  if (typeof value !== 'string') return false
-  const match = new RegExp(`^data:${kind}/[^;,]+(?:;[^;,=]+=[^;,]*)*;base64,([\\dA-Z+/\\s]+={0,2})$`, 'i').exec(value)
-  return Boolean(match?.[1]?.replace(/\s/g, ''))
+function normalizePresentationFileSourceForExport(kind: PresentationFileKind, source: unknown) {
+  if (!isRecord(source)
+    || typeof source.dataUrl !== 'string'
+    || typeof source.fileName !== 'string'
+    || typeof source.mimeType !== 'string') return null
+
+  const normalized = normalizePresentationFileSource(kind, {
+    dataUrl: source.dataUrl,
+    fileName: source.fileName,
+    mimeType: source.mimeType,
+  })
+  return normalized
 }
 
 function presentationImageAspectRatio(dataUrl: string, fallback: number): number {
@@ -232,7 +243,18 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
         isRecord(element) && element.type === 'audio'
       ))
     ))
-    if (transitions.every((transition) => transition.effect === 'none') && !slidesWithAudio.some(Boolean)) return bytes
+    const hasQuickTimeVideo = document.slides.some((slide) => (
+      Array.isArray(slide.elements) && (slide.elements as unknown[]).some((element) => {
+        if (!isRecord(element) || element.type !== 'video' || !isRecord(element.source)) return false
+        const mimeType = typeof element.source.mimeType === 'string' ? element.source.mimeType.trim().toLowerCase() : ''
+        const fileName = typeof element.source.fileName === 'string' ? element.source.fileName.trim() : ''
+        const dataUrl = typeof element.source.dataUrl === 'string' ? element.source.dataUrl : ''
+        return mimeType === 'video/quicktime' || /\.mov$/i.test(fileName) || /^data:video\/quicktime[;,]/i.test(dataUrl)
+      })
+    ))
+    if (transitions.every((transition) => transition.effect === 'none')
+      && !slidesWithAudio.some(Boolean)
+      && !hasQuickTimeVideo) return bytes
 
     const p14Namespace = 'http://schemas.microsoft.com/office/powerpoint/2010/main'
     const markupCompatibilityNamespace = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
@@ -375,7 +397,27 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }, xml)
     }
 
+    const correctMediaContentTypes = async (archive: JSZip): Promise<void> => {
+      const contentTypesPath = '[Content_Types].xml'
+      const contentTypesFile = archive.file(contentTypesPath)
+      if (!contentTypesFile) throw new Error('PPTX exporter did not create [Content_Types].xml')
+      const canonicalContentTypes = new Map([
+        ['mp3', 'audio/mpeg'],
+        ['m4a', 'audio/mp4'],
+        ['mov', 'video/quicktime'],
+      ])
+      const xml = await contentTypesFile.async('text')
+      const correctedXml = xml.replace(/<Default\b[^>]*\/>/g, (defaultTag) => {
+        const extension = /\bExtension=(['"])([^'"]+)\1/.exec(defaultTag)?.[2]?.toLowerCase()
+        const contentType = extension ? canonicalContentTypes.get(extension) : undefined
+        if (!contentType || !/\bContentType=(['"])[^'"]*\1/.test(defaultTag)) return defaultTag
+        return defaultTag.replace(/\bContentType=(['"])[^'"]*\1/, `ContentType="${contentType}"`)
+      })
+      archive.file(contentTypesPath, correctedXml)
+    }
+
     const archive = await JSZip.loadAsync(bytes)
+    await correctMediaContentTypes(archive)
     await Promise.all(transitions.map(async (transition, index) => {
       if (transition.effect === 'none' && !slidesWithAudio[index]) return
       const slidePath = `ppt/slides/slide${index + 1}.xml`
@@ -416,6 +458,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       const element = candidate
 
       if (isPresentationTextElement(element)) {
+        const hasHyperlink = Boolean(element.hyperlink)
         let bullet: true | { type: 'number'; numberType: 'arabicPeriod' } | undefined
         if (element.listStyle === 'bullet') bullet = true
         else if (element.listStyle === 'number') bullet = { type: 'number', numberType: 'arabicPeriod' }
@@ -437,7 +480,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           align: ['left', 'center', 'right', 'justify'].includes(element.align) ? element.align : 'left',
           bold: typeof element.fontWeight === 'number' && element.fontWeight >= 600,
           italic: Boolean(element.italic),
-          underline: element.underline ? { style: 'sng' } : undefined,
+          underline: element.underline || hasHyperlink ? { style: 'sng' } : undefined,
           strike: Boolean(element.strikethrough),
           superscript: element.baseline === 'superscript',
           subscript: element.baseline === 'subscript',
@@ -452,7 +495,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
             : undefined,
           bullet,
           indentLevel,
-          color: presentationColor(element.color, '20202B'),
+          color: hasHyperlink ? '2563EB' : presentationColor(element.color, '20202B'),
           fontFace: typeof element.fontFamily === 'string' && element.fontFamily.trim() ? element.fontFamily : 'Aptos',
           fontSize: Number.isFinite(element.fontSize) && element.fontSize > 0 ? element.fontSize : 18,
           fit: 'shrink',
@@ -465,8 +508,8 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }
 
       if (isPresentationImageElement(element)) {
-        const source = element.source
-        if (!isRecord(source) || !isBase64DataUrl(source.dataUrl, 'image')) continue
+        const source = normalizePresentationFileSourceForExport('image', element.source)
+        if (!source) continue
         const width = x(element.width)
         const height = y(element.height)
         const aspectRatio = presentationImageAspectRatio(source.dataUrl, width / height)
@@ -493,8 +536,8 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }
 
       if (isPresentationMediaElement(element)) {
-        const source = element.source
-        if (!isRecord(source) || !isBase64DataUrl(source.dataUrl, element.type)) continue
+        const source = normalizePresentationFileSourceForExport(element.type, element.source)
+        if (!source || !hasValidPresentationMediaSignature(element.type, source)) continue
         slide.addMedia({
           type: element.type,
           data: source.dataUrl,

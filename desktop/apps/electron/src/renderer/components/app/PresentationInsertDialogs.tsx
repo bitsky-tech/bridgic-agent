@@ -59,6 +59,7 @@ export type PresentationInsertDialogKind = PresentationInsertDialogValue['kind']
 export interface PresentationInsertDialogsProps {
   open: PresentationInsertDialogKind | null
   initialValue?: PresentationInsertDialogValue | null
+  linkLabelEditable?: boolean
   slides: readonly PresentationInsertSlideOption[]
   onClose: () => void
   onSubmit: (value: PresentationInsertDialogValue) => void
@@ -276,8 +277,9 @@ function ChartDialog({ initialValue, onClose, onSubmit }: {
   )
 }
 
-function LinkDialog({ initialValue, onClose, onSubmit, slides }: {
+function LinkDialog({ initialValue, linkLabelEditable, onClose, onSubmit, slides }: {
   initialValue?: PresentationInsertLinkValue
+  linkLabelEditable: boolean
   onClose: () => void
   onSubmit: (value: PresentationInsertLinkValue) => void
   slides: readonly PresentationInsertSlideOption[]
@@ -291,7 +293,7 @@ function LinkDialog({ initialValue, onClose, onSubmit, slides }: {
   const targetInvalid = targetType === 'url'
     ? !isAllowedExternalUrl(url.trim())
     : !slides.some((slide) => slide.id === slideId)
-  const invalid = !label.trim() || targetInvalid
+  const invalid = (linkLabelEditable && !label.trim()) || targetInvalid
 
   return (
     <DialogFrame
@@ -327,10 +329,12 @@ function LinkDialog({ initialValue, onClose, onSubmit, slides }: {
             </select>
           </label>
         )}
-        <label className={labelClassName}>
-          {t('session.presentation.insertDialog.label')}
-          <input data-testid="presentation-insert-link-label" className={fieldClassName} value={label} onChange={(event) => setLabel(event.target.value)} />
-        </label>
+        {linkLabelEditable ? (
+          <label className={labelClassName}>
+            {t('session.presentation.insertDialog.label')}
+            <input data-testid="presentation-insert-link-label" className={fieldClassName} value={label} onChange={(event) => setLabel(event.target.value)} />
+          </label>
+        ) : null}
         <label className={labelClassName}>
           {t('session.presentation.insertDialog.tooltip')}
           <input data-testid="presentation-insert-link-tooltip" className={fieldClassName} value={tooltip} onChange={(event) => setTooltip(event.target.value)} />
@@ -388,7 +392,7 @@ function CheckboxField({ checked, label, onChange, testId }: { checked: boolean;
 }
 
 /** Controlled host for the richer Insert-tab flows. File pickers remain owned by the workbench. */
-export function PresentationInsertDialogs({ initialValue, onClose, onSubmit, open, slides }: PresentationInsertDialogsProps) {
+export function PresentationInsertDialogs({ initialValue, linkLabelEditable = true, onClose, onSubmit, open, slides }: PresentationInsertDialogsProps) {
   if (!open) return null
   const matchingInitialValue = initialValue?.kind === open ? initialValue : undefined
   const resetKey = `${open}:${JSON.stringify(matchingInitialValue ?? null)}`
@@ -399,7 +403,7 @@ export function PresentationInsertDialogs({ initialValue, onClose, onSubmit, ope
     return <ChartDialog key={resetKey} initialValue={matchingInitialValue as PresentationInsertChartValue | undefined} onClose={onClose} onSubmit={onSubmit} />
   }
   if (open === 'link') {
-    return <LinkDialog key={resetKey} initialValue={matchingInitialValue as PresentationInsertLinkValue | undefined} onClose={onClose} onSubmit={onSubmit} slides={slides} />
+    return <LinkDialog key={resetKey} initialValue={matchingInitialValue as PresentationInsertLinkValue | undefined} linkLabelEditable={linkLabelEditable} onClose={onClose} onSubmit={onSubmit} slides={slides} />
   }
   return <FooterDialog key={resetKey} initialValue={matchingInitialValue as PresentationInsertFooterValue | undefined} onClose={onClose} onSubmit={onSubmit} />
 }

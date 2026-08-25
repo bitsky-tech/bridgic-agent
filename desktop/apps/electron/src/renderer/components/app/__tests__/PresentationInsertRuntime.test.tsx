@@ -7,6 +7,7 @@ GlobalRegistrator.register()
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { Simulate } = await import('react-dom/test-utils')
 const { createBlankPresentationDocument } = await import('@/atoms/presentation')
 const {
   createPresentationImageElement,
@@ -18,6 +19,8 @@ const {
   createPresentationHistoryEntry,
   estimatePresentationDocumentBytes,
   isPresentationRotationLocked,
+  PresentationNumberField,
+  resolvePresentationNumberFieldValue,
   resolvePresentationSlideshowKeyAction,
   trimPresentationHistoryEntries,
 } = await import('../PresentationWorkbenchPanel')
@@ -81,6 +84,21 @@ describe('presentation Insert runtime safeguards', () => {
     expect(byteLimited.map((item) => item.document.id)).toEqual(['document-2', 'document-3'])
   })
 
+  it('preserves shared media sources across history clones', () => {
+    const document = createBlankPresentationDocument('Shared media')
+    const source = fileSource('video/mp4', 'large.mp4', 'A'.repeat(10_000))
+    const media = createPresentationMediaElement('video', source)
+    document.slides[0]!.elements = [media, { ...media, id: 'duplicated-media' }]
+    const estimatedBefore = estimatePresentationDocumentBytes(document)
+    const entry = createPresentationHistoryEntry(document)
+    expect(entry).not.toBeNull()
+    const [first, second] = entry!.document.slides[0]!.elements
+    expect(first?.type).toBe('video')
+    expect(second?.type).toBe('video')
+    if (first?.type === 'video' && second?.type === 'video') expect(first.source).toBe(second.source)
+    expect(estimatePresentationDocumentBytes(entry!.document)).toBe(estimatedBefore)
+  })
+
   it('leaves media navigation keys to native controls while preserving slideshow shortcuts', () => {
     const audio = document.createElement('audio')
     const video = document.createElement('video')
@@ -134,6 +152,89 @@ describe('presentation Insert runtime safeguards', () => {
       expect(media.autoplay).toBe(true)
       expect(media.muted).toBe(false)
     }
+  })
+
+  it('keeps a linked background overlay below later media controls', async () => {
+    const linkedImage = {
+      ...createPresentationImageElement(fileSource('image/png', 'background.png')),
+      hyperlink: { type: 'url' as const, url: 'https://example.com' },
+    }
+    const audio = {
+      ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'sound.mp3')),
+      hyperlink: { type: 'url' as const, url: 'https://example.com/unsupported-media-link' },
+    }
+    const slide = { ...createBlankPresentationDocument('Links').slides[0]!, elements: [linkedImage, audio] }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    await act(async () => {
+      root.render(
+        <PresentationSlidePreview
+          slide={slide}
+          width={960}
+          selected={false}
+          presentation
+          onActivateHyperlink={() => undefined}
+        />,
+      )
+    })
+
+    const content = host.querySelector<HTMLElement>('[data-testid="presentation-slide-preview"] > span')!
+    const image = content.querySelector('img')!
+    const overlay = content.querySelector('button')!
+    const media = content.querySelector('audio')!
+    const children = [...content.children]
+    expect(content.querySelectorAll('button')).toHaveLength(1)
+    expect(children.indexOf(image)).toBeLessThan(children.indexOf(overlay))
+    expect(children.indexOf(overlay)).toBeLessThan(children.indexOf(media))
+  })
+
+  it('keeps an empty number-field draft while focused and clamps only when committed', () => {
+    expect(resolvePresentationNumberFieldValue('', 8, 320)).toBe(320)
+    expect(resolvePresentationNumberFieldValue('0', 8, 320)).toBe(8)
+    expect(resolvePresentationNumberFieldValue('-20', 8, 320)).toBe(8)
+    expect(resolvePresentationNumberFieldValue('42.6', 8, 320)).toBe(43)
+    expect(resolvePresentationNumberFieldValue('not-a-number', undefined, 15)).toBe(15)
+  })
+
+  it('does not replace an empty focused number field until blur', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    const changes: number[] = []
+    await act(async () => {
+      root.render(<PresentationNumberField label="Width" min={8} value={320} onChange={(value) => changes.push(value)} />)
+    })
+    const input = host.querySelector<HTMLInputElement>('input')!
+    const setNativeValue = (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
+    }
+
+    await act(async () => {
+      Simulate.focus(input)
+      setNativeValue('')
+      Simulate.change(input)
+    })
+    expect(input.value).toBe('')
+    expect(changes).toEqual([])
+
+    await act(async () => Simulate.blur(input))
+    expect(input.value).toBe('320')
+    expect(changes).toEqual([])
+
+    await act(async () => {
+      Simulate.focus(input)
+      setNativeValue('0')
+      Simulate.change(input)
+    })
+    expect(input.value).toBe('0')
+    expect(changes).toEqual([])
+
+    await act(async () => Simulate.blur(input))
+    expect(input.value).toBe('8')
+    expect(changes).toEqual([8])
   })
 
   it('locks unsupported element rotation in both runtime policy and static previews', async () => {
@@ -213,5 +314,28 @@ describe('presentation Insert runtime safeguards', () => {
     const points = [...host.querySelectorAll<SVGCircleElement>('circle')]
     expect(Number(points[0]?.getAttribute('cy'))).toBeLessThan(lineZeroY)
     expect(Number(points[1]?.getAttribute('cy'))).toBeGreaterThan(lineZeroY)
+  })
+
+  it('uses a minimum logical chart viewport while retaining a legacy small frame', async () => {
+    const chart = { ...createPresentationChartElement('column'), width: 8, height: 8 }
+    const slide = { ...createBlankPresentationDocument('Small chart').slides[0]!, elements: [chart] }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    await act(async () => {
+      root.render(<PresentationSlidePreview slide={slide} width={960} selected={false} />)
+    })
+
+    const preview = host.querySelector<SVGElement>('[data-testid="presentation-chart-preview"]')!
+    expect(preview.getAttribute('viewBox')).toBe('0 0 180 120')
+    expect(preview.getAttribute('preserveAspectRatio')).toBe('none')
+    expect(preview.style.width).toBe('8px')
+    expect(preview.style.height).toBe('8px')
+    const zeroAxis = host.querySelector<SVGLineElement>('[data-testid="presentation-chart-zero-axis"]')!
+    const zeroY = Number(zeroAxis.getAttribute('y1'))
+    expect(Number.isFinite(zeroY)).toBe(true)
+    expect(zeroY).toBeGreaterThanOrEqual(0)
+    expect(zeroY).toBeLessThanOrEqual(120)
   })
 })

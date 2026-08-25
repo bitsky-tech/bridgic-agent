@@ -40,6 +40,7 @@ import {
   stripPresentationListMarkers,
   type PresentationDocument,
   type PresentationElement,
+  type PresentationFileSource,
   type PresentationHyperlink,
   type PresentationImageElement,
   type PresentationMediaElement,
@@ -63,6 +64,7 @@ import {
   createPresentationMediaElement,
   createPresentationTableElement,
   createPresentationUrlHyperlink,
+  hasValidPresentationMediaSignature,
   isPresentationChartElement,
   isPresentationImageElement,
   isPresentationMediaElement,
@@ -70,6 +72,9 @@ import {
   isPresentationTableElement,
   isPresentationTextElement,
   normalizePresentationFileSource,
+  supportsPresentationElementHyperlink,
+  supportsPresentationElementRotation,
+  supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
 import {
@@ -170,6 +175,14 @@ function cloneDocument(document: PresentationDocument): PresentationDocument {
   // structuredClone would duplicate every Base64 payload for every undo step.
   // Strip the immutable payloads while cloning the mutable model, then reattach
   // the original strings by index so snapshots cannot mutate one another.
+  const payloadFreeSources = new WeakMap<PresentationFileSource, PresentationFileSource>()
+  const sourceWithoutPayload = (source: PresentationFileSource) => {
+    const existing = payloadFreeSources.get(source)
+    if (existing) return existing
+    const cloned = { ...source, dataUrl: '' }
+    payloadFreeSources.set(source, cloned)
+    return cloned
+  }
   const payloads = document.slides.map((slide) => slide.elements.map((element) => (
     isPresentationImageElement(element) || isPresentationMediaElement(element)
       ? element.source.dataUrl
@@ -181,7 +194,7 @@ function cloneDocument(document: PresentationDocument): PresentationDocument {
       ...slide,
       elements: slide.elements.map((element) => (
         isPresentationImageElement(element) || isPresentationMediaElement(element)
-          ? { ...element, source: { ...element.source, dataUrl: '' } }
+          ? { ...element, source: sourceWithoutPayload(element.source) }
           : element
       )),
     })),
@@ -204,6 +217,28 @@ export function createPresentationHistoryEntry(document: PresentationDocument, m
   const estimatedBytes = estimatePresentationDocumentBytes(document)
   if (estimatedBytes > maxBytes) return null
   return { document: cloneDocument(document), estimatedBytes }
+}
+
+export function canAppendPresentationFileElement(
+  document: PresentationDocument,
+  element: PresentationImageElement | PresentationMediaElement,
+  maxBytes = PRESENTATION_HISTORY_MAX_BYTES,
+): boolean {
+  const slide = document.slides.find((item) => item.id === document.selectedSlideId)
+  if (!slide) return false
+  const nextDocument = {
+    ...document,
+    slides: document.slides.map((item) => item.id === slide.id
+      ? { ...item, elements: [...item.elements, element] }
+      : item),
+  }
+  return estimatePresentationDocumentBytes(nextDocument) <= maxBytes
+}
+
+export function resolvePresentationNumberFieldValue(draft: string, min: number | undefined, fallback: number): number {
+  const parsed = draft.trim() ? Number(draft) : Number.NaN
+  if (!Number.isFinite(parsed)) return Math.round(fallback)
+  return Math.round(min === undefined ? parsed : Math.max(min, parsed))
 }
 
 /** Keep the newest contiguous history segment within both entry and byte limits. */
@@ -233,9 +268,7 @@ function trimPresentationHistoryPair(past: PresentationHistoryEntry[], future: P
 }
 
 export function isPresentationRotationLocked(element: PresentationElement): boolean {
-  return isPresentationMediaElement(element)
-    || isPresentationTableElement(element)
-    || isPresentationChartElement(element)
+  return !supportsPresentationElementRotation(element)
 }
 
 export type PresentationSlideshowKeyAction = 'close' | 'next' | 'previous' | null
@@ -294,6 +327,37 @@ async function presentationImageSize(file: File): Promise<{ width: number; heigh
   } catch {
     return null
   }
+}
+
+async function presentationMediaCanLoad(file: File, type: PresentationMediaElement['type'], mimeType: string): Promise<boolean> {
+  const media = document.createElement(type)
+  if (!media.canPlayType(mimeType) || typeof URL.createObjectURL !== 'function') return false
+  const objectUrl = URL.createObjectURL(file)
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: boolean) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      media.removeEventListener('loadedmetadata', onLoaded)
+      media.removeEventListener('error', onError)
+      media.removeAttribute('src')
+      URL.revokeObjectURL(objectUrl)
+      resolve(result)
+    }
+    const onLoaded = () => finish(true)
+    const onError = () => finish(false)
+    const timeout = window.setTimeout(() => finish(false), 5_000)
+    media.addEventListener('loadedmetadata', onLoaded, { once: true })
+    media.addEventListener('error', onError, { once: true })
+    media.preload = 'metadata'
+    media.src = objectUrl
+    try {
+      media.load()
+    } catch {
+      finish(false)
+    }
+  })
 }
 
 type FabricModule = typeof import('fabric')
@@ -1040,7 +1104,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           transparentCorners: false,
           objectCaching: false,
           lockRotation: isPresentationRotationLocked(element),
-          hoverCursor: element.hyperlink ? 'pointer' : 'move',
+          hoverCursor: element.hyperlink && supportsPresentationElementHyperlink(element) ? 'pointer' : 'move',
         })
         objectIdsRef.current.set(object, element.id)
         canvas.add(object)
@@ -1319,12 +1383,23 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     }
     try {
       const dataUrl = await readFileAsDataUrl(file)
+      const targetStillCurrent = () => {
+        const currentTarget = fileInsertionTargetRef.current
+        return target.generation === currentTarget.generation
+          && target.sessionId === currentTarget.sessionId
+          && target.documentId === currentTarget.documentId
+          && target.slideId === currentTarget.slideId
+      }
       const source = normalizePresentationFileSource(kind, {
         dataUrl,
         fileName: file.name,
         mimeType: file.type || 'application/octet-stream',
       })
       if (!source) throw new Error('Unsupported presentation media format')
+      if (!targetStillCurrent()) {
+        showToast(t('session.common.cancelled'))
+        return
+      }
       let element: PresentationElement
       if (kind === 'image') {
         const image = createPresentationImageElement(source)
@@ -1345,14 +1420,21 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           element = image
         }
       } else {
+        if (!hasValidPresentationMediaSignature(kind, source)) {
+          throw new Error('The selected media container does not match its file type')
+        }
+        if (!await presentationMediaCanLoad(file, kind, source.mimeType)) {
+          throw new Error('The selected media cannot be decoded by the slide show renderer')
+        }
         element = createPresentationMediaElement(kind, source)
       }
-      const currentTarget = fileInsertionTargetRef.current
-      if (target.generation !== currentTarget.generation
-        || target.sessionId !== currentTarget.sessionId
-        || target.documentId !== currentTarget.documentId
-        || target.slideId !== currentTarget.slideId) {
+      if (!targetStillCurrent()) {
         showToast(t('session.common.cancelled'))
+        return
+      }
+      if ((isPresentationImageElement(element) || isPresentationMediaElement(element))
+        && !canAppendPresentationFileElement(documentRef.current, element)) {
+        showToast(t('session.presentation.insertDialog.totalFileSizeTooLarge'))
         return
       }
       appendElement(element)
@@ -1362,11 +1444,9 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   }
 
   const openLinkDialog = () => {
-    const linkable = selectedElement && (
-      isPresentationTextElement(selectedElement)
-      || isPresentationShapeElement(selectedElement)
-      || isPresentationImageElement(selectedElement)
-    ) ? selectedElement : null
+    const linkable = selectedElement && supportsPresentationElementHyperlink(selectedElement)
+      ? selectedElement
+      : null
     setInsertDialog({ kind: 'link', ...(linkable ? { elementId: linkable.id } : {}) })
   }
 
@@ -1465,12 +1545,16 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
 
   const updateSelectedElement = (patch: Partial<PresentationElement>) => {
     if (!selectedElement) return
-    if (isPresentationRotationLocked(selectedElement) && 'rotation' in patch) {
-      const { rotation: _ignoredRotation, ...supportedPatch } = patch
-      if (Object.keys(supportedPatch).length > 0) patchElement(selectedElement.id, supportedPatch)
-      return
+    let supportedPatch = patch
+    if (isPresentationRotationLocked(selectedElement) && 'rotation' in supportedPatch) {
+      const { rotation: _ignoredRotation, ...remainingPatch } = supportedPatch
+      supportedPatch = remainingPatch
     }
-    patchElement(selectedElement.id, patch)
+    if (!supportsPresentationElementShadow(selectedElement) && 'shadow' in supportedPatch) {
+      const { shadow: _ignoredShadow, ...remainingPatch } = supportedPatch
+      supportedPatch = remainingPatch
+    }
+    if (Object.keys(supportedPatch).length > 0) patchElement(selectedElement.id, supportedPatch)
   }
 
   const moveSelectedElement = (direction: 'front' | 'back') => {
@@ -2013,6 +2097,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       <PresentationInsertDialogs
         open={insertDialog?.kind ?? null}
         initialValue={insertDialogInitialValue}
+        linkLabelEditable={!insertDialogElement || isPresentationTextElement(insertDialogElement)}
         slides={document.slides.map((slide) => ({ id: slide.id, name: slide.name }))}
         onClose={() => setInsertDialog(null)}
         onSubmit={submitInsertDialog}
@@ -2238,7 +2323,7 @@ function PresentationInspector({
                   <option value="Courier New">Courier New</option>
                 </select>
               </label>
-              <NumberField
+              <PresentationNumberField
                 label={t('session.presentation.fontSize')}
                 value={selectedElement.fontSize}
                 min={8}
@@ -2324,13 +2409,13 @@ function PresentationInspector({
             </button>
           ) : null}
           <div className="grid grid-cols-2 gap-2">
-            <NumberField label="X" value={selectedElement.x} onChange={(value) => onElementChange({ x: value })} />
-            <NumberField label="Y" value={selectedElement.y} onChange={(value) => onElementChange({ y: value })} />
-            <NumberField label={t('session.presentation.width')} value={selectedElement.width} min={8} onChange={(value) => onElementChange({ width: value })} />
-            <NumberField label={t('session.presentation.height')} value={selectedElement.height} min={8} onChange={(value) => onElementChange({ height: value })} />
+            <PresentationNumberField label="X" value={selectedElement.x} onChange={(value) => onElementChange({ x: value })} />
+            <PresentationNumberField label="Y" value={selectedElement.y} onChange={(value) => onElementChange({ y: value })} />
+            <PresentationNumberField label={t('session.presentation.width')} value={selectedElement.width} min={8} onChange={(value) => onElementChange({ width: value })} />
+            <PresentationNumberField label={t('session.presentation.height')} value={selectedElement.height} min={8} onChange={(value) => onElementChange({ height: value })} />
           </div>
           {!isPresentationRotationLocked(selectedElement) ? (
-            <NumberField
+            <PresentationNumberField
               label={t('session.presentation.rotation')}
               value={selectedElement.rotation}
               onChange={(value) => onElementChange({ rotation: value })}
@@ -2402,22 +2487,46 @@ function InspectorCheckbox({ checked, label, onChange }: {
   )
 }
 
-function NumberField({ label, min, value, onChange }: {
+export function PresentationNumberField({ label, min, value, onChange }: {
   label: string
   min?: number
   value: number
   onChange: (value: number) => void
 }) {
+  const [draft, setDraft] = useState(String(Math.round(value)))
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(String(Math.round(value)))
+  }, [value])
+
+  const commitDraft = () => {
+    focusedRef.current = false
+    const next = resolvePresentationNumberFieldValue(draft, min, value)
+    setDraft(String(next))
+    if (next !== value) onChange(next)
+  }
+
   return (
     <label className="block text-2xs font-medium text-text-tertiary">
       {label}
       <input
         type="number"
         min={min}
-        value={Math.round(value)}
+        value={draft}
+        onFocus={() => {
+          focusedRef.current = true
+        }}
         onChange={(event) => {
-          const next = Number(event.target.value)
-          if (Number.isFinite(next)) onChange(next)
+          const raw = event.target.value
+          setDraft(raw)
+          if (!raw.trim()) return
+          const next = Number(raw)
+          if (Number.isFinite(next) && (min === undefined || next >= min)) onChange(next)
+        }}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
         }}
         className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-2 text-xs text-text-primary outline-none focus:border-brand-purple"
       />

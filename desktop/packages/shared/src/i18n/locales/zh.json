@@ -1722,6 +1722,7 @@
         "tableCell": "第 {{row}} 行，第 {{column}} 列",
         "tableTitle": "插入表格",
         "tooltip": "屏幕提示（可选）",
+        "totalFileSizeTooLarge": "当前文稿已达到嵌入文件容量上限。请先移除较大的图片、音频或视频，再继续插入。",
         "url": "网页地址或电子邮件"
       },
       "italic": "斜体",

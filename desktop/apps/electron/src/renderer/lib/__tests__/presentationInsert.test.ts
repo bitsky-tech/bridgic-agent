@@ -11,6 +11,7 @@ import {
   createPresentationMediaElement,
   createPresentationTableElement,
   createPresentationUrlHyperlink,
+  hasValidPresentationMediaSignature,
   isPresentationChartElement,
   isPresentationImageElement,
   isPresentationMediaElement,
@@ -21,6 +22,9 @@ import {
   normalizePresentationFileSource,
   normalizePresentationHyperlinkUrl,
   parsePresentationDelimitedText,
+  supportsPresentationElementHyperlink,
+  supportsPresentationElementRotation,
+  supportsPresentationElementShadow,
 } from '../presentationInsert'
 
 const imageSource: PresentationFileSource = {
@@ -69,6 +73,11 @@ describe('presentation insert helpers', () => {
     expect(normalizePresentationFileSource('audio', {
       dataUrl: 'data:video/mp4;base64,bWVkaWE=',
       fileName: 'media.mp4',
+      mimeType: 'video/mp4',
+    })).toBeNull()
+    expect(normalizePresentationFileSource('video', {
+      dataUrl: 'data:video/mp4;base64,bWVkaWE=',
+      fileName: 'renamed.mov',
       mimeType: 'video/mp4',
     })).toBeNull()
     expect(normalizePresentationFileSource('image', {
@@ -148,6 +157,39 @@ describe('presentation insert helpers', () => {
       loop: false,
       muted: false,
     })
+  })
+
+  it('validates supported media container signatures before insertion or export', () => {
+    expect(hasValidPresentationMediaSignature('audio', {
+      dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
+      fileName: 'sound.mp3',
+      mimeType: 'audio/mpeg',
+    })).toBe(true)
+    expect(hasValidPresentationMediaSignature('audio', {
+      dataUrl: 'data:audio/ogg;base64,T2dnUwAAAAA=',
+      fileName: 'sound.ogg',
+      mimeType: 'audio/ogg',
+    })).toBe(true)
+    expect(hasValidPresentationMediaSignature('video', {
+      dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAA==',
+      fileName: 'clip.mp4',
+      mimeType: 'video/mp4',
+    })).toBe(true)
+    expect(hasValidPresentationMediaSignature('video', {
+      dataUrl: 'data:video/webm;base64,GkXfowAAAAA=',
+      fileName: 'clip.webm',
+      mimeType: 'video/webm',
+    })).toBe(true)
+    expect(hasValidPresentationMediaSignature('audio', {
+      dataUrl: 'data:audio/mpeg;base64,AQIDBA==',
+      fileName: 'fake.mp3',
+      mimeType: 'audio/mpeg',
+    })).toBe(false)
+    expect(hasValidPresentationMediaSignature('video', {
+      dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
+      fileName: 'wrong-kind.mp3',
+      mimeType: 'audio/mpeg',
+    })).toBe(false)
   })
 
   it('creates independent table, chart, and footer defaults', () => {
@@ -239,6 +281,18 @@ describe('presentation insert helpers', () => {
     expect(isPresentationVideoElement(video)).toBe(true)
     expect(isPresentationTableElement(table)).toBe(true)
     expect(isPresentationChartElement(chart)).toBe(true)
+    expect(supportsPresentationElementShadow(text)).toBe(true)
+    expect(supportsPresentationElementShadow(image)).toBe(true)
+    expect(supportsPresentationElementShadow(table)).toBe(false)
+    expect(supportsPresentationElementRotation(image)).toBe(true)
+    expect(supportsPresentationElementRotation(video)).toBe(false)
+    expect(supportsPresentationElementRotation(chart)).toBe(false)
+    expect(supportsPresentationElementHyperlink(text)).toBe(true)
+    expect(supportsPresentationElementHyperlink(shape)).toBe(true)
+    expect(supportsPresentationElementHyperlink(image)).toBe(true)
+    expect(supportsPresentationElementHyperlink(video)).toBe(false)
+    expect(supportsPresentationElementHyperlink(table)).toBe(false)
+    expect(supportsPresentationElementHyperlink(chart)).toBe(false)
   })
 
   it('normalizes only supported external URL schemes and builds tooltip metadata', () => {

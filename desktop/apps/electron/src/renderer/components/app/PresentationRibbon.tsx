@@ -75,7 +75,11 @@ import type {
 } from '@/atoms/presentation'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
-import { isPresentationShapeElement } from '@/lib/presentationInsert'
+import {
+  isPresentationShapeElement,
+  supportsPresentationElementRotation,
+  supportsPresentationElementShadow,
+} from '@/lib/presentationInsert'
 import { getPresentationShapeName, isPresentationLineShape, presentationShapeCategories } from '@/lib/presentationShapes'
 import {
   changePresentationTransitionEffect,
@@ -853,11 +857,12 @@ function ObjectControls({ inspectorOpen, selectedElement, onMoveElement, onToggl
 }) {
   const { t } = useTranslation()
   const shape = selectedElement && isPresentationShapeElement(selectedElement) ? selectedElement : null
+  const shadowSupported = Boolean(selectedElement && supportsPresentationElementShadow(selectedElement))
   return (
     <div className="grid grid-cols-4 content-center gap-0.5 px-1">
       <FormatButton label={t('session.presentation.bringToFront')} disabled={!selectedElement} onClick={() => onMoveElement('front')}><BringToFront className="size-4" /></FormatButton>
       <FormatButton label={t('session.presentation.sendToBack')} disabled={!selectedElement} onClick={() => onMoveElement('back')}><SendToBack className="size-4" /></FormatButton>
-      <FormatButton label={t('session.presentation.effects')} disabled={!selectedElement} pressed={Boolean(selectedElement?.shadow)} onClick={() => onUpdateElement({ shadow: !selectedElement?.shadow })}><Sparkles className="size-4" /></FormatButton>
+      <FormatButton label={t('session.presentation.effects')} disabled={!shadowSupported} pressed={Boolean(selectedElement?.shadow)} onClick={() => shadowSupported && onUpdateElement({ shadow: !selectedElement?.shadow })}><Sparkles className="size-4" /></FormatButton>
       <ColorButton label={t('session.presentation.fillColor')} color={shape?.fill ?? '#8B7CFF'} disabled={!shape} icon={<PaintBucket className="size-4" />} onChange={(fill) => onUpdateElement({ fill })} />
       <ColorButton label={t('session.presentation.borderColor')} color={shape?.borderColor ?? '#6957D9'} disabled={!shape} icon={<Square className="size-4" />} onChange={(borderColor) => onUpdateElement({ borderColor, borderWidth: Math.max(1, shape?.borderWidth ?? 0) })} />
       <FormatButton label={t('session.presentation.borderWidth')} disabled={!shape} pressed={(shape?.borderWidth ?? 0) > 0} onClick={() => onUpdateElement({ borderWidth: (shape?.borderWidth ?? 0) >= 4 ? 0 : Math.max(1, (shape?.borderWidth ?? 0) + 1) })}><span className="text-sm">▱</span></FormatButton>
@@ -1025,6 +1030,8 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
   const { t } = useTranslation()
   const shape = selectedElement && isPresentationShapeElement(selectedElement) ? selectedElement : null
   const text = selectedElement?.type === 'text' ? selectedElement : null
+  const rotationSupported = Boolean(selectedElement && supportsPresentationElementRotation(selectedElement))
+  const shadowSupported = Boolean(selectedElement && supportsPresentationElementShadow(selectedElement))
   const presets = ['#20202B', '#4D7CFE', '#E17B47', '#74777F', '#F2B91F', '#54A8DC', '#64A45B']
   const applyPreset = (color: string) => {
     if (!selectedElement) return
@@ -1056,7 +1063,7 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
       <RibbonGroup label={t('session.presentation.shapeAppearance')}>
         <RibbonColorAction color={shape?.fill ?? '#4D7CFE'} disabled={!shape} icon={PaintBucket} label={t('session.presentation.fillColor')} onChange={(fill) => onUpdateElement({ fill })} />
         <RibbonColorAction color={shape?.borderColor ?? '#20202B'} disabled={!shape} icon={Square} label={t('session.presentation.borderColor')} onChange={(borderColor) => onUpdateElement({ borderColor, borderWidth: Math.max(1, shape?.borderWidth ?? 0) })} />
-        <RibbonAction dropdown disabled={!selectedElement} icon={Sparkles} label={t('session.presentation.effects')} onClick={() => selectedElement && onUpdateElement({ shadow: !selectedElement.shadow })} />
+        <RibbonAction dropdown disabled={!shadowSupported} icon={Sparkles} label={t('session.presentation.effects')} onClick={() => shadowSupported && selectedElement && onUpdateElement({ shadow: !selectedElement.shadow })} />
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.wordArt')}>
         {['#111111', '#3F6EC9', '#E7783D'].map((color) => (
@@ -1069,7 +1076,7 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
         <RibbonAction dropdown disabled={!text} icon={CaseUpper} label={t('session.presentation.font')} onClick={() => onMock(t('session.presentation.font'))} />
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.arrange')}>
-        <RibbonAction dropdown disabled={!selectedElement} icon={RotateCw} label={t('session.presentation.rotation')} onClick={() => selectedElement && onUpdateElement({ rotation: (selectedElement.rotation + 15) % 360 })} />
+        <RibbonAction dropdown disabled={!rotationSupported} icon={RotateCw} label={t('session.presentation.rotation')} onClick={() => rotationSupported && selectedElement && onUpdateElement({ rotation: (selectedElement.rotation + 15) % 360 })} />
         <RibbonAction dropdown disabled={!selectedElement} icon={AlignCenter} label={t('session.presentation.align')} onClick={() => onMock(t('session.presentation.align'))} />
         <RibbonAction disabled={!selectedElement} icon={ArrowUpToLine} label={t('session.presentation.moveUp')} onClick={() => onMoveElement('front')} />
         <RibbonAction disabled={!selectedElement} icon={ArrowDownToLine} label={t('session.presentation.moveDown')} onClick={() => onMoveElement('back')} />

@@ -1722,6 +1722,7 @@
         "tableCell": "Row {{row}}, column {{column}}",
         "tableTitle": "Insert table",
         "tooltip": "ScreenTip (optional)",
+        "totalFileSizeTooLarge": "This presentation has reached its embedded file limit. Remove a large image, audio file, or video before inserting another.",
         "url": "Web address or email"
       },
       "italic": "Italic",

@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent, ReactNode } from 'react'
+import { Fragment, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { AudioLines, Play } from 'lucide-react'
 import {
   PRESENTATION_HEIGHT,
@@ -20,6 +20,7 @@ import {
   isPresentationShapeElement,
   isPresentationTableElement,
   isPresentationTextElement,
+  supportsPresentationElementHyperlink,
 } from '@/lib/presentationInsert'
 import { getPresentationShapeDefinition, isPresentationLineShape } from '@/lib/presentationShapes'
 
@@ -66,19 +67,18 @@ export function PresentationSlidePreview({
         }}
       >
         {slide.elements.map((element) => (
-          <PresentationElementPreview key={element.id} element={element} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
+          <Fragment key={element.id}>
+            <PresentationElementPreview element={element} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
+            {interactive && element.hyperlink && supportsPresentationElementHyperlink(element) ? (
+              <HyperlinkOverlay
+                element={element}
+                hyperlink={element.hyperlink}
+                onActivate={onActivateHyperlink!}
+              />
+            ) : null}
+          </Fragment>
         ))}
         <PresentationFooterPreview slide={slide} slideNumber={slideNumber} />
-        {interactive ? slide.elements.map((element) => (
-          element.hyperlink ? (
-            <HyperlinkOverlay
-              key={`link-${element.id}`}
-              element={element}
-              hyperlink={element.hyperlink}
-              onActivate={onActivateHyperlink!}
-            />
-          ) : null
-        )) : null}
       </span>
     </span>
   )
@@ -271,13 +271,15 @@ function PresentationTablePreview({ element }: { element: PresentationTableEleme
 }
 
 function PresentationChartPreview({ element }: { element: PresentationChartElement }) {
+  const layoutWidth = Math.max(180, element.width)
+  const layoutHeight = Math.max(120, element.height)
   const titleHeight = element.title ? 38 : 12
   const legendHeight = element.showLegend ? 34 : 8
   const plot = {
     x: element.chartType === 'bar' ? 100 : 54,
     y: titleHeight,
-    width: element.width - (element.chartType === 'bar' ? 120 : 76),
-    height: element.height - titleHeight - legendHeight - 28,
+    width: layoutWidth - (element.chartType === 'bar' ? 120 : 76),
+    height: layoutHeight - titleHeight - legendHeight - 28,
   }
   let chartMarks: ReactNode
   if (element.chartType === 'pie' || element.chartType === 'doughnut') chartMarks = <PieChartMarks element={element} plot={plot} />
@@ -286,14 +288,15 @@ function PresentationChartPreview({ element }: { element: PresentationChartEleme
   return (
     <svg
       className="absolute block overflow-hidden rounded-md bg-white"
-      viewBox={`0 0 ${element.width} ${element.height}`}
-      style={{ ...elementStyle(element), filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.16))' : undefined }}
+      viewBox={`0 0 ${layoutWidth} ${layoutHeight}`}
+      preserveAspectRatio="none"
+      style={elementStyle(element)}
       data-testid="presentation-chart-preview"
     >
-      <rect x="0" y="0" width={element.width} height={element.height} fill="#FFFFFF" stroke="#E3E4EA" />
-      {element.title ? <text x={element.width / 2} y="25" textAnchor="middle" fontFamily="Aptos, sans-serif" fontSize="18" fontWeight="600" fill="#20202B">{element.title}</text> : null}
+      <rect x="0" y="0" width={layoutWidth} height={layoutHeight} fill="#FFFFFF" stroke="#E3E4EA" />
+      {element.title ? <text x={layoutWidth / 2} y="25" textAnchor="middle" fontFamily="Aptos, sans-serif" fontSize="18" fontWeight="600" fill="#20202B">{element.title}</text> : null}
       {chartMarks}
-      {element.showLegend ? <ChartLegend element={element} y={element.height - 18} /> : null}
+      {element.showLegend ? <ChartLegend element={element} width={layoutWidth} y={layoutHeight - 18} /> : null}
     </svg>
   )
 }
@@ -470,12 +473,12 @@ function PieChartMarks({ element, plot }: { element: PresentationChartElement; p
   )
 }
 
-function ChartLegend({ element, y }: { element: PresentationChartElement; y: number }) {
+function ChartLegend({ element, width, y }: { element: PresentationChartElement; width: number; y: number }) {
   const labels = element.chartType === 'pie' || element.chartType === 'doughnut'
     ? element.categories
     : element.series.map((series) => series.name)
-  const itemWidth = Math.min(150, element.width / Math.max(1, labels.length))
-  const start = (element.width - (itemWidth * labels.length)) / 2
+  const itemWidth = Math.min(150, width / Math.max(1, labels.length))
+  const start = (width - (itemWidth * labels.length)) / 2
   return (
     <g>
       {labels.map((label, index) => (

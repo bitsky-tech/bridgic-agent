@@ -178,6 +178,23 @@ describe('createPresentationPptx', () => {
         muted: false,
       },
       {
+        id: 'embedded-extensionless-audio',
+        type: 'audio',
+        x: 30,
+        y: 300,
+        width: 260,
+        height: 60,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
+          fileName: 'extensionless-audio',
+          mimeType: 'audio/mpeg',
+        },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
         id: 'embedded-video',
         type: 'video',
         x: 310,
@@ -189,6 +206,40 @@ describe('createPresentationPptx', () => {
           dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
           fileName: 'sample.mp4',
           mimeType: 'video/mp4',
+        },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
+        id: 'embedded-m4a',
+        type: 'audio',
+        x: 310,
+        y: 270,
+        width: 120,
+        height: 40,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:audio/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+          fileName: 'sample.m4a',
+          mimeType: 'audio/mp4',
+        },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
+        id: 'embedded-mov',
+        type: 'video',
+        x: 450,
+        y: 270,
+        width: 120,
+        height: 68,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+          fileName: 'sample.mov',
+          mimeType: 'video/quicktime',
         },
         autoplay: false,
         loop: false,
@@ -247,6 +298,9 @@ describe('createPresentationPptx', () => {
     const slideRelationships = await archive.file('ppt/slides/_rels/slide1.xml.rels')?.async('text')
     if (!slideRelationships) throw new Error('Missing slide relationships')
 
+    const linkedTextRun = /<a:r>[\s\S]*?<a:t>External link<\/a:t><\/a:r>/.exec(slideXml)?.[0]
+    expect(linkedTextRun).toContain('u="sng"')
+    expect(linkedTextRun).toContain('<a:srgbClr val="2563EB"/>')
     expect(slideXml).toContain('descr="Tiny preview"')
     expect(slideXml).toContain('descr="Contained preview"')
     expect(slideXml).toContain('rot="900000"')
@@ -271,11 +325,22 @@ describe('createPresentationPptx', () => {
 
     const mediaPaths = Object.keys(archive.files).filter((path) => path.startsWith('ppt/media/') && !path.endsWith('/'))
     expect(mediaPaths.some((path) => path.endsWith('.png'))).toBe(true)
-    expect(mediaPaths.some((path) => path.endsWith('.mp3'))).toBe(true)
+    expect(mediaPaths.filter((path) => path.endsWith('.mp3'))).toHaveLength(2)
+    expect(mediaPaths.some((path) => path.endsWith('.m4a'))).toBe(true)
     expect(mediaPaths.some((path) => path.endsWith('.mp4'))).toBe(true)
+    expect(mediaPaths.some((path) => path.endsWith('.mov'))).toBe(true)
     await Promise.all(mediaPaths.map(async (path) => {
       expect((await archive.file(path)?.async('uint8array'))?.length).toBeGreaterThan(0)
     }))
+
+    const contentTypesXml = await archive.file('[Content_Types].xml')?.async('text')
+    if (!contentTypesXml) throw new Error('Missing content types')
+    expect(contentTypesXml).toContain('<Default Extension="mp3" ContentType="audio/mpeg"/>')
+    expect(contentTypesXml).toContain('<Default Extension="m4a" ContentType="audio/mp4"/>')
+    expect(contentTypesXml).toContain('<Default Extension="mov" ContentType="video/quicktime"/>')
+    expect(contentTypesXml).not.toContain('ContentType="audio/mp3"')
+    expect(contentTypesXml).not.toContain('ContentType="audio/m4a"')
+    expect(contentTypesXml).not.toContain('ContentType="video/mov"')
 
     const chartPaths = Object.keys(archive.files).filter((path) => /^ppt\/charts\/chart\d+\.xml$/.test(path))
     const embeddingPaths = Object.keys(archive.files).filter((path) => /^ppt\/embeddings\/.*\.xlsx$/.test(path))
@@ -297,6 +362,34 @@ describe('createPresentationPptx', () => {
     }))
   })
 
+  it('canonicalizes QuickTime content types without relying on audio or transitions', async () => {
+    const document = createInitialPresentationDocument()
+    document.slides[0]!.elements = [{
+      id: 'quicktime-only',
+      type: 'video',
+      x: 10,
+      y: 10,
+      width: 320,
+      height: 180,
+      rotation: 0,
+      source: {
+        dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+        fileName: 'quicktime-only.mov',
+        mimeType: 'video/quicktime',
+      },
+      autoplay: false,
+      loop: false,
+      muted: false,
+    }]
+    document.slides[0]!.transition = { effect: 'none', durationMs: 1_000 }
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const contentTypesXml = await archive.file('[Content_Types].xml')?.async('text')
+    if (!contentTypesXml) throw new Error('Missing content types')
+    expect(contentTypesXml).toContain('<Default Extension="mov" ContentType="video/quicktime"/>')
+    expect(contentTypesXml).not.toContain('ContentType="video/mov"')
+  })
+
   it('skips malformed legacy elements and dangling hyperlinks without failing export', async () => {
     const document = createInitialPresentationDocument()
     const elements = document.slides[0]!.elements as unknown[]
@@ -313,6 +406,65 @@ describe('createPresentationPptx', () => {
         source: { dataUrl: 'not-a-data-url', fileName: 'broken.png', mimeType: 'image/png' },
         altText: 'Broken image',
         fit: 'contain',
+      },
+      {
+        id: 'mismatched-image',
+        type: 'image',
+        x: 120,
+        y: 10,
+        width: 100,
+        height: 100,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5QAAAABJRU5ErkJggg==',
+          fileName: 'mismatch.jpg',
+          mimeType: 'image/png',
+        },
+        altText: 'Mismatched image',
+        fit: 'contain',
+      },
+      {
+        id: 'mismatched-audio',
+        type: 'audio',
+        x: 230,
+        y: 10,
+        width: 100,
+        height: 50,
+        rotation: 0,
+        source: { dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA', fileName: 'mismatch.ogg', mimeType: 'audio/mpeg' },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
+        id: 'bad-signature-audio',
+        type: 'audio',
+        x: 340,
+        y: 10,
+        width: 100,
+        height: 50,
+        rotation: 0,
+        source: { dataUrl: 'data:audio/mpeg;base64,AAAA', fileName: 'broken.mp3', mimeType: 'audio/mpeg' },
+        autoplay: false,
+        loop: false,
+        muted: false,
+      },
+      {
+        id: 'mismatched-video',
+        type: 'video',
+        x: 450,
+        y: 10,
+        width: 100,
+        height: 50,
+        rotation: 0,
+        source: {
+          dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+          fileName: 'mismatch.mov',
+          mimeType: 'video/mp4',
+        },
+        autoplay: false,
+        loop: false,
+        muted: false,
       },
       {
         id: 'dangling-shape-link',
@@ -334,7 +486,11 @@ describe('createPresentationPptx', () => {
     const relationships = await archive.file('ppt/slides/_rels/slide1.xml.rels')?.async('text')
     expect(slideXml).not.toContain('legacyWidget')
     expect(slideXml).not.toContain('Broken image')
+    expect(slideXml).not.toContain('Mismatched image')
     expect(relationships).not.toContain('missing-slide')
+    expect(relationships).not.toContain('relationships/audio')
+    expect(relationships).not.toContain('relationships/video')
+    expect(Object.keys(archive.files).filter((path) => path.startsWith('ppt/media/') && !path.endsWith('/'))).toHaveLength(0)
   })
 
   it('writes standard transitions with exact duration, fallback speed, direction, and through-black options', async () => {

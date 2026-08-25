@@ -88,12 +88,71 @@ export function isPresentationChartElement(element: { type: string }): element i
   return element.type === 'chart'
 }
 
+export function supportsPresentationElementShadow(element: { type: string }): boolean {
+  return isPresentationTextElement(element)
+    || isPresentationShapeElement(element)
+    || isPresentationImageElement(element)
+}
+
+export function supportsPresentationElementRotation(element: { type: string }): boolean {
+  return !isPresentationMediaElement(element)
+    && !isPresentationTableElement(element)
+    && !isPresentationChartElement(element)
+}
+
+export function supportsPresentationElementHyperlink(element: { type: string }): boolean {
+  return isPresentationTextElement(element)
+    || isPresentationShapeElement(element)
+    || isPresentationImageElement(element)
+}
+
+function presentationFileHeader(source: PresentationFileSource, byteCount = 16): Uint8Array | null {
+  const payload = source.dataUrl.slice(source.dataUrl.indexOf(',') + 1).replace(/\s/g, '')
+  const encodedLength = Math.min(payload.length, Math.ceil(byteCount / 3) * 4)
+  const encoded = payload.slice(0, encodedLength - (encodedLength % 4))
+  if (!encoded) return null
+  try {
+    const binary = atob(encoded)
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  } catch {
+    return null
+  }
+}
+
+/** Reject obvious container/extension disguises before Chromium or Office sees them. */
+export function hasValidPresentationMediaSignature(type: PresentationMediaElement['type'], source: PresentationFileSource): boolean {
+  if (!source.mimeType.startsWith(`${type}/`)) return false
+  const bytes = presentationFileHeader(source)
+  if (!bytes) return false
+  const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length))
+  switch (source.mimeType) {
+    case 'audio/mpeg':
+      return ascii(0, 3) === 'ID3' || (bytes[0] === 0xFF && ((bytes[1] ?? 0) & 0xE0) === 0xE0)
+    case 'audio/wav':
+      return ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WAVE'
+    case 'audio/mp4':
+      return ascii(4, 4) === 'ftyp'
+    case 'audio/ogg':
+      return ascii(0, 4) === 'OggS'
+    case 'video/mp4':
+    case 'video/quicktime':
+      return ascii(4, 4) === 'ftyp'
+    case 'video/webm':
+      return bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3
+    default:
+      return false
+  }
+}
+
 export function normalizePresentationFileSource(kind: PresentationFileKind, source: PresentationFileSource): PresentationFileSource | null {
   const sourceMimeType = source.mimeType.trim().toLowerCase()
   const extension = /\.([^.]+)$/.exec(source.fileName.trim())?.[1]?.toLowerCase()
   const inferredMimeType = extension
     ? PRESENTATION_FILE_EXTENSION_MIME_TYPES[kind][extension]
     : undefined
+  if (inferredMimeType
+    && !GENERIC_PRESENTATION_FILE_MIME_TYPES.has(sourceMimeType)
+    && inferredMimeType !== sourceMimeType) return null
   const mimeType = GENERIC_PRESENTATION_FILE_MIME_TYPES.has(sourceMimeType)
     ? inferredMimeType
     : sourceMimeType

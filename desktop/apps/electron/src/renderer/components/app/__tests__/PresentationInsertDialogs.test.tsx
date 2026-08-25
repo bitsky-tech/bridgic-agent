@@ -154,6 +154,33 @@ describe('PresentationInsertDialogs', () => {
     })
   })
 
+  it('hides and does not require the label when the linked object owns its display content', async () => {
+    const { submitted } = await mountDialog({
+      open: 'link',
+      linkLabelEditable: false,
+      initialValue: {
+        kind: 'link',
+        targetType: 'url',
+        url: 'https://example.com/image',
+        slideId: '',
+        label: '',
+        tooltip: 'Open image source',
+      },
+    })
+    expect(document.querySelector('[data-testid="presentation-insert-link-label"]')).toBeNull()
+    const submit = document.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    expect(submit.disabled).toBe(false)
+    await act(async () => submit.click())
+    expect(submitted[0]).toEqual({
+      kind: 'link',
+      targetType: 'url',
+      url: 'https://example.com/image',
+      slideId: '',
+      label: '',
+      tooltip: 'Open image source',
+    })
+  })
+
   it('submits footer display flags and apply scope', async () => {
     const { submitted } = await mountDialog({
       open: 'footer',
