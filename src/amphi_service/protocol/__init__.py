@@ -51,12 +51,6 @@ from ._events import (
     WorkflowProgressEvent,
     WorkflowResultEvent,
 )
-from ._providers_catalog import (
-    HIDDEN_PROVIDER_IDS,
-    PROVIDER_CATALOG,
-    PROVIDER_CATALOG_BY_ID,
-    visible_catalog,
-)
 from ._schemas import (
     AddProviderRequest,
     CreateMemoryRequest,
@@ -144,10 +138,6 @@ __all__ = [
     "FetchModelsRequest",
     # skills
     "ToggleSkillRequest",
-    "PROVIDER_CATALOG",
-    "PROVIDER_CATALOG_BY_ID",
-    "HIDDEN_PROVIDER_IDS",
-    "visible_catalog",
     # Workflows
     "WorkflowFile",
     "WorkflowProgram",

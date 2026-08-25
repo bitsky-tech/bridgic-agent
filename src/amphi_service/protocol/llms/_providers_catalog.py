@@ -1,3 +1,5 @@
+"""Built-in provider presets exposed to clients and LLM routing code."""
+
 from typing import Dict, List
 
 PROVIDER_CATALOG: List[dict] = [

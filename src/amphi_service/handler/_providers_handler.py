@@ -10,14 +10,13 @@ import httpx
 from fastapi import HTTPException, Response, status
 
 from ..protocol import (
-    PROVIDER_CATALOG_BY_ID,
     AddProviderRequest,
     FetchModelsRequest,
     SetActiveModelRequest,
     TestProviderRequest,
     ToggleProviderRequest,
-    visible_catalog,
 )
+from ..protocol.llms import PROVIDER_CATALOG_BY_ID, visible_catalog
 from ..protocol.llms._codex_credentials import (
     CodexAuthError,
     peek_codex_local,

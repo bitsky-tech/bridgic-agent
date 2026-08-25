@@ -10,5 +10,17 @@ non-trivial auth flows (OAuth, device-code, MCP, ...) live alongside
 from __future__ import annotations
 
 from ._factory import build_llm
+from ._providers_catalog import (
+    HIDDEN_PROVIDER_IDS,
+    PROVIDER_CATALOG,
+    PROVIDER_CATALOG_BY_ID,
+    visible_catalog,
+)
 
-__all__ = ["build_llm"]
+__all__ = [
+    "HIDDEN_PROVIDER_IDS",
+    "PROVIDER_CATALOG",
+    "PROVIDER_CATALOG_BY_ID",
+    "build_llm",
+    "visible_catalog",
+]

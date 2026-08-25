@@ -17,7 +17,7 @@ class ProviderCredential(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: str = Field(foreign_key="users.id", index=True)
     # provider_id is now any user-chosen slug; the catalog (see
-    # ``protocol/_providers_catalog.py``) acts only as a UI prefill source
+    # ``protocol/llms/_providers_catalog.py``) acts only as a UI prefill source
     # and no longer constrains POST /me/providers (the catalog was once a 400 gate).
     provider_id: str = Field(description="User-chosen slug; catalog entries reuse their id but custom channels are free-form.")
     auth_mode: str = Field(description="'api_key' | 'oauth'.")
