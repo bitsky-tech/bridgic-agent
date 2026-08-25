@@ -463,7 +463,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     const toIndex = Math.max(0, Math.min(slides.length - 1, requestedIndex))
     if (toIndex === slideshowIndex) return
     const transition = normalizePresentationTransition(slides[toIndex]?.transition)
-    if (transition.effect === 'none' || (transition.effect === 'cut' && !transition.throughBlack)) {
+    if (transition.effect === 'none') {
       setSlideshowIndex(toIndex)
       return
     }
@@ -1043,7 +1043,6 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
                       current={<SlidePreview slide={currentSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />}
                       transition={transitionPreviewRun.transition}
                       runKey={transitionPreviewRun.runKey}
-                      mode="preview"
                       onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
                       className="size-full"
                     />

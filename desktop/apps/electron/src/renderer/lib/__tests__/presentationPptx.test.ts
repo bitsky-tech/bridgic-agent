@@ -97,8 +97,7 @@ describe('createPresentationPptx', () => {
   it('writes standard transitions with exact duration, fallback speed, direction, and through-black options', async () => {
     const archive = await exportTransitionSlides([
       { effect: 'none', durationMs: 500 },
-      { effect: 'cut', durationMs: 250, throughBlack: true },
-      { effect: 'fade', durationMs: 750 },
+      { effect: 'fade', durationMs: 750, throughBlack: true },
       { effect: 'push', durationMs: 1_500, direction: 'right' },
       { effect: 'wipe', durationMs: 500, direction: 'up' },
       { effect: 'cover', durationMs: 1_000, direction: 'down' },
@@ -106,27 +105,35 @@ describe('createPresentationPptx', () => {
     ])
 
     const noneXml = await readSlideXml(archive, 1)
-    const cutXml = await readSlideXml(archive, 2)
-    const fadeXml = await readSlideXml(archive, 3)
-    const pushXml = await readSlideXml(archive, 4)
-    const wipeXml = await readSlideXml(archive, 5)
-    const coverXml = await readSlideXml(archive, 6)
-    const zoomXml = await readSlideXml(archive, 7)
+    const fadeXml = await readSlideXml(archive, 2)
+    const pushXml = await readSlideXml(archive, 3)
+    const wipeXml = await readSlideXml(archive, 4)
+    const coverXml = await readSlideXml(archive, 5)
+    const zoomXml = await readSlideXml(archive, 6)
 
     expect(noneXml).not.toContain('<p:transition')
     expect(noneXml).not.toContain('xmlns:p14=')
-    expect(cutXml).toContain('xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"')
-    expect(cutXml).toContain('xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"')
-    expect(cutXml).toContain('mc:Ignorable="p14"')
-    expect(cutXml).toContain('<p:transition spd="fast" p14:dur="250"><p:cut thruBlk="1"/></p:transition>')
-    expect(fadeXml).toContain('<p:transition spd="med" p14:dur="750"><p:fade/></p:transition>')
+    expect(fadeXml).toContain('xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"')
+    expect(fadeXml).toContain('xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"')
+    expect(fadeXml).toContain('mc:Ignorable="p14"')
+    expect(fadeXml).toContain('<p:transition spd="med" p14:dur="750"><p:fade thruBlk="1"/></p:transition>')
     expect(pushXml).toContain('<p:transition spd="slow" p14:dur="1500"><p:push dir="l"/></p:transition>')
     expect(wipeXml).toContain('<p:transition spd="fast" p14:dur="500"><p:wipe dir="d"/></p:transition>')
     expect(coverXml).toContain('<p:transition spd="med" p14:dur="1000"><p:cover dir="u"/></p:transition>')
     expect(zoomXml).toContain('<p:transition spd="med" p14:dur="600"><p:zoom dir="out"/></p:transition>')
-    expect(cutXml).not.toContain('<mc:AlternateContent>')
-    expect(cutXml.indexOf('</p:clrMapOvr>')).toBeLessThan(cutXml.indexOf('<p:transition'))
-    expect(cutXml.indexOf('<p:transition')).toBeLessThan(cutXml.indexOf('</p:sld>'))
+    expect(fadeXml).not.toContain('<mc:AlternateContent>')
+    expect(fadeXml.indexOf('</p:clrMapOvr>')).toBeLessThan(fadeXml.indexOf('<p:transition'))
+    expect(fadeXml.indexOf('<p:transition')).toBeLessThan(fadeXml.indexOf('</p:sld>'))
+  })
+
+  it('normalizes a legacy cut transition to no transition instead of exporting p:cut', async () => {
+    const legacyCut = { effect: 'cut', durationMs: 250, throughBlack: true } as unknown as PresentationTransition
+    const archive = await exportTransitionSlides([legacyCut])
+    const slideXml = await readSlideXml(archive, 1)
+
+    expect(slideXml).not.toContain('<p:transition')
+    expect(slideXml).not.toContain('<p:cut')
+    expect(slideXml).not.toContain('xmlns:p14=')
   })
 
   it('wraps Office extension transitions with a standard fade fallback', async () => {

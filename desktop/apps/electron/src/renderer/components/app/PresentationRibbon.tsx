@@ -145,7 +145,6 @@ const slideThemes = [
 
 const transitionIcons: Record<PresentationTransitionEffect, LucideIcon> = {
   none: Square,
-  cut: Eraser,
   fade: Blend,
   push: ArrowUpToLine,
   wipe: Columns3,
@@ -156,7 +155,7 @@ const transitionIcons: Record<PresentationTransitionEffect, LucideIcon> = {
   cube: Box,
 }
 
-const quickTransitionEffects: readonly PresentationTransitionEffect[] = ['none', 'cut', 'fade', 'push', 'wipe']
+const quickTransitionEffects: readonly PresentationTransitionEffect[] = ['none', 'fade', 'push', 'wipe']
 const extendedTransitionEffects: readonly PresentationTransitionEffect[] = ['reveal', 'cover', 'zoom', 'flip', 'cube']
 const quickTransitionDefinitions = presentationTransitionDefinitions.filter((definition) => (
   quickTransitionEffects.includes(definition.effect)

@@ -27,7 +27,6 @@ const NONE_TRANSITION_DEFINITION: PresentationTransitionDefinition = {
 
 export const presentationTransitionDefinitions: readonly PresentationTransitionDefinition[] = [
   NONE_TRANSITION_DEFINITION,
-  { effect: 'cut', labelKey: 'session.presentation.effectCut', directions: [], supportsThroughBlack: true },
   { effect: 'fade', labelKey: 'session.presentation.effectFadeThrough', directions: [], supportsThroughBlack: true },
   { effect: 'push', labelKey: 'session.presentation.effectPush', directions: CARDINAL_DIRECTIONS, defaultDirection: 'left' },
   { effect: 'wipe', labelKey: 'session.presentation.effectWipe', directions: CARDINAL_DIRECTIONS, defaultDirection: 'left' },
@@ -45,7 +44,12 @@ const presentationTransitionEffects = new Set<PresentationTransitionEffect>(
   presentationTransitionDefinitions.map((definition) => definition.effect),
 )
 
-export type PresentationTransitionInput = Partial<PresentationTransition> | PresentationTransitionEffect | null | undefined
+type LegacyPresentationTransitionEffect = 'cut'
+type PresentationTransitionObjectInput = Partial<Omit<PresentationTransition, 'effect'>> & {
+  effect?: PresentationTransitionEffect | LegacyPresentationTransitionEffect
+}
+
+export type PresentationTransitionInput = PresentationTransitionObjectInput | PresentationTransitionEffect | LegacyPresentationTransitionEffect | null | undefined
 
 export function getPresentationTransitionDefinition(effect: PresentationTransitionEffect): PresentationTransitionDefinition {
   return presentationTransitionDefinitionMap.get(effect) ?? NONE_TRANSITION_DEFINITION
@@ -60,7 +64,9 @@ export function createDefaultPresentationTransition(): PresentationTransition {
 
 export function normalizePresentationTransition(value: PresentationTransitionInput): PresentationTransition {
   const candidate = typeof value === 'string' ? { effect: value } : value
-  const effect = candidate?.effect && presentationTransitionEffects.has(candidate.effect)
+  const effect: PresentationTransitionEffect = candidate?.effect !== 'cut'
+    && candidate?.effect
+    && presentationTransitionEffects.has(candidate.effect)
     ? candidate.effect
     : 'none'
   const definition = getPresentationTransitionDefinition(effect)

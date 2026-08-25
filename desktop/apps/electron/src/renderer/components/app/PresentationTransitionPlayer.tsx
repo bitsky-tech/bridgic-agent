@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'rea
 import type { PresentationTransition, PresentationTransitionDirection } from '@/atoms/presentation'
 
 export type PresentationTransitionPlaybackDirection = 'forward' | 'backward'
-export type PresentationTransitionPlayerMode = 'playback' | 'preview'
 
 export interface PresentationTransitionPlayerProps {
   previous: ReactNode
@@ -10,7 +9,6 @@ export interface PresentationTransitionPlayerProps {
   transition: PresentationTransition
   runKey: string | number
   direction?: PresentationTransitionPlaybackDirection
-  mode?: PresentationTransitionPlayerMode
   onComplete?: () => void
   className?: string
 }
@@ -31,9 +29,6 @@ interface MovementVector {
 
 const MOTION_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
 const LINEAR_EASING = 'linear'
-const CUT_PREVIEW_MIN_DURATION_MS = 400
-const CUT_PREVIEW_MAX_DURATION_MS = 1_000
-const CUT_PREVIEW_SWITCH_OFFSET = 0.5
 const FACE_SWITCH_OFFSET = 0.5
 
 function getMovementVector(direction: PresentationTransitionDirection | undefined, playbackDirection: PresentationTransitionPlaybackDirection): MovementVector {
@@ -88,7 +83,7 @@ function getCubeTransformOrigin(vector: MovementVector, face: 'incoming' | 'outg
  * Build the Web Animations keyframes used by both editor preview and slideshow playback.
  * The navigation direction reverses spatial effects when the user moves to a previous slide.
  */
-export function createPresentationTransitionKeyframes(transition: PresentationTransition, playbackDirection: PresentationTransitionPlaybackDirection = 'forward', mode: PresentationTransitionPlayerMode = 'playback'): PresentationTransitionAnimationSpec {
+export function createPresentationTransitionKeyframes(transition: PresentationTransition, playbackDirection: PresentationTransitionPlaybackDirection = 'forward'): PresentationTransitionAnimationSpec {
   const duration = Number.isFinite(transition.durationMs) ? Math.max(0, transition.durationMs) : 0
   const base = {
     previous: [] as Keyframe[],
@@ -101,49 +96,6 @@ export function createPresentationTransitionKeyframes(transition: PresentationTr
 
   if (transition.effect === 'none') {
     return { ...base, immediate: true }
-  }
-
-  if (transition.effect === 'cut') {
-    if (!transition.throughBlack) {
-      if (mode !== 'preview') return { ...base, immediate: true }
-      const previewDuration = Math.min(
-        CUT_PREVIEW_MAX_DURATION_MS,
-        Math.max(CUT_PREVIEW_MIN_DURATION_MS, duration),
-      )
-      return {
-        ...base,
-        previous: [
-          { opacity: 1, offset: 0 },
-          { opacity: 1, offset: CUT_PREVIEW_SWITCH_OFFSET },
-          { opacity: 0, offset: CUT_PREVIEW_SWITCH_OFFSET },
-          { opacity: 0, offset: 1 },
-        ],
-        current: [
-          { opacity: 0, offset: 0 },
-          { opacity: 0, offset: CUT_PREVIEW_SWITCH_OFFSET },
-          { opacity: 1, offset: CUT_PREVIEW_SWITCH_OFFSET },
-          { opacity: 1, offset: 1 },
-        ],
-        options: { ...base.options, duration: previewDuration, easing: LINEAR_EASING },
-        immediate: false,
-      }
-    }
-    return {
-      ...base,
-      previous: [
-        { opacity: 1, offset: 0 },
-        { opacity: 1, offset: 0.45 },
-        { opacity: 0, offset: 0.45 },
-        { opacity: 0, offset: 1 },
-      ],
-      current: [
-        { opacity: 0, offset: 0 },
-        { opacity: 0, offset: 0.55 },
-        { opacity: 1, offset: 0.55 },
-        { opacity: 1, offset: 1 },
-      ],
-      options: { ...base.options, easing: LINEAR_EASING },
-    }
   }
 
   if (transition.effect === 'fade') {
@@ -306,16 +258,16 @@ const layerStyle: CSSProperties = {
   willChange: 'transform, opacity, clip-path, filter',
 }
 
-export function PresentationTransitionPlayer({ previous, current, transition, runKey, direction = 'forward', mode = 'playback', onComplete, className }: PresentationTransitionPlayerProps) {
+export function PresentationTransitionPlayer({ previous, current, transition, runKey, direction = 'forward', onComplete, className }: PresentationTransitionPlayerProps) {
   const previousRef = useRef<HTMLDivElement>(null)
   const currentRef = useRef<HTMLDivElement>(null)
   const animationsRef = useRef<Animation[]>([])
-  const playbackRef = useRef({ transition, direction, mode })
+  const playbackRef = useRef({ transition, direction })
   const onCompleteRef = useRef(onComplete)
   const generationRef = useRef(0)
 
   useLayoutEffect(() => {
-    playbackRef.current = { transition, direction, mode }
+    playbackRef.current = { transition, direction }
     onCompleteRef.current = onComplete
   })
 
@@ -343,7 +295,7 @@ export function PresentationTransitionPlayer({ previous, current, transition, ru
       onCompleteRef.current?.()
     }
 
-    const spec = createPresentationTransitionKeyframes(playbackRef.current.transition, playbackRef.current.direction, playbackRef.current.mode)
+    const spec = createPresentationTransitionKeyframes(playbackRef.current.transition, playbackRef.current.direction)
     const canAnimate = currentLayer && typeof currentLayer.animate === 'function'
     if (spec.immediate || prefersReducedMotion() || !canAnimate) {
       queueMicrotask(complete)

@@ -165,20 +165,13 @@ describe('PresentationWorkbenchPanel', () => {
 
     const transitions = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-transitions"]')!
     await act(async () => transitions.click())
-    for (const effect of ['none', 'cut', 'fade', 'push', 'wipe']) {
+    for (const effect of ['none', 'fade', 'push', 'wipe']) {
       expect(host.querySelector(`[data-testid="presentation-transition-${effect}"]`)).not.toBeNull()
     }
     for (const effect of ['reveal', 'cover', 'zoom', 'flip', 'cube']) {
       expect(host.querySelector(`[data-testid="presentation-transition-${effect}"]`)).toBeNull()
     }
-    const cutTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-cut"]')!
-    const animationCountBeforeCut = transitionAnimationCalls.length
-    await act(async () => cutTransition.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
-      effect: 'cut',
-      durationMs: 1_000,
-    })
-    expect(transitionAnimationCalls.length).toBeGreaterThan(animationCountBeforeCut)
+    expect(host.querySelector('[data-testid="presentation-transition-cut"]')).toBeNull()
 
     const noTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-none"]')!
     await act(async () => noTransition.click())

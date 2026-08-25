@@ -6,7 +6,7 @@ export const PRESENTATION_WIDTH = 1280
 export const PRESENTATION_HEIGHT = 720
 
 export type PresentationAnimationEffect = 'none' | 'appear' | 'fade' | 'flyIn' | 'zoom'
-export type PresentationTransitionEffect = 'none' | 'cut' | 'fade' | 'push' | 'wipe' | 'reveal' | 'cover' | 'zoom' | 'flip' | 'cube'
+export type PresentationTransitionEffect = 'none' | 'fade' | 'push' | 'wipe' | 'reveal' | 'cover' | 'zoom' | 'flip' | 'cube'
 export type PresentationTransitionDirection = 'left' | 'right' | 'up' | 'down' | 'in' | 'out'
 
 export interface PresentationTransition {

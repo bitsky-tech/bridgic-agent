@@ -11,7 +11,6 @@ describe('presentation transitions', () => {
   it('registers every supported effect with its label and direction options', () => {
     expect(presentationTransitionDefinitions.map((definition) => definition.effect)).toEqual([
       'none',
-      'cut',
       'fade',
       'push',
       'wipe',
@@ -51,10 +50,10 @@ describe('presentation transitions', () => {
       direction: 'in',
     })
     expect(normalizePresentationTransition({ effect: 'cut', durationMs: 750.4, throughBlack: true })).toEqual({
-      effect: 'cut',
+      effect: 'none',
       durationMs: 750,
-      throughBlack: true,
     })
+    expect(normalizePresentationTransition('cut')).toEqual({ effect: 'none', durationMs: 1_000 })
   })
 
   it('preserves duration while changing effects and resets incompatible options', () => {

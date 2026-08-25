@@ -56,8 +56,6 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
 
     const standardEffectXml = (transition: PresentationTransition): string => {
       switch (transition.effect) {
-        case 'cut':
-          return `<p:cut${throughBlackAttribute(transition)}/>`
         case 'fade':
           return `<p:fade${throughBlackAttribute(transition)}/>`
         case 'push':
