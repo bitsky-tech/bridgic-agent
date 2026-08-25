@@ -8,9 +8,23 @@ import {
   currentPresentationWorkspaceAtom,
   presentationExpandedAtom,
   purgePresentationSessionAtom,
+  formatPresentationText,
+  stripPresentationListMarkers,
 } from '../presentation'
 
 describe('presentation atoms', () => {
+  it('formats list markers for display without polluting editable text', () => {
+    const document = createInitialPresentationDocument()
+    const element = document.slides[0]?.elements.find((item) => item.type === 'text')
+    if (!element || element.type !== 'text') throw new Error('Expected a text element')
+    element.text = 'First point\nSecond point'
+    element.listStyle = 'number'
+
+    const displayText = formatPresentationText(element)
+    expect(displayText).toBe('1. First point\n2. Second point')
+    expect(stripPresentationListMarkers(displayText, element.listStyle)).toBe(element.text)
+  })
+
   it('keeps documents and expanded state independent between Sessions', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')

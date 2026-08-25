@@ -34,6 +34,9 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     if (sourceSlide.notes?.trim()) slide.addNotes(sourceSlide.notes)
     for (const element of sourceSlide.elements) {
       if (element.type === 'text') {
+        let bullet: true | { type: 'number'; numberType: 'arabicPeriod' } | undefined
+        if (element.listStyle === 'bullet') bullet = true
+        else if (element.listStyle === 'number') bullet = { type: 'number', numberType: 'arabicPeriod' }
         slide.addText(element.text, {
           x: x(element.x),
           y: y(element.y),
@@ -47,10 +50,21 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           bold: element.fontWeight >= 600,
           italic: Boolean(element.italic),
           underline: element.underline ? { style: 'sng' } : undefined,
+          strike: Boolean(element.strikethrough),
+          superscript: element.baseline === 'superscript',
+          subscript: element.baseline === 'subscript',
+          highlight: element.highlightColor ? withoutHash(element.highlightColor) : undefined,
+          charSpacing: element.characterSpacing,
+          lineSpacingMultiple: element.lineHeight,
+          bullet,
+          indentLevel: element.listStyle && element.listStyle !== 'none' ? element.indentLevel ?? 0 : undefined,
           color: withoutHash(element.color),
           fontFace: element.fontFamily,
           fontSize: element.fontSize,
           fit: 'shrink',
+          shadow: element.shadow
+            ? { type: 'outer', color: '20202B', opacity: 0.28, blur: 3, angle: 45, offset: 2 }
+            : undefined,
         })
         continue
       }
@@ -71,6 +85,9 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
             width: element.borderWidth,
             transparency: element.borderWidth === 0 ? 100 : 0,
           },
+          shadow: element.shadow
+            ? { type: 'outer', color: '20202B', opacity: 0.22, blur: 3, angle: 45, offset: 2 }
+            : undefined,
         },
       )
     }

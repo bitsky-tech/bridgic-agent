@@ -11,6 +11,13 @@ describe('createPresentationPptx', () => {
     if (title?.type === 'text') {
       title.italic = true
       title.underline = true
+      title.strikethrough = true
+      title.baseline = 'superscript'
+      title.highlightColor = '#FFF200'
+      title.characterSpacing = 100
+      title.lineHeight = 1.5
+      title.listStyle = 'bullet'
+      title.shadow = true
     }
     const bytes = await createPresentationPptx(document)
 
@@ -26,6 +33,10 @@ describe('createPresentationPptx', () => {
     const firstSlideXml = await archive.file('ppt/slides/slide1.xml')?.async('text')
     expect(firstSlideXml).toContain(' i="1"')
     expect(firstSlideXml).toContain(' u="sng"')
+    expect(firstSlideXml).toContain(' strike="sngStrike"')
+    expect(firstSlideXml).toContain('<a:highlight>')
+    expect(firstSlideXml).toContain('<a:buChar')
+    expect(firstSlideXml).toContain(' baseline="30000"')
     const firstNotesXml = await archive.file('ppt/notesSlides/notesSlide1.xml')?.async('text')
     expect(firstNotesXml).toContain('Speaker note exported from Bridgic.')
   })

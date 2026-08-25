@@ -61,33 +61,48 @@ describe('PresentationWorkbenchPanel', () => {
 
     const home = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-home"]')!
     await act(async () => home.click())
-    const addText = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
+    const insertMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-insert"]')!
+    await act(async () => insertMenu.click())
+    const addText = document.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
     await act(async () => addText.click())
 
-    const bold = host.querySelector<HTMLButtonElement>('[data-testid="presentation-bold"]')!
-    const italic = host.querySelector<HTMLButtonElement>('[data-testid="presentation-italic"]')!
-    const underline = host.querySelector<HTMLButtonElement>('[data-testid="presentation-underline"]')!
-    const alignCenter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-align-center"]')!
+    const fontMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-font"]')!
+    await act(async () => fontMenu.click())
+    const bold = document.querySelector<HTMLButtonElement>('[data-testid="presentation-bold"]')!
+    const italic = document.querySelector<HTMLButtonElement>('[data-testid="presentation-italic"]')!
+    const underline = document.querySelector<HTMLButtonElement>('[data-testid="presentation-underline"]')!
+    const strikethrough = document.querySelector<HTMLButtonElement>('[data-testid="presentation-strikethrough"]')!
     expect(bold).not.toBeNull()
-    expect(host.querySelector('[data-testid="presentation-font-family"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="presentation-font-size"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="presentation-font-family"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="presentation-font-size"]')).not.toBeNull()
 
     await act(async () => {
       bold.click()
       italic.click()
       underline.click()
-      alignCenter.click()
+      strikethrough.click()
     })
 
-    const document = store.get(currentPresentationDocumentAtom)
-    const slide = document.slides.find((item) => item.id === document.selectedSlideId)!
+    const paragraphMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-paragraph"]')!
+    await act(async () => paragraphMenu.click())
+    const alignCenter = document.querySelector<HTMLButtonElement>('[data-testid="presentation-align-center"]')!
+    const bullets = document.querySelector<HTMLButtonElement>('[data-testid="presentation-bullets"]')!
+    await act(async () => {
+      alignCenter.click()
+      bullets.click()
+    })
+
+    const presentation = store.get(currentPresentationDocumentAtom)
+    const slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
     const element = slide.elements.at(-1)
     expect(element?.type).toBe('text')
     if (element?.type === 'text') {
       expect(element.fontWeight).toBe(700)
       expect(element.italic).toBe(true)
       expect(element.underline).toBe(true)
+      expect(element.strikethrough).toBe(true)
       expect(element.align).toBe('center')
+      expect(element.listStyle).toBe('bullet')
     }
 
     await act(async () => root.unmount())
@@ -98,6 +113,21 @@ describe('PresentationWorkbenchPanel', () => {
 
     expect(host.querySelectorAll('[data-testid^="presentation-tab-"]')).toHaveLength(8)
     expect(host.querySelector('[data-testid="presentation-tab-home"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(host.querySelector('[data-testid="presentation-tab-shape"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="presentation-tab-review"]')).toBeNull()
+    expect(host.querySelector('input[aria-label="文稿标题"]')).toBeNull()
+    const toolbarActions = host.querySelector<HTMLElement>('[data-testid="presentation-toolbar-actions"]')!
+    expect(toolbarActions.querySelector('button[aria-label="保存"]')).toBeNull()
+    expect(toolbarActions.querySelector('button[aria-label="上传"]')).toBeNull()
+    expect(toolbarActions.querySelector('button[aria-label="分享"]')).toBeNull()
+    expect(toolbarActions.querySelector('button[aria-label="在文件管理器打开"]')).not.toBeNull()
+    expect(toolbarActions.querySelector('[data-testid="presentation-toggle-expanded"]')).toBeNull()
+
+    const insert = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-insert"]')!
+    await act(async () => insert.click())
+    const insertActions = ['空白页面', '文本框', '形状', '图片', '音频', '视频', '表格', '链接', '图表', '页脚']
+    const actionLabels = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).map((button) => button.getAttribute('aria-label'))
+    expect(insertActions.every((label) => actionLabels.includes(label))).toBe(true)
 
     const notes = host.querySelector<HTMLTextAreaElement>('[data-testid="presentation-notes"]')!
     await act(async () => {
@@ -116,16 +146,65 @@ describe('PresentationWorkbenchPanel', () => {
 
     const home = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-home"]')!
     await act(async () => home.click())
-    const addText = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
+    const insertMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-insert"]')!
+    await act(async () => insertMenu.click())
+    const addText = document.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
     await act(async () => addText.click())
     const animations = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-animations"]')!
     await act(async () => animations.click())
     const fadeAnimation = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-fade"]')!
     await act(async () => fadeAnimation.click())
 
-    const document = store.get(currentPresentationDocumentAtom)
-    const selectedSlide = document.slides.find((slide) => slide.id === document.selectedSlideId)!
+    const presentation = store.get(currentPresentationDocumentAtom)
+    const selectedSlide = presentation.slides.find((slide) => slide.id === presentation.selectedSlideId)!
     expect(selectedSlide.elements.at(-1)?.animation).toBe('fade')
+
+    await act(async () => root.unmount())
+  })
+
+  it('copies and clears formatting through the compact History group', async () => {
+    const { host, root, store } = await mountPanel()
+    const insertMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-insert"]')!
+    await act(async () => insertMenu.click())
+    const addText = document.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
+    await act(async () => addText.click())
+
+    const fontMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-font"]')!
+    await act(async () => fontMenu.click())
+    const bold = document.querySelector<HTMLButtonElement>('[data-testid="presentation-bold"]')!
+    await act(async () => bold.click())
+
+    const formatPainter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')!
+    expect(formatPainter.disabled).toBe(false)
+    await act(async () => formatPainter.click())
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.getAttribute('aria-pressed')).toBe('true')
+    await act(async () => addText.click())
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const current = store.get(currentPresentationDocumentAtom)
+      const selectedSlide = current.slides.find((item) => item.id === current.selectedSlideId)!
+      const target = selectedSlide.elements.at(-1)
+      if (target?.type === 'text' && target.fontWeight === 700) break
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)))
+    }
+
+    let presentation = store.get(currentPresentationDocumentAtom)
+    let slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    const painted = slide.elements.at(-1)
+    expect(painted?.type).toBe('text')
+    if (painted?.type === 'text') expect(painted.fontWeight).toBe(700)
+
+    const clearFormat = host.querySelector<HTMLButtonElement>('[data-testid="presentation-clear-format"]')!
+    await act(async () => clearFormat.click())
+    presentation = store.get(currentPresentationDocumentAtom)
+    slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    const cleared = slide.elements.at(-1)
+    expect(cleared?.type).toBe('text')
+    if (cleared?.type === 'text') {
+      expect(cleared.fontWeight).toBe(400)
+      expect(cleared.fontFamily).toBe('Aptos')
+      expect(cleared.listStyle).toBe('none')
+    }
 
     await act(async () => root.unmount())
   })
@@ -140,6 +219,12 @@ describe('PresentationWorkbenchPanel', () => {
     expect(filmstripFooter.className).toContain('mt-auto')
 
     const addDocument = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-document"]')!
+    const documentTabs = host.querySelector<HTMLElement>('[data-testid="presentation-document-tabs"]')!
+    const expandPanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-expanded"]')!
+    const closePanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-close-panel"]')!
+    expect(addDocument.parentElement).toBe(documentTabs.parentElement)
+    expect(expandPanel.parentElement).toBe(documentTabs.parentElement)
+    expect(closePanel.parentElement).toBe(documentTabs.parentElement)
     await act(async () => addDocument.click())
 
     expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(2)
