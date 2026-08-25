@@ -13,11 +13,35 @@ const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
 
+const originalElementAnimateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate')
+let transitionAnimationCalls: Keyframe[][] = []
+
+function installTransitionAnimationMock() {
+  Object.defineProperty(Element.prototype, 'animate', {
+    configurable: true,
+    writable: true,
+    value(frames: Keyframe[]) {
+      transitionAnimationCalls.push(frames)
+      let finish: () => void = () => undefined
+      const finished = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      return {
+        finished,
+        cancel: finish,
+      } as unknown as Animation
+    },
+  })
+}
+
 beforeEach(async () => {
   await i18n.changeLanguage('zh')
+  transitionAnimationCalls = []
 })
 
 afterEach(() => {
+  if (originalElementAnimateDescriptor) Object.defineProperty(Element.prototype, 'animate', originalElementAnimateDescriptor)
+  else Reflect.deleteProperty(Element.prototype, 'animate')
   document.body.replaceChildren()
 })
 
@@ -110,6 +134,7 @@ describe('PresentationWorkbenchPanel', () => {
 
   it('offers a complete ribbon and stores notes, transitions, and animation choices', async () => {
     const { host, root, store } = await mountPanel()
+    installTransitionAnimationMock()
 
     expect(host.querySelectorAll('[data-testid^="presentation-tab-"]')).toHaveLength(8)
     expect(host.querySelector('[data-testid="presentation-tab-home"]')?.getAttribute('aria-selected')).toBe('true')
@@ -140,13 +165,34 @@ describe('PresentationWorkbenchPanel', () => {
 
     const transitions = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-transitions"]')!
     await act(async () => transitions.click())
-    expect(host.querySelectorAll('[data-testid^="presentation-transition-"]').length).toBeGreaterThanOrEqual(10)
+    for (const effect of ['none', 'cut', 'fade', 'push', 'wipe']) {
+      expect(host.querySelector(`[data-testid="presentation-transition-${effect}"]`)).not.toBeNull()
+    }
+    for (const effect of ['reveal', 'cover', 'zoom', 'flip', 'cube']) {
+      expect(host.querySelector(`[data-testid="presentation-transition-${effect}"]`)).toBeNull()
+    }
+    const cutTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-cut"]')!
+    const animationCountBeforeCut = transitionAnimationCalls.length
+    await act(async () => cutTransition.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
+      effect: 'cut',
+      durationMs: 500,
+    })
+    expect(transitionAnimationCalls.length).toBeGreaterThan(animationCountBeforeCut)
+
+    const noTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-none"]')!
+    await act(async () => noTransition.click())
+    expect(host.querySelector('[data-testid="presentation-transition-player"]')).toBeNull()
+
     const fadeTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-fade"]')!
+    const animationCountBeforeSelection = transitionAnimationCalls.length
     await act(async () => fadeTransition.click())
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
       effect: 'fade',
       durationMs: 500,
     })
+    expect(transitionAnimationCalls.length).toBeGreaterThan(animationCountBeforeSelection)
+    expect(host.querySelector('[data-testid="presentation-transition-player"]')).not.toBeNull()
 
     const duration = host.querySelector<HTMLInputElement>('input[aria-label="持续时间"]')!
     await act(async () => {
@@ -172,6 +218,8 @@ describe('PresentationWorkbenchPanel', () => {
 
     const gallery = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-gallery"]')!
     await act(async () => gallery.click())
+    expect(document.querySelector('[data-testid="presentation-transition-gallery-fade"]')).toBeNull()
+    expect(document.querySelector('[data-testid="presentation-transition-gallery-reveal"]')).not.toBeNull()
     const cube = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-gallery-cube"]')!
     await act(async () => cube.click())
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
@@ -179,6 +227,12 @@ describe('PresentationWorkbenchPanel', () => {
       durationMs: 1_200,
       direction: 'left',
     })
+    expect(gallery.getAttribute('aria-pressed')).toBe('true')
+
+    const preview = host.querySelector<HTMLButtonElement>('[data-testid="presentation-preview-transition"]')!
+    const animationCountBeforePreview = transitionAnimationCalls.length
+    await act(async () => preview.click())
+    expect(transitionAnimationCalls.length).toBeGreaterThan(animationCountBeforePreview)
 
     await act(async () => options.click())
     const fromTop = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-direction-up"]')!

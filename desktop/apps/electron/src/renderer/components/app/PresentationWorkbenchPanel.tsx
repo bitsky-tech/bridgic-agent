@@ -80,6 +80,7 @@ interface SlideshowTransitionRun {
 interface TransitionPreviewRun {
   runKey: number
   slideId: string
+  transition: PresentationTransition
 }
 
 interface SlideshowTransitionView extends SlideshowTransitionRun {
@@ -702,11 +703,17 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     setCanvasScale(Math.min(widthScale, heightScale, 1))
   }
 
-  const previewTransition = () => {
-    const transition = normalizePresentationTransition(currentSlide?.transition)
-    if (!currentSlide || transition.effect === 'none') return
+  const previewTransition = (override?: PresentationTransition) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const transition = normalizePresentationTransition(override ?? slide?.transition)
+    if (!slide) return
+    if (transition.effect === 'none') {
+      setTransitionPreviewRun(null)
+      return
+    }
     transitionRunIdRef.current += 1
-    setTransitionPreviewRun({ runKey: transitionRunIdRef.current, slideId: currentSlide.id })
+    setTransitionPreviewRun({ runKey: transitionRunIdRef.current, slideId: slide.id, transition })
   }
 
   const previewSelectedAnimation = () => {
@@ -1034,8 +1041,9 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
                         ? <SlidePreview slide={transitionPreviewPreviousSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />
                         : <span className="block size-full bg-black" />}
                       current={<SlidePreview slide={currentSlide} width={PRESENTATION_WIDTH * canvasScale} selected={false} presentation />}
-                      transition={normalizePresentationTransition(currentSlide.transition)}
+                      transition={transitionPreviewRun.transition}
                       runKey={transitionPreviewRun.runKey}
+                      mode="preview"
                       onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
                       className="size-full"
                     />

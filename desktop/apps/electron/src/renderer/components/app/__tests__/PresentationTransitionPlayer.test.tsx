@@ -12,6 +12,7 @@ const {
   PresentationTransitionPlayer,
   createPresentationTransitionKeyframes,
 } = await import('../PresentationTransitionPlayer')
+type PresentationTransitionPlayerMode = import('../PresentationTransitionPlayer').PresentationTransitionPlayerMode
 
 interface MockAnimationCall {
   element: Element
@@ -71,7 +72,7 @@ afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
-function mountPlayer(props: { transition?: PresentationTransition; runKey?: string | number; onComplete?: () => void } = {}): { host: HTMLElement; root: Root } {
+function mountPlayer(props: { transition?: PresentationTransition; runKey?: string | number; mode?: PresentationTransitionPlayerMode; onComplete?: () => void } = {}): { host: HTMLElement; root: Root } {
   const host = document.createElement('div')
   host.style.width = '1280px'
   host.style.height = '720px'
@@ -84,6 +85,7 @@ function mountPlayer(props: { transition?: PresentationTransition; runKey?: stri
         current={<div>Current slide</div>}
         transition={props.transition ?? transition()}
         runKey={props.runKey ?? 1}
+        mode={props.mode}
         onComplete={props.onComplete}
       />,
     )
@@ -139,6 +141,23 @@ describe('createPresentationTransitionKeyframes', () => {
     expect(blackFade.current[1]?.offset).toBe(0.5)
     expect(blackReveal.previous[1]?.offset).toBe(0.45)
     expect(blackReveal.current[1]?.offset).toBe(0.55)
+  })
+
+  it('keeps a plain cut immediate for playback and makes it discrete and perceptible for preview', () => {
+    const cut = transition({ effect: 'cut' })
+    const playbackCut = createPresentationTransitionKeyframes(cut)
+    const previewCut = createPresentationTransitionKeyframes(cut, 'forward', 'preview')
+
+    expect(playbackCut.immediate).toBe(true)
+    expect(playbackCut.previous).toHaveLength(0)
+    expect(previewCut.immediate).toBe(false)
+    expect(previewCut.options.duration).toBe(180)
+    expect(previewCut.previous[1]?.offset).toBe(previewCut.previous[2]?.offset)
+    expect(previewCut.previous[1]?.opacity).toBe(1)
+    expect(previewCut.previous[2]?.opacity).toBe(0)
+    expect(previewCut.current[1]?.offset).toBe(previewCut.current[2]?.offset)
+    expect(previewCut.current[1]?.opacity).toBe(0)
+    expect(previewCut.current[2]?.opacity).toBe(1)
   })
 })
 
@@ -202,6 +221,29 @@ describe('PresentationTransitionPlayer', () => {
     expect(completed).toBe(1)
 
     window.matchMedia = originalMatchMedia
+    await act(async () => root.unmount())
+  })
+
+  it('plays a plain cut through discrete WAAPI keyframes only in preview mode', async () => {
+    let completed = 0
+    const { root } = mountPlayer({
+      transition: transition({ effect: 'cut' }),
+      mode: 'preview',
+      onComplete: () => { completed += 1 },
+    })
+
+    expect(animationCalls).toHaveLength(2)
+    expect(animationCalls[0]?.keyframes[1]?.offset).toBe(animationCalls[0]?.keyframes[2]?.offset)
+    expect(animationCalls[0]?.keyframes[1]?.opacity).toBe(1)
+    expect(animationCalls[0]?.keyframes[2]?.opacity).toBe(0)
+    expect(animationCalls[1]?.keyframes[1]?.opacity).toBe(0)
+    expect(animationCalls[1]?.keyframes[2]?.opacity).toBe(1)
+
+    animationCalls[0]?.finish()
+    animationCalls[1]?.finish()
+    await act(async () => Promise.resolve())
+    expect(completed).toBe(1)
+
     await act(async () => root.unmount())
   })
 

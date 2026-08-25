@@ -113,7 +113,7 @@ interface PresentationRibbonProps {
   onFindText: (query: string) => void
   onMoveElement: (direction: 'front' | 'back') => void
   onPreviewAnimation: () => void
-  onPreviewTransition: () => void
+  onPreviewTransition: (transitionOverride?: PresentationTransition) => void
   onRedo: () => void
   onSlideChange: (patch: Partial<PresentationSlide>) => void
   onStartSlideshow: () => void
@@ -155,6 +155,15 @@ const transitionIcons: Record<PresentationTransitionEffect, LucideIcon> = {
   flip: FlipHorizontal2,
   cube: Box,
 }
+
+const quickTransitionEffects: readonly PresentationTransitionEffect[] = ['none', 'cut', 'fade', 'push', 'wipe']
+const extendedTransitionEffects: readonly PresentationTransitionEffect[] = ['reveal', 'cover', 'zoom', 'flip', 'cube']
+const quickTransitionDefinitions = presentationTransitionDefinitions.filter((definition) => (
+  quickTransitionEffects.includes(definition.effect)
+))
+const extendedTransitionDefinitions = presentationTransitionDefinitions.filter((definition) => (
+  extendedTransitionEffects.includes(definition.effect)
+))
 
 const transitionDirectionLabelKeys: Record<PresentationTransitionDirection, string> = {
   left: 'session.presentation.directionLeft',
@@ -223,13 +232,17 @@ export function PresentationRibbon({
   const runMock = (label: string) => setMockNotice(t('session.presentation.mockNotice', { feature: label }))
   const transition = normalizePresentationTransition(currentSlide?.transition)
   const transitionDefinition = getPresentationTransitionDefinition(transition.effect)
-  const updateTransition = (patch: Partial<typeof transition>) => {
+  const updateTransition = (patch: Partial<typeof transition>, preview = false) => {
     if (!currentSlide) return
-    onSlideChange({ transition: normalizePresentationTransition({ ...transition, ...patch }) })
+    const nextTransition = normalizePresentationTransition({ ...transition, ...patch })
+    onSlideChange({ transition: nextTransition })
+    if (preview) onPreviewTransition(nextTransition)
   }
   const selectTransition = (effect: PresentationTransitionEffect) => {
     if (!currentSlide) return
-    onSlideChange({ transition: changePresentationTransitionEffect(transition, effect) })
+    const nextTransition = changePresentationTransitionEffect(transition, effect)
+    onSlideChange({ transition: nextTransition })
+    onPreviewTransition(nextTransition)
   }
 
   useEffect(() => {
@@ -490,10 +503,10 @@ export function PresentationRibbon({
         {activeTab === 'transitions' ? (
           <>
             <RibbonGroup label={t('session.presentation.preview')}>
-              <RibbonAction icon={Eye} label={t('session.presentation.previewEffect')} onClick={onPreviewTransition} disabled={!currentSlide || transition.effect === 'none'} testId="presentation-preview-transition" />
+              <RibbonAction icon={Eye} label={t('session.presentation.previewEffect')} onClick={() => onPreviewTransition(transition)} disabled={!currentSlide || transition.effect === 'none'} testId="presentation-preview-transition" />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.transitionEffects')} wide>
-              {presentationTransitionDefinitions.map((definition) => (
+              {quickTransitionDefinitions.map((definition) => (
                 <EffectButton
                   key={definition.effect}
                   active={transition.effect === definition.effect}
@@ -504,10 +517,15 @@ export function PresentationRibbon({
                   testId={`presentation-transition-${definition.effect}`}
                 />
               ))}
-              <CompactRibbonMenu icon={GalleryHorizontal} label={t('session.presentation.transitionGallery')} testId="presentation-transition-gallery">
+              <CompactRibbonMenu
+                active={extendedTransitionEffects.includes(transition.effect)}
+                icon={GalleryHorizontal}
+                label={t('session.presentation.transitionGallery')}
+                testId="presentation-transition-gallery"
+              >
                 {(close) => (
                   <div className="grid w-[380px] grid-cols-5 gap-1.5" data-testid="presentation-transition-gallery-panel">
-                    {presentationTransitionDefinitions.map((definition) => (
+                    {extendedTransitionDefinitions.map((definition) => (
                       <EffectButton
                         key={definition.effect}
                         active={transition.effect === definition.effect}
@@ -536,7 +554,7 @@ export function PresentationRibbon({
                   <TransitionOptions
                     transition={transition}
                     onChange={(patch) => {
-                      updateTransition(patch)
+                      updateTransition(patch, true)
                       close()
                     }}
                   />
@@ -1142,7 +1160,7 @@ function ShapePickerButton({ onAddShape }: { onAddShape: (type: PresentationShap
 
 type CompactRibbonMenuChildren = ReactNode | ((close: () => void) => ReactNode)
 
-function CompactRibbonMenu({ children, disabled = false, icon: Icon, iconOnly = false, label, panelClassName, testId }: { children: CompactRibbonMenuChildren; disabled?: boolean; icon: LucideIcon; iconOnly?: boolean; label: string; panelClassName?: string; testId?: string }) {
+function CompactRibbonMenu({ active = false, children, disabled = false, icon: Icon, iconOnly = false, label, panelClassName, testId }: { active?: boolean; children: CompactRibbonMenuChildren; disabled?: boolean; icon: LucideIcon; iconOnly?: boolean; label: string; panelClassName?: string; testId?: string }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 8, top: 8 })
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -1188,6 +1206,7 @@ function CompactRibbonMenu({ children, disabled = false, icon: Icon, iconOnly = 
       type="button"
       aria-expanded={open}
       aria-label={label}
+      aria-pressed={active}
       data-testid={testId}
       disabled={disabled}
       onClick={() => {
@@ -1207,7 +1226,7 @@ function CompactRibbonMenu({ children, disabled = false, icon: Icon, iconOnly = 
       }}
       className={cn(
         iconOnly ? 'flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary' : 'flex h-[58px] min-w-[58px] shrink-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary',
-        open && 'bg-brand-purple/10 text-brand-purple',
+        (open || active) && 'bg-brand-purple/10 text-brand-purple',
         disabled && 'cursor-not-allowed opacity-35',
       )}
     >
