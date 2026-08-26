@@ -601,6 +601,7 @@ interface PresentationMediaSession {
 }
 
 export interface PresentationMediaRuntime {
+  cursorFromCanvas: (object: FabricObject, scenePoint: FabricPoint) => 'pointer' | null
   dispose: () => void
   pause: (elementId: string) => void
   pauseAll: () => void
@@ -874,7 +875,23 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
     return sessions.get(elementId) === session ? session : null
   }
 
+  const isPlaybackTarget = (object: FabricObject, scenePoint: FabricPoint) => {
+    const elementId = registrationIds.get(object)
+    const view = presentationMediaFabricViews.get(object)
+    if (!elementId || !view || !registrations.has(elementId)) return null
+    const localPoint = scenePoint.transform(fabric.util.invertTransform(object.calcTransformMatrix()))
+    const distance = Math.hypot(
+      localPoint.x - view.buttonCenter.x,
+      localPoint.y - view.buttonCenter.y,
+    )
+    return distance <= view.buttonHitRadius
+  }
+
   const runtime: PresentationMediaRuntime = {
+    cursorFromCanvas(object, scenePoint) {
+      const playbackTarget = isPlaybackTarget(object, scenePoint)
+      return playbackTarget ? 'pointer' : null
+    },
     dispose() {
       if (runtimeDisposed) return
       runtime.reset()
@@ -914,14 +931,7 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
     },
     toggleFromCanvas(object, scenePoint) {
       const elementId = registrationIds.get(object)
-      const view = presentationMediaFabricViews.get(object)
-      if (!elementId || !view || !registrations.has(elementId)) return false
-      const localPoint = scenePoint.transform(fabric.util.invertTransform(object.calcTransformMatrix()))
-      const distance = Math.hypot(
-        localPoint.x - view.buttonCenter.x,
-        localPoint.y - view.buttonCenter.y,
-      )
-      if (distance > view.buttonHitRadius) return false
+      if (!elementId || !isPlaybackTarget(object, scenePoint)) return false
       void runtime.toggle(elementId)
       return true
     },
@@ -1602,6 +1612,11 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       canvas.on('selection:cleared', () => selectCanvasObject())
       canvas.on('object:moving', () => mediaRuntime.pauseAll())
       canvas.on('object:scaling', () => mediaRuntime.pauseAll())
+      canvas.on('mouse:move', (event) => {
+        if (!event.target) return
+        const cursor = mediaRuntime.cursorFromCanvas(event.target, event.scenePoint)
+        if (cursor) canvas.setCursor(cursor)
+      })
       canvas.on('mouse:up', (event) => {
         if (event.isClick && event.target) mediaRuntime.toggleFromCanvas(event.target, event.scenePoint)
       })
@@ -1651,6 +1666,9 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       if (cancelled || canvasRef.current !== canvas) return
       let activeObject: FabricObject | null = null
       for (const { element, object } of entries) {
+        let hoverCursor = 'move'
+        if (isPresentationMediaElement(element)) hoverCursor = 'default'
+        else if (element.hyperlink && supportsPresentationElementHyperlink(element)) hoverCursor = 'pointer'
         object.set({
           borderColor: '#6957D9',
           cornerColor: '#FFFFFF',
@@ -1660,7 +1678,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           transparentCorners: false,
           objectCaching: false,
           lockRotation: isPresentationRotationLocked(element),
-          hoverCursor: element.hyperlink && supportsPresentationElementHyperlink(element) ? 'pointer' : 'move',
+          hoverCursor,
         })
         objectIdsRef.current.set(object, element.id)
         canvas.add(object)

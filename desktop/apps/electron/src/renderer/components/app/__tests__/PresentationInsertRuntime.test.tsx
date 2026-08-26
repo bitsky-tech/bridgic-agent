@@ -359,6 +359,15 @@ describe('presentation Insert runtime safeguards', () => {
     try {
       runtime.register(first, firstObject)
       runtime.register(second, secondObject)
+      expect(runtime.cursorFromCanvas(
+        firstObject,
+        new fabric.Point(first.x + 4, first.y + 4),
+      )).toBeNull()
+      expect(runtime.cursorFromCanvas(firstObject, playPoint(first))).toBe('pointer')
+      expect(runtime.cursorFromCanvas(
+        new fabric.Rect({ width: 20, height: 20 }),
+        new fabric.Point(10, 10),
+      )).toBeNull()
       expect(runtime.toggleFromCanvas(
         firstObject,
         new fabric.Point(first.x + 4, first.y + 4),
