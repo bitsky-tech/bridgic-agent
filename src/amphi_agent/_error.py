@@ -43,6 +43,18 @@ class AgentEmptyAnswerError(AgentException):
         )
 
 
+class ContextWindowExceededError(AgentException):
+    """Raised before a model call when protected context still exceeds its input capacity."""
+
+    def __init__(self, estimated_tokens: int, input_capacity: int) -> None:
+        self.estimated_tokens = estimated_tokens
+        self.input_capacity = input_capacity
+        super().__init__(
+            "Context window exceeded after history compaction: "
+            f"estimated input {estimated_tokens} tokens, capacity {input_capacity} tokens"
+        )
+
+
 @dataclass(frozen=True)
 class PublicAgentError:
     """A safe public failure and the factory that classifies internal errors."""
@@ -277,5 +289,6 @@ __all__ = [
     "AgentEmptyAnswerError",
     "AgentErrorAction",
     "AgentException",
+    "ContextWindowExceededError",
     "PublicAgentError",
 ]

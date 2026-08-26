@@ -224,7 +224,10 @@ class AgentInvocation:
         Per-root Session limit for simultaneously executing Child Agent attempts.
     """
 
-    MAX_OTA_CONTEXT_BYTES = 2 * 1024 * 1024
+    # SQLite stores the trace as TEXT and can accept values far larger than this.
+    # Keep an application guard against pathological tool output, but leave enough
+    # room for normal long-running Turns before falling back to a reduced checkpoint.
+    MAX_OTA_CONTEXT_BYTES = 64 * 1024 * 1024
     MAX_CONCURRENT_CHILDREN = 10
     INTERACTION_ANSWER_TYPES = frozenset({
         "build_confirm",

@@ -4,7 +4,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from bridgic.amphibious import CognitiveWorker, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
@@ -18,6 +18,12 @@ from ._context import (
     ContextUsageBreakdown,
     ContextUsageSnapshot,
     _view,
+)
+from ._error import ContextWindowExceededError
+from ._prompts.compaction import (
+    COMPACTION_SYSTEM_PROMPT,
+    render_session_compaction_prompt,
+    render_turn_compaction_prompt,
 )
 from ._skills import Skill, SkillGroup
 from ._prompt import (
@@ -72,6 +78,12 @@ CONTEXT_COMPACTION_PROVIDER_THRESHOLD = 0.80
 CONTEXT_COMPACTION_ESTIMATED_THRESHOLD = 0.70
 CONTEXT_COMPACTION_PROVIDER_TARGET = 0.60
 CONTEXT_COMPACTION_ESTIMATED_TARGET = 0.55
+CONTEXT_COMPACTION_KEEP_SESSION_TURNS = 4
+CONTEXT_COMPACTION_KEEP_TURN_ROUNDS = 4
+CONTEXT_COMPACTION_SUMMARY_INPUT_RATIO = 0.50
+CONTEXT_COMPACTION_SUMMARY_DEFAULT_INPUT_TOKENS = 32_000
+CONTEXT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS = 2_048
+CONTEXT_COMPACTION_MAX_MODEL_CHUNKS_PER_SCOPE = 8
 
 
 CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
@@ -494,38 +506,256 @@ class MainThink(CognitiveWorker):
         context: AmphiContext,
         target: int,
     ) -> List[Message]:
-        """Compact growing history sources, rebuilding the worker request after each update."""
-        if self._estimate_request_tokens(messages, tools) <= target:
+        """Compact both growing history scopes with bounded rolling summaries."""
+        before_tokens = self._estimate_request_tokens(messages, tools)
+        input_capacity = context.llm_provider.input_capacity()
+        previous_usage = ota_context.context_usage
+        measured_over_target = (
+            previous_usage.model_id == context.llm_provider.model_id
+            and previous_usage.source == "provider"
+            and previous_usage.used_tokens > target
+        )
+        if before_tokens <= target and not measured_over_target:
             return messages
 
-        if await self.compact_session_history(ota_context, context, target):
-            messages = await self._reassemble_compacted_messages(ota_context, context)
-            if self._estimate_request_tokens(messages, tools) <= target:
-                return messages
+        summary_input_tokens = (
+            max(4_096, math.floor(input_capacity * CONTEXT_COMPACTION_SUMMARY_INPUT_RATIO))
+            if input_capacity is not None and input_capacity >= 4_096
+            else CONTEXT_COMPACTION_SUMMARY_DEFAULT_INPUT_TOKENS
+        )
+        summary_input_tokens = min(
+            summary_input_tokens,
+            CONTEXT_COMPACTION_SUMMARY_DEFAULT_INPUT_TOKENS,
+        )
+        summary_output_tokens = min(
+            CONTEXT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            max(128, summary_input_tokens // 4),
+        )
+        unit_tokens = max(128, math.floor(summary_input_tokens * 0.40))
+        can_call_model = self._llm is not None and (
+            input_capacity is None or input_capacity >= 4_096
+        )
+        original_compaction = ota_context.state.context_compaction
+        candidate = (
+            original_compaction.model_copy(deep=True)
+            if original_compaction is not None
+            else ContextCompactionState()
+        )
 
-        if await self.compact_turn_history(ota_context, context, target):
-            messages = await self._reassemble_compacted_messages(ota_context, context)
+        def text_tokens(value: str) -> int:
+            return math.ceil(len(value.encode("utf-8")) / 2) if value else 0
+
+        def trim_text(value: str, token_limit: int) -> str:
+            """Keep a bounded head and tail while making every omission explicit."""
+            encoded = value.encode("utf-8")
+            byte_limit = max(64, token_limit * 2)
+            if len(encoded) <= byte_limit:
+                return value
+            marker = f"\n...[{len(encoded) - byte_limit} bytes omitted during compaction]...\n".encode()
+            retained = max(16, byte_limit - len(marker))
+            head = math.floor(retained * 0.65)
+            tail = retained - head
+            return (
+                encoded[:head].decode("utf-8", errors="ignore")
+                + marker.decode()
+                + encoded[-tail:].decode("utf-8", errors="ignore")
+            )
+
+        def serialize_messages(history_messages: Sequence[Message]) -> str:
+            payload = [message.model_dump(mode="json") for message in history_messages]
+            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+        def summary_messages(user_prompt: str) -> List[Message]:
+            return [
+                Message.from_text(COMPACTION_SYSTEM_PROMPT, role=Role.SYSTEM),
+                Message.from_text(user_prompt, role=Role.USER),
+            ]
+
+        def record_summary_usage(result: Any) -> None:
+            input_tokens, output_tokens, _ = self._usage_values(result.usage)
+            if not input_tokens and not output_tokens:
+                return
+            self.spent_tokens += input_tokens + output_tokens
+            usage = ota_context.context_usage
+            ota_context.context_usage = usage.model_copy(update={
+                "input_tokens": usage.input_tokens + input_tokens,
+                "output_tokens": usage.output_tokens + output_tokens,
+            })
+
+        async def roll_summary(
+            previous_summary: str,
+            units: Sequence[Tuple[int, str]],
+            render_prompt: Callable[[str, str, int], str],
+        ) -> Tuple[str, Optional[int]]:
+            """Fold ordered atomic units through bounded model calls, then a bounded fallback."""
+            if not units or sum(text_tokens(text) for _, text in units) < 256:
+                return previous_summary, None
+
+            summary = trim_text(previous_summary.strip(), summary_output_tokens)
+            through: Optional[int] = None
+            index = 0
+            model_chunks = 0
+            while index < len(units) and model_chunks < CONTEXT_COMPACTION_MAX_MODEL_CHUNKS_PER_SCOPE:
+                chunk: List[Tuple[int, str]] = []
+                next_index = index
+                while next_index < len(units):
+                    trial = [*chunk, units[next_index]]
+                    history = "\n\n".join(text for _, text in trial)
+                    output_limit = min(
+                        summary_output_tokens,
+                        max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
+                    )
+                    request = summary_messages(render_prompt(summary, history, output_limit))
+                    if self._estimate_request_tokens(request, []) <= summary_input_tokens:
+                        chunk = trial
+                        next_index += 1
+                        continue
+                    if chunk:
+                        break
+                    reduced = trim_text(units[next_index][1], max(64, summary_input_tokens // 4))
+                    chunk = [(units[next_index][0], reduced)]
+                    next_index += 1
+                    break
+
+                if not chunk:
+                    break
+                history = "\n\n".join(text for _, text in chunk)
+                output_limit = min(
+                    summary_output_tokens,
+                    max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
+                )
+                request = summary_messages(render_prompt(summary, history, output_limit))
+                fallback = trim_text(
+                    "\n\n".join(part for part in (summary, history) if part),
+                    output_limit,
+                )
+                compacted = ""
+                if can_call_model and self._estimate_request_tokens(request, []) <= summary_input_tokens:
+                    try:
+                        result = await self._llm.stream_turn(
+                            request,
+                            None,
+                            publish=lambda _event, **_payload: None,
+                        )
+                        record_summary_usage(result)
+                        compacted = str(result.content or "").strip()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Context summary call failed; using bounded fallback: %s: %s",
+                            type(exc).__name__,
+                            exc,
+                        )
+                summary = trim_text(compacted or fallback, output_limit)
+                through = chunk[-1][0]
+                index = next_index
+                model_chunks += 1
+
+            if index < len(units):
+                logger.debug(
+                    "Context summary reached its model-call bound; folding %s remaining units deterministically",
+                    len(units) - index,
+                )
+                for boundary, text in units[index:]:
+                    summary = trim_text(
+                        "\n\n".join(part for part in (summary, text) if part),
+                        summary_output_tokens,
+                    )
+                    through = boundary
+            return summary, through
+
+        async def compact_session_history() -> bool:
+            turns = context.session.get_all()
+            raw_prefix = turns[:max(0, len(turns) - CONTEXT_COMPACTION_KEEP_SESSION_TURNS)]
+            units: List[Tuple[int, str]] = []
+            for turn in raw_prefix:
+                if turn.session_ordinal <= candidate.session_through_ordinal:
+                    continue
+                payload = trim_text(
+                    serialize_messages(self._session_messages([turn], context)),
+                    unit_tokens,
+                )
+                units.append((
+                    turn.session_ordinal,
+                    f'<session_turn ordinal="{turn.session_ordinal}" status="{turn.status.value}">\n'
+                    f"{payload}\n</session_turn>",
+                ))
+
+            def render(previous: str, history: str, output_limit: int) -> str:
+                return render_session_compaction_prompt(previous, history, output_limit)
+
+            summary, through = await roll_summary(candidate.session_summary, units, render)
+            if through is None or through <= candidate.session_through_ordinal:
+                return False
+            candidate.session_summary = summary
+            candidate.session_through_ordinal = through
+            return True
+
+        async def compact_turn_history() -> bool:
+            records = ota_context.ota_record
+            prefix_end = max(0, len(records) - CONTEXT_COMPACTION_KEEP_TURN_ROUNDS)
+            start = min(candidate.turn_through_round, len(records))
+            projected_state = ota_context.state.model_copy(update={"context_compaction": None})
+            units: List[Tuple[int, str]] = []
+            for index in range(start, prefix_end):
+                projected = ota_context.model_copy(update={
+                    "ota_record": [records[index]],
+                    "state": projected_state,
+                })
+                payload = trim_text(
+                    serialize_messages(self.turn_messages_block(projected, context)),
+                    unit_tokens,
+                )
+                units.append((
+                    index + 1,
+                    f'<turn_round number="{index + 1}">\n{payload}\n</turn_round>',
+                ))
+            user_request = await self.user_input_block(ota_context, context)
+
+            def render(previous: str, history: str, output_limit: int) -> str:
+                return render_turn_compaction_prompt(
+                    previous,
+                    user_request,
+                    history,
+                    output_limit,
+                )
+
+            summary, through = await roll_summary(candidate.turn_summary, units, render)
+            if through is None or through <= candidate.turn_through_round:
+                return False
+            candidate.turn_summary = summary
+            candidate.turn_through_round = through
+            return True
+
+        async def reassemble() -> List[Message]:
+            rebuilt = await self.assemble_messages(ota_context, context)
+            return await self.append_runtime_state(rebuilt, ota_context, context)
+
+        session_changed = await compact_session_history()
+        turn_changed = await compact_turn_history()
+        if session_changed or turn_changed:
+            ota_context.state.context_compaction = candidate
+            compacted_messages = await reassemble()
+            compacted_tokens = self._estimate_request_tokens(compacted_messages, tools)
+            if compacted_tokens < before_tokens:
+                messages = compacted_messages
+                before_tokens = compacted_tokens
+            else:
+                ota_context.state.context_compaction = original_compaction
+                logger.warning(
+                    "Discarded context compaction without a net token reduction: before=%s after=%s",
+                    before_tokens,
+                    compacted_tokens,
+                )
+
+        if input_capacity is not None and before_tokens >= input_capacity:
+            raise ContextWindowExceededError(before_tokens, input_capacity)
+        if before_tokens > target:
+            logger.debug(
+                "Context compaction completed above its soft target: estimated=%s target=%s",
+                before_tokens,
+                target,
+            )
         return messages
-
-    async def compact_session_history(self, ota_context: AmphiOTAContext, context: AmphiContext, target: int) -> bool:
-        """Update the persisted Session-history summary; implemented by the compaction policy."""
-        return False
-
-    async def compact_turn_history(self, ota_context: AmphiOTAContext, context: AmphiContext, target: int) -> bool:
-        """Update the persisted current-Turn summary; implemented by the compaction policy."""
-        return False
-
-    async def _reassemble_compacted_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Rebuild this worker's request from the updated compaction projection."""
-        messages = await self.assemble_messages(ota_context, context)
-        return await self.append_runtime_state(messages, ota_context, context)
-
-    @staticmethod
-    def _context_compaction(ota_context: AmphiOTAContext) -> ContextCompactionState:
-        """Return the active persisted compaction projection, creating it on demand."""
-        if ota_context.state.context_compaction is None:
-            ota_context.state.context_compaction = ContextCompactionState()
-        return ota_context.state.context_compaction
 
     def _record_model_usage(
         self,

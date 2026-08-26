@@ -89,7 +89,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         session=make_session(test_sandbox.sessions / "live-round"),
         llm_provider=LlmProvider(
             model_id="test-model",
-            model_limits={"context": 100, "output": 20},
+            model_limits={"input": 100_000},
         ),
     )
 
@@ -129,8 +129,8 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         "output_tokens": 3,
         "cached_input_tokens": 5,
         "used_tokens": 11,
-        "usable_tokens": 80,
-        "percentage": 13.8,
+        "usable_tokens": 100_000,
+        "percentage": 0.0,
         "source": "provider",
         "breakdown": None,
     }
@@ -274,60 +274,6 @@ async def test_context_threshold_enters_the_compaction_hook(test_sandbox: Isolat
     assert worker.target == 1
     assert prepared == messages
     assert estimate > 1
-
-
-async def test_compaction_skeleton_runs_session_before_turn_and_reassembles(test_sandbox: IsolatedPaths) -> None:
-    """The policy hooks persist projections and rebuild after each changed scope."""
-    class PolicyProbe(MainThink):
-        scopes: list[str] = []
-        reassemblies = 0
-
-        def _estimate_request_tokens(self, messages, tools):
-            assert tools == [{"name": "read_file"}]
-            return 100
-
-        async def compact_session_history(self, ota_context, context, target):
-            assert target == 50
-            self.scopes.append("session")
-            state = self._context_compaction(ota_context)
-            state.session_summary = "Earlier Session work"
-            state.session_through_ordinal = 3
-            return True
-
-        async def compact_turn_history(self, ota_context, context, target):
-            assert target == 50
-            self.scopes.append("turn")
-            state = self._context_compaction(ota_context)
-            state.turn_summary = "Earlier work in this Turn"
-            state.turn_through_round = 2
-            return True
-
-        async def _reassemble_compacted_messages(self, ota_context, context):
-            self.reassemblies += 1
-            return [Message.from_text(f"rebuilt-{self.reassemblies}", role=Role.USER)]
-
-    worker = PolicyProbe()
-    ota_context = AmphiOTAContext(user_input="large request")
-    context = AmphiContext(session=make_session(test_sandbox.sessions / "compaction-skeleton"))
-
-    messages = await worker.compact_messages(
-        [Message.from_text("original", role=Role.USER)],
-        [{"name": "read_file"}],
-        ota_context,
-        context,
-        50,
-    )
-
-    assert worker.scopes == ["session", "turn"]
-    assert worker.reassemblies == 2
-    assert [message.content for message in messages] == ["rebuilt-2"]
-    assert ota_context.state.context_compaction is not None
-    assert ota_context.state.context_compaction.model_dump() == {
-        "session_summary": "Earlier Session work",
-        "session_through_ordinal": 3,
-        "turn_summary": "Earlier work in this Turn",
-        "turn_through_round": 2,
-    }
 
 
 def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:

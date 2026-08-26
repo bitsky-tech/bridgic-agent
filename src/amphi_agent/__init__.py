@@ -43,6 +43,7 @@ from ._invocation import (
     InvocationStateError,
     InvocationTraceLimitError,
 )
+from ._error import ContextWindowExceededError
 from ._session import Session
 from ._memory import DEFAULT_RECALL_LIMIT, Memory, MemoryItem
 from ._llm_provider import LlmProvider
@@ -57,6 +58,7 @@ __all__ = [
     "AmphiContext",
     "ContextUsageBreakdown",
     "ContextUsageSnapshot",
+    "ContextWindowExceededError",
     # cognitive / agent
     "MainThink",
     "AGENT_NAME",

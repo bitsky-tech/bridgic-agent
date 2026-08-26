@@ -201,6 +201,8 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
         node_version=None,
     )
     monkeypatch.setattr(app_command_environment, "snapshot", lambda: snapshot)
+    trace_limit = 2 * 1024
+    monkeypatch.setattr(AgentInvocation, "MAX_OTA_CONTEXT_BYTES", trace_limit)
 
     sessions = SessionRepository()
     turns = SessionTurnRepository()
@@ -214,7 +216,7 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
     await sessions.save(session)
     llm = ScriptedLlm(model=agent_model)
     llm.enqueue_text(
-        "X" * (AgentInvocation.MAX_OTA_CONTEXT_BYTES + 1024),
+        "X" * (trace_limit + 1024),
         input_tokens=3,
         output_tokens=4,
     )
