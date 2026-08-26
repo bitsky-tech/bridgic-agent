@@ -25,7 +25,12 @@ from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
 from ._browser import BrowserHost
 from ._cognitive import MainThink
 from ._prompt import AGENT_NAME
-from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
+from ._context import (
+    AmphiContext,
+    AmphiOTAContext,
+    ContextUsageBreakdown,
+    ContextUsageSnapshot,
+)
 from ._invocation import (
     AgentInvocation,
     AppEnvironmentStatus,
@@ -50,6 +55,7 @@ __all__ = [
     # contexts
     "AmphiOTAContext",
     "AmphiContext",
+    "ContextUsageBreakdown",
     "ContextUsageSnapshot",
     # cognitive / agent
     "MainThink",

@@ -52,10 +52,17 @@ describe('ContextUsagePill', () => {
       inputTokens: 60,
       outputTokens: 10,
       cachedInputTokens: 42,
-      usedTokens: 70,
+      usedTokens: 60,
       usableTokens: 100,
-      percentage: 70,
+      percentage: 60,
       source: 'provider',
+      breakdown: {
+        systemPromptTokens: 10,
+        dynamicContextTokens: 10,
+        toolSchemaTokens: 10,
+        sessionHistoryTokens: 20,
+        currentInputTokens: 10,
+      },
     })
 
     await act(async () => {
@@ -68,7 +75,49 @@ describe('ContextUsagePill', () => {
       await new Promise(resolve => setTimeout(resolve, 320))
     })
 
-    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain('42')
+    const tooltip = document.querySelector('[role="tooltip"]')
+    expect(tooltip?.textContent).toContain('42')
+    expect(tooltip?.querySelector('[role="progressbar"]')).not.toBeNull()
+    expect(tooltip?.querySelector('[data-context-part]')).toBeNull()
+    expect(tooltip?.querySelector('[data-context-cache]')).not.toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('omits the cache card when the provider does not report cache usage', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'uncached-session')
+    store.set(contextUsageFamily('uncached-session'), {
+      modelId: 'gpt-test',
+      inputTokens: 60,
+      outputTokens: 10,
+      cachedInputTokens: null,
+      usedTokens: 60,
+      usableTokens: 100,
+      percentage: 60,
+      source: 'provider',
+      breakdown: {
+        systemPromptTokens: 10,
+        dynamicContextTokens: 10,
+        toolSchemaTokens: 10,
+        sessionHistoryTokens: 20,
+        currentInputTokens: 10,
+      },
+    })
+
+    await act(async () => {
+      root.render(createElement(Provider, { store }, createElement(ContextUsagePill)))
+    })
+    const trigger = host.querySelector<HTMLElement>('[aria-label]')
+    await act(async () => {
+      trigger?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      await new Promise(resolve => setTimeout(resolve, 320))
+    })
+
+    expect(document.querySelector('[role="tooltip"]')?.querySelector('[data-context-cache]')).toBeNull()
     await act(async () => root.unmount())
     host.remove()
   })

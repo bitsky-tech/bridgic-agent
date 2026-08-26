@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
+from bridgic.core.model.types import Message, Role
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink
 from src.amphi_service.protocol.llms._streaming import StreamResult
@@ -119,19 +120,27 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         ota_context.context_usage.cached_input_tokens,
     ) == (11, 3, 5)
     assert worker.spent_tokens == 14
-    assert [event for event in stream.events if event[0] == "context_usage"] == [
-        ("context_usage", {
-            "model_id": "test-model",
-            "input_tokens": 11,
-            "output_tokens": 3,
-            "cached_input_tokens": 5,
-            "used_tokens": 14,
-            "usable_tokens": 80,
-            "percentage": 17.5,
-            "source": "provider",
-        })
-    ]
-    assert ota_context.context_usage.used_tokens == 14
+    context_events = [payload for event, payload in stream.events if event == "context_usage"]
+    assert len(context_events) == 1
+    context_event = context_events[0]
+    assert context_event | {"breakdown": None} == {
+        "model_id": "test-model",
+        "input_tokens": 11,
+        "output_tokens": 3,
+        "cached_input_tokens": 5,
+        "used_tokens": 11,
+        "usable_tokens": 80,
+        "percentage": 13.8,
+        "source": "provider",
+        "breakdown": None,
+    }
+    assert sum(context_event["breakdown"].values()) == 11
+    assert context_event["breakdown"]["system_prompt_tokens"] > 0
+    assert context_event["breakdown"]["dynamic_context_tokens"] > 0
+    assert context_event["breakdown"]["tool_schema_tokens"] > 0
+    assert context_event["breakdown"]["session_history_tokens"] == 0
+    assert context_event["breakdown"]["current_input_tokens"] > 0
+    assert ota_context.context_usage.used_tokens == 11
 
     # Check 4: The open OTA record identifies its cognitive scope and Session-history policy.
     expected_scope = {
@@ -170,6 +179,33 @@ def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tup
     assert MainThink._usage_values(usage) == expected
 
 
+async def test_context_breakdown_classifies_the_final_request(test_sandbox: IsolatedPaths) -> None:
+    """The persisted components distinguish tools from other dynamic input."""
+    worker = MainThink()
+    ota_context = AmphiOTAContext(
+        user_input="Current request",
+        prompt_time="2026-08-26 12:00 (UTC+08:00)",
+    )
+    context = AmphiContext(session=make_session(test_sandbox.sessions / "breakdown"))
+    current_input = await worker.current_user_block(ota_context, context)
+    messages = [
+        Message.from_text("Stable persona\n\n<context>\nDynamic data\n</context>", role=Role.SYSTEM),
+        Message.from_text("Earlier question", role=Role.USER),
+        Message.from_text("Earlier answer", role=Role.AI),
+        Message.from_text(current_input, role=Role.USER),
+    ]
+
+    breakdown = await worker._estimate_context_breakdown(
+        messages, [{"name": "read_file"}], ota_context, context,
+    )
+
+    assert breakdown.system_prompt_tokens > 0
+    assert breakdown.dynamic_context_tokens > 0
+    assert breakdown.tool_schema_tokens > 0
+    assert breakdown.session_history_tokens > 0
+    assert breakdown.current_input_tokens > 0
+
+
 async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox: IsolatedPaths) -> None:
     """Missing provider usage still produces an estimated context snapshot."""
     class MissingUsageLlm:
@@ -202,7 +238,8 @@ async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox:
     assert events[0]["model_id"] == "usage-less-model"
     assert events[0]["input_tokens"] > 0
     assert events[0]["output_tokens"] > 0
-    assert events[0]["used_tokens"] == events[0]["input_tokens"] + events[0]["output_tokens"]
+    assert events[0]["used_tokens"] == events[0]["input_tokens"]
+    assert sum(events[0]["breakdown"].values()) == events[0]["input_tokens"]
     assert ota_context.context_usage.input_tokens == 0
     assert ota_context.context_usage.output_tokens == 0
     assert ota_context.context_usage.occupied_input_tokens == events[0]["input_tokens"]

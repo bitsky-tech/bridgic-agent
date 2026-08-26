@@ -116,6 +116,15 @@ export interface WorkflowRunState {
   validationSteps: string[]
 }
 
+/** Persisted composition of the latest model call's input context. */
+export interface ContextUsageBreakdown {
+  systemPromptTokens: number
+  dynamicContextTokens: number
+  toolSchemaTokens: number
+  sessionHistoryTokens: number
+  currentInputTokens: number
+}
+
 /** Latest model-call context-window occupancy for one Session. */
 export interface ContextUsageSnapshot {
   modelId: string
@@ -126,6 +135,7 @@ export interface ContextUsageSnapshot {
   usableTokens: number | null
   percentage: number | null
   source: 'provider' | 'estimated'
+  breakdown: ContextUsageBreakdown
 }
 
 /**

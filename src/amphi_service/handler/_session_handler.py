@@ -1117,6 +1117,16 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
 
 def _context_usage(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any]]:
     """Latest durable context occupancy, shaped like the live stream event."""
+    def breakdown(value: Any) -> Dict[str, int]:
+        data = value if isinstance(value, dict) else {}
+        return {
+            "system_prompt_tokens": int(data.get("system_prompt_tokens") or 0),
+            "dynamic_context_tokens": int(data.get("dynamic_context_tokens") or 0),
+            "tool_schema_tokens": int(data.get("tool_schema_tokens") or 0),
+            "session_history_tokens": int(data.get("session_history_tokens") or 0),
+            "current_input_tokens": int(data.get("current_input_tokens") or 0),
+        }
+
     for turn in reversed(turns):
         usage = turn.context_usage
         if not isinstance(usage, dict):
@@ -1144,6 +1154,7 @@ def _context_usage(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
             "usable_tokens": usage.get("usable_tokens"),
             "percentage": usage.get("percentage"),
             "source": usage["source"],
+            "breakdown": breakdown(usage.get("breakdown")),
         }
     return None
 

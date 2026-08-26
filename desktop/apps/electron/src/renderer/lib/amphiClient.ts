@@ -694,6 +694,13 @@ const workflowRunFileContentSchema = z.object({
   content: z.string().nullable(),
   truncated: z.boolean().default(false),
 }).passthrough()
+const contextUsageBreakdownSchema = z.object({
+  system_prompt_tokens: z.number().int().nonnegative().default(0),
+  dynamic_context_tokens: z.number().int().nonnegative().default(0),
+  tool_schema_tokens: z.number().int().nonnegative().default(0),
+  session_history_tokens: z.number().int().nonnegative().default(0),
+  current_input_tokens: z.number().int().nonnegative().default(0),
+})
 const contextUsageSnapshotSchema = z.object({
   model_id: z.string(),
   input_tokens: z.number(),
@@ -703,6 +710,13 @@ const contextUsageSnapshotSchema = z.object({
   usable_tokens: z.number().nullable(),
   percentage: z.number().nullable(),
   source: z.enum(['provider', 'estimated']),
+  breakdown: contextUsageBreakdownSchema.default({
+    system_prompt_tokens: 0,
+    dynamic_context_tokens: 0,
+    tool_schema_tokens: 0,
+    session_history_tokens: 0,
+    current_input_tokens: 0,
+  }),
 })
 const sessionMessagesSchema = z
   .object({
@@ -1347,6 +1361,13 @@ export class AmphiClient {
         usable_tokens: number | null
         percentage: number | null
         source: 'provider' | 'estimated'
+        breakdown: {
+          system_prompt_tokens: number
+          dynamic_context_tokens: number
+          tool_schema_tokens: number
+          session_history_tokens: number
+          current_input_tokens: number
+        }
       } | null
       pending_request?: {
         kind?: string
@@ -1397,6 +1418,13 @@ export class AmphiClient {
             usableTokens: res.context_usage.usable_tokens,
             percentage: res.context_usage.percentage,
             source: res.context_usage.source,
+            breakdown: {
+              systemPromptTokens: res.context_usage.breakdown.system_prompt_tokens,
+              dynamicContextTokens: res.context_usage.breakdown.dynamic_context_tokens,
+              toolSchemaTokens: res.context_usage.breakdown.tool_schema_tokens,
+              sessionHistoryTokens: res.context_usage.breakdown.session_history_tokens,
+              currentInputTokens: res.context_usage.breakdown.current_input_tokens,
+            },
           }
         : null,
       pendingRequest: pending

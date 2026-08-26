@@ -12,7 +12,13 @@ from bridgic.core.model.types import Message, Role
 
 from ..amphi_service.i18n import DEFAULT_LOCALE, backend_i18n, detect_locale
 from ..amphi_store import SessionTurnRecord, TurnStatus
-from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot, _view
+from ._context import (
+    AmphiContext,
+    AmphiOTAContext,
+    ContextUsageBreakdown,
+    ContextUsageSnapshot,
+    _view,
+)
 from ._skills import Skill, SkillGroup
 from ._prompt import (
     CLARIFY_PERSONA,
@@ -281,6 +287,9 @@ class MainThink(CognitiveWorker):
         messages = await self.append_runtime_state(messages, ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
         messages, request_estimate = await self._prepare_context_window(messages, tools, ota_context, context)
+        breakdown_estimate = await self._estimate_context_breakdown(
+            messages, tools, ota_context, context,
+        )
         stream = ota_context.stream
         def publish(event: str, **payload: Any) -> None:
             # Keep the in-flight model output on the open OTA round. A user may
@@ -318,7 +327,9 @@ class MainThink(CognitiveWorker):
             extra_body=self.extra_body,
             context=context,
         )
-        self._record_model_usage(ota_context, context, result, request_estimate)
+        self._record_model_usage(
+            ota_context, context, result, request_estimate, breakdown_estimate,
+        )
         record = ota_context._current_record()
         for key, value in result.capture.items():
             setattr(record, key, value)
@@ -357,6 +368,79 @@ class MainThink(CognitiveWorker):
             default=str,
         ).encode("utf-8"))
         return max(1, math.ceil(byte_count / 2))
+
+    async def _estimate_context_breakdown(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[Any],
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+    ) -> ContextUsageBreakdown:
+        """Estimate the final prompt's persisted context components."""
+        def dump(value: Any) -> Any:
+            model_dump = getattr(value, "model_dump", None)
+            return model_dump(mode="json") if callable(model_dump) else value
+
+        def serialized_tokens(value: Any) -> int:
+            byte_count = len(json.dumps(
+                dump(value),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8"))
+            return math.ceil(byte_count / 2)
+
+        def text_tokens(value: str) -> int:
+            return math.ceil(len(value.encode("utf-8")) / 2) if value else 0
+
+        system_prompt_tokens = 0
+        dynamic_context_tokens = 256
+        tool_schema_tokens = 0
+        session_history_tokens = 0
+        current_input_tokens = 0
+
+        current_user = await self.current_user_block(ota_context, context)
+        current_index = next((
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == Role.USER
+            and not messages[index].extras.get(VOLATILE_TAIL_EXTRA)
+            and messages[index].content == current_user
+        ), None)
+
+        for index, message in enumerate(messages):
+            if index == 0 and message.role == Role.SYSTEM:
+                marker = "\n\n<context>\n"
+                boundary = message.content.find(marker)
+                if boundary >= 0:
+                    system_text = message.content[:boundary]
+                    dynamic_text = message.content[boundary + 2:]
+                else:
+                    system_text = message.content
+                    dynamic_text = ""
+                system_prompt_tokens += text_tokens(system_text) + 12
+                dynamic_context_tokens += text_tokens(dynamic_text)
+                continue
+
+            tokens = serialized_tokens(message) + 12
+            if message.extras.get(VOLATILE_TAIL_EXTRA):
+                dynamic_context_tokens += tokens
+            elif index == current_index:
+                current_input_tokens += tokens
+            else:
+                session_history_tokens += tokens
+
+        if tools:
+            tool_schema_tokens += serialized_tokens([dump(tool) for tool in tools])
+            tool_schema_tokens += len(tools) * 64
+
+        return ContextUsageBreakdown(
+            system_prompt_tokens=system_prompt_tokens,
+            dynamic_context_tokens=dynamic_context_tokens,
+            tool_schema_tokens=tool_schema_tokens,
+            session_history_tokens=session_history_tokens,
+            current_input_tokens=current_input_tokens,
+        )
 
     def _project_context_usage(self, ota_context: AmphiOTAContext, request_estimate: int, model_id: str) -> Tuple[int, str]:
         """Combine the last measured occupancy with newly estimated prompt growth."""
@@ -398,8 +482,45 @@ class MainThink(CognitiveWorker):
         # TODO: Compact the oldest complete Session Turn prefix while preserving the current Turn and Tool pairs.
         pass
 
-    def _record_model_usage(self, ota_context: AmphiOTAContext, context: AmphiContext, result: Any, request_estimate: int) -> None:
-        """Record one model call's totals, context occupancy, and cache usage."""
+    def _record_model_usage(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        result: Any,
+        request_estimate: int,
+        breakdown_estimate: ContextUsageBreakdown,
+    ) -> None:
+        """Record one model call's totals, input composition, and cache usage."""
+        def scale_breakdown(target: int) -> ContextUsageBreakdown:
+            names = (
+                "system_prompt_tokens",
+                "dynamic_context_tokens",
+                "tool_schema_tokens",
+                "session_history_tokens",
+                "current_input_tokens",
+            )
+            estimates = [getattr(breakdown_estimate, name) for name in names]
+            estimate_total = sum(estimates)
+            if target <= 0:
+                return ContextUsageBreakdown()
+            if estimate_total <= 0:
+                return ContextUsageBreakdown(dynamic_context_tokens=target)
+            nonzero_count = sum(value > 0 for value in estimates)
+            minimums = (
+                [1 if value > 0 else 0 for value in estimates]
+                if target >= nonzero_count else [0] * len(estimates)
+            )
+            remaining = target - sum(minimums)
+            exact = [remaining * value / estimate_total for value in estimates]
+            values = [minimum + math.floor(value) for minimum, value in zip(minimums, exact)]
+            for index in sorted(
+                range(len(values)),
+                key=lambda item: exact[item] - math.floor(exact[item]),
+                reverse=True,
+            )[:target - sum(values)]:
+                values[index] += 1
+            return ContextUsageBreakdown(**dict(zip(names, values)))
+
         provider_input_tokens, provider_output_tokens, cached_input_tokens = self._usage_values(
             result.usage
         )
@@ -413,12 +534,8 @@ class MainThink(CognitiveWorker):
         has_provider_input = provider_input_tokens > 0
         input_tokens = provider_input_tokens if has_provider_input else request_estimate
         output_tokens = provider_output_tokens if provider_output_tokens > 0 else estimated_output
-        source = (
-            "provider"
-            if has_provider_input and provider_output_tokens > 0
-            else "estimated"
-        )
-        used_tokens = input_tokens + output_tokens
+        source = "provider" if has_provider_input else "estimated"
+        used_tokens = input_tokens
         usable_tokens = context.llm_provider.input_capacity()
         percentage = (
             round(used_tokens / usable_tokens * 100, 1)
@@ -435,7 +552,8 @@ class MainThink(CognitiveWorker):
             usable_tokens=usable_tokens,
             percentage=percentage,
             source=source,
-            estimated_occupied_tokens=request_estimate + estimated_output,
+            estimated_occupied_tokens=request_estimate,
+            breakdown=scale_breakdown(input_tokens),
         )
         ota_context.context_usage = snapshot
         stream = getattr(ota_context, "stream", None)
@@ -450,6 +568,7 @@ class MainThink(CognitiveWorker):
                 usable_tokens=snapshot.usable_tokens,
                 percentage=snapshot.percentage,
                 source=snapshot.source,
+                breakdown=snapshot.breakdown.model_dump(mode="json"),
             )
 
     ############################################################################

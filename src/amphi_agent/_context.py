@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 else:
     AgentInvocation = Any
 
-__all__ = ["AmphiOTAContext", "AmphiContext", "ContextUsageSnapshot"]
+__all__ = [
+    "AmphiOTAContext",
+    "AmphiContext",
+    "ContextUsageBreakdown",
+    "ContextUsageSnapshot",
+]
 
 
 ################################################################################################################
@@ -28,8 +33,18 @@ __all__ = ["AmphiOTAContext", "AmphiContext", "ContextUsageSnapshot"]
 ################################################################################################################
 
 
+class ContextUsageBreakdown(BaseModel):
+    """Estimated composition of the latest model call's input context."""
+
+    system_prompt_tokens: int = 0
+    dynamic_context_tokens: int = 0
+    tool_schema_tokens: int = 0
+    session_history_tokens: int = 0
+    current_input_tokens: int = 0
+
+
 class ContextUsageSnapshot(BaseModel):
-    """Turn totals plus the latest call's context occupancy and cache-read count."""
+    """Turn totals plus the latest call's input occupancy and composition."""
 
     model_id: str = ""
     input_tokens: int = 0
@@ -42,6 +57,7 @@ class ContextUsageSnapshot(BaseModel):
     percentage: Optional[float] = None
     source: Literal["provider", "estimated"] = "estimated"
     estimated_occupied_tokens: int = 0
+    breakdown: ContextUsageBreakdown = Field(default_factory=ContextUsageBreakdown)
 
 
 class AmphiOTAContext(OTAContext):

@@ -173,6 +173,13 @@ class Repository(Generic[T]):
                 "percentage": None,
                 "source": "estimated",
                 "estimated_occupied_tokens": 0,
+                "breakdown": {
+                    "system_prompt_tokens": 0,
+                    "dynamic_context_tokens": 0,
+                    "tool_schema_tokens": 0,
+                    "session_history_tokens": 0,
+                    "current_input_tokens": 0,
+                },
                 **existing_usage,
             }
             sync_conn.execute(

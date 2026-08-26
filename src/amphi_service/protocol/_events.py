@@ -144,7 +144,7 @@ class LoopAbortEvent(TurnEvent):
 
 @dataclass(frozen=True)
 class ContextUsageEvent(TurnEvent):
-    """One model call's context occupancy and optional cache-read count."""
+    """One model call's input occupancy, composition, and cache-read count."""
 
     name: ClassVar[str] = "context_usage"
 
@@ -156,6 +156,7 @@ class ContextUsageEvent(TurnEvent):
     usable_tokens: Optional[int]
     percentage: Optional[float]
     source: Literal["provider", "estimated"]
+    breakdown: Dict[str, int]
 
     def payload(self) -> Dict[str, Any]:
         return {
@@ -167,6 +168,7 @@ class ContextUsageEvent(TurnEvent):
             "usable_tokens": self.usable_tokens,
             "percentage": self.percentage,
             "source": self.source,
+            "breakdown": self.breakdown,
         }
 
 

@@ -53,6 +53,13 @@ const modelRetryDataSchema = z.object({
   discard_text_chars: z.number().int().nonnegative().default(0),
   discard_reasoning_chars: z.number().int().nonnegative().default(0),
 })
+const contextBreakdownDataSchema = z.object({
+  system_prompt_tokens: z.number().int().nonnegative().default(0),
+  dynamic_context_tokens: z.number().int().nonnegative().default(0),
+  tool_schema_tokens: z.number().int().nonnegative().default(0),
+  session_history_tokens: z.number().int().nonnegative().default(0),
+  current_input_tokens: z.number().int().nonnegative().default(0),
+})
 const contextUsageDataSchema = z.object({
   model_id: z.string(),
   input_tokens: z.number().int().nonnegative(),
@@ -62,6 +69,13 @@ const contextUsageDataSchema = z.object({
   usable_tokens: z.number().int().positive().nullable(),
   percentage: z.number().nonnegative().nullable(),
   source: z.enum(['provider', 'estimated']),
+  breakdown: contextBreakdownDataSchema.default({
+    system_prompt_tokens: 0,
+    dynamic_context_tokens: 0,
+    tool_schema_tokens: 0,
+    session_history_tokens: 0,
+    current_input_tokens: 0,
+  }),
 })
 const toolDataSchema = z.object({
   tool_id: z.string().optional(),
@@ -243,6 +257,13 @@ export function translateTurnEvent(
           usableTokens: r.data.usable_tokens,
           percentage: r.data.percentage,
           source: r.data.source,
+          breakdown: {
+            systemPromptTokens: r.data.breakdown.system_prompt_tokens,
+            dynamicContextTokens: r.data.breakdown.dynamic_context_tokens,
+            toolSchemaTokens: r.data.breakdown.tool_schema_tokens,
+            sessionHistoryTokens: r.data.breakdown.session_history_tokens,
+            currentInputTokens: r.data.breakdown.current_input_tokens,
+          },
         },
       })
       return { events, state: next }

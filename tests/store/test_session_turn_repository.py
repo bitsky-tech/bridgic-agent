@@ -82,6 +82,13 @@ async def test_legacy_token_columns_migrate_to_context_usage(initialized_store: 
         "percentage": None,
         "source": "estimated",
         "estimated_occupied_tokens": 0,
+        "breakdown": {
+            "system_prompt_tokens": 0,
+            "dynamic_context_tokens": 0,
+            "tool_schema_tokens": 0,
+            "session_history_tokens": 0,
+            "current_input_tokens": 0,
+        },
     }
 
     await SessionTurnRepository.init_schema()
@@ -122,6 +129,13 @@ async def _append_turn(
         "percentage": None,
         "source": "estimated",
         "estimated_occupied_tokens": 0,
+        "breakdown": {
+            "system_prompt_tokens": 0,
+            "dynamic_context_tokens": 0,
+            "tool_schema_tokens": 0,
+            "session_history_tokens": 0,
+            "current_input_tokens": 0,
+        },
     }
     return await repository.append_result(
         USER_ID,

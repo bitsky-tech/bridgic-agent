@@ -1756,10 +1756,17 @@ describe('loadSessionMessagesAtom', () => {
       input_tokens: 60,
       output_tokens: 10,
       cached_input_tokens: 42,
-      used_tokens: 70,
+      used_tokens: 60,
       usable_tokens: 100,
-      percentage: 70,
+      percentage: 60,
       source: 'provider',
+      breakdown: {
+        system_prompt_tokens: 10,
+        dynamic_context_tokens: 10,
+        tool_schema_tokens: 10,
+        session_history_tokens: 20,
+        current_input_tokens: 10,
+      },
     }
     const { release } = installDaemon(store, [serverMsg], null, null, usage)
 
@@ -1772,10 +1779,17 @@ describe('loadSessionMessagesAtom', () => {
       inputTokens: 60,
       outputTokens: 10,
       cachedInputTokens: 42,
-      usedTokens: 70,
+      usedTokens: 60,
       usableTokens: 100,
-      percentage: 70,
+      percentage: 60,
       source: 'provider',
+      breakdown: {
+        systemPromptTokens: 10,
+        dynamicContextTokens: 10,
+        toolSchemaTokens: 10,
+        sessionHistoryTokens: 20,
+        currentInputTokens: 10,
+      },
     })
   })
 
@@ -2158,14 +2172,21 @@ describe('reducer: context usage', () => {
           inputTokens: 60,
           outputTokens: 10,
           cachedInputTokens: 42,
-          usedTokens: 70,
+          usedTokens: 60,
           usableTokens: 100,
-          percentage: 70,
+          percentage: 60,
           source: 'provider',
+          breakdown: {
+            systemPromptTokens: 10,
+            dynamicContextTokens: 10,
+            toolSchemaTokens: 10,
+            sessionHistoryTokens: 20,
+            currentInputTokens: 10,
+          },
         },
       },
     })
-    expect(store.get(contextUsageFamily(id))?.percentage).toBe(70)
+    expect(store.get(contextUsageFamily(id))?.percentage).toBe(60)
     store.set(purgeSessionAtom, id)
     expect(store.get(contextUsageFamily(id))).toBeNull()
   })

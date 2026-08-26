@@ -221,16 +221,18 @@
       }
     },
     "contextUsage": {
-      "cached": "Cache hit: {{cached}} input tokens",
-      "estimatedDetail": "This model did not return exact usage, so Bridgic is using a deliberately conservative estimate. The displayed value may be slightly higher than the actual usage.",
+      "cacheRatio": "{{percentage}}% of this input",
+      "cacheTitle": "Cache hit",
+      "capacityUnknown": "Capacity unknown",
       "label": "Context usage",
       "pending": "Recalculate",
       "pendingDetail": "Different models count tokens differently. This percentage will be recalculated after the next run with the selected model.",
-      "providerDetail": "Usage was reported by the current model.",
-      "remaining": "About {{remaining}} tokens remain",
-      "unavailable": "Context usage will appear after the next model call. A percentage requires a known context-window capacity.",
-      "unknownCapacity": "About {{used}} tokens are in use, but this model's context-window capacity is unknown. Add the capacity in model settings to see a percentage.",
-      "used": "Used {{used}} of {{capacity}} tokens"
+      "remainingCompact": "{{remaining}} remaining",
+      "title": "Context window",
+      "tokenValue": "{{tokens}} tokens",
+      "usedLabel": "Used",
+      "usedOnly": "{{used}} tokens",
+      "usedValue": "{{used}} / {{capacity}}"
     },
     "emptySession": "Create or select a session first",
     "model": {

@@ -85,11 +85,12 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     ]
     assert len(context_usage) == 1
     assert context_usage[0]["model_id"] == FLOW_MODEL
-    assert context_usage[0]["used_tokens"] == 10
+    assert context_usage[0]["used_tokens"] == 7
     assert context_usage[0]["cached_input_tokens"] is None
     assert context_usage[0]["usable_tokens"] == 80
-    assert context_usage[0]["percentage"] == 12.5
+    assert context_usage[0]["percentage"] == 8.8
     assert context_usage[0]["source"] == "provider"
+    assert sum(context_usage[0]["breakdown"].values()) == 7
     assert final["answer"] == "Hello Ada."
     assert final["tokens_spent"] == 10
 
@@ -103,10 +104,11 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
         "input_tokens": 7,
         "output_tokens": 3,
         "cached_input_tokens": None,
-        "used_tokens": 10,
+        "used_tokens": 7,
         "usable_tokens": 80,
-        "percentage": 12.5,
+        "percentage": 8.8,
         "source": "provider",
+        "breakdown": context_usage[0]["breakdown"],
     }
 
 
