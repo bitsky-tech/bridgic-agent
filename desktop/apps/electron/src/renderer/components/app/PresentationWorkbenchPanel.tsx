@@ -64,6 +64,7 @@ import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import {
+  compactLegacyPresentationAudioElement,
   createPresentationChartElement,
   createPresentationFooter,
   createPresentationImageElement,
@@ -381,36 +382,9 @@ function fitFabricGroupToElement(group: FabricObject, element: PresentationEleme
   return group
 }
 
-function createFittedFabricLabel(
-  fabric: FabricModule,
-  value: string,
-  maxWidth: number,
-  options: ConstructorParameters<typeof fabric.Text>[1],
-) {
-  const normalized = value.trim() || 'Media'
-  let label = new fabric.Text(normalized, options)
-  if ((label.width ?? 0) <= maxWidth) return label
-  let lower = 1
-  let upper = normalized.length
-  let fitted = '…'
-  while (lower <= upper) {
-    const middle = Math.floor((lower + upper) / 2)
-    const candidate = `${normalized.slice(0, middle).trimEnd()}…`
-    const probe = new fabric.Text(candidate, options)
-    if ((probe.width ?? 0) <= maxWidth) {
-      fitted = candidate
-      lower = middle + 1
-    } else {
-      upper = middle - 1
-    }
-  }
-  label = new fabric.Text(fitted, options)
-  return label
-}
-
 interface PresentationMediaFabricView {
   buttonCenter: FabricPoint
-  buttonRadius: number
+  buttonHitRadius: number
   pauseGlyphs: [FabricObject, FabricObject]
   playGlyph: FabricObject
   root: FabricGroup
@@ -421,7 +395,7 @@ const presentationMediaFabricViews = new WeakMap<FabricObject, PresentationMedia
 
 function createFixedMediaGroup(fabric: FabricModule, element: PresentationMediaElement, objects: FabricObject[]): FabricGroup {
   const radius = element.type === 'audio'
-    ? Math.min(18, element.height / 2)
+    ? Math.min(element.width, element.height) / 2
     : Math.min(12, element.height * 0.08)
   const [background, ...decorations] = objects
   const group = new fabric.Group(background ? [background] : [], {
@@ -515,15 +489,9 @@ function createMediaPlaybackButton(
 function createAudioFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
   const width = element.width
   const height = element.height
-  const padding = Math.max(2, Math.min(14, height * 0.16, width * 0.04))
-  const buttonSize = Math.max(4, Math.min(38, height - (padding * 2), width * 0.18))
-  const buttonLeft = padding
-  const buttonCenterX = buttonLeft + (buttonSize / 2)
+  const buttonSize = Math.max(4, Math.min(48, Math.min(width, height) - 12))
+  const buttonCenterX = width / 2
   const buttonCenterY = height / 2
-  const waveLeft = buttonLeft + buttonSize + Math.max(10, padding * 0.75)
-  const waveWidth = Math.min(72, Math.max(8, width * 0.15))
-  const textLeft = waveLeft + waveWidth + Math.max(10, padding * 0.75)
-  const textWidth = Math.max(24, width - textLeft - padding)
   const playbackButton = createMediaPlaybackButton(
     fabric,
     buttonCenterX,
@@ -540,46 +508,18 @@ function createAudioFabricObject(fabric: FabricModule, element: PresentationMedi
       height: Math.max(1, height - 1),
       originX: 'left',
       originY: 'top',
-      rx: Math.min(18, height / 2),
-      ry: Math.min(18, height / 2),
-      fill: '#F8F6FF',
-      stroke: '#CFC8F5',
+      rx: Math.min(width, height) / 2,
+      ry: Math.min(width, height) / 2,
+      fill: '#F4F1FF',
+      stroke: '#BEB4F1',
       strokeWidth: 1,
     }),
     ...playbackButton.objects,
   ]
-  const waveHeights = [0.32, 0.66, 0.46, 0.9, 0.58, 0.38, 0.76, 0.5, 0.68]
-  const barGap = waveWidth / waveHeights.length
-  for (const [index, ratio] of waveHeights.entries()) {
-    const barHeight = Math.max(4, (height - (padding * 2)) * ratio)
-    objects.push(new fabric.Rect({
-      left: waveLeft + (index * barGap),
-      top: (height - barHeight) / 2,
-      width: Math.max(2, Math.min(4, barGap * 0.45)),
-      height: barHeight,
-      rx: 2,
-      ry: 2,
-      originX: 'left',
-      originY: 'top',
-      fill: index % 2 === 0 ? '#7662E4' : '#B0A4F0',
-      strokeWidth: 0,
-    }))
-  }
-  const nameFontSize = Math.max(7, Math.min(15, height * 0.22))
-  objects.push(createFittedFabricLabel(fabric, element.source.fileName, textWidth, {
-    left: textLeft,
-    top: Math.max(1, (height - nameFontSize) / 2),
-    originX: 'left',
-    originY: 'top',
-    fill: '#352D55',
-    fontSize: nameFontSize,
-    fontFamily: 'Aptos',
-    fontWeight: 600,
-  }))
   const root = createFixedMediaGroup(fabric, element, objects)
   presentationMediaFabricViews.set(root, {
     buttonCenter: new fabric.Point(buttonCenterX - (width / 2), buttonCenterY - (height / 2)),
-    buttonRadius: Math.max(buttonSize / 2, 4),
+    buttonHitRadius: Math.max(buttonSize / 2, 4),
     pauseGlyphs: playbackButton.pauseGlyphs,
     playGlyph: playbackButton.playGlyph,
     root,
@@ -632,7 +572,7 @@ function createVideoFabricObject(fabric: FabricModule, element: PresentationMedi
   const root = createFixedMediaGroup(fabric, element, objects)
   presentationMediaFabricViews.set(root, {
     buttonCenter: new fabric.Point(0, 0),
-    buttonRadius: Math.max(buttonSize / 2, 4),
+    buttonHitRadius: Math.max((buttonSize / 2) * 1.3, 4),
     pauseGlyphs: playbackButton.pauseGlyphs,
     playGlyph: playbackButton.playGlyph,
     root,
@@ -666,6 +606,7 @@ export interface PresentationMediaRuntime {
   pauseAll: () => void
   prepare: (elementId: string) => void
   register: (element: PresentationMediaElement, object: FabricObject) => void
+  releaseAll: () => void
   reset: () => void
   toggle: (elementId: string) => Promise<void>
   toggleFromCanvas: (object: FabricObject, scenePoint: FabricPoint) => boolean
@@ -685,9 +626,20 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
     if (view.root.canvas === canvas) canvas.requestRenderAll()
   }
 
-  const disposeAllExcept = (elementId?: string) => {
+  const pauseAllExcept = (elementId?: string) => {
     for (const [id, session] of [...sessions]) {
       if (id === elementId) continue
+      if (registrations.get(id)?.element.type === 'audio') {
+        sessions.delete(id)
+        session.dispose()
+      } else {
+        session.pause()
+      }
+    }
+  }
+
+  const disposeAll = () => {
+    for (const [id, session] of [...sessions]) {
       sessions.delete(id)
       session.dispose()
     }
@@ -916,7 +868,6 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
     if (existing) return existing
     const registration = registrations.get(elementId)
     if (!registration || runtimeDisposed) return null
-    disposeAllExcept(elementId)
     const session = createSession(registration)
     sessions.set(elementId, session)
     session.start()
@@ -933,7 +884,7 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
       sessions.get(elementId)?.pause()
     },
     pauseAll() {
-      disposeAllExcept()
+      pauseAllExcept()
     },
     prepare(elementId) {
       if (registrations.get(elementId)?.element.type === 'video') ensureSession(elementId)
@@ -948,14 +899,18 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
       registrationIds.set(object, element.id)
       setViewPlaying(view, false)
     },
+    releaseAll() {
+      disposeAll()
+    },
     reset() {
-      const activeSessions = [...sessions.values()]
-      sessions.clear()
-      for (const session of activeSessions) session.dispose()
+      disposeAll()
       registrations.clear()
     },
     async toggle(elementId) {
-      await ensureSession(elementId)?.toggle()
+      const session = ensureSession(elementId)
+      if (!session) return
+      pauseAllExcept(elementId)
+      await session.toggle()
     },
     toggleFromCanvas(object, scenePoint) {
       const elementId = registrationIds.get(object)
@@ -966,7 +921,7 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
         localPoint.x - view.buttonCenter.x,
         localPoint.y - view.buttonCenter.y,
       )
-      if (distance > view.buttonRadius * 1.3) return false
+      if (distance > view.buttonHitRadius) return false
       void runtime.toggle(elementId)
       return true
     },
@@ -1525,6 +1480,24 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     }
   }, [document, sessionId])
 
+  useEffect(() => {
+    const current = documentRef.current
+    let documentChanged = false
+    const slides = current.slides.map((slide) => {
+      let slideChanged = false
+      const elements = slide.elements.map((element) => {
+        if (element.type !== 'audio') return element
+        const compact = compactLegacyPresentationAudioElement(element)
+        if (compact === element) return element
+        slideChanged = true
+        documentChanged = true
+        return compact
+      })
+      return slideChanged ? { ...slide, elements } : slide
+    })
+    if (documentChanged) commitDocument({ ...current, slides }, false)
+  }, [commitDocument, document])
+
   useEffect(() => () => {
     fileInsertionTargetRef.current = {
       ...fileInsertionTargetRef.current,
@@ -1569,7 +1542,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     const mediaRuntime = mediaRuntimeRef.current
     if (!mediaRuntime) return
     if (!active || slideshowOpen || transitionPreviewRun) {
-      mediaRuntime.pauseAll()
+      mediaRuntime.releaseAll()
       return
     }
     const elementId = selectedElementIdRef.current
@@ -2233,7 +2206,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setTransitionPreviewRun(null)
       return
     }
-    mediaRuntimeRef.current?.pauseAll()
+    mediaRuntimeRef.current?.releaseAll()
     transitionRunIdRef.current += 1
     setTransitionPreviewRun({ runKey: transitionRunIdRef.current, slideId: slide.id, transition })
   }
@@ -2282,7 +2255,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
 
   const startSlideshow = () => {
     const index = documentRef.current.slides.findIndex((slide) => slide.id === documentRef.current.selectedSlideId)
-    mediaRuntimeRef.current?.pauseAll()
+    mediaRuntimeRef.current?.releaseAll()
     setTransitionPreviewRun(null)
     setSlideshowTransition(null)
     setSlideshowIndex(Math.max(0, index))
@@ -2290,7 +2263,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   }
 
   const startSlideshowFromBeginning = () => {
-    mediaRuntimeRef.current?.pauseAll()
+    mediaRuntimeRef.current?.releaseAll()
     setTransitionPreviewRun(null)
     setSlideshowTransition(null)
     setSlideshowIndex(0)

@@ -163,6 +163,7 @@ export interface PresentationImageElement extends PresentationElementBase {
 export interface PresentationAudioElement extends PresentationElementBase {
   type: 'audio'
   source: PresentationFileSource
+  displayStyle?: 'compact'
   autoplay: boolean
   loop: boolean
   muted: boolean

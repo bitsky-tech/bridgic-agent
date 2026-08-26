@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { Play } from 'lucide-react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { Pause, Play } from 'lucide-react'
 import {
   PRESENTATION_HEIGHT,
   PRESENTATION_WIDTH,
@@ -138,25 +138,79 @@ function PresentationPlaybackVideo({ element }: { element: Extract<PresentationE
 
 function PresentationPlaybackAudio({ element }: { element: Extract<PresentationElement, { type: 'audio' }> }) {
   const mediaRef = useRef<HTMLAudioElement>(null)
+  const playAttemptRef = useRef(0)
+  const [playing, setPlaying] = useState(false)
   const sourceUrl = element.source.dataUrl
   useEffect(() => {
     const media = mediaRef.current
-    startPresentationPlaybackMedia(media, element.autoplay)
+    const onPlay = () => setPlaying(true)
+    const onPause = () => setPlaying(false)
+    media?.addEventListener('play', onPlay)
+    media?.addEventListener('pause', onPause)
+    media?.addEventListener('ended', onPause)
+    if (media && element.autoplay) {
+      const attempt = ++playAttemptRef.current
+      try {
+        void media.play().catch(() => {
+          if (attempt === playAttemptRef.current) setPlaying(false)
+        })
+      } catch {
+        if (attempt === playAttemptRef.current) setPlaying(false)
+      }
+    }
     return () => {
+      playAttemptRef.current += 1
+      media?.removeEventListener('play', onPlay)
+      media?.removeEventListener('pause', onPause)
+      media?.removeEventListener('ended', onPause)
       if (media?.getAttribute('src') === sourceUrl) stopPresentationPlaybackMedia(media)
     }
   }, [element.autoplay, sourceUrl])
+  const togglePlayback = () => {
+    const media = mediaRef.current
+    if (!media) return
+    if (!media.paused) {
+      playAttemptRef.current += 1
+      media.pause()
+      return
+    }
+    const attempt = ++playAttemptRef.current
+    setPlaying(true)
+    try {
+      void media.play().then(() => {
+        if (attempt === playAttemptRef.current && media.paused) setPlaying(false)
+      }).catch(() => {
+        if (attempt === playAttemptRef.current) setPlaying(false)
+      })
+    } catch {
+      if (attempt === playAttemptRef.current) setPlaying(false)
+    }
+  }
   return (
-    <audio
-      ref={mediaRef}
-      className="absolute block"
-      controls
-      autoPlay={element.autoplay}
-      loop={element.loop}
-      muted={element.muted}
-      src={sourceUrl}
+    <span
+      className="absolute flex items-center justify-center overflow-hidden rounded-full border border-[#BEB4F1] bg-[#F4F1FF] shadow-sm"
       style={elementStyle(element)}
-    />
+    >
+      <audio
+        ref={mediaRef}
+        className="hidden"
+        autoPlay={element.autoplay}
+        loop={element.loop}
+        muted={element.muted}
+        src={sourceUrl}
+      />
+      <button
+        type="button"
+        className="flex size-[75%] items-center justify-center rounded-full bg-[#705BE5] text-white shadow-sm"
+        aria-label={element.source.fileName}
+        aria-pressed={playing}
+        onClick={togglePlayback}
+      >
+        {playing
+          ? <Pause className="size-[42%]" fill="currentColor" />
+          : <Play className="size-[42%] translate-x-[5%]" fill="currentColor" />}
+      </button>
+    </span>
   )
 }
 
@@ -218,23 +272,13 @@ function PresentationElementPreview({ element, interactive, suppressMediaPlaybac
     }
     if (element.type === 'audio') return (
       <span
-        className="absolute flex items-center gap-3 overflow-hidden rounded-[10px] border border-[#D8D0FF] bg-[#FBFAFF] px-3 text-[#302A4A] shadow-sm"
+        className="absolute flex items-center justify-center overflow-hidden rounded-full border border-[#BEB4F1] bg-[#F4F1FF] shadow-sm"
         style={elementStyle(element)}
         data-testid="presentation-audio-placeholder"
       >
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#6F5BE7] text-white shadow-sm">
-          <Play className="size-4 translate-x-px" fill="currentColor" />
+        <span className="flex size-[75%] items-center justify-center rounded-full bg-[#705BE5] text-white shadow-sm">
+          <Play className="size-[42%] translate-x-[5%]" fill="currentColor" />
         </span>
-        <span className="flex h-8 shrink-0 items-center gap-1" aria-hidden="true">
-          {[8, 16, 24, 13, 20, 11, 18, 9, 15, 7].map((height, index) => (
-            <span
-              className={cn('w-1 rounded-full', index % 2 === 0 ? 'bg-[#725EE7]' : 'bg-[#B8ADF4]')}
-              key={`${element.id}-wave-${index}`}
-              style={{ height }}
-            />
-          ))}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[16px] font-semibold leading-5">{element.source.fileName}</span>
       </span>
     )
     return (

@@ -98,6 +98,11 @@ describe('presentation Insert runtime safeguards', () => {
           width: element.width,
           height: element.height,
         })
+        if (element.type === 'audio') {
+          expect((object as InstanceType<typeof fabric.Group>).getObjects().some((child) => (
+            child instanceof fabric.Text
+          ))).toBe(false)
+        }
       }
     } finally {
       Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -155,6 +160,10 @@ describe('presentation Insert runtime safeguards', () => {
         height: element.height,
       })
       runtime.pauseAll()
+      expect(group.getObjects().some((child) => child instanceof fabric.FabricImage)).toBe(true)
+      expect(video.getAttribute('src')).toBe(element.source.dataUrl)
+
+      runtime.releaseAll()
       expect(group.getObjects().some((child) => child instanceof fabric.FabricImage)).toBe(false)
       expect(video.getAttribute('src')).toBeNull()
     } finally {
@@ -342,18 +351,17 @@ describe('presentation Insert runtime safeguards', () => {
         return created
       },
     })
-    const playPoint = (element: typeof first) => {
-      const padding = Math.max(2, Math.min(14, element.height * 0.16, element.width * 0.04))
-      const buttonSize = Math.max(4, Math.min(38, element.height - (padding * 2), element.width * 0.18))
-      return new fabric.Point(element.x + padding + (buttonSize / 2), element.y + (element.height / 2))
-    }
+    const playPoint = (element: typeof first) => new fabric.Point(
+      element.x + (element.width / 2),
+      element.y + (element.height / 2),
+    )
 
     try {
       runtime.register(first, firstObject)
       runtime.register(second, secondObject)
       expect(runtime.toggleFromCanvas(
         firstObject,
-        new fabric.Point(first.x + first.width - 4, first.y + (first.height / 2)),
+        new fabric.Point(first.x + 4, first.y + 4),
       )).toBe(false)
       expect(mediaStates).toHaveLength(0)
 
@@ -501,6 +509,67 @@ describe('presentation Insert runtime safeguards', () => {
     }
   })
 
+  it('ignores an obsolete slide-show audio play failure after playback restarts', async () => {
+    const audio = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'restart-slideshow.mp3'))
+    const slide = { ...createBlankPresentationDocument('Audio controls').slides[0]!, elements: [audio] }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    await act(async () => {
+      root.render(
+        <PresentationSlidePreview
+          slide={slide}
+          width={960}
+          selected={false}
+          presentation
+          onActivateHyperlink={() => undefined}
+        />,
+      )
+    })
+    const media = host.querySelector<HTMLAudioElement>('audio')!
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="restart-slideshow.mp3"]')!
+    const playResults: Array<{ reject: () => void; resolve: () => void }> = []
+    let paused = true
+    Object.defineProperties(media, {
+      pause: {
+        configurable: true,
+        value: () => {
+          paused = true
+          media.dispatchEvent(new Event('pause'))
+        },
+      },
+      paused: { configurable: true, get: () => paused },
+      play: {
+        configurable: true,
+        value: () => {
+          paused = false
+          return new Promise<void>((resolve, reject) => {
+            playResults.push({ reject: () => reject(new Error('obsolete')), resolve })
+          })
+        },
+      },
+    })
+
+    await act(async () => button.click())
+    await act(async () => button.click())
+    await act(async () => button.click())
+    expect(playResults).toHaveLength(2)
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => {
+      playResults[0]!.reject()
+      await Promise.resolve()
+    })
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => {
+      playResults[1]!.resolve()
+      await Promise.resolve()
+    })
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('keeps stable slideshow media sources during StrictMode effect replay', async () => {
     const audio = { ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'strict.mp3', 'AAAA')), autoplay: true }
     const video = { ...createPresentationMediaElement('video', fileSource('video/mp4', 'strict.mp4', 'BBBB')), autoplay: true }
@@ -614,12 +683,13 @@ describe('presentation Insert runtime safeguards', () => {
 
     const content = host.querySelector<HTMLElement>('[data-testid="presentation-slide-preview"] > span')!
     const image = content.querySelector('img')!
-    const overlay = content.querySelector('button')!
+    const overlay = content.querySelector<HTMLButtonElement>('button[aria-label="https://example.com"]')!
     const media = content.querySelector('audio')!
+    const mediaContainer = media.parentElement!
     const children = [...content.children]
-    expect(content.querySelectorAll('button')).toHaveLength(1)
+    expect(content.querySelectorAll('button')).toHaveLength(2)
     expect(children.indexOf(image)).toBeLessThan(children.indexOf(overlay))
-    expect(children.indexOf(overlay)).toBeLessThan(children.indexOf(media))
+    expect(children.indexOf(overlay)).toBeLessThan(children.indexOf(mediaContainer))
   })
 
   it('keeps an empty number-field draft while focused and clamps only when committed', () => {

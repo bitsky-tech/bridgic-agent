@@ -2,6 +2,7 @@ import {
   PRESENTATION_HEIGHT,
   PRESENTATION_WIDTH,
   createPresentationId,
+  type PresentationAudioElement,
   type PresentationChartElement,
   type PresentationChartType,
   type PresentationFileSource,
@@ -18,6 +19,9 @@ import {
 import { presentationShapeCategories } from '@/lib/presentationShapes'
 
 const DEFAULT_CHART_COLORS = ['#6957D9', '#2F8B78', '#DF6C47', '#4D7CFE', '#F2B91F'] as const
+export const PRESENTATION_AUDIO_ICON_SIZE = 64
+const LEGACY_PRESENTATION_AUDIO_WIDTH = 520
+const LEGACY_PRESENTATION_AUDIO_HEIGHT = 72
 const presentationShapeTypes = new Set<PresentationShapeType>(
   presentationShapeCategories.flatMap((category) => category.shapes.map((shape) => shape.type)),
 )
@@ -275,9 +279,12 @@ export function createPresentationImageElement(source: PresentationFileSource): 
   }
 }
 
+export function createPresentationMediaElement(type: 'audio', source: PresentationFileSource): PresentationAudioElement
+export function createPresentationMediaElement(type: 'video', source: PresentationFileSource): PresentationVideoElement
+export function createPresentationMediaElement(type: PresentationMediaElement['type'], source: PresentationFileSource): PresentationMediaElement
 export function createPresentationMediaElement(type: PresentationMediaElement['type'], source: PresentationFileSource): PresentationMediaElement {
-  const width = type === 'video' ? 640 : 520
-  const height = type === 'video' ? 360 : 72
+  const width = type === 'video' ? 640 : PRESENTATION_AUDIO_ICON_SIZE
+  const height = type === 'video' ? 360 : PRESENTATION_AUDIO_ICON_SIZE
   return {
     id: createPresentationId(type),
     type,
@@ -286,9 +293,27 @@ export function createPresentationMediaElement(type: PresentationMediaElement['t
     height,
     rotation: 0,
     source,
+    ...(type === 'audio' ? { displayStyle: 'compact' as const } : {}),
     autoplay: false,
     loop: false,
     muted: false,
+  }
+}
+
+/** Shrinks only the former default audio card while preserving its visual center. */
+export function compactLegacyPresentationAudioElement(element: PresentationAudioElement): PresentationAudioElement {
+  if (element.displayStyle === 'compact'
+    || element.width !== LEGACY_PRESENTATION_AUDIO_WIDTH
+    || element.height !== LEGACY_PRESENTATION_AUDIO_HEIGHT) {
+    return element
+  }
+  return {
+    ...element,
+    x: element.x + ((element.width - PRESENTATION_AUDIO_ICON_SIZE) / 2),
+    y: element.y + ((element.height - PRESENTATION_AUDIO_ICON_SIZE) / 2),
+    width: PRESENTATION_AUDIO_ICON_SIZE,
+    height: PRESENTATION_AUDIO_ICON_SIZE,
+    displayStyle: 'compact',
   }
 }
 
