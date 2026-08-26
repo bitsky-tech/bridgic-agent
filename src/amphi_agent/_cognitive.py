@@ -74,16 +74,15 @@ logger = logging.getLogger(__name__)
 # prefix. Adapters treat it specially (Anthropic: no cache breakpoint on or after
 # it; OpenAI: the flag is stripped before the wire) and it is never persisted.
 VOLATILE_TAIL_EXTRA = "volatile_tail"
-CONTEXT_COMPACTION_PROVIDER_THRESHOLD = 0.80
-CONTEXT_COMPACTION_ESTIMATED_THRESHOLD = 0.70
+CONTEXT_COMPACTION_PROVIDER_THRESHOLD = 0.95
+CONTEXT_COMPACTION_ESTIMATED_THRESHOLD = 0.90
 CONTEXT_COMPACTION_PROVIDER_TARGET = 0.60
 CONTEXT_COMPACTION_ESTIMATED_TARGET = 0.55
 CONTEXT_COMPACTION_KEEP_SESSION_TURNS = 4
 CONTEXT_COMPACTION_KEEP_TURN_ROUNDS = 4
-CONTEXT_COMPACTION_SUMMARY_INPUT_RATIO = 0.50
-CONTEXT_COMPACTION_SUMMARY_DEFAULT_INPUT_TOKENS = 32_000
-CONTEXT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS = 2_048
-CONTEXT_COMPACTION_MAX_MODEL_CHUNKS_PER_SCOPE = 8
+CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS = 32_000
+CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS = 2_048
+CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE = 8
 
 
 CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
@@ -519,16 +518,12 @@ class MainThink(CognitiveWorker):
             return messages
 
         summary_input_tokens = (
-            max(4_096, math.floor(input_capacity * CONTEXT_COMPACTION_SUMMARY_INPUT_RATIO))
-            if input_capacity is not None and input_capacity >= 4_096
-            else CONTEXT_COMPACTION_SUMMARY_DEFAULT_INPUT_TOKENS
+            min(input_capacity // 2, CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS)
+            if input_capacity is not None
+            else CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS
         )
-        summary_input_tokens = min(
-            summary_input_tokens,
-            CONTEXT_COMPACTION_SUMMARY_DEFAULT_INPUT_TOKENS,
-        )
-        summary_output_tokens = min(
-            CONTEXT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+        summary_retained_tokens = min(
+            CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS,
             max(128, summary_input_tokens // 4),
         )
         unit_tokens = max(128, math.floor(summary_input_tokens * 0.40))
@@ -591,18 +586,18 @@ class MainThink(CognitiveWorker):
             if not units or sum(text_tokens(text) for _, text in units) < 256:
                 return previous_summary, None
 
-            summary = trim_text(previous_summary.strip(), summary_output_tokens)
+            summary = trim_text(previous_summary.strip(), summary_retained_tokens)
             through: Optional[int] = None
             index = 0
-            model_chunks = 0
-            while index < len(units) and model_chunks < CONTEXT_COMPACTION_MAX_MODEL_CHUNKS_PER_SCOPE:
+            summary_calls = 0
+            while index < len(units) and summary_calls < CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE:
                 chunk: List[Tuple[int, str]] = []
                 next_index = index
                 while next_index < len(units):
                     trial = [*chunk, units[next_index]]
                     history = "\n\n".join(text for _, text in trial)
                     output_limit = min(
-                        summary_output_tokens,
+                        summary_retained_tokens,
                         max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
                     )
                     request = summary_messages(render_prompt(summary, history))
@@ -621,7 +616,7 @@ class MainThink(CognitiveWorker):
                     break
                 history = "\n\n".join(text for _, text in chunk)
                 output_limit = min(
-                    summary_output_tokens,
+                    summary_retained_tokens,
                     max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
                 )
                 request = summary_messages(render_prompt(summary, history))
@@ -648,7 +643,7 @@ class MainThink(CognitiveWorker):
                 summary = trim_text(compacted or fallback, output_limit)
                 through = chunk[-1][0]
                 index = next_index
-                model_chunks += 1
+                summary_calls += 1
 
             if index < len(units):
                 logger.debug(
@@ -658,7 +653,7 @@ class MainThink(CognitiveWorker):
                 for boundary, text in units[index:]:
                     summary = trim_text(
                         "\n\n".join(part for part in (summary, text) if part),
-                        summary_output_tokens,
+                        summary_retained_tokens,
                     )
                     through = boundary
             return summary, through

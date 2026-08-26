@@ -246,34 +246,53 @@ async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox:
     assert ota_context.context_usage.occupied_output_tokens == events[0]["output_tokens"]
 
 
-async def test_context_threshold_enters_the_compaction_hook(test_sandbox: IsolatedPaths) -> None:
-    """An over-threshold preflight invokes compaction without changing messages yet."""
+@pytest.mark.parametrize(("source", "estimate", "target"), [
+    ("provider", 95, 60),
+    ("estimated", 90, 55),
+])
+async def test_context_threshold_enters_the_compaction_hook(test_sandbox: IsolatedPaths, source: str, estimate: int, target: int) -> None:
+    """Provider and estimated preflights compact at their configured late thresholds."""
     class ProbeThink(MainThink):
         compacted = False
-        target = None
+        target_tokens = None
 
-        async def compact_messages(self, messages, tools, ota_context, context, target):
+        def _estimate_request_tokens(self, messages, tools):
+            return estimate
+
+        async def compact_messages(self, messages, tools, ota_context, context, target_tokens):
             self.compacted = True
-            self.target = target
+            self.target_tokens = target_tokens
             return messages
 
     worker = ProbeThink()
     context = AmphiContext(
-        session=make_session(test_sandbox.sessions / "compaction-threshold"),
+        session=make_session(test_sandbox.sessions / f"compaction-threshold-{source}"),
         llm_provider=LlmProvider(
             model_id="small-model",
-            model_limits={"input": 1},
+            model_limits={"input": 100},
         ),
     )
     messages = await worker.assemble_messages(AmphiOTAContext(user_input="large request"), context)
 
-    ota_context = AmphiOTAContext(user_input="large request")
-    prepared, estimate = await worker._prepare_context_window(messages, [], ota_context, context)
+    usage = (
+        {
+            "model_id": "small-model",
+            "source": "provider",
+            "used_tokens": estimate,
+            "estimated_occupied_tokens": estimate,
+        }
+        if source == "provider"
+        else {}
+    )
+    ota_context = AmphiOTAContext(user_input="large request", context_usage=usage)
+    prepared, request_estimate = await worker._prepare_context_window(
+        messages, [], ota_context, context,
+    )
 
     assert worker.compacted is True
-    assert worker.target == 1
+    assert worker.target_tokens == target
     assert prepared == messages
-    assert estimate > 1
+    assert request_estimate == estimate
 
 
 def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:
