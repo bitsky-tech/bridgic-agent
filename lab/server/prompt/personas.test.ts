@@ -2,14 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 
 import {
+  PERSONA_SOURCE_PATHS,
   PERSONA_SOURCE_SHA256,
   PERSONA_SOURCE_VERSION,
+} from "./personas.generated";
+import {
   renderPersona,
   TURN_FAILED_MESSAGE,
 } from "./personas";
+import { promptPythonExecutable, promptSourceFingerprint } from "./source";
 import type { PromptStage, PromptUiLanguage } from "./types";
 
+const repositoryRoot = resolve(import.meta.dir, "../../..");
 const sourcePath = resolve(import.meta.dir, "../../../src/amphi_agent/_prompt.py");
+const pythonExecutable = promptPythonExecutable(repositoryRoot);
 const stages: PromptStage[] = [
   "main",
   "child",
@@ -31,15 +37,23 @@ function pythonPromptSnapshot(toolNames: string[], locale: "zh" | "en"): PythonP
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 source_path = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(source_path.parents[2]))
 tool_names = json.loads(sys.argv[2])
 locale = sys.argv[3]
 from src.amphi_service.i18n import use_locale
+import src
+package = types.ModuleType("src.amphi_agent")
+package.__path__ = [str(source_path.parent)]
+package.__package__ = "src.amphi_agent"
+sys.modules["src.amphi_agent"] = package
 spec = importlib.util.spec_from_file_location("src.amphi_agent._prompt_parity", source_path)
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 assert spec.loader is not None
 spec.loader.exec_module(module)
 with use_locale(locale):
@@ -59,17 +73,17 @@ result = {
 }
 json.dump(result, sys.stdout, ensure_ascii=False)
 `;
-  const process = Bun.spawnSync(["python3", "-c", script, sourcePath, JSON.stringify(toolNames), locale]);
+  const process = Bun.spawnSync([pythonExecutable, "-c", script, sourcePath, JSON.stringify(toolNames), locale]);
   if (process.exitCode !== 0) throw new Error(process.stderr.toString());
   return JSON.parse(process.stdout.toString()) as PythonPromptSnapshot;
 }
 
 describe("persona source snapshot", () => {
-  test("is pinned to the current _prompt.py SHA-256", async () => {
-    const source = await Bun.file(sourcePath).arrayBuffer();
-    const current = new Bun.CryptoHasher("sha256").update(source).digest("hex");
-    expect(current).toBe(PERSONA_SOURCE_SHA256);
-    expect(String(PERSONA_SOURCE_VERSION)).toBe(`_prompt.py@${current.slice(0, 12)}`);
+  test("is pinned to the current prompt source graph SHA-256", async () => {
+    const current = await promptSourceFingerprint(repositoryRoot);
+    expect(PERSONA_SOURCE_PATHS.join("\n")).toBe(current.paths.join("\n"));
+    expect(current.sha256).toBe(PERSONA_SOURCE_SHA256);
+    expect(String(PERSONA_SOURCE_VERSION)).toBe(`_prompt.py@${current.sha256.slice(0, 12)}`);
   });
 
   for (const toolNames of [

@@ -84,19 +84,23 @@ than `targetRoundIndex` appear in the current-Turn message block.
 
 All eight runtime personas are copied in full to `personas.generated.ts`:
 normal Main, Child, all four Build stages, and both Workflow Run stages. The
-generated module records the source `_prompt.py` SHA-256 and the shared
-failed-Turn marker. `personas.test.ts` checks that hash and compares every
-rendered persona byte-for-byte with the Python renderer in both UI languages,
-including conditional Child delegation guidance.
+generated module records the SHA-256 of the complete, automatically discovered
+modular prompt source graph (with normalized line endings) and the shared
+failed-Turn marker. `personas.test.ts` checks that source manifest and hash,
+then compares every rendered persona byte-for-byte with the Python renderer in
+both UI languages, including conditional Child delegation guidance.
 
-After intentionally changing `src/amphi_agent/_prompt.py`, refresh the Lab copy
-from the repository root with:
+After intentionally changing `src/amphi_agent/_prompt.py` or a module under
+`src/amphi_agent/_prompts/`, refresh the Lab copy from the repository root with:
 
 ```sh
 cd lab
 bun run scripts/snapshot-personas.ts
 bun test server/prompt/personas.test.ts
 ```
+
+The generator uses `PYTHON` when set, otherwise the repository `.venv`, then a
+system `python3` or `python` executable.
 
 The generation command is a development-time synchronization aid only. The Lab
 runtime imports the static TypeScript snapshot and never imports or invokes the

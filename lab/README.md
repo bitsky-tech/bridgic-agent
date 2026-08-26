@@ -66,7 +66,7 @@ tools:
   visible function definitions sent separately beside messages
 ```
 
-The eight persona variants are complete static snapshots of `src/amphi_agent/_prompt.py`, pinned by SHA-256 and checked byte-for-byte in tests. Prompt diff keeps ordered Message blocks and the unordered Tool surface in separate comparison sections, so a Tool Schema change is not reported as the last Message change. See `server/prompt/README.md` for the synchronization command and internal reconstruction model.
+The eight persona variants are complete static snapshots of the modular prompt source rooted at `src/amphi_agent/_prompt.py`, pinned by a source-graph SHA-256 and checked byte-for-byte in tests. Prompt diff keeps ordered Message blocks and the unordered Tool surface in separate comparison sections, so a Tool Schema change is not reported as the last Message change. See `server/prompt/README.md` for the synchronization command and internal reconstruction model.
 
 ## Verify
 
