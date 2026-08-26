@@ -81,6 +81,19 @@ describe('translateTurnEvent', () => {
     })
   })
 
+  it('maps context compaction lifecycle without creating message content', () => {
+    const { events, warnings } = run([
+      { event: 'context_compaction', data: { active: true } },
+      { event: 'context_compaction', data: { active: false } },
+    ])
+    expect(warnings).toEqual([])
+    expect(events).toEqual([
+      { type: 'message_start', messageId: 'm1', role: 'assistant' },
+      { type: 'context_compaction', active: true },
+      { type: 'context_compaction', active: false },
+    ])
+  })
+
   it('maps context usage into the renderer snapshot shape', () => {
     const { events, warnings } = run([{
       event: 'context_usage',

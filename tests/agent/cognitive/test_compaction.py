@@ -40,6 +40,16 @@ class SummaryLlm:
         )
 
 
+class EventStream:
+    """Collect transient compaction lifecycle events."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def publish(self, event: str, **payload: Any) -> None:
+        self.events.append((event, payload))
+
+
 def _turn(session_id: str, ordinal: int, content: str) -> SessionTurnRecord:
     return SessionTurnRecord(
         id=f"turn-{ordinal}",
@@ -86,10 +96,12 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
     ]
     llm = SummaryLlm("Compacted Session facts", "Compacted current-Turn progress")
     worker = MainThink(llm)
+    stream = EventStream()
     ota_context = AmphiOTAContext(
         user_input="Continue the current request",
         prompt_time="2026-08-26 12:00 (UTC+08:00)",
         ota_record=records,
+        stream=stream,
     )
     context = _context(str(test_sandbox.sessions / "both-scopes"), turns, 200_000)
     original = await worker.assemble_messages(ota_context, context)
@@ -117,6 +129,10 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
     assert worker.spent_tokens == 14
     assert ota_context.context_usage.input_tokens == 10
     assert ota_context.context_usage.output_tokens == 4
+    assert stream.events == [
+        ("context_compaction", {"active": True}),
+        ("context_compaction", {"active": False}),
+    ]
 
 
 async def test_summary_input_is_bounded_when_one_atomic_turn_is_huge(test_sandbox: IsolatedPaths) -> None:
@@ -168,7 +184,8 @@ async def test_summary_failure_uses_a_bounded_fallback_and_advances(test_sandbox
 async def test_protected_context_over_hard_capacity_fails_before_provider_call(test_sandbox: IsolatedPaths) -> None:
     """The soft target is best-effort, but the model's hard input capacity is enforced."""
     worker = MainThink()
-    ota_context = AmphiOTAContext(user_input="Current request")
+    stream = EventStream()
+    ota_context = AmphiOTAContext(user_input="Current request", stream=stream)
     context = _context(str(test_sandbox.sessions / "hard-capacity"), [], 500)
     messages = [Message.from_text("X" * 4_000)]
 
@@ -177,3 +194,7 @@ async def test_protected_context_over_hard_capacity_fails_before_provider_call(t
 
     assert raised.value.input_capacity == 500
     assert raised.value.estimated_tokens > 500
+    assert stream.events == [
+        ("context_compaction", {"active": True}),
+        ("context_compaction", {"active": False}),
+    ]

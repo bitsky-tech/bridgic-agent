@@ -1561,6 +1561,7 @@
         "awaitingAnswer": "Awaiting your answer",
         "awaitingSubagent": "Waiting for subagents",
         "callingTool": "Calling a tool",
+        "compactingContext": "Compacting context",
         "generating": "Generating response",
         "runningWorkflow": "Running workflow",
         "thinking": "Thinking",

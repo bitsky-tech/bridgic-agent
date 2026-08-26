@@ -173,6 +173,18 @@ class ContextUsageEvent(TurnEvent):
 
 
 @dataclass(frozen=True)
+class ContextCompactionEvent(TurnEvent):
+    """Transient lifecycle status for one Turn's context compaction."""
+
+    name: ClassVar[str] = "context_compaction"
+
+    active: bool
+
+    def payload(self) -> Dict[str, Any]:
+        return {"active": self.active}
+
+
+@dataclass(frozen=True)
 class StageEvent(TurnEvent):
     """The turn's thinking position moved — the two-layer think loop's position.
 
@@ -618,6 +630,7 @@ __all__ = [
     "ToolResultEvent",
     "LoopAbortEvent",
     "ContextUsageEvent",
+    "ContextCompactionEvent",
     "StageEvent",
     "WorkflowProgressEvent",
     "TitleEvent",

@@ -89,6 +89,8 @@ export interface Message {
   streaming?: boolean
   /** The current model connection is doing a backoff retry; only present on a streaming Turn, never persisted. */
   retry?: StreamingState['retry']
+  /** The daemon is compacting old context before the next model call. */
+  compacting?: boolean
   /** Error message for a turn that failed; when non-empty a red error bar is rendered after the body (WS error / gateway not ready, etc.). */
   error?: string
   /** The backend's authoritative final answer (only available once the turn ends); passed through to MessageContent to split process/answer precisely. */
@@ -501,6 +503,7 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
                 sessionId={ownerSessionId}
                 streaming
                 retry={streamingState.retry}
+                compacting={streamingState.compacting}
                 startedAt={streamingState.startedAt}
               />,
             ] : [])]}
@@ -690,6 +693,7 @@ export function MessageBubble({
   stopped,
   sessionId,
   retry,
+  compacting,
   completedAt,
   durationMs,
   startedAt,
@@ -707,6 +711,7 @@ export function MessageBubble({
     !isUser && isParentWaitingForSubagents(blocks ?? [], liveSubagents, turnStatus)
   const activity = (() => {
     if (isUser || retry) return null
+    if (compacting) return { label: t('session.pipeline.activity.compactingContext') }
     if (waitingForHumanRequest) return { label: t('session.pipeline.activity.awaitingAnswer'), animated: false }
     if (!streaming && !waitingForSubagent) return null
     if (waitingForSubagent) return { label: t('session.pipeline.activity.awaitingSubagent') }

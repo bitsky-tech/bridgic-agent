@@ -300,6 +300,7 @@ export const TURN_EVENT = {
   Token: 'token',
   Reasoning: 'reasoning',
   ModelRetry: 'model_retry',
+  ContextCompaction: 'context_compaction',
   ContextUsage: 'context_usage',
   Tool: 'tool',
   ToolResult: 'tool_result',
@@ -335,6 +336,7 @@ export type TurnEvent =
       event: typeof TURN_EVENT.ModelRetry
       data: { active: boolean; attempt: number; max_retries: number; delay_seconds: number }
     }
+  | { event: typeof TURN_EVENT.ContextCompaction; data: { active: boolean } }
   | {
       event: typeof TURN_EVENT.ContextUsage
       data: {

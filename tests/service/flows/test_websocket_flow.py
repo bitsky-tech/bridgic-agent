@@ -50,7 +50,7 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
         api_key="flow-test-key",
         base_url="http://model.invalid/v1",
         models=[FLOW_MODEL],
-        model_limits={FLOW_MODEL: {"context": 100, "output": 20, "source": "manual"}},
+        model_limits={FLOW_MODEL: {"context": 100_000, "output": 20, "source": "manual"}},
     )
     await ProviderRepository().set_active(LOCAL_USER_ID, provider.provider_id)
     session_id = await create_session(flow_client)
@@ -87,8 +87,8 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     assert context_usage[0]["model_id"] == FLOW_MODEL
     assert context_usage[0]["used_tokens"] == 7
     assert context_usage[0]["cached_input_tokens"] is None
-    assert context_usage[0]["usable_tokens"] == 80
-    assert context_usage[0]["percentage"] == 8.8
+    assert context_usage[0]["usable_tokens"] == 99_980
+    assert context_usage[0]["percentage"] == 0.0
     assert context_usage[0]["source"] == "provider"
     assert sum(context_usage[0]["breakdown"].values()) == 7
     assert final["answer"] == "Hello Ada."
@@ -105,8 +105,8 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
         "output_tokens": 3,
         "cached_input_tokens": None,
         "used_tokens": 7,
-        "usable_tokens": 80,
-        "percentage": 8.8,
+        "usable_tokens": 99_980,
+        "percentage": 0.0,
         "source": "provider",
         "breakdown": context_usage[0]["breakdown"],
     }

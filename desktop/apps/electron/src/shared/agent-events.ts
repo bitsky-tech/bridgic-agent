@@ -155,6 +155,7 @@ export type AgentEvent =
       discardTextChars: number
       discardReasoningChars: number
     }
+  | { type: 'context_compaction'; active: boolean }
   | { type: 'context_usage'; usage: ContextUsageSnapshot }
   | {
       type: 'tool_call'

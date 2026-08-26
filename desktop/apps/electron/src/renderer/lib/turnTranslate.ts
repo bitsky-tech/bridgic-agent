@@ -53,6 +53,7 @@ const modelRetryDataSchema = z.object({
   discard_text_chars: z.number().int().nonnegative().default(0),
   discard_reasoning_chars: z.number().int().nonnegative().default(0),
 })
+const contextCompactionDataSchema = z.object({ active: z.boolean() })
 const contextBreakdownDataSchema = z.object({
   system_prompt_tokens: z.number().int().nonnegative().default(0),
   dynamic_context_tokens: z.number().int().nonnegative().default(0),
@@ -240,6 +241,13 @@ export function translateTurnEvent(
         discardTextChars: r.data.discard_text_chars,
         discardReasoningChars: r.data.discard_reasoning_chars,
       })
+      return { events, state: next }
+    }
+    case TURN_EVENT.ContextCompaction: {
+      const r = contextCompactionDataSchema.safeParse(frame.data)
+      if (!r.success)
+        return { events, state: next, warning: 'context_compaction payload invalid — skipped' }
+      events.push({ type: 'context_compaction', active: r.data.active })
       return { events, state: next }
     }
     case TURN_EVENT.ContextUsage: {

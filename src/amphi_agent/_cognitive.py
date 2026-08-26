@@ -729,32 +729,39 @@ class MainThink(CognitiveWorker):
             rebuilt = await self.assemble_messages(ota_context, context)
             return await self.append_runtime_state(rebuilt, ota_context, context)
 
-        session_changed = await compact_session_history()
-        turn_changed = await compact_turn_history()
-        if session_changed or turn_changed:
-            ota_context.state.context_compaction = candidate
-            compacted_messages = await reassemble()
-            compacted_tokens = self._estimate_request_tokens(compacted_messages, tools)
-            if compacted_tokens < before_tokens:
-                messages = compacted_messages
-                before_tokens = compacted_tokens
-            else:
-                ota_context.state.context_compaction = original_compaction
-                logger.warning(
-                    "Discarded context compaction without a net token reduction: before=%s after=%s",
-                    before_tokens,
-                    compacted_tokens,
-                )
+        stream = getattr(ota_context, "stream", None)
+        if stream is not None:
+            stream.publish("context_compaction", active=True)
+        try:
+            session_changed = await compact_session_history()
+            turn_changed = await compact_turn_history()
+            if session_changed or turn_changed:
+                ota_context.state.context_compaction = candidate
+                compacted_messages = await reassemble()
+                compacted_tokens = self._estimate_request_tokens(compacted_messages, tools)
+                if compacted_tokens < before_tokens:
+                    messages = compacted_messages
+                    before_tokens = compacted_tokens
+                else:
+                    ota_context.state.context_compaction = original_compaction
+                    logger.warning(
+                        "Discarded context compaction without a net token reduction: before=%s after=%s",
+                        before_tokens,
+                        compacted_tokens,
+                    )
 
-        if input_capacity is not None and before_tokens >= input_capacity:
-            raise ContextWindowExceededError(before_tokens, input_capacity)
-        if before_tokens > target:
-            logger.debug(
-                "Context compaction completed above its soft target: estimated=%s target=%s",
-                before_tokens,
-                target,
-            )
-        return messages
+            if input_capacity is not None and before_tokens >= input_capacity:
+                raise ContextWindowExceededError(before_tokens, input_capacity)
+            if before_tokens > target:
+                logger.debug(
+                    "Context compaction completed above its soft target: estimated=%s target=%s",
+                    before_tokens,
+                    target,
+                )
+            return messages
+        finally:
+            if stream is not None:
+                stream.publish("context_compaction", active=False)
 
     def _record_model_usage(
         self,

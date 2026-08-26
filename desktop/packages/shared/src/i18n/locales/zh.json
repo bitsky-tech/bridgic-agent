@@ -1561,6 +1561,7 @@
         "awaitingAnswer": "等待你的回答",
         "awaitingSubagent": "正在等待子 Agent",
         "callingTool": "正在调用工具",
+        "compactingContext": "正在压缩上下文",
         "generating": "正在生成回复",
         "runningWorkflow": "正在执行工作流",
         "thinking": "正在思考",

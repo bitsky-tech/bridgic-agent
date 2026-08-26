@@ -248,6 +248,27 @@ describe('reducer: message lifecycle', () => {
     expect(store.get(currentStreamingAtom)?.retry).toBeUndefined()
   })
 
+  it('context compaction is transient state and clears after finishing', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'context_compaction', active: true },
+    })
+    expect(store.get(currentStreamingAtom)?.compacting).toBe(true)
+
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'context_compaction', active: false },
+    })
+    expect(store.get(currentStreamingAtom)?.compacting).toBeUndefined()
+  })
+
   it('clears stale model retry state as soon as recovered output arrives', () => {
     const store = makeStore()
     const id = setupSession(store)

@@ -98,6 +98,8 @@ export interface StreamingState {
     maxRetries: number
     delaySeconds: number
   }
+  /** True only while the daemon is replacing old raw history with compact summaries. */
+  compacting?: boolean
 }
 
 /** Per-session committed messages. One independent primitive atom per sessionId,
@@ -1379,6 +1381,15 @@ export const applyAgentEventAtom = atom(
                 delaySeconds: event.delaySeconds,
               }
             : undefined,
+        })
+        return
+      }
+      case 'context_compaction': {
+        const cur = get(streamingFamily(sessionId))
+        if (!cur) return
+        set(streamingFamily(sessionId), {
+          ...cur,
+          compacting: event.active || undefined,
         })
         return
       }
