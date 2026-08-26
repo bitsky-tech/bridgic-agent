@@ -98,10 +98,6 @@ function elementStyle(element: PresentationElement): CSSProperties {
   }
 }
 
-function presentationMediaExtension(fileName: string): string {
-  return /\.([^.]+)$/.exec(fileName.trim())?.[1]?.toUpperCase() ?? 'MEDIA'
-}
-
 function stopPresentationPlaybackMedia(media: HTMLMediaElement | null): void {
   media?.pause()
 }
@@ -222,43 +218,37 @@ function PresentationElementPreview({ element, interactive, suppressMediaPlaybac
     }
     if (element.type === 'audio') return (
       <span
-        className="absolute flex items-center gap-4 overflow-hidden rounded-xl border border-[#CFC5F5] bg-[linear-gradient(110deg,#FAF8FF_0%,#F0ECFF_58%,#E8E2FF_100%)] px-5 text-[#302A4A] shadow-sm"
+        className="absolute flex items-center gap-3 overflow-hidden rounded-[10px] border border-[#D8D0FF] bg-[#FBFAFF] px-3 text-[#302A4A] shadow-sm"
         style={elementStyle(element)}
         data-testid="presentation-audio-placeholder"
       >
-        <span className="absolute inset-y-0 left-0 w-1.5 bg-[#7965E8]" />
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#6D58DC] text-white shadow-sm">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#6F5BE7] text-white shadow-sm">
           <Play className="size-4 translate-x-px" fill="currentColor" />
         </span>
         <span className="flex h-8 shrink-0 items-center gap-1" aria-hidden="true">
-          {[9, 17, 25, 14, 21, 12, 18, 8].map((height, index) => (
+          {[8, 16, 24, 13, 20, 11, 18, 9, 15, 7].map((height, index) => (
             <span
-              className={cn('w-1 rounded-full', index % 2 === 0 ? 'bg-[#7662E4]' : 'bg-[#B0A4F0]')}
+              className={cn('w-1 rounded-full', index % 2 === 0 ? 'bg-[#725EE7]' : 'bg-[#B8ADF4]')}
               key={`${element.id}-wave-${index}`}
               style={{ height }}
             />
           ))}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[17px] font-semibold leading-5">{element.source.fileName}</span>
-          <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7D749F]">{presentationMediaExtension(element.source.fileName)}</span>
-        </span>
+        <span className="min-w-0 flex-1 truncate text-[16px] font-semibold leading-5">{element.source.fileName}</span>
       </span>
     )
     return (
       <span
-        className="absolute overflow-hidden rounded-2xl border border-[#53658F] bg-[radial-gradient(circle_at_78%_16%,rgba(116,94,226,0.35),transparent_32%),linear-gradient(145deg,#29385F_0%,#17233E_52%,#0E1426_100%)] text-white shadow-md"
+        className="absolute overflow-hidden rounded-[10px] border border-[#3D4663] bg-[#151A2D] text-white shadow-md"
         style={elementStyle(element)}
         data-testid="presentation-video-placeholder"
       >
-        <span className="absolute left-5 top-5 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#E6EAFE]">
-          {presentationMediaExtension(element.source.fileName)}
+        <span className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(111,91,231,0.18),transparent_36%)]" />
+        <span className="absolute left-1/2 top-1/2 flex size-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/35 bg-black/45 text-white shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
+          <Play className="size-6 translate-x-0.5" fill="currentColor" />
         </span>
-        <span className="absolute left-1/2 top-[45%] flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-[#5E49D0] shadow-[0_12px_30px_rgba(0,0,0,0.28)]">
-          <Play className="size-7 translate-x-0.5" fill="currentColor" />
-        </span>
-        <span className="absolute inset-x-0 bottom-0 block bg-[linear-gradient(180deg,transparent,rgba(7,10,22,0.92))] px-6 pb-5 pt-12">
-          <span className="block truncate text-[17px] font-semibold">{element.source.fileName}</span>
+        <span className="absolute inset-x-0 bottom-0 block bg-[linear-gradient(180deg,transparent,rgba(5,8,18,0.82))] px-4 pb-3 pt-9">
+          <span className="block truncate text-[14px] font-medium">{element.source.fileName}</span>
         </span>
       </span>
     )

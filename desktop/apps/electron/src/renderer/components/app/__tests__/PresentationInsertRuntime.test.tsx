@@ -19,6 +19,7 @@ const {
 const {
   createPresentationHistoryEntry,
   createPresentationMediaFabricObject,
+  createPresentationMediaRuntime,
   estimatePresentationDocumentBytes,
   isPresentationRotationLocked,
   PresentationNumberField,
@@ -102,6 +103,277 @@ describe('presentation Insert runtime safeguards', () => {
       Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
         configurable: true,
         value: getContext,
+      })
+    }
+  })
+
+  it('keeps a live Fabric video frame inside the media element bounds', () => {
+    const element = {
+      ...createPresentationMediaElement('video', fileSource('video/mp4', 'frame.mp4')),
+      x: 80,
+      y: 96,
+    }
+    const object = createPresentationMediaFabricObject(fabric, element)
+    const canvas = {
+      renderAll: () => undefined,
+      requestRenderAll: () => undefined,
+    } as unknown as InstanceType<typeof fabric.Canvas>
+    const runtime = createPresentationMediaRuntime(fabric, canvas)
+    const originalCreateElement = document.createElement
+    const videos: HTMLVideoElement[] = []
+    Object.defineProperty(document, 'createElement', {
+      configurable: true,
+      value(tagName: string) {
+        const created = Reflect.apply(originalCreateElement, document, [tagName]) as HTMLElement
+        if (tagName.toLowerCase() === 'video') videos.push(created as HTMLVideoElement)
+        return created
+      },
+    })
+
+    try {
+      runtime.register(element, object)
+      expect(videos).toHaveLength(0)
+      runtime.prepare(element.id)
+      const video = videos[0]
+      if (!video) throw new Error('Expected the runtime to create a video element')
+      Object.defineProperties(video, {
+        videoHeight: { configurable: true, value: 720 },
+        videoWidth: { configurable: true, value: 1280 },
+      })
+      video.dispatchEvent(new Event('loadeddata'))
+      const group = object as InstanceType<typeof fabric.Group>
+      const frame = group.getObjects().find((child) => child instanceof fabric.FabricImage)
+
+      expect(frame).toBeInstanceOf(fabric.FabricImage)
+      expect(frame?.getElement()).toBe(video)
+      expect(video.width).toBe(1280)
+      expect(video.height).toBe(720)
+      expect(frame?.getBoundingRect()).toMatchObject({
+        left: element.x,
+        top: element.y,
+        width: element.width,
+        height: element.height,
+      })
+      runtime.pauseAll()
+      expect(group.getObjects().some((child) => child instanceof fabric.FabricImage)).toBe(false)
+      expect(video.getAttribute('src')).toBeNull()
+    } finally {
+      runtime.dispose()
+      Object.defineProperty(document, 'createElement', {
+        configurable: true,
+        value: originalCreateElement,
+      })
+    }
+  })
+
+  it('does not restart audio when a pending play resolves after the runtime pauses it', async () => {
+    const element = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'pending.mp3'))
+    const object = createPresentationMediaFabricObject(fabric, element)
+    const canvas = {
+      renderAll: () => undefined,
+      requestRenderAll: () => undefined,
+    } as unknown as InstanceType<typeof fabric.Canvas>
+    const runtime = createPresentationMediaRuntime(fabric, canvas)
+    const originalCreateElement = document.createElement
+    const audios: HTMLAudioElement[] = []
+    let paused = true
+    let pauseCalls = 0
+    let resolvePlay: () => void = () => undefined
+    const playResult = new Promise<void>((resolve) => {
+      resolvePlay = resolve
+    })
+    Object.defineProperty(document, 'createElement', {
+      configurable: true,
+      value(tagName: string) {
+        const created = Reflect.apply(originalCreateElement, document, [tagName]) as HTMLElement
+        if (tagName.toLowerCase() === 'audio') {
+          const audio = created as HTMLAudioElement
+          audios.push(audio)
+          Object.defineProperties(audio, {
+            pause: {
+              configurable: true,
+              value: () => {
+                paused = true
+                pauseCalls += 1
+              },
+            },
+            paused: { configurable: true, get: () => paused },
+            play: {
+              configurable: true,
+              value: () => {
+                paused = false
+                return playResult
+              },
+            },
+          })
+        }
+        return created
+      },
+    })
+
+    try {
+      runtime.register(element, object)
+      const pending = runtime.toggle(element.id)
+      const audio = audios[0]
+      if (!audio) throw new Error('Expected the runtime to create an audio element')
+      expect((object as InstanceType<typeof fabric.Group>).getObjects().find((child) => child instanceof fabric.Triangle)?.visible).toBe(false)
+
+      runtime.pauseAll()
+      expect(pauseCalls).toBe(1)
+      expect((object as InstanceType<typeof fabric.Group>).getObjects().find((child) => child instanceof fabric.Triangle)?.visible).toBe(true)
+      resolvePlay()
+      await pending
+
+      expect(paused).toBe(true)
+      expect((object as InstanceType<typeof fabric.Group>).getObjects().find((child) => child instanceof fabric.Triangle)?.visible).toBe(true)
+    } finally {
+      runtime.dispose()
+      Object.defineProperty(document, 'createElement', {
+        configurable: true,
+        value: originalCreateElement,
+      })
+    }
+  })
+
+  it('ignores an obsolete play result after playback is restarted', async () => {
+    const element = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'restart.mp3'))
+    const object = createPresentationMediaFabricObject(fabric, element)
+    const canvas = {
+      renderAll: () => undefined,
+      requestRenderAll: () => undefined,
+    } as unknown as InstanceType<typeof fabric.Canvas>
+    const runtime = createPresentationMediaRuntime(fabric, canvas)
+    const createElement = document.createElement.bind(document)
+    const resolvePlay: Array<() => void> = []
+    let paused = true
+    Object.defineProperty(document, 'createElement', {
+      configurable: true,
+      value(tagName: string) {
+        const created = createElement(tagName)
+        if (tagName.toLowerCase() === 'audio') {
+          Object.defineProperties(created, {
+            load: { configurable: true, value: () => undefined },
+            pause: { configurable: true, value: () => { paused = true } },
+            paused: { configurable: true, get: () => paused },
+            play: {
+              configurable: true,
+              value: () => {
+                paused = false
+                return new Promise<void>((resolve) => resolvePlay.push(resolve))
+              },
+            },
+          })
+        }
+        return created
+      },
+    })
+    const playGlyph = () => (
+      object as InstanceType<typeof fabric.Group>
+    ).getObjects().find((child) => child instanceof fabric.Triangle)
+
+    try {
+      runtime.register(element, object)
+      const obsolete = runtime.toggle(element.id)
+      await runtime.toggle(element.id)
+      const current = runtime.toggle(element.id)
+      expect(resolvePlay).toHaveLength(2)
+      expect(playGlyph()?.visible).toBe(false)
+
+      resolvePlay[0]!()
+      await obsolete
+      expect(playGlyph()?.visible).toBe(false)
+
+      resolvePlay[1]!()
+      await current
+      expect(paused).toBe(false)
+      expect(playGlyph()?.visible).toBe(false)
+    } finally {
+      runtime.dispose()
+      Object.defineProperty(document, 'createElement', {
+        configurable: true,
+        value: createElement,
+      })
+    }
+  })
+
+  it('toggles media only from its canvas play target and pauses the previous session', async () => {
+    const first = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'first.mp3'))
+    const second = {
+      ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'second.mp3')),
+      x: first.x + 40,
+      y: first.y + 100,
+    }
+    const firstObject = createPresentationMediaFabricObject(fabric, first)
+    const secondObject = createPresentationMediaFabricObject(fabric, second)
+    const canvas = {
+      renderAll: () => undefined,
+      requestRenderAll: () => undefined,
+    } as unknown as InstanceType<typeof fabric.Canvas>
+    const runtime = createPresentationMediaRuntime(fabric, canvas)
+    const createElement = document.createElement.bind(document)
+    const mediaStates: Array<{ pauseCalls: number; paused: boolean; playCalls: number }> = []
+    Object.defineProperty(document, 'createElement', {
+      configurable: true,
+      value(tagName: string) {
+        const created = createElement(tagName)
+        if (tagName.toLowerCase() === 'audio') {
+          const state = { pauseCalls: 0, paused: true, playCalls: 0 }
+          mediaStates.push(state)
+          Object.defineProperties(created, {
+            load: { configurable: true, value: () => undefined },
+            pause: {
+              configurable: true,
+              value: () => {
+                state.pauseCalls += 1
+                state.paused = true
+              },
+            },
+            paused: { configurable: true, get: () => state.paused },
+            play: {
+              configurable: true,
+              value: () => {
+                state.playCalls += 1
+                state.paused = false
+                return Promise.resolve()
+              },
+            },
+          })
+        }
+        return created
+      },
+    })
+    const playPoint = (element: typeof first) => {
+      const padding = Math.max(2, Math.min(14, element.height * 0.16, element.width * 0.04))
+      const buttonSize = Math.max(4, Math.min(38, element.height - (padding * 2), element.width * 0.18))
+      return new fabric.Point(element.x + padding + (buttonSize / 2), element.y + (element.height / 2))
+    }
+
+    try {
+      runtime.register(first, firstObject)
+      runtime.register(second, secondObject)
+      expect(runtime.toggleFromCanvas(
+        firstObject,
+        new fabric.Point(first.x + first.width - 4, first.y + (first.height / 2)),
+      )).toBe(false)
+      expect(mediaStates).toHaveLength(0)
+
+      expect(runtime.toggleFromCanvas(firstObject, playPoint(first))).toBe(true)
+      await Promise.resolve()
+      expect(mediaStates[0]).toMatchObject({ pauseCalls: 0, paused: false, playCalls: 1 })
+
+      expect(runtime.toggleFromCanvas(secondObject, playPoint(second))).toBe(true)
+      await Promise.resolve()
+      expect(mediaStates[0]).toMatchObject({ pauseCalls: 1, paused: true, playCalls: 1 })
+      expect(mediaStates[1]).toMatchObject({ pauseCalls: 0, paused: false, playCalls: 1 })
+
+      expect(runtime.toggleFromCanvas(secondObject, playPoint(second))).toBe(true)
+      await Promise.resolve()
+      expect(mediaStates[1]).toMatchObject({ pauseCalls: 1, paused: true, playCalls: 1 })
+    } finally {
+      runtime.dispose()
+      Object.defineProperty(document, 'createElement', {
+        configurable: true,
+        value: createElement,
       })
     }
   })

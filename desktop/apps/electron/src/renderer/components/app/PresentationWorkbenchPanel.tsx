@@ -11,7 +11,13 @@ import {
 } from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
-import type { Canvas as FabricCanvas, FabricObject } from 'fabric'
+import type {
+  Canvas as FabricCanvas,
+  FabricImage,
+  FabricObject,
+  Group as FabricGroup,
+  Point as FabricPoint,
+} from 'fabric'
 import {
   ChevronLeft,
   ChevronRight,
@@ -100,7 +106,6 @@ import {
   PresentationTransitionPlayer,
   type PresentationTransitionPlaybackDirection,
 } from './PresentationTransitionPlayer'
-import { PresentationEditorMediaPreview } from './PresentationEditorMediaPreview'
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
@@ -403,8 +408,21 @@ function createFittedFabricLabel(
   return label
 }
 
-function createFixedMediaGroup(fabric: FabricModule, element: PresentationMediaElement, objects: FabricObject[]): FabricObject {
-  const radius = Math.min(element.type === 'video' ? 20 : 16, element.height * 0.2)
+interface PresentationMediaFabricView {
+  buttonCenter: FabricPoint
+  buttonRadius: number
+  pauseGlyphs: [FabricObject, FabricObject]
+  playGlyph: FabricObject
+  root: FabricGroup
+  videoFrame: FabricImage | null
+}
+
+const presentationMediaFabricViews = new WeakMap<FabricObject, PresentationMediaFabricView>()
+
+function createFixedMediaGroup(fabric: FabricModule, element: PresentationMediaElement, objects: FabricObject[]): FabricGroup {
+  const radius = element.type === 'audio'
+    ? Math.min(18, element.height / 2)
+    : Math.min(12, element.height * 0.08)
   const [background, ...decorations] = objects
   const group = new fabric.Group(background ? [background] : [], {
     left: 0,
@@ -427,26 +445,93 @@ function createFixedMediaGroup(fabric: FabricModule, element: PresentationMediaE
     }),
   })
   if (decorations.length > 0) group.add(...decorations)
-  group.set({ left: element.x, top: element.y })
+  group.set({
+    left: element.x,
+    top: element.y,
+    angle: isPresentationRotationLocked(element) ? 0 : element.rotation,
+  })
   group.setCoords()
   return group
 }
 
-function presentationMediaExtension(fileName: string): string {
-  return /\.([^.]+)$/.exec(fileName.trim())?.[1]?.toUpperCase() ?? 'MEDIA'
+function createMediaPlaybackButton(
+  fabric: FabricModule,
+  centerX: number,
+  centerY: number,
+  size: number,
+  background: string,
+  foreground: string,
+): { objects: FabricObject[]; pauseGlyphs: [FabricObject, FabricObject]; playGlyph: FabricObject } {
+  const circle = new fabric.Circle({
+    left: centerX,
+    top: centerY,
+    radius: size / 2,
+    originX: 'center',
+    originY: 'center',
+    fill: background,
+    stroke: 'rgba(255,255,255,0.38)',
+    strokeWidth: 1,
+    selectable: false,
+    evented: false,
+  })
+  const playGlyph = new fabric.Triangle({
+    left: centerX + (size * 0.035),
+    top: centerY,
+    width: size * 0.32,
+    height: size * 0.36,
+    originX: 'center',
+    originY: 'center',
+    angle: 90,
+    fill: foreground,
+    strokeWidth: 0,
+    selectable: false,
+    evented: false,
+  })
+  const pauseWidth = Math.max(1.5, size * 0.105)
+  const pauseHeight = size * 0.34
+  const pauseOffset = size * 0.105
+  const createPauseGlyph = (offset: number) => new fabric.Rect({
+    left: centerX + offset,
+    top: centerY,
+    width: pauseWidth,
+    height: pauseHeight,
+    rx: pauseWidth / 2,
+    ry: pauseWidth / 2,
+    originX: 'center',
+    originY: 'center',
+    fill: foreground,
+    strokeWidth: 0,
+    visible: false,
+    selectable: false,
+    evented: false,
+  })
+  const pauseGlyphs: [FabricObject, FabricObject] = [
+    createPauseGlyph(-pauseOffset),
+    createPauseGlyph(pauseOffset),
+  ]
+  return { objects: [circle, playGlyph, ...pauseGlyphs], pauseGlyphs, playGlyph }
 }
 
 function createAudioFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
   const width = element.width
   const height = element.height
-  const padding = Math.max(10, Math.min(18, height * 0.2))
-  const buttonSize = Math.max(24, Math.min(42, height - (padding * 2)))
+  const padding = Math.max(2, Math.min(14, height * 0.16, width * 0.04))
+  const buttonSize = Math.max(4, Math.min(38, height - (padding * 2), width * 0.18))
   const buttonLeft = padding
-  const buttonTop = (height - buttonSize) / 2
+  const buttonCenterX = buttonLeft + (buttonSize / 2)
+  const buttonCenterY = height / 2
   const waveLeft = buttonLeft + buttonSize + Math.max(10, padding * 0.75)
-  const waveWidth = Math.min(82, Math.max(34, width * 0.16))
+  const waveWidth = Math.min(72, Math.max(8, width * 0.15))
   const textLeft = waveLeft + waveWidth + Math.max(10, padding * 0.75)
   const textWidth = Math.max(24, width - textLeft - padding)
+  const playbackButton = createMediaPlaybackButton(
+    fabric,
+    buttonCenterX,
+    buttonCenterY,
+    buttonSize,
+    '#705BE5',
+    '#FFFFFF',
+  )
   const objects: FabricObject[] = [
     new fabric.Rect({
       left: 0.5,
@@ -455,44 +540,15 @@ function createAudioFabricObject(fabric: FabricModule, element: PresentationMedi
       height: Math.max(1, height - 1),
       originX: 'left',
       originY: 'top',
-      rx: Math.min(16, height * 0.2),
-      ry: Math.min(16, height * 0.2),
-      fill: '#F6F3FF',
-      stroke: '#CFC5F5',
+      rx: Math.min(18, height / 2),
+      ry: Math.min(18, height / 2),
+      fill: '#F8F6FF',
+      stroke: '#CFC8F5',
       strokeWidth: 1,
     }),
-    new fabric.Rect({
-      left: 0.5,
-      top: 0.5,
-      width: Math.max(4, Math.min(7, width * 0.014)),
-      height: Math.max(1, height - 1),
-      originX: 'left',
-      originY: 'top',
-      fill: '#7965E8',
-      strokeWidth: 0,
-    }),
-    new fabric.Circle({
-      left: buttonLeft,
-      top: buttonTop,
-      radius: buttonSize / 2,
-      originX: 'left',
-      originY: 'top',
-      fill: '#6D58DC',
-      strokeWidth: 0,
-    }),
-    new fabric.Triangle({
-      left: buttonLeft + (buttonSize * 0.53),
-      top: buttonTop + (buttonSize * 0.5),
-      width: buttonSize * 0.32,
-      height: buttonSize * 0.34,
-      originX: 'center',
-      originY: 'center',
-      angle: 90,
-      fill: '#FFFFFF',
-      strokeWidth: 0,
-    }),
+    ...playbackButton.objects,
   ]
-  const waveHeights = [0.34, 0.62, 0.86, 0.5, 0.74, 0.42, 0.66, 0.3]
+  const waveHeights = [0.32, 0.66, 0.46, 0.9, 0.58, 0.38, 0.76, 0.5, 0.68]
   const barGap = waveWidth / waveHeights.length
   for (const [index, ratio] of waveHeights.entries()) {
     const barHeight = Math.max(4, (height - (padding * 2)) * ratio)
@@ -509,48 +565,55 @@ function createAudioFabricObject(fabric: FabricModule, element: PresentationMedi
       strokeWidth: 0,
     }))
   }
-  const nameFontSize = Math.max(11, Math.min(18, height * 0.24))
+  const nameFontSize = Math.max(7, Math.min(15, height * 0.22))
   objects.push(createFittedFabricLabel(fabric, element.source.fileName, textWidth, {
     left: textLeft,
-    top: Math.max(6, (height / 2) - nameFontSize - 1),
+    top: Math.max(1, (height - nameFontSize) / 2),
     originX: 'left',
     originY: 'top',
-    fill: '#302A4A',
+    fill: '#352D55',
     fontSize: nameFontSize,
     fontFamily: 'Aptos',
     fontWeight: 600,
   }))
-  objects.push(new fabric.Text(presentationMediaExtension(element.source.fileName), {
-    left: textLeft,
-    top: Math.min(height - 16, (height / 2) + 4),
-    originX: 'left',
-    originY: 'top',
-    fill: '#7D749F',
-    fontSize: Math.max(8, Math.min(11, height * 0.15)),
-    fontFamily: 'Aptos',
-    fontWeight: 500,
-  }))
-  return createFixedMediaGroup(fabric, element, objects)
+  const root = createFixedMediaGroup(fabric, element, objects)
+  presentationMediaFabricViews.set(root, {
+    buttonCenter: new fabric.Point(buttonCenterX - (width / 2), buttonCenterY - (height / 2)),
+    buttonRadius: Math.max(buttonSize / 2, 4),
+    pauseGlyphs: playbackButton.pauseGlyphs,
+    playGlyph: playbackButton.playGlyph,
+    root,
+    videoFrame: null,
+  })
+  return root
 }
 
 function createVideoFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
   const width = element.width
   const height = element.height
-  const radius = Math.min(20, height * 0.12)
-  const buttonSize = Math.max(36, Math.min(76, Math.min(width, height) * 0.22))
-  const captionHeight = Math.max(44, Math.min(68, height * 0.2))
-  const labelPadding = Math.max(14, Math.min(24, width * 0.04))
-  const fileName = createFittedFabricLabel(fabric, element.source.fileName, Math.max(24, width - (labelPadding * 2)), {
-    left: labelPadding,
-    top: height - captionHeight + Math.max(10, captionHeight * 0.28),
-    originX: 'left',
-    originY: 'top',
-    fill: '#FFFFFF',
-    fontSize: Math.max(12, Math.min(19, captionHeight * 0.31)),
-    fontFamily: 'Aptos',
-    fontWeight: 600,
-  })
+  const radius = Math.min(12, height * 0.08)
+  const buttonSize = Math.max(4, Math.min(64, Math.min(width, height) * 0.2))
+  const playbackButton = createMediaPlaybackButton(
+    fabric,
+    width / 2,
+    height / 2,
+    buttonSize,
+    'rgba(16,17,25,0.68)',
+    '#FFFFFF',
+  )
   const objects: FabricObject[] = [
+    new fabric.Rect({
+      left: 0,
+      top: 0,
+      width,
+      height,
+      originX: 'left',
+      originY: 'top',
+      rx: radius,
+      ry: radius,
+      fill: '#171923',
+      strokeWidth: 0,
+    }),
     new fabric.Rect({
       left: 0.5,
       top: 0.5,
@@ -560,90 +623,356 @@ function createVideoFabricObject(fabric: FabricModule, element: PresentationMedi
       originY: 'top',
       rx: radius,
       ry: radius,
-      fill: new fabric.Gradient({
-        type: 'linear',
-        coords: { x1: 0, y1: 0, x2: width, y2: height },
-        colorStops: [
-          { offset: 0, color: '#26345C' },
-          { offset: 0.55, color: '#17233E' },
-          { offset: 1, color: '#0E1426' },
-        ],
-      }),
-      stroke: '#52658F',
+      fill: 'rgba(0,0,0,0)',
+      stroke: 'rgba(132,112,237,0.72)',
       strokeWidth: 1,
     }),
-    new fabric.Circle({
-      left: width * 0.78,
-      top: height * 0.1,
-      radius: Math.max(28, Math.min(width, height) * 0.22),
-      originX: 'center',
-      originY: 'center',
-      fill: 'rgba(112, 92, 225, 0.18)',
-      strokeWidth: 0,
-    }),
-    new fabric.Rect({
-      left: labelPadding,
-      top: labelPadding,
-      width: Math.max(52, Math.min(92, width * 0.16)),
-      height: Math.max(22, Math.min(30, height * 0.1)),
-      originX: 'left',
-      originY: 'top',
-      rx: 8,
-      ry: 8,
-      fill: 'rgba(255,255,255,0.14)',
-      stroke: 'rgba(255,255,255,0.22)',
-      strokeWidth: 1,
-    }),
-    new fabric.Text(presentationMediaExtension(element.source.fileName), {
-      left: labelPadding + 10,
-      top: labelPadding + Math.max(5, Math.min(7, height * 0.02)),
-      originX: 'left',
-      originY: 'top',
-      fill: '#E6EAFE',
-      fontSize: Math.max(9, Math.min(12, height * 0.035)),
-      fontFamily: 'Aptos',
-      fontWeight: 600,
-    }),
-    new fabric.Circle({
-      left: width / 2,
-      top: Math.max(buttonSize, (height - captionHeight) / 2),
-      radius: buttonSize / 2,
-      originX: 'center',
-      originY: 'center',
-      fill: 'rgba(255,255,255,0.92)',
-      shadow: new fabric.Shadow({ color: 'rgba(0,0,0,0.24)', blur: 18, offsetX: 0, offsetY: 6 }),
-      strokeWidth: 0,
-    }),
-    new fabric.Triangle({
-      left: (width / 2) + (buttonSize * 0.04),
-      top: Math.max(buttonSize, (height - captionHeight) / 2),
-      width: buttonSize * 0.34,
-      height: buttonSize * 0.38,
-      originX: 'center',
-      originY: 'center',
-      angle: 90,
-      fill: '#5E49D0',
-      strokeWidth: 0,
-    }),
-    new fabric.Rect({
-      left: 0,
-      top: height - captionHeight,
-      width,
-      height: captionHeight,
-      originX: 'left',
-      originY: 'top',
-      fill: 'rgba(8,12,24,0.72)',
-      strokeWidth: 0,
-    }),
-    fileName,
+    ...playbackButton.objects,
   ]
-  return createFixedMediaGroup(fabric, element, objects)
+  const root = createFixedMediaGroup(fabric, element, objects)
+  presentationMediaFabricViews.set(root, {
+    buttonCenter: new fabric.Point(0, 0),
+    buttonRadius: Math.max(buttonSize / 2, 4),
+    pauseGlyphs: playbackButton.pauseGlyphs,
+    playGlyph: playbackButton.playGlyph,
+    root,
+    videoFrame: null,
+  })
+  return root
 }
 
 export function createPresentationMediaFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
   return element.type === 'audio'
     ? createAudioFabricObject(fabric, element)
     : createVideoFabricObject(fabric, element)
+}
+
+interface PresentationMediaRegistration {
+  element: PresentationMediaElement
+  object: FabricObject
+  view: PresentationMediaFabricView
+}
+
+interface PresentationMediaSession {
+  dispose: () => void
+  pause: () => void
+  start: () => void
+  toggle: () => Promise<void>
+}
+
+export interface PresentationMediaRuntime {
+  dispose: () => void
+  pause: (elementId: string) => void
+  pauseAll: () => void
+  prepare: (elementId: string) => void
+  register: (element: PresentationMediaElement, object: FabricObject) => void
+  reset: () => void
+  toggle: (elementId: string) => Promise<void>
+  toggleFromCanvas: (object: FabricObject, scenePoint: FabricPoint) => boolean
+}
+
+/** Runtime-only playback state for media drawn inside the Fabric canvas. */
+export function createPresentationMediaRuntime(fabric: FabricModule, canvas: FabricCanvas): PresentationMediaRuntime {
+  const registrations = new Map<string, PresentationMediaRegistration>()
+  const registrationIds = new WeakMap<FabricObject, string>()
+  const sessions = new Map<string, PresentationMediaSession>()
+  let runtimeDisposed = false
+
+  const setViewPlaying = (view: PresentationMediaFabricView, playing: boolean) => {
+    view.playGlyph.set({ visible: !playing })
+    for (const glyph of view.pauseGlyphs) glyph.set({ visible: playing })
+    view.root.dirty = true
+    if (view.root.canvas === canvas) canvas.requestRenderAll()
+  }
+
+  const disposeAllExcept = (elementId?: string) => {
+    for (const [id, session] of [...sessions]) {
+      if (id === elementId) continue
+      sessions.delete(id)
+      session.dispose()
+    }
+  }
+
+  const createSession = (registration: PresentationMediaRegistration): PresentationMediaSession => {
+    const { element, view } = registration
+    const media = document.createElement(element.type)
+    let disposed = false
+    let playing = false
+    let starting = false
+    let playAttempt = 0
+    let videoFrameCallback: number | null = null
+    let animationFrame: number | null = null
+
+    const markVideoFrameDirty = () => {
+      if (disposed || view.root.canvas !== canvas) return
+      view.root.dirty = true
+      if (view.videoFrame) view.videoFrame.dirty = true
+      canvas.renderAll()
+    }
+
+    const cancelFrameRefresh = () => {
+      if (videoFrameCallback !== null && media instanceof HTMLVideoElement) {
+        media.cancelVideoFrameCallback(videoFrameCallback)
+        videoFrameCallback = null
+      }
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame)
+        animationFrame = null
+      }
+    }
+
+    const scheduleFrameRefresh = () => {
+      if (
+        disposed
+        || !(media instanceof HTMLVideoElement)
+        || media.paused
+        || media.ended
+        || videoFrameCallback !== null
+        || animationFrame !== null
+      ) return
+      if (typeof media.requestVideoFrameCallback === 'function') {
+        videoFrameCallback = media.requestVideoFrameCallback(() => {
+          videoFrameCallback = null
+          markVideoFrameDirty()
+          scheduleFrameRefresh()
+        })
+        return
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null
+        markVideoFrameDirty()
+        scheduleFrameRefresh()
+      })
+    }
+
+    const updatePlaying = (next: boolean) => {
+      playing = next
+      if (!next) starting = false
+      setViewPlaying(view, next)
+      if (next) scheduleFrameRefresh()
+      else cancelFrameRefresh()
+    }
+
+    const removeVideoFrame = () => {
+      const frame = view.videoFrame
+      if (!frame) return
+      view.videoFrame = null
+      if (frame.group === view.root) view.root.remove(frame)
+      frame.dispose()
+      view.root.dirty = true
+      if (view.root.canvas === canvas) canvas.requestRenderAll()
+    }
+
+    const attachVideoFrame = () => {
+      if (disposed || !(media instanceof HTMLVideoElement) || view.videoFrame) return
+      const sourceWidth = Math.max(0, media.videoWidth)
+      const sourceHeight = Math.max(0, media.videoHeight)
+      if (!sourceWidth || !sourceHeight) return
+      media.width = sourceWidth
+      media.height = sourceHeight
+      const frameWidth = registration.element.width
+      const frameHeight = registration.element.height
+      const scale = Math.max(frameWidth / sourceWidth, frameHeight / sourceHeight)
+      const cropWidth = frameWidth / scale
+      const cropHeight = frameHeight / scale
+      const frame = new fabric.FabricImage(media, {
+        left: 0,
+        top: 0,
+        width: cropWidth,
+        height: cropHeight,
+        cropX: Math.max(0, (sourceWidth - cropWidth) / 2),
+        cropY: Math.max(0, (sourceHeight - cropHeight) / 2),
+        scaleX: scale,
+        scaleY: scale,
+        originX: 'left',
+        originY: 'top',
+        selectable: false,
+        evented: false,
+        objectCaching: false,
+      })
+      view.videoFrame = frame
+      view.root.insertAt(1, frame)
+      frame.set({
+        left: -(frameWidth / 2),
+        top: -(frameHeight / 2),
+      })
+      frame.setCoords()
+      view.root.dirty = true
+      if (view.root.canvas === canvas) canvas.requestRenderAll()
+    }
+
+    const onPlay = () => {
+      if (!media.paused) updatePlaying(true)
+    }
+    const onPause = () => {
+      if (media.paused) updatePlaying(false)
+    }
+    const onEnded = () => updatePlaying(false)
+    const onLoadedData = () => attachVideoFrame()
+    const onSeeked = () => {
+      view.root.dirty = true
+      if (view.videoFrame) view.videoFrame.dirty = true
+      if (view.root.canvas === canvas) canvas.requestRenderAll()
+    }
+    let session: PresentationMediaSession
+    const onError = () => {
+      if (disposed) return
+      session.dispose()
+      if (sessions.get(element.id) === session) sessions.delete(element.id)
+    }
+
+    const dispose = () => {
+      if (disposed) return
+      disposed = true
+      playAttempt += 1
+      starting = false
+      playing = false
+      cancelFrameRefresh()
+      media.removeEventListener('play', onPlay)
+      media.removeEventListener('pause', onPause)
+      media.removeEventListener('ended', onEnded)
+      media.removeEventListener('error', onError)
+      media.removeEventListener('loadeddata', onLoadedData)
+      media.removeEventListener('seeked', onSeeked)
+      try {
+        media.pause()
+      } catch {
+        // The source may already have been detached by the browser.
+      }
+      media.removeAttribute('src')
+      try {
+        media.load()
+      } catch {
+        // A disposed media element does not need to be reloaded.
+      }
+      removeVideoFrame()
+      setViewPlaying(view, false)
+    }
+
+    const pause = () => {
+      if (disposed) return
+      playAttempt += 1
+      starting = false
+      try {
+        media.pause()
+      } finally {
+        updatePlaying(false)
+      }
+    }
+
+    const toggle = async () => {
+      if (disposed) return
+      if (playing || starting || !media.paused) {
+        pause()
+        return
+      }
+      const attempt = ++playAttempt
+      starting = true
+      setViewPlaying(view, true)
+      try {
+        await media.play()
+        if (disposed || attempt !== playAttempt) return
+        if (!media.paused) {
+          starting = false
+          updatePlaying(true)
+        } else {
+          updatePlaying(false)
+        }
+      } catch {
+        if (!disposed && attempt === playAttempt) updatePlaying(false)
+      }
+    }
+
+    const start = () => {
+      if (disposed) return
+      media.autoplay = false
+      media.controls = false
+      media.loop = element.loop
+      media.muted = element.muted
+      media.preload = element.type === 'video' ? 'auto' : 'metadata'
+      if (media instanceof HTMLVideoElement) media.playsInline = true
+      media.addEventListener('play', onPlay)
+      media.addEventListener('pause', onPause)
+      media.addEventListener('ended', onEnded)
+      media.addEventListener('error', onError)
+      media.addEventListener('loadeddata', onLoadedData)
+      media.addEventListener('seeked', onSeeked)
+      media.src = element.source.dataUrl
+      try {
+        media.load()
+      } catch {
+        onError()
+        return
+      }
+      if (media instanceof HTMLVideoElement && media.readyState >= 2) attachVideoFrame()
+    }
+
+    session = { dispose, pause, start, toggle }
+    return session
+  }
+
+  const ensureSession = (elementId: string): PresentationMediaSession | null => {
+    const existing = sessions.get(elementId)
+    if (existing) return existing
+    const registration = registrations.get(elementId)
+    if (!registration || runtimeDisposed) return null
+    disposeAllExcept(elementId)
+    const session = createSession(registration)
+    sessions.set(elementId, session)
+    session.start()
+    return sessions.get(elementId) === session ? session : null
+  }
+
+  const runtime: PresentationMediaRuntime = {
+    dispose() {
+      if (runtimeDisposed) return
+      runtime.reset()
+      runtimeDisposed = true
+    },
+    pause(elementId) {
+      sessions.get(elementId)?.pause()
+    },
+    pauseAll() {
+      disposeAllExcept()
+    },
+    prepare(elementId) {
+      if (registrations.get(elementId)?.element.type === 'video') ensureSession(elementId)
+    },
+    register(element, object) {
+      if (runtimeDisposed) return
+      const view = presentationMediaFabricViews.get(object)
+      if (!view) return
+      sessions.get(element.id)?.dispose()
+      sessions.delete(element.id)
+      registrations.set(element.id, { element, object, view })
+      registrationIds.set(object, element.id)
+      setViewPlaying(view, false)
+    },
+    reset() {
+      const activeSessions = [...sessions.values()]
+      sessions.clear()
+      for (const session of activeSessions) session.dispose()
+      registrations.clear()
+    },
+    async toggle(elementId) {
+      await ensureSession(elementId)?.toggle()
+    },
+    toggleFromCanvas(object, scenePoint) {
+      const elementId = registrationIds.get(object)
+      const view = presentationMediaFabricViews.get(object)
+      if (!elementId || !view || !registrations.has(elementId)) return false
+      const localPoint = scenePoint.transform(fabric.util.invertTransform(object.calcTransformMatrix()))
+      const distance = Math.hypot(
+        localPoint.x - view.buttonCenter.x,
+        localPoint.y - view.buttonCenter.y,
+      )
+      if (distance > view.buttonRadius * 1.3) return false
+      void runtime.toggle(elementId)
+      return true
+    },
+  }
+
+  return runtime
 }
 
 function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
@@ -1090,7 +1419,6 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
   const [exportState, setExportState] = useState<ExportState>('idle')
   const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
-  const [mediaPreviewSuppressed, setMediaPreviewSuppressed] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasElementRef = useRef<HTMLCanvasElement>(null)
@@ -1099,6 +1427,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const videoInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<FabricCanvas | null>(null)
   const fabricModuleRef = useRef<typeof import('fabric') | null>(null)
+  const mediaRuntimeRef = useRef<PresentationMediaRuntime | null>(null)
   const objectIdsRef = useRef(new WeakMap<FabricObject, string>())
   const documentRef = useRef(document)
   const selectedElementIdRef = useRef<string | null>(null)
@@ -1220,7 +1549,6 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setTransitionPreviewRun(null)
       setInsertDialog(null)
       setSelectedElementId(null)
-      setMediaPreviewSuppressed(false)
       setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
     return () => window.clearTimeout(timer)
@@ -1233,10 +1561,20 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setSlideshowTransition(null)
       setTransitionPreviewRun(null)
       setInsertDialog(null)
-      setMediaPreviewSuppressed(false)
     }, 0)
     return () => window.clearTimeout(timer)
   }, [active])
+
+  useEffect(() => {
+    const mediaRuntime = mediaRuntimeRef.current
+    if (!mediaRuntime) return
+    if (!active || slideshowOpen || transitionPreviewRun) {
+      mediaRuntime.pauseAll()
+      return
+    }
+    const elementId = selectedElementIdRef.current
+    if (elementId) mediaRuntime.prepare(elementId)
+  }, [active, slideshowOpen, transitionPreviewRun])
 
   useEffect(() => {
     const root = rootRef.current
@@ -1278,34 +1616,24 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       })
       fabricModuleRef.current = fabric
       canvasRef.current = canvas
-      canvas.on('selection:created', (event) => {
-        const selected = event.selected?.[0]
-        setMediaPreviewSuppressed(false)
-        setSelectedElementId(selected ? objectIdsRef.current.get(selected) ?? null : null)
-      })
-      canvas.on('selection:updated', (event) => {
-        const selected = event.selected?.[0]
-        setMediaPreviewSuppressed(false)
-        setSelectedElementId(selected ? objectIdsRef.current.get(selected) ?? null : null)
-      })
-      canvas.on('selection:cleared', () => {
-        setMediaPreviewSuppressed(false)
-        setSelectedElementId(null)
-      })
-      const suppressMediaPreviewForTarget = (target?: FabricObject) => {
-        if (!target) return
-        const elementId = objectIdsRef.current.get(target)
-        const current = documentRef.current
-        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
-        const element = slide?.elements.find((item) => item.id === elementId)
-        if (element && isPresentationMediaElement(element)) setMediaPreviewSuppressed(true)
+      const mediaRuntime = createPresentationMediaRuntime(fabric, canvas)
+      mediaRuntimeRef.current = mediaRuntime
+      const selectCanvasObject = (selected?: FabricObject) => {
+        const elementId = selected ? objectIdsRef.current.get(selected) ?? null : null
+        mediaRuntime.pauseAll()
+        if (elementId) mediaRuntime.prepare(elementId)
+        setSelectedElementId(elementId)
       }
-      canvas.on('object:moving', (event) => suppressMediaPreviewForTarget(event.target))
-      canvas.on('object:scaling', (event) => suppressMediaPreviewForTarget(event.target))
-      canvas.on('mouse:up', () => setMediaPreviewSuppressed(false))
+      canvas.on('selection:created', (event) => selectCanvasObject(event.selected?.[0]))
+      canvas.on('selection:updated', (event) => selectCanvasObject(event.selected?.[0]))
+      canvas.on('selection:cleared', () => selectCanvasObject())
+      canvas.on('object:moving', () => mediaRuntime.pauseAll())
+      canvas.on('object:scaling', () => mediaRuntime.pauseAll())
+      canvas.on('mouse:up', (event) => {
+        if (event.isClick && event.target) mediaRuntime.toggleFromCanvas(event.target, event.scenePoint)
+      })
       canvas.on('object:modified', (event) => {
         if (event.target) syncFabricObjectRef.current(event.target)
-        setMediaPreviewSuppressed(false)
       })
       canvas.on('mouse:dblclick', (event) => {
         const elementId = event.target ? objectIdsRef.current.get(event.target) : undefined
@@ -1324,7 +1652,10 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       const canvas = canvasRef.current
       canvasRef.current = null
       fabricModuleRef.current = null
+      const mediaRuntime = mediaRuntimeRef.current
+      mediaRuntimeRef.current = null
       objectIdsRef.current = new WeakMap()
+      mediaRuntime?.dispose()
       if (canvas) void canvas.dispose()
     }
   }, [active])
@@ -1332,9 +1663,11 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   useEffect(() => {
     const canvas = canvasRef.current
     const fabric = fabricModuleRef.current
-    if (!active || !canvas || !fabric || !currentSlide) return
+    const mediaRuntime = mediaRuntimeRef.current
+    if (!active || !canvas || !fabric || !mediaRuntime || !currentSlide) return
     let cancelled = false
     const activeElementId = selectedElementIdRef.current
+    mediaRuntime.reset()
     canvas.clear()
     canvas.backgroundColor = currentSlide.background
     objectIdsRef.current = new WeakMap()
@@ -1358,17 +1691,22 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         })
         objectIdsRef.current.set(object, element.id)
         canvas.add(object)
+        if (isPresentationMediaElement(element)) mediaRuntime.register(element, object)
         if (element.id === activeElementId) activeObject = object
       }
       const slideNumber = documentRef.current.slides.findIndex((slide) => slide.id === currentSlide.id) + 1
       createFooterFabricObjects(fabric, currentSlide, Math.max(1, slideNumber)).forEach((object) => canvas.add(object))
-      if (activeObject) canvas.setActiveObject(activeObject)
+      if (activeObject) {
+        canvas.setActiveObject(activeObject)
+        if (activeElementId) mediaRuntime.prepare(activeElementId)
+      }
       canvas.requestRenderAll()
     }).catch(() => {
       if (!cancelled) canvas.requestRenderAll()
     })
     return () => {
       cancelled = true
+      if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
   }, [active, canvasGeneration, currentSlide])
 
@@ -1414,9 +1752,20 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         || target.tagName === 'INPUT'
         || target.tagName === 'TEXTAREA'
         || target.tagName === 'SELECT'
-        || Boolean(target.closest('[data-testid="presentation-editor-media-preview"]'))
+        || Boolean(target.closest('button, a, [role="button"]'))
       )) return
       const modifier = event.metaKey || event.ctrlKey
+      if (!modifier && !event.repeat && (event.key === ' ' || event.key === 'Enter')) {
+        const elementId = selectedElementIdRef.current
+        const current = documentRef.current
+        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const element = slide?.elements.find((item) => item.id === elementId)
+        if (element && isPresentationMediaElement(element) && !transitionPreviewRun) {
+          event.preventDefault()
+          void mediaRuntimeRef.current?.toggle(element.id)
+          return
+        }
+      }
       if (modifier && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         if (event.shiftKey) redo()
@@ -1430,7 +1779,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [active, deleteSelectedElement, redo, slideshowOpen, undo])
+  }, [active, deleteSelectedElement, redo, slideshowOpen, transitionPreviewRun, undo])
 
   const goToSlideshowIndex = useCallback((requestedIndex: number) => {
     if (slideshowTransition) return
@@ -1884,6 +2233,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setTransitionPreviewRun(null)
       return
     }
+    mediaRuntimeRef.current?.pauseAll()
     transitionRunIdRef.current += 1
     setTransitionPreviewRun({ runKey: transitionRunIdRef.current, slideId: slide.id, transition })
   }
@@ -1932,6 +2282,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
 
   const startSlideshow = () => {
     const index = documentRef.current.slides.findIndex((slide) => slide.id === documentRef.current.selectedSlideId)
+    mediaRuntimeRef.current?.pauseAll()
     setTransitionPreviewRun(null)
     setSlideshowTransition(null)
     setSlideshowIndex(Math.max(0, index))
@@ -1939,6 +2290,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   }
 
   const startSlideshowFromBeginning = () => {
+    mediaRuntimeRef.current?.pauseAll()
     setTransitionPreviewRun(null)
     setSlideshowTransition(null)
     setSlideshowIndex(0)
@@ -2291,18 +2643,6 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
               />
             ) : null}
           </div>
-
-          {active && selectedElement && isPresentationMediaElement(selectedElement) && !slideshowOpen ? (
-            <div
-              className={cn(
-                'shrink-0 border-t border-border-subtle/65 bg-bg-surface px-3 py-2',
-                selectedElement.type === 'video' ? 'h-[112px]' : 'h-[80px]',
-              )}
-              data-testid="presentation-editor-media-preview-host"
-            >
-              {!mediaPreviewSuppressed && !transitionPreviewRun ? <PresentationEditorMediaPreview element={selectedElement} /> : null}
-            </div>
-          ) : null}
 
           <label className={cn('flex shrink-0 items-start gap-2 border-t border-border-subtle/65 bg-bg-surface px-3 py-2', compact ? 'h-11' : 'h-14')}>
             <MessageSquareText className="mt-0.5 size-4 shrink-0 text-text-tertiary" />
