@@ -585,7 +585,7 @@ class MainThink(CognitiveWorker):
         async def roll_summary(
             previous_summary: str,
             units: Sequence[Tuple[int, str]],
-            render_prompt: Callable[[str, str, int], str],
+            render_prompt: Callable[[str, str], str],
         ) -> Tuple[str, Optional[int]]:
             """Fold ordered atomic units through bounded model calls, then a bounded fallback."""
             if not units or sum(text_tokens(text) for _, text in units) < 256:
@@ -605,7 +605,7 @@ class MainThink(CognitiveWorker):
                         summary_output_tokens,
                         max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
                     )
-                    request = summary_messages(render_prompt(summary, history, output_limit))
+                    request = summary_messages(render_prompt(summary, history))
                     if self._estimate_request_tokens(request, []) <= summary_input_tokens:
                         chunk = trial
                         next_index += 1
@@ -624,7 +624,7 @@ class MainThink(CognitiveWorker):
                     summary_output_tokens,
                     max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
                 )
-                request = summary_messages(render_prompt(summary, history, output_limit))
+                request = summary_messages(render_prompt(summary, history))
                 fallback = trim_text(
                     "\n\n".join(part for part in (summary, history) if part),
                     output_limit,
@@ -680,8 +680,8 @@ class MainThink(CognitiveWorker):
                     f"{payload}\n</session_turn>",
                 ))
 
-            def render(previous: str, history: str, output_limit: int) -> str:
-                return render_session_compaction_prompt(previous, history, output_limit)
+            def render(previous: str, history: str) -> str:
+                return render_session_compaction_prompt(previous, history)
 
             summary, through = await roll_summary(candidate.session_summary, units, render)
             if through is None or through <= candidate.session_through_ordinal:
@@ -711,12 +711,11 @@ class MainThink(CognitiveWorker):
                 ))
             user_request = await self.user_input_block(ota_context, context)
 
-            def render(previous: str, history: str, output_limit: int) -> str:
+            def render(previous: str, history: str) -> str:
                 return render_turn_compaction_prompt(
                     previous,
                     user_request,
                     history,
-                    output_limit,
                 )
 
             summary, through = await roll_summary(candidate.turn_summary, units, render)

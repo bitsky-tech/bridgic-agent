@@ -103,7 +103,9 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
     assert state.turn_summary == "Compacted current-Turn progress"
     assert state.turn_through_round == 2
     assert len(llm.calls) == 2
-    assert all(call[0].content.startswith("You compress historical agent context") for call in llm.calls)
+    assert all(call[0].content.startswith("You turn historical agent context") for call in llm.calls)
+    assert all("substantially shorter" in call[0].content for call in llm.calls)
+    assert all("Aim for at most" not in call[1].content for call in llm.calls)
     contents = [message.content for message in compacted]
     assert not any("Session question 0" in content for content in contents)
     assert not any("Session question 1" in content for content in contents)
