@@ -8,6 +8,7 @@ from bridgic.core.model.types import Message, Response, Role
 
 from src.amphi_agent.security import ClassifyItem, LlmSafetyClassifier
 from src.amphi_agent.security._reasoning import reasoning_off
+from src.amphi_service.i18n import use_locale
 
 if TYPE_CHECKING:
     from tests._support.sandbox import IsolatedPaths
@@ -314,6 +315,59 @@ async def test_reasoning_retry(test_sandbox: "IsolatedPaths") -> None:
     # Check 3: The successful retry remains the final safety decision instead of falling back to ask.
     assert verdicts[0].verdict == "allow"
     assert verdicts[0].reason == "Routine operation."
+
+
+async def test_reason_language_falls_back_to_locale(
+    test_sandbox: "IsolatedPaths", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Final review-language instruction:
+
+    {
+      "primary": "the language of the user requests",
+      "en_locale_fallback": "English",
+      "zh_locale_fallback": "Chinese"
+    }
+
+    Checks:
+    1. The user's own language stays the primary rule, as it is for the agent's replies.
+    2. Each locale names itself as the fallback for requests with no language signal.
+    3. The calls under review never get to supply the language.
+    """
+    policy_path = test_sandbox.root / "policy.json"
+    _write_policy(policy_path)
+    monkeypatch.setenv("AMPHI_POLICY_FILE", str(policy_path))
+    response = json.dumps(
+        [{"index": 0, "verdict": "allow", "rule": "", "reason": "Routine work."}]
+    )
+    llm = _ScriptedLlm([response, response])
+    classifier = LlmSafetyClassifier(llm)
+    item = _item("install_sdk")
+    roots = [str(test_sandbox.root)]
+    # A resumed or scheduled Run reaches the classifier with no user request to read —
+    # the case that left the language unpinned and produced a card mixing both.
+    requests: list[str] = []
+
+    with use_locale("en"):
+        await classifier.judge([item], requests, roots)
+    english_prompt = llm.calls[0]["messages"][0].content
+
+    with use_locale("zh"):
+        await classifier.judge([item], requests, roots)
+    chinese_prompt = llm.calls[1]["messages"][0].content
+
+    # Check 1: The user's own language stays the primary rule.
+    for prompt in (english_prompt, chinese_prompt):
+        assert "**Write `reason` in the same language the user writes in**" in prompt
+
+    # Check 2: Each locale names itself as the fallback for requests with no language signal.
+    assert "write it in English" in english_prompt
+    assert "write it in Chinese" not in english_prompt
+    assert "write it in Chinese" in chinese_prompt
+    assert "write it in English" not in chinese_prompt
+
+    # Check 3: The calls under review never get to supply the language.
+    for prompt in (english_prompt, chinese_prompt):
+        assert "never take the language from the calls, paths or reasoning under review" in prompt
 
 
 def test_reasoning_overrides_follow_model_capabilities() -> None:
