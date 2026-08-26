@@ -34,7 +34,7 @@ from ._prompt import (
     render_stage_persona,
     time_in_local_tz,
 )
-from ._state import BuildStageState, NormalStageState, WorkflowStageState
+from ._state import BuildStageState, ContextCompactionState, NormalStageState, WorkflowStageState
 from ._tools import TOOL_LIBRARY
 from ._thinking_debug import write_thinking_debug
 from .tools import (
@@ -70,6 +70,8 @@ logger = logging.getLogger(__name__)
 VOLATILE_TAIL_EXTRA = "volatile_tail"
 CONTEXT_COMPACTION_PROVIDER_THRESHOLD = 0.80
 CONTEXT_COMPACTION_ESTIMATED_THRESHOLD = 0.70
+CONTEXT_COMPACTION_PROVIDER_TARGET = 0.60
+CONTEXT_COMPACTION_ESTIMATED_TARGET = 0.55
 
 
 CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
@@ -472,15 +474,58 @@ class MainThink(CognitiveWorker):
                     usable_tokens,
                     source,
                 )
-                compacted = await self.compact_messages(messages, tools, context)
-                if compacted is not None:
-                    messages = compacted
-                    request_estimate = self._estimate_request_tokens(messages, tools)
+                target_ratio = (
+                    CONTEXT_COMPACTION_PROVIDER_TARGET
+                    if source == "provider"
+                    else CONTEXT_COMPACTION_ESTIMATED_TARGET
+                )
+                target = max(1, math.floor(usable_tokens * target_ratio))
+                messages = await self.compact_messages(
+                    messages, tools, ota_context, context, target,
+                )
+                request_estimate = self._estimate_request_tokens(messages, tools)
         return messages, request_estimate
 
-    async def compact_messages(self, messages: List[Message], tools: List[Any], context: AmphiContext) -> Optional[List[Message]]:
-        # TODO: Compact the oldest complete Session Turn prefix while preserving the current Turn and Tool pairs.
-        pass
+    async def compact_messages(
+        self,
+        messages: List[Message],
+        tools: List[Any],
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        target: int,
+    ) -> List[Message]:
+        """Compact growing history sources, rebuilding the worker request after each update."""
+        if self._estimate_request_tokens(messages, tools) <= target:
+            return messages
+
+        if await self.compact_session_history(ota_context, context, target):
+            messages = await self._reassemble_compacted_messages(ota_context, context)
+            if self._estimate_request_tokens(messages, tools) <= target:
+                return messages
+
+        if await self.compact_turn_history(ota_context, context, target):
+            messages = await self._reassemble_compacted_messages(ota_context, context)
+        return messages
+
+    async def compact_session_history(self, ota_context: AmphiOTAContext, context: AmphiContext, target: int) -> bool:
+        """Update the persisted Session-history summary; implemented by the compaction policy."""
+        return False
+
+    async def compact_turn_history(self, ota_context: AmphiOTAContext, context: AmphiContext, target: int) -> bool:
+        """Update the persisted current-Turn summary; implemented by the compaction policy."""
+        return False
+
+    async def _reassemble_compacted_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
+        """Rebuild this worker's request from the updated compaction projection."""
+        messages = await self.assemble_messages(ota_context, context)
+        return await self.append_runtime_state(messages, ota_context, context)
+
+    @staticmethod
+    def _context_compaction(ota_context: AmphiOTAContext) -> ContextCompactionState:
+        """Return the active persisted compaction projection, creating it on demand."""
+        if ota_context.state.context_compaction is None:
+            ota_context.state.context_compaction = ContextCompactionState()
+        return ota_context.state.context_compaction
 
     def _record_model_usage(
         self,
@@ -1037,19 +1082,60 @@ class MainThink(CognitiveWorker):
         return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
 
     async def session_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Replay all past Turns as native user, assistant, and tool messages."""
-        return self._session_messages(context.session.get_all(), context)
+        """Replay the persisted Session summary followed by uncovered raw Turns."""
+        turns = context.session.get_all()
+        compaction = ota_context.state.context_compaction
+        if compaction is None or not compaction.session_summary:
+            return self._session_messages(turns, context)
+        remaining = [
+            turn
+            for turn in turns
+            if turn.session_ordinal > compaction.session_through_ordinal
+        ]
+        return [
+            self._compaction_summary_message(
+                "session_history",
+                compaction.session_summary,
+                "through_ordinal",
+                compaction.session_through_ordinal,
+            ),
+            *self._session_messages(remaining, context),
+        ]
+
+    @staticmethod
+    def _compaction_summary_message(scope: str, summary: str, through_name: str, through: int) -> Message:
+        """Render one persisted summary as low-authority Assistant history."""
+        content = (
+            f"<{scope}_summary {through_name}=\"{through}\">\n"
+            f"{summary.strip()}\n"
+            f"</{scope}_summary>"
+        )
+        return Message.from_text(content, role=Role.AI)
 
     def _session_messages(self, turns: Sequence[SessionTurnRecord], context: AmphiContext) -> List[Message]:
         """Replay persisted Turns oldest-first without history truncation."""
         messages: List[Message] = []
-        for turn_index, turn in enumerate(turns):
+        for turn in turns:
             ota = turn.ota_context_dump()
             messages.append(Message.from_text(
                 self._render_user_input(turn.user_input, context),
                 role=Role.USER,
             ))
-            messages.extend(self._ota_messages(ota, turn_index))
+            compaction_data = (turn.agent_state or {}).get("context_compaction")
+            compaction = (
+                ContextCompactionState.model_validate(compaction_data)
+                if compaction_data
+                else None
+            )
+            if compaction is not None and compaction.turn_summary:
+                messages.append(self._compaction_summary_message(
+                    "turn_history",
+                    compaction.turn_summary,
+                    "through_round",
+                    compaction.turn_through_round,
+                ))
+                ota["ota_record"] = (ota.get("ota_record") or [])[compaction.turn_through_round:]
+            messages.extend(self._ota_messages(ota, turn.session_ordinal))
             if turn.status == TurnStatus.FAILED:
                 messages.append(Message.from_text(TURN_FAILED_MESSAGE, role=Role.AI))
         return messages
@@ -1210,6 +1296,11 @@ class MainThink(CognitiveWorker):
             USER  "<observation>"                               (a stamped nudge, if any)
         """
         records = ota_context.ota_record
+        round_offset = 0
+        compaction = ota_context.state.context_compaction
+        if compaction is not None and compaction.turn_summary:
+            round_offset = compaction.turn_through_round
+            records = records[round_offset:]
         MAX_ARG_VALUE_CHARS = 1200
 
         def step_call(step: Any, round_index: int, step_index: int) -> Tuple[Dict[str, Any], Dict[str, int], List[str]]:
@@ -1308,7 +1399,14 @@ class MainThink(CognitiveWorker):
                 break
 
         messages: List[Message] = []
-        for index, record in enumerate(records):
+        if compaction is not None and compaction.turn_summary:
+            messages.append(self._compaction_summary_message(
+                "turn_history",
+                compaction.turn_summary,
+                "through_round",
+                compaction.turn_through_round,
+            ))
+        for index, record in enumerate(records, start=round_offset):
             think = _view(_view(record, "think_result"), "step_content") or ""
             steps = _view(_view(record, "action_result"), "results") or []
             if steps:

@@ -29,6 +29,7 @@ def _turn(
     status: TurnStatus = TurnStatus.COMPLETED,
     error: str | None = None,
     blocks: list[dict[str, Any]] | None = None,
+    agent_state: dict[str, Any] | None = None,
 ) -> SessionTurnRecord:
     return SessionTurnRecord(
         id=turn_id,
@@ -37,7 +38,7 @@ def _turn(
         session_ordinal=ordinal,
         user_input=UserInput(text=text, blocks=blocks or []),
         ota_records=ota_records,
-        agent_state={},
+        agent_state=agent_state or {},
         status=status,
         error=error,
     )
@@ -549,3 +550,98 @@ async def test_session_history_has_no_record_limit() -> None:
         Role.USER,
     ]
     assert messages[5].content.startswith("Current request\n\n<current_time>")
+
+
+async def test_session_compaction_replays_summaries_and_only_uncovered_history() -> None:
+    """Persisted Session and historical-Turn summaries replace their covered raw prefixes."""
+    history = [
+        _turn(
+            "turn-covered",
+            0,
+            "Covered question",
+            [{"think_result": {"step_content": "Covered answer", "tool_calls": []}}],
+        ),
+        _turn(
+            "turn-partial",
+            1,
+            "Partially compacted question",
+            [
+                {"think_result": {"step_content": "Covered round", "tool_calls": []}},
+                {"think_result": {"step_content": "Uncovered round", "tool_calls": []}},
+            ],
+            agent_state={
+                "context_compaction": {
+                    "turn_summary": "Earlier work in this Turn",
+                    "turn_through_round": 1,
+                },
+            },
+        ),
+        _turn(
+            "turn-recent",
+            2,
+            "Recent question",
+            [{"think_result": {"step_content": "Recent answer", "tool_calls": []}}],
+        ),
+    ]
+    ota_context = AmphiOTAContext(
+        user_input="Current request",
+        prompt_time=PROMPT_TIME,
+        state={
+            "context_compaction": {
+                "session_summary": "Earlier Session work",
+                "session_through_ordinal": 0,
+            },
+        },
+    )
+
+    messages = await MainThink().assemble_messages(ota_context, _context(history))
+    contents = [message.content for message in messages]
+
+    assert "Covered question" not in contents
+    assert "Covered answer" not in contents
+    assert "Covered round" not in contents
+    assert contents[1] == (
+        '<session_history_summary through_ordinal="0">\n'
+        "Earlier Session work\n"
+        "</session_history_summary>"
+    )
+    assert contents[2:5] == [
+        "Partially compacted question",
+        '<turn_history_summary through_round="1">\n'
+        "Earlier work in this Turn\n"
+        "</turn_history_summary>",
+        "Uncovered round",
+    ]
+    assert contents[5:7] == ["Recent question", "Recent answer"]
+    assert contents[7].startswith("Current request\n\n<current_time>")
+
+
+async def test_current_turn_compaction_keeps_only_uncovered_rounds() -> None:
+    """The current Turn renders its summary before rounds beyond the persisted boundary."""
+    ota_context = AmphiOTAContext(
+        user_input="Current request",
+        prompt_time=PROMPT_TIME,
+        ota_record=[
+            OTARecord(think_result={"step_content": "Covered round one", "tool_calls": []}),
+            OTARecord(think_result={"step_content": "Covered round two", "tool_calls": []}),
+            OTARecord(think_result={"step_content": "Uncovered round", "tool_calls": []}),
+        ],
+        state={
+            "context_compaction": {
+                "turn_summary": "Earlier work in the current Turn",
+                "turn_through_round": 2,
+            },
+        },
+    )
+
+    messages = await MainThink().assemble_messages(ota_context, _context([]))
+    contents = [message.content for message in messages]
+
+    assert "Covered round one" not in contents
+    assert "Covered round two" not in contents
+    assert contents[2:] == [
+        '<turn_history_summary through_round="2">\n'
+        "Earlier work in the current Turn\n"
+        "</turn_history_summary>",
+        "Uncovered round",
+    ]

@@ -53,6 +53,7 @@ from ._state import (
     AwaitingWorkflowRunChoice,
     BuildStageState,
     AwaitingSubAgent,
+    ContextCompactionState,
     NormalStageState,
     RoundPermission,
     CallVerdict,
@@ -1124,6 +1125,15 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     "output_tokens": 0,
                 })
             ota_context.context_usage = previous_usage
+            raw_compaction = (latest_turn.agent_state or {}).get("context_compaction")
+            if raw_compaction:
+                compaction = ContextCompactionState.model_validate(raw_compaction)
+                if latest_turn.status.is_terminal:
+                    compaction = compaction.model_copy(update={
+                        "turn_summary": "",
+                        "turn_through_round": 0,
+                    })
+                ota_context.state.context_compaction = compaction
 
         ########################
         # Initialize a new Agent Turn

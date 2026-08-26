@@ -9,7 +9,7 @@ __all__ = [
     "AwaitingAcceptRule", "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
     "AwaitingBuildConflict", "AwaitingWorkflowRunChoice",
     "SubAgentCall", "AwaitingSubAgent", "SubAgentResult", "SubAgentsCompleted", "AgentResult",
-    "AgentState",
+    "AgentState", "ContextCompactionState",
     "CallVerdict", "RoundPermission",
 ]
 
@@ -276,10 +276,20 @@ AgentResult: TypeAlias = Union[
 ]
 
 
+class ContextCompactionState(BaseModel):
+    """Persisted prompt projection for compacted Session and current-Turn history."""
+
+    session_summary: str = ""
+    session_through_ordinal: int = Field(default=-1, ge=-1)
+    turn_summary: str = ""
+    turn_through_round: int = Field(default=0, ge=0)
+
+
 class AgentState(BaseModel):
     think: InStage = Field(default_factory=NormalStageState)
     interaction: Optional[InteractionState] = None
     subagents: Optional[AwaitingSubAgent] = None
+    context_compaction: Optional[ContextCompactionState] = None
 
     def to_think(self, state: InStage) -> None:
         """Set the think dimension outright."""

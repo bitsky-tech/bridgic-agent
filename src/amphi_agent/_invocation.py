@@ -1673,9 +1673,17 @@ class AgentInvocation:
         )
         state_dump = context_dump.get("state") or {}
         think = state_dump.get("think") if isinstance(state_dump, dict) else None
+        compaction = (
+            state_dump.get("context_compaction")
+            if isinstance(state_dump, dict)
+            else None
+        )
+        agent_state = {"think": think} if isinstance(think, dict) else {}
+        if isinstance(compaction, dict):
+            agent_state["context_compaction"] = compaction
         return {
             "ota_records": [],
-            "agent_state": {"think": think} if isinstance(think, dict) else {},
+            "agent_state": agent_state,
             "browser_tool_loaded": False,
             "workspace_tools_loaded": False,
             "skills_tool_loaded": False,

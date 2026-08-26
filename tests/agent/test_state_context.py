@@ -5,15 +5,17 @@ import pytest
 from bridgic.amphibious import OTARecord
 from pydantic import ValidationError
 
-from src.amphi_agent import AmphiOTAContext, ContextUsageSnapshot
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, ContextUsageSnapshot, Session
 from src.amphi_agent._state import (
     AgentState,
     AwaitingBuildConfirm,
     AwaitingSubAgent,
     BuildStageState,
+    ContextCompactionState,
     SubAgentCall,
     WorkflowStageState,
 )
+from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 
 
 def test_state_round_trip() -> None:
@@ -71,6 +73,54 @@ def test_context_usage_is_the_single_token_state() -> None:
     assert ota_context.context_usage == ContextUsageSnapshot()
     assert "input_tokens" not in AmphiOTAContext.model_fields
     assert "output_tokens" not in AmphiOTAContext.model_fields
+
+
+def test_context_compaction_round_trip() -> None:
+    """Session and current-Turn prompt projections survive AgentState persistence."""
+    state = AgentState(context_compaction=ContextCompactionState(
+        session_summary="Earlier Session work",
+        session_through_ordinal=4,
+        turn_summary="Earlier rounds in this Turn",
+        turn_through_round=3,
+    ))
+
+    restored = AgentState.model_validate(state.model_dump(mode="json"))
+
+    assert restored.context_compaction == state.context_compaction
+
+
+async def test_new_turn_inherits_only_session_compaction() -> None:
+    """A terminal tail carries Session projection forward and resets current-Turn projection."""
+    persisted = ContextCompactionState(
+        session_summary="Earlier Session work",
+        session_through_ordinal=4,
+        turn_summary="Earlier rounds in the completed Turn",
+        turn_through_round=3,
+    )
+    session_record = SessionRecord(
+        id="session-compaction",
+        user_id="local",
+        workspace_root="/sessions/session-compaction",
+    )
+    latest_turn = SessionTurnRecord(
+        id="turn-compaction",
+        user_id="local",
+        session_id=session_record.id,
+        session_ordinal=5,
+        user_input=UserInput(text="Previous request"),
+        ota_records=[],
+        agent_state=AgentState(context_compaction=persisted).model_dump(mode="json"),
+        status=TurnStatus.COMPLETED,
+    )
+    context = AmphiContext(session=Session(session_record, [latest_turn]))
+    ota_context = AmphiOTAContext(user_input="New request")
+
+    await AmphiAgent().init_state(ota_context, context)
+
+    assert ota_context.state.context_compaction == ContextCompactionState(
+        session_summary="Earlier Session work",
+        session_through_ordinal=4,
+    )
 
 
 def test_child_identities() -> None:
