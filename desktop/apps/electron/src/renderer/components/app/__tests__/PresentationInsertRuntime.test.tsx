@@ -5,9 +5,10 @@ import type { Root } from 'react-dom/client'
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const { act } = await import('react')
+const { StrictMode, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
+const fabric = await import('fabric')
 const { createBlankPresentationDocument } = await import('@/atoms/presentation')
 const {
   createPresentationImageElement,
@@ -17,6 +18,7 @@ const {
 } = await import('@/lib/presentationInsert')
 const {
   createPresentationHistoryEntry,
+  createPresentationMediaFabricObject,
   estimatePresentationDocumentBytes,
   isPresentationRotationLocked,
   PresentationNumberField,
@@ -49,6 +51,61 @@ function fileSource(type: string, name: string, payload = 'AA==') {
 }
 
 describe('presentation Insert runtime safeguards', () => {
+  it('keeps media Fabric groups and their background children aligned to model geometry', () => {
+    const getContext = HTMLCanvasElement.prototype.getContext
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: () => ({
+        font: '',
+        textBaseline: 'alphabetic',
+        measureText: (value: string) => ({ width: value.length * 9 }),
+      }),
+    })
+    const audio = {
+      ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'a-very-long-unbroken-audio-file-name-that-used-to-expand-the-selection-frame.mp3')),
+      x: 35,
+      y: 48,
+    }
+    const video = {
+      ...createPresentationMediaElement('video', fileSource('video/mp4', 'a-very-long-unbroken-video-file-name-that-used-to-expand-the-selection-frame.mp4')),
+      x: 80,
+      y: 96,
+    }
+    const tinyAudio = { ...audio, id: 'tiny-audio', x: 11, y: 13, width: 8, height: 8 }
+    const tinyVideo = { ...video, id: 'tiny-video', x: 17, y: 19, width: 8, height: 8 }
+    try {
+      for (const element of [audio, video, tinyAudio, tinyVideo]) {
+        const object = createPresentationMediaFabricObject(fabric, element)
+        const background = (object as InstanceType<typeof fabric.Group>).getObjects()[0]!
+        expect(object.left).toBe(element.x)
+        expect(object.top).toBe(element.y)
+        expect(object.width).toBe(element.width)
+        expect(object.height).toBe(element.height)
+        expect(object.scaleX).toBe(1)
+        expect(object.scaleY).toBe(1)
+        expect(object.lockSkewingX).toBe(true)
+        expect(object.lockSkewingY).toBe(true)
+        expect(object.getBoundingRect()).toMatchObject({
+          left: element.x,
+          top: element.y,
+          width: element.width,
+          height: element.height,
+        })
+        expect(background.getBoundingRect()).toMatchObject({
+          left: element.x,
+          top: element.y,
+          width: element.width,
+          height: element.height,
+        })
+      }
+    } finally {
+      Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+        configurable: true,
+        value: getContext,
+      })
+    }
+  })
+
   it('keeps ordinary history at 50 entries and trims embedded payloads by byte budget', () => {
     const documentModel = createBlankPresentationDocument('History')
     const plainBytes = estimatePresentationDocumentBytes(documentModel)
@@ -117,7 +174,7 @@ describe('presentation Insert runtime safeguards', () => {
     expect(resolvePresentationSlideshowKeyAction(canvas, 'ArrowLeft')).toBe('previous')
   })
 
-  it('suppresses and mutes transition media, then restores stable playback settings', async () => {
+  it('uses inert media cards during transitions, then restores stable playback controls', async () => {
     const audio = { ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'sound.mp3')), autoplay: true, muted: false }
     const video = { ...createPresentationMediaElement('video', fileSource('video/mp4', 'clip.mp4')), autoplay: true, muted: false }
     const slide = { ...createBlankPresentationDocument('Media').slides[0]!, elements: [audio, video] }
@@ -125,6 +182,14 @@ describe('presentation Insert runtime safeguards', () => {
     document.body.appendChild(host)
     const root = createRoot(host)
     mountedRoots.add(root)
+    const pauseDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'pause')
+    let pauseCalls = 0
+    Object.defineProperty(HTMLMediaElement.prototype, 'pause', {
+      configurable: true,
+      value: () => {
+        pauseCalls += 1
+      },
+    })
 
     const render = async (suppressMediaPlayback: boolean) => {
       await act(async () => {
@@ -141,17 +206,112 @@ describe('presentation Insert runtime safeguards', () => {
       })
     }
 
-    await render(true)
-    for (const media of host.querySelectorAll<HTMLMediaElement>('audio, video')) {
-      expect(media.autoplay).toBe(false)
-      expect(media.muted).toBe(true)
+    try {
+      await render(false)
+      for (const media of host.querySelectorAll<HTMLMediaElement>('audio, video')) {
+        expect(media.autoplay).toBe(true)
+        expect(media.muted).toBe(false)
+      }
+
+      await render(true)
+      expect(host.querySelectorAll('audio, video')).toHaveLength(0)
+      expect(host.querySelector('[data-testid="presentation-audio-placeholder"]')).not.toBeNull()
+      expect(host.querySelector('[data-testid="presentation-video-placeholder"]')).not.toBeNull()
+      expect(pauseCalls).toBe(2)
+
+      await render(false)
+      await act(async () => root.unmount())
+      mountedRoots.delete(root)
+      expect(pauseCalls).toBe(4)
+    } finally {
+      if (pauseDescriptor) Object.defineProperty(HTMLMediaElement.prototype, 'pause', pauseDescriptor)
+      else Reflect.deleteProperty(HTMLMediaElement.prototype, 'pause')
+    }
+  })
+
+  it('keeps stable slideshow media sources during StrictMode effect replay', async () => {
+    const audio = { ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'strict.mp3', 'AAAA')), autoplay: true }
+    const video = { ...createPresentationMediaElement('video', fileSource('video/mp4', 'strict.mp4', 'BBBB')), autoplay: true }
+    const slide = { ...createBlankPresentationDocument('Strict media').slides[0]!, elements: [audio, video] }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    const playDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'play')
+    let playCalls = 0
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value: () => {
+        playCalls += 1
+        return Promise.resolve()
+      },
+    })
+
+    try {
+      await act(async () => {
+        root.render(
+          <StrictMode>
+            <PresentationSlidePreview
+              slide={slide}
+              width={960}
+              selected={false}
+              presentation
+              onActivateHyperlink={() => undefined}
+            />
+          </StrictMode>,
+        )
+      })
+
+      expect(host.querySelector('audio')?.getAttribute('src')).toBe(audio.source.dataUrl)
+      expect(host.querySelector('video')?.getAttribute('src')).toBe(video.source.dataUrl)
+      expect(playCalls).toBe(4)
+    } finally {
+      if (playDescriptor) Object.defineProperty(HTMLMediaElement.prototype, 'play', playDescriptor)
+      else Reflect.deleteProperty(HTMLMediaElement.prototype, 'play')
+    }
+  })
+
+  it('keeps replacement audio and video sources when stable playback nodes update in place', async () => {
+    const initialAudio = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'first.mp3', 'AAAA'))
+    const initialVideo = createPresentationMediaElement('video', fileSource('video/mp4', 'first.mp4', 'BBBB'))
+    const baseSlide = createBlankPresentationDocument('Media source replacement').slides[0]!
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+
+    const render = async (audioSource: typeof initialAudio.source, videoSource: typeof initialVideo.source) => {
+      await act(async () => {
+        root.render(
+          <PresentationSlidePreview
+            slide={{
+              ...baseSlide,
+              elements: [
+                { ...initialAudio, source: audioSource },
+                { ...initialVideo, source: videoSource },
+              ],
+            }}
+            width={960}
+            selected={false}
+            presentation
+            onActivateHyperlink={() => undefined}
+          />,
+        )
+      })
     }
 
-    await render(false)
-    for (const media of host.querySelectorAll<HTMLMediaElement>('audio, video')) {
-      expect(media.autoplay).toBe(true)
-      expect(media.muted).toBe(false)
-    }
+    await render(initialAudio.source, initialVideo.source)
+    const originalAudioNode = host.querySelector('audio')!
+    const originalVideoNode = host.querySelector('video')!
+    const replacementAudio = fileSource('audio/mpeg', 'second.mp3', 'CCCC')
+    const replacementVideo = fileSource('video/mp4', 'second.mp4', 'DDDD')
+
+    await render(replacementAudio, replacementVideo)
+
+    expect(host.querySelector('audio')).toBe(originalAudioNode)
+    expect(host.querySelector('video')).toBe(originalVideoNode)
+    expect(originalAudioNode.getAttribute('src')).toBe(replacementAudio.dataUrl)
+    expect(originalVideoNode.getAttribute('src')).toBe(replacementVideo.dataUrl)
   })
 
   it('keeps a linked background overlay below later media controls', async () => {

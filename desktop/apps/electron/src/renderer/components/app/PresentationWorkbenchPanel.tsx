@@ -100,6 +100,7 @@ import {
   PresentationTransitionPlayer,
   type PresentationTransitionPlaybackDirection,
 } from './PresentationTransitionPlayer'
+import { PresentationEditorMediaPreview } from './PresentationEditorMediaPreview'
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
@@ -375,45 +376,274 @@ function fitFabricGroupToElement(group: FabricObject, element: PresentationEleme
   return group
 }
 
-function createMediaFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
-  const background = new fabric.Rect({
+function createFittedFabricLabel(
+  fabric: FabricModule,
+  value: string,
+  maxWidth: number,
+  options: ConstructorParameters<typeof fabric.Text>[1],
+) {
+  const normalized = value.trim() || 'Media'
+  let label = new fabric.Text(normalized, options)
+  if ((label.width ?? 0) <= maxWidth) return label
+  let lower = 1
+  let upper = normalized.length
+  let fitted = '…'
+  while (lower <= upper) {
+    const middle = Math.floor((lower + upper) / 2)
+    const candidate = `${normalized.slice(0, middle).trimEnd()}…`
+    const probe = new fabric.Text(candidate, options)
+    if ((probe.width ?? 0) <= maxWidth) {
+      fitted = candidate
+      lower = middle + 1
+    } else {
+      upper = middle - 1
+    }
+  }
+  label = new fabric.Text(fitted, options)
+  return label
+}
+
+function createFixedMediaGroup(fabric: FabricModule, element: PresentationMediaElement, objects: FabricObject[]): FabricObject {
+  const radius = Math.min(element.type === 'video' ? 20 : 16, element.height * 0.2)
+  const [background, ...decorations] = objects
+  const group = new fabric.Group(background ? [background] : [], {
     left: 0,
     top: 0,
     width: element.width,
     height: element.height,
-    rx: Math.min(18, element.height * 0.18),
-    ry: Math.min(18, element.height * 0.18),
-    fill: element.type === 'video' ? '#171923' : '#252737',
-    stroke: '#44475A',
-    strokeWidth: 1,
+    originX: 'left',
+    originY: 'top',
+    strokeWidth: 0,
+    lockSkewingX: true,
+    lockSkewingY: true,
+    layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+    clipPath: new fabric.Rect({
+      width: element.width,
+      height: element.height,
+      rx: radius,
+      ry: radius,
+      originX: 'center',
+      originY: 'center',
+    }),
   })
-  const buttonSize = Math.min(68, element.height * 0.58)
-  const button = new fabric.Circle({
-    left: Math.max(16, element.height * 0.18),
-    top: (element.height - buttonSize) / 2,
-    radius: buttonSize / 2,
-    fill: 'rgba(255,255,255,0.14)',
-  })
-  const symbol = new fabric.Text(element.type === 'video' ? '▶' : '♫', {
-    left: button.left + (buttonSize / 2),
-    top: button.top + (buttonSize / 2),
-    originX: 'center',
-    originY: 'center',
-    fill: '#FFFFFF',
-    fontSize: Math.max(20, buttonSize * 0.44),
-    fontFamily: 'Arial',
-  })
-  const fileName = new fabric.Textbox(element.source.fileName, {
-    left: button.left + buttonSize + 20,
-    top: Math.max(10, (element.height - 32) / 2),
-    width: Math.max(60, element.width - button.left - buttonSize - 40),
-    height: 40,
-    fill: '#FFFFFF',
-    fontSize: Math.min(24, Math.max(14, element.height * 0.25)),
+  if (decorations.length > 0) group.add(...decorations)
+  group.set({ left: element.x, top: element.y })
+  group.setCoords()
+  return group
+}
+
+function presentationMediaExtension(fileName: string): string {
+  return /\.([^.]+)$/.exec(fileName.trim())?.[1]?.toUpperCase() ?? 'MEDIA'
+}
+
+function createAudioFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  const width = element.width
+  const height = element.height
+  const padding = Math.max(10, Math.min(18, height * 0.2))
+  const buttonSize = Math.max(24, Math.min(42, height - (padding * 2)))
+  const buttonLeft = padding
+  const buttonTop = (height - buttonSize) / 2
+  const waveLeft = buttonLeft + buttonSize + Math.max(10, padding * 0.75)
+  const waveWidth = Math.min(82, Math.max(34, width * 0.16))
+  const textLeft = waveLeft + waveWidth + Math.max(10, padding * 0.75)
+  const textWidth = Math.max(24, width - textLeft - padding)
+  const objects: FabricObject[] = [
+    new fabric.Rect({
+      left: 0.5,
+      top: 0.5,
+      width: Math.max(1, width - 1),
+      height: Math.max(1, height - 1),
+      originX: 'left',
+      originY: 'top',
+      rx: Math.min(16, height * 0.2),
+      ry: Math.min(16, height * 0.2),
+      fill: '#F6F3FF',
+      stroke: '#CFC5F5',
+      strokeWidth: 1,
+    }),
+    new fabric.Rect({
+      left: 0.5,
+      top: 0.5,
+      width: Math.max(4, Math.min(7, width * 0.014)),
+      height: Math.max(1, height - 1),
+      originX: 'left',
+      originY: 'top',
+      fill: '#7965E8',
+      strokeWidth: 0,
+    }),
+    new fabric.Circle({
+      left: buttonLeft,
+      top: buttonTop,
+      radius: buttonSize / 2,
+      originX: 'left',
+      originY: 'top',
+      fill: '#6D58DC',
+      strokeWidth: 0,
+    }),
+    new fabric.Triangle({
+      left: buttonLeft + (buttonSize * 0.53),
+      top: buttonTop + (buttonSize * 0.5),
+      width: buttonSize * 0.32,
+      height: buttonSize * 0.34,
+      originX: 'center',
+      originY: 'center',
+      angle: 90,
+      fill: '#FFFFFF',
+      strokeWidth: 0,
+    }),
+  ]
+  const waveHeights = [0.34, 0.62, 0.86, 0.5, 0.74, 0.42, 0.66, 0.3]
+  const barGap = waveWidth / waveHeights.length
+  for (const [index, ratio] of waveHeights.entries()) {
+    const barHeight = Math.max(4, (height - (padding * 2)) * ratio)
+    objects.push(new fabric.Rect({
+      left: waveLeft + (index * barGap),
+      top: (height - barHeight) / 2,
+      width: Math.max(2, Math.min(4, barGap * 0.45)),
+      height: barHeight,
+      rx: 2,
+      ry: 2,
+      originX: 'left',
+      originY: 'top',
+      fill: index % 2 === 0 ? '#7662E4' : '#B0A4F0',
+      strokeWidth: 0,
+    }))
+  }
+  const nameFontSize = Math.max(11, Math.min(18, height * 0.24))
+  objects.push(createFittedFabricLabel(fabric, element.source.fileName, textWidth, {
+    left: textLeft,
+    top: Math.max(6, (height / 2) - nameFontSize - 1),
+    originX: 'left',
+    originY: 'top',
+    fill: '#302A4A',
+    fontSize: nameFontSize,
+    fontFamily: 'Aptos',
+    fontWeight: 600,
+  }))
+  objects.push(new fabric.Text(presentationMediaExtension(element.source.fileName), {
+    left: textLeft,
+    top: Math.min(height - 16, (height / 2) + 4),
+    originX: 'left',
+    originY: 'top',
+    fill: '#7D749F',
+    fontSize: Math.max(8, Math.min(11, height * 0.15)),
     fontFamily: 'Aptos',
     fontWeight: 500,
+  }))
+  return createFixedMediaGroup(fabric, element, objects)
+}
+
+function createVideoFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  const width = element.width
+  const height = element.height
+  const radius = Math.min(20, height * 0.12)
+  const buttonSize = Math.max(36, Math.min(76, Math.min(width, height) * 0.22))
+  const captionHeight = Math.max(44, Math.min(68, height * 0.2))
+  const labelPadding = Math.max(14, Math.min(24, width * 0.04))
+  const fileName = createFittedFabricLabel(fabric, element.source.fileName, Math.max(24, width - (labelPadding * 2)), {
+    left: labelPadding,
+    top: height - captionHeight + Math.max(10, captionHeight * 0.28),
+    originX: 'left',
+    originY: 'top',
+    fill: '#FFFFFF',
+    fontSize: Math.max(12, Math.min(19, captionHeight * 0.31)),
+    fontFamily: 'Aptos',
+    fontWeight: 600,
   })
-  return fitFabricGroupToElement(new fabric.Group([background, button, symbol, fileName]), element)
+  const objects: FabricObject[] = [
+    new fabric.Rect({
+      left: 0.5,
+      top: 0.5,
+      width: Math.max(1, width - 1),
+      height: Math.max(1, height - 1),
+      originX: 'left',
+      originY: 'top',
+      rx: radius,
+      ry: radius,
+      fill: new fabric.Gradient({
+        type: 'linear',
+        coords: { x1: 0, y1: 0, x2: width, y2: height },
+        colorStops: [
+          { offset: 0, color: '#26345C' },
+          { offset: 0.55, color: '#17233E' },
+          { offset: 1, color: '#0E1426' },
+        ],
+      }),
+      stroke: '#52658F',
+      strokeWidth: 1,
+    }),
+    new fabric.Circle({
+      left: width * 0.78,
+      top: height * 0.1,
+      radius: Math.max(28, Math.min(width, height) * 0.22),
+      originX: 'center',
+      originY: 'center',
+      fill: 'rgba(112, 92, 225, 0.18)',
+      strokeWidth: 0,
+    }),
+    new fabric.Rect({
+      left: labelPadding,
+      top: labelPadding,
+      width: Math.max(52, Math.min(92, width * 0.16)),
+      height: Math.max(22, Math.min(30, height * 0.1)),
+      originX: 'left',
+      originY: 'top',
+      rx: 8,
+      ry: 8,
+      fill: 'rgba(255,255,255,0.14)',
+      stroke: 'rgba(255,255,255,0.22)',
+      strokeWidth: 1,
+    }),
+    new fabric.Text(presentationMediaExtension(element.source.fileName), {
+      left: labelPadding + 10,
+      top: labelPadding + Math.max(5, Math.min(7, height * 0.02)),
+      originX: 'left',
+      originY: 'top',
+      fill: '#E6EAFE',
+      fontSize: Math.max(9, Math.min(12, height * 0.035)),
+      fontFamily: 'Aptos',
+      fontWeight: 600,
+    }),
+    new fabric.Circle({
+      left: width / 2,
+      top: Math.max(buttonSize, (height - captionHeight) / 2),
+      radius: buttonSize / 2,
+      originX: 'center',
+      originY: 'center',
+      fill: 'rgba(255,255,255,0.92)',
+      shadow: new fabric.Shadow({ color: 'rgba(0,0,0,0.24)', blur: 18, offsetX: 0, offsetY: 6 }),
+      strokeWidth: 0,
+    }),
+    new fabric.Triangle({
+      left: (width / 2) + (buttonSize * 0.04),
+      top: Math.max(buttonSize, (height - captionHeight) / 2),
+      width: buttonSize * 0.34,
+      height: buttonSize * 0.38,
+      originX: 'center',
+      originY: 'center',
+      angle: 90,
+      fill: '#5E49D0',
+      strokeWidth: 0,
+    }),
+    new fabric.Rect({
+      left: 0,
+      top: height - captionHeight,
+      width,
+      height: captionHeight,
+      originX: 'left',
+      originY: 'top',
+      fill: 'rgba(8,12,24,0.72)',
+      strokeWidth: 0,
+    }),
+    fileName,
+  ]
+  return createFixedMediaGroup(fabric, element, objects)
+}
+
+export function createPresentationMediaFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  return element.type === 'audio'
+    ? createAudioFabricObject(fabric, element)
+    : createVideoFabricObject(fabric, element)
 }
 
 function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
@@ -793,10 +1023,10 @@ async function createPresentationFabricObject(
         loop: false,
         muted: true,
       }
-      return createMediaFabricObject(fabric, fallback)
+      return createPresentationMediaFabricObject(fabric, fallback)
     }
   }
-  if (isPresentationMediaElement(element)) return createMediaFabricObject(fabric, element)
+  if (isPresentationMediaElement(element)) return createPresentationMediaFabricObject(fabric, element)
   if (isPresentationTableElement(element)) return createTableFabricObject(fabric, element)
   if (isPresentationChartElement(element)) return createChartFabricObject(fabric, element)
   throw new Error(`Unsupported presentation element: ${(element as { type?: string }).type ?? 'unknown'}`)
@@ -860,6 +1090,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
   const [exportState, setExportState] = useState<ExportState>('idle')
   const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
+  const [mediaPreviewSuppressed, setMediaPreviewSuppressed] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasElementRef = useRef<HTMLCanvasElement>(null)
@@ -989,6 +1220,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setTransitionPreviewRun(null)
       setInsertDialog(null)
       setSelectedElementId(null)
+      setMediaPreviewSuppressed(false)
       setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
     return () => window.clearTimeout(timer)
@@ -1001,6 +1233,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       setSlideshowTransition(null)
       setTransitionPreviewRun(null)
       setInsertDialog(null)
+      setMediaPreviewSuppressed(false)
     }, 0)
     return () => window.clearTimeout(timer)
   }, [active])
@@ -1047,15 +1280,32 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
       canvasRef.current = canvas
       canvas.on('selection:created', (event) => {
         const selected = event.selected?.[0]
+        setMediaPreviewSuppressed(false)
         setSelectedElementId(selected ? objectIdsRef.current.get(selected) ?? null : null)
       })
       canvas.on('selection:updated', (event) => {
         const selected = event.selected?.[0]
+        setMediaPreviewSuppressed(false)
         setSelectedElementId(selected ? objectIdsRef.current.get(selected) ?? null : null)
       })
-      canvas.on('selection:cleared', () => setSelectedElementId(null))
+      canvas.on('selection:cleared', () => {
+        setMediaPreviewSuppressed(false)
+        setSelectedElementId(null)
+      })
+      const suppressMediaPreviewForTarget = (target?: FabricObject) => {
+        if (!target) return
+        const elementId = objectIdsRef.current.get(target)
+        const current = documentRef.current
+        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const element = slide?.elements.find((item) => item.id === elementId)
+        if (element && isPresentationMediaElement(element)) setMediaPreviewSuppressed(true)
+      }
+      canvas.on('object:moving', (event) => suppressMediaPreviewForTarget(event.target))
+      canvas.on('object:scaling', (event) => suppressMediaPreviewForTarget(event.target))
+      canvas.on('mouse:up', () => setMediaPreviewSuppressed(false))
       canvas.on('object:modified', (event) => {
         if (event.target) syncFabricObjectRef.current(event.target)
+        setMediaPreviewSuppressed(false)
       })
       canvas.on('mouse:dblclick', (event) => {
         const elementId = event.target ? objectIdsRef.current.get(event.target) : undefined
@@ -1164,6 +1414,7 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         || target.tagName === 'INPUT'
         || target.tagName === 'TEXTAREA'
         || target.tagName === 'SELECT'
+        || Boolean(target.closest('[data-testid="presentation-editor-media-preview"]'))
       )) return
       const modifier = event.metaKey || event.ctrlKey
       if (modifier && event.key.toLowerCase() === 'z') {
@@ -2040,6 +2291,18 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
               />
             ) : null}
           </div>
+
+          {active && selectedElement && isPresentationMediaElement(selectedElement) && !slideshowOpen ? (
+            <div
+              className={cn(
+                'shrink-0 border-t border-border-subtle/65 bg-bg-surface px-3 py-2',
+                selectedElement.type === 'video' ? 'h-[112px]' : 'h-[80px]',
+              )}
+              data-testid="presentation-editor-media-preview-host"
+            >
+              {!mediaPreviewSuppressed && !transitionPreviewRun ? <PresentationEditorMediaPreview element={selectedElement} /> : null}
+            </div>
+          ) : null}
 
           <label className={cn('flex shrink-0 items-start gap-2 border-t border-border-subtle/65 bg-bg-surface px-3 py-2', compact ? 'h-11' : 'h-14')}>
             <MessageSquareText className="mt-0.5 size-4 shrink-0 text-text-tertiary" />

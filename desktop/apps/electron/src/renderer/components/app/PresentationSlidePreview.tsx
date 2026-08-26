@@ -1,5 +1,5 @@
-import { Fragment, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { AudioLines, Play } from 'lucide-react'
+import { Fragment, useEffect, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { Play } from 'lucide-react'
 import {
   PRESENTATION_HEIGHT,
   PRESENTATION_WIDTH,
@@ -98,6 +98,72 @@ function elementStyle(element: PresentationElement): CSSProperties {
   }
 }
 
+function presentationMediaExtension(fileName: string): string {
+  return /\.([^.]+)$/.exec(fileName.trim())?.[1]?.toUpperCase() ?? 'MEDIA'
+}
+
+function stopPresentationPlaybackMedia(media: HTMLMediaElement | null): void {
+  media?.pause()
+}
+
+function startPresentationPlaybackMedia(media: HTMLMediaElement | null, autoplay: boolean): void {
+  if (!media || !autoplay) return
+  try {
+    void media.play().catch(() => undefined)
+  } catch {
+    // Browser autoplay policy may reject playback without a user gesture.
+  }
+}
+
+function PresentationPlaybackVideo({ element }: { element: Extract<PresentationElement, { type: 'video' }> }) {
+  const mediaRef = useRef<HTMLVideoElement>(null)
+  const sourceUrl = element.source.dataUrl
+  useEffect(() => {
+    const media = mediaRef.current
+    startPresentationPlaybackMedia(media, element.autoplay)
+    return () => {
+      if (media?.getAttribute('src') === sourceUrl) stopPresentationPlaybackMedia(media)
+    }
+  }, [element.autoplay, sourceUrl])
+  return (
+    <video
+      ref={mediaRef}
+      className="absolute block bg-[#10172A]"
+      controls
+      autoPlay={element.autoplay}
+      loop={element.loop}
+      muted={element.muted}
+      playsInline
+      src={sourceUrl}
+      style={elementStyle(element)}
+    />
+  )
+}
+
+function PresentationPlaybackAudio({ element }: { element: Extract<PresentationElement, { type: 'audio' }> }) {
+  const mediaRef = useRef<HTMLAudioElement>(null)
+  const sourceUrl = element.source.dataUrl
+  useEffect(() => {
+    const media = mediaRef.current
+    startPresentationPlaybackMedia(media, element.autoplay)
+    return () => {
+      if (media?.getAttribute('src') === sourceUrl) stopPresentationPlaybackMedia(media)
+    }
+  }, [element.autoplay, sourceUrl])
+  return (
+    <audio
+      ref={mediaRef}
+      className="absolute block"
+      controls
+      autoPlay={element.autoplay}
+      loop={element.loop}
+      muted={element.muted}
+      src={sourceUrl}
+      style={elementStyle(element)}
+    />
+  )
+}
+
 function PresentationElementPreview({ element, interactive, suppressMediaPlayback }: {
   element: PresentationElement
   interactive: boolean
@@ -148,44 +214,52 @@ function PresentationElementPreview({ element, interactive, suppressMediaPlaybac
     )
   }
   if (isPresentationMediaElement(element)) {
-    if (element.type === 'video' && interactive) {
-      return (
-        <video
-          className="absolute block bg-black"
-          controls
-          autoPlay={!suppressMediaPlayback && element.autoplay}
-          loop={element.loop}
-          muted={suppressMediaPlayback || element.muted}
-          src={element.source.dataUrl}
-          style={elementStyle(element)}
-        />
-      )
+    if (element.type === 'video' && interactive && !suppressMediaPlayback) {
+      return <PresentationPlaybackVideo element={element} />
     }
-    if (element.type === 'audio' && interactive) {
-      return (
-        <audio
-          className="absolute block"
-          controls
-          autoPlay={!suppressMediaPlayback && element.autoplay}
-          loop={element.loop}
-          muted={suppressMediaPlayback || element.muted}
-          src={element.source.dataUrl}
-          style={elementStyle(element)}
-        />
-      )
+    if (element.type === 'audio' && interactive && !suppressMediaPlayback) {
+      return <PresentationPlaybackAudio element={element} />
     }
+    if (element.type === 'audio') return (
+      <span
+        className="absolute flex items-center gap-4 overflow-hidden rounded-xl border border-[#CFC5F5] bg-[linear-gradient(110deg,#FAF8FF_0%,#F0ECFF_58%,#E8E2FF_100%)] px-5 text-[#302A4A] shadow-sm"
+        style={elementStyle(element)}
+        data-testid="presentation-audio-placeholder"
+      >
+        <span className="absolute inset-y-0 left-0 w-1.5 bg-[#7965E8]" />
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#6D58DC] text-white shadow-sm">
+          <Play className="size-4 translate-x-px" fill="currentColor" />
+        </span>
+        <span className="flex h-8 shrink-0 items-center gap-1" aria-hidden="true">
+          {[9, 17, 25, 14, 21, 12, 18, 8].map((height, index) => (
+            <span
+              className={cn('w-1 rounded-full', index % 2 === 0 ? 'bg-[#7662E4]' : 'bg-[#B0A4F0]')}
+              key={`${element.id}-wave-${index}`}
+              style={{ height }}
+            />
+          ))}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[17px] font-semibold leading-5">{element.source.fileName}</span>
+          <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7D749F]">{presentationMediaExtension(element.source.fileName)}</span>
+        </span>
+      </span>
+    )
     return (
       <span
-        className={cn(
-          'absolute flex items-center justify-center gap-4 overflow-hidden rounded-xl border border-white/15 bg-[#20212B] px-6 text-white shadow-sm',
-          element.type === 'video' && 'bg-[linear-gradient(145deg,#262936,#111218)]',
-        )}
+        className="absolute overflow-hidden rounded-2xl border border-[#53658F] bg-[radial-gradient(circle_at_78%_16%,rgba(116,94,226,0.35),transparent_32%),linear-gradient(145deg,#29385F_0%,#17233E_52%,#0E1426_100%)] text-white shadow-md"
         style={elementStyle(element)}
+        data-testid="presentation-video-placeholder"
       >
-        <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-white/14">
-          {element.type === 'video' ? <Play className="size-6 translate-x-0.5" fill="currentColor" /> : <AudioLines className="size-6" />}
+        <span className="absolute left-5 top-5 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#E6EAFE]">
+          {presentationMediaExtension(element.source.fileName)}
         </span>
-        <span className="min-w-0 truncate text-lg font-medium">{element.source.fileName}</span>
+        <span className="absolute left-1/2 top-[45%] flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-[#5E49D0] shadow-[0_12px_30px_rgba(0,0,0,0.28)]">
+          <Play className="size-7 translate-x-0.5" fill="currentColor" />
+        </span>
+        <span className="absolute inset-x-0 bottom-0 block bg-[linear-gradient(180deg,transparent,rgba(7,10,22,0.92))] px-6 pb-5 pt-12">
+          <span className="block truncate text-[17px] font-semibold">{element.source.fileName}</span>
+        </span>
       </span>
     )
   }
