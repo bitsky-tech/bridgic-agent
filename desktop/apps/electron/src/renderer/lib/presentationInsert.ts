@@ -53,6 +53,24 @@ const PRESENTATION_FILE_EXTENSION_MIME_TYPES: Record<PresentationFileKind, Reado
 
 const GENERIC_PRESENTATION_FILE_MIME_TYPES = new Set(['', 'application/octet-stream'])
 
+function isValidPresentationBase64Payload(payload: string): boolean {
+  if (!payload || payload.length % 4 !== 0) return false
+  let paddingLength = 0
+  if (payload.endsWith('==')) paddingLength = 2
+  else if (payload.endsWith('=')) paddingLength = 1
+  const contentLength = payload.length - paddingLength
+  for (let index = 0; index < contentLength; index += 1) {
+    const code = payload.charCodeAt(index)
+    const isBase64Character = (code >= 0x41 && code <= 0x5A)
+      || (code >= 0x61 && code <= 0x7A)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2B
+      || code === 0x2F
+    if (!isBase64Character) return false
+  }
+  return true
+}
+
 function centeredPosition(width: number, height: number): { x: number; y: number } {
   return {
     x: Math.round((PRESENTATION_WIDTH - width) / 2),
@@ -163,7 +181,7 @@ export function normalizePresentationFileSource(kind: PresentationFileKind, sour
   const dataUrlMimeType = dataUrlMatch[1]!.trim().toLowerCase()
   if (!GENERIC_PRESENTATION_FILE_MIME_TYPES.has(dataUrlMimeType) && dataUrlMimeType !== mimeType) return null
   const payload = dataUrlMatch[2]!.replace(/\s/g, '')
-  if (!payload || !/^(?:[\dA-Z+/]{4})*(?:[\dA-Z+/]{2}==|[\dA-Z+/]{3}=)?$/i.test(payload)) return null
+  if (!isValidPresentationBase64Payload(payload)) return null
 
   return {
     dataUrl: `data:${mimeType};base64,${payload}`,

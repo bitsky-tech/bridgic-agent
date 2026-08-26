@@ -64,6 +64,19 @@ describe('presentation insert helpers', () => {
     })
   })
 
+  it('normalizes multi-megabyte MP3 payloads without a recursive regular expression', () => {
+    const payload = 'A'.repeat(5 * 1024 * 1024)
+    expect(normalizePresentationFileSource('audio', {
+      dataUrl: `data:audio/mpeg;base64,${payload}`,
+      fileName: 'long-track.mp3',
+      mimeType: 'audio/mpeg',
+    })).toEqual({
+      dataUrl: `data:audio/mpeg;base64,${payload}`,
+      fileName: 'long-track.mp3',
+      mimeType: 'audio/mpeg',
+    })
+  })
+
   it('rejects unsupported, cross-kind, mismatched, or malformed file sources', () => {
     expect(normalizePresentationFileSource('image', {
       dataUrl: 'data:image/webp;base64,aW1hZ2U=',
@@ -103,6 +116,16 @@ describe('presentation insert helpers', () => {
     expect(normalizePresentationFileSource('audio', {
       dataUrl: 'data:audio/mpeg;base64,',
       fileName: 'empty.mp3',
+      mimeType: 'audio/mpeg',
+    })).toBeNull()
+    expect(normalizePresentationFileSource('audio', {
+      dataUrl: 'data:audio/mpeg;base64,S=Qz',
+      fileName: 'misplaced-padding.mp3',
+      mimeType: 'audio/mpeg',
+    })).toBeNull()
+    expect(normalizePresentationFileSource('audio', {
+      dataUrl: 'data:audio/mpeg;base64,SUQ',
+      fileName: 'missing-padding.mp3',
       mimeType: 'audio/mpeg',
     })).toBeNull()
     expect(normalizePresentationFileSource('video', {
