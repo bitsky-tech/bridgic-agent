@@ -28,12 +28,12 @@ def time_in_local_tz() -> str:
 
 
 def render_main_persona(tool_names: Collection[str], *, template: str = PERSONA) -> str:
-    """Render Main's persona with the exact runtime-visible tool names."""
+    """Render Main or Child guidance for the current ToolSurface and locale."""
     return _render.render_main_persona(tool_names, template=template)
 
 
 def render_stage_persona(tool_names: Collection[str], *, template: str) -> str:
-    """Render a special-mode persona with its exact current ToolSurface."""
+    """Render special-mode guidance for the current ToolSurface and locale."""
     return _render.render_stage_persona(tool_names, template=template)
 
 

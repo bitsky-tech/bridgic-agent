@@ -87,6 +87,8 @@ describe("persona source snapshot", () => {
   });
 
   for (const toolNames of [
+    [],
+    ["read_file"],
     ["read_file", "run_subagent"],
     ["read_file", "run_subagent", "start_subagent"],
   ]) {
@@ -107,10 +109,37 @@ describe("persona source snapshot", () => {
     }
   }
 
+  test("keeps rendering tool placeholders in injected legacy snapshots", () => {
+    const snapshot = {
+      main: "tools=__AMPHI_MAIN_TOOL_NAMES__\ndelegation=__AMPHI_SUB_AGENT_GUIDANCE__\nlocale=__AMPHI_UI_LANGUAGE__",
+      clarify: "tools=__AMPHI_STAGE_TOOL_NAMES__\ndelegation=__AMPHI_SUB_AGENT_GUIDANCE__\nlocale=__AMPHI_UI_LANGUAGE__",
+      version: "legacy-persona",
+    };
+    const tools = ["read_file", "run_subagent"];
+
+    for (const stage of ["main", "clarify"] as const) {
+      const rendered = renderPersona(stage, tools, snapshot, "English");
+      expect(rendered.content).toContain("tools=`read_file`, `run_subagent`");
+      expect(rendered.content).toContain("`run_subagent`");
+      expect(rendered.content).toContain("locale=English");
+      expect(rendered.content).not.toContain("__AMPHI_");
+      expect(rendered.version).toBe("legacy-persona");
+      expect(rendered.usesInjectedSnapshot).toBe(true);
+      expect(rendered.completeSnapshot).toBe(false);
+    }
+  });
+
   test("keeps the expected stage identities as a golden structural guard", () => {
     const tools = ["read_file"];
-    expect(renderPersona("main", tools).content).toContain("You are Bridgic Agent, a general-purpose agent");
-    expect(renderPersona("child", tools).content).toContain("This Session is a Child Agent");
+    const main = renderPersona("main", tools).content;
+    const child = renderPersona("child", tools).content;
+    expect(main).toContain("You are Bridgic Agent, a general-purpose agent");
+    expect(main).toContain("Workflow execution:");
+    expect(child).toContain("This Session is a Child Agent");
+    expect(child).not.toContain("Workflow execution:");
+    expect(child).not.toContain("Scheduled tasks:");
+    expect(main).not.toContain("The tools currently available in this cognitive loop are:");
+    expect(child).not.toContain("The tools currently available in this cognitive loop are:");
     expect(renderPersona("clarify", tools).content).toContain("# Current stage: clarify");
     expect(renderPersona("explore", tools).content).toContain("# Current stage: explore");
     expect(renderPersona("generate", tools).content).toContain("# Current stage: generate");

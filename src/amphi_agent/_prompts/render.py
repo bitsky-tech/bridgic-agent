@@ -54,7 +54,7 @@ def _ui_language() -> str:
 
 
 def render_main_persona(tool_names: Collection[str], *, template: str = PERSONA) -> str:
-    """Render Main's persona with the exact runtime-visible tool names."""
+    """Render Main or Child guidance for the current ToolSurface and locale."""
     guidance = _sub_agent_guidance(tool_names)
     return (
         template.replace(_MAIN_TOOL_NAMES_PLACEHOLDER, _format_tool_names(tool_names))

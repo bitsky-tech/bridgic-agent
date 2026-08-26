@@ -583,7 +583,7 @@ class MainThink(CognitiveWorker):
             SYSTEM:
                 You are Bridgic Agent, a general-purpose agent that helps users on
                 their machine. …(full persona)…
-                The tools currently available … <exact ToolSurface names>
+                Attached tool schemas define the exact ToolSurface.
 
                 <context>
                 <transcript>
@@ -617,7 +617,7 @@ class MainThink(CognitiveWorker):
             while retaining the same native message structure::
 
                 SYSTEM:
-                    …(the Child persona, rendered with only Child ToolSurface names)…
+                    …(the Child persona; attached schemas define its ToolSurface)…
 
                     <context>
                     <skills>
