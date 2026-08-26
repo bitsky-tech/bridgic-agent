@@ -40,7 +40,13 @@ from ._prompt import (
     render_stage_persona,
     time_in_local_tz,
 )
-from ._state import BuildStageState, ContextCompactionState, NormalStageState, WorkflowStageState
+from ._state import (
+    BuildStageState,
+    ContextCompactionState,
+    NormalStageState,
+    TurnCompactionState,
+    WorkflowStageState,
+)
 from ._tools import TOOL_LIBRARY
 from ._thinking_debug import write_thinking_debug
 from .tools import (
@@ -686,13 +692,21 @@ class MainThink(CognitiveWorker):
             return True
 
         async def compact_turn_history() -> bool:
-            records = ota_context.ota_record
+            think = ota_context.think_status
+            mode = think.mode
+            stage = think.stage
+            turn_context, _ = self._stage_turn_context(ota_context, mode, stage)
+            records = turn_context.ota_record
+            turn_compaction = candidate.turn.get(mode, {}).get(
+                stage,
+                TurnCompactionState(),
+            )
             prefix_end = max(0, len(records) - CONTEXT_COMPACTION_KEEP_TURN_ROUNDS)
-            start = min(candidate.turn_through_round, len(records))
+            start = min(turn_compaction.turn_through_round, len(records))
             projected_state = ota_context.state.model_copy(update={"context_compaction": None})
             units: List[Tuple[int, str]] = []
             for index in range(start, prefix_end):
-                projected = ota_context.model_copy(update={
+                projected = turn_context.model_copy(update={
                     "ota_record": [records[index]],
                     "state": projected_state,
                 })
@@ -713,11 +727,13 @@ class MainThink(CognitiveWorker):
                     history,
                 )
 
-            summary, through = await roll_summary(candidate.turn_summary, units, render)
-            if through is None or through <= candidate.turn_through_round:
+            summary, through = await roll_summary(turn_compaction.turn_summary, units, render)
+            if through is None or through <= turn_compaction.turn_through_round:
                 return False
-            candidate.turn_summary = summary
-            candidate.turn_through_round = through
+            candidate.turn.setdefault(mode, {})[stage] = turn_compaction.model_copy(update={
+                "turn_summary": summary,
+                "turn_through_round": through,
+            })
             return True
 
         async def reassemble() -> List[Message]:
@@ -1344,7 +1360,7 @@ class MainThink(CognitiveWorker):
         return Message.from_text(content, role=Role.AI)
 
     def _session_messages(self, turns: Sequence[SessionTurnRecord], context: AmphiContext) -> List[Message]:
-        """Replay persisted Turns oldest-first without history truncation."""
+        """Replay persisted Turns oldest-first, reusing only the global normal-mode projection."""
         messages: List[Message] = []
         for turn in turns:
             ota = turn.ota_context_dump()
@@ -1358,14 +1374,21 @@ class MainThink(CognitiveWorker):
                 if compaction_data
                 else None
             )
-            if compaction is not None and compaction.turn_summary:
+            turn_compaction = (
+                compaction.turn.get("normal", {}).get("main")
+                if compaction is not None
+                else None
+            )
+            if turn_compaction is not None and turn_compaction.turn_summary:
                 messages.append(self._compaction_summary_message(
                     "turn_history",
-                    compaction.turn_summary,
+                    turn_compaction.turn_summary,
                     "through_round",
-                    compaction.turn_through_round,
+                    turn_compaction.turn_through_round,
                 ))
-                ota["ota_record"] = (ota.get("ota_record") or [])[compaction.turn_through_round:]
+                ota["ota_record"] = (
+                    ota.get("ota_record") or []
+                )[turn_compaction.turn_through_round:]
             messages.extend(self._ota_messages(ota, turn.session_ordinal))
             if turn.status == TurnStatus.FAILED:
                 messages.append(Message.from_text(TURN_FAILED_MESSAGE, role=Role.AI))
@@ -1529,8 +1552,14 @@ class MainThink(CognitiveWorker):
         records = ota_context.ota_record
         round_offset = 0
         compaction = ota_context.state.context_compaction
-        if compaction is not None and compaction.turn_summary:
-            round_offset = compaction.turn_through_round
+        think = ota_context.think_status
+        turn_compaction = (
+            compaction.turn.get(think.mode, {}).get(think.stage)
+            if compaction is not None
+            else None
+        )
+        if turn_compaction is not None and turn_compaction.turn_summary:
+            round_offset = turn_compaction.turn_through_round
             records = records[round_offset:]
         MAX_ARG_VALUE_CHARS = 1200
 
@@ -1630,12 +1659,12 @@ class MainThink(CognitiveWorker):
                 break
 
         messages: List[Message] = []
-        if compaction is not None and compaction.turn_summary:
+        if turn_compaction is not None and turn_compaction.turn_summary:
             messages.append(self._compaction_summary_message(
                 "turn_history",
-                compaction.turn_summary,
+                turn_compaction.turn_summary,
                 "through_round",
-                compaction.turn_through_round,
+                turn_compaction.turn_through_round,
             ))
         for index, record in enumerate(records, start=round_offset):
             think = _view(_view(record, "think_result"), "step_content") or ""

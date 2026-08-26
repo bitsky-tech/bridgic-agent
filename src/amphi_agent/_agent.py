@@ -1130,8 +1130,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 compaction = ContextCompactionState.model_validate(raw_compaction)
                 if latest_turn.status.is_terminal:
                     compaction = compaction.model_copy(update={
-                        "turn_summary": "",
-                        "turn_through_round": 0,
+                        "turn": {},
                     })
                 ota_context.state.context_compaction = compaction
 

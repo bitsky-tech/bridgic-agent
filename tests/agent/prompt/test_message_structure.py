@@ -552,8 +552,8 @@ async def test_session_history_has_no_record_limit() -> None:
     assert messages[5].content.startswith("Current request\n\n<current_time>")
 
 
-async def test_session_compaction_replays_summaries_and_only_uncovered_history() -> None:
-    """Persisted Session and historical-Turn summaries replace their covered raw prefixes."""
+async def test_session_compaction_replays_its_summary_and_full_completed_turns() -> None:
+    """Session summaries replace covered Turns while completed Turns replay their durable raw trace."""
     history = [
         _turn(
             "turn-covered",
@@ -571,8 +571,14 @@ async def test_session_compaction_replays_summaries_and_only_uncovered_history()
             ],
             agent_state={
                 "context_compaction": {
-                    "turn_summary": "Earlier work in this Turn",
-                    "turn_through_round": 1,
+                    "turn": {
+                        "build": {
+                            "clarify": {
+                                "turn_summary": "Earlier work in this Turn",
+                                "turn_through_round": 1,
+                            },
+                        },
+                    },
                 },
             },
         ),
@@ -599,21 +605,56 @@ async def test_session_compaction_replays_summaries_and_only_uncovered_history()
 
     assert "Covered question" not in contents
     assert "Covered answer" not in contents
-    assert "Covered round" not in contents
     assert contents[1] == (
         '<session_history_summary through_ordinal="0">\n'
         "Earlier Session work\n"
         "</session_history_summary>"
     )
-    assert contents[2:5] == [
+    assert "Earlier work in this Turn" not in contents
+    assert contents[2:4] == [
         "Partially compacted question",
-        '<turn_history_summary through_round="1">\n'
-        "Earlier work in this Turn\n"
-        "</turn_history_summary>",
         "Uncovered round",
     ]
-    assert contents[5:7] == ["Recent question", "Recent answer"]
-    assert contents[7].startswith("Current request\n\n<current_time>")
+    assert contents[4:6] == ["Recent question", "Recent answer"]
+    assert contents[6].startswith("Current request\n\n<current_time>")
+
+
+async def test_completed_normal_turn_reuses_its_global_compaction() -> None:
+    """A normal-mode Turn summary remains a safe projection of its complete OTA timeline."""
+    history = [
+        _turn(
+            "turn-normal-compacted",
+            0,
+            "Normal question",
+            [
+                {"think_result": {"step_content": "Covered round", "tool_calls": []}},
+                {"think_result": {"step_content": "Uncovered round", "tool_calls": []}},
+            ],
+            agent_state={
+                "context_compaction": {
+                    "turn": {
+                        "normal": {
+                            "main": {
+                                "turn_summary": "Earlier normal work",
+                                "turn_through_round": 1,
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+    ]
+    ota_context = AmphiOTAContext(user_input="Current request", prompt_time=PROMPT_TIME)
+
+    messages = await MainThink().assemble_messages(ota_context, _context(history))
+    contents = [message.content for message in messages]
+
+    assert contents[1:4] == [
+        "Normal question",
+        '<turn_history_summary through_round="1">\nEarlier normal work\n</turn_history_summary>',
+        "Uncovered round",
+    ]
+    assert contents[4].startswith("Current request\n\n<current_time>")
 
 
 async def test_current_turn_compaction_keeps_only_uncovered_rounds() -> None:
@@ -628,8 +669,14 @@ async def test_current_turn_compaction_keeps_only_uncovered_rounds() -> None:
         ],
         state={
             "context_compaction": {
-                "turn_summary": "Earlier work in the current Turn",
-                "turn_through_round": 2,
+                "turn": {
+                    "normal": {
+                        "main": {
+                            "turn_summary": "Earlier work in the current Turn",
+                            "turn_through_round": 2,
+                        },
+                    },
+                },
             },
         },
     )

@@ -15,6 +15,8 @@ from src.amphi_agent import (
     MainThink,
     Session,
 )
+from src.amphi_agent._cognitive import ClarifyThink, ExploreThink
+from src.amphi_agent._state import BuildStageState
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
@@ -112,8 +114,9 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
     assert state is not None
     assert state.session_summary == "Compacted Session facts"
     assert state.session_through_ordinal == 1
-    assert state.turn_summary == "Compacted current-Turn progress"
-    assert state.turn_through_round == 2
+    turn_state = state.turn["normal"]["main"]
+    assert turn_state.turn_summary == "Compacted current-Turn progress"
+    assert turn_state.turn_through_round == 2
     assert len(llm.calls) == 2
     assert all(call[0].content.startswith("You turn historical agent context") for call in llm.calls)
     assert all("substantially shorter" in call[0].content for call in llm.calls)
@@ -133,6 +136,64 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
         ("context_compaction", {"active": True}),
         ("context_compaction", {"active": False}),
     ]
+
+
+async def test_turn_compaction_is_isolated_by_mode_and_stage(test_sandbox: IsolatedPaths) -> None:
+    """Build stages retain independent summaries and projected round boundaries."""
+    class ContextFreeExploreThink(ExploreThink):
+        async def build_context_blocks(self, ota_context, context, *artifact_names):
+            return []
+
+    class ContextFreeClarifyThink(ClarifyThink):
+        async def build_context_blocks(self, ota_context, context, *artifact_names):
+            return []
+
+    def record(stage: str, index: int) -> OTARecord:
+        round_ = OTARecord(think_result={
+            "step_content": f"{stage.title()} round {index}: " + "stage history " * 200,
+            "tool_calls": [],
+        })
+        round_.think_scope = {"mode": "build", "stage": stage}
+        return round_
+
+    records = [
+        *[record("clarify", index) for index in range(6)],
+        *[record("explore", index) for index in range(6)],
+    ]
+    worker = ContextFreeExploreThink(SummaryLlm("Compacted Explore history"))
+    ota_context = AmphiOTAContext(
+        user_input="Build the workflow",
+        prompt_time="2026-08-26 12:00 (UTC+08:00)",
+        ota_record=records,
+        state={"think": {"mode": "build", "stage": "explore"}},
+    )
+    context = _context(str(test_sandbox.sessions / "stage-scopes"), [], 200_000)
+    original = await worker.assemble_messages(ota_context, context)
+
+    await worker.compact_messages(original, [], ota_context, context, target=1)
+
+    compaction = ota_context.state.context_compaction
+    assert compaction is not None
+    assert set(compaction.turn) == {"build"}
+    assert set(compaction.turn["build"]) == {"explore"}
+    explore_state = compaction.turn["build"]["explore"]
+    assert explore_state.turn_summary == "Compacted Explore history"
+    assert explore_state.turn_through_round == 2
+
+    ota_context.ota_record.append(record("clarify", 6))
+    ota_context.transition_think(BuildStageState(stage="clarify"))
+    clarify_messages = await ContextFreeClarifyThink().assemble_messages(ota_context, context)
+    clarify_contents = [message.content for message in clarify_messages]
+    assert not any("Compacted Explore history" in content for content in clarify_contents)
+    assert any("Clarify round 0" in content for content in clarify_contents)
+
+    ota_context.ota_record.append(record("explore", 6))
+    ota_context.transition_think(BuildStageState(stage="explore"))
+    explore_messages = await worker.assemble_messages(ota_context, context)
+    explore_contents = [message.content for message in explore_messages]
+    assert any("Compacted Explore history" in content for content in explore_contents)
+    assert not any("Explore round 0" in content for content in explore_contents)
+    assert any("Explore round 2" in content for content in explore_contents)
 
 
 async def test_summary_input_is_bounded_when_one_atomic_turn_is_huge(test_sandbox: IsolatedPaths) -> None:

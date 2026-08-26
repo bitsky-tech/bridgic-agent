@@ -80,8 +80,14 @@ def test_context_compaction_round_trip() -> None:
     state = AgentState(context_compaction=ContextCompactionState(
         session_summary="Earlier Session work",
         session_through_ordinal=4,
-        turn_summary="Earlier rounds in this Turn",
-        turn_through_round=3,
+        turn={
+            "build": {
+                "clarify": {
+                    "turn_summary": "Earlier rounds in this Turn",
+                    "turn_through_round": 3,
+                },
+            },
+        },
     ))
 
     restored = AgentState.model_validate(state.model_dump(mode="json"))
@@ -89,13 +95,33 @@ def test_context_compaction_round_trip() -> None:
     assert restored.context_compaction == state.context_compaction
 
 
+def test_legacy_flat_turn_compaction_keeps_session_projection() -> None:
+    """Older flat Turn fields are ignored safely because their durable OTA records remain available."""
+    restored = ContextCompactionState.model_validate({
+        "session_summary": "Earlier Session work",
+        "session_through_ordinal": 4,
+        "turn_summary": "Legacy current-Turn summary",
+        "turn_through_round": 3,
+    })
+
+    assert restored.session_summary == "Earlier Session work"
+    assert restored.session_through_ordinal == 4
+    assert restored.turn == {}
+
+
 async def test_new_turn_inherits_only_session_compaction() -> None:
     """A terminal tail carries Session projection forward and resets current-Turn projection."""
     persisted = ContextCompactionState(
         session_summary="Earlier Session work",
         session_through_ordinal=4,
-        turn_summary="Earlier rounds in the completed Turn",
-        turn_through_round=3,
+        turn={
+            "normal": {
+                "main": {
+                    "turn_summary": "Earlier rounds in the completed Turn",
+                    "turn_through_round": 3,
+                },
+            },
+        },
     )
     session_record = SessionRecord(
         id="session-compaction",
