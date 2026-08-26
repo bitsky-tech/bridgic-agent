@@ -5,7 +5,9 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role, ToolCallBlock, ToolResultBlock
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, MainThink, Session
+from src.amphi_agent._cognitive import render_input
 from src.amphi_agent._workspace import Workspace
+from src.amphi_service.i18n import backend_i18n, use_locale
 from src.amphi_store import SessionMountRecord, SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
 
@@ -226,6 +228,86 @@ async def test_structured_input(test_sandbox: IsolatedPaths) -> None:
     for messages in (build_messages, workflow_messages):
         assert [message.role for message in messages] == [Role.SYSTEM, Role.USER]
         assert messages[1].content.endswith(f"<current_time>\n{PROMPT_TIME}\n</current_time>")
+
+
+def test_intent_language_falls_back_to_the_client_locale() -> None:
+    """Final intent-sentence language:
+
+    {
+      "slash_only_under_en": "English",
+      "slash_only_under_zh": "Chinese",
+      "prose_present": "the user's own prose still decides",
+      "cjk_labels_under_en": "English"
+    }
+
+    Checks:
+    1. A slash carrying no readable prose renders its intent in the client's locale, not
+       in the product default — an English client must never be handed a Chinese request
+       it did not write.
+    2. The same input under a Chinese client renders the Chinese intent.
+    3. Prose the user actually typed still decides the language, whatever the locale is.
+    4. Slash and mention labels are not prose and never decide the language.
+    """
+    # Only text blocks count as prose, so a slash-only turn — a bare /build, or a
+    # Workflow run with nothing typed after it — carries no language of its own.
+    build_only = SimpleNamespace(
+        input="/build",
+        blocks=[SimpleNamespace(type="slash", id="build", label="build", resource=None)],
+    )
+    workflow_only = SimpleNamespace(
+        input="/Daily Digest",
+        blocks=[
+            SimpleNamespace(type="slash", id="wf-a", label="Daily Digest", resource="workflow")
+        ],
+    )
+    workflow_with_prose = SimpleNamespace(
+        input="/Daily Digest for the current week",
+        blocks=[
+            SimpleNamespace(type="slash", id="wf-a", label="Daily Digest", resource="workflow"),
+            SimpleNamespace(type="text", value=" for the current week"),
+        ],
+    )
+
+    def expected(message_id: str, locale: str) -> str:
+        return backend_i18n.text(message_id, locale=locale, label="Daily Digest", workflow_id="wf-a")
+
+    # Check 1: A slash carrying no readable prose renders its intent in the client's locale.
+    with use_locale("en"):
+        assert render_input(build_only) == expected("agent.input.build_intent", "en")
+        assert render_input(workflow_only) == expected("agent.input.workflow_run_intent", "en")
+
+    # Check 2: The same input under a Chinese client renders the Chinese intent.
+    with use_locale("zh"):
+        assert render_input(build_only) == expected("agent.input.build_intent", "zh")
+        assert render_input(workflow_only) == expected("agent.input.workflow_run_intent", "zh")
+
+    # Check 3: Prose the user actually typed still decides the language, whatever the locale.
+    with use_locale("zh"):
+        assert render_input(workflow_with_prose) == (
+            expected("agent.input.workflow_run_intent", "en") + " for the current week"
+        )
+
+    # Check 4: A label is not prose. Whoever named the Workflow or the folder does not get
+    # to pick the language of a request the user did not write — the CJK data below is the
+    # point of the case, not display copy.
+    cjk_workflow = SimpleNamespace(
+        input="/生成报告",
+        blocks=[SimpleNamespace(type="slash", id="wf-b", label="生成报告", resource="workflow")],
+    )
+    cjk_mention = SimpleNamespace(
+        input="/build @项目",
+        blocks=[
+            SimpleNamespace(type="slash", id="build", label="build", resource=None),
+            SimpleNamespace(type="mention", id="m-1", label="项目", group="", path=""),
+        ],
+    )
+    with use_locale("en"):
+        assert render_input(cjk_workflow) == backend_i18n.text(
+            "agent.input.workflow_run_intent", locale="en", label="生成报告", workflow_id="wf-b"
+        )
+        assert render_input(cjk_mention).startswith(
+            backend_i18n.text("agent.input.build_intent", locale="en")
+        )
 
 
 async def test_session_replay() -> None:

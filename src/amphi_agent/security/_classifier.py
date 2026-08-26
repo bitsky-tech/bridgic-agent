@@ -177,14 +177,14 @@ def _numbered_bullets(items: List[str], ids: List[str]) -> str:
 
 def _build_system_prompt(policy: Policy) -> str:
     """Build the classifier system prompt from the externalised policy
-    (:class:`Policy`). **Contains the four static policy sections only** — the workspace
-    roots, which change per session, are not concatenated here (they go on the user side),
-    making the system prompt a stable prefix that hits prompt caching; as long as the
-    policy content is unchanged the bytes
-    are unchanged and later calls hit the cache.
+    (:class:`Policy`). **Carries the four static policy sections plus the active locale,
+    and nothing else** — the workspace roots, which change per session, are not
+    concatenated here (they go on the user side), so the prompt stays a prefix stable
+    enough for prompt caching: with the policy and the locale unchanged the bytes are
+    unchanged and later calls hit the cache.
 
-    The one per-request value it does carry is the active locale, named as the fallback
-    for ``reason``'s language. ``reason`` is rendered verbatim on the approval card, so it
+    The locale is named as the fallback for ``reason``'s language. ``reason`` is
+    rendered verbatim on the approval card, so it
     follows the user's own language exactly as the agent's replies do (``_prompt.py``'s
     CRITICAL language rule) — but the requests are not always readable (a scheduled or
     resumed Run carries none, and paths / commands / quoted logs carry no language of
