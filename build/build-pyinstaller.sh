@@ -63,6 +63,10 @@ if ! "$PYINSTALLER_PYTHON" -c 'import PyInstaller' 2>/dev/null; then
   exit 1
 fi
 
+echo "[build-pyinstaller] generating packaged model catalog"
+"$PYINSTALLER_PYTHON" build/generate-providers-catalog.py \
+  --output "$ROOT/build/generated/_models_dev_catalog.json"
+
 "$PYINSTALLER_PYTHON" -m PyInstaller build/amphi.spec --clean --noconfirm
 
 # Assert the onedir layout, mirroring the same check in build-pyinstaller.ps1.

@@ -447,10 +447,9 @@ export function collectPythonEntries(): LicenseEntry[] {
  * The bundled runtimes shipped via `extraResources`.
  *
  * These are whole third-party distributions (CPython, Node.js, uv, and the
- * PyInstaller-built `amphi` launcher), each embedding its own subtree of
- * dependencies. Only `node_runtime` currently ships a LICENSE of its own; the
- * rest are declared by hand in NOTICE, and this pass records which is which so
- * that gap stays visible instead of being assumed handled.
+ * PyInstaller-built `amphi` launcher), plus the models.dev data snapshot inside
+ * that launcher. Only `node_runtime` currently ships a LICENSE of its own; the
+ * rest are declared or attributed here so a missing text stays visible.
  */
 export function collectRuntimeEntries(): LicenseEntry[] {
   const runtimes: ReadonlyArray<{ dir: string; name: string; license: string }> = [
@@ -471,6 +470,18 @@ export function collectRuntimeEntries(): LicenseEntry[] {
       origin: 'runtime',
     })
   }
+
+  const modelsDevLicense = join(
+    REPO_ROOT,
+    'src/amphi_service/protocol/llms/_providers_catalog.LICENSE.txt',
+  )
+  entries.push({
+    name: 'models.dev catalog snapshot',
+    version: 'bundled',
+    license: 'MIT',
+    text: existsSync(modelsDevLicense) ? readFileSync(modelsDevLicense, 'utf-8').trimEnd() : null,
+    origin: 'runtime',
+  })
 
   const electron = collectElectronEntry()
   if (electron !== null) entries.push(electron)

@@ -37,7 +37,7 @@ from ._cognitive import (
     WorkflowThink,
     render_input,
 )
-from ._context import AmphiContext, AmphiOTAContext
+from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
 from ._error import AgentEmptyAnswerError
 from ._prompt import TITLE_PROMPT
@@ -53,6 +53,7 @@ from ._state import (
     AwaitingWorkflowRunChoice,
     BuildStageState,
     AwaitingSubAgent,
+    ContextCompactionState,
     NormalStageState,
     RoundPermission,
     CallVerdict,
@@ -1116,6 +1117,22 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # Get the latest Session Turn
         turns = context.session.get_all()
         latest_turn = turns[-1] if turns else None
+        if latest_turn is not None:
+            previous_usage = ContextUsageSnapshot.model_validate(latest_turn.context_usage)
+            if latest_turn.status.is_terminal:
+                previous_usage = previous_usage.model_copy(update={
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                })
+            ota_context.context_usage = previous_usage
+            raw_compaction = (latest_turn.agent_state or {}).get("context_compaction")
+            if raw_compaction:
+                compaction = ContextCompactionState.model_validate(raw_compaction)
+                if latest_turn.status.is_terminal:
+                    compaction = compaction.model_copy(update={
+                        "turn": {},
+                    })
+                ota_context.state.context_compaction = compaction
 
         ########################
         # Initialize a new Agent Turn

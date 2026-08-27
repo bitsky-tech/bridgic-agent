@@ -1,7 +1,29 @@
-from src.amphi_store import ProviderCredential, ProviderRepository
+from typing import Any
+
+from src.amphi_store import ProviderCredential, ProviderRepository, Repository
 
 
 USER_ID = "local"
+
+
+async def test_model_limits_column_backfill(initialized_store: None) -> None:
+    """An existing database receives the JSON metadata column at startup."""
+    engine = Repository._engine
+    assert engine is not None
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql(
+            "ALTER TABLE provider_credentials DROP COLUMN model_limits"
+        )
+
+    await Repository.init_schema()
+
+    async with engine.begin() as connection:
+        rows = (
+            await connection.exec_driver_sql("PRAGMA table_info(provider_credentials)")
+        ).all()
+    columns = {row[1]: row for row in rows}
+    assert columns["model_limits"][3] == 1
+    assert columns["model_limits"][4] == "'{}'"
 
 
 async def _create_provider(
@@ -14,6 +36,7 @@ async def _create_provider(
     protocol: str | None = "openai",
     display_name: str | None = None,
     models: list[str] | None = None,
+    model_limits: dict[str, dict[str, Any]] | None = None,
 ) -> ProviderCredential:
     """Persist one local provider through the public repository API."""
     return await repository.upsert(
@@ -25,6 +48,7 @@ async def _create_provider(
         protocol=protocol,
         display_name=display_name,
         models=models,
+        model_limits=model_limits,
     )
 
 
@@ -63,6 +87,11 @@ async def test_upsert(initialized_store: None) -> None:
         protocol="anthropic",
         display_name="Custom Channel",
         models=["model-a", "model-b"],
+        model_limits={
+            "model-a": {"context": 128_000, "source": "provider"},
+            "model-b": {"context": 64_000, "source": "models_dev"},
+            "not-selected": {"context": 1},
+        },
     )
     assert created.id is not None
     assert created.provider_id == "custom"
@@ -72,6 +101,10 @@ async def test_upsert(initialized_store: None) -> None:
     assert created.protocol == "anthropic"
     assert created.display_name == "Custom Channel"
     assert created.enabled_models == ["model-a", "model-b"]
+    assert created.model_limits == {
+        "model-a": {"context": 128_000, "source": "provider"},
+        "model-b": {"context": 64_000, "source": "models_dev"},
+    }
     assert created.is_enabled is True
     assert created.is_active is False
 
@@ -95,7 +128,20 @@ async def test_upsert(initialized_store: None) -> None:
     assert updated.protocol == "anthropic"
     assert updated.display_name == "Custom Channel"
     assert updated.enabled_models == ["model-a", "model-b"]
+    assert updated.model_limits == created.model_limits
     assert updated.is_active is True
+
+    pruned = await repository.upsert(
+        USER_ID,
+        "custom",
+        auth_mode="oauth",
+        api_key=None,
+        base_url=None,
+        models=["model-a"],
+    )
+    assert pruned.model_limits == {
+        "model-a": {"context": 128_000, "source": "provider"},
+    }
 
     # Check 3: Explicit empty values clear nullable text and model-list settings.
     cleared = await repository.upsert(
@@ -113,6 +159,7 @@ async def test_upsert(initialized_store: None) -> None:
     assert cleared.protocol == "openai"
     assert cleared.display_name == ""
     assert cleared.enabled_models == []
+    assert cleared.model_limits == {}
     assert cleared.is_active is True
 
     # Check 4: Repeated upserts keep one row for the provider id.

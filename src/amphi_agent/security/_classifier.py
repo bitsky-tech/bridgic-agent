@@ -54,7 +54,8 @@ from bridgic.core.model.types import Message, Role
 
 from src.amphi_service.i18n import backend_i18n
 
-from .._prompt import AGENT_NAME, _ui_language
+from .._prompt import AGENT_NAME
+from ..prompts.render import _ui_language
 from ._audit import write_classify_record
 from ._policy import Policy, load_policy, soft_deny_ids, soft_deny_title
 from ._reasoning import reasoning_off

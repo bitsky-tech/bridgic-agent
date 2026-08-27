@@ -120,8 +120,10 @@ class SessionTurnRecord(SQLModel, table=True):
     execution_mode: Optional[str] = Field(default=None)
     max_rounds: Optional[int] = Field(default=None)
     model: Optional[str] = Field(default=None)
-    input_tokens: int = Field(default=0)
-    output_tokens: int = Field(default=0)
+    context_usage: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JsonType, nullable=False),
+    )
     created_at: datetime = Field(default_factory=_utcnow)
 
     @property
@@ -144,8 +146,7 @@ class SessionTurnRecord(SQLModel, table=True):
             "browser_tool_loaded": self.browser_tool_loaded,
             "workspace_tools_loaded": self.workspace_tools_loaded,
             "skills_tool_loaded": self.skills_tool_loaded,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
+            "context_usage": copy.deepcopy(self.context_usage),
         }
         if self.error and self.status is TurnStatus.FAILED:
             dump["turn_error"] = self.error
@@ -180,8 +181,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
         status: TurnStatus,
         final_answer: Optional[str],
         error: Optional[str],
-        input_tokens: int,
-        output_tokens: int,
+        context_usage: dict[str, Any],
         model: Optional[str] = None,
         execution_mode: Optional[str] = None,
         max_rounds: Optional[int] = None,
@@ -202,8 +202,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
             status=status,
             final_answer=final_answer,
             error=error,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            context_usage=context_usage,
             model=model,
             execution_mode=execution_mode,
             max_rounds=max_rounds,
@@ -225,8 +224,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
         status: TurnStatus,
         final_answer: Optional[str],
         error: Optional[str],
-        input_tokens: int,
-        output_tokens: int,
+        context_usage: dict[str, Any],
         model: Optional[str] = None,
         execution_mode: Optional[str] = None,
         max_rounds: Optional[int] = None,
@@ -247,8 +245,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
             status=status,
             final_answer=final_answer,
             error=error,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            context_usage=context_usage,
             model=model,
             execution_mode=execution_mode,
             max_rounds=max_rounds,
@@ -271,8 +268,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
         status: TurnStatus,
         final_answer: Optional[str],
         error: Optional[str],
-        input_tokens: int,
-        output_tokens: int,
+        context_usage: dict[str, Any],
         model: Optional[str],
         execution_mode: Optional[str],
         max_rounds: Optional[int],
@@ -338,8 +334,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
                 model=model,
                 execution_mode=execution_mode,
                 max_rounds=max_rounds,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                context_usage=copy.deepcopy(context_usage),
             )
             session.add(record)
             await session.commit()
@@ -406,8 +401,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
                     model=row.model,
                     execution_mode=row.execution_mode,
                     max_rounds=row.max_rounds,
-                    input_tokens=row.input_tokens,
-                    output_tokens=row.output_tokens,
+                    context_usage=remap(row.context_usage),
                     created_at=row.created_at,
                 ))
             await session.commit()
@@ -522,8 +516,7 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
                         SessionTurnRecord.session_id,
                         SessionTurnRecord.session_ordinal,
                         SessionTurnRecord.user_input,
-                        SessionTurnRecord.input_tokens,
-                        SessionTurnRecord.output_tokens,
+                        SessionTurnRecord.context_usage,
                         SessionTurnRecord.status,
                     )
                     .where(
@@ -539,10 +532,23 @@ class SessionTurnRepository(Repository[SessionTurnRecord]):
         values: Dict[str, List[tuple[str, int, TurnStatus]]] = {
             session_id: [] for session_id in record_by_id
         }
-        for session_id, _ordinal, user_input, input_tokens, output_tokens, turn_status in rows:
+
+        def usage_tokens(usage: Any) -> int:
+            if not isinstance(usage, dict):
+                return 0
+
+            def token_value(name: str) -> int:
+                try:
+                    return max(0, int(usage.get(name) or 0))
+                except (TypeError, ValueError):
+                    return 0
+
+            return token_value("input_tokens") + token_value("output_tokens")
+
+        for session_id, _ordinal, user_input, context_usage, turn_status in rows:
             values[session_id].append((
                 user_input.text,
-                int(input_tokens or 0) + int(output_tokens or 0),
+                usage_tokens(context_usage),
                 turn_status,
             ))
         return {

@@ -329,7 +329,12 @@ async def test_google_stream_turn_reduces_native_chunks() -> None:
             yield chunk([
                 {"text": "done"},
                 {"function_call": {"id": "call-1", "name": "inspect", "args": {"path": "."}}, "thought_signature": b"sig"},
-            ], {"prompt_token_count": 3, "candidates_token_count": 1, "thoughts_token_count": 2})
+            ], {
+                "prompt_token_count": 3,
+                "candidates_token_count": 1,
+                "thoughts_token_count": 2,
+                "cached_content_token_count": 2,
+            })
 
     async def generate_content_stream(**_params):
         return Stream()
@@ -347,7 +352,11 @@ async def test_google_stream_turn_reduces_native_chunks() -> None:
 
     assert result.content == "done"
     assert result.tool_calls == [{"name": "inspect", "arguments": {"path": "."}, "call_id": "call-1"}]
-    assert result.usage == {"input_tokens": 3, "output_tokens": 3}
+    assert result.usage == {
+        "input_tokens": 3,
+        "output_tokens": 3,
+        "cached_input_tokens": 2,
+    }
     assert result.capture == {"thought_signatures": ["c2ln"]}
     assert events == [("reasoning", {"text": "plan"}), ("token", {"text": "done"})]
 

@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from src.amphi_agent._error import AgentEmptyAnswerError, AgentException, PublicAgentError
+from src.amphi_agent._error import (
+    AgentEmptyAnswerError,
+    AgentException,
+    ContextWindowExceededError,
+    PublicAgentError,
+)
 from src.amphi_service.i18n import backend_i18n, use_locale
 from src.amphi_service.protocol.llms._codex_credentials import CodexAuthError
 from src.amphi_service.protocol.llms._streaming import ModelNotFoundError
@@ -57,6 +62,14 @@ def test_context_limit_unwraps_framework_error_without_exposing_provider_details
     assert "WorkflowThink" not in public.message
     assert "sk-private" not in public.message
     assert "upstream_error" not in public.message
+
+
+def test_preflight_context_limit_uses_the_same_public_error() -> None:
+    public = PublicAgentError.from_exception(ContextWindowExceededError(120_000, 100_000))
+
+    assert public.code == "context_too_large"
+    assert public.retryable is False
+    assert public.action == "new_session"
 
 
 @pytest.mark.parametrize(

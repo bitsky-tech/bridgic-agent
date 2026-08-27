@@ -277,6 +277,7 @@ function renderBlocks(prompt: PromptReconstruction, options: PromptViewOptions):
       description: component.label === title ? undefined : component.label,
       sources: [...component.source],
       limitations,
+      metadata: component.metadata ? { ...component.metadata } : undefined,
       messageIndexes: [...component.messageIndexes],
       unresolvedMessageIndexes: rendered.unresolvedMessageIndexes,
       text: rendered.text,

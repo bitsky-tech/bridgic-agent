@@ -4,6 +4,8 @@ import asyncio
 
 from httpx import AsyncClient
 
+from src.amphi_service.auth import LOCAL_USER_ID
+from src.amphi_store import ProviderRepository
 from tests.service.flows._scripted_llm import FLOW_MODEL, ScriptedLlm
 from tests.service.flows._websocket import WebSocketRecorder
 
@@ -24,14 +26,14 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     """Final client state:
 
     {
-      "events": ["stage", "reasoning", "token", "token", "usage", "final"],
+      "events": ["stage", "reasoning", "token", "token", "context_usage", "final"],
       "final": {"answer": "Hello Ada.", "tokens_spent": 10},
       "system": {"type": "session.completed"}
     }
 
     Checks:
     1. WebSocket hello and subscription expose one authenticated Session stream.
-    2. A chat emits structured reasoning, token, usage, and final events in one attempt.
+    2. A chat emits structured reasoning, token, context usage, and final events in one attempt.
     3. The system topic announces completion and REST reloads the same final answer.
     """
     scripted_llm.enqueue_text(
@@ -41,6 +43,16 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
         chunks=("Hello ", "Ada."),
         reasoning="Recall the name.",
     )
+    provider = await ProviderRepository().upsert(
+        LOCAL_USER_ID,
+        "flow-provider",
+        auth_mode="api_key",
+        api_key="flow-test-key",
+        base_url="http://model.invalid/v1",
+        models=[FLOW_MODEL],
+        model_limits={FLOW_MODEL: {"context": 100_000, "output": 20, "source": "manual"}},
+    )
+    await ProviderRepository().set_active(LOCAL_USER_ID, provider.provider_id)
     session_id = await create_session(flow_client)
 
     # Check 1: The connection subscribes to the Session and process-wide topics.
@@ -68,18 +80,36 @@ async def test_chat_events(flow_client: AsyncClient, flow_socket: WebSocketRecor
     assert [message["text"] for message in session_events if message["type"] == "reasoning"] == [
         "Recall the name.",
     ]
-    assert [
-        (message["input_tokens"], message["output_tokens"])
-        for message in session_events if message["type"] == "usage"
-    ] == [(7, 3)]
+    context_usage = [
+        message for message in session_events if message["type"] == "context_usage"
+    ]
+    assert len(context_usage) == 1
+    assert context_usage[0]["model_id"] == FLOW_MODEL
+    assert context_usage[0]["used_tokens"] == 7
+    assert context_usage[0]["cached_input_tokens"] is None
+    assert context_usage[0]["usable_tokens"] == 99_980
+    assert context_usage[0]["percentage"] == 0.0
+    assert context_usage[0]["source"] == "provider"
+    assert sum(context_usage[0]["breakdown"].values()) == 7
     assert final["answer"] == "Hello Ada."
     assert final["tokens_spent"] == 10
 
     # Check 3: Completion reaches the system topic and the durable transcript.
     completed = await flow_socket.receive_until("session.completed", session_id=session_id)
     assert completed == {"type": "session.completed", "session_id": session_id}
-    messages = (await flow_client.get(f"/sessions/{session_id}/messages")).json()["messages"]
-    assert messages[-1]["finalAnswer"] == "Hello Ada."
+    transcript = (await flow_client.get(f"/sessions/{session_id}/messages")).json()
+    assert transcript["messages"][-1]["finalAnswer"] == "Hello Ada."
+    assert transcript["context_usage"] == {
+        "model_id": FLOW_MODEL,
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "cached_input_tokens": None,
+        "used_tokens": 7,
+        "usable_tokens": 99_980,
+        "percentage": 0.0,
+        "source": "provider",
+        "breakdown": context_usage[0]["breakdown"],
+    }
 
 
 async def test_chat_runtime_error_is_presented_safely(flow_client: AsyncClient, flow_socket: WebSocketRecorder, scripted_llm: ScriptedLlm) -> None:

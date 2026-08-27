@@ -18,7 +18,7 @@
  * Upstream: window.api.events.onAgentEvent → applyAgentEventAtom (subscribed in App.tsx)
  * Downstream: currentMessagesAtom / currentStreamingAtom are rendered by Pipeline
  */
-import type { AgentEvent, ThinkPosition, WorkflowRunState } from '@shared/types'
+import type { AgentEvent, ContextUsageSnapshot, ThinkPosition, WorkflowRunState } from '@shared/types'
 import { atom, type Getter, type Setter } from 'jotai'
 import { atomFamily } from 'jotai-family'
 import type {
@@ -98,6 +98,8 @@ export interface StreamingState {
     maxRetries: number
     delaySeconds: number
   }
+  /** True only while the daemon is replacing old raw history with compact summaries. */
+  compacting?: boolean
 }
 
 /** Per-session committed messages. One independent primitive atom per sessionId,
@@ -110,6 +112,16 @@ export const messageFamily = atomFamily((_sessionId: string) => atom<AgentMessag
 export const streamingFamily = atomFamily((_sessionId: string) =>
   atom<StreamingState | undefined>(undefined),
 )
+
+/** Latest context-window occupancy emitted for each Session. */
+export const contextUsageFamily = atomFamily((_sessionId: string) =>
+  atom<ContextUsageSnapshot | null>(null),
+)
+
+export const activeContextUsageAtom = atom((get) => {
+  const sessionId = get(activeSessionIdAtom)
+  return sessionId ? get(contextUsageFamily(sessionId)) : null
+})
 
 /** Session ids with an in-flight Agent turn. Sidebar consumers read this once
  * instead of calling hooks over a dynamic session list. */
@@ -319,7 +331,7 @@ export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: st
     const transcript = await client.getSessionMessages(sessionId, {
       limit: INITIAL_TRANSCRIPT_TURNS,
     })
-    const { messages, pendingRequest, thinkingMode, workflowRun, children } = transcript
+    const { messages, pendingRequest, thinkingMode, workflowRun, children, contextUsage } = transcript
     if (
       get(liveRevisionFamily(sessionId)) !== beforeLiveRevision ||
       get(streamingFamily(sessionId)) ||
@@ -379,6 +391,7 @@ export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: st
         nextBefore: transcript.nextBefore,
       })
     }
+    set(contextUsageFamily(sessionId), contextUsage)
     set(thinkingModeFamily(sessionId), thinkingMode)
     set(workflowRunFamily(sessionId), workflowRun ?? undefined)
     set(childrenFamily(sessionId), children)
@@ -561,6 +574,7 @@ export const fetchOlderTranscriptAtom = atom(null, async (get, set, sessionId: s
 export const purgeSessionAtom = atom(null, (get, set, id: string) => {
   messageFamily.remove(id)
   streamingFamily.remove(id)
+  contextUsageFamily.remove(id)
   continuationFamily.remove(id)
   liveRevisionFamily.remove(id)
   thinkingModeFamily.remove(id)
@@ -1368,6 +1382,19 @@ export const applyAgentEventAtom = atom(
               }
             : undefined,
         })
+        return
+      }
+      case 'context_compaction': {
+        const cur = get(streamingFamily(sessionId))
+        if (!cur) return
+        set(streamingFamily(sessionId), {
+          ...cur,
+          compacting: event.active || undefined,
+        })
+        return
+      }
+      case 'context_usage': {
+        set(contextUsageFamily(sessionId), event.usage)
         return
       }
       case 'tool_call': {

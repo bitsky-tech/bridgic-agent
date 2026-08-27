@@ -9,7 +9,7 @@ import { StateDataSource } from './data-source'
 
 const temporaryDirectories: string[] = []
 
-function createFixture(): string {
+function createFixture(legacyUsage = false): string {
   const directory = mkdtempSync(join(tmpdir(), 'bridgic-agent-lab-'))
   temporaryDirectories.push(directory)
   const databasePath = join(directory, 'state.db')
@@ -48,8 +48,9 @@ function createFixture(): string {
       execution_mode TEXT,
       max_rounds INTEGER,
       model TEXT,
-      input_tokens INTEGER NOT NULL,
-      output_tokens INTEGER NOT NULL,
+      ${legacyUsage
+        ? 'input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,'
+        : 'context_usage TEXT NOT NULL,'}
       created_at TEXT NOT NULL,
       duration_ms INTEGER,
       completed_at TEXT
@@ -79,19 +80,27 @@ function createFixture(): string {
       '2026-08-17 08:00:00', '2026-08-17 09:00:00', NULL, NULL
     )
   `)
+  const usageValues = legacyUsage
+    ? ['1200, 90', '5, 2']
+    : [
+        `'{"model_id":"gpt-5","input_tokens":1200,"output_tokens":90}'`,
+        `'{"input_tokens":5,"output_tokens":2}'`,
+      ]
   database.run(`
     INSERT INTO session_turns VALUES (
       'turn_new', 'local', 'session_new', 1,
       '{"text":"Run the report","blocks":[{"type":"text","value":"Run the report"}]}',
       '[{"observation_result":"tool output","think_result":{"step_content":"Inspect files","tool_calls":[]},"permission":{"execution_mode":"auto"},"action_result":{"results":[]},"turn_duration_ms":3210}]',
       '{"main":"done"}', 1, 1, 0, 'COMPLETED', 'Done', NULL, 'AUTO', 8,
-      'gpt-5', 1200, 90, '2026-08-18 08:10:00', 3000, '2026-08-18 08:10:04'
+      'gpt-5', ${usageValues[0]},
+      '2026-08-18 08:10:00', 3000, '2026-08-18 08:10:04'
     )
   `)
   database.run(`
     INSERT INTO session_turns VALUES (
       'turn_old', 'local', 'session_new', 0, 'not-json', 'not-json', '[]',
-      0, 0, 0, 'FAILED', NULL, 'boom', 'unexpected', NULL, NULL, 5, 2,
+      0, 0, 0, 'FAILED', NULL, 'boom', 'unexpected', NULL, NULL,
+      ${usageValues[1]},
       '2026-08-18 08:00:00', NULL, NULL
     )
   `)
@@ -158,7 +167,10 @@ describe('StateDataSource', () => {
       status: 'completed',
       executionMode: 'auto',
       userInput: { text: 'Run the report' },
+      inputTokens: 1200,
+      outputTokens: 90,
     })
+    expect(page?.items[1]).toMatchObject({ inputTokens: 5, outputTokens: 2 })
 
     const detail = source.getTurnDetail('turn_new')
     expect(detail).toMatchObject({
@@ -195,6 +207,21 @@ describe('StateDataSource', () => {
     expect(sessionConversation?.turns[0]?.otaRecords).toEqual([])
     expect(sessionConversation?.turns[1]?.otaRecords).toHaveLength(1)
     expect(source.getSessionPromptConversation('missing')).toBeNull()
+    source.close()
+  })
+
+  test('keeps read-only inspection compatible with pre-migration token columns', () => {
+    const source = new StateDataSource(createFixture(true))
+
+    expect(source.listSessions().items[0]).toMatchObject({
+      id: 'session_new',
+      inputTokens: 1205,
+      outputTokens: 92,
+    })
+    expect(source.listTurns('session_new')?.items).toEqual([
+      expect.objectContaining({ id: 'turn_new', inputTokens: 1200, outputTokens: 90 }),
+      expect.objectContaining({ id: 'turn_old', inputTokens: 5, outputTokens: 2 }),
+    ])
     source.close()
   })
 })

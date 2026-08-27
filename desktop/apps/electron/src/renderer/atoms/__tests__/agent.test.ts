@@ -11,6 +11,7 @@ import {
   appendUserMessageAtom,
   currentAgentRunningAtom,
   currentBrowserAgentActiveAtom,
+  contextUsageFamily,
   currentMessagesAtom,
   currentPendingFrameworkInteractionAtom,
   currentStreamingAtom,
@@ -245,6 +246,27 @@ describe('reducer: message lifecycle', () => {
       },
     })
     expect(store.get(currentStreamingAtom)?.retry).toBeUndefined()
+  })
+
+  it('context compaction is transient state and clears after finishing', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'context_compaction', active: true },
+    })
+    expect(store.get(currentStreamingAtom)?.compacting).toBe(true)
+
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'context_compaction', active: false },
+    })
+    expect(store.get(currentStreamingAtom)?.compacting).toBeUndefined()
   })
 
   it('clears stale model retry state as soon as recovered output arrives', () => {
@@ -1695,6 +1717,7 @@ describe('loadSessionMessagesAtom', () => {
     messages: AgentMessage[],
     pendingRequest: unknown = null,
     thinkingMode: unknown = null,
+    contextUsage: unknown = null,
   ) {
     store.set(backendSnapshotAtom, {
       state: BackendState.Ready,
@@ -1717,6 +1740,7 @@ describe('loadSessionMessagesAtom', () => {
         messages,
         pending_request: pendingRequest,
         thinking_mode: thinkingMode,
+        context_usage: contextUsage,
       }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -1744,6 +1768,50 @@ describe('loadSessionMessagesAtom', () => {
     await Promise.all([p1, p2])
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(store.get(messageFamily('sess-1')).map((m) => m.id)).toEqual(['srv-m1'])
+  })
+
+  it('restores durable context usage when a session transcript is hydrated', async () => {
+    const store = makeStore()
+    const usage = {
+      model_id: 'gpt-test',
+      input_tokens: 60,
+      output_tokens: 10,
+      cached_input_tokens: 42,
+      used_tokens: 60,
+      usable_tokens: 100,
+      percentage: 60,
+      source: 'provider',
+      breakdown: {
+        system_prompt_tokens: 10,
+        dynamic_context_tokens: 10,
+        tool_schema_tokens: 10,
+        session_history_tokens: 20,
+        current_input_tokens: 10,
+      },
+    }
+    const { release } = installDaemon(store, [serverMsg], null, null, usage)
+
+    const pending = store.set(loadSessionMessagesAtom, 'sess-context')
+    release()
+    await pending
+
+    expect(store.get(contextUsageFamily('sess-context'))).toEqual({
+      modelId: 'gpt-test',
+      inputTokens: 60,
+      outputTokens: 10,
+      cachedInputTokens: 42,
+      usedTokens: 60,
+      usableTokens: 100,
+      percentage: 60,
+      source: 'provider',
+      breakdown: {
+        systemPromptTokens: 10,
+        dynamicContextTokens: 10,
+        toolSchemaTokens: 10,
+        sessionHistoryTokens: 20,
+        currentInputTokens: 10,
+      },
+    })
   })
 
   it('刷新后乐观用户消息保留本地 id —— 换 key 会重挂气泡、重播入场动画', async () => {
@@ -2109,6 +2177,39 @@ describe('reducer: stage (build focus mode)', () => {
       'build_stage',
       'build_stage',
     ])
+  })
+})
+
+describe('reducer: context usage', () => {
+  it('stores the latest Session snapshot and purge clears it', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'context_usage',
+        usage: {
+          modelId: 'gpt-test',
+          inputTokens: 60,
+          outputTokens: 10,
+          cachedInputTokens: 42,
+          usedTokens: 60,
+          usableTokens: 100,
+          percentage: 60,
+          source: 'provider',
+          breakdown: {
+            systemPromptTokens: 10,
+            dynamicContextTokens: 10,
+            toolSchemaTokens: 10,
+            sessionHistoryTokens: 20,
+            currentInputTokens: 10,
+          },
+        },
+      },
+    })
+    expect(store.get(contextUsageFamily(id))?.percentage).toBe(60)
+    store.set(purgeSessionAtom, id)
+    expect(store.get(contextUsageFamily(id))).toBeNull()
   })
 })
 

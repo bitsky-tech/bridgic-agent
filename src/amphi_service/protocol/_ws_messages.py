@@ -139,11 +139,11 @@ class WsChatMessage(BaseModel):
     type: Literal["chat"] = "chat"
     session_id: str
     # Clean flattened display text (``@label`` / ``/id`` form) — used for the
-    # history title, the stored user message, and the LLM's history rounds.
+    # history title and as the stored input's display/fallback text.
     input: str
-    # Structured input truth: ordered text / @mention / /slash blocks. The
-    # observation hook walks these to inline-resolve @mention paths in place
-    # (preserving the user's ordering); GUI history rebuilds badges from them.
+    # Structured input truth: ordered text / @mention / /slash blocks. Cognitive
+    # prompt assembly renders these for both current and historical User messages;
+    # GUI history also rebuilds badges from them.
     blocks: List[WsChatBlock] = Field(default_factory=list)
 
 

@@ -252,8 +252,11 @@ async def test_message_pagination(service_client: httpx.AsyncClient) -> None:
             status=TurnStatus.COMPLETED,
             final_answer=f"Answer {ordinal}",
             error=None,
-            input_tokens=ordinal + 1,
-            output_tokens=ordinal + 2,
+            context_usage={
+                "model_id": "test-model",
+                "input_tokens": ordinal + 1,
+                "output_tokens": ordinal + 2,
+            },
             model="test-model",
             execution_mode="normal",
         )

@@ -14,9 +14,10 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from ._agent import AmphiAgent
 from ._browser import BrowserHost
-from ._context import AmphiContext, AmphiOTAContext
+from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._error import PublicAgentError
 from ._memory import Memory
+from ._llm_provider import LlmProvider
 from ._schedules import ScheduleLibrary
 from ._session import Session
 from ._skills import SkillLibrary
@@ -223,7 +224,10 @@ class AgentInvocation:
         Per-root Session limit for simultaneously executing Child Agent attempts.
     """
 
-    MAX_OTA_CONTEXT_BYTES = 2 * 1024 * 1024
+    # SQLite stores the trace as TEXT and can accept values far larger than this.
+    # Keep an application guard against pathological tool output, but leave enough
+    # room for normal long-running Turns before falling back to a reduced checkpoint.
+    MAX_OTA_CONTEXT_BYTES = 64 * 1024 * 1024
     MAX_CONCURRENT_CHILDREN = 10
     INTERACTION_ANSWER_TYPES = frozenset({
         "build_confirm",
@@ -739,12 +743,17 @@ class AgentInvocation:
             llm = await self._llms.resolve(user, model)
             workflows = WorkflowLibrary(user.id)
             workflow_runs = WorkflowRunLibrary(user.id)
-            skills, workflows, workflow_runs, schedules, mounts = await asyncio.gather(
+            llm_provider = LlmProvider(user.id, model)
+            skills, workflows, workflow_runs, schedules, mounts, llm_provider = await asyncio.gather(
                 SkillLibrary(user.id).load(),
                 workflows.load(),
-                workflow_runs.load(user_input),
+                workflow_runs.load(
+                    user_input,
+                    *(turn.user_input for turn in previous_turns),
+                ),
                 ScheduleLibrary(user.id, mutable=root.kind is not SessionKind.SCHEDULED).load(),
                 load_mounts(),
+                llm_provider.load(),
             )
             referenced_runs = workflow_runs.referenced_runs(user_input)
             referenced_workflow_ids = tuple(dict.fromkeys(
@@ -772,6 +781,7 @@ class AgentInvocation:
                     tool_result_dir=workspace.tool_result_dir,
                 ),
                 invocations=self,
+                llm_provider=llm_provider,
                 execution_mode=execution_mode,
             )
             agent = AmphiAgent(max_rounds=max_rounds, verbose=False)
@@ -963,15 +973,7 @@ class AgentInvocation:
                 error = self._error_message(exc)
                 trace_error = exc
 
-        input_tokens = (
-            outcome.input_tokens if outcome is not None else ota_context.input_tokens
-        )
-        output_tokens = (
-            outcome.output_tokens if outcome is not None else ota_context.output_tokens
-        )
         if replaced is not None:
-            input_tokens += replaced.input_tokens
-            output_tokens += replaced.output_tokens
             duration_ms += replaced.duration_ms or 0
 
         if status is None:
@@ -991,8 +993,6 @@ class AgentInvocation:
                 else None
             ),
             "error": error,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
             "model": model,
             "execution_mode": execution_mode,
             "max_rounds": max_rounds,
@@ -1155,8 +1155,9 @@ class AgentInvocation:
                     status=status,
                     final_answer=None,
                     error=message,
-                    input_tokens=0,
-                    output_tokens=0,
+                    context_usage=ContextUsageSnapshot(
+                        model_id=child.last_used_model or "",
+                    ).model_dump(mode="json"),
                 )
                 await self._update_projection(
                     child,
@@ -1386,8 +1387,9 @@ class AgentInvocation:
                 "status": TurnStatus.CANCELLED,
                 "final_answer": None,
                 "error": "Agent execution cancelled by user",
-                "input_tokens": 0,
-                "output_tokens": 0,
+                "context_usage": ContextUsageSnapshot(
+                    model_id=record.last_used_model or "",
+                ).model_dump(mode="json"),
                 "model": record.last_used_model,
             }
             try:
@@ -1414,8 +1416,7 @@ class AgentInvocation:
                     status=TurnStatus.CANCELLED,
                     final_answer=None,
                     error="Agent execution cancelled by user",
-                    input_tokens=latest.input_tokens,
-                    output_tokens=latest.output_tokens,
+                    context_usage=latest.context_usage,
                     model=latest.model,
                     execution_mode=latest.execution_mode,
                     max_rounds=latest.max_rounds,
@@ -1644,6 +1645,7 @@ class AgentInvocation:
                 "browser_tool_loaded",
                 "workspace_tools_loaded",
                 "skills_tool_loaded",
+                "context_usage",
             },
         )
         values = {
@@ -1652,6 +1654,7 @@ class AgentInvocation:
             "browser_tool_loaded": bool(dump.get("browser_tool_loaded")),
             "workspace_tools_loaded": bool(dump.get("workspace_tools_loaded")),
             "skills_tool_loaded": bool(dump.get("skills_tool_loaded")),
+            "context_usage": dump.get("context_usage"),
         }
         size = len(
             json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -1667,17 +1670,27 @@ class AgentInvocation:
         ota_context: AmphiOTAContext,
     ) -> dict[str, Any]:
         """Keep only cognitive state when a complete OTA trace is too large."""
-        state_dump = ota_context.model_dump(
+        context_dump = ota_context.model_dump(
             mode="json",
-            include={"state"},
-        ).get("state") or {}
+            include={"state", "context_usage"},
+        )
+        state_dump = context_dump.get("state") or {}
         think = state_dump.get("think") if isinstance(state_dump, dict) else None
+        compaction = (
+            state_dump.get("context_compaction")
+            if isinstance(state_dump, dict)
+            else None
+        )
+        agent_state = {"think": think} if isinstance(think, dict) else {}
+        if isinstance(compaction, dict):
+            agent_state["context_compaction"] = compaction
         return {
             "ota_records": [],
-            "agent_state": {"think": think} if isinstance(think, dict) else {},
+            "agent_state": agent_state,
             "browser_tool_loaded": False,
             "workspace_tools_loaded": False,
             "skills_tool_loaded": False,
+            "context_usage": context_dump.get("context_usage"),
         }
 
     @staticmethod
@@ -1741,6 +1754,6 @@ class AgentInvocation:
         return InvocationOutcome(
             answer=answer,
             disposition=disposition,
-            input_tokens=ota_context.input_tokens,
-            output_tokens=ota_context.output_tokens,
+            input_tokens=ota_context.context_usage.input_tokens,
+            output_tokens=ota_context.context_usage.output_tokens,
         )

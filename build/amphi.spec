@@ -284,7 +284,18 @@ def _builtin_skills_datas():
     return entries
 
 
-datas = _builtin_skills_datas()
+def _generated_catalog_datas():
+    """The raw models.dev snapshot downloaded immediately before PyInstaller."""
+    path = PROJECT_ROOT / 'build' / 'generated' / '_models_dev_catalog.json'
+    if not path.is_file():
+        raise SystemExit(
+            f'[amphi.spec] generated provider catalog missing: {path}; '
+            'run build/generate-providers-catalog.py first'
+        )
+    return [(str(path), 'src/amphi_service/protocol/llms')]
+
+
+datas = _builtin_skills_datas() + _generated_catalog_datas()
 binaries = []
 hiddenimports = []
 collected_import_roots = set()

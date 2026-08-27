@@ -7,7 +7,7 @@
  * is unit-testable without the atom store. Re-exported from atoms/models.ts
  * so existing `@/atoms/models` call sites keep working.
  */
-import type { ProviderCatalogEntry } from '../lib/amphiClient'
+import type { ModelLimits, ProviderCatalogEntry } from '../lib/amphiClient'
 
 /** UI-only display metadata (icon letter + brand color + optional tag).
  *  Single source of truth for "what color/letter does provider X look like".
@@ -130,6 +130,7 @@ export interface ProviderPreset {
   protocol: 'openai' | 'anthropic'
   baseUrl: string
   models: string[]
+  modelLimits: Record<string, ModelLimits>
   /** Configured channel's auth method (edit mode carries it in from
    *  ConfiguredProvider so the form re-displays the right radio). Absent in
    *  add mode → form falls back to the catalog's default_auth_mode. */
@@ -146,6 +147,7 @@ export const CUSTOM_PROTOCOL_PRESETS: ProviderPreset[] = [
     protocol: 'openai',
     baseUrl: '',
     models: [],
+    modelLimits: {},
   },
   {
     providerId: '',
@@ -153,6 +155,7 @@ export const CUSTOM_PROTOCOL_PRESETS: ProviderPreset[] = [
     protocol: 'anthropic',
     baseUrl: '',
     models: [],
+    modelLimits: {},
   },
 ]
 
@@ -166,5 +169,10 @@ export function getProviderPreset(entry: ProviderCatalogEntry, displayName = ent
     protocol: entry.protocol,
     baseUrl: entry.default_base_url,
     models: entry.models.map((m) => m.id),
+    modelLimits: Object.fromEntries(
+      entry.models
+        .filter((model) => model.limits && Object.keys(model.limits).length > 0)
+        .map((model) => [model.id, { ...model.limits, source: 'models_dev' as const }]),
+    ),
   }
 }

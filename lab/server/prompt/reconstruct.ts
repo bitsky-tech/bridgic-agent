@@ -1,7 +1,7 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { selectToolSurface } from "./catalog";
-import { renderPersona } from "./personas";
+import { renderPersona, TURN_FAILED_MESSAGE } from "./personas";
 import type {
   NativePromptMessage,
   NativeToolCall,
@@ -18,7 +18,6 @@ import type {
 } from "./types";
 import { PromptRebuildError } from "./types";
 
-const SESSION_MESSAGE_RECORD_LIMIT = 100;
 const MAX_ARG_VALUE_CHARS = 1_200;
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -74,6 +73,80 @@ interface PersistedThinkScope {
   mode: string;
   stage: string;
   sessionHistory?: string;
+}
+
+interface TurnCompactionProjection {
+  summary: string;
+  throughRound: number;
+}
+
+interface ContextCompactionProjection {
+  sessionSummary: string;
+  sessionThroughOrdinal: number;
+  turn: Record<string, Record<string, TurnCompactionProjection>>;
+}
+
+function nonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : fallback;
+}
+
+function contextCompaction(turn: PromptTurnSnapshot | undefined): ContextCompactionProjection | undefined {
+  const state = record(turn?.agentState);
+  const source = record(state?.context_compaction ?? state?.contextCompaction);
+  if (!source) return undefined;
+
+  const projectedTurns: Record<string, Record<string, TurnCompactionProjection>> = {};
+  const turnScopes = record(source.turn) ?? {};
+  Object.entries(turnScopes).forEach(([mode, rawStages]) => {
+    const stages = record(rawStages);
+    if (!stages) return;
+    Object.entries(stages).forEach(([stage, rawProjection]) => {
+      const projection = record(rawProjection);
+      if (!projection) return;
+      const summary = String(projection.turn_summary ?? projection.turnSummary ?? "").trim();
+      const throughRound = nonNegativeInteger(
+        projection.turn_through_round ?? projection.turnThroughRound,
+        0,
+      );
+      if (!summary) return;
+      (projectedTurns[mode] ??= {})[stage] = { summary, throughRound };
+    });
+  });
+
+  const sessionSummary = String(source.session_summary ?? source.sessionSummary ?? "").trim();
+  const rawSessionBoundary = source.session_through_ordinal ?? source.sessionThroughOrdinal;
+  const sessionThroughOrdinal = rawSessionBoundary === -1
+    ? -1
+    : nonNegativeInteger(rawSessionBoundary, -1);
+  if (!sessionSummary && Object.keys(projectedTurns).length === 0) return undefined;
+  return { sessionSummary, sessionThroughOrdinal, turn: projectedTurns };
+}
+
+function stageCompaction(
+  projection: ContextCompactionProjection | undefined,
+  stage: PromptStage,
+): TurnCompactionProjection | undefined {
+  if (!projection) return undefined;
+  if (stage === "workflow_execute") return projection.turn.run_workflow?.execute;
+  if (stage === "workflow_validate") return projection.turn.run_workflow?.validate;
+  if (["clarify", "explore", "generate", "verify"].includes(stage)) {
+    return projection.turn.build?.[stage];
+  }
+  return projection.turn.normal?.main;
+}
+
+function compactionSummaryMessage(
+  scope: "session_history" | "turn_history",
+  summary: string,
+  boundaryName: "through_ordinal" | "through_round",
+  boundary: number,
+): NativePromptMessage {
+  return {
+    role: "assistant",
+    content: `<${scope}_summary ${boundaryName}="${boundary}">\n${summary.trim()}\n</${scope}_summary>`,
+  };
 }
 
 function persistedThinkScope(round: Record<string, unknown>): PersistedThinkScope | undefined {
@@ -207,48 +280,60 @@ function projectStageRounds(
     return String(resultRecord.stage ?? argumentsRecord.stage ?? "") === targetScope.stage;
   });
 
-  const scopes = priorRounds.map((round) => roundThinkScope(round));
-  const projected: Record<string, unknown>[] = [];
+  // Mirror BuildThink._stage_turn_context against the trace including the open
+  // target record. The current record establishes the destination stage but is
+  // removed again because this endpoint reconstructs the request before it ran.
+  const availableRounds = turn.otaRecords.slice(0, targetRoundIndex + 1);
+  const scopes = availableRounds.map((round) => roundThinkScope(round));
+  const modeIndexes = scopes.flatMap((scope, index) =>
+    scope?.mode === targetScope.mode ? [index] : []);
+  const selected = new Set<number>();
+  if (modeIndexes.length === 0) {
+    availableRounds.forEach((_, index) => selected.add(index));
+  } else if (scopes[modeIndexes[0] ?? -1]?.stage === targetScope.stage) {
+    for (let index = 0; index < (modeIndexes[0] ?? 0); index += 1) selected.add(index);
+  }
+
   let switchRoundCount = 0;
   let transitionCount = 0;
-  priorRounds.forEach((round, index) => {
+  availableRounds.forEach((round, index) => {
     const scope = scopes[index];
     if (scope?.mode === targetScope.mode && scope.stage === targetScope.stage) {
-      projected.push(round);
+      selected.add(index);
+    }
+    if (switchesToTarget(round)) {
+      selected.add(index);
+      transitionCount += 1;
+      if (index < targetRoundIndex) switchRoundCount += 1;
       return;
     }
     const nextScope = index + 1 < scopes.length ? scopes[index + 1] : targetScope;
-    if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage
-      && nextScope?.mode === targetScope.mode && nextScope.stage === targetScope.stage) {
+    if (nextScope?.mode === targetScope.mode && nextScope.stage === targetScope.stage
+      && (scope?.mode !== targetScope.mode || scope.stage !== targetScope.stage)) {
       transitionCount += 1;
-      if (switchesToTarget(round)) {
-        projected.push(round);
-        switchRoundCount += 1;
-      }
+      if (!scope || scope.mode !== targetScope.mode) selected.add(index);
     }
   });
-  if (transitionCount) {
-    return {
-      rounds: projected,
-      usesStageScope: true,
-      hasStageBoundary: true,
-      allStageSessionHistory,
-      switchRoundCount,
-    };
-  }
+  const projected = availableRounds.filter((_, index) =>
+    index < targetRoundIndex && selected.has(index));
   return {
-    rounds: priorRounds,
+    rounds: projected,
     usesStageScope: true,
-    hasStageBoundary: false,
+    hasStageBoundary: transitionCount > 0,
     allStageSessionHistory,
-    switchRoundCount: 0,
+    switchRoundCount,
   };
 }
 
 function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot): string {
   const blocks = userInput.blocks ?? [];
   if (!blocks.length) return userInput.text;
-  const paths = context?.referencePaths ?? {};
+  const paths = {
+    ...(context?.referencePaths ?? {}),
+    ...Object.fromEntries((context?.workflowResults ?? []).flatMap((run) =>
+      run.resultDir ? [[run.runId, run.resultDir]] : [],
+    )),
+  };
   const parts: string[] = [];
   for (const block of blocks) {
     if (block.type === "text") {
@@ -291,20 +376,27 @@ function renderInput(userInput: PromptUserInput, context?: PromptContextSnapshot
   return parts.join("");
 }
 
-function selectSessionTail(turns: PromptTurnSnapshot[], target: PromptTurnSnapshot): PromptTurnSnapshot[] {
-  const before = turns
+function workflowRunReferenceIds(userInputs: PromptUserInput[]): string[] {
+  return unique(userInputs.flatMap((userInput) =>
+    (userInput.blocks ?? [])
+      .filter((block) => block.type === "mention" && block.group === "WorkflowRun")
+      .map((block) => String(block.id ?? "")),
+  ));
+}
+
+function hasLocalizedSlashIntent(userInputs: PromptUserInput[]): boolean {
+  return userInputs.some((userInput) =>
+    (userInput.blocks ?? []).some((block) =>
+      block.type === "slash"
+      && ((block.id === "build" && block.resource == null) || block.resource === "workflow"),
+    ),
+  );
+}
+
+function selectSessionHistory(turns: PromptTurnSnapshot[], target: PromptTurnSnapshot): PromptTurnSnapshot[] {
+  return turns
     .filter((turn) => turn.sessionId === target.sessionId && turn.sessionOrdinal < target.sessionOrdinal)
     .sort((left, right) => left.sessionOrdinal - right.sessionOrdinal);
-  const selected: PromptTurnSnapshot[] = [];
-  let count = 0;
-  for (let index = before.length - 1; index >= 0; index -= 1) {
-    const turn = before[index];
-    if (!turn) continue;
-    if (count + turn.otaRecords.length > SESSION_MESSAGE_RECORD_LIMIT) break;
-    selected.push(turn);
-    count += turn.otaRecords.length;
-  }
-  return selected.reverse();
 }
 
 function actionSteps(round: Record<string, unknown>): Record<string, unknown>[] {
@@ -363,11 +455,15 @@ function askedChoice(otaRecords: Record<string, unknown>[]): string {
   return lines.join("\n");
 }
 
-function historicalOtaMessages(turn: PromptTurnSnapshot, turnIndex: number): NativePromptMessage[] {
+function historicalOtaMessages(
+  turn: PromptTurnSnapshot,
+  otaRecords: Record<string, unknown>[],
+  roundOffset = 0,
+): NativePromptMessage[] {
   const messages: NativePromptMessage[] = [];
   let finalAnswer = "";
-  for (let roundIndex = 0; roundIndex < turn.otaRecords.length; roundIndex += 1) {
-    const round = turn.otaRecords[roundIndex];
+  for (let roundIndex = 0; roundIndex < otaRecords.length; roundIndex += 1) {
+    const round = otaRecords[roundIndex];
     if (!round) continue;
     const think = record(round.think_result) ?? {};
     const content = String(think.step_content ?? "");
@@ -375,7 +471,7 @@ function historicalOtaMessages(turn: PromptTurnSnapshot, turnIndex: number): Nat
     const steps = actionSteps(round);
     if (calls.length && calls.length === steps.length) {
       const renderedCalls = calls.map((call, callIndex): NativeToolCall => ({
-        id: String(steps[callIndex]?.tool_id ?? `hist_call_${turnIndex}_${roundIndex}_${callIndex}`),
+        id: String(steps[callIndex]?.tool_id ?? `hist_call_${turn.sessionOrdinal}_${roundOffset + roundIndex}_${callIndex}`),
         name: String(call.tool ?? call.name ?? ""),
         arguments: toolCallArguments(call),
       }));
@@ -394,18 +490,37 @@ function historicalOtaMessages(turn: PromptTurnSnapshot, turnIndex: number): Nat
   }
   if (finalAnswer) messages.push({ role: "assistant", content: finalAnswer });
   else {
-    const question = askedChoice(turn.otaRecords);
+    const question = askedChoice(otaRecords);
     if (question) messages.push({ role: "assistant", content: question });
   }
   return messages;
 }
 
-function sessionHistoryMessages(turns: PromptTurnSnapshot[]): NativePromptMessage[] {
+function sessionHistoryMessages(turns: PromptTurnSnapshot[], context?: PromptContextSnapshot): NativePromptMessage[] {
   const messages: NativePromptMessage[] = [];
-  turns.forEach((turn, turnIndex) => {
-    messages.push({ role: "user", content: turn.userInput.text });
-    if (turn.error && turn.status === "failed") return;
-    messages.push(...historicalOtaMessages(turn, turnIndex));
+  turns.forEach((turn) => {
+    messages.push({
+      role: "user",
+      content: renderInput(turn.userInput, context),
+    });
+    const projection = stageCompaction(contextCompaction(turn), "main");
+    const roundOffset = Math.min(projection?.throughRound ?? 0, turn.otaRecords.length);
+    if (projection) {
+      messages.push(compactionSummaryMessage(
+        "turn_history",
+        projection.summary,
+        "through_round",
+        projection.throughRound,
+      ));
+    }
+    messages.push(...historicalOtaMessages(
+      turn,
+      turn.otaRecords.slice(roundOffset),
+      roundOffset,
+    ));
+    if (turn.status?.toLowerCase() === "failed") {
+      messages.push({ role: "assistant", content: TURN_FAILED_MESSAGE });
+    }
   });
   return messages;
 }
@@ -413,6 +528,7 @@ function sessionHistoryMessages(turns: PromptTurnSnapshot[]): NativePromptMessag
 function currentTurnMessages(
   rounds: Record<string, unknown>[],
   tools: PromptToolSummary[],
+  roundOffset = 0,
 ): NativePromptMessage[] {
   const requiredByTool = new Map(tools.map((tool) => [tool.name, new Set(tool.required)]));
   let reasoningMode: "openai" | "anthropic" | undefined;
@@ -438,7 +554,7 @@ function currentTurnMessages(
         const missing = [...(requiredByTool.get(name) ?? [])].filter((key) => !provided.has(key)).sort();
         return {
           call: {
-            id: String(step.tool_id ?? `call_${roundIndex}_${stepIndex}`),
+            id: String(step.tool_id ?? `call_${roundOffset + roundIndex}_${stepIndex}`),
             name,
             arguments: args,
           } satisfies NativeToolCall,
@@ -603,7 +719,6 @@ function renderContext(
   input: PromptRebuildInput,
   target: PromptTurnSnapshot,
   stage: PromptStage,
-  sessionTail: PromptTurnSnapshot[],
 ): ContextBuildResult {
   const snapshot = input.context;
   const blocks: string[] = [];
@@ -734,12 +849,32 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   const priorRounds = target.otaRecords.slice(0, input.targetRoundIndex);
   const stageProjection = projectStageRounds(target, input.targetRoundIndex);
   const toolSurface = selectToolSurface(stage, target, priorRounds, input.toolCatalog);
-  const persona = renderPersona(stage, toolSurface.tools.map((tool) => tool.name), input.personas);
-  const tail = selectSessionTail(input.turns, target);
-  const context = renderContext(input, target, stage, tail);
+  const persona = renderPersona(
+    stage,
+    toolSurface.tools.map((tool) => tool.name),
+    input.personas,
+    input.uiLanguage,
+  );
+  const historyTurns = selectSessionHistory(input.turns, target);
+  const baselineCompaction = contextCompaction(historyTurns.at(-1));
+  const finalCompaction = contextCompaction(target);
+  const usesFinalCompaction = input.targetRoundIndex === target.otaRecords.length - 1;
+  const activeCompaction = usesFinalCompaction
+    ? finalCompaction ?? baselineCompaction
+    : baselineCompaction;
+  const context = renderContext(input, target, stage);
   const system = `${persona.content}\n\n${context.content}`;
 
   const messages: NativePromptMessage[] = [{ role: "system", content: system }];
+  const personaLimitations = [
+    ...(persona.usesInjectedSnapshot
+      ? []
+      : [`The complete Persona template is byte-equivalent to ${persona.version}; state.db does not record which backend source revision produced this historical Turn.`]),
+    ...(input.uiLanguage
+      ? []
+      : ["The request-scoped UI language is not persisted; the Lab used the default Chinese fallback."]),
+    ...stageLimitations,
+  ];
   const components: PromptComponent[] = [
     component(
       "persona",
@@ -748,14 +883,14 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
       persona.content,
       [0],
       [`Lab persona snapshot ${persona.version}`],
-      "reconstructed",
-      [
-        ...(persona.usesInjectedSnapshot
-          ? []
-          : [`The complete persona is byte-equivalent to ${persona.version}; state.db does not record which backend source revision produced this historical Turn.`]),
-        ...stageLimitations,
-      ],
-      { stage, version: persona.version, completeSnapshot: persona.completeSnapshot },
+      input.uiLanguage ? "reconstructed" : "partial",
+      personaLimitations,
+      {
+        stage,
+        version: persona.version,
+        completeSnapshot: persona.completeSnapshot,
+        uiLanguage: input.uiLanguage ?? "Chinese (fallback)",
+      },
     ),
     component("context", "context", "Context umbrella", context.content, [0], context.sources, context.fidelity, context.limitations),
   ];
@@ -767,22 +902,79 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     stageProjection.hasStageBoundary,
     stageProjection.allStageSessionHistory,
   );
-  const history = includeSessionHistory ? sessionHistoryMessages(tail) : [];
+  const sessionSummary = activeCompaction?.sessionSummary
+    ? compactionSummaryMessage(
+        "session_history",
+        activeCompaction.sessionSummary,
+        "through_ordinal",
+        activeCompaction.sessionThroughOrdinal,
+      )
+    : undefined;
+  const replayedHistoryTurns = activeCompaction?.sessionSummary
+    ? historyTurns.filter((turn) => turn.sessionOrdinal > activeCompaction.sessionThroughOrdinal)
+    : historyTurns;
+  const history = includeSessionHistory
+    ? [
+        ...(sessionSummary ? [sessionSummary] : []),
+        ...sessionHistoryMessages(replayedHistoryTurns, input.context),
+      ]
+    : [];
+  const resolvedReferenceIds = new Set([
+    ...Object.keys(input.context?.referencePaths ?? {}),
+    ...(input.context?.workflowResults ?? []).flatMap((run) => run.resultDir ? [run.runId] : []),
+  ]);
+  const unresolvedHistoryRunIds = includeSessionHistory
+    ? workflowRunReferenceIds(replayedHistoryTurns.map((turn) => turn.userInput))
+      .filter((runId) => !resolvedReferenceIds.has(runId))
+    : [];
+  const historyLimitations: string[] = [];
+  const finalSessionProjectionDiffers = Boolean(
+    !usesFinalCompaction
+    && finalCompaction?.sessionSummary
+    && (
+      finalCompaction.sessionSummary !== baselineCompaction?.sessionSummary
+      || finalCompaction.sessionThroughOrdinal !== baselineCompaction?.sessionThroughOrdinal
+    ),
+  );
+  if (finalSessionProjectionDiffers) {
+    historyLimitations.push(
+      "Context compaction is not versioned per Round; the Turn stores only its final Session projection. The Lab used the prior Turn boundary here to avoid leaking a later summary into the request.",
+    );
+  }
+  if (unresolvedHistoryRunIds.length) {
+    historyLimitations.push(
+      `WorkflowRun mention paths were unavailable for: ${unresolvedHistoryRunIds.join(", ")}.`,
+    );
+  }
+  if (
+    includeSessionHistory
+    && hasLocalizedSlashIntent(replayedHistoryTurns.map((turn) => turn.userInput))
+  ) {
+    historyLimitations.push("Localized slash-command intent prose is approximated by the Lab copy.");
+  }
   messages.push(...history);
   components.push(component(
     "session-history",
     "session_history",
-    "Bounded Session history",
+    "Session history",
     undefined,
     history.map((_, index) => historyStart + index),
-    ["session_turns.user_input", "session_turns.ota_records"],
-    "reconstructed",
-    [],
+    ["session_turns.user_input", "session_turns.ota_records", "session_turns.agent_state.context_compaction"],
+    historyLimitations.length ? "partial" : "reconstructed",
+    historyLimitations,
     {
-      includedTurns: tail.length,
-      recordLimit: SESSION_MESSAGE_RECORD_LIMIT,
+      includedTurns: replayedHistoryTurns.length,
+      availableTurns: historyTurns.length,
       omittedByStage: !includeSessionHistory,
       historyModel: stageProjection.allStageSessionHistory ? "all_stages" : "stage_default",
+      compactionApplied: includeSessionHistory && Boolean(sessionSummary),
+      compactedTurns: includeSessionHistory && sessionSummary
+        ? historyTurns.length - replayedHistoryTurns.length
+        : 0,
+      compactedThroughOrdinal: includeSessionHistory && sessionSummary
+        ? activeCompaction?.sessionThroughOrdinal ?? -1
+        : -1,
+      finalCompactionDeferred: includeSessionHistory && finalSessionProjectionDiffers,
     },
   ));
 
@@ -793,8 +985,15 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   const inputLimitations = input.promptTime
     ? []
     : ["prompt_time is excluded from persistence; the Lab inferred it from Turn creation time rather than the original Invocation clock snapshot."];
-  if (target.userInput.blocks?.some((block) => block.type === "slash" && ["build"].includes(String(block.id)))) {
+  if (hasLocalizedSlashIntent([target.userInput])) {
     inputLimitations.push("Localized slash-command intent prose is approximated by the Lab copy.");
+  }
+  const unresolvedCurrentRunIds = workflowRunReferenceIds([target.userInput])
+    .filter((runId) => !resolvedReferenceIds.has(runId));
+  if (unresolvedCurrentRunIds.length) {
+    inputLimitations.push(
+      `WorkflowRun mention paths were unavailable for: ${unresolvedCurrentRunIds.join(", ")}.`,
+    );
   }
   components.push(component(
     "current-input",
@@ -808,7 +1007,30 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   ));
 
   const turnStart = messages.length;
-  const turnMessages = currentTurnMessages(stageProjection.rounds, toolSurface.tools);
+  const finalTurnProjection = stageCompaction(finalCompaction, stage);
+  const turnProjection = usesFinalCompaction ? finalTurnProjection : undefined;
+  const compactedThroughRound = Math.min(
+    turnProjection?.throughRound ?? 0,
+    stageProjection.rounds.length,
+  );
+  const turnMessages = [
+    ...(turnProjection
+      ? [compactionSummaryMessage(
+          "turn_history",
+          turnProjection.summary,
+          "through_round",
+          turnProjection.throughRound,
+        )]
+      : []),
+    ...currentTurnMessages(
+      stageProjection.rounds.slice(compactedThroughRound),
+      toolSurface.tools,
+      compactedThroughRound,
+    ),
+  ];
+  const turnLimitations = !usesFinalCompaction && finalTurnProjection
+    ? ["Context compaction is not versioned per Round; the final stage projection was not applied here because its summary may contain later execution history."]
+    : [];
   messages.push(...turnMessages);
   components.push(component(
     "current-turn",
@@ -816,16 +1038,21 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
     "Completed rounds before target",
     undefined,
     turnMessages.map((_, index) => turnStart + index),
-    ["session_turns.ota_records"],
-    "reconstructed",
-    [],
+    ["session_turns.ota_records", "session_turns.agent_state.context_compaction"],
+    turnLimitations.length ? "partial" : "reconstructed",
+    turnLimitations,
     {
       completedRounds: stageProjection.rounds.length,
+      replayedRounds: stageProjection.rounds.length - compactedThroughRound,
       availableRounds: priorRounds.length,
       omittedByStage: priorRounds.length - stageProjection.rounds.length,
       historyModel: stageProjection.usesStageScope ? "stage_scoped" : "legacy_full_turn",
       retainedBoundaryRound: stageProjection.switchRoundCount > 0,
       retainedSwitchRounds: stageProjection.switchRoundCount,
+      compactionApplied: Boolean(turnProjection),
+      compactedRounds: compactedThroughRound,
+      compactedThroughRound: turnProjection?.throughRound ?? 0,
+      finalCompactionDeferred: !usesFinalCompaction && Boolean(finalTurnProjection),
     },
   ));
 

@@ -29,6 +29,7 @@ function request(turns: PromptTurnSnapshot[], targetTurnId: string, targetRoundI
     turns,
     targetTurnId,
     targetRoundIndex,
+    uiLanguage: "Chinese",
     promptTime: "2026-08-18 09:02 (UTC+08:00)",
     workspace: {
       workDir: "/sessions/session-1/.work",
@@ -110,8 +111,8 @@ describe("rebuildPrompt", () => {
     expect(result.components.find((item) => item.id === "current-turn")?.metadata?.completedRounds).toBe(1);
   });
 
-  test("bounds Session history by whole Turns and the 100 OTA-record limit", () => {
-    const old = turn("turn-old", 0, "old-should-be-omitted", Array.from({ length: 60 }, () => ({})));
+  test("replays all Session history without an OTA-record limit", () => {
+    const old = turn("turn-old", 0, "old-should-remain", Array.from({ length: 60 }, () => ({})));
     const recent = turn("turn-recent", 1, "recent-should-remain", Array.from({ length: 50 }, () => ({})));
     const current = turn("turn-current", 2, "current", [{}]);
 
@@ -119,8 +120,241 @@ describe("rebuildPrompt", () => {
     const contents = result.messages.map((message) => message.content ?? "");
 
     expect(contents).toContain("recent-should-remain");
-    expect(contents).not.toContain("old-should-be-omitted");
-    expect(result.components.find((item) => item.id === "session-history")?.metadata?.includedTurns).toBe(1);
+    expect(contents).toContain("old-should-remain");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata?.includedTurns).toBe(2);
+  });
+
+  test("replays persisted Turn summaries inside later Session history", () => {
+    const compacted = turn("turn-compacted", 0, "Earlier task", [
+      { think_result: { step_content: "Raw round covered by the summary" } },
+      { think_result: { step_content: "Recent raw round" } },
+    ], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          turn: {
+            normal: {
+              main: {
+                turn_summary: "Durable historical Turn summary",
+                turn_through_round: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+    const current = turn("turn-current", 1, "Continue", [{}]);
+
+    const result = rebuildPrompt(request([compacted, current], current.id, 0));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain(
+      '<turn_history_summary through_round="1">\nDurable historical Turn summary\n</turn_history_summary>',
+    );
+    expect(contents).toContain("Recent raw round");
+    expect(contents).not.toContain("Raw round covered by the summary");
+  });
+
+  test("applies the latest persisted Session and stage compaction projections", () => {
+    const old = turn("turn-old", 0, "Old request covered by Session summary", []);
+    const recent = turn("turn-recent", 1, "Recent raw request", [{
+      think_result: { step_content: "Recent raw answer" },
+    }]);
+    const current = turn("turn-current", 2, "Continue the current task", [
+      { think_result: { step_content: "Current round covered by Turn summary" } },
+      { think_result: { step_content: "Current raw round 2" } },
+      { think_result: { step_content: "Current raw round 3" } },
+      {},
+    ], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          session_summary: "Durable Session summary",
+          session_through_ordinal: 0,
+          turn: {
+            normal: {
+              main: {
+                turn_summary: "Durable current-Turn summary",
+                turn_through_round: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([old, recent, current], current.id, 3));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain(
+      '<session_history_summary through_ordinal="0">\nDurable Session summary\n</session_history_summary>',
+    );
+    expect(contents).not.toContain("Old request covered by Session summary");
+    expect(contents).toContain("Recent raw request");
+    expect(contents).toContain(
+      '<turn_history_summary through_round="1">\nDurable current-Turn summary\n</turn_history_summary>',
+    );
+    expect(contents).not.toContain("Current round covered by Turn summary");
+    expect(contents).toContain("Current raw round 2");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
+      compactionApplied: true,
+      compactedTurns: 1,
+      compactedThroughOrdinal: 0,
+      includedTurns: 1,
+      availableTurns: 2,
+      finalCompactionDeferred: false,
+    });
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
+      compactionApplied: true,
+      compactedRounds: 1,
+      compactedThroughRound: 1,
+      finalCompactionDeferred: false,
+    });
+  });
+
+  test("does not report diagnostics from Turns replaced by a Session summary", () => {
+    const covered = turn("turn-covered", 0, "Run the old Workflow", [], {
+      userInput: {
+        text: "Run the old Workflow",
+        blocks: [
+          { type: "slash", id: "workflow-old", label: "Old Workflow", resource: "workflow" },
+          { type: "mention", id: "run-missing", label: "Old result", group: "WorkflowRun" },
+        ],
+      },
+    });
+    const current = turn("turn-current", 1, "Continue", [{}], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          session_summary: "The covered Turn is represented here.",
+          session_through_ordinal: 0,
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([covered, current], current.id, 0));
+    const history = result.components.find((item) => item.id === "session-history");
+
+    expect(history?.fidelity).toBe("reconstructed");
+    expect(history?.limitations).toEqual([]);
+    expect(history?.metadata).toMatchObject({
+      compactionApplied: true,
+      compactedTurns: 1,
+      includedTurns: 0,
+    });
+  });
+
+  test("does not leak a final compaction summary into an earlier Round", () => {
+    const previous = turn("turn-previous", 0, "Earlier Session request", []);
+    const current = turn("turn-current", 1, "Continue", [
+      { think_result: { step_content: "Round 1" } },
+      { think_result: { step_content: "Round 2" } },
+      { think_result: { step_content: "Round 3" } },
+      { think_result: { step_content: "Round 4" } },
+      {},
+    ], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          session_summary: "Final Session summary must not travel backwards",
+          session_through_ordinal: 0,
+          turn: {
+            normal: {
+              main: {
+                turn_summary: "Final Turn summary must not travel backwards",
+                turn_through_round: 2,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([previous, current], current.id, 2));
+    const serialized = JSON.stringify(result.messages);
+
+    expect(serialized).not.toContain("must not travel backwards");
+    expect(serialized).toContain("Earlier Session request");
+    expect(serialized).toContain("Round 1");
+    expect(result.components.find((item) => item.id === "session-history")?.fidelity).toBe("partial");
+    expect(result.components.find((item) => item.id === "current-turn")?.fidelity).toBe("partial");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata?.finalCompactionDeferred).toBe(true);
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata?.finalCompactionDeferred).toBe(true);
+    expect(result.fidelity.limitations.some((item) => item.toLowerCase().includes("not versioned per round"))).toBe(true);
+  });
+
+  test("renders persisted structured inputs in Session history", () => {
+    const previous = turn("turn-previous", 0, "/build Create report from references", [{
+      think_result: { step_content: "Historical structured answer", tool_calls: [] },
+    }], {
+      userInput: {
+        text: "/build Create report from references",
+        blocks: [
+          { type: "slash", id: "build", label: "build", resource: null },
+          { type: "text", value: " Create report from " },
+          { type: "mention", id: "mount-project", label: "Project", path: "spec.md" },
+          { type: "text", value: " and " },
+          { type: "mention", id: "removed-mount", label: "Removed", path: "" },
+          { type: "text", value: " with " },
+          {
+            type: "mention",
+            id: "run-prior",
+            label: "Prior",
+            group: "WorkflowRun",
+            path: "report.md",
+          },
+        ],
+      },
+    });
+    const current = turn("turn-current", 1, "Continue", [{}]);
+    const input = request([previous, current], current.id, 0);
+    input.context = {
+      ...input.context,
+      referencePaths: { "mount-project": "/mounted/project" },
+      workflowResults: [{
+        runId: "run-prior",
+        workflowName: "Prior report",
+        status: "completed",
+        resultDir: "/published/run-prior/result",
+      }],
+    };
+
+    const result = rebuildPrompt(input);
+
+    expect(result.messages[1]?.content).toBe(
+      "The user explicitly requested reusable Workflow Build mode. Additional input: "
+      + "Create report from Project(/mounted/project/spec.md) and @Removed "
+      + "with Prior(/published/run-prior/result/report.md)",
+    );
+    expect(result.messages[2]?.content).toBe("Historical structured answer");
+    const historyComponent = result.components.find((item) => item.id === "session-history");
+    expect(historyComponent?.fidelity).toBe("partial");
+    expect(historyComponent?.limitations).toContain(
+      "Localized slash-command intent prose is approximated by the Lab copy.",
+    );
+  });
+
+  test("keeps Agent content from a failed historical Turn", () => {
+    const failed = turn("turn-failed", 0, "Trigger the failed request", [{
+      think_result: { step_content: "Partial response before failure", tool_calls: [] },
+    }], {
+      status: "failed",
+      error: "Provider unavailable",
+    });
+    const current = turn("turn-current", 1, "Continue", [{}]);
+
+    const result = rebuildPrompt(request([failed, current], current.id, 0));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain("Trigger the failed request");
+    expect(contents).toContain("Partial response before failure");
+    const marker = "<turn_failed>This Turn failed before completion. "
+      + "Its preceding Agent content may be incomplete.</turn_failed>";
+    expect(contents).toContain(marker);
+    expect(contents.filter((content) => content === marker)).toHaveLength(1);
+    expect(contents.indexOf(marker)).toBe(contents.indexOf("Partial response before failure") + 1);
+    expect(contents).not.toContain("Provider unavailable");
+    expect(JSON.stringify(result.messages)).not.toContain("Provider unavailable");
   });
 
   test("replays persisted historical Think tool calls as atomic assistant/tool pairs", () => {
@@ -210,6 +444,60 @@ describe("rebuildPrompt", () => {
       retainedBoundaryRound: false,
       retainedSwitchRounds: 0,
     });
+  });
+
+  test("keeps the pre-Build entry prefix for the first Build stage", () => {
+    const current = turn("turn-current", 0, "Build it", [
+      {
+        think_scope: { mode: "normal", stage: "main", session_history: "all_stages" },
+        think_result: { step_content: "Normal entry that opened Build" },
+      },
+      {
+        think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" },
+        think_result: { step_content: "Clarify history" },
+      },
+      { think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" } },
+    ], { agentState: { think: { mode: "build", stage: "clarify" } } });
+
+    const result = rebuildPrompt(request([current], current.id, 2));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain("Normal entry that opened Build");
+    expect(contents).toContain("Clarify history");
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
+      completedRounds: 2,
+      availableRounds: 2,
+      omittedByStage: 0,
+      historyModel: "stage_scoped",
+    });
+  });
+
+  test("uses the active Build stage's compaction projection", () => {
+    const current = turn("turn-current", 0, "Generate it", [
+      { think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" }, think_result: { step_content: "Clarify history" } },
+      { think_scope: { mode: "build", stage: "generate", session_history: "all_stages" }, think_result: { step_content: "Generate history covered by summary" } },
+      { think_scope: { mode: "build", stage: "generate", session_history: "all_stages" }, think_result: { step_content: "Generate raw tail" } },
+      { think_scope: { mode: "build", stage: "generate", session_history: "all_stages" } },
+    ], {
+      agentState: {
+        think: { mode: "build", stage: "generate" },
+        context_compaction: {
+          turn: {
+            normal: { main: { turn_summary: "Wrong scope summary", turn_through_round: 1 } },
+            build: { generate: { turn_summary: "Generate stage summary", turn_through_round: 1 } },
+          },
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([current], current.id, 3));
+    const serialized = JSON.stringify(result.messages);
+
+    expect(serialized).toContain("Generate stage summary");
+    expect(serialized).toContain("Generate raw tail");
+    expect(serialized).not.toContain("Generate history covered by summary");
+    expect(serialized).not.toContain("Wrong scope summary");
+    expect(serialized).not.toContain("Clarify history");
   });
 
   test("applies the Build switch history policy when a stage is re-entered", () => {
@@ -421,6 +709,7 @@ describe("rebuildPrompt", () => {
   test("marks non-persisted Invocation metadata as explicit fidelity limitations", () => {
     const current = turn("turn-current", 0, "Hello", [{}]);
     const input = request([current], current.id, 0);
+    delete input.uiLanguage;
     delete input.promptTime;
     delete input.workspace;
     delete input.context;
@@ -430,6 +719,7 @@ describe("rebuildPrompt", () => {
     expect(result.fidelity.level).toBe("partial");
     expect(result.fidelity.score).toBeLessThan(100);
     expect(result.fidelity.limitations.some((item) => item.includes("prompt_time"))).toBe(true);
+    expect(result.fidelity.limitations.some((item) => item.includes("UI language"))).toBe(true);
     expect(result.fidelity.limitations.some((item) => item.includes("Browser tabs"))).toBe(true);
     expect(result.messages[0]?.content).toContain("<Workspace>");
   });

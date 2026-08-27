@@ -13,6 +13,7 @@ build/
 build/*
 !build/amphi_autostart_entry.py
 !build/build-desktop-mac.sh
+!build/generate-providers-catalog.py
 dist/
 *.egg-info/
 *.egg
