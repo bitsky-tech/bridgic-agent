@@ -1763,6 +1763,15 @@
       },
       "italic": "Italic",
       "justify": "Justify",
+      "launchButton": {
+        "create": "New PPT",
+        "creating": "Creating…",
+        "ready": "PPT created",
+        "retry": "Try again"
+      },
+      "launchDetail": "Once created, you and the agent can edit the same presentation together.",
+      "launchFailed": "Failed to create: {{message}}",
+      "launchTitle": "New PPT",
       "layout": {
         "blank": "Blank",
         "title": "Title slide",
@@ -1851,6 +1860,8 @@
       "strikethrough": "Strikethrough",
       "subscript": "Subscript",
       "superscript": "Superscript",
+      "syncCreating": "Creating presentation…",
+      "syncReady": "PPT created; opening the workbench…",
       "tabAnimations": "Animations",
       "tabDesign": "Design",
       "tabHome": "Home",
@@ -1915,6 +1926,7 @@
       "output": "Session resources",
       "preparingMode": "Switching view…",
       "presentation": "PPT",
+      "presentationOpened": "PPT is open",
       "resources": "Resources",
       "results": "Runs",
       "schedules": "Scheduled",

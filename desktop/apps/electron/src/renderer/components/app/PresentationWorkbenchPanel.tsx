@@ -1293,23 +1293,18 @@ async function createPresentationFabricObject(
   fabric: FabricModule,
   element: PresentationElement,
   onTextEdit: (object: FabricObject) => void,
-  placeholderText?: string,
 ): Promise<FabricObject> {
   if (isPresentationTextElement(element)) {
     const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
     const text = formatPresentationText(element)
-    const editorText = text || placeholderText || ''
-    let textFill = element.color
-    if (element.hyperlink) textFill = '#2563EB'
-    if (placeholderText) textFill = '#777483'
     const textOptions = {
       left: element.x + insets.left,
       top: element.y + insets.top,
       angle: element.rotation,
       originX: 'left',
       originY: 'top',
-      fill: textFill,
-      fontFamily: presentationRenderingFontFamily(element.fontFamily, editorText),
+      fill: element.hyperlink ? '#2563EB' : element.color,
+      fontFamily: presentationRenderingFontFamily(element.fontFamily, text),
       fontSize: element.fontSize,
       fontWeight: element.fontWeight,
       fontStyle: element.italic ? 'italic' : 'normal',
@@ -1322,11 +1317,11 @@ async function createPresentationFabricObject(
       padding: (element.indentLevel ?? 0) * 16,
       opacity: element.opacity ?? 1,
       shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.28)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
-      splitByGrapheme: shouldSplitPresentationTextByGrapheme(editorText, element.wordWrap !== false),
+      splitByGrapheme: shouldSplitPresentationTextByGrapheme(text, element.wordWrap !== false),
     } as const
     const textbox = element.wordWrap === false
-      ? new fabric.IText(editorText, textOptions)
-      : new fabric.Textbox(editorText, {
+      ? new fabric.IText(text, textOptions)
+      : new fabric.Textbox(text, {
           ...textOptions,
           width: Math.max(1, element.width - insets.left - insets.right),
         })
@@ -1336,28 +1331,7 @@ async function createPresentationFabricObject(
       const freeHeight = Math.max(0, element.height - (textbox.height ?? 0))
       textbox.set({ top: element.y + (element.verticalAlign === 'middle' ? freeHeight / 2 : freeHeight) })
     }
-    const placeholderTextbox = textbox as FabricObject & {
-      presentationPlaceholderText?: string
-      presentationPlaceholderVisible?: boolean
-      text: string
-    }
-    if (placeholderText) {
-      placeholderTextbox.presentationPlaceholderText = placeholderText
-      placeholderTextbox.presentationPlaceholderVisible = true
-      textbox.on('editing:entered', () => {
-        if (!placeholderTextbox.presentationPlaceholderVisible) return
-        placeholderTextbox.presentationPlaceholderVisible = false
-        textbox.set({ fill: element.hyperlink ? '#2563EB' : element.color, text: '' })
-        textbox.canvas?.requestRenderAll()
-      })
-    }
-    textbox.on('editing:exited', () => {
-      onTextEdit(textbox)
-      if (!placeholderText || textbox.text.trim()) return
-      placeholderTextbox.presentationPlaceholderVisible = true
-      textbox.set({ fill: '#777483', text: placeholderText })
-      textbox.canvas?.requestRenderAll()
-    })
+    textbox.on('editing:exited', () => onTextEdit(textbox))
     return textbox
   }
   if (isPresentationShapeElement(element)) return createShapeFabricObject(fabric, element)
@@ -1714,14 +1688,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           patch.y = Math.round(object.top - (Math.max(0, frameHeight - renderedHeight) * alignmentFactor))
           patch.height = Math.round(frameHeight)
         }
-        const placeholderObject = object as FabricObject & {
-          presentationPlaceholderVisible?: boolean
-          text: string
-        }
-        const editableText = placeholderObject.presentationPlaceholderVisible ? '' : object.text
         const text = element.type === 'text'
-          ? stripPresentationListMarkers(editableText, element.listStyle)
-          : editableText
+          ? stripPresentationListMarkers(object.text, element.listStyle)
+          : object.text
         Object.assign(patch, { text })
       }
       patches.set(elementId, patch)
@@ -2126,23 +2095,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     canvas.setDimensions({ width: pageSize.width, height: pageSize.height })
     canvas.backgroundColor = currentSlide.background
     objectIdsRef.current = new WeakMap()
-    void Promise.all(currentSlide.elements.map(async (element) => {
-      let placeholderText: string | undefined
-      if (isPresentationTextElement(element) && !element.text.trim() && element.placeholder) {
-        if (element.placeholder === 'title') placeholderText = t('session.presentation.clickToAddTitle')
-        else if (element.placeholder === 'subtitle') placeholderText = t('session.presentation.clickToAddSubtitle')
-        else placeholderText = t('session.presentation.clickToAddBody')
-      }
-      return {
-        element,
-        object: await createPresentationFabricObject(
-          fabric,
-          element,
-          (object) => syncFabricObjectRef.current(object),
-          placeholderText,
-        ),
-      }
-    })).then((entries) => {
+    void Promise.all(currentSlide.elements.map(async (element) => ({
+      element,
+      object: await createPresentationFabricObject(fabric, element, (object) => syncFabricObjectRef.current(object)),
+    }))).then((entries) => {
       if (cancelled || canvasRef.current !== canvas) return
       for (const { element, object } of entries) {
         let hoverCursor = 'move'
@@ -2180,7 +2136,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       cancelled = true
       if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
-  }, [activateFabricElement, active, canvasGeneration, currentSlide, pageSize, t])
+  }, [activateFabricElement, active, canvasGeneration, currentSlide, pageSize])
 
   const undo = useCallback(() => {
     const previous = pastRef.current.pop()
@@ -2327,7 +2283,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   }
 
   const closePresentation = (documentId: string) => {
-    if (workspace.documents.length <= 1) return
+    if (workspace.documents.length <= 1) {
+      setExpanded(false)
+      if (onClose) onClose()
+      else setRightCollapsed(true)
+      return
+    }
     const closedIndex = workspace.documents.findIndex((item) => item.id === documentId)
     const documents = workspace.documents.filter((item) => item.id !== documentId)
     const activeDocumentId = documentId === workspace.activeDocumentId
@@ -2443,8 +2404,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     const positioned: PresentationTextElement[] = []
     if (layout === 'title') {
       positioned.push(
-        { ...title, placeholder: 'title', x: 120, y: 245, width: pageSize.width - 240, height: 100, align: 'center' },
-        { ...body, placeholder: 'subtitle', x: 180, y: 365, width: pageSize.width - 360, height: 70, align: 'center' },
+        { ...title, x: 120, y: 245, width: pageSize.width - 240, height: 100, align: 'center' },
+        { ...body, x: 180, y: 365, width: pageSize.width - 360, height: 70, align: 'center' },
       )
     } else {
       positioned.push({ ...title, x: 80, y: 58, width: pageSize.width - 160, height: 82 })
@@ -3165,9 +3126,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
                   <button
                     type="button"
                     aria-label={t('session.presentation.closeDocument', { name: fileName })}
-                    disabled={workspace.documents.length <= 1}
                     onClick={() => closePresentation(item.id)}
-                    className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100 disabled:cursor-default disabled:opacity-20"
+                    className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
                     data-testid="presentation-close-document"
                   >
                     <X className="size-3" />

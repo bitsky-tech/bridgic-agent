@@ -51,7 +51,7 @@ afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
-async function mountPanel(withTestContent = true) {
+async function mountPanel(withTestContent = true, onClose?: () => void) {
   const store = createStore()
   const settings = store.get(settingsAtom)
   store.set(settingsAtom, { ...settings, ui: { ...settings.ui, lastNav: 'home' } })
@@ -63,7 +63,7 @@ async function mountPanel(withTestContent = true) {
   await act(async () => {
     root.render(
       <Provider store={store}>
-        <PresentationWorkbenchPanel active={false} />
+        <PresentationWorkbenchPanel active={false} onClose={onClose} />
       </Provider>,
     )
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -72,22 +72,35 @@ async function mountPanel(withTestContent = true) {
 }
 
 describe('PresentationWorkbenchPanel', () => {
-  it('opens directly into one presentation with three native text placeholders', async () => {
+  it('opens directly into one presentation with three ordinary text boxes', async () => {
     const { host, root, store } = await mountPanel(false)
     const presentation = store.get(currentPresentationDocumentAtom)
 
     expect(presentation.title).toBe('')
     expect(presentation.slides).toHaveLength(1)
     expect(presentation.slides[0]?.layout).toBe('title')
-    expect(presentation.slides[0]?.elements).toMatchObject([
-      { placeholder: 'title', text: '', type: 'text' },
-      { placeholder: 'subtitle', text: '', type: 'text' },
-      { placeholder: 'body', text: '', type: 'text' },
-    ])
+    expect(presentation.slides[0]?.elements).toHaveLength(3)
+    expect(presentation.slides[0]?.elements.every((element) => element.type === 'text')).toBe(true)
+    expect(presentation.slides[0]?.elements.every((element) => !('placeholder' in element))).toBe(true)
     expect(host.querySelector('[data-testid="presentation-document-tab"]')?.textContent).toBe('未命名演示文稿.pptx')
     expect(host.querySelectorAll('[data-testid="presentation-slide-preview"]')).toHaveLength(1)
-    expect(host.querySelector('[data-testid^="presentation-placeholder-"]')).toBeNull()
     expect(host.textContent).not.toContain('Ideas that move forward')
+
+    await act(async () => root.unmount())
+  })
+
+  it('closes the entire PPT surface when the only document tab is closed', async () => {
+    let closeCalls = 0
+    const { host, root, store } = await mountPanel(false, () => { closeCalls += 1 })
+    const close = host.querySelector<HTMLButtonElement>(
+      '[data-testid="presentation-close-document"]',
+    )!
+
+    expect(close.disabled).toBe(false)
+    await act(async () => close.click())
+
+    expect(closeCalls).toBe(1)
+    expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(1)
 
     await act(async () => root.unmount())
   })

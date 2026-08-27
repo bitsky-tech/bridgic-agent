@@ -23,8 +23,9 @@ import {
 
 installApiStub()
 
-const sessionId = new URLSearchParams(location.search).get('sessionId')?.trim()
-if (!sessionId) throw new Error('PowerPoint renderer requires a sessionId')
+const requestedSessionId = new URLSearchParams(location.search).get('sessionId')?.trim()
+if (!requestedSessionId) throw new Error('PowerPoint renderer requires a sessionId')
+const sessionId: string = requestedSessionId
 
 const store = createStore()
 store.set(powerPointSessionIdOverrideAtom, sessionId)
@@ -68,7 +69,7 @@ function PowerPointRuntime() {
       <PresentationWorkbenchPanel
         active
         onClose={() => {
-          void window.api.powerpoint.requestClose()
+          void window.api.powerpoint.requestClose(sessionId)
         }}
         onExpandedChange={(expanded) => {
           void window.api.powerpoint.setExpanded(expanded)

@@ -36,8 +36,15 @@ export function registerPowerPointHandlers(
     if (!visible && focusHost === true && !event.sender.isDestroyed()) event.sender.focus()
   })
 
-  loggedHandle(IPC.powerpoint.requestClose, () => {
-    emitToHost(IPC.events.powerPointCloseRequested)
+  loggedHandle(IPC.powerpoint.requestClose, (event, sessionId: string) => {
+    const session = powerpoint.sessionInfo(sessionId)
+    if (!session || session.webContentsId !== event.sender.id) {
+      throw new Error('PowerPoint close request does not own the requested Session')
+    }
+    emitToHost(IPC.events.powerPointCloseRequested, sessionId)
+    // Let invoke() deliver its acknowledgement before destroying the renderer
+    // that issued it. The host retracts the panel from the event above.
+    setImmediate(() => powerpoint.closeSession(sessionId))
   })
 
   loggedHandle(IPC.powerpoint.setExpanded, (_event, expanded: boolean) => {

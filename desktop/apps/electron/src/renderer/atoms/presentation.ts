@@ -1,4 +1,5 @@
 import { atom } from 'jotai'
+import { i18n } from '@/lib/i18n'
 import { createDefaultPresentationTransition } from '@/lib/presentationTransitions'
 import { viewedSessionIdAtom } from './navigation'
 
@@ -176,8 +177,6 @@ export interface PresentationElementBase {
 
 export interface PresentationTextElement extends PresentationElementBase {
   type: 'text'
-  /** Empty layout placeholders render an editor hint without becoming presentation content. */
-  placeholder?: 'body' | 'subtitle' | 'title'
   text: string
   fontSize: number
   fontFamily: string
@@ -379,21 +378,23 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
 export function createInitialPresentationDocument(): PresentationDocument {
   const document = createBlankPresentationDocument('')
   const slide = document.slides[0]!
-  const createPlaceholder = (
-    placeholder: NonNullable<PresentationTextElement['placeholder']>,
+  const createTextBox = (
+    kind: 'body' | 'subtitle' | 'title',
     geometry: Pick<PresentationTextElement, 'height' | 'width' | 'x' | 'y'>,
   ): PresentationTextElement => {
-    const isTitle = placeholder === 'title'
-    let fontSize = 20
+    const isTitle = kind === 'title'
+    let fontSize = 24
     if (isTitle) fontSize = 42
-    else if (placeholder === 'subtitle') fontSize = 24
+    else if (kind === 'subtitle') fontSize = 24
+    let text = i18n.t('session.presentation.clickToAddBody')
+    if (isTitle) text = i18n.t('session.presentation.clickToAddTitle')
+    else if (kind === 'subtitle') text = i18n.t('session.presentation.clickToAddSubtitle')
     return {
       id: createPresentationId('text'),
       type: 'text',
-      placeholder,
       ...geometry,
       rotation: 0,
-      text: '',
+      text,
       fontSize,
       fontFamily: isTitle ? document.master.titleFontFamily : document.master.bodyFontFamily,
       fontWeight: isTitle ? 700 : 400,
@@ -406,15 +407,14 @@ export function createInitialPresentationDocument(): PresentationDocument {
       indentLevel: 0,
       listStyle: 'none',
       color: '#20202B',
-      align: placeholder === 'body' ? 'left' : 'center',
-      verticalAlign: placeholder === 'body' ? 'top' : 'middle',
+      align: kind === 'body' ? 'left' : 'center',
     }
   }
   slide.layout = 'title'
   slide.elements = [
-    createPlaceholder('title', { x: 120, y: 105, width: document.pageSize.width - 240, height: 90 }),
-    createPlaceholder('subtitle', { x: 160, y: 220, width: document.pageSize.width - 320, height: 60 }),
-    createPlaceholder('body', { x: 120, y: 320, width: document.pageSize.width - 240, height: Math.max(180, document.pageSize.height - 425) }),
+    createTextBox('title', { x: 120, y: 105, width: document.pageSize.width - 240, height: 90 }),
+    createTextBox('subtitle', { x: 160, y: 220, width: document.pageSize.width - 320, height: 60 }),
+    createTextBox('body', { x: 120, y: 320, width: document.pageSize.width - 240, height: Math.max(180, document.pageSize.height - 425) }),
   ]
   return document
 }

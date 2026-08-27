@@ -26,6 +26,7 @@ import {
   setRightPanelCollapsedAtom,
 } from '@/atoms/layout'
 import { presentationExpandedAtom } from '@/atoms/presentation'
+import { activeEmbeddedPowerPointSessionAtom } from '@/atoms/powerpoint'
 import {
   consumeSessionModeExitCollapseRequestAtom,
   currentSessionModeExitCollapseRequestAtom,
@@ -174,6 +175,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const selectedModeSurface = useAtomValue(selectedSessionModeSurfaceAtom)
   const modeExitCollapseRequest = useAtomValue(currentSessionModeExitCollapseRequestAtom)
   const browserSession = useAtomValue(activeEmbeddedBrowserSessionAtom)
+  const powerPointSession = useAtomValue(activeEmbeddedPowerPointSessionAtom)
   const browserAgentActive = useAtomValue(currentBrowserAgentActiveAtom)
   const rightCollapsed = useAtomValue(rightPanelCollapsedAtom)
   const collapseRequest = useAtomValue(rightPanelCollapseRequestAtom)
@@ -196,10 +198,11 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const [settledModeHandoffKey, setSettledModeHandoffKey] = useState<string | null>(null)
   const hostWindowForeground = useHostWindowForeground()
 
-  useEffect(() => window.api.events.onPowerPointCloseRequested?.(() => {
+  useEffect(() => window.api.events.onPowerPointCloseRequested?.((sessionId) => {
+    if (store.get(viewedSessionIdAtom) !== sessionId) return
     setPresentationExpanded(false)
     setRightCollapsed(true)
-  }) ?? (() => undefined), [setPresentationExpanded, setRightCollapsed])
+  }) ?? (() => undefined), [setPresentationExpanded, setRightCollapsed, store])
 
   useEffect(() => window.api.events.onPowerPointExpandedChanged?.((expanded) => {
     setPresentationExpanded(expanded)
@@ -528,6 +531,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
           browserNeedsAttention={browserNeedsAttention}
           filesNeedsAttention={filesNeedsAttention}
           hasBrowserOpenPage={browserHasOpenPage}
+          hasPresentationOpen={powerPointSession !== null}
           isBrowserAgentActive={browserAgentActive && browserActivityKind === 'agent'}
           isBrowserBusy={browserBusy}
           isContentOpen={contentOpen}

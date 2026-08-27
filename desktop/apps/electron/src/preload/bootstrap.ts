@@ -104,7 +104,7 @@ const api: ElectronAPI = {
     setBounds: (bounds) => ipcRenderer.invoke(IPC.powerpoint.setBounds, bounds),
     setVisible: (visible, focusHost) =>
       ipcRenderer.invoke(IPC.powerpoint.setVisible, visible, focusHost),
-    requestClose: () => ipcRenderer.invoke(IPC.powerpoint.requestClose),
+    requestClose: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.requestClose, sessionId),
     setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
   },
   backend: {
@@ -167,7 +167,7 @@ const api: ElectronAPI = {
     onEmbeddedPowerPointChanged: (callback) =>
       subscribe<EmbeddedPowerPointSnapshot>(IPC.events.embeddedPowerPointChanged, callback),
     onPowerPointCloseRequested: (callback) =>
-      subscribe<void>(IPC.events.powerPointCloseRequested, callback),
+      subscribe<string>(IPC.events.powerPointCloseRequested, callback),
     onPowerPointExpandedChanged: (callback) =>
       subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),

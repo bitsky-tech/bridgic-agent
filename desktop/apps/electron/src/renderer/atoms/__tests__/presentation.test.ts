@@ -29,7 +29,7 @@ describe('presentation atoms', () => {
     expect(initialDocument.slides.every((slide) => slide.footer === undefined)).toBe(true)
   })
 
-  it('starts with one unnamed slide containing editable text placeholders instead of bundled sample content', () => {
+  it('starts with one unnamed slide containing ordinary editable text boxes instead of bundled sample content', () => {
     const document = createInitialPresentationDocument()
     expect(document.title).toBe('')
     expect(document.slides).toHaveLength(1)
@@ -41,11 +41,9 @@ describe('presentation atoms', () => {
       notes: '',
     })
     expect(document.slides[0]!.elements).toHaveLength(3)
-    expect(document.slides[0]!.elements).toMatchObject([
-      { align: 'center', placeholder: 'title', text: '', type: 'text' },
-      { align: 'center', placeholder: 'subtitle', text: '', type: 'text' },
-      { align: 'left', placeholder: 'body', text: '', type: 'text' },
-    ])
+    expect(document.slides[0]!.elements.every((element) => element.type === 'text')).toBe(true)
+    expect(document.slides[0]!.elements.every((element) => element.type !== 'text' || element.text.length > 0)).toBe(true)
+    expect(document.slides[0]!.elements.every((element) => !('placeholder' in element))).toBe(true)
     expect(JSON.stringify(document)).not.toContain('Ideas that move forward')
   })
 

@@ -77,6 +77,7 @@ const {
   setSessionWorkbenchSurfaceAtom,
 } = await import('@/atoms/browser')
 const { notifySessionWorkbenchActivityAtom } = await import('@/atoms/workbench')
+const { setEmbeddedPowerPointSnapshotAtom } = await import('@/atoms/powerpoint')
 const {
   filesNeedsAttentionFamily,
   setFilesNeedsAttentionAtom,
@@ -227,7 +228,7 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="workflow-library-panel"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="workflow-results-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="schedule-workbench-tool"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="embedded-powerpoint-viewport"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
 
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
@@ -241,6 +242,59 @@ describe('SessionResourcePanel', () => {
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     expect(host.querySelector('[data-testid="session-surface-rail"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('true')
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows PPT as active without a background marker until a presentation is created', async () => {
+    const store = createStore()
+    const sessionId = 'session-ppt-lifecycle'
+    store.set(activeSessionIdAtom, sessionId)
+    const { host, root } = await mountPanel(store)
+    const presentation = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-presentation"]',
+    )!
+
+    await act(async () => presentation.click())
+
+    expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
+    expect(presentation.querySelector(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )).toBeNull()
+
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'ppt-target',
+          webContentsId: 42,
+          loading: false,
+          crashed: false,
+        }],
+      })
+    })
+
+    expect(presentation.querySelector<HTMLElement>(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )?.dataset.state).toBe('active')
+    expect(presentation.getAttribute('aria-label')).toBe('PPT 已打开')
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')?.click()
+    })
+    expect(presentation.querySelector<HTMLElement>(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )?.dataset.state).toBe('background-open')
+
+    await act(async () => presentation.click())
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, { sessions: [] })
+      await Promise.resolve()
+    })
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    expect(presentation.querySelector(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )).toBeNull()
 
     await act(async () => root.unmount())
   })

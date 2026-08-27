@@ -28,12 +28,11 @@ describe('createPresentationPptx', () => {
     return slide.async('text')
   }
 
-  it('does not export empty editor placeholders as slide content', async () => {
+  it('does not export empty text boxes as slide content', async () => {
     const document = createEmptyPresentationDocument()
     document.slides[0]!.elements = [{
       id: 'empty-title-placeholder',
       type: 'text',
-      placeholder: 'title',
       x: 120,
       y: 245,
       width: 1040,

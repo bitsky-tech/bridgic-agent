@@ -35,6 +35,7 @@ import { useAutoOpenWorkflowRunDetails } from './hooks/useAutoOpenWorkflowRunDet
 import { useCollapseNewSessionWorkbench } from './hooks/useCollapseNewSessionWorkbench'
 import { useRememberRightPanelState } from './hooks/useRememberRightPanelState'
 import { useEmbeddedBrowserBridge } from './hooks/useEmbeddedBrowserBridge'
+import { useEmbeddedPowerPointBridge } from './hooks/useEmbeddedPowerPointBridge'
 import {
   ConfirmDialog,
   ExternalLinkDialog,
@@ -84,6 +85,7 @@ export default function App() {
   useRememberRightPanelState()
   useCollapseNewSessionWorkbench()
   useEmbeddedBrowserBridge()
+  useEmbeddedPowerPointBridge()
 
   // GatewayBootGate gates the entire UI on Bridgic Agent daemon readiness.
   // Wrapping includes the modal stack: any modal opened mid-session would

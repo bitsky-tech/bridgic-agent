@@ -380,7 +380,7 @@ export interface ElectronAPI {
     activateSession(sessionId: string | null): Promise<void>
     setBounds(bounds: EmbeddedPowerPointBounds): Promise<void>
     setVisible(visible: boolean, focusHost?: boolean): Promise<void>
-    requestClose(): Promise<void>
+    requestClose(sessionId: string): Promise<void>
     setExpanded(expanded: boolean): Promise<void>
   }
   backend: {
@@ -472,7 +472,7 @@ export interface ElectronAPI {
     onWindowCloseRequested(callback: (req: WindowCloseRequest) => void): () => void
     onEmbeddedBrowserChanged(callback: (snapshot: EmbeddedBrowserSnapshot) => void): () => void
     onEmbeddedPowerPointChanged(callback: (snapshot: EmbeddedPowerPointSnapshot) => void): () => void
-    onPowerPointCloseRequested(callback: () => void): () => void
+    onPowerPointCloseRequested(callback: (sessionId: string) => void): () => void
     onPowerPointExpandedChanged(callback: (expanded: boolean) => void): () => void
     /** A watched session-file directory changed on disk — re-read that level. */
     onFsChanged(callback: (event: FsChangedEvent) => void): () => void

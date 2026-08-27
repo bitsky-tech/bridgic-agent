@@ -10,6 +10,7 @@ export interface SessionSurfaceRailTabsProps {
   browserNeedsAttention: boolean
   filesNeedsAttention: boolean
   hasBrowserOpenPage: boolean
+  hasPresentationOpen: boolean
   isBrowserAgentActive: boolean
   isBrowserBusy: boolean
   isContentOpen: boolean
@@ -25,6 +26,7 @@ export function SessionSurfaceRailTabs({
   browserNeedsAttention,
   filesNeedsAttention,
   hasBrowserOpenPage,
+  hasPresentationOpen,
   isBrowserAgentActive,
   isBrowserBusy,
   isContentOpen,
@@ -41,6 +43,7 @@ export function SessionSurfaceRailTabs({
       icon: Icons.folder(17),
       isOpenInBackground: false,
       label: t('session.resourcePanel.files'),
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Files,
       testId: 'session-workbench-files',
     },
@@ -49,6 +52,7 @@ export function SessionSurfaceRailTabs({
       icon: Icons.workflow(17),
       isOpenInBackground: false,
       label: t('session.resourcePanel.workflows'),
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Workflows,
       testId: 'session-workbench-workflows',
     },
@@ -57,14 +61,18 @@ export function SessionSurfaceRailTabs({
       icon: Icons.workflowResult(17),
       isOpenInBackground: false,
       label: t('session.resourcePanel.results'),
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Results,
       testId: 'session-workbench-results',
     },
     {
-      ariaLabel: t('session.resourcePanel.presentation'),
+      ariaLabel: hasPresentationOpen
+        ? t('session.resourcePanel.presentationOpened')
+        : t('session.resourcePanel.presentation'),
       icon: Icons.presentation(17),
-      isOpenInBackground: false,
+      isOpenInBackground: hasPresentationOpen,
       label: t('session.resourcePanel.presentation'),
+      showActiveIndicator: hasPresentationOpen,
       surface: SessionWorkbenchSurface.Presentation,
       testId: 'session-workbench-presentation',
     },
@@ -73,6 +81,7 @@ export function SessionSurfaceRailTabs({
       icon: Icons.globe(17),
       label: browserLabel,
       isOpenInBackground: hasBrowserOpenPage,
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Browser,
       testId: 'session-workbench-browser',
     },
@@ -91,6 +100,7 @@ export function SessionSurfaceRailTabs({
         key={tool.surface}
         label={tool.label}
         isOpenInBackground={tool.isOpenInBackground ?? false}
+        showActiveIndicator={tool.showActiveIndicator}
         isBusy={isBrowser && isBrowserBusy}
         isPulsing={isBrowser && isBrowserAgentActive && !browserNeedsAttention}
         needsAttention={(isBrowser && browserNeedsAttention) || (isFiles && filesNeedsAttention)}

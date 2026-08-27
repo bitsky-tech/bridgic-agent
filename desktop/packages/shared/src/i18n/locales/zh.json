@@ -1763,6 +1763,15 @@
       },
       "italic": "斜体",
       "justify": "两端对齐",
+      "launchButton": {
+        "create": "新建 PPT",
+        "creating": "正在新建…",
+        "ready": "PPT 已创建",
+        "retry": "重新新建"
+      },
+      "launchDetail": "创建后，你和 Agent 都可以在同一个演示文稿中编辑内容。",
+      "launchFailed": "新建失败：{{message}}",
+      "launchTitle": "新建 PPT",
       "layout": {
         "blank": "空白",
         "title": "标题幻灯片",
@@ -1851,6 +1860,8 @@
       "strikethrough": "删除线",
       "subscript": "下标",
       "superscript": "上标",
+      "syncCreating": "正在创建演示文稿…",
+      "syncReady": "PPT 已创建，正在打开工作台…",
       "tabAnimations": "动画",
       "tabDesign": "美化",
       "tabHome": "开始",
@@ -1915,6 +1926,7 @@
       "output": "会话资源",
       "preparingMode": "正在切换界面…",
       "presentation": "PPT",
+      "presentationOpened": "PPT 已打开",
       "resources": "会话资源",
       "results": "运行记录",
       "schedules": "调度",

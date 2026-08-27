@@ -46,6 +46,11 @@ const DYNAMIC_TRANSLATION_KEYS = [
   'skill.import.pick.source.clawhub',
   // SkillImportPick.tsx :: REMOTE_SOURCES[].subKey — read through a variable, not a literal
   'skill.import.pick.sourceList.skillsSh',
+  // EmbeddedPowerPointPanel.tsx :: PowerPointLaunchState
+  'session.presentation.launchButton.create',
+  'session.presentation.launchButton.creating',
+  'session.presentation.launchButton.ready',
+  'session.presentation.launchButton.retry',
   'status.subagent.awaitingHuman',
   'status.subagent.awaitingHumanShort',
   'status.subagent.awaitingPermission',
