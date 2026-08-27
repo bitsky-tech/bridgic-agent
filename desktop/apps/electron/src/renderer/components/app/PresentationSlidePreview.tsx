@@ -1,16 +1,17 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { Pause, Play } from 'lucide-react'
 import {
-  PRESENTATION_HEIGHT,
-  PRESENTATION_WIDTH,
+  PRESENTATION_PAGE_SIZES,
   formatPresentationText,
   type PresentationChartElement,
   type PresentationChartSeries,
   type PresentationElement,
   type PresentationHyperlink,
+  type PresentationPageSize,
   type PresentationShapeElement,
   type PresentationSlide,
   type PresentationTableElement,
+  type PresentationTextElement,
 } from '@/atoms/presentation'
 import { cn } from '@/lib/cn'
 import {
@@ -23,8 +24,10 @@ import {
   supportsPresentationElementHyperlink,
 } from '@/lib/presentationInsert'
 import { getPresentationShapeDefinition, isPresentationLineShape } from '@/lib/presentationShapes'
+import { presentationRenderingFontFamily } from '@/lib/presentationText'
 
 interface PresentationSlidePreviewProps {
+  hiddenElementIds?: ReadonlySet<string>
   slide: PresentationSlide
   slideNumber?: number
   width: number
@@ -32,10 +35,12 @@ interface PresentationSlidePreviewProps {
   presentation?: boolean
   suppressMediaPlayback?: boolean
   onActivateHyperlink?: (hyperlink: PresentationHyperlink) => void
+  pageSize?: PresentationPageSize
 }
 
 /** Shared static renderer used by thumbnails, transition previews and slide show playback. */
 export function PresentationSlidePreview({
+  hiddenElementIds,
   slide,
   slideNumber,
   width,
@@ -43,8 +48,9 @@ export function PresentationSlidePreview({
   presentation = false,
   suppressMediaPlayback = false,
   onActivateHyperlink,
+  pageSize = PRESENTATION_PAGE_SIZES.wide,
 }: PresentationSlidePreviewProps) {
-  const scale = width / PRESENTATION_WIDTH
+  const scale = width / pageSize.width
   const interactive = presentation && Boolean(onActivateHyperlink)
   return (
     <span
@@ -53,20 +59,20 @@ export function PresentationSlidePreview({
         presentation ? 'rounded-sm shadow-[0_24px_72px_rgba(0,0,0,0.5)]' : 'rounded border shadow-sm',
         !presentation && (selected ? 'border-brand-purple ring-1 ring-brand-purple/25' : 'border-border-default'),
       )}
-      style={{ width, height: width * (PRESENTATION_HEIGHT / PRESENTATION_WIDTH) }}
+      style={{ width, height: width * (pageSize.height / pageSize.width) }}
       aria-hidden={interactive ? undefined : 'true'}
       data-testid="presentation-slide-preview"
     >
       <span
         className="absolute left-0 top-0 block origin-top-left overflow-hidden"
         style={{
-          width: PRESENTATION_WIDTH,
-          height: PRESENTATION_HEIGHT,
+          width: pageSize.width,
+          height: pageSize.height,
           transform: `scale(${scale})`,
           backgroundColor: slide.background,
         }}
       >
-        {slide.elements.map((element) => (
+        {slide.elements.filter((element) => !hiddenElementIds?.has(element.id)).map((element) => (
           <Fragment key={element.id}>
             <PresentationElementPreview element={element} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
             {interactive && element.hyperlink && supportsPresentationElementHyperlink(element) ? (
@@ -95,6 +101,7 @@ function elementStyle(element: PresentationElement): CSSProperties {
     height: element.height,
     transform: `rotate(${rotationLocked ? 0 : element.rotation}deg)`,
     transformOrigin: 'top left',
+    opacity: element.opacity ?? 1,
   }
 }
 
@@ -214,19 +221,26 @@ function PresentationPlaybackAudio({ element }: { element: Extract<PresentationE
   )
 }
 
-function PresentationElementPreview({ element, interactive, suppressMediaPlayback }: {
+export function PresentationElementPreview({ element, interactive, suppressMediaPlayback }: {
   element: PresentationElement
   interactive: boolean
   suppressMediaPlayback: boolean
 }) {
   if (isPresentationTextElement(element)) {
+    const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
     return (
       <span
-        className="absolute block whitespace-pre-wrap overflow-hidden"
+        className="absolute block"
         style={{
           ...elementStyle(element),
+          left: element.x + insets.left,
+          top: element.y + insets.top,
+          width: Math.max(1, element.width - insets.left - insets.right),
+          height: Math.max(1, element.height - insets.top - insets.bottom),
+          whiteSpace: element.wordWrap === false ? 'pre' : 'pre-wrap',
+          overflow: element.wordWrap === false ? 'visible' : 'hidden',
           color: element.color,
-          fontFamily: element.fontFamily,
+          fontFamily: presentationRenderingFontFamily(element.fontFamily, element.text),
           fontSize: element.fontSize,
           fontWeight: element.fontWeight,
           fontStyle: element.italic ? 'italic' : 'normal',
@@ -240,15 +254,40 @@ function PresentationElementPreview({ element, interactive, suppressMediaPlaybac
           backgroundColor: element.highlightColor,
           letterSpacing: `${(element.characterSpacing ?? 0) / 1000}em`,
           paddingLeft: (element.indentLevel ?? 0) * 16,
+          display: 'flex',
+          alignItems: presentationVerticalAlignment(element.verticalAlign),
           ...(element.hyperlink ? { color: '#2563EB' } : {}),
         }}
+        data-testid="presentation-text-preview"
       >
-        {formatPresentationText(element)}
+        <span className="block w-full">{formatPresentationText(element)}</span>
       </span>
     )
   }
   if (isPresentationShapeElement(element)) return <SlideShapePreview element={element} />
   if (isPresentationImageElement(element)) {
+    const crop = element.crop
+    if (crop) {
+      const visibleWidth = Math.max(0.001, 1 - crop.left - crop.right)
+      const visibleHeight = Math.max(0.001, 1 - crop.top - crop.bottom)
+      return (
+        <span className="absolute block overflow-hidden" style={elementStyle(element)}>
+          <img
+            alt={element.altText}
+            className="absolute block max-w-none"
+            draggable={false}
+            src={element.source.dataUrl}
+            style={{
+              left: `${-(crop.left / visibleWidth) * 100}%`,
+              top: `${-(crop.top / visibleHeight) * 100}%`,
+              width: `${100 / visibleWidth}%`,
+              height: `${100 / visibleHeight}%`,
+              filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
+            }}
+          />
+        </span>
+      )
+    }
     return (
       <img
         alt={element.altText}
@@ -300,6 +339,12 @@ function PresentationElementPreview({ element, interactive, suppressMediaPlaybac
   if (isPresentationTableElement(element)) return <PresentationTablePreview element={element} />
   if (isPresentationChartElement(element)) return <PresentationChartPreview element={element} />
   return null
+}
+
+function presentationVerticalAlignment(alignment: PresentationTextElement['verticalAlign']): CSSProperties['alignItems'] {
+  if (alignment === 'bottom') return 'flex-end'
+  if (alignment === 'middle') return 'center'
+  return 'flex-start'
 }
 
 function SlideShapePreview({ element }: { element: PresentationShapeElement }) {

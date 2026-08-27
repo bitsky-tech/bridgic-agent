@@ -772,6 +772,46 @@ describe('presentation Insert runtime safeguards', () => {
     expect(host.querySelector<HTMLImageElement>('img')?.style.transform).toBe('rotate(45deg)')
   })
 
+  it('renders centered PowerPoint text at point-correct CSS size inside the full text box width', async () => {
+    const documentModel = createBlankPresentationDocument('Centered text')
+    const slide = documentModel.slides[0]!
+    slide.elements = [{
+      id: 'centered-title',
+      type: 'text',
+      x: 520,
+      y: 220,
+      width: 240,
+      height: 101,
+      rotation: 0,
+      text: '诸行无常',
+      fontSize: 60,
+      fontFamily: '思源宋体',
+      fontWeight: 700,
+      characterSpacing: 100,
+      lineHeight: 1.4,
+      color: '#1A1A1A',
+      align: 'center',
+      verticalAlign: 'top',
+      wordWrap: false,
+    }]
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    await act(async () => {
+      root.render(<PresentationSlidePreview slide={slide} width={1280} selected={false} />)
+    })
+
+    const textBox = host.querySelector<HTMLElement>('[data-testid="presentation-text-preview"]')!
+    const content = textBox.firstElementChild as HTMLElement
+    expect(textBox.style.left).toBe('520px')
+    expect(textBox.style.width).toBe('240px')
+    expect(textBox.style.fontSize).toBe('60px')
+    expect(textBox.style.textAlign).toBe('center')
+    expect(textBox.style.letterSpacing).toBe('0.1em')
+    expect(content.className).toContain('w-full')
+  })
+
   it('draws negative Cartesian chart values on the opposite side of a shared zero axis', async () => {
     const range = getPresentationChartRange([{ name: 'Mixed', values: [10, -5] }])
     expect(range).toEqual({ min: -5, max: 10, span: 15 })

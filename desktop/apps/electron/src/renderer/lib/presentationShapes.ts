@@ -153,6 +153,10 @@ export function getPresentationShapeDefinition(type: PresentationShapeType): Pre
   return presentationShapeMap.get(type) ?? RECTANGLE_SHAPES[0]!
 }
 
+export function isSupportedPresentationShapeType(value: string): value is PresentationShapeType {
+  return presentationShapeMap.has(value as PresentationShapeType)
+}
+
 export function getPresentationShapeName(type: PresentationShapeType, language: string): string {
   const name = getPresentationShapeDefinition(type).name
   return language.toLowerCase().startsWith('zh') ? name.zh : name.en

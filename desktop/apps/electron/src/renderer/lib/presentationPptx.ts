@@ -1,14 +1,23 @@
 import PptxGenJS from 'pptxgenjs'
 import JSZip from 'jszip'
 import {
-  PRESENTATION_HEIGHT,
-  PRESENTATION_WIDTH,
+  getPresentationPageSize,
   type PresentationChartType,
   type PresentationDocument,
+  type PresentationElement,
   type PresentationHyperlink,
   type PresentationTransition,
   type PresentationTransitionDirection,
 } from '@/atoms/presentation'
+import {
+  hasPresentationAnimation,
+  normalizePresentationAnimation,
+  type NormalizedPresentationAnimation,
+} from '@/lib/presentationAnimations'
+import {
+  getPresentationAnimationAffectedElements,
+  getPresentationAnimationTargets,
+} from '@/lib/presentationGroups'
 import {
   hasValidPresentationMediaSignature,
   isPresentationChartElement,
@@ -22,11 +31,14 @@ import {
 } from '@/lib/presentationInsert'
 import { getPresentationLineEnds, isPresentationLineShape } from '@/lib/presentationShapes'
 import {
+  presentationCharacterSpacingToPoints,
+  presentationFontSizeToPoints,
+} from '@/lib/presentationText'
+import {
   DEFAULT_PRESENTATION_TRANSITION_DURATION_MS,
   normalizePresentationTransition,
 } from '@/lib/presentationTransitions'
 
-const SLIDE_WIDTH_INCHES = 13.333
 const SLIDE_HEIGHT_INCHES = 7.5
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,6 +72,12 @@ function presentationColor(value: unknown, fallback: string): string {
     return normalized.split('').map((character) => character + character).join('').toUpperCase()
   }
   return fallback
+}
+
+function presentationVerticalAlignment(value: unknown): 'top' | 'middle' | 'bottom' {
+  if (value === 'bottom') return 'bottom'
+  if (value === 'middle') return 'middle'
+  return 'top'
 }
 
 function normalizePresentationFileSourceForExport(kind: PresentationFileKind, source: unknown) {
@@ -236,12 +254,17 @@ function chartDefinition(type: PresentationChartType | unknown): {
 
 /** Convert the renderer-owned presentation model into an Office-compatible PPTX archive. */
 export async function createPresentationPptx(document: PresentationDocument): Promise<Uint8Array> {
+  const pageSize = getPresentationPageSize(document)
+  const slideWidthInches = SLIDE_HEIGHT_INCHES * (pageSize.width / pageSize.height)
   async function addNativePresentationFeatures(bytes: Uint8Array): Promise<Uint8Array> {
     const transitions = document.slides.map((slide) => normalizePresentationTransition(slide.transition))
     const slidesWithAudio = document.slides.map((slide) => (
       Array.isArray(slide.elements) && (slide.elements as unknown[]).some((element) => (
         isRecord(element) && element.type === 'audio'
       ))
+    ))
+    const slidesWithAnimations = document.slides.map((slide) => (
+      Array.isArray(slide.elements) && (slide.elements as PresentationElement[]).some(hasPresentationAnimation)
     ))
     const hasQuickTimeVideo = document.slides.some((slide) => (
       Array.isArray(slide.elements) && (slide.elements as unknown[]).some((element) => {
@@ -254,6 +277,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     ))
     if (transitions.every((transition) => transition.effect === 'none')
       && !slidesWithAudio.some(Boolean)
+      && !slidesWithAnimations.some(Boolean)
       && !hasQuickTimeVideo) return bytes
 
     const p14Namespace = 'http://schemas.microsoft.com/office/powerpoint/2010/main'
@@ -379,6 +403,219 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       return xml.slice(0, insertionPoint) + transitionMarkup + xml.slice(insertionPoint)
     }
 
+    interface NativeAnimationEntry {
+      animation: NormalizedPresentationAnimation
+      element: PresentationElement
+      shapeId: number
+    }
+
+    interface NativeAnimationStep {
+      entries: NativeAnimationEntry[]
+    }
+
+    interface NativeAnimationGroup {
+      steps: NativeAnimationStep[]
+      trigger: NativeAnimationEntry
+    }
+
+    const shapeIdsByObjectName = (xml: string): Map<string, number> => {
+      const result = new Map<string, number>()
+      for (const tag of xml.match(/<p:cNvPr\b[^>]*>/g) ?? []) {
+        const id = /\bid="(\d+)"/.exec(tag)?.[1]
+        const name = /\bname="([^"]+)"/.exec(tag)?.[1]
+        if (id && name) result.set(name, Number(id))
+      }
+      return result
+    }
+
+    const groupNativeAnimations = (entries: NativeAnimationEntry[]): NativeAnimationGroup[] => {
+      const groups: NativeAnimationGroup[] = []
+      let current: NativeAnimationGroup | undefined
+      for (const entry of entries) {
+        if (entry.animation.start === 'onClick' || !current) {
+          current = { steps: [{ entries: [entry] }], trigger: entry }
+          groups.push(current)
+        } else if (entry.animation.start === 'withPrevious') {
+          current.steps.at(-1)?.entries.push(entry)
+        } else {
+          current.steps.push({ entries: [entry] })
+        }
+      }
+      return groups
+    }
+
+    const nativeAnimationDuration = (animation: NormalizedPresentationAnimation): number => (
+      animation.effect === 'appear' || animation.effect === 'disappear' ? 1 : animation.durationMs
+    )
+
+    const nativeAnimationEffectXml = (entry: NativeAnimationEntry, nodeId: number): string => {
+      const { animation, shapeId } = entry
+      const duration = nativeAnimationDuration(animation)
+      const color = presentationColor(animation.color, '8B7CFF')
+      const presets: Record<Exclude<typeof animation.effect, 'none'>, { presetClass: 'entr' | 'emph' | 'exit'; presetId: number; presetSubtype: number }> = {
+        appear: { presetClass: 'entr', presetId: 1, presetSubtype: 0 },
+        fade: { presetClass: 'entr', presetId: 10, presetSubtype: 0 },
+        blinds: { presetClass: 'entr', presetId: 3, presetSubtype: 10 },
+        checkerboard: { presetClass: 'entr', presetId: 5, presetSubtype: 6 },
+        dissolve: { presetClass: 'entr', presetId: 9, presetSubtype: 0 },
+        flyIn: { presetClass: 'entr', presetId: 2, presetSubtype: 4 },
+        floatIn: { presetClass: 'entr', presetId: 30, presetSubtype: 0 },
+        split: { presetClass: 'entr', presetId: 16, presetSubtype: 21 },
+        wipeIn: { presetClass: 'entr', presetId: 22, presetSubtype: 2 },
+        zoomIn: { presetClass: 'entr', presetId: 23, presetSubtype: 16 },
+        zoom: { presetClass: 'emph', presetId: 6, presetSubtype: 0 },
+        fillColor: { presetClass: 'emph', presetId: 19, presetSubtype: 0 },
+        textColor: { presetClass: 'emph', presetId: 3, presetSubtype: 2 },
+        disappear: { presetClass: 'exit', presetId: 1, presetSubtype: 0 },
+        blindsOut: { presetClass: 'exit', presetId: 3, presetSubtype: 10 },
+      }
+      if (animation.effect === 'none') return ''
+      const preset = presets[animation.effect]
+      const target = `<p:tgtEl><p:spTgt spid="${shapeId}"/></p:tgtEl>`
+      const setVisibility = (visible: boolean, id: number, delay = 0): string => (
+        '<p:set><p:cBhvr>'
+        + `<p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="${delay}"/></p:stCondLst></p:cTn>`
+        + target
+        + '<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst>'
+        + `</p:cBhvr><p:to><p:strVal val="${visible ? 'visible' : 'hidden'}"/></p:to></p:set>`
+      )
+      const filteredEffect = (transition: 'in' | 'out', filter: string, id: number): string => (
+        `<p:animEffect transition="${transition}" filter="${filter}"><p:cBhvr>`
+        + `<p:cTn id="${id}" dur="${duration}" fill="hold"/>${target}</p:cBhvr></p:animEffect>`
+      )
+      let behavior = ''
+      switch (animation.effect) {
+        case 'appear':
+          behavior = setVisibility(true, nodeId + 1)
+          break
+        case 'fade':
+          behavior = setVisibility(true, nodeId + 1) + filteredEffect('in', 'fade', nodeId + 2)
+          break
+        case 'blinds':
+          behavior = setVisibility(true, nodeId + 1) + filteredEffect('in', 'blinds(horizontal)', nodeId + 2)
+          break
+        case 'checkerboard':
+          behavior = setVisibility(true, nodeId + 1) + filteredEffect('in', 'checkerboard(across)', nodeId + 2)
+          break
+        case 'dissolve':
+          behavior = setVisibility(true, nodeId + 1) + filteredEffect('in', 'dissolve', nodeId + 2)
+          break
+        case 'flyIn':
+          behavior = setVisibility(true, nodeId + 1)
+            + filteredEffect('in', 'slide(fromBottom)', nodeId + 2)
+          break
+        case 'floatIn':
+          behavior = setVisibility(true, nodeId + 1)
+            + filteredEffect('in', 'slide(fromBottom)', nodeId + 2)
+            + filteredEffect('in', 'fade', nodeId + 3)
+          break
+        case 'split':
+          behavior = setVisibility(true, nodeId + 1)
+            + filteredEffect('in', 'barn(inVertical)', nodeId + 2)
+          break
+        case 'wipeIn':
+          behavior = setVisibility(true, nodeId + 1)
+            + filteredEffect('in', 'wipe(right)', nodeId + 2)
+          break
+        case 'zoomIn':
+          behavior = setVisibility(true, nodeId + 1)
+            + '<p:animScale><p:cBhvr>'
+            + `<p:cTn id="${nodeId + 2}" dur="${duration}" fill="hold"/>${target}</p:cBhvr>`
+            + '<p:from x="20000" y="20000"/><p:to x="100000" y="100000"/></p:animScale>'
+          break
+        case 'zoom':
+          behavior = '<p:animScale><p:cBhvr>'
+            + `<p:cTn id="${nodeId + 1}" dur="${duration}" fill="hold"/>${target}</p:cBhvr>`
+            + '<p:by x="150000" y="150000"/></p:animScale>'
+          break
+        case 'fillColor':
+        case 'textColor': {
+          const attribute = animation.effect === 'textColor' ? 'style.color' : 'fillcolor'
+          const override = animation.effect === 'textColor' ? ' override="childStyle"' : ''
+          behavior = `<p:animClr clrSpc="rgb" dir="cw"><p:cBhvr${override}>`
+            + `<p:cTn id="${nodeId + 1}" dur="${duration}" fill="hold"/>${target}`
+            + `<p:attrNameLst><p:attrName>${attribute}</p:attrName></p:attrNameLst></p:cBhvr>`
+            + `<p:to><a:srgbClr val="${color}"/></p:to></p:animClr>`
+          break
+        }
+        case 'disappear':
+          behavior = setVisibility(false, nodeId + 1)
+          break
+        case 'blindsOut':
+          behavior = filteredEffect('out', 'blinds(horizontal)', nodeId + 1)
+            + setVisibility(false, nodeId + 2, Math.max(0, duration - 1))
+          break
+      }
+      let nodeType = 'clickEffect'
+      if (animation.start === 'withPrevious') nodeType = 'withEffect'
+      else if (animation.start === 'afterPrevious') nodeType = 'afterEffect'
+      return '<p:par>'
+        + `<p:cTn id="${nodeId}" presetID="${preset.presetId}" presetClass="${preset.presetClass}" presetSubtype="${preset.presetSubtype}" fill="hold" grpId="0" nodeType="${nodeType}">`
+        + `<p:stCondLst><p:cond delay="${animation.delayMs}"/></p:stCondLst><p:childTnLst>`
+        + behavior
+        + '</p:childTnLst></p:cTn></p:par>'
+    }
+
+    const nativeAnimationTimingXml = (xml: string, elements: PresentationElement[]): string => {
+      const shapeIds = shapeIdsByObjectName(xml)
+      const entries = getPresentationAnimationTargets(elements).flatMap((target): NativeAnimationEntry[] => {
+        const animation = normalizePresentationAnimation(target.animationElement)
+        return getPresentationAnimationAffectedElements(target, animation.effect).flatMap((element, index) => {
+          const shapeId = shapeIds.get(element.id)
+          if (!shapeId) return []
+          return [{
+            animation: index === 0 ? animation : { ...animation, start: 'withPrevious' },
+            element,
+            shapeId,
+          }]
+        })
+      })
+      if (entries.length === 0) return ''
+      const groups = groupNativeAnimations(entries)
+      let nodeId = 3
+      let body = ''
+      for (const group of groups) {
+        const groupTrigger = group.trigger
+        const triggerCondition = groupTrigger?.animation.trigger === 'elementClick'
+          ? `<p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${groupTrigger.shapeId}"/></p:tgtEl></p:cond>`
+          : '<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>'
+        body += `<p:par><p:cTn id="${nodeId}" fill="hold"><p:stCondLst>${triggerCondition}</p:stCondLst><p:childTnLst>`
+        nodeId += 1
+        let cumulativeDelay = 0
+        for (const step of group.steps) {
+          body += `<p:par><p:cTn id="${nodeId}" fill="hold"><p:stCondLst><p:cond delay="${cumulativeDelay}"/></p:stCondLst><p:childTnLst>`
+          nodeId += 1
+          let stepDuration = 0
+          for (const entry of step.entries) {
+            body += nativeAnimationEffectXml(entry, nodeId)
+            nodeId += 8
+            stepDuration = Math.max(stepDuration, entry.animation.delayMs + nativeAnimationDuration(entry.animation))
+          }
+          body += '</p:childTnLst></p:cTn></p:par>'
+          cumulativeDelay += stepDuration
+        }
+        body += '</p:childTnLst></p:cTn></p:par>'
+      }
+      const buildList = Array.from(new Set(entries.map((entry) => entry.shapeId)))
+        .map((shapeId) => `<p:bldP spid="${shapeId}" grpId="0" animBg="1"/>`)
+        .join('')
+      return '<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>'
+        + '<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>'
+        + body
+        + '</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>'
+        + '<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>'
+        + `</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>${buildList}</p:bldLst></p:timing>`
+    }
+
+    const insertTimingXml = (xml: string, timingMarkup: string): string => {
+      const insertionOffsets = ['<p:extLst', '</p:sld>']
+        .map((marker) => xml.indexOf(marker))
+        .filter((offset) => offset >= 0)
+      if (insertionOffsets.length === 0) throw new Error('PPTX exporter produced slide XML without a valid animation insertion point')
+      const insertionPoint = Math.min(...insertionOffsets)
+      return xml.slice(0, insertionPoint) + timingMarkup + xml.slice(insertionPoint)
+    }
+
     const correctAudioFileTags = async (archive: JSZip, xml: string, slideNumber: number): Promise<string> => {
       const relationshipsPath = `ppt/slides/_rels/slide${slideNumber}.xml.rels`
       const relationshipsFile = archive.file(relationshipsPath)
@@ -419,7 +656,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     const archive = await JSZip.loadAsync(bytes)
     await correctMediaContentTypes(archive)
     await Promise.all(transitions.map(async (transition, index) => {
-      if (transition.effect === 'none' && !slidesWithAudio[index]) return
+      if (transition.effect === 'none' && !slidesWithAudio[index] && !slidesWithAnimations[index]) return
       const slidePath = `ppt/slides/slide${index + 1}.xml`
       const slideFile = archive.file(slidePath)
       if (!slideFile) throw new Error(`PPTX exporter did not create ${slidePath}`)
@@ -428,36 +665,48 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       if (transition.effect !== 'none') {
         xml = insertTransitionXml(ensureTransitionNamespaces(xml), transitionXml(transition))
       }
+      if (slidesWithAnimations[index]) {
+        const timingMarkup = nativeAnimationTimingXml(xml, document.slides[index]?.elements ?? [])
+        if (timingMarkup) xml = insertTimingXml(xml, timingMarkup)
+      }
       archive.file(slidePath, xml)
     }))
     return archive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
   }
 
   const pptx = new PptxGenJS()
-  pptx.layout = 'LAYOUT_WIDE'
+  pptx.defineLayout({ name: 'BRIDGIC_DOCUMENT', width: slideWidthInches, height: SLIDE_HEIGHT_INCHES })
+  pptx.layout = 'BRIDGIC_DOCUMENT'
   pptx.author = 'Bridgic'
   pptx.company = 'Bridgic'
   pptx.subject = document.title
   pptx.title = document.title
   pptx.theme = {
-    headFontFace: 'Aptos Display',
-    bodyFontFace: 'Aptos',
+    headFontFace: document.master?.titleFontFamily ?? 'Aptos Display',
+    bodyFontFace: document.master?.bodyFontFamily ?? 'Aptos',
   }
 
-  const x = (pixels: number) => (pixels / PRESENTATION_WIDTH) * SLIDE_WIDTH_INCHES
-  const y = (pixels: number) => (pixels / PRESENTATION_HEIGHT) * SLIDE_HEIGHT_INCHES
+  const x = (pixels: number) => (pixels / pageSize.width) * slideWidthInches
+  const y = (pixels: number) => (pixels / pageSize.height) * SLIDE_HEIGHT_INCHES
   const footerDate = new Intl.DateTimeFormat().format(new Date())
 
   for (const sourceSlide of document.slides) {
     const slide = pptx.addSlide()
     slide.background = { color: presentationColor(sourceSlide.background, 'FFFFFF') }
-    if (typeof sourceSlide.notes === 'string' && sourceSlide.notes.trim()) slide.addNotes(sourceSlide.notes)
+    const commentNotes = (sourceSlide.comments ?? []).map((comment) => (
+      `[${comment.resolved ? 'Resolved comment' : 'Comment'} — ${comment.author}] ${comment.text}`
+    ))
+    const notes = [typeof sourceSlide.notes === 'string' ? sourceSlide.notes.trim() : '', ...commentNotes]
+      .filter(Boolean)
+      .join('\n\n')
+    if (notes) slide.addNotes(notes)
     const sourceElements = Array.isArray(sourceSlide.elements) ? sourceSlide.elements : []
     for (const candidate of sourceElements as unknown[]) {
       if (!hasValidGeometry(candidate)) continue
       const element = candidate
 
       if (isPresentationTextElement(element)) {
+        if (!element.text.trim()) continue
         const hasHyperlink = Boolean(element.hyperlink)
         let bullet: true | { type: 'number'; numberType: 'arabicPeriod' } | undefined
         if (element.listStyle === 'bullet') bullet = true
@@ -474,9 +723,11 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
-          margin: 0,
+          margin: element.textInsets
+            ? [element.textInsets.left * 0.75, element.textInsets.right * 0.75, element.textInsets.bottom * 0.75, element.textInsets.top * 0.75]
+            : 0,
           breakLine: false,
-          valign: 'middle',
+          valign: presentationVerticalAlignment(element.verticalAlign),
           align: ['left', 'center', 'right', 'justify'].includes(element.align) ? element.align : 'left',
           bold: typeof element.fontWeight === 'number' && element.fontWeight >= 600,
           italic: Boolean(element.italic),
@@ -488,7 +739,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
             ? presentationColor(element.highlightColor, '') || undefined
             : undefined,
           charSpacing: typeof element.characterSpacing === 'number' && Number.isFinite(element.characterSpacing)
-            ? element.characterSpacing
+            ? presentationCharacterSpacingToPoints(element.characterSpacing, presentationFontSizeToPoints(element.fontSize))
             : undefined,
           lineSpacingMultiple: typeof element.lineHeight === 'number' && Number.isFinite(element.lineHeight) && element.lineHeight > 0
             ? element.lineHeight
@@ -496,9 +747,12 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           bullet,
           indentLevel,
           color: hasHyperlink ? '2563EB' : presentationColor(element.color, '20202B'),
+          transparency: typeof element.opacity === 'number' ? Math.round((1 - Math.max(0, Math.min(1, element.opacity))) * 100) : undefined,
           fontFace: typeof element.fontFamily === 'string' && element.fontFamily.trim() ? element.fontFamily : 'Aptos',
-          fontSize: Number.isFinite(element.fontSize) && element.fontSize > 0 ? element.fontSize : 18,
-          fit: 'shrink',
+          fontSize: Number.isFinite(element.fontSize) && element.fontSize > 0 ? presentationFontSizeToPoints(element.fontSize) : 13.5,
+          fit: element.wordWrap === false ? 'none' : 'shrink',
+          wrap: element.wordWrap !== false,
+          objectName: typeof element.id === 'string' ? element.id : undefined,
           hyperlink: toPptxHyperlink(element.hyperlink, document),
           shadow: element.shadow
             ? { type: 'outer', color: '20202B', opacity: 0.28, blur: 3, angle: 45, offset: 2 }
@@ -513,18 +767,30 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
         const width = x(element.width)
         const height = y(element.height)
         const aspectRatio = presentationImageAspectRatio(source.dataUrl, width / height)
+        const crop = element.crop
+        const visibleWidth = crop ? Math.max(0.001, 1 - crop.left - crop.right) : 1
+        const visibleHeight = crop ? Math.max(0.001, 1 - crop.top - crop.bottom) : 1
+        const naturalWidth = crop ? width / visibleWidth : width
+        const naturalHeight = crop ? height / visibleHeight : width / aspectRatio
         slide.addImage({
           data: source.dataUrl,
           x: x(element.x),
           y: y(element.y),
-          w: width,
-          h: width / aspectRatio,
-          sizing: {
-            type: element.fit === 'cover' ? 'cover' : 'contain',
+          w: naturalWidth,
+          h: naturalHeight,
+          sizing: crop ? {
+            type: 'crop',
+            x: naturalWidth * crop.left,
+            y: naturalHeight * crop.top,
             w: width,
             h: height,
-          },
+          } : {
+              type: element.fit === 'cover' ? 'cover' : 'contain',
+              w: width,
+              h: height,
+            },
           rotate: element.rotation,
+          transparency: typeof element.opacity === 'number' ? Math.round((1 - Math.max(0, Math.min(1, element.opacity))) * 100) : undefined,
           altText: typeof element.altText === 'string' ? element.altText : '',
           objectName: typeof element.id === 'string' ? element.id : undefined,
           hyperlink: toPptxHyperlink(element.hyperlink, document, true),
@@ -561,7 +827,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
         const bodyFill = presentationColor(element.bodyFill, 'FFFFFF')
         const textColor = presentationColor(element.textColor, '20202B')
         const borderColor = presentationColor(element.borderColor, 'D8D9E0')
-        const fontSize = Number.isFinite(element.fontSize) && element.fontSize > 0 ? element.fontSize : 18
+        const fontSize = Number.isFinite(element.fontSize) && element.fontSize > 0 ? presentationFontSizeToPoints(element.fontSize) : 13.5
         const rows: PptxGenJS.TableRow[] = cells.map((row, rowIndex) => (
           Array.from({ length: columnCount }, (_, columnIndex) => ({
             text: typeof row[columnIndex] === 'string' ? row[columnIndex] : '',
@@ -586,6 +852,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           rowH: Array.from({ length: cells.length }, () => y(element.height) / cells.length),
           autoPage: false,
           margin: 0,
+          objectName: typeof element.id === 'string' ? element.id : undefined,
         })
         continue
       }
@@ -656,7 +923,13 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
-          fill: lineShape ? { color: 'FFFFFF', transparency: 100 } : { color: presentationColor(element.fill, 'FFFFFF') },
+          objectName: typeof element.id === 'string' ? element.id : undefined,
+          fill: lineShape
+            ? { color: 'FFFFFF', transparency: 100 }
+            : {
+                color: presentationColor(element.fill, 'FFFFFF'),
+                transparency: typeof element.opacity === 'number' ? Math.round((1 - Math.max(0, Math.min(1, element.opacity))) * 100) : 0,
+              },
           line: {
             color: presentationColor(element.borderColor, '20202B'),
             width: lineShape ? Math.max(1, borderWidth) : borderWidth,
@@ -692,7 +965,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }
       if (footer.showDate === true) {
         slide.addText(footerDate, {
-          x: (SLIDE_WIDTH_INCHES / 2) - 1.2,
+          x: (slideWidthInches / 2) - 1.2,
           y: footerY,
           w: 2.4,
           h: 0.2,
@@ -706,7 +979,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }
       if (footer.showSlideNumber === true) {
         slide.slideNumber = {
-          x: SLIDE_WIDTH_INCHES - 1.35,
+          x: slideWidthInches - 1.35,
           y: footerY,
           w: 0.95,
           h: 0.2,

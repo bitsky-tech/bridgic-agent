@@ -15,6 +15,7 @@ const { settingsAtom } = await import('@/atoms/settings')
 const { toastAtom } = await import('@/atoms/toast')
 const { i18n } = await import('@/lib/i18n')
 const { createPresentationMediaElement } = await import('@/lib/presentationInsert')
+const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
 const {
   canAppendPresentationFileElement,
   estimatePresentationDocumentBytes,
@@ -44,6 +45,7 @@ async function mountPanel() {
   const settings = store.get(settingsAtom)
   store.set(settingsAtom, { ...settings, ui: { ...settings.ui, lastNav: 'home' } })
   store.set(activeSessionIdAtom, `presentation-insert-${Math.random()}`)
+  store.set(currentPresentationDocumentAtom, createPresentationTestDocument())
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)

@@ -4,10 +4,50 @@ import { viewedSessionIdAtom } from './navigation'
 
 export const PRESENTATION_WIDTH = 1280
 export const PRESENTATION_HEIGHT = 720
+export const PRESENTATION_STANDARD_WIDTH = 960
 
-export type PresentationAnimationEffect = 'none' | 'appear' | 'fade' | 'flyIn' | 'zoom'
+export type PresentationPageSizePreset = 'wide' | 'standard'
+
+export interface PresentationPageSize {
+  height: number
+  preset: PresentationPageSizePreset
+  width: number
+}
+
+export const PRESENTATION_PAGE_SIZES: Record<PresentationPageSizePreset, PresentationPageSize> = {
+  wide: { width: PRESENTATION_WIDTH, height: PRESENTATION_HEIGHT, preset: 'wide' },
+  standard: { width: PRESENTATION_STANDARD_WIDTH, height: PRESENTATION_HEIGHT, preset: 'standard' },
+}
+
+export function getPresentationPageSize(document: Pick<PresentationDocument, 'pageSize'> | null | undefined): PresentationPageSize {
+  const size = document?.pageSize
+  return size && Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0
+    ? size
+    : PRESENTATION_PAGE_SIZES.wide
+}
+
+export type PresentationAnimationEffect =
+  | 'none'
+  | 'appear'
+  | 'fade'
+  | 'blinds'
+  | 'checkerboard'
+  | 'dissolve'
+  | 'flyIn'
+  | 'floatIn'
+  | 'split'
+  | 'wipeIn'
+  | 'zoomIn'
+  | 'zoom'
+  | 'fillColor'
+  | 'textColor'
+  | 'disappear'
+  | 'blindsOut'
+export type PresentationAnimationStart = 'onClick' | 'withPrevious' | 'afterPrevious'
+export type PresentationAnimationTrigger = 'slideClick' | 'elementClick'
 export type PresentationTransitionEffect = 'none' | 'fade' | 'push' | 'wipe' | 'reveal' | 'cover' | 'zoom' | 'flip' | 'cube'
 export type PresentationTransitionDirection = 'left' | 'right' | 'up' | 'down' | 'in' | 'out'
+export type PresentationSlideLayout = 'blank' | 'title' | 'titleContent' | 'twoContent'
 
 export type PresentationHyperlink =
   | { type: 'url'; url: string; tooltip?: string }
@@ -115,19 +155,29 @@ export type PresentationShapeType =
 
 export interface PresentationElementBase {
   id: string
+  /** Elements sharing a group id behave as one visual object for selection and animation. */
+  groupId?: string
   x: number
   y: number
   width: number
   height: number
   rotation: number
+  /** Visual opacity in the inclusive range 0..1. */
+  opacity?: number
   animation?: PresentationAnimationEffect
   animationDuration?: number
+  animationDelay?: number
+  animationStart?: PresentationAnimationStart
+  animationTrigger?: PresentationAnimationTrigger
+  animationColor?: string
   shadow?: boolean
   hyperlink?: PresentationHyperlink
 }
 
 export interface PresentationTextElement extends PresentationElementBase {
   type: 'text'
+  /** Empty layout placeholders render an editor hint without becoming presentation content. */
+  placeholder?: 'body' | 'subtitle' | 'title'
   text: string
   fontSize: number
   fontFamily: string
@@ -143,6 +193,15 @@ export interface PresentationTextElement extends PresentationElementBase {
   listStyle?: 'none' | 'bullet' | 'number'
   color: string
   align: 'left' | 'center' | 'right' | 'justify'
+  verticalAlign?: 'top' | 'middle' | 'bottom'
+  /** PowerPoint text boxes can deliberately allow text to overflow without wrapping. */
+  wordWrap?: boolean
+  textInsets?: {
+    left: number
+    top: number
+    right: number
+    bottom: number
+  }
 }
 
 export interface PresentationShapeElement extends PresentationElementBase {
@@ -158,6 +217,13 @@ export interface PresentationImageElement extends PresentationElementBase {
   source: PresentationFileSource
   altText: string
   fit: 'contain' | 'cover'
+  /** Normalized source crop fractions copied from OOXML a:srcRect. */
+  crop?: {
+    left: number
+    top: number
+    right: number
+    bottom: number
+  }
 }
 
 export interface PresentationAudioElement extends PresentationElementBase {
@@ -221,6 +287,15 @@ export interface PresentationFooter {
   showSlideNumber: boolean
 }
 
+export interface PresentationComment {
+  author: string
+  createdAt: string
+  elementId?: string
+  id: string
+  resolved: boolean
+  text: string
+}
+
 /** Add visual list markers while keeping the underlying editable text marker-free. */
 export function formatPresentationText(element: PresentationTextElement): string {
   if (!element.listStyle || element.listStyle === 'none') return element.text
@@ -242,17 +317,36 @@ export function stripPresentationListMarkers(text: string, listStyle: Presentati
 
 export interface PresentationSlide {
   id: string
+  layout?: PresentationSlideLayout
   name: string
   background: string
+  comments?: PresentationComment[]
   elements: PresentationElement[]
   notes?: string
   footer?: PresentationFooter
   transition: PresentationTransition
 }
 
+export interface PresentationMaster {
+  background: string
+  bodyFontFamily: string
+  footer: PresentationFooter
+  titleFontFamily: string
+}
+
+export const DEFAULT_PRESENTATION_MASTER: PresentationMaster = {
+  background: '#FFFFFF',
+  bodyFontFamily: 'Aptos',
+  footer: { text: '', showDate: false, showSlideNumber: false },
+  titleFontFamily: 'Aptos Display',
+}
+
 export interface PresentationDocument {
   id: string
+  master: PresentationMaster
   title: string
+  version: number
+  pageSize: PresentationPageSize
   slides: PresentationSlide[]
   selectedSlideId: string
 }
@@ -283,179 +377,56 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
 }
 
 export function createInitialPresentationDocument(): PresentationDocument {
-  const titleSlideId = createPresentationId('slide')
-  const overviewSlideId = createPresentationId('slide')
-  const keyPoints = [
-    ['01', 'Frame the idea', 'Start with the tension your audience already feels.', '#6957D9'],
-    ['02', 'Make it tangible', 'Use one memorable proof point to earn attention.', '#DF6C47'],
-    ['03', 'Create momentum', 'End with a decision that is easy to understand.', '#2F8B78'],
-  ] as const
-  return {
-    id: createPresentationId('presentation'),
-    title: 'Ideas that move forward',
-    selectedSlideId: titleSlideId,
-    slides: [
-      {
-        id: titleSlideId,
-        name: 'Cover',
-        background: '#17182B',
-        transition: createDefaultPresentationTransition(),
-        elements: [
-          {
-            id: createPresentationId('shape'),
-            type: 'rect',
-            x: 88,
-            y: 82,
-            width: 116,
-            height: 12,
-            rotation: 0,
-            fill: '#8B7CFF',
-            borderColor: '#8B7CFF',
-            borderWidth: 0,
-            radius: 6,
-          },
-          {
-            id: createPresentationId('text'),
-            type: 'text',
-            x: 88,
-            y: 158,
-            width: 1040,
-            height: 170,
-            rotation: 0,
-            text: 'Ideas that\nmove forward',
-            fontSize: 64,
-            fontFamily: 'Aptos Display',
-            fontWeight: 700,
-            color: '#FFFFFF',
-            align: 'left',
-          },
-          {
-            id: createPresentationId('text'),
-            type: 'text',
-            x: 92,
-            y: 375,
-            width: 760,
-            height: 72,
-            rotation: 0,
-            text: 'Turn a clear point of view into a compelling story.',
-            fontSize: 25,
-            fontFamily: 'Aptos',
-            fontWeight: 400,
-            color: '#B7B9D5',
-            align: 'left',
-          },
-          {
-            id: createPresentationId('text'),
-            type: 'text',
-            x: 92,
-            y: 614,
-            width: 420,
-            height: 34,
-            rotation: 0,
-            text: 'BRIDGIC PRESENTATION',
-            fontSize: 14,
-            fontFamily: 'Aptos',
-            fontWeight: 600,
-            color: '#8B7CFF',
-            align: 'left',
-          },
-        ],
-      },
-      {
-        id: overviewSlideId,
-        name: 'Key points',
-        background: '#F7F6F2',
-        transition: createDefaultPresentationTransition(),
-        elements: [
-          {
-            id: createPresentationId('text'),
-            type: 'text',
-            x: 82,
-            y: 70,
-            width: 1050,
-            height: 72,
-            rotation: 0,
-            text: 'One story. Three essential moves.',
-            fontSize: 42,
-            fontFamily: 'Aptos Display',
-            fontWeight: 700,
-            color: '#1D1D28',
-            align: 'left',
-          },
-          ...keyPoints.flatMap(([number, heading, body, accent], index): PresentationElement[] => {
-            const x = 82 + (index * 390)
-            return [
-              {
-                id: createPresentationId('shape'),
-                type: 'rect',
-                x,
-                y: 205,
-                width: 350,
-                height: 365,
-                rotation: 0,
-                fill: '#FFFFFF',
-                borderColor: '#E2E0D8',
-                borderWidth: 1,
-                radius: 20,
-              },
-              {
-                id: createPresentationId('text'),
-                type: 'text',
-                x: x + 30,
-                y: 240,
-                width: 80,
-                height: 45,
-                rotation: 0,
-                text: number,
-                fontSize: 20,
-                fontFamily: 'Aptos',
-                fontWeight: 700,
-                color: accent,
-                align: 'left',
-              },
-              {
-                id: createPresentationId('text'),
-                type: 'text',
-                x: x + 30,
-                y: 326,
-                width: 285,
-                height: 70,
-                rotation: 0,
-                text: heading,
-                fontSize: 28,
-                fontFamily: 'Aptos Display',
-                fontWeight: 700,
-                color: '#1D1D28',
-                align: 'left',
-              },
-              {
-                id: createPresentationId('text'),
-                type: 'text',
-                x: x + 30,
-                y: 430,
-                width: 285,
-                height: 88,
-                rotation: 0,
-                text: body,
-                fontSize: 18,
-                fontFamily: 'Aptos',
-                fontWeight: 400,
-                color: '#666571',
-                align: 'left',
-              },
-            ]
-          }),
-        ],
-      },
-    ],
+  const document = createBlankPresentationDocument('')
+  const slide = document.slides[0]!
+  const createPlaceholder = (
+    placeholder: NonNullable<PresentationTextElement['placeholder']>,
+    geometry: Pick<PresentationTextElement, 'height' | 'width' | 'x' | 'y'>,
+  ): PresentationTextElement => {
+    const isTitle = placeholder === 'title'
+    let fontSize = 20
+    if (isTitle) fontSize = 42
+    else if (placeholder === 'subtitle') fontSize = 24
+    return {
+      id: createPresentationId('text'),
+      type: 'text',
+      placeholder,
+      ...geometry,
+      rotation: 0,
+      text: '',
+      fontSize,
+      fontFamily: isTitle ? document.master.titleFontFamily : document.master.bodyFontFamily,
+      fontWeight: isTitle ? 700 : 400,
+      italic: false,
+      underline: false,
+      strikethrough: false,
+      baseline: 'normal',
+      characterSpacing: 0,
+      lineHeight: 1.08,
+      indentLevel: 0,
+      listStyle: 'none',
+      color: '#20202B',
+      align: placeholder === 'body' ? 'left' : 'center',
+      verticalAlign: placeholder === 'body' ? 'top' : 'middle',
+    }
   }
+  slide.layout = 'title'
+  slide.elements = [
+    createPlaceholder('title', { x: 120, y: 105, width: document.pageSize.width - 240, height: 90 }),
+    createPlaceholder('subtitle', { x: 160, y: 220, width: document.pageSize.width - 320, height: 60 }),
+    createPlaceholder('body', { x: 120, y: 320, width: document.pageSize.width - 240, height: Math.max(180, document.pageSize.height - 425) }),
+  ]
+  return document
 }
 
 export function createBlankPresentationDocument(title: string, slideName = 'Slide 1'): PresentationDocument {
   const slide = createBlankPresentationSlide(slideName)
   return {
     id: createPresentationId('presentation'),
+    master: { ...DEFAULT_PRESENTATION_MASTER, footer: { ...DEFAULT_PRESENTATION_MASTER.footer } },
     title,
+    version: 1,
+    pageSize: { ...PRESENTATION_PAGE_SIZES.wide },
     slides: [slide],
     selectedSlideId: slide.id,
   }

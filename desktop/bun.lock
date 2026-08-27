@@ -60,6 +60,7 @@
       "devDependencies": {
         "@app/shared": "workspace:*",
         "@app/ui": "workspace:*",
+        "@xmldom/xmldom": "0.8.13",
         "fabric": "7.4.0",
         "jszip": "3.10.1",
         "katex": "^0.17.0",

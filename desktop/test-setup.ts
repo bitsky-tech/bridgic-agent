@@ -84,6 +84,24 @@ const unregisterDom = GlobalRegistrator.unregister.bind(GlobalRegistrator)
 
 GlobalRegistrator.register = ((options?: Parameters<typeof registerDom>[0]) => {
   if (domRegistrations === 0) registerDom(options)
+  else if (
+    GlobalRegistrator.isRegistered
+    && globalThis.document
+    && typeof globalThis.HTMLIFrameElement === 'function'
+  ) {
+    // Some non-DOM atom tests replace `globalThis.window` with a plain IPC
+    // stub while another DOM test file still owns the shared registration.
+    // Happy DOM installs its globals directly on `globalThis`, so restoring
+    // this alias is enough to recover the registered window without tearing
+    // down another file's document. React relies on constructors such as
+    // `window.HTMLIFrameElement` during every commit.
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: globalThis,
+    })
+  }
   domRegistrations += 1
   // Clear any `window.api` an earlier file left behind.
   //

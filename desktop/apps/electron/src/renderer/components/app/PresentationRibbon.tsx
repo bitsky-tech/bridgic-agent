@@ -37,6 +37,7 @@ import {
   ListOrdered,
   Maximize,
   MousePointerClick,
+  MessageSquarePlus,
   Paintbrush,
   PaintBucket,
   Palette,
@@ -65,9 +66,13 @@ import {
 } from 'lucide-react'
 import type {
   PresentationAnimationEffect,
+  PresentationAnimationStart,
+  PresentationAnimationTrigger,
   PresentationElement,
+  PresentationPageSizePreset,
   PresentationShapeType,
   PresentationSlide,
+  PresentationSlideLayout,
   PresentationTextElement,
   PresentationTransition,
   PresentationTransitionDirection,
@@ -76,7 +81,14 @@ import type {
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import {
+  copyPresentationAnimationPatch,
+  hasPresentationAnimation,
+  normalizePresentationAnimation,
+  presentationAnimationLabelKeys,
+} from '@/lib/presentationAnimations'
+import {
   isPresentationShapeElement,
+  isPresentationTextElement,
   supportsPresentationElementRotation,
   supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
@@ -96,26 +108,53 @@ export type PresentationRibbonTab =
   | 'animations'
   | 'slideshow'
   | 'view'
+  | 'review'
   | 'shape'
+
+export interface PresentationViewOptions {
+  gridlines: boolean
+  guides: boolean
+  notes: boolean
+  ruler: boolean
+  smartSnap: boolean
+}
+
+export type PresentationElementAlignment = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
 
 interface PresentationRibbonProps {
   activeTab: PresentationRibbonTab
+  animationTargetElements?: readonly PresentationElement[]
+  canvasScale: number
   compact: boolean
   currentSlide: PresentationSlide | undefined
   filmstripCollapsed: boolean
   historyStatus: { canUndo: boolean; canRedo: boolean }
+  animationMarkersHidden: boolean
   animationPaneOpen: boolean
   inspectorOpen: boolean
+  commentsOpen: boolean
+  layersOpen: boolean
+  pageSizePreset: PresentationPageSizePreset
+  ribbonCollapsed: boolean
   selectedElement: PresentationElement | null
   selectedText: PresentationTextElement | null
   toolbarActions: ReactNode
+  viewOptions: PresentationViewOptions
   onActiveTabChange: (tab: PresentationRibbonTab) => void
   onAddShape: (type: PresentationShapeType) => void
   onAddSlide: () => void
   onAddText: (kind: 'title' | 'body') => void
+  onAlignElement: (alignment: PresentationElementAlignment) => void
+  onApplyAnimationToAll: () => void
+  onApplyTheme: (background: string, colors: readonly string[]) => void
+  onApplyLayout: (layout: PresentationSlideLayout) => void
   onApplyTransitionToAll: () => void
   onApplyFormat: (elementId: string, patch: Partial<PresentationElement>) => void
+  onCanvasScaleChange: (scale: number) => void
+  onToggleComments: () => void
   onFindText: (query: string) => void
+  onFitCanvas: () => void
+  onEditMaster: () => void
   onInsertAudio: () => void
   onInsertChart: () => void
   onInsertFooter: () => void
@@ -124,17 +163,23 @@ interface PresentationRibbonProps {
   onInsertTable: () => void
   onInsertVideo: () => void
   onMoveElement: (direction: 'front' | 'back') => void
-  onPreviewAnimation: () => void
+  onPageSizeChange: (preset: PresentationPageSizePreset) => void
+  onPreviewAnimation: (animationOverride?: Partial<PresentationElement>) => void
   onPreviewTransition: (transitionOverride?: PresentationTransition) => void
   onRedo: () => void
   onSlideChange: (patch: Partial<PresentationSlide>) => void
   onStartSlideshow: () => void
   onStartSlideshowFromBeginning: () => void
+  onToggleAnimationMarkers: () => void
   onToggleAnimationPane: () => void
   onToggleFilmstrip: () => void
+  onToggleGroup: () => void
   onToggleInspector: () => void
+  onToggleLayers: () => void
+  onToggleRibbon: () => void
   onUndo: () => void
   onUpdateElement: (patch: Partial<PresentationElement>) => void
+  onViewOptionsChange: (options: PresentationViewOptions) => void
 }
 
 const tabs: Array<{ id: PresentationRibbonTab; label: string }> = [
@@ -145,6 +190,7 @@ const tabs: Array<{ id: PresentationRibbonTab; label: string }> = [
   { id: 'animations', label: 'session.presentation.tabAnimations' },
   { id: 'slideshow', label: 'session.presentation.tabSlideshow' },
   { id: 'view', label: 'session.presentation.tabView' },
+  { id: 'review', label: 'session.presentation.review' },
   { id: 'shape', label: 'session.presentation.tabShape' },
 ]
 
@@ -185,32 +231,74 @@ const transitionDirectionLabelKeys: Record<PresentationTransitionDirection, stri
   out: 'session.presentation.directionOut',
 }
 
-const entranceAnimations: Array<{ id?: PresentationAnimationEffect; label: string; icon: LucideIcon }> = [
+const entranceAnimations: Array<{ id: PresentationAnimationEffect; label: string; icon: LucideIcon }> = [
   { id: 'appear', label: 'session.presentation.effectAppear', icon: Sparkles },
-  { id: 'fade', label: 'session.presentation.effectBlinds', icon: Columns3 },
-  { label: 'session.presentation.effectCheckerboard', icon: Grid3X3 },
-  { label: 'session.presentation.effectDissolveIn', icon: Sparkles },
+  { id: 'fade', label: 'session.presentation.effectFade', icon: Blend },
+  { id: 'blinds', label: 'session.presentation.effectBlinds', icon: Columns3 },
+  { id: 'checkerboard', label: 'session.presentation.effectCheckerboard', icon: Grid3X3 },
+  { id: 'dissolve', label: 'session.presentation.effectDissolveIn', icon: Sparkles },
   { id: 'flyIn', label: 'session.presentation.effectFlyIn', icon: ArrowUpToLine },
+]
+
+const allAnimationEffects: PresentationAnimationEffect[] = [
+  'none',
+  'appear',
+  'fade',
+  'blinds',
+  'checkerboard',
+  'dissolve',
+  'flyIn',
+  'floatIn',
+  'split',
+  'wipeIn',
+  'zoomIn',
+  'zoom',
+  'fillColor',
+  'textColor',
+  'disappear',
+  'blindsOut',
+]
+
+const animationColors = ['#8B7CFF', '#2678E8', '#22A06B', '#F2B91F', '#E17B47', '#DB2B32']
+const presentationBackgroundColors = [
+  '#FFFFFF', '#F7F6F2', '#F7F3EA', '#EAF0F8', '#EAF7F1', '#FFF1EC',
+  '#20202B', '#17182B', '#203864', '#3A214F', '#1E473A', '#5A2C22',
 ]
 
 export function PresentationRibbon({
   activeTab,
+  animationTargetElements = [],
+  animationMarkersHidden,
   animationPaneOpen,
+  canvasScale,
   compact,
   currentSlide,
   filmstripCollapsed,
   historyStatus,
   inspectorOpen,
+  commentsOpen,
+  layersOpen,
+  pageSizePreset,
+  ribbonCollapsed,
   selectedElement,
   selectedText,
   toolbarActions,
+  viewOptions,
   onActiveTabChange,
   onAddShape,
   onAddSlide,
   onAddText,
+  onAlignElement,
+  onApplyAnimationToAll,
+  onApplyTheme,
+  onApplyLayout,
   onApplyTransitionToAll,
   onApplyFormat,
+  onCanvasScaleChange,
+  onToggleComments,
   onFindText,
+  onFitCanvas,
+  onEditMaster,
   onInsertAudio,
   onInsertChart,
   onInsertFooter,
@@ -219,35 +307,40 @@ export function PresentationRibbon({
   onInsertTable,
   onInsertVideo,
   onMoveElement,
+  onPageSizeChange,
   onPreviewAnimation,
   onPreviewTransition,
   onRedo,
   onSlideChange,
   onStartSlideshow,
   onStartSlideshowFromBeginning,
+  onToggleAnimationMarkers,
   onToggleAnimationPane,
   onToggleFilmstrip,
+  onToggleGroup,
   onToggleInspector,
+  onToggleLayers,
+  onToggleRibbon,
   onUndo,
   onUpdateElement,
+  onViewOptionsChange,
 }: PresentationRibbonProps) {
   const { t } = useTranslation()
-  const [mockNotice, setMockNotice] = useState<string | null>(null)
-  const [viewOptions, setViewOptions] = useState({ gridlines: false, guides: false, notes: false, ruler: false, smartSnap: true })
+  const [statusNotice, setStatusNotice] = useState<string | null>(null)
   const [formatPainter, setFormatPainter] = useState<{
     sourceId: string
     sourceType: 'text' | 'shape'
     patch: Partial<PresentationElement>
   } | null>(null)
+  const [animationPainter, setAnimationPainter] = useState<{ sourceId: string; patch: Partial<PresentationElement> } | null>(null)
   const appliedFormatTargetRef = useRef<string | null>(null)
+  const appliedAnimationTargetRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!mockNotice) return
-    const timer = window.setTimeout(() => setMockNotice(null), 1800)
+    if (!statusNotice) return
+    const timer = window.setTimeout(() => setStatusNotice(null), 1800)
     return () => window.clearTimeout(timer)
-  }, [mockNotice])
-
-  const runMock = (label: string) => setMockNotice(t('session.presentation.mockNotice', { feature: label }))
+  }, [statusNotice])
   const transition = normalizePresentationTransition(currentSlide?.transition)
   const transitionDefinition = getPresentationTransitionDefinition(transition.effect)
   const updateTransition = (patch: Partial<typeof transition>, preview = false) => {
@@ -277,6 +370,32 @@ export function PresentationRibbon({
       setFormatPainter((current) => current === formatPainter ? null : current)
     })
   }, [formatPainter, onApplyFormat, selectedElement])
+
+  useEffect(() => {
+    if (!animationPainter || !selectedElement || selectedElement.id === animationPainter.sourceId) return
+    if (appliedAnimationTargetRef.current === selectedElement.id) return
+    appliedAnimationTargetRef.current = selectedElement.id
+    onApplyFormat(selectedElement.id, animationPainter.patch)
+    onPreviewAnimation(animationPainter.patch)
+    queueMicrotask(() => {
+      appliedAnimationTargetRef.current = null
+      setAnimationPainter((current) => current === animationPainter ? null : current)
+    })
+  }, [animationPainter, onApplyFormat, onPreviewAnimation, selectedElement])
+
+  const copySelectedAnimation = () => {
+    if (!selectedElement || !hasPresentationAnimation(selectedElement)) return
+    appliedAnimationTargetRef.current = null
+    setAnimationPainter({
+      sourceId: selectedElement.id,
+      patch: copyPresentationAnimationPatch(selectedElement),
+    })
+  }
+
+  const applyAndPreviewAnimation = (patch: Partial<PresentationElement>) => {
+    onUpdateElement(patch)
+    if (patch.animation !== 'none') onPreviewAnimation(patch)
+  }
 
   const copySelectedFormat = () => {
     if (!selectedElement) return
@@ -396,11 +515,27 @@ export function PresentationRibbon({
         </nav>
         <div className="flex shrink-0 items-center gap-0.5 bg-bg-surface px-2" data-testid="presentation-toolbar-actions">
           {toolbarActions}
+          <PresentationTooltip content={t('session.presentation.collapseRibbon')}>
+            <button
+              type="button"
+              aria-label={t('session.presentation.collapseRibbon')}
+              aria-pressed={ribbonCollapsed}
+              data-testid="presentation-toggle-ribbon"
+              onClick={onToggleRibbon}
+              className="flex size-7 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover"
+            >
+              <ChevronsUpDown className="size-4" />
+            </button>
+          </PresentationTooltip>
         </div>
       </div>
       <section
-        className="relative flex h-[92px] items-stretch gap-1 overflow-x-auto border-b border-border-subtle/70 bg-bg-app/45 px-2 py-1.5 shadow-[0_5px_18px_rgba(29,26,48,0.045)]"
+        className={cn(
+          'relative flex items-stretch gap-1 overflow-x-auto border-b border-border-subtle/70 bg-bg-app/45 shadow-[0_5px_18px_rgba(29,26,48,0.045)] transition-[height,padding] duration-150',
+          ribbonCollapsed ? 'h-0 overflow-hidden border-b-0 px-2 py-0' : 'h-[92px] px-2 py-1.5',
+        )}
         data-testid="presentation-ribbon"
+        aria-hidden={ribbonCollapsed}
       >
         {activeTab === 'home' && (
           compact ? (
@@ -466,6 +601,23 @@ export function PresentationRibbon({
           <>
             <RibbonGroup label={t('session.presentation.slides')}>
               <RibbonAction icon={FilePlus2} label={t('session.presentation.blankSlide')} onClick={onAddSlide} />
+              <CompactRibbonMenu icon={LayoutGrid} label={t('session.presentation.slideLayout')} testId="presentation-slide-layout">
+                {(close) => (
+                  <div className="grid w-[260px] grid-cols-2 gap-1 p-1">
+                    {(['blank', 'title', 'titleContent', 'twoContent'] as const).map((layout) => (
+                      <button
+                        key={layout}
+                        type="button"
+                        aria-pressed={currentSlide?.layout === layout}
+                        className="h-10 rounded-md px-2 text-left text-xs text-text-secondary hover:bg-bg-hover"
+                        onClick={() => { onApplyLayout(layout); close() }}
+                      >
+                        {t(`session.presentation.layout.${layout}`)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CompactRibbonMenu>
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.textAndShapes')}>
               <RibbonAction dropdown icon={Type} label={t('session.presentation.textBox')} onClick={() => onAddText('body')} testId="presentation-add-text" />
@@ -493,7 +645,7 @@ export function PresentationRibbon({
                       type="button"
                       aria-label={t(theme.label)}
                       aria-pressed={currentSlide?.background === theme.background}
-                      onClick={() => onSlideChange({ background: theme.background })}
+                      onClick={() => onApplyTheme(theme.background, theme.colors)}
                       className={cn(
                         'grid h-14 w-[88px] grid-cols-4 gap-0.5 rounded-md border border-border-subtle bg-bg-surface p-1 shadow-sm transition-transform hover:-translate-y-0.5',
                         currentSlide?.background === theme.background && 'ring-2 ring-brand-purple ring-offset-1 ring-offset-bg-app',
@@ -506,8 +658,62 @@ export function PresentationRibbon({
               </div>
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.customize')}>
-              <RibbonAction icon={Palette} label={t('session.presentation.moreColors')} onClick={() => runMock(t('session.presentation.moreColors'))} />
-              <RibbonAction dropdown icon={Ratio} label={t('session.presentation.slideRatio')} onClick={() => runMock(t('session.presentation.slideRatio'))} />
+              <CompactRibbonMenu icon={Palette} label={t('session.presentation.moreColors')} testId="presentation-more-colors">
+                {(close) => (
+                  <div className="grid w-[220px] grid-cols-6 gap-1.5 p-2">
+                    {presentationBackgroundColors.map((background) => (
+                      <button
+                        key={background}
+                        type="button"
+                        aria-label={`${t('session.presentation.background')} ${background}`}
+                        aria-pressed={currentSlide?.background.toUpperCase() === background}
+                        className="size-8 rounded-md border border-border-subtle shadow-sm hover:ring-2 hover:ring-brand-purple/35"
+                        style={{ backgroundColor: background }}
+                        onClick={() => {
+                          onSlideChange({ background })
+                          close()
+                        }}
+                      />
+                    ))}
+                    <label className="col-span-6 mt-1 flex h-8 cursor-pointer items-center justify-center rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-bg-hover">
+                      {t('session.presentation.moreColors')}
+                      <input
+                        type="color"
+                        value={currentSlide?.background ?? '#FFFFFF'}
+                        className="sr-only"
+                        onChange={(event) => onSlideChange({ background: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                )}
+              </CompactRibbonMenu>
+              <CompactRibbonMenu icon={Ratio} label={t('session.presentation.slideRatio')} testId="presentation-slide-ratio">
+                {(close) => (
+                  <div className="flex min-w-[220px] flex-col gap-1 p-1">
+                    {([
+                      ['wide', 'session.presentation.slideRatioWide'],
+                      ['standard', 'session.presentation.slideRatioStandard'],
+                    ] as const).map(([preset, label]) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        aria-pressed={pageSizePreset === preset}
+                        data-testid={`presentation-slide-ratio-${preset}`}
+                        className={cn(
+                          'h-9 rounded-md px-3 text-left text-xs text-text-secondary hover:bg-bg-hover',
+                          pageSizePreset === preset && 'bg-brand-purple/10 text-brand-purple',
+                        )}
+                        onClick={() => {
+                          onPageSizeChange(preset)
+                          close()
+                        }}
+                      >
+                        {t(label)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CompactRibbonMenu>
               <label className="flex h-[58px] min-w-[58px] cursor-pointer flex-col items-center justify-center gap-1 rounded-lg px-1.5 text-[10px] text-text-secondary hover:bg-bg-hover">
                 <Palette className="size-5" strokeWidth={1.7} />
                 {t('session.presentation.setBackground')}
@@ -518,7 +724,7 @@ export function PresentationRibbon({
                   className="sr-only"
                 />
               </label>
-              <RibbonAction icon={BookOpen} label={t('session.presentation.masterEdit')} onClick={() => runMock(t('session.presentation.masterEdit'))} />
+              <RibbonAction icon={BookOpen} label={t('session.presentation.masterEdit')} onClick={onEditMaster} testId="presentation-edit-master" />
             </RibbonGroup>
           </>
         ) : null}
@@ -600,7 +806,7 @@ export function PresentationRibbon({
                 label={t('session.presentation.applyToAll')}
                 onClick={() => {
                   onApplyTransitionToAll()
-                  setMockNotice(t('session.presentation.transitionAppliedToAll'))
+                  setStatusNotice(t('session.presentation.transitionAppliedToAll'))
                 }}
                 testId="presentation-transition-apply-all"
               />
@@ -611,37 +817,44 @@ export function PresentationRibbon({
         {activeTab === 'animations' ? (
           <>
             <RibbonGroup label={t('session.presentation.preview')}>
-              <RibbonAction dropdown icon={Eye} label={t('session.presentation.preview')} onClick={onPreviewAnimation} disabled={!selectedElement || selectedElement.animation === 'none'} />
+              <RibbonAction
+                dropdown
+                icon={Eye}
+                label={t('session.presentation.preview')}
+                onClick={() => onPreviewAnimation()}
+                disabled={!currentSlide?.elements.some(hasPresentationAnimation)}
+                testId="presentation-preview-animation"
+              />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.entrance')} wide>
               {entranceAnimations.map((effect) => (
                 <EffectButton
                   key={effect.label}
-                  active={Boolean(effect.id && (selectedElement?.animation ?? 'none') === effect.id)}
+                  active={(selectedElement?.animation ?? 'none') === effect.id}
                   disabled={!selectedElement}
                   icon={effect.icon}
                   label={t(effect.label)}
-                  onClick={() => effect.id ? onUpdateElement({ animation: effect.id }) : runMock(t(effect.label))}
-                  testId={effect.id ? `presentation-animation-${effect.id}` : undefined}
+                  onClick={() => applyAndPreviewAnimation({ animation: effect.id })}
+                  testId={`presentation-animation-${effect.id}`}
                 />
               ))}
-              <RibbonAction dropdown icon={GalleryHorizontal} label={t('session.presentation.moreAnimations')} onClick={() => runMock(t('session.presentation.moreAnimations'))} />
+              <AnimationEffectMenu selectedElement={selectedElement} onApplyAnimation={applyAndPreviewAnimation} />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.emphasis')}>
-              <RibbonAction icon={PaintBucket} label={t('session.presentation.fillColor')} onClick={() => runMock(t('session.presentation.fillColor'))} disabled={!selectedElement} />
-              <RibbonAction icon={Type} label={t('session.presentation.textColor')} onClick={() => runMock(t('session.presentation.textColor'))} disabled={!selectedElement} />
-              <RibbonAction icon={ZoomIn} label={t('session.presentation.growShrink')} onClick={() => selectedElement ? onUpdateElement({ animation: 'zoom' }) : undefined} disabled={!selectedElement} />
+              <AnimationColorMenu effect="fillColor" icon={PaintBucket} selectedElement={selectedElement} targetElements={animationTargetElements} onApplyAnimation={applyAndPreviewAnimation} />
+              <AnimationColorMenu effect="textColor" icon={Type} selectedElement={selectedElement} targetElements={animationTargetElements} onApplyAnimation={applyAndPreviewAnimation} />
+              <RibbonAction icon={ZoomIn} label={t('session.presentation.growShrink')} onClick={() => applyAndPreviewAnimation({ animation: 'zoom' })} disabled={!selectedElement} />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.exit')}>
-              <RibbonAction icon={EyeOff} label={t('session.presentation.disappear')} onClick={() => runMock(t('session.presentation.disappear'))} disabled={!selectedElement} />
-              <RibbonAction dropdown icon={Columns3} label={t('session.presentation.effectBlinds')} onClick={() => runMock(t('session.presentation.effectBlinds'))} disabled={!selectedElement} />
+              <RibbonAction icon={EyeOff} label={t('session.presentation.disappear')} onClick={() => applyAndPreviewAnimation({ animation: 'disappear' })} disabled={!selectedElement} testId="presentation-animation-disappear" />
+              <RibbonAction dropdown icon={Columns3} label={t('session.presentation.effectBlinds')} onClick={() => applyAndPreviewAnimation({ animation: 'blindsOut' })} disabled={!selectedElement} testId="presentation-animation-blindsOut" />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.advancedAnimation')}>
               <RibbonAction active={animationPaneOpen} icon={List} label={t('session.presentation.animationPane')} onClick={onToggleAnimationPane} />
-              <RibbonAction dropdown icon={ListPlus} label={t('session.presentation.multipleAnimations')} onClick={() => runMock(t('session.presentation.multipleAnimations'))} disabled={!selectedElement} />
-              <RibbonAction icon={Paintbrush} label={t('session.presentation.animationPainter')} onClick={() => runMock(t('session.presentation.animationPainter'))} disabled={!selectedElement} />
+              <RibbonAction dropdown icon={ListPlus} label={t('session.presentation.multipleAnimations')} onClick={() => { onApplyAnimationToAll(); onPreviewAnimation() }} disabled={!selectedElement || !hasPresentationAnimation(selectedElement)} testId="presentation-animation-apply-all" />
+              <RibbonAction active={Boolean(animationPainter)} icon={Paintbrush} label={t('session.presentation.animationPainter')} onClick={copySelectedAnimation} disabled={!selectedElement || !hasPresentationAnimation(selectedElement)} testId="presentation-animation-painter" />
             </RibbonGroup>
-            <AnimationTimingControls selectedElement={selectedElement} onUpdateElement={onUpdateElement} onMock={runMock} />
+            <AnimationTimingControls markersHidden={animationMarkersHidden} selectedElement={selectedElement} onToggleMarkers={onToggleAnimationMarkers} onUpdateElement={onUpdateElement} />
           </>
         ) : null}
 
@@ -658,18 +871,48 @@ export function PresentationRibbon({
           <>
             <RibbonGroup label={t('session.presentation.workspace')}>
               <RibbonAction active={!filmstripCollapsed} icon={LayoutGrid} label={t('session.presentation.normalView')} onClick={onToggleFilmstrip} testId="presentation-toggle-filmstrip" />
-              <RibbonAction icon={BookOpen} label={t('session.presentation.slideMaster')} onClick={() => runMock(t('session.presentation.slideMaster'))} />
+              <RibbonAction icon={BookOpen} label={t('session.presentation.slideMaster')} onClick={onEditMaster} testId="presentation-slide-master" />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.show')}>
-              <ViewToggle checked={viewOptions.ruler} label={t('session.presentation.ruler')} onChange={() => setViewOptions((value) => ({ ...value, ruler: !value.ruler }))} />
-              <ViewToggle checked={viewOptions.guides} label={t('session.presentation.guides')} onChange={() => setViewOptions((value) => ({ ...value, guides: !value.guides }))} />
-              <ViewToggle checked={viewOptions.gridlines} label={t('session.presentation.gridlines')} onChange={() => setViewOptions((value) => ({ ...value, gridlines: !value.gridlines }))} />
-              <ViewToggle checked={viewOptions.smartSnap} label={t('session.presentation.smartSnap')} onChange={() => setViewOptions((value) => ({ ...value, smartSnap: !value.smartSnap }))} />
-              <RibbonAction active={viewOptions.notes} icon={StickyNote} label={t('session.presentation.notes')} onClick={() => setViewOptions((value) => ({ ...value, notes: !value.notes }))} />
+              <ViewToggle checked={viewOptions.ruler} label={t('session.presentation.ruler')} onChange={() => onViewOptionsChange({ ...viewOptions, ruler: !viewOptions.ruler })} />
+              <ViewToggle checked={viewOptions.guides} label={t('session.presentation.guides')} onChange={() => onViewOptionsChange({ ...viewOptions, guides: !viewOptions.guides })} />
+              <ViewToggle checked={viewOptions.gridlines} label={t('session.presentation.gridlines')} onChange={() => onViewOptionsChange({ ...viewOptions, gridlines: !viewOptions.gridlines })} />
+              <ViewToggle checked={viewOptions.smartSnap} label={t('session.presentation.smartSnap')} onChange={() => onViewOptionsChange({ ...viewOptions, smartSnap: !viewOptions.smartSnap })} />
+              <RibbonAction active={viewOptions.notes} icon={StickyNote} label={t('session.presentation.notes')} onClick={() => onViewOptionsChange({ ...viewOptions, notes: !viewOptions.notes })} />
             </RibbonGroup>
             <RibbonGroup label={t('session.presentation.zoom')}>
-              <RibbonAction dropdown icon={ZoomIn} label={t('session.presentation.zoom')} onClick={() => runMock(t('session.presentation.zoom'))} />
-              <RibbonAction icon={Maximize} label={t('session.presentation.fitWindow')} onClick={() => runMock(t('session.presentation.fitWindow'))} />
+              <CompactRibbonMenu icon={ZoomIn} label={t('session.presentation.zoom')} testId="presentation-zoom-menu">
+                {(close) => (
+                  <div className="flex min-w-[150px] flex-col gap-1 p-1">
+                    {[0.25, 0.5, 0.75, 1, 1.25].map((scale) => (
+                      <button
+                        key={scale}
+                        type="button"
+                        aria-pressed={Math.abs(canvasScale - scale) < 0.001}
+                        className={cn(
+                          'h-8 rounded-md px-3 text-left text-xs text-text-secondary hover:bg-bg-hover',
+                          Math.abs(canvasScale - scale) < 0.001 && 'bg-brand-purple/10 text-brand-purple',
+                        )}
+                        onClick={() => {
+                          onCanvasScaleChange(scale)
+                          close()
+                        }}
+                      >
+                        {Math.round(scale * 100)}%
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CompactRibbonMenu>
+              <RibbonAction icon={Maximize} label={t('session.presentation.fitWindow')} onClick={onFitCanvas} testId="presentation-fit-window" />
+            </RibbonGroup>
+          </>
+        ) : null}
+
+        {activeTab === 'review' ? (
+          <>
+            <RibbonGroup label={t('session.presentation.comments')}>
+              <RibbonAction active={commentsOpen} icon={MessageSquarePlus} label={t('session.presentation.newComment')} onClick={onToggleComments} testId="presentation-toggle-comments" />
             </RibbonGroup>
           </>
         ) : null}
@@ -680,19 +923,22 @@ export function PresentationRibbon({
             canUndo={historyStatus.canUndo}
             formatPainterActive={Boolean(formatPainter)}
             selectedElement={selectedElement}
+            layersOpen={layersOpen}
             onAddShape={onAddShape}
             onAddText={onAddText}
+            onAlignElement={onAlignElement}
             onCopyFormat={copySelectedFormat}
-            onMock={runMock}
             onMoveElement={onMoveElement}
             onRedo={onRedo}
             onUndo={onUndo}
             onUpdateElement={onUpdateElement}
+            onToggleGroup={onToggleGroup}
+            onToggleLayers={onToggleLayers}
           />
         ) : null}
 
-        <RibbonTail onFindText={onFindText} onMock={runMock} />
-        {mockNotice ? <span className="pointer-events-none sticky right-16 top-1 z-20 self-start rounded-md bg-text-primary px-2 py-1 text-[10px] text-bg-surface shadow-lg">{mockNotice}</span> : null}
+        <RibbonTail onFindText={onFindText} onToggleRibbon={onToggleRibbon} />
+        {statusNotice ? <span className="pointer-events-none sticky right-16 top-1 z-20 self-start rounded-md bg-text-primary px-2 py-1 text-[10px] text-bg-surface shadow-lg">{statusNotice}</span> : null}
       </section>
     </div>
   )
@@ -836,7 +1082,16 @@ function ParagraphControls({ selectedText, onUpdateElement }: {
       <FormatButton label={t('session.presentation.alignCenter')} disabled={disabled} pressed={selectedText?.align === 'center'} onClick={() => onUpdateElement({ align: 'center' })} testId="presentation-align-center"><AlignCenter className="size-4" /></FormatButton>
       <FormatButton label={t('session.presentation.alignRight')} disabled={disabled} pressed={selectedText?.align === 'right'} onClick={() => onUpdateElement({ align: 'right' })}><AlignRight className="size-4" /></FormatButton>
       <FormatButton label={t('session.presentation.justify')} disabled={disabled} pressed={selectedText?.align === 'justify'} onClick={() => onUpdateElement({ align: 'justify' })} testId="presentation-align-justify"><AlignJustify className="size-4" /></FormatButton>
-      <FormatButton label={t('session.presentation.verticalAlignment')} disabled onClick={() => undefined}><ChevronsUpDown className="size-4" /></FormatButton>
+      <FormatButton
+        label={t('session.presentation.verticalAlignment')}
+        disabled={disabled}
+        onClick={() => {
+          const current = selectedText?.verticalAlign ?? 'top'
+          onUpdateElement({ verticalAlign: getNextVerticalAlignment(current) })
+        }}
+        pressed={(selectedText?.verticalAlign ?? 'top') !== 'top'}
+        testId="presentation-vertical-align"
+      ><ChevronsUpDown className="size-4" /></FormatButton>
     </div>
   )
 }
@@ -846,6 +1101,12 @@ function getNextLineHeight(lineHeight: number): number {
   if (lineHeight < 1.15) return 1.15
   if (lineHeight < 1.5) return 1.5
   return 2
+}
+
+function getNextVerticalAlignment(alignment: 'top' | 'middle' | 'bottom'): 'top' | 'middle' | 'bottom' {
+  if (alignment === 'top') return 'middle'
+  if (alignment === 'middle') return 'bottom'
+  return 'top'
 }
 
 function ObjectControls({ inspectorOpen, selectedElement, onMoveElement, onToggleInspector, onUpdateElement }: {
@@ -976,17 +1237,111 @@ function RibbonNumberInput({ disabled, icon: Icon, label, max, min, onChange, st
   )
 }
 
-function AnimationTimingControls({ onMock, onUpdateElement, selectedElement }: {
-  onMock: (label: string) => void
+function AnimationEffectMenu({ onApplyAnimation, selectedElement }: {
+  onApplyAnimation: (patch: Partial<PresentationElement>) => void
+  selectedElement: PresentationElement | null
+}) {
+  const { t } = useTranslation()
+  return (
+    <CompactRibbonMenu disabled={!selectedElement} icon={GalleryHorizontal} label={t('session.presentation.moreAnimations')} testId="presentation-animation-gallery">
+      {(close) => (
+        <div className="grid w-[360px] grid-cols-3 gap-1 p-1">
+          {allAnimationEffects.map((effect) => (
+            <button
+              key={effect}
+              type="button"
+              aria-pressed={(selectedElement?.animation ?? 'none') === effect}
+              data-testid={`presentation-animation-gallery-${effect}`}
+              className={cn(
+                'flex h-8 items-center rounded-md px-2 text-left text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+                (selectedElement?.animation ?? 'none') === effect && 'bg-brand-purple/10 text-brand-purple',
+              )}
+              onClick={() => {
+                onApplyAnimation({ animation: effect })
+                close()
+              }}
+            >
+              {effect === 'blindsOut' ? `${t('session.presentation.exit')} · ` : null}{t(presentationAnimationLabelKeys[effect])}
+            </button>
+          ))}
+        </div>
+      )}
+    </CompactRibbonMenu>
+  )
+}
+
+function AnimationColorMenu({ effect, icon, onApplyAnimation, selectedElement, targetElements }: {
+  effect: 'fillColor' | 'textColor'
+  icon: LucideIcon
+  onApplyAnimation: (patch: Partial<PresentationElement>) => void
+  selectedElement: PresentationElement | null
+  targetElements: readonly PresentationElement[]
+}) {
+  const { t } = useTranslation()
+  let elements = targetElements
+  if (elements.length === 0 && selectedElement) elements = [selectedElement]
+  const supported = effect === 'fillColor'
+    ? elements.some(isPresentationShapeElement)
+    : elements.some(isPresentationTextElement)
+  const label = t(effect === 'fillColor' ? 'session.presentation.fillColor' : 'session.presentation.textColor')
+  return (
+    <CompactRibbonMenu active={selectedElement?.animation === effect} disabled={!supported} icon={icon} label={label} testId={`presentation-animation-${effect}`}>
+      {(close) => (
+        <div className="flex items-center gap-1 p-1">
+          {animationColors.map((color) => (
+            <button
+              key={color}
+              type="button"
+              aria-label={`${label} ${color}`}
+              className="flex size-8 items-center justify-center rounded-md border border-border-subtle hover:bg-bg-hover"
+              onClick={() => {
+                onApplyAnimation({ animation: effect, animationColor: color })
+                close()
+              }}
+            >
+              <span className="size-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />
+            </button>
+          ))}
+        </div>
+      )}
+    </CompactRibbonMenu>
+  )
+}
+
+function AnimationTimingControls({ markersHidden, onToggleMarkers, onUpdateElement, selectedElement }: {
+  markersHidden: boolean
+  onToggleMarkers: () => void
   onUpdateElement: (patch: Partial<PresentationElement>) => void
   selectedElement: PresentationElement | null
 }) {
   const { t } = useTranslation()
   const disabled = !selectedElement
+  const animation = selectedElement ? normalizePresentationAnimation(selectedElement) : null
+  const startOptions: Array<{ value: PresentationAnimationStart; label: string }> = [
+    { value: 'onClick', label: 'session.presentation.startOnClick' },
+    { value: 'withPrevious', label: 'session.presentation.startWithPrevious' },
+    { value: 'afterPrevious', label: 'session.presentation.startAfterPrevious' },
+  ]
+  const triggerOptions: Array<{ value: PresentationAnimationTrigger; label: string }> = [
+    { value: 'slideClick', label: 'session.presentation.triggerSlideClick' },
+    { value: 'elementClick', label: 'session.presentation.triggerElementClick' },
+  ]
   return (
     <RibbonGroup label={t('session.presentation.timing')}>
-      <RibbonAction dropdown disabled={disabled} icon={Play} label={t('session.presentation.startMode')} onClick={() => onMock(t('session.presentation.startMode'))} />
-      <RibbonAction dropdown disabled={disabled} icon={Timer} label={t('session.presentation.delay')} onClick={() => onMock(t('session.presentation.delay'))} />
+      <CompactRibbonMenu disabled={disabled} icon={Play} label={t('session.presentation.startMode')} testId="presentation-animation-start">
+        {(close) => <AnimationTimingMenu options={startOptions} selected={animation?.start} onSelect={(value) => { onUpdateElement({ animationStart: value }); close() }} />}
+      </CompactRibbonMenu>
+      <RibbonNumberInput
+        disabled={disabled}
+        icon={Timer}
+        label={t('session.presentation.delay')}
+        max={30}
+        min={0}
+        step={0.1}
+        suffix="s"
+        value={(animation?.delayMs ?? 0) / 1000}
+        onChange={(value) => onUpdateElement({ animationDelay: Math.round(Math.max(0, value) * 1000) })}
+      />
       <RibbonNumberInput
         disabled={disabled}
         icon={Clock3}
@@ -995,12 +1350,41 @@ function AnimationTimingControls({ onMock, onUpdateElement, selectedElement }: {
         min={0.18}
         step={0.1}
         suffix="s"
-        value={(selectedElement?.animationDuration ?? 520) / 1000}
+        value={(animation?.durationMs ?? 520) / 1000}
         onChange={(value) => onUpdateElement({ animationDuration: Math.round(Math.max(0.18, value) * 1000) })}
       />
-      <RibbonAction dropdown disabled={disabled} icon={MousePointerClick} label={t('session.presentation.trigger')} onClick={() => onMock(t('session.presentation.trigger'))} />
-      <RibbonAction icon={EyeOff} label={t('session.presentation.hideAllCorners')} onClick={() => onMock(t('session.presentation.hideAllCorners'))} />
+      <CompactRibbonMenu disabled={disabled} icon={MousePointerClick} label={t('session.presentation.trigger')} testId="presentation-animation-trigger">
+        {(close) => <AnimationTimingMenu options={triggerOptions} selected={animation?.trigger} onSelect={(value) => { onUpdateElement({ animationTrigger: value }); close() }} />}
+      </CompactRibbonMenu>
+      <RibbonAction active={markersHidden} icon={EyeOff} label={t('session.presentation.hideAllCorners')} onClick={onToggleMarkers} testId="presentation-animation-hide-markers" />
     </RibbonGroup>
+  )
+}
+
+function AnimationTimingMenu<T extends string>({ onSelect, options, selected }: {
+  onSelect: (value: T) => void
+  options: Array<{ value: T; label: string }>
+  selected: T | undefined
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex min-w-[210px] flex-col gap-1 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={selected === option.value}
+          data-testid={`presentation-animation-option-${option.value}`}
+          className={cn(
+            'h-8 rounded-md px-2 text-left text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary',
+            selected === option.value && 'bg-brand-purple/10 text-brand-purple',
+          )}
+          onClick={() => onSelect(option.value)}
+        >
+          {t(option.label)}
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -1013,16 +1397,19 @@ function ViewToggle({ checked, label, onChange }: { checked: boolean; label: str
   )
 }
 
-function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddText, onCopyFormat, onMock, onMoveElement, onRedo, onUndo, onUpdateElement, selectedElement }: {
+function ShapeRibbon({ canRedo, canUndo, formatPainterActive, layersOpen, onAddShape, onAddText, onAlignElement, onCopyFormat, onMoveElement, onRedo, onToggleGroup, onToggleLayers, onUndo, onUpdateElement, selectedElement }: {
   canRedo: boolean
   canUndo: boolean
   formatPainterActive: boolean
+  layersOpen: boolean
   onAddShape: (type: PresentationShapeType) => void
   onAddText: (kind: 'title' | 'body') => void
+  onAlignElement: (alignment: PresentationElementAlignment) => void
   onCopyFormat: () => void
-  onMock: (label: string) => void
   onMoveElement: (direction: 'front' | 'back') => void
   onRedo: () => void
+  onToggleGroup: () => void
+  onToggleLayers: () => void
   onUndo: () => void
   onUpdateElement: (patch: Partial<PresentationElement>) => void
   selectedElement: PresentationElement | null
@@ -1073,15 +1460,43 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
       <RibbonGroup label={t('session.presentation.textAppearance')}>
         <RibbonColorAction color={text?.color ?? '#20202B'} disabled={!text} icon={Type} label={t('session.presentation.textColor')} onChange={(color) => onUpdateElement({ color })} />
         <RibbonAction dropdown disabled={!text} icon={Sparkles} label={t('session.presentation.textEffects')} onClick={() => text && onUpdateElement({ shadow: !text.shadow })} />
-        <RibbonAction dropdown disabled={!text} icon={CaseUpper} label={t('session.presentation.font')} onClick={() => onMock(t('session.presentation.font'))} />
+        <CompactRibbonMenu disabled={!text} icon={CaseUpper} label={t('session.presentation.font')} testId="presentation-shape-font">
+          {() => <FontControls selectedText={text} compact={false} onUpdateElement={onUpdateElement} />}
+        </CompactRibbonMenu>
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.arrange')}>
         <RibbonAction dropdown disabled={!rotationSupported} icon={RotateCw} label={t('session.presentation.rotation')} onClick={() => rotationSupported && selectedElement && onUpdateElement({ rotation: (selectedElement.rotation + 15) % 360 })} />
-        <RibbonAction dropdown disabled={!selectedElement} icon={AlignCenter} label={t('session.presentation.align')} onClick={() => onMock(t('session.presentation.align'))} />
+        <CompactRibbonMenu disabled={!selectedElement} icon={AlignCenter} label={t('session.presentation.align')} testId="presentation-align-menu">
+          {(close) => (
+            <div className="grid min-w-[220px] grid-cols-2 gap-1 p-1">
+              {([
+                ['left', 'session.presentation.alignLeft'],
+                ['center', 'session.presentation.alignCenter'],
+                ['right', 'session.presentation.alignRight'],
+                ['top', 'session.presentation.alignTop'],
+                ['middle', 'session.presentation.alignMiddle'],
+                ['bottom', 'session.presentation.alignBottom'],
+              ] as const).map(([alignment, label]) => (
+                <button
+                  key={alignment}
+                  type="button"
+                  data-testid={`presentation-align-${alignment}`}
+                  className="h-8 rounded-md px-2 text-left text-xs text-text-secondary hover:bg-bg-hover"
+                  onClick={() => {
+                    onAlignElement(alignment)
+                    close()
+                  }}
+                >
+                  {t(label)}
+                </button>
+              ))}
+            </div>
+          )}
+        </CompactRibbonMenu>
         <RibbonAction disabled={!selectedElement} icon={ArrowUpToLine} label={t('session.presentation.moveUp')} onClick={() => onMoveElement('front')} />
         <RibbonAction disabled={!selectedElement} icon={ArrowDownToLine} label={t('session.presentation.moveDown')} onClick={() => onMoveElement('back')} />
-        <RibbonAction dropdown disabled icon={Group} label={t('session.presentation.group')} onClick={() => undefined} />
-        <RibbonAction icon={Layers3} label={t('session.presentation.allLayers')} onClick={() => onMock(t('session.presentation.allLayers'))} />
+        <RibbonAction active={Boolean(selectedElement?.groupId)} disabled={!selectedElement} icon={Group} label={t(selectedElement?.groupId ? 'session.presentation.ungroup' : 'session.presentation.group')} onClick={onToggleGroup} testId="presentation-toggle-group" />
+        <RibbonAction active={layersOpen} icon={Layers3} label={t('session.presentation.allLayers')} onClick={onToggleLayers} testId="presentation-toggle-layers" />
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.size')}>
         <RibbonNumberInput disabled={!selectedElement} icon={Ruler} label={t('session.presentation.width')} min={8} value={selectedElement?.width ?? 0} onChange={(width) => onUpdateElement({ width })} />
@@ -1091,13 +1506,13 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, onAddShape, onAddT
   )
 }
 
-function RibbonTail({ onFindText, onMock }: { onFindText: (query: string) => void; onMock: (label: string) => void }) {
+function RibbonTail({ onFindText, onToggleRibbon }: { onFindText: (query: string) => void; onToggleRibbon: () => void }) {
   const { t } = useTranslation()
   return (
     <div className="sticky right-0 z-10 ml-auto flex shrink-0 items-center gap-0.5 border-l border-border-subtle/70 bg-bg-app/95 px-1 shadow-[-8px_0_12px_rgba(29,26,48,0.03)]">
       <SearchControl iconOnly onFindText={onFindText} />
       <PresentationTooltip content={t('session.presentation.collapseRibbon')}>
-        <button type="button" aria-label={t('session.presentation.collapseRibbon')} onClick={() => onMock(t('session.presentation.collapseRibbon'))} className="flex size-8 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover"><ChevronsUpDown className="size-4" /></button>
+        <button type="button" aria-label={t('session.presentation.collapseRibbon')} onClick={onToggleRibbon} className="flex size-8 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover"><ChevronsUpDown className="size-4" /></button>
       </PresentationTooltip>
     </div>
   )

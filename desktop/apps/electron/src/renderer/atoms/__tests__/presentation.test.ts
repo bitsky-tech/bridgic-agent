@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { createStore } from 'jotai'
 import { activeSessionIdAtom } from '../sessions'
 import {
+  PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
   createBlankPresentationDocument,
   createInitialPresentationDocument,
@@ -14,6 +15,11 @@ import {
 } from '../presentation'
 
 describe('presentation atoms', () => {
+  it('creates documents with an explicit widescreen page size', () => {
+    expect(createInitialPresentationDocument().pageSize).toEqual(PRESENTATION_PAGE_SIZES.wide)
+    expect(createBlankPresentationDocument('Blank').pageSize).toEqual(PRESENTATION_PAGE_SIZES.wide)
+  })
+
   it('gives every generated slide an explicit no-transition default', () => {
     expect(createBlankPresentationSlide('Blank').transition).toEqual({ effect: 'none', durationMs: 1_000 })
     const initialDocument = createInitialPresentationDocument()
@@ -23,12 +29,43 @@ describe('presentation atoms', () => {
     expect(initialDocument.slides.every((slide) => slide.footer === undefined)).toBe(true)
   })
 
-  it('formats list markers for display without polluting editable text', () => {
+  it('starts with one unnamed slide containing editable text placeholders instead of bundled sample content', () => {
     const document = createInitialPresentationDocument()
-    const element = document.slides[0]?.elements.find((item) => item.type === 'text')
-    if (!element || element.type !== 'text') throw new Error('Expected a text element')
-    element.text = 'First point\nSecond point'
-    element.listStyle = 'number'
+    expect(document.title).toBe('')
+    expect(document.slides).toHaveLength(1)
+    expect(document.selectedSlideId).toBe(document.slides[0]!.id)
+    expect(document.slides[0]).toMatchObject({
+      background: '#FFFFFF',
+      layout: 'title',
+      name: 'Slide 1',
+      notes: '',
+    })
+    expect(document.slides[0]!.elements).toHaveLength(3)
+    expect(document.slides[0]!.elements).toMatchObject([
+      { align: 'center', placeholder: 'title', text: '', type: 'text' },
+      { align: 'center', placeholder: 'subtitle', text: '', type: 'text' },
+      { align: 'left', placeholder: 'body', text: '', type: 'text' },
+    ])
+    expect(JSON.stringify(document)).not.toContain('Ideas that move forward')
+  })
+
+  it('formats list markers for display without polluting editable text', () => {
+    const element = {
+      id: 'list-text',
+      type: 'text' as const,
+      x: 0,
+      y: 0,
+      width: 300,
+      height: 120,
+      rotation: 0,
+      text: 'First point\nSecond point',
+      fontSize: 24,
+      fontFamily: 'Aptos',
+      fontWeight: 400 as const,
+      color: '#1D1D28',
+      align: 'left' as const,
+      listStyle: 'number' as const,
+    }
 
     const displayText = formatPresentationText(element)
     expect(displayText).toBe('1. First point\n2. Second point')
@@ -97,4 +134,5 @@ describe('presentation atoms', () => {
       item.id === secondDocument.id
     ))?.title).toBe('Edited second deck')
   })
+
 })

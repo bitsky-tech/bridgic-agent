@@ -6,11 +6,13 @@ GlobalRegistrator.register()
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider } = await import('jotai')
 const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
+const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
 
 const originalElementAnimateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate')
@@ -49,11 +51,12 @@ afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
-async function mountPanel() {
+async function mountPanel(withTestContent = true) {
   const store = createStore()
   const settings = store.get(settingsAtom)
   store.set(settingsAtom, { ...settings, ui: { ...settings.ui, lastNav: 'home' } })
   store.set(activeSessionIdAtom, 'presentation-session')
+  if (withTestContent) store.set(currentPresentationDocumentAtom, createPresentationTestDocument())
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -69,6 +72,26 @@ async function mountPanel() {
 }
 
 describe('PresentationWorkbenchPanel', () => {
+  it('opens directly into one presentation with three native text placeholders', async () => {
+    const { host, root, store } = await mountPanel(false)
+    const presentation = store.get(currentPresentationDocumentAtom)
+
+    expect(presentation.title).toBe('')
+    expect(presentation.slides).toHaveLength(1)
+    expect(presentation.slides[0]?.layout).toBe('title')
+    expect(presentation.slides[0]?.elements).toMatchObject([
+      { placeholder: 'title', text: '', type: 'text' },
+      { placeholder: 'subtitle', text: '', type: 'text' },
+      { placeholder: 'body', text: '', type: 'text' },
+    ])
+    expect(host.querySelector('[data-testid="presentation-document-tab"]')?.textContent).toBe('未命名演示文稿.pptx')
+    expect(host.querySelectorAll('[data-testid="presentation-slide-preview"]')).toHaveLength(1)
+    expect(host.querySelector('[data-testid^="presentation-placeholder-"]')).toBeNull()
+    expect(host.textContent).not.toContain('Ideas that move forward')
+
+    await act(async () => root.unmount())
+  })
+
   it('collapses the filmstrip and exposes Office-style text formatting controls', async () => {
     const { host, root, store } = await mountPanel()
     const filmstrip = host.querySelector<HTMLElement>('aside')!
@@ -111,9 +134,11 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => paragraphMenu.click())
     const alignCenter = document.querySelector<HTMLButtonElement>('[data-testid="presentation-align-center"]')!
     const bullets = document.querySelector<HTMLButtonElement>('[data-testid="presentation-bullets"]')!
+    const verticalAlign = document.querySelector<HTMLButtonElement>('[data-testid="presentation-vertical-align"]')!
     await act(async () => {
       alignCenter.click()
       bullets.click()
+      verticalAlign.click()
     })
 
     const presentation = store.get(currentPresentationDocumentAtom)
@@ -127,7 +152,34 @@ describe('PresentationWorkbenchPanel', () => {
       expect(element.strikethrough).toBe(true)
       expect(element.align).toBe('center')
       expect(element.listStyle).toBe('bullet')
+      expect(element.verticalAlign).toBe('middle')
     }
+
+    await act(async () => root.unmount())
+  })
+
+  it('adds, resolves, and deletes review comments', async () => {
+    const { host, root, store } = await mountPanel()
+    const review = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-review"]')!
+    await act(async () => review.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-comments"]')!.click())
+
+    const textarea = host.querySelector<HTMLTextAreaElement>('[data-testid="presentation-comment-input"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, 'Tighten this claim')
+      Simulate.change(textarea)
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-comment"]')!.click())
+
+    let slide = store.get(currentPresentationDocumentAtom).slides[0]!
+    expect(slide.comments?.[0]?.text).toBe('Tighten this claim')
+    const comment = host.querySelector<HTMLElement>('[data-presentation-comment-id]')!
+    const actions = comment.querySelectorAll<HTMLButtonElement>('button')
+    await act(async () => actions[0]!.click())
+    slide = store.get(currentPresentationDocumentAtom).slides[0]!
+    expect(slide.comments?.[0]?.resolved).toBe(true)
+    await act(async () => actions[1]!.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.comments).toEqual([])
 
     await act(async () => root.unmount())
   })
@@ -136,10 +188,10 @@ describe('PresentationWorkbenchPanel', () => {
     const { host, root, store } = await mountPanel()
     installTransitionAnimationMock()
 
-    expect(host.querySelectorAll('[data-testid^="presentation-tab-"]')).toHaveLength(8)
+    expect(host.querySelectorAll('[data-testid^="presentation-tab-"]')).toHaveLength(9)
     expect(host.querySelector('[data-testid="presentation-tab-home"]')?.getAttribute('aria-selected')).toBe('true')
     expect(host.querySelector('[data-testid="presentation-tab-shape"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="presentation-tab-review"]')).toBeNull()
+    expect(host.querySelector('[data-testid="presentation-tab-review"]')).not.toBeNull()
     expect(host.querySelector('input[aria-label="文稿标题"]')).toBeNull()
     const toolbarActions = host.querySelector<HTMLElement>('[data-testid="presentation-toolbar-actions"]')!
     expect(toolbarActions.querySelector('button[aria-label="保存"]')).toBeNull()
@@ -193,18 +245,21 @@ describe('PresentationWorkbenchPanel', () => {
       duration.focus()
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '')
-      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+      Simulate.change(duration)
     })
     expect(duration.value).toBe('')
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_000)
-    await act(async () => duration.blur())
+    await act(async () => {
+      Simulate.blur(duration)
+      duration.blur()
+    })
     expect(duration.value).toBe('1')
 
     await act(async () => {
       duration.focus()
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '')
-      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+      Simulate.change(duration)
       store.set(currentPresentationDocumentAtom, (current) => ({
         ...current,
         slides: current.slides.map((slide) => slide.id === current.selectedSlideId
@@ -214,8 +269,8 @@ describe('PresentationWorkbenchPanel', () => {
     })
     expect(duration.value).toBe('')
     await act(async () => {
-      const view = duration.ownerDocument.defaultView!
-      duration.dispatchEvent(new view.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }))
+      Simulate.keyDown(duration, { key: 'Enter' })
+      Simulate.blur(duration)
     })
     expect(duration.ownerDocument.activeElement).not.toBe(duration)
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_800)
@@ -225,30 +280,39 @@ describe('PresentationWorkbenchPanel', () => {
       duration.focus()
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '0.01')
-      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+      Simulate.change(duration)
     })
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(100)
-    await act(async () => duration.blur())
+    await act(async () => {
+      Simulate.blur(duration)
+      duration.blur()
+    })
     expect(duration.value).toBe('0.1')
 
     await act(async () => {
       duration.focus()
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '30')
-      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+      Simulate.change(duration)
     })
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(20_000)
-    await act(async () => duration.blur())
+    await act(async () => {
+      Simulate.blur(duration)
+      duration.blur()
+    })
     expect(duration.value).toBe('20')
 
     await act(async () => {
       duration.focus()
       const view = duration.ownerDocument.defaultView!
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '1.2')
-      duration.dispatchEvent(new view.Event('input', { bubbles: true }))
+      Simulate.change(duration)
     })
     expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_200)
-    await act(async () => duration.blur())
+    await act(async () => {
+      Simulate.blur(duration)
+      duration.blur()
+    })
     expect(duration.value).toBe('1.2')
 
     const options = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-options"]')!
@@ -302,6 +366,201 @@ describe('PresentationWorkbenchPanel', () => {
     const presentation = store.get(currentPresentationDocumentAtom)
     const selectedSlide = presentation.slides.find((slide) => slide.id === presentation.selectedSlideId)!
     expect(selectedSlide.elements.at(-1)?.animation).toBe('fade')
+    expect(host.querySelector('[data-testid="presentation-animation-player"]')).not.toBeNull()
+    expect(host.querySelector('[data-animation-part$="-fade"]')).not.toBeNull()
+
+    const checkerboard = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-checkerboard"]')!
+    const dissolve = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-dissolve"]')!
+    expect(checkerboard.disabled).toBe(false)
+    expect(dissolve.disabled).toBe(false)
+    await act(async () => checkerboard.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.at(-1)?.animation).toBe('checkerboard')
+    expect(host.querySelectorAll('[data-animation-part*="-checker-"]')).toHaveLength(48)
+
+    const textColor = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-textColor"]')!
+    await act(async () => textColor.click())
+    const purpleTextAnimation = document.querySelector<HTMLButtonElement>('button[aria-label="文字颜色 #8B7CFF"]')!
+    await act(async () => purpleTextAnimation.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.at(-1)).toMatchObject({
+      animation: 'textColor',
+      animationColor: '#8B7CFF',
+    })
+
+    const start = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-start"]')!
+    await act(async () => start.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-option-withPrevious"]')!.click())
+    const delay = host.querySelector<HTMLInputElement>('input[aria-label="延迟"]')!
+    await act(async () => {
+      const view = delay.ownerDocument.defaultView!
+      Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(delay, '1.3')
+      Simulate.change(delay)
+    })
+    const trigger = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-trigger"]')!
+    await act(async () => trigger.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-option-elementClick"]')!.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.at(-1)).toMatchObject({
+      animationDelay: 1_300,
+      animationStart: 'withPrevious',
+      animationTrigger: 'elementClick',
+    })
+
+    const applyAnimationToAll = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-apply-all"]')!
+    await act(async () => applyAnimationToAll.click())
+    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.every((element) => (
+      element.animation === 'textColor'
+      && element.animationDelay === 1_300
+      && element.animationStart === 'withPrevious'
+      && element.animationTrigger === 'elementClick'
+    ))).toBe(true)
+
+    const animationPane = host.querySelector<HTMLButtonElement>('button[aria-label="动画窗格"]')!
+    await act(async () => animationPane.click())
+    expect(host.querySelector('[data-testid="presentation-animation-pane-list"]')).not.toBeNull()
+    const animationPainter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-painter"]')!
+    await act(async () => animationPainter.click())
+    expect(animationPainter.getAttribute('aria-pressed')).toBe('true')
+    const firstAnimationTarget = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-pane-list"] button')!
+    await act(async () => {
+      firstAnimationTarget.click()
+      await Promise.resolve()
+    })
+    expect(animationPainter.getAttribute('aria-pressed')).toBe('false')
+    const hideMarkers = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-hide-markers"]')!
+    expect(host.querySelector('[data-testid="presentation-animation-markers"]')).not.toBeNull()
+    await act(async () => hideMarkers.click())
+    expect(hideMarkers.getAttribute('aria-pressed')).toBe('true')
+    expect(host.querySelector('[data-testid="presentation-animation-markers"]')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('applies and previews one animation for an entire grouped card', async () => {
+    const { host, root, store } = await mountPanel()
+    const initial = store.get(currentPresentationDocumentAtom)
+    const overview = initial.slides[1]!
+    const cardGroupId = overview.elements.find((element) => element.groupId)?.groupId
+    if (!cardGroupId) throw new Error('Expected a grouped test card')
+    const cardElements = overview.elements.filter((element) => element.groupId === cardGroupId)
+
+    await act(async () => {
+      store.set(currentPresentationDocumentAtom, {
+        ...initial,
+        selectedSlideId: overview.id,
+        slides: initial.slides.map((slide) => slide.id === overview.id
+          ? { ...slide, elements: cardElements }
+          : slide),
+      })
+      await Promise.resolve()
+    })
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-animations"]')!.click())
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-fillColor"]')?.disabled).toBe(false)
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-textColor"]')?.disabled).toBe(false)
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-fade"]')!.click())
+
+    const current = store.get(currentPresentationDocumentAtom)
+    const currentSlide = current.slides.find((slide) => slide.id === overview.id)!
+    expect(currentSlide.elements[0]?.animation).toBe('fade')
+    expect(currentSlide.elements.slice(1).every((element) => element.animation === undefined)).toBe(true)
+    expect(host.querySelectorAll('[data-animation-part]')).toHaveLength(1)
+    expect(host.querySelectorAll('[data-animation-element-id]')).toHaveLength(4)
+    expect(host.querySelector('[data-testid="presentation-animation-markers"]')?.childElementCount).toBe(1)
+
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="动画窗格"]')!.click())
+    expect(host.querySelectorAll('[data-testid="presentation-animation-pane-list"] button')).toHaveLength(1)
+
+    await act(async () => root.unmount())
+  })
+
+  it('advances slide-click animations before moving to the next slide in slideshow mode', async () => {
+    const { host, root, store } = await mountPanel()
+    const current = store.get(currentPresentationDocumentAtom)
+    const firstSlide = current.slides[0]!
+    const animatedElement = firstSlide.elements.find((element) => element.type === 'text')!
+    await act(async () => {
+      store.set(currentPresentationDocumentAtom, {
+        ...current,
+        slides: current.slides.map((slide) => slide.id === firstSlide.id
+          ? {
+              ...slide,
+              elements: slide.elements.map((element) => element.id === animatedElement.id
+                ? { ...element, animation: 'fade' as const }
+                : element),
+            }
+          : slide),
+      })
+      await Promise.resolve()
+    })
+
+    const start = host.querySelector<HTMLButtonElement>(`button[aria-label="${i18n.t('session.presentation.playFromCurrent')}"]`)!
+    await act(async () => start.click())
+    const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
+    const next = slideshow.querySelector<HTMLButtonElement>(`button[aria-label="${i18n.t('session.presentation.nextSlide')}"]`)!
+    expect(slideshow.textContent).toContain('1 / 2')
+
+    await act(async () => next.click())
+    expect(slideshow.querySelector('[data-testid="presentation-animation-player"]')).not.toBeNull()
+    expect(slideshow.textContent).toContain('1 / 2')
+
+    await act(async () => root.unmount())
+  })
+
+  it('uses an immersive responsive slideshow stage with one accessible control dock', async () => {
+    const { host, root } = await mountPanel()
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-slideshow"]')!.click())
+    const start = host.querySelector<HTMLButtonElement>(`button[aria-label="${i18n.t('session.presentation.playFromCurrent')}"]`)!
+    await act(async () => {
+      start.click()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
+    const frame = slideshow.querySelector<HTMLElement>('[data-testid="presentation-slideshow-frame"]')!
+    const progress = slideshow.querySelector<HTMLElement>('[data-testid="presentation-slideshow-progress"]')!
+
+    expect(slideshow.className).toContain('fixed')
+    expect(slideshow.className).toContain('app-no-drag')
+    expect(slideshow.getAttribute('role')).toBe('dialog')
+    expect(Number.parseFloat(frame.style.width)).toBeGreaterThan(300)
+    expect(slideshow.querySelectorAll('[data-testid="presentation-slideshow-controls"]')).toHaveLength(1)
+    expect(progress.getAttribute('aria-valuenow')).toBe('1')
+    expect(progress.getAttribute('aria-valuemax')).toBe('2')
+    expect(slideshow.textContent?.match(/1 \/ 2/g)).toHaveLength(1)
+    const close = slideshow.querySelector<HTMLButtonElement>(`button[aria-label="${i18n.t('session.presentation.closeSlideshow')}"]`)!
+    expect(close.textContent).toContain('Esc')
+
+    await act(async () => close.click())
+    expect(host.querySelector('[data-testid="presentation-slideshow"]')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('runs an element-click animation from its target area in slideshow mode', async () => {
+    const { host, root, store } = await mountPanel()
+    const current = store.get(currentPresentationDocumentAtom)
+    const firstSlide = current.slides[0]!
+    const animatedElement = firstSlide.elements.find((element) => element.type === 'text')!
+    await act(async () => {
+      store.set(currentPresentationDocumentAtom, {
+        ...current,
+        slides: current.slides.map((slide) => slide.id === firstSlide.id
+          ? {
+              ...slide,
+              elements: slide.elements.map((element) => element.id === animatedElement.id
+                ? { ...element, animation: 'fade' as const, animationTrigger: 'elementClick' as const }
+                : element),
+            }
+          : slide),
+      })
+      await Promise.resolve()
+    })
+
+    const start = host.querySelector<HTMLButtonElement>(`button[aria-label="${i18n.t('session.presentation.playFromCurrent')}"]`)!
+    await act(async () => start.click())
+    const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
+    const trigger = slideshow.querySelector<HTMLButtonElement>(`button[aria-label="${i18n.t('session.presentation.triggerElementClick')}"]`)!
+
+    await act(async () => trigger.click())
+    expect(slideshow.querySelector('[data-testid="presentation-animation-player"]')).not.toBeNull()
 
     await act(async () => root.unmount())
   })
@@ -309,9 +568,17 @@ describe('PresentationWorkbenchPanel', () => {
   it('copies and clears formatting through the compact History group', async () => {
     const { host, root, store } = await mountPanel()
     const insertMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-insert"]')!
+    const addTextThroughMenu = async () => {
+      let action = document.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')
+      if (!action) {
+        await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-insert"]')!.click())
+        action = document.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')
+      }
+      if (!action) throw new Error('Expected the compact Insert menu to expose Add text')
+      await act(async () => action.click())
+    }
     await act(async () => insertMenu.click())
-    const addText = document.querySelector<HTMLButtonElement>('[data-testid="presentation-add-text"]')!
-    await act(async () => addText.click())
+    await addTextThroughMenu()
 
     const fontMenu = host.querySelector<HTMLButtonElement>('[data-testid="presentation-compact-font"]')!
     await act(async () => fontMenu.click())
@@ -323,13 +590,13 @@ describe('PresentationWorkbenchPanel', () => {
       await act(async () => new Promise((resolve) => setTimeout(resolve, 10)))
     }
     if (host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.disabled) {
-      await act(async () => addText.click())
+      await addTextThroughMenu()
     }
     const formatPainter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')!
     expect(formatPainter.disabled).toBe(false)
     await act(async () => formatPainter.click())
     expect(host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.getAttribute('aria-pressed')).toBe('true')
-    await act(async () => addText.click())
+    await addTextThroughMenu()
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const current = store.get(currentPresentationDocumentAtom)

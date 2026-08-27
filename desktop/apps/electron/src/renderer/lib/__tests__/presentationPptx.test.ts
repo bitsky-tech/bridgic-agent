@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
 import {
+  PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
-  createInitialPresentationDocument,
+  createInitialPresentationDocument as createEmptyPresentationDocument,
   type PresentationElement,
   type PresentationTransition,
 } from '@/atoms/presentation'
+import { createPresentationTestDocument as createInitialPresentationDocument } from '@/test-fixtures/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 
 describe('createPresentationPptx', () => {
@@ -25,6 +27,32 @@ describe('createPresentationPptx', () => {
     if (!slide) throw new Error(`Missing slide ${slideNumber}`)
     return slide.async('text')
   }
+
+  it('does not export empty editor placeholders as slide content', async () => {
+    const document = createEmptyPresentationDocument()
+    document.slides[0]!.elements = [{
+      id: 'empty-title-placeholder',
+      type: 'text',
+      placeholder: 'title',
+      x: 120,
+      y: 245,
+      width: 1040,
+      height: 100,
+      rotation: 0,
+      text: '',
+      fontSize: 42,
+      fontFamily: 'Aptos Display',
+      fontWeight: 700,
+      color: '#20202B',
+      align: 'center',
+    }]
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const slideXml = await readSlideXml(archive, 1)
+
+    expect(slideXml).not.toContain('Click to add title')
+    expect(slideXml).not.toContain('<a:t>')
+  })
 
   it('exports every slide into a valid PowerPoint Open XML archive', async () => {
     const document = createInitialPresentationDocument()
@@ -93,6 +121,263 @@ describe('createPresentationPptx', () => {
     expect(firstSlideXml).toContain('<a:tailEnd type="arrow"')
     const firstNotesXml = await archive.file('ppt/notesSlides/notesSlide1.xml')?.async('text')
     expect(firstNotesXml).toContain('Speaker note exported from Bridgic.')
+  })
+
+  it('exports the document page size instead of forcing widescreen', async () => {
+    const document = createInitialPresentationDocument()
+    document.pageSize = PRESENTATION_PAGE_SIZES.standard
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const presentationXml = await archive.file('ppt/presentation.xml')?.async('text')
+
+    expect(presentationXml).toContain('<p:sldSz cx="9144000" cy="6858000"')
+  })
+
+  it('exports element animations as native PowerPoint timing targeted by object id', async () => {
+    const document = createInitialPresentationDocument()
+    const slide = document.slides[0]!
+    const title = slide.elements.find((element) => element.type === 'text')!
+    title.animation = 'fade'
+    title.animationDuration = 860
+    title.animationDelay = 275
+    title.animationStart = 'onClick'
+    title.animationTrigger = 'elementClick'
+    slide.transition = { effect: 'fade', durationMs: 450 }
+    slide.elements.push(
+      {
+        id: 'checker-shape',
+        type: 'rect',
+        x: 760,
+        y: 160,
+        width: 180,
+        height: 120,
+        rotation: 0,
+        fill: '#6957D9',
+        borderColor: '#4433AA',
+        borderWidth: 1,
+        animation: 'checkerboard',
+        animationDuration: 640,
+        animationStart: 'withPrevious',
+      },
+      {
+        id: 'color-shape',
+        type: 'ellipse',
+        x: 970,
+        y: 160,
+        width: 140,
+        height: 140,
+        rotation: 0,
+        fill: '#FFFFFF',
+        borderColor: '#2678E8',
+        borderWidth: 2,
+        animation: 'fillColor',
+        animationColor: '#F2B91F',
+        animationDuration: 700,
+        animationStart: 'afterPrevious',
+      },
+      {
+        id: 'exit-shape',
+        type: 'rect',
+        x: 760,
+        y: 330,
+        width: 180,
+        height: 120,
+        rotation: 0,
+        fill: '#E17B47',
+        borderColor: '#A94F22',
+        borderWidth: 1,
+        animation: 'blindsOut',
+        animationDuration: 510,
+        animationStart: 'onClick',
+      },
+      {
+        id: 'fly-shape',
+        type: 'rect',
+        x: 970,
+        y: 330,
+        width: 140,
+        height: 120,
+        rotation: 0,
+        fill: '#52A47A',
+        borderColor: '#23754E',
+        borderWidth: 1,
+        animation: 'flyIn',
+        animationDuration: 620,
+        animationStart: 'withPrevious',
+      },
+      {
+        id: 'color-text',
+        type: 'text',
+        x: 760,
+        y: 490,
+        width: 350,
+        height: 70,
+        rotation: 0,
+        text: 'Color emphasis',
+        fontSize: 28,
+        fontFamily: 'Aptos',
+        fontWeight: 600,
+        color: '#20202B',
+        align: 'left',
+        animation: 'textColor',
+        animationColor: '#F04E98',
+        animationDuration: 720,
+        animationStart: 'afterPrevious',
+      },
+    )
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const xml = await readSlideXml(archive, 1)
+    const shapeId = (objectName: string): string => {
+      const tag = (xml.match(/<p:cNvPr\b[^>]*>/g) ?? []).find((candidate) => candidate.includes(`name="${objectName}"`))
+      const id = tag && /\bid="(\d+)"/.exec(tag)?.[1]
+      if (!id) throw new Error(`Missing exported object ${objectName}`)
+      return id
+    }
+
+    const titleShapeId = shapeId(title.id)
+    const checkerShapeId = shapeId('checker-shape')
+    const colorShapeId = shapeId('color-shape')
+    const exitShapeId = shapeId('exit-shape')
+    const flyShapeId = shapeId('fly-shape')
+    const colorTextShapeId = shapeId('color-text')
+    expect(xml.indexOf('<p:transition')).toBeLessThan(xml.indexOf('<p:timing>'))
+    expect(xml).toContain('<p:timing>')
+    expect(xml).toContain('nodeType="clickEffect"')
+    expect(xml).toContain('nodeType="withEffect"')
+    expect(xml).toContain('nodeType="afterEffect"')
+    expect(xml).toContain('delay="275"')
+    expect(xml).toContain('dur="860"')
+    expect(xml).toContain('filter="fade"')
+    expect(xml).toContain('filter="checkerboard(across)"')
+    expect(xml).toContain('filter="blinds(horizontal)"')
+    expect(xml).toContain('filter="slide(fromBottom)"')
+    expect(xml).not.toContain('#ppt_x-0.08')
+    expect(xml).toContain('<a:srgbClr val="F2B91F"/>')
+    expect(xml).toContain('<a:srgbClr val="F04E98"/>')
+    expect(xml).toMatch(new RegExp(`presetID="5"[^>]*presetClass="entr"[^>]*presetSubtype="6"[\\s\\S]*?<p:spTgt spid="${checkerShapeId}"/>`))
+    expect(xml).toMatch(new RegExp(`presetID="19"[^>]*presetClass="emph"[^>]*presetSubtype="0"[\\s\\S]*?<p:spTgt spid="${colorShapeId}"/>`))
+    expect(xml).toMatch(new RegExp(`presetID="3"[^>]*presetClass="emph"[^>]*presetSubtype="2"[\\s\\S]*?<p:spTgt spid="${colorTextShapeId}"/>`))
+    for (const id of [titleShapeId, checkerShapeId, colorShapeId, exitShapeId, flyShapeId, colorTextShapeId]) {
+      expect(xml).toContain(`<p:spTgt spid="${id}"/>`)
+      expect(xml).toContain(`<p:bldP spid="${id}"`)
+    }
+  })
+
+  it('exports grouped card members in one synchronized native animation step', async () => {
+    const document = createInitialPresentationDocument()
+    const slide = document.slides[0]!
+    slide.elements = [
+      {
+        id: 'group-card',
+        groupId: 'card-group',
+        type: 'rect',
+        x: 120,
+        y: 160,
+        width: 360,
+        height: 260,
+        rotation: 0,
+        fill: '#FFFFFF',
+        borderColor: '#D7D8DE',
+        borderWidth: 1,
+        animation: 'fade',
+        animationDuration: 700,
+        animationDelay: 140,
+        animationStart: 'onClick',
+      },
+      {
+        id: 'group-number',
+        groupId: 'card-group',
+        type: 'text',
+        x: 150,
+        y: 190,
+        width: 80,
+        height: 40,
+        rotation: 0,
+        text: '01',
+        fontSize: 20,
+        fontFamily: 'Aptos',
+        fontWeight: 700,
+        color: '#6957D9',
+        align: 'left',
+      },
+      {
+        id: 'group-heading',
+        groupId: 'card-group',
+        type: 'text',
+        x: 150,
+        y: 260,
+        width: 280,
+        height: 60,
+        rotation: 0,
+        text: 'Frame the idea',
+        fontSize: 28,
+        fontFamily: 'Aptos Display',
+        fontWeight: 700,
+        color: '#20202B',
+        align: 'left',
+      },
+    ]
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const xml = await readSlideXml(archive, 1)
+    const shapeId = (objectName: string): string => {
+      const tag = (xml.match(/<p:cNvPr\b[^>]*>/g) ?? []).find((candidate) => candidate.includes(`name="${objectName}"`))
+      const id = tag && /\bid="(\d+)"/.exec(tag)?.[1]
+      if (!id) throw new Error(`Missing exported object ${objectName}`)
+      return id
+    }
+
+    for (const objectName of ['group-card', 'group-number', 'group-heading']) {
+      const id = shapeId(objectName)
+      expect(xml).toContain(`<p:spTgt spid="${id}"/>`)
+      expect(xml).toContain(`<p:bldP spid="${id}"`)
+    }
+    expect(xml.match(/nodeType="clickEffect"/g)).toHaveLength(1)
+    expect(xml.match(/nodeType="withEffect"/g)).toHaveLength(2)
+    expect(xml.match(/dur="700"/g)).toHaveLength(3)
+    expect(xml.match(/delay="140"/g)).toHaveLength(3)
+  })
+
+  it('preserves after-previous steps when a with-previous effect follows them', async () => {
+    const document = createInitialPresentationDocument()
+    const slide = document.slides[0]!
+    const animatedShape = (id: string, animationStart: 'onClick' | 'withPrevious' | 'afterPrevious', animation: 'fade' | 'appear' | 'disappear', duration: number, x: number): PresentationElement => ({
+      id,
+      type: 'rect',
+      x,
+      y: 180,
+      width: 180,
+      height: 120,
+      rotation: 0,
+      fill: '#6957D9',
+      borderColor: '#4433AA',
+      borderWidth: 1,
+      animation,
+      animationDuration: duration,
+      animationStart,
+    })
+    slide.elements = [
+      animatedShape('order-a', 'onClick', 'fade', 400, 120),
+      animatedShape('order-b', 'afterPrevious', 'appear', 3_000, 360),
+      animatedShape('order-c', 'withPrevious', 'disappear', 2_500, 600),
+    ]
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const xml = await readSlideXml(archive, 1)
+    const shapeId = (objectName: string): string => {
+      const tag = (xml.match(/<p:cNvPr\b[^>]*>/g) ?? []).find((candidate) => candidate.includes(`name="${objectName}"`))
+      const id = tag && /\bid="(\d+)"/.exec(tag)?.[1]
+      if (!id) throw new Error(`Missing exported object ${objectName}`)
+      return id
+    }
+    const targetIndex = (id: string): number => xml.indexOf(`<p:spTgt spid="${shapeId(id)}"/>`)
+
+    expect(targetIndex('order-a')).toBeLessThan(targetIndex('order-b'))
+    expect(targetIndex('order-b')).toBeLessThan(targetIndex('order-c'))
+    expect(xml).toContain('<p:cond delay="400"/>')
+    expect(xml).not.toContain('dur="3000"')
+    expect(xml).not.toContain('dur="2500"')
   })
 
   it('exports hyperlinks, embedded media, editable tables and charts, and slide footers', async () => {
