@@ -359,6 +359,33 @@ def test_build_tool_contracts() -> None:
     assert '"summary": "optional short summary"' in prompt_description
 
 
+def test_build_language_follows_the_reply_language_resolution() -> None:
+    """The Build language resolves like every other display language:
+
+    {
+      "definition": "user input → the user's prior language → app UI language",
+      "forbidden_sources": "Workflow source / tool results / earlier assistant messages",
+      "removed": "the original Build request (unresolvable once history slides out)"
+    }
+
+    Checks:
+    1. Every Build stage defines the Build language by the reply-language resolution,
+       not by "the original Build request" — that anchor is unreadable whenever the
+       founding Turn has left the history window, and the model then inferred the
+       language from its own earlier output (a Chinese Workflow run flipped an
+       English session's Explore stage to Chinese).
+    2. Every Build stage forbids taking the language from earlier assistant messages.
+    """
+    personas = _personas()
+    for name in ("clarify", "explore", "generate", "verify"):
+        persona = personas[name]
+        # Check 1: The underdetermined anchor is gone; the resolution chain defines it.
+        assert "original Build request" not in persona, name
+        assert "resolved exactly like your reply language" in persona, name
+        # Check 2: Earlier assistant messages may not supply the language.
+        assert "earlier assistant messages" in persona, name
+
+
 def test_build_structures() -> None:
     """Each Build stage retains its owned artifact and completion boundary."""
     personas = _personas()
