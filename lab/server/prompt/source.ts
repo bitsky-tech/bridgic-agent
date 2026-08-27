@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const PROMPT_FACADE_PATH = "src/amphi_agent/_prompt.py";
-const PROMPT_MODULE_GLOB = "src/amphi_agent/_prompts/**/*.py";
+const PROMPT_MODULE_GLOB = "src/amphi_agent/prompts/**/*.py";
 
 export interface PromptSourceFingerprint {
   paths: string[];

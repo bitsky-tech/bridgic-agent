@@ -2,21 +2,21 @@
 
 from typing import Collection
 
-from ._prompts import render as _render
-from ._prompts.build import (
+from .prompts import render as _render
+from .prompts.build import (
     CLARIFY_PERSONA,
     EXPLORE_PERSONA,
     GENERATE_PERSONA,
     VERIFY_PERSONA,
 )
-from ._prompts.main import PERSONA, SUB_AGENT_PERSONA, SUB_AGENT_PROMPT
-from ._prompts.shared import (
+from .prompts.main import PERSONA, SUB_AGENT_PERSONA, SUB_AGENT_PROMPT
+from .prompts.shared import (
     AGENT_NAME,
     TURN_FAILED_MESSAGE,
     _SUB_AGENT_GUIDANCE as _SUB_AGENT_GUIDANCE,
 )
-from ._prompts.title import TITLE_PROMPT
-from ._prompts.workflow import (
+from .prompts.title import TITLE_PROMPT
+from .prompts.workflow import (
     WORKFLOW_PERSONA,
     WORKFLOW_VALIDATE_PERSONA,
 )

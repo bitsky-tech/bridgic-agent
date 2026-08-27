@@ -20,7 +20,7 @@ from ._context import (
     _view,
 )
 from ._error import ContextWindowExceededError
-from ._prompts.compaction import (
+from .prompts.compaction import (
     COMPACTION_SYSTEM_PROMPT,
     render_session_compaction_prompt,
     render_turn_compaction_prompt,
