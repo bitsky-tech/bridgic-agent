@@ -15,7 +15,7 @@ export function WorkflowResultCard({ block }: { block: WorkflowResultBlock }) {
   const openModal = useSetAtom(openModalAtom)
   const insertWorkflowResult = useSetAtom(useWorkflowResultAtom)
   const completed = block.status === 'completed'
-  const hasReusableResult = completed && block.resultFileCount !== 0
+  const hasReusableResult = block.status === 'failed' || block.resultFileCount !== 0
   const title = completed
     ? t('workflow.result.title.completed')
     : t('workflow.result.title.failed')

@@ -26,6 +26,74 @@ async def _create_session(session_id: str) -> SessionRecord:
     return record
 
 
+async def test_legacy_token_columns_migrate_to_context_usage(initialized_store: None) -> None:
+    """Existing Turn totals move into the structured snapshot before old columns drop."""
+    await _create_session("legacy-session")
+    repository = SessionTurnRepository()
+    turn = await _append_turn(
+        repository,
+        "legacy-session",
+        "Legacy question",
+        None,
+        input_tokens=13,
+        output_tokens=5,
+        model="legacy-model",
+    )
+    engine = SessionTurnRepository._engine
+    assert engine is not None
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql(
+            "ALTER TABLE session_turns DROP COLUMN context_usage"
+        )
+        await connection.exec_driver_sql(
+            "ALTER TABLE session_turns ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0"
+        )
+        await connection.exec_driver_sql(
+            "ALTER TABLE session_turns ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0"
+        )
+        await connection.exec_driver_sql(
+            "UPDATE session_turns SET input_tokens = 13, output_tokens = 5 WHERE id = ?",
+            (turn.id,),
+        )
+
+    await SessionTurnRepository.init_schema()
+
+    async with engine.begin() as connection:
+        rows = (
+            await connection.exec_driver_sql("PRAGMA table_info(session_turns)")
+        ).all()
+    columns = {row[1]: row for row in rows}
+    assert columns["context_usage"][3] == 1
+    assert columns["context_usage"][4] == "'{}'"
+    assert "input_tokens" not in columns
+    assert "output_tokens" not in columns
+
+    migrated = await repository.get(USER_ID, turn.id)
+    assert migrated is not None
+    assert migrated.context_usage == {
+        "model_id": "legacy-model",
+        "input_tokens": 13,
+        "output_tokens": 5,
+        "occupied_input_tokens": 0,
+        "occupied_output_tokens": 0,
+        "cached_input_tokens": None,
+        "used_tokens": 0,
+        "usable_tokens": None,
+        "percentage": None,
+        "source": "estimated",
+        "estimated_occupied_tokens": 0,
+        "breakdown": {
+            "system_prompt_tokens": 0,
+            "dynamic_context_tokens": 0,
+            "tool_schema_tokens": 0,
+            "session_history_tokens": 0,
+            "current_input_tokens": 0,
+        },
+    }
+
+    await SessionTurnRepository.init_schema()
+
+
 async def _append_turn(
     repository: SessionTurnRepository,
     session_id: str,
@@ -49,6 +117,26 @@ async def _append_turn(
     duration_ms: int = 100,
 ) -> SessionTurnRecord:
     """Append one Turn through the public repository API."""
+    context_usage = {
+        "model_id": model or "",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "occupied_input_tokens": 0,
+        "occupied_output_tokens": 0,
+        "cached_input_tokens": None,
+        "used_tokens": 0,
+        "usable_tokens": None,
+        "percentage": None,
+        "source": "estimated",
+        "estimated_occupied_tokens": 0,
+        "breakdown": {
+            "system_prompt_tokens": 0,
+            "dynamic_context_tokens": 0,
+            "tool_schema_tokens": 0,
+            "session_history_tokens": 0,
+            "current_input_tokens": 0,
+        },
+    }
     return await repository.append_result(
         USER_ID,
         session_id=session_id,
@@ -62,8 +150,7 @@ async def _append_turn(
         status=status,
         final_answer=final_answer,
         error=error,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
+        context_usage=context_usage,
         model=model,
         execution_mode=execution_mode,
         max_rounds=max_rounds,
@@ -127,7 +214,11 @@ async def test_append_turns(initialized_store: None) -> None:
     assert first.user_input == UserInput(text="First question")
     assert first.status is TurnStatus.COMPLETED
     assert first.final_answer == "First answer"
-    assert first.input_tokens + first.output_tokens == 15
+    assert (
+        first.context_usage["input_tokens"]
+        + first.context_usage["output_tokens"]
+        == 15
+    )
     assert first.model == "test-model"
     assert first.execution_mode == "auto"
     assert first.max_rounds == 8
@@ -154,7 +245,11 @@ async def test_append_turns(initialized_store: None) -> None:
     assert second.session_ordinal == 1
     assert second.status is TurnStatus.FAILED
     assert second.error == "Provider unavailable"
-    assert second.input_tokens + second.output_tokens == 10
+    assert (
+        second.context_usage["input_tokens"]
+        + second.context_usage["output_tokens"]
+        == 10
+    )
     assert second.duration_ms == 240
 
     # Check 3: A Turn can be loaded later by its generated id.
@@ -232,8 +327,7 @@ async def test_replace_tail(initialized_store: None) -> None:
             status=TurnStatus.COMPLETED,
             final_answer="Corrected answer",
             error=None,
-            input_tokens=7,
-            output_tokens=5,
+            context_usage={"input_tokens": 7, "output_tokens": 5},
             model="replacement-model",
             execution_mode="request",
             max_rounds=4,
@@ -416,8 +510,7 @@ async def test_copy_history(initialized_store: None) -> None:
         assert copied_turn.browser_tool_loaded is source_turn.browser_tool_loaded
         assert copied_turn.workspace_tools_loaded is source_turn.workspace_tools_loaded
         assert copied_turn.skills_tool_loaded is source_turn.skills_tool_loaded
-        assert copied_turn.input_tokens == source_turn.input_tokens
-        assert copied_turn.output_tokens == source_turn.output_tokens
+        assert copied_turn.context_usage == source_turn.context_usage
 
     # Check 3: Exact reference ids are remapped through input blocks and nested context.
     copied_first = destination[0]

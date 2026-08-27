@@ -18,7 +18,7 @@ This file carries only the statements that cannot be derived from package
 metadata — license elections, source-availability offers, linking exceptions,
 and corrections to metadata that is absent or wrong.
 
-Section 8 covers something different in kind: third-party material vendored
+Section 9 covers something different in kind: third-party material vendored
 directly into the source tree, which no package manager knows about and which
 therefore never reaches THIRD-PARTY-LICENSES.txt. Read it before assuming the
 repository's own license applies to everything in the repository.
@@ -205,7 +205,24 @@ not include a license file at their root:
 
 
 --------------------------------------------------------------------------------
-8. Vendored Skill packages — the license in each directory governs it
+8. Bundled model metadata
+--------------------------------------------------------------------------------
+
+The packaged provider/model catalog is a complete raw snapshot of the
+models.dev API database downloaded at build time and distributed under the
+MIT License.
+
+  models.dev      Copyright (c) 2025 models.dev
+                  https://models.dev/
+                  https://github.com/anomalyco/models.dev
+
+The full MIT text is stored beside the snapshot at
+`src/amphi_service/protocol/llms/_providers_catalog.LICENSE.txt` and is also
+reproduced in THIRD-PARTY-LICENSES.txt in the installed desktop application.
+
+
+--------------------------------------------------------------------------------
+9. Vendored Skill packages — the license in each directory governs it
 --------------------------------------------------------------------------------
 
 `src/amphi_agent/builtin_skills/` holds Skill packages that are checked into

@@ -18,7 +18,7 @@ USER_ID = "local"
 WINDOWS_ERROR_PRIVILEGE_NOT_HELD = 1314
 
 
-async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None) -> None:
+async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Final published Workflow results:
 
     {
@@ -38,6 +38,7 @@ async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None
     2. Only explicit result and background/work files are visible and readable.
     3. Structured WorkflowRun mentions are deduplicated without accepting other mention groups.
     4. Completed references load successfully while failed or missing results block composition.
+    5. References from historical inputs load even when absent from the recent-result cache.
     """
     def create_source(name: str, report: str):
         root = test_sandbox.root / name
@@ -127,6 +128,15 @@ async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None
             text="Use missing result",
             blocks=[{"type": "mention", "group": "WorkflowRun", "id": "missing-run"}],
         ))
+
+    # Check 5: Every supplied input contributes owner-gated references beyond the recent cache.
+    async def no_recent_results(user_id: str, *, limit: int = 50, offset: int = 0):
+        return []
+
+    historical_library = WorkflowRunLibrary(USER_ID)
+    monkeypatch.setattr(historical_library._repo, "list_for_user", no_recent_results)
+    await historical_library.load(UserInput(text="Current request"), mentions)
+    assert historical_library.get(completed_id) is not None
 
 
 def test_result_links(test_sandbox: IsolatedPaths) -> None:

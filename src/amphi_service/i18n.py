@@ -20,14 +20,17 @@ _logger = logging.getLogger(__name__)
 
 
 Locale = Literal["zh", "en"]
-DEFAULT_LOCALE: Locale = "zh"
+# Matches the GUI's pre-boot default (`fallbackLng` in the renderer's i18n init): with no
+# stated preference at all, both halves of the product now land on English. This was "zh"
+# historically, which left a header-less client reading Chinese under an English UI.
+DEFAULT_LOCALE: Locale = "en"
 
 
 def locale_from_accept_language(value: str | None) -> Locale:
     """Choose a supported locale from an HTTP ``Accept-Language`` value.
 
-    Unsupported or absent preferences preserve the product's historical
-    Chinese default.  Quality values determine preference order.  RFC 9110
+    Unsupported or absent preferences fall back to the product default.
+    Quality values determine preference order.  RFC 9110
     allows optional whitespace around ``;``, so the language tag is trimmed
     on its own.  A malformed or out-of-range quality (``q=bad``, ``inf``,
     ``1e5``) must not inherit the default 1.0 and outrank a well-formed
@@ -563,6 +566,74 @@ class BackendI18n:
         "llm.codex_credentials_missing": {
             "zh": "未找到用户 {user_id!r} 的 Codex 登录信息。完成 Codex 订阅授权后重试(POST /me/providers/openai-codex/oauth/start)。",
             "en": "No Codex credentials for user {user_id!r}. Complete Codex subscription authorization and try again (POST /me/providers/openai-codex/oauth/start).",
+        },
+        "agent.error.context_too_large": {
+            "zh": "这次对话内容太多，当前模型无法继续处理。请精简内容，或新建一个对话后再试。",
+            "en": "This conversation has too much content for the current model. Shorten it or start a new conversation and try again.",
+        },
+        "agent.error.empty_answer": {
+            "zh": "抱歉，这次任务没有生成回复。请重新运行一次；如果仍然没有回复，可以换一个模型再试。",
+            "en": "Sorry, no response was generated for this task. Run it again, or try another model if it still produces no response.",
+        },
+        "agent.error.model_not_found": {
+            "zh": "当前选择的模型无法使用。请前往模型设置，选择其他模型后再试。",
+            "en": "The selected model cannot be used right now. Choose another model in settings and try again.",
+        },
+        "agent.error.quota_exhausted": {
+            "zh": "当前模型的使用次数已用完。请稍后再试，或换一个模型。",
+            "en": "The current model has no usage remaining. Try again later or choose another model.",
+        },
+        "agent.error.rate_limited": {
+            "zh": "当前服务繁忙，请稍后再试。",
+            "en": "The service is busy right now. Please try again later.",
+        },
+        "agent.error.authentication_failed": {
+            "zh": "当前模型需要重新连接。请前往模型设置，完成连接后再试。",
+            "en": "The selected model needs to be reconnected. Open model settings, reconnect it, and try again.",
+        },
+        "agent.error.login_required": {
+            "zh": "当前模型的登录已失效。请重新登录后再试。",
+            "en": "The selected model's sign-in has expired. Sign in again and try again.",
+        },
+        "agent.error.content_rejected": {
+            "zh": "这次输入的部分内容无法处理。请调整相关内容后再试。",
+            "en": "Some of this message could not be processed. Adjust that content and try again.",
+        },
+        "agent.error.permission_denied": {
+            "zh": "当前账号不能使用这个模型。请换一个模型，或联系管理员开通权限。",
+            "en": "Your account cannot use this model. Choose another model or ask your administrator for access.",
+        },
+        "agent.error.model_or_endpoint_not_found": {
+            "zh": "当前模型的连接设置有问题。请前往模型设置检查，或换一个模型后再试。",
+            "en": "There is a problem with the selected model's connection. Check it in model settings or choose another model.",
+        },
+        "agent.error.request_rejected": {
+            "zh": "当前模型无法处理这次内容。请换一种说法、精简内容，或换一个模型后再试。",
+            "en": "The selected model could not handle this message. Reword or shorten it, or choose another model and try again.",
+        },
+        "agent.error.stream_interrupted": {
+            "zh": "回复生成到一半时连接中断了。请重新试一次；如果仍然失败，请检查网络连接。",
+            "en": "The connection was interrupted while the response was being generated. Try again, and check your network if it keeps happening.",
+        },
+        "agent.error.request_timeout": {
+            "zh": "等待回复的时间过长，本次任务已停止。请重新试一次，并确认网络连接正常。",
+            "en": "The response took too long, so this task was stopped. Try again and make sure your network is working.",
+        },
+        "agent.error.network_unreachable": {
+            "zh": "暂时无法连接服务。请检查网络后再试。",
+            "en": "The service could not be reached. Check your network and try again.",
+        },
+        "agent.error.provider_unavailable": {
+            "zh": "当前服务暂时不可用。请稍后再试，或换一个模型。",
+            "en": "The service is temporarily unavailable. Try again later or choose another model.",
+        },
+        "agent.error.trace_too_large": {
+            "zh": "这次任务包含的步骤太多，结果无法完整保存。请把任务拆成几个较小的步骤后再试。",
+            "en": "This task produced too much information to save completely. Break it into smaller tasks and try again.",
+        },
+        "agent.error.internal": {
+            "zh": "处理任务时出现了问题。请重新试一次；如果仍然失败，请稍后再试。",
+            "en": "Something went wrong while handling this task. Try again, or wait a moment if it keeps happening.",
         },
         "agent.describe.system_prompt": {
             "zh": "你在向不懂命令行的普通用户解释 Agent 即将执行的操作。把每条工具调用用一句简短中文说明它实际会做什么：说人话、聚焦效果，不要罗列参数或术语。\n只输出 JSON 数组并与输入顺序一一对应，每项格式为\n{{\"index\": 序号, \"summary\": \"一句中文说明\"}}，不要输出其他内容。\n",

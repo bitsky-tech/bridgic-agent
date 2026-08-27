@@ -143,25 +143,45 @@ class LoopAbortEvent(TurnEvent):
 
 
 @dataclass(frozen=True)
-class UsageEvent(TurnEvent):
-    """Token usage reported by one completed LLM call within the turn.
+class ContextUsageEvent(TurnEvent):
+    """One model call's input occupancy, composition, and cache-read count."""
 
-    Emitted per model call (a turn makes several — one per observe-think-act
-    round, across every stage it walks), so a client can show cost accruing live.
-    ``input_tokens`` is the prompt cost, ``output_tokens`` the generation
-    cost of that single call; :class:`FinalEvent` carries the turn totals.
-    """
+    name: ClassVar[str] = "context_usage"
 
-    name: ClassVar[str] = "usage"
-
-    input_tokens: int = 0
-    output_tokens: int = 0
+    model_id: str
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: Optional[int]
+    used_tokens: int
+    usable_tokens: Optional[int]
+    percentage: Optional[float]
+    source: Literal["provider", "estimated"]
+    breakdown: Dict[str, int]
 
     def payload(self) -> Dict[str, Any]:
         return {
+            "model_id": self.model_id,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "cached_input_tokens": self.cached_input_tokens,
+            "used_tokens": self.used_tokens,
+            "usable_tokens": self.usable_tokens,
+            "percentage": self.percentage,
+            "source": self.source,
+            "breakdown": self.breakdown,
         }
+
+
+@dataclass(frozen=True)
+class ContextCompactionEvent(TurnEvent):
+    """Transient lifecycle status for one Turn's context compaction."""
+
+    name: ClassVar[str] = "context_compaction"
+
+    active: bool
+
+    def payload(self) -> Dict[str, Any]:
+        return {"active": self.active}
 
 
 @dataclass(frozen=True)
@@ -429,7 +449,7 @@ class FinalEvent(TurnEvent):
 
     ``tokens_spent`` is the turn total (``input_tokens + output_tokens``);
     the split is carried alongside so a client can attribute prompt vs
-    generation cost without summing the per-call :class:`UsageEvent`\\ s.
+    generation cost.
     """
 
     name: ClassVar[str] = "final"
@@ -609,7 +629,8 @@ __all__ = [
     "ToolEvent",
     "ToolResultEvent",
     "LoopAbortEvent",
-    "UsageEvent",
+    "ContextUsageEvent",
+    "ContextCompactionEvent",
     "StageEvent",
     "WorkflowProgressEvent",
     "TitleEvent",

@@ -128,9 +128,9 @@ function WorkflowResultsPanelForSession({
           key={run.id}
           run={run}
           onOpen={() => openRun(run)}
-          onReference={effectiveResultStatus(run) === 'completed'
-            ? () => referenceRun(run)
-            : undefined}
+          onReference={effectiveResultStatus(run) === 'other'
+            ? undefined
+            : () => referenceRun(run)}
         />
       ))}
     </div>

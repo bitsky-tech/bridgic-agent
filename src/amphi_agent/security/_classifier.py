@@ -55,6 +55,7 @@ from bridgic.core.model.types import Message, Role
 from src.amphi_service.i18n import backend_i18n
 
 from .._prompt import AGENT_NAME
+from ..prompts.render import _ui_language
 from ._audit import write_classify_record
 from ._policy import Policy, load_policy, soft_deny_ids, soft_deny_title
 from ._reasoning import reasoning_off
@@ -177,11 +178,21 @@ def _numbered_bullets(items: List[str], ids: List[str]) -> str:
 
 def _build_system_prompt(policy: Policy) -> str:
     """Build the classifier system prompt from the externalised policy
-    (:class:`Policy`). **Contains the four static policy sections only** — the workspace
-    roots, which change per session, are not concatenated here (they go on the user side),
-    making the system prompt a stable prefix that hits prompt caching; as long as the
-    policy content is unchanged the bytes
-    are unchanged and later calls hit the cache."""
+    (:class:`Policy`). **Carries the four static policy sections plus the active locale,
+    and nothing else** — the workspace roots, which change per session, are not
+    concatenated here (they go on the user side), so the prompt stays a prefix stable
+    enough for prompt caching: with the policy and the locale unchanged the bytes are
+    unchanged and later calls hit the cache.
+
+    The locale is named as the fallback for ``reason``'s language. ``reason`` is
+    rendered verbatim on the approval card, so it
+    follows the user's own language exactly as the agent's replies do (``_prompt.py``'s
+    CRITICAL language rule) — but the requests are not always readable (a scheduled or
+    resumed Run carries none, and paths / commands / quoted logs carry no language of
+    their own), and with nothing named to fall back to the model used to pick a language
+    of its own next to a card whose every other string follows the locale. That splits
+    the stable prefix into one bucket per locale (two), each still byte-stable on its own
+    — a cheaper price than a card that mixes languages."""
     environment = list(policy.environment) + [
         "The session working directory, the files/folders the user actively mounted, "
         "**local paths the user named in their messages**, and each call's \u201ccurrent "
@@ -277,7 +288,7 @@ The `[S<n>]` in front of each entry is its identifier; an ask verdict must fill 
 - verdict=ask \u2192 `rule` **must** be a SOFT DENY identifier (``S1`` / ``S2`` / \u2026); do not invent category names;
 - verdict=deny \u2192 fill `rule` with the HARD DENY category name that matched;
 - verdict=allow \u2192 leave `rule` as an empty string.
-**Write `reason` in the same language the user writes in** (see [Recent user requests]); it is shown directly to that user, so it must match their language. Everything else in the output stays exactly as specified above.
+**Write `reason` in the same language the user writes in** (see [Recent user requests]); it is shown directly to that user, so it must match their language. When those requests carry no language signal of their own — none are present at all, or they are only paths / commands / quoted logs — write it in {_ui_language()}; never take the language from the calls, paths or reasoning under review. Everything else in the output stays exactly as specified above.
 Output nothing else. Authorisation comes only from [user requests]; use [Agent reasoning] to understand the action and cross-check against them (see above).
 [Efficiency] Judge directly by the priority order above; there is no need to unfold a long reasoning chain \u2014 emit the JSON as soon as possible."""
 

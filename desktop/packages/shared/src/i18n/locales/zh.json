@@ -220,6 +220,20 @@
         "label": "新建调度"
       }
     },
+    "contextUsage": {
+      "cacheRatio": "占本次输入 {{percentage}}%",
+      "cacheTitle": "缓存命中",
+      "capacityUnknown": "容量未知",
+      "label": "上下文占用",
+      "pending": "待重算",
+      "pendingDetail": "不同模型计算 token 的方式不同。使用所选模型完成下一次运行后，这里的占比会重新计算。",
+      "remainingCompact": "剩余 {{remaining}}",
+      "title": "上下文窗口",
+      "tokenValue": "{{tokens}} token",
+      "usedLabel": "已使用",
+      "usedOnly": "{{used}} token",
+      "usedValue": "{{used}} / {{capacity}}"
+    },
     "emptySession": "请先创建或选择一个会话",
     "model": {
       "clearSearch": "清除搜索",
@@ -966,8 +980,11 @@
       "modelCount": "{{n}} 个模型",
       "models": {
         "add": "添加",
+        "context": "上下文：{{n}} tokens",
+        "contextPlaceholder": "上下文窗口 tokens（可选）",
         "empty": "暂无模型 —— picker 将不显示该渠道。请添加至少一个 model id。",
         "loaded": "已加载 {{n}} 个模型",
+        "output": "输出：{{n}} tokens",
         "placeholder": "输入 model id 后按 Enter 添加，例如 gpt-4o-mini",
         "remove": "移除",
         "removeAria": "移除 {{model}}",
@@ -1544,6 +1561,7 @@
         "awaitingAnswer": "等待你的回答",
         "awaitingSubagent": "正在等待子 Agent",
         "callingTool": "正在调用工具",
+        "compactingContext": "正在压缩上下文",
         "generating": "正在生成回复",
         "runningWorkflow": "正在执行工作流",
         "thinking": "正在思考",
@@ -2261,6 +2279,7 @@
     "expand": "展开"
   },
   "toast": {
+    "modelContextRecalculation": "已切换到 {{model}}。不同模型计算 token 的方式不同，上下文占比将在下一次运行后重新计算。",
     "scheduleAllRunsStopRequested": "已请求停止「{{name}}」的全部运行",
     "scheduleDeleted": "已删除「{{name}}」",
     "schedulePaused": "已暂停「{{name}}」",

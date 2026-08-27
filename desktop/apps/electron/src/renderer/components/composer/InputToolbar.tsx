@@ -19,6 +19,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { Icons } from '../amphi/Icons'
 import { ModelPickerMenu } from './ModelPickerMenu'
+import { ContextUsagePill } from './ContextUsagePill'
 import { activeSessionIdAtom } from '@/atoms/sessions'
 import { pickAndMountAtom, requestMentionInsertAtom } from '@/atoms/mounts'
 import { hydrateWorkflowRunsAtom, workflowRunsAtom } from '@/atoms/workflows'
@@ -66,6 +67,7 @@ export function InputToolbar(_props: InputToolbarProps) {
   return (
     <div className="flex items-center gap-1.5">
       <ModelPickerMenu />
+      <ContextUsagePill />
       <div className="w-px h-4 bg-border-subtle" />
       <div className="relative">
         <button

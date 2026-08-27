@@ -1306,6 +1306,68 @@ select:focus-visible {
   gap: 19px;
 }
 
+.prompt-history-block-content,
+.prompt-compaction-notices {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.prompt-compaction-notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--brand-blue) 24%, var(--border-subtle));
+  border-radius: var(--radius-sm);
+  color: var(--brand-blue);
+  background: color-mix(in srgb, var(--brand-blue) 7%, var(--bg-surface));
+}
+
+.prompt-compaction-notice.is-warning {
+  border-color: color-mix(in srgb, var(--status-warning) 30%, var(--border-subtle));
+  color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 7%, var(--bg-surface));
+}
+
+.prompt-compaction-notice > svg {
+  margin-top: 1px;
+}
+
+.prompt-compaction-notice > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.prompt-compaction-notice strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.prompt-compaction-notice small {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.prompt-history-transcript {
+  max-width: 100%;
+  max-height: 520px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--bg-code);
+  font: 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .prompt-native-message-trigger {
   width: fit-content;
   display: inline-flex;

@@ -69,6 +69,11 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
+Write-Host "[build-pyinstaller] generating packaged model catalog"
+$GeneratedCatalog = Join-Path $RootDir "build\generated\_models_dev_catalog.json"
+& $PyInstallerPython build\generate-providers-catalog.py --output $GeneratedCatalog
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 & $PyInstallerPython -m PyInstaller build\amphi.spec --clean --noconfirm
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

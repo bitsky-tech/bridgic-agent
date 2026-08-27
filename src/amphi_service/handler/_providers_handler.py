@@ -10,12 +10,16 @@ import httpx
 from fastapi import HTTPException, Response, status
 
 from ..protocol import (
-    PROVIDER_CATALOG_BY_ID,
     AddProviderRequest,
     FetchModelsRequest,
     SetActiveModelRequest,
     TestProviderRequest,
     ToggleProviderRequest,
+)
+from ..protocol.llms import (
+    PROVIDER_CATALOG_BY_ID,
+    catalog_model,
+    resolve_model_limits,
     visible_catalog,
 )
 from ..protocol.llms._codex_credentials import (
@@ -69,6 +73,13 @@ def _configured(cred: ProviderCredential) -> dict:
     no entry → empty list (picker won't show it).
     """
     models = cred.enabled_models if isinstance(cred.enabled_models, list) else []
+    raw_stored_limits = getattr(cred, "model_limits", {})
+    stored_limits = raw_stored_limits if isinstance(raw_stored_limits, dict) else {}
+    model_limits = {
+        model_id: dict(stored_limits[model_id])
+        for model_id in models
+        if isinstance(stored_limits.get(model_id), dict) and stored_limits[model_id]
+    }
     return {
         "id": cred.provider_id,
         "auth_mode": cred.auth_mode,
@@ -79,6 +90,7 @@ def _configured(cred: ProviderCredential) -> dict:
         "protocol": cred.protocol,
         "display_name": cred.display_name,
         "available_models": models,
+        "model_limits": model_limits,
     }
 
 
@@ -184,7 +196,40 @@ class MeProvidersHandler(BaseHandler):
         # can wire any OpenAI-compat or Anthropic-compat endpoint by giving
         # it a slug. The catalog at GET /providers is now a UI prefill source.
         user = await self.require_user()
-        cred = await ProviderRepository().upsert(
+        repository = ProviderRepository()
+        existing_rows = await repository.list_for_user(user.id)
+        existing_row = next(
+            (row for row in existing_rows if row.provider_id == body.provider_id),
+            None,
+        )
+        selected_models = (
+            body.models
+            if body.models is not None
+            else existing_row.enabled_models if existing_row is not None else []
+        )
+        submitted_limits = (
+            {
+                model_id: limits.model_dump(exclude_none=True)
+                for model_id, limits in body.model_limits.items()
+            }
+            if body.model_limits is not None
+            else {}
+        )
+        existing_limits = (
+            existing_row.model_limits
+            if existing_row is not None and isinstance(existing_row.model_limits, dict)
+            else {}
+        )
+        resolved_limits = None
+        if body.models is not None or body.model_limits is not None:
+            resolved_limits = {}
+            for model_id in selected_models:
+                incoming = submitted_limits.get(model_id, existing_limits.get(model_id))
+                resolved = resolve_model_limits(body.provider_id, model_id, incoming)
+                if resolved is not None:
+                    resolved_limits[model_id] = resolved
+
+        cred = await repository.upsert(
             user.id,
             body.provider_id,
             auth_mode=body.auth_mode,
@@ -193,12 +238,13 @@ class MeProvidersHandler(BaseHandler):
             protocol=_resolve_protocol(body.provider_id, body.protocol),
             display_name=body.display_name,
             models=body.models,
+            model_limits=resolved_limits,
         )
         # First usable (api_key) provider auto-activates and mirrors its
         # creds onto the User row so chat works without a separate step.
-        existing = await ProviderRepository().list_for_user(user.id)
+        existing = await repository.list_for_user(user.id)
         if not any(c.is_active for c in existing) and cred.api_key:
-            cred = await ProviderRepository().set_active(user.id, cred.provider_id)
+            cred = await repository.set_active(user.id, cred.provider_id)
             await _sync_user_credentials(
                 self.llms,
                 user.id,
@@ -542,36 +588,119 @@ def _models_request(
     return url, {"authorization": f"Bearer {api_key}"}, {}
 
 
-def _parse_models(protocol: str, payload: Any) -> List[Dict[str, str]]:
-    """Normalize a provider's list-models payload into ``[{id, name}]``.
+def _parse_models(protocol: str, payload: Any) -> List[Dict[str, Any]]:
+    """Normalize a provider's list-models payload and retain advertised limits.
 
     Deduplicates by id (keeping first occurrence) — some OpenAI-compat
     gateways aggregate several upstreams and repeat ids.
     """
-    entries: List[Dict[str, str]] = []
+    def positive_int(value: Any) -> Optional[int]:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return None
+        return value
+
+    def advertised_limits(model: dict) -> Dict[str, int]:
+        fields: Dict[str, Any]
+        if protocol == "google":
+            fields = {
+                "input": model.get("inputTokenLimit"),
+                "output": model.get("outputTokenLimit"),
+            }
+        elif protocol == "anthropic":
+            fields = {
+                "input": model.get("max_input_tokens"),
+                "output": model.get("max_tokens"),
+            }
+        else:
+            top_provider = model.get("top_provider")
+            top_provider = top_provider if isinstance(top_provider, dict) else {}
+            fields = {
+                "context": model.get("context_length") or top_provider.get("context_length"),
+                "input": model.get("max_input_tokens"),
+                "output": (
+                    model.get("max_output_tokens")
+                    or model.get("max_completion_tokens")
+                    or top_provider.get("max_completion_tokens")
+                ),
+            }
+        return {
+            key: value
+            for key, raw in fields.items()
+            if (value := positive_int(raw)) is not None
+        }
+
+    entries: List[Dict[str, Any]] = []
     if protocol == "google":
         for m in (payload or {}).get("models") or []:
+            if not isinstance(m, dict):
+                continue
             # Filter out embedding / tuning-only models — they'd break chat.
             if "generateContent" not in (m.get("supportedGenerationMethods") or []):
                 continue
             raw = str(m.get("name") or "")
             model_id = raw[len("models/"):] if raw.startswith("models/") else raw
             if model_id:
-                entries.append({"id": model_id, "name": m.get("displayName") or model_id})
+                entries.append({
+                    "id": model_id,
+                    "name": m.get("displayName") or model_id,
+                    "provider_limits": advertised_limits(m),
+                })
     else:
         for m in (payload or {}).get("data") or []:
+            if not isinstance(m, dict):
+                continue
             model_id = str(m.get("id") or "")
             if model_id:
                 # display_name is Anthropic-only; OpenAI-compat has no name field.
-                entries.append({"id": model_id, "name": m.get("display_name") or model_id})
+                entries.append({
+                    "id": model_id,
+                    "name": m.get("display_name") or m.get("name") or model_id,
+                    "provider_limits": advertised_limits(m),
+                })
         if protocol != "anthropic":
             # OpenAI-compat returns an arbitrary order and often 100+ entries;
             # Anthropic/Google already come newest-first, so leave those alone.
             entries.sort(key=lambda e: e["id"])
-    deduped: Dict[str, Dict[str, str]] = {}
+    deduped: Dict[str, Dict[str, Any]] = {}
     for e in entries:
         deduped.setdefault(e["id"], e)
     return list(deduped.values())
+
+
+def _enrich_models(provider_id: str, models: List[Dict[str, Any]]) -> List[dict]:
+    """Merge live availability with packaged models.dev metadata."""
+    enriched = []
+    for item in models:
+        model_id = item["id"]
+        packaged = catalog_model(provider_id, model_id)
+        packaged_limits = packaged["limits"] if packaged is not None else {}
+        provider_limits = item.get("provider_limits")
+        provider_limits = provider_limits if isinstance(provider_limits, dict) else {}
+        limits = {**packaged_limits, **provider_limits}
+        limits_source = (
+            "provider" if provider_limits
+            else "models_dev" if packaged_limits
+            else "unknown"
+        )
+        source_provider_id = (
+            packaged["source_provider_id"] if packaged is not None else provider_id
+        )
+        source_model_id = packaged["source_model_id"] if packaged is not None else model_id
+        name = item.get("name") or model_id
+        if name == model_id and packaged is not None:
+            name = packaged["name"]
+        enriched.append({
+            "id": model_id,
+            "name": name,
+            "vision": packaged["vision"] if packaged is not None else None,
+            "tool_call": packaged["tool_call"] if packaged is not None else None,
+            "reasoning": packaged["reasoning"] if packaged is not None else None,
+            "limits": limits,
+            "limits_source": limits_source,
+            "source_provider_id": source_provider_id,
+            "source_model_id": source_model_id,
+        })
+    return enriched
 
 
 def _fetch_error_message(status_code: int, body: str, api_key: str) -> str:
@@ -632,10 +761,11 @@ class MeProviderFetchModelsHandler(BaseHandler):
         # send us down the API-key path. Subscription channels also carry no
         # api_key, so this must precede the emptiness check too.
         if body.protocol == "openai-codex":
-            # Copy the entries too, not just the outer list — a shallow list()
-            # hands out references to the module-level dicts, so any downstream
-            # mutation would permanently corrupt the in-process catalog.
-            return self.response({"ok": True, "models": [dict(m) for m in CODEX_CATALOG_MODELS]})
+            models = _enrich_models(
+                body.provider_id,
+                [{**model, "provider_limits": {}} for model in CODEX_CATALOG_MODELS],
+            )
+            return self.response({"ok": True, "models": models})
 
         if not body.api_key.strip():
             return self.response({
@@ -688,7 +818,10 @@ class MeProviderFetchModelsHandler(BaseHandler):
                 "error": _non_json_endpoint_error(),
             })
         try:
-            models = _parse_models(protocol, payload)
+            models = _enrich_models(
+                body.provider_id,
+                _parse_models(protocol, payload),
+            )
         except Exception as exc:  # noqa: BLE001 — valid JSON, unexpected shape
             return self.response({
                 "ok": False,
@@ -895,6 +1028,11 @@ async def _activate_codex_provider(llms: LlmCache, user_id: str) -> None:
             relogin_required=True,
         )
     models = [m["id"] for m in CODEX_CATALOG_MODELS]
+    model_limits = {}
+    for model_id in models:
+        resolved = resolve_model_limits(_CODEX_PROVIDER_ID, model_id)
+        if resolved is not None:
+            model_limits[model_id] = resolved
     # current_model stays the pinned default rather than the table's first row:
     # the table is ordered newest-first for display, and the newest model isn't
     # necessarily the one this account can actually drive.
@@ -909,6 +1047,7 @@ async def _activate_codex_provider(llms: LlmCache, user_id: str) -> None:
         protocol="openai-codex",
         display_name="OpenAI",
         models=models,
+        model_limits=model_limits,
     )
     # upsert preserves a non-None base_url — explicitly forget the api_key-era
     # url, or the next /me/active-model mirrors it back and Codex requests go

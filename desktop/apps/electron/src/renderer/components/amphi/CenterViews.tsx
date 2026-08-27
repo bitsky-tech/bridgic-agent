@@ -715,6 +715,7 @@ function WorkflowResultsTree({
               {open ? group.runs.map((run) => {
                 const status = runStatus(t, run)
                 const canDelete = ['completed', 'failed', 'cancelled'].includes(run.status)
+                const canUse = run.status === 'completed' || run.status === 'failed'
                 return (
                   <div key={run.id} className="relative border-t border-border-subtle bg-bg-app">
                     <button
@@ -731,7 +732,7 @@ function WorkflowResultsTree({
                       <span className={cn('w-fit rounded-full px-2 py-0.5 text-2xs font-semibold', status.tone)}>{status.label}</span>
                       <span className="font-mono text-xs text-text-secondary">{formatWorkflowRunShortTimestamp(run.created_at)}</span>
                     </button>
-                    {run.status === 'completed' ? (
+                    {canUse ? (
                       <button
                         type="button"
                         onClick={() => onUseRun(run)}

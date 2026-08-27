@@ -51,6 +51,7 @@
 import { atom, type Getter, type Setter } from 'jotai'
 import {
   type ConfiguredProvider,
+  type ModelLimits,
   type ProviderCatalogEntry,
   type FetchModelsResult,
   type TestProviderResult,
@@ -58,6 +59,7 @@ import {
 import { buildAmphiClient } from './backend'
 import { i18n } from '../lib/i18n'
 import { rlog } from '../lib/logger'
+import { showToastAtom } from './toast'
 
 /**
  * Pure display meta + form presets + base-URL normalization live in
@@ -323,6 +325,7 @@ export interface AddProviderInput {
   protocol?: 'openai' | 'anthropic'
   displayName?: string | null
   models?: string[]
+  modelLimits?: Record<string, ModelLimits>
 }
 
 export const addProviderAtom = atom(
@@ -346,6 +349,7 @@ export const addProviderAtom = atom(
         protocol: input.protocol,
         display_name: input.displayName,
         models: input.models,
+        model_limits: input.modelLimits,
       })
       await set(hydrateModelsAtom)
       set(_lastActionError, null)
@@ -397,6 +401,7 @@ export const addProviderAtom = atom(
 /** Input to {@link setCodexModelsAtom}. */
 export interface SetCodexModelsInput {
   models: string[]
+  modelLimits: Record<string, ModelLimits>
 }
 
 /**
@@ -426,6 +431,7 @@ export const setCodexModelsAtom = atom(
         // api_key omitted → backend upsert preserves the (absent) Codex key.
         display_name: 'OpenAI',
         models: input.models,
+        model_limits: input.modelLimits,
       })
       await set(hydrateModelsAtom)
       set(_lastActionError, null)
@@ -617,6 +623,7 @@ export const useLocalCodexAtom = atom(
 export const setActiveModelAtom = atom(
   null,
   async (get, set, input: { providerId: string; modelId: string }) => {
+    const previous = get(activeModelAtom)
     const client = buildAmphiClient(get)
     if (!client) {
       const msg = i18n.t('error.backendNotReady')
@@ -630,6 +637,9 @@ export const setActiveModelAtom = atom(
       })
       await set(hydrateModelsAtom)
       set(_lastActionError, null)
+      if (previous && (previous.providerId !== input.providerId || previous.modelId !== input.modelId)) {
+        set(showToastAtom, i18n.t('toast.modelContextRecalculation', { model: input.modelId }))
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       rlog.error('[models] set active model failed', err)

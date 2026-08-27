@@ -17,6 +17,7 @@ import { createStore } from 'jotai'
 import { fetchProviderApiKeyAtom, fetchProviderModelsAtom } from '../models'
 import { backendSnapshotAtom } from '../backend'
 import { BackendState } from '../../../main/python-client/types'
+import { i18n } from '../../lib/i18n'
 
 const INPUT = {
   providerId: 'openai',
@@ -53,11 +54,27 @@ describe('fetchProviderModelsAtom', () => {
     withDaemon(
       store,
       mock(async () =>
-        jsonResponse({ ok: true, models: [{ id: 'gpt-4o', name: 'GPT-4o' }] }),
+        jsonResponse({
+          ok: true,
+          models: [{
+            id: 'gpt-4o',
+            name: 'GPT-4o',
+            limits: { context: 128_000, output: 16_384 },
+            limits_source: 'provider',
+          }],
+        }),
       ) as never,
     )
     const result = await store.set(fetchProviderModelsAtom, INPUT)
-    expect(result).toEqual({ ok: true, models: [{ id: 'gpt-4o', name: 'GPT-4o' }] })
+    expect(result).toEqual({
+      ok: true,
+      models: [{
+        id: 'gpt-4o',
+        name: 'GPT-4o',
+        limits: { context: 128_000, output: 16_384 },
+        limits_source: 'provider',
+      }],
+    })
   })
 
   it('posts to /me/providers/fetch-models WITHOUT a model field', async () => {
@@ -103,11 +120,11 @@ describe('fetchProviderModelsAtom', () => {
     expect(result.error).toContain('socket hang up')
   })
 
-  it('reports 后端未就绪 when no daemon endpoint is configured', async () => {
+  it('reports the localized backend-not-ready error when no daemon is configured', async () => {
     const store = createStore()
     // Default snapshot has endpoint=null → buildAmphiClient returns null.
     const result = await store.set(fetchProviderModelsAtom, INPUT)
-    expect(result).toEqual({ ok: false, error: '后端未就绪' })
+    expect(result).toEqual({ ok: false, error: i18n.t('error.backendNotReady') })
   })
 })
 

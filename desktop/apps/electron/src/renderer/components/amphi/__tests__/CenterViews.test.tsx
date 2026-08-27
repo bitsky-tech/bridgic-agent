@@ -239,6 +239,17 @@ describe('CenterAssets', () => {
             created_at: '2026-07-21T08:00:00Z',
             finished_at: '2026-07-21T08:01:00Z',
           },
+          {
+            id: 'wfr_failed',
+            workflow_id: 'wf_1',
+            workflow_name: '论文发现与主题相关性筛选',
+            source_session_id: 'session_1',
+            workflow_input: { text: '失败的筛选运行', blocks: [] },
+            status: 'failed',
+            validation_status: 'failed',
+            created_at: '2026-07-23T08:00:00Z',
+            finished_at: '2026-07-23T08:01:00Z',
+          },
         ])
       }
       return jsonResponse({})
@@ -258,7 +269,7 @@ describe('CenterAssets', () => {
     expect(host.textContent).toContain('—') // folder size cell = placeholder
     expect(host.textContent).toContain('Agent 上下文压缩论文')
     expect(host.textContent).toContain('论文发现与主题相关性筛选')
-    expect(host.textContent).toContain('2 次运行')
+    expect(host.textContent).toContain('3 次运行')
     expect(host.textContent).not.toContain('用户画像.xlsx')
 
     const workflowButton = Array.from(host.querySelectorAll('button'))
@@ -276,14 +287,14 @@ describe('CenterAssets', () => {
       composerTarget: ComposerTarget.NewSession,
     })
 
-    const useResult = host.querySelector<HTMLButtonElement>(
-      'button[aria-label="在新会话中使用结果 wfr_1"]',
+    const useFailedResult = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="在新会话中使用结果 wfr_failed"]',
     )
-    await act(async () => useResult?.click())
+    await act(async () => useFailedResult?.click())
     expect(store.get(activeSessionIdAtom)).toBe(DRAFT_SESSION_ID)
     expect(store.get(pendingComposerSeedAtom)?.segments[0]).toMatchObject({
       type: 'mention',
-      id: 'wfr_1',
+      id: 'wfr_failed',
       group: 'WorkflowRun',
     })
     await act(async () => root.unmount())

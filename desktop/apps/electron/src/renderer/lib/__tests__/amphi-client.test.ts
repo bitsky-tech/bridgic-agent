@@ -588,6 +588,49 @@ describe('AmphiClient session transcript', () => {
       validationSteps: ['检查报告'],
     })
   })
+
+  it('rehydrates the latest durable context usage snapshot', async () => {
+    installFetchStub({
+      messages: [],
+      context_usage: {
+        model_id: 'gpt-test',
+        input_tokens: 60,
+        output_tokens: 10,
+        cached_input_tokens: 42,
+        used_tokens: 60,
+        usable_tokens: 100,
+        percentage: 60,
+        source: 'provider',
+        breakdown: {
+          system_prompt_tokens: 10,
+          dynamic_context_tokens: 20,
+          session_history_tokens: 20,
+          current_input_tokens: 10,
+        },
+      },
+    })
+    const client = new AmphiClient({ baseUrl: 'http://x', token: 'tok' })
+
+    const transcript = await client.getSessionMessages('session_1')
+
+    expect(transcript.contextUsage).toEqual({
+      modelId: 'gpt-test',
+      inputTokens: 60,
+      outputTokens: 10,
+      cachedInputTokens: 42,
+      usedTokens: 60,
+      usableTokens: 100,
+      percentage: 60,
+      source: 'provider',
+      breakdown: {
+        systemPromptTokens: 10,
+        dynamicContextTokens: 20,
+        toolSchemaTokens: 0,
+        sessionHistoryTokens: 20,
+        currentInputTokens: 10,
+      },
+    })
+  })
 })
 
 // ─── Request timeout ────────────────────────────────────────────────────────

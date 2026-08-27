@@ -37,8 +37,9 @@ from ._cognitive import (
     WorkflowThink,
     render_input,
 )
-from ._context import AmphiContext, AmphiOTAContext
+from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
+from ._error import AgentEmptyAnswerError
 from ._prompt import TITLE_PROMPT
 from ._state import (
     AgentResult,
@@ -52,6 +53,7 @@ from ._state import (
     AwaitingWorkflowRunChoice,
     BuildStageState,
     AwaitingSubAgent,
+    ContextCompactionState,
     NormalStageState,
     RoundPermission,
     CallVerdict,
@@ -97,6 +99,7 @@ logger = logging.getLogger(__name__)
 # Constants
 DEFAULT_MAX_ROUNDS = 200
 MAX_THINK_UNITS_PER_TURN = 50
+MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS = 3
 TITLE_MAX_LEN = 40
 TOOL_RESULT_INLINE_CHAR_LIMIT = 16 * 1024
 
@@ -252,7 +255,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # 2. Walk the agent loop.
         answer: Optional[AgentResult] = None
         budget = MAX_THINK_UNITS_PER_TURN
-        empty_answer_retried = False
+        empty_answer_recovery_attempts = 0
         while budget > 0:
             # Stop before another think unit when the turn is already parked.
             if ota_context.interaction_status is not None:
@@ -289,10 +292,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     self._publish_stage(ota_context, next_status)
                     budget = max(budget, 1)
                     continue
-                if not answer:  # Empty Main answer: continue once more for a user-visible reply.
-                    if empty_answer_retried:
-                        raise RuntimeError("Agent produced an empty answer after continuation")
-                    empty_answer_retried = True
+                if not answer:
+                    if empty_answer_recovery_attempts >= MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS:
+                        raise AgentEmptyAnswerError(empty_answer_recovery_attempts)
+                    empty_answer_recovery_attempts += 1
                     self._stamp_continue(ota_context)
                     budget = max(budget, 1)
                     continue
@@ -1114,6 +1117,22 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # Get the latest Session Turn
         turns = context.session.get_all()
         latest_turn = turns[-1] if turns else None
+        if latest_turn is not None:
+            previous_usage = ContextUsageSnapshot.model_validate(latest_turn.context_usage)
+            if latest_turn.status.is_terminal:
+                previous_usage = previous_usage.model_copy(update={
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                })
+            ota_context.context_usage = previous_usage
+            raw_compaction = (latest_turn.agent_state or {}).get("context_compaction")
+            if raw_compaction:
+                compaction = ContextCompactionState.model_validate(raw_compaction)
+                if latest_turn.status.is_terminal:
+                    compaction = compaction.model_copy(update={
+                        "turn": {},
+                    })
+                ota_context.state.context_compaction = compaction
 
         ########################
         # Initialize a new Agent Turn
@@ -3620,14 +3639,16 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _stamp_continue(ota_context: AmphiOTAContext) -> None:
-        """Ask Main to recover an empty response with a user-visible summary."""
+        """Ask Main to recover an empty response with a user-visible final answer."""
         records = getattr(ota_context, "ota_record", None) or []
         if not records:
             return
         note = (
-            "[system] Your last response was empty. Continue the same turn and provide "
-            "a clear user-visible final answer, briefly summarizing any work just "
-            "completed. Do not repeat completed actions."
+            "[system] Please give the user a clear summary of the task outcome, "
+            "including what was completed and where the result can be found. If "
+            "anything remains unfinished, explain why, describe the current progress, "
+            "and suggest the next step. There is no need to call more tools or repeat "
+            "work that has already been completed."
         )
         last = records[-1]
         existing = getattr(last, "observation_result", None)

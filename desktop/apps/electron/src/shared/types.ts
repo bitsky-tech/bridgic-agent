@@ -125,6 +125,7 @@ export type {
   AgentEvent,
   AskUserQuestion,
   AskUserQuestionOption,
+  ContextUsageSnapshot,
   PermissionItem,
   ThinkPosition,
   WorkflowRunState,

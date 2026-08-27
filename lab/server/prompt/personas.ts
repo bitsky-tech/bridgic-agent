@@ -3,11 +3,13 @@ import {
   PERSONA_SOURCE_SNAPSHOT,
   PERSONA_SOURCE_VERSION,
 } from "./personas.generated";
-import type { PromptPersonaSnapshot, PromptStage } from "./types";
+import type { PromptPersonaSnapshot, PromptStage, PromptUiLanguage } from "./types";
 
 const MAIN_TOOL_NAMES_PLACEHOLDER = "__AMPHI_MAIN_TOOL_NAMES__";
 const STAGE_TOOL_NAMES_PLACEHOLDER = "__AMPHI_STAGE_TOOL_NAMES__";
 const SUB_AGENT_GUIDANCE_PLACEHOLDER = "__AMPHI_SUB_AGENT_GUIDANCE__";
+const UI_LANGUAGE_PLACEHOLDER = "__AMPHI_UI_LANGUAGE__";
+const DEFAULT_UI_LANGUAGE = "Chinese";
 const SUB_AGENT_TOOL_NAMES = new Set(["run_subagent", "start_subagent"]);
 
 export const DEFAULT_PERSONAS: Required<Omit<PromptPersonaSnapshot, "version">> & { version: string } = {
@@ -23,6 +25,7 @@ export const DEFAULT_PERSONAS: Required<Omit<PromptPersonaSnapshot, "version">> 
 };
 
 export { PERSONA_SOURCE_SHA256, PERSONA_SOURCE_VERSION };
+export const TURN_FAILED_MESSAGE = PERSONA_SOURCE_SNAPSHOT.turnFailedMessage;
 
 export interface RenderedPersona {
   content: string;
@@ -49,6 +52,7 @@ export function renderPersona(
   stage: PromptStage,
   toolNames: string[],
   snapshot?: PromptPersonaSnapshot,
+  uiLanguage: PromptUiLanguage = DEFAULT_UI_LANGUAGE,
 ): RenderedPersona {
   const key: Exclude<keyof PromptPersonaSnapshot, "version"> = stage === "workflow_execute"
     ? "workflowExecute"
@@ -63,6 +67,7 @@ export function renderPersona(
       .replaceAll(MAIN_TOOL_NAMES_PLACEHOLDER, renderedNames)
       .replaceAll(STAGE_TOOL_NAMES_PLACEHOLDER, renderedNames)
       .replaceAll(SUB_AGENT_GUIDANCE_PLACEHOLDER, subAgentGuidance(toolNames))
+      .replaceAll(UI_LANGUAGE_PLACEHOLDER, uiLanguage)
       .trim(),
     version: snapshot?.version ?? DEFAULT_PERSONAS.version,
     usesInjectedSnapshot: injected !== undefined,

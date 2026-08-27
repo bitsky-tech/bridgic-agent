@@ -241,13 +241,17 @@ class GoogleLlm(BaseLlm):
         """
         usage = getattr(chunk, "usage_metadata", None)
         if usage is not None:
-            # Normalize to the input/output shape ``_usage_pair`` reads; Gemini's
-            # thinking tokens are billed as output.
-            state["usage"] = {
+            # Normalize to the shape ``_usage_values`` reads; Gemini's thinking
+            # tokens are billed as output.
+            normalized_usage = {
                 "input_tokens": getattr(usage, "prompt_token_count", 0) or 0,
                 "output_tokens": (getattr(usage, "candidates_token_count", 0) or 0)
                 + (getattr(usage, "thoughts_token_count", 0) or 0),
             }
+            cached_input_tokens = getattr(usage, "cached_content_token_count", None)
+            if cached_input_tokens is not None:
+                normalized_usage["cached_input_tokens"] = cached_input_tokens
+            state["usage"] = normalized_usage
         candidates = getattr(chunk, "candidates", None) or []
         if not candidates:
             return

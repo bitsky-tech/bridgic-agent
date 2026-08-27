@@ -5,7 +5,49 @@ import httpx
 import pytest
 
 from src.amphi_service.handler import _providers_handler as providers_handler
+from src.amphi_service.protocol.llms import catalog_model, resolve_model_limits
 from src.amphi_service.protocol.llms import openai_llm as openai_module
+from src.amphi_store import ProviderRepository
+
+
+def test_packaged_catalog_lookup() -> None:
+    """Product provider ids resolve into the packaged models.dev namespace."""
+    kimi = catalog_model("kimi", "k3")
+    assert kimi is not None
+    assert kimi["source_provider_id"] == "kimi-for-coding"
+    assert kimi["limits"]["context"] > 0
+
+    free_openrouter = catalog_model("openrouter", "openai/gpt-oss-120b:free")
+    assert free_openrouter is not None
+    assert free_openrouter["source_model_id"] == "openai/gpt-oss-120b"
+
+    resolved = resolve_model_limits(
+        "openai",
+        "gpt-5.5",
+        {"context": 999_999, "source": "provider"},
+    )
+    assert resolved is not None
+    assert resolved["context"] == 999_999
+    assert resolved["output"] > 0
+    assert resolved["source"] == "provider"
+
+    packaged_over_manual = resolve_model_limits(
+        "openai",
+        "gpt-5.5",
+        {"context": 1, "source": "manual"},
+    )
+    assert packaged_over_manual is not None
+    assert packaged_over_manual["context"] != 1
+    assert packaged_over_manual["source"] == "models_dev"
+
+    manual_unknown = resolve_model_limits(
+        "custom-provider",
+        "custom-model",
+        {"context": 32_000, "source": "manual"},
+    )
+    assert manual_unknown is not None
+    assert manual_unknown["context"] == 32_000
+    assert manual_unknown["source"] == "manual"
 
 
 async def test_catalog(service_client: httpx.AsyncClient) -> None:
@@ -16,7 +58,7 @@ async def test_catalog(service_client: httpx.AsyncClient) -> None:
         {
           "id": "<unique id>",
           "protocol": "<wire protocol>",
-          "models": [{"id": "<model id>", "vision": true}]
+          "models": [{"id": "<model id>", "limits": {"context": 128000}}]
         }
       ]
     }
@@ -48,7 +90,15 @@ async def test_catalog(service_client: httpx.AsyncClient) -> None:
     for provider in providers:
         assert provider["default_auth_mode"] in provider["auth_modes"]
         assert provider["models"]
-        assert all(set(model) == {"id", "vision"} for model in provider["models"])
+        assert all(set(model) == {
+            "id",
+            "name",
+            "vision",
+            "tool_call",
+            "reasoning",
+            "limits",
+        } for model in provider["models"])
+        assert all(model["tool_call"] is True for model in provider["models"])
 
     # Check 3: Hidden vendors stay absent while core public channels remain available.
     provider_ids = {provider["id"] for provider in providers}
@@ -90,6 +140,9 @@ async def test_add_provider(service_client: httpx.AsyncClient) -> None:
         "protocol": "anthropic",
         "display_name": "Company Gateway",
         "models": ["company-model"],
+        "model_limits": {
+            "company-model": {"context": 96_000, "source": "manual"},
+        },
     }
 
     # Check 1: Saving a custom provider returns its complete redacted HTTP projection.
@@ -105,6 +158,9 @@ async def test_add_provider(service_client: httpx.AsyncClient) -> None:
         "protocol": "anthropic",
         "display_name": "Company Gateway",
         "available_models": ["company-model"],
+        "model_limits": {
+            "company-model": {"context": 96_000, "source": "manual"},
+        },
     }
     assert response.json() == provider
     assert secret not in response.text
@@ -127,6 +183,35 @@ async def test_add_provider(service_client: httpx.AsyncClient) -> None:
     response = await service_client.get("/me/providers/company-gateway/api-key")
     assert response.status_code == 200
     assert response.json() == {"api_key": secret}
+
+
+async def test_configured_provider_uses_packaged_limit_fallback(service_client: httpx.AsyncClient) -> None:
+    """Saving selected ids resolves packaged limits and persists them once."""
+    response = await service_client.post(
+        "/me/providers",
+        json={
+            "provider_id": "openai",
+            "auth_mode": "api_key",
+            "api_key": "offline-key",
+            "protocol": "openai",
+            "models": ["gpt-5.5", "gpt-5.4-mini", "unknown-model"],
+            "model_limits": {
+                "gpt-5.4-mini": {"context": 999_999, "source": "provider"},
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    limits = response.json()["model_limits"]
+    assert limits["gpt-5.5"]["context"] > 0
+    assert limits["gpt-5.5"]["source"] == "models_dev"
+    assert limits["gpt-5.4-mini"]["context"] == 999_999
+    assert limits["gpt-5.4-mini"]["source"] == "provider"
+    assert "unknown-model" not in limits
+
+    rows = await ProviderRepository().list_for_user("local")
+    stored = next(row for row in rows if row.provider_id == "openai")
+    assert stored.model_limits == limits
 
 
 async def test_builtin_protocol(service_client: httpx.AsyncClient) -> None:
@@ -527,6 +612,8 @@ async def test_provider_network_contract(service_client: httpx.AsyncClient, monk
                         "name": "models/gemini-chat",
                         "displayName": "Gemini Chat",
                         "supportedGenerationMethods": ["generateContent"],
+                        "inputTokenLimit": 1_000_000,
+                        "outputTokenLimit": 65_536,
                     },
                     {
                         "name": "models/text-embedding",
@@ -554,7 +641,17 @@ async def test_provider_network_contract(service_client: httpx.AsyncClient, monk
     assert response.status_code == 200
     assert response.json() == {
         "ok": True,
-        "models": [{"id": "gemini-chat", "name": "Gemini Chat"}],
+        "models": [{
+            "id": "gemini-chat",
+            "name": "Gemini Chat",
+            "vision": None,
+            "tool_call": None,
+            "reasoning": None,
+            "limits": {"input": 1_000_000, "output": 65_536},
+            "limits_source": "provider",
+            "source_provider_id": "google",
+            "source_model_id": "gemini-chat",
+        }],
     }
     assert str(requests[-1].url) == (
         "https://generativelanguage.example.test/v1beta/models?key=google-secret"

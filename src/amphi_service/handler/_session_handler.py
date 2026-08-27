@@ -258,6 +258,7 @@ class SessionMessagesHandler(BaseHandler):
             ),
             "has_more": has_more,
             "next_before": turns[0].session_ordinal if turns else None,
+            "context_usage": _context_usage(turns) if is_tail_page else None,
             # The trailing turn's thinking position and active Workflow card.
             "thinking_mode": _thinking_mode(turns) if is_tail_page else None,
             "workflow_run": (
@@ -487,8 +488,8 @@ def _error_message(
     execution_mode: Optional[str] = None,
 ) -> dict:
     """A failed agent turn → an assistant error bubble — mirrors the live
-    ``error`` frame (``error`` set, no text). Shown in the transcript; the turn
-    is kept OUT of the LLM context (see session_messages_block in _cognitive.py)."""
+    ``error`` frame (``error`` set, no text). The UI shows this internal error
+    separately; persisted Agent messages from the failed Turn remain in context."""
     error_message = {
         "id": f"{session_id}:{idx}.err",
         "turnId": turn_id,
@@ -1112,6 +1113,50 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
     if think.get("mode") == "build" and think.get("workflow_id"):
         position["workflow_id"] = think["workflow_id"]
     return position
+
+
+def _context_usage(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any]]:
+    """Latest durable context occupancy, shaped like the live stream event."""
+    def breakdown(value: Any) -> Dict[str, int]:
+        data = value if isinstance(value, dict) else {}
+        return {
+            "system_prompt_tokens": int(data.get("system_prompt_tokens") or 0),
+            "dynamic_context_tokens": int(data.get("dynamic_context_tokens") or 0),
+            "tool_schema_tokens": int(data.get("tool_schema_tokens") or 0),
+            "session_history_tokens": int(data.get("session_history_tokens") or 0),
+            "current_input_tokens": int(data.get("current_input_tokens") or 0),
+        }
+
+    for turn in reversed(turns):
+        usage = turn.context_usage
+        if not isinstance(usage, dict):
+            continue
+        if not isinstance(usage.get("model_id"), str):
+            continue
+        if usage.get("source") not in {"provider", "estimated"}:
+            continue
+        if int(usage.get("used_tokens") or 0) <= 0:
+            continue
+        return {
+            "model_id": usage["model_id"],
+            "input_tokens": int(
+                usage.get("occupied_input_tokens", usage.get("input_tokens")) or 0
+            ),
+            "output_tokens": int(
+                usage.get("occupied_output_tokens", usage.get("output_tokens")) or 0
+            ),
+            "cached_input_tokens": (
+                int(usage["cached_input_tokens"])
+                if usage.get("cached_input_tokens") is not None
+                else None
+            ),
+            "used_tokens": int(usage.get("used_tokens") or 0),
+            "usable_tokens": usage.get("usable_tokens"),
+            "percentage": usage.get("percentage"),
+            "source": usage["source"],
+            "breakdown": breakdown(usage.get("breakdown")),
+        }
+    return None
 
 
 def _pending_request(turns: Sequence[SessionTurnRecord]) -> Optional[dict]:

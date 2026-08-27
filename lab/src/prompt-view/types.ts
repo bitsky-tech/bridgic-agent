@@ -62,6 +62,7 @@ export interface ReadablePromptBlock {
   description?: string
   sources: string[]
   limitations: string[]
+  metadata?: JsonObject
   messageIndexes: number[]
   unresolvedMessageIndexes: number[]
   text: string

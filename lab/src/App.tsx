@@ -760,6 +760,78 @@ function OverviewPanel({ round }: { round: RoundTrace }) {
   )
 }
 
+function metadataNumber(metadata: JsonObject | undefined, key: string): number {
+  const value = metadata?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
+}
+
+interface CompactionPromptBlock {
+  kind?: string
+  metadata?: JsonObject
+}
+
+function hasCompactionNotice(block: CompactionPromptBlock): boolean {
+  return block.metadata?.compactionApplied === true || block.metadata?.finalCompactionDeferred === true
+}
+
+function PromptCompactionNotice({ block }: { block: CompactionPromptBlock }) {
+  const { formatNumber, t } = useI18n()
+  const metadata = block.metadata
+  const applied = metadata?.compactionApplied === true
+  const deferred = metadata?.finalCompactionDeferred === true
+  if (!applied && !deferred) return null
+
+  const notices: Array<{ key: string; title: string; detail: string; tone: 'info' | 'warning' }> = []
+  if (applied && block.kind === 'session_history') {
+    const boundary = metadataNumber(metadata, 'compactedThroughOrdinal') + 1
+    notices.push({
+      key: 'session-applied',
+      title: t('prompt.compaction.sessionTitle'),
+      detail: t('prompt.compaction.sessionDetail', {
+        compacted: formatNumber(metadataNumber(metadata, 'compactedTurns')),
+        through: formatNumber(boundary),
+        replayed: formatNumber(metadataNumber(metadata, 'includedTurns')),
+        available: formatNumber(metadataNumber(metadata, 'availableTurns')),
+      }),
+      tone: 'info',
+    })
+  }
+  if (applied && block.kind === 'current_turn') {
+    notices.push({
+      key: 'turn-applied',
+      title: t('prompt.compaction.turnTitle'),
+      detail: t('prompt.compaction.turnDetail', {
+        compacted: formatNumber(metadataNumber(metadata, 'compactedRounds')),
+        replayed: formatNumber(metadataNumber(metadata, 'replayedRounds')),
+        available: formatNumber(metadataNumber(metadata, 'completedRounds')),
+      }),
+      tone: 'info',
+    })
+  }
+  if (deferred) {
+    notices.push({
+      key: 'deferred',
+      title: t('prompt.compaction.deferredTitle'),
+      detail: t('prompt.compaction.deferredDetail'),
+      tone: 'warning',
+    })
+  }
+
+  return (
+    <div className="prompt-compaction-notices">
+      {notices.map((notice) => (
+        <div key={notice.key} className={`prompt-compaction-notice is-${notice.tone}`}>
+          <BrainCircuit size={15} aria-hidden="true" />
+          <span>
+            <strong>{notice.title}</strong>
+            <small>{notice.detail}</small>
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function PromptPanel({
   prompt,
   loading,
@@ -801,6 +873,14 @@ function PromptPanel({
   const readableBlocks = view.blocks.map((block) => ({
     ...block,
     description: t(promptBlockDescriptionKeys[block.kind]),
+    badges: [
+      ...(block.metadata?.compactionApplied === true
+        ? [{ label: t('prompt.compaction.appliedBadge'), tone: 'info' as const }]
+        : []),
+      ...(block.metadata?.finalCompactionDeferred === true
+        ? [{ label: t('prompt.compaction.deferredBadge'), tone: 'warning' as const }]
+        : []),
+    ],
   }))
   const messageBlocks = readableBlocks.filter((block) => block.kind !== 'tools')
   const toolSurfaceBlock = readableBlocks.find((block) => block.kind === 'tools') ?? null
@@ -895,31 +975,47 @@ function PromptPanel({
         showLimitations={false}
         defaultExpandedBlockIds={expandedBlockIds}
         labels={{ ...promptReadableLabels, blocks: t('prompt.messageBlocks') }}
-        renderBlockContent={(block) => block.id === turnHistoryBlock?.id ? (
-          <TurnHistoryView
-            messages={prompt.messages}
-            messageIndexes={turnHistoryBlock.messageIndexes}
-            labels={{
-              title: t('prompt.turnHistory.title'),
-              step: t('prompt.turnHistory.step'),
-              assistant: t('prompt.turnHistory.assistant'),
-              assistantDecision: t('prompt.turnHistory.assistantDecision'),
-              toolCalls: t('prompt.turnHistory.toolCalls'),
-              toolCall: t('prompt.turnHistory.toolCall'),
-              arguments: t('prompt.turnHistory.arguments'),
-              noArguments: t('prompt.turnHistory.noArguments'),
-              toolResult: t('prompt.turnHistory.toolResult'),
-              noToolResult: t('prompt.turnHistory.noToolResult'),
-              unmatchedToolResult: t('prompt.turnHistory.unmatchedToolResult'),
-              observations: t('prompt.turnHistory.observations'),
-              observation: t('prompt.turnHistory.observation'),
-              noObservation: t('prompt.turnHistory.noObservation'),
-              callId: t('prompt.turnHistory.callId'),
-              message: t('prompt.turnHistory.message'),
-              empty: t('prompt.turnHistory.empty'),
-            }}
-          />
-        ) : undefined}
+        renderBlockContent={(block) => {
+          if (block.id === turnHistoryBlock?.id) {
+            return (
+              <div className="prompt-history-block-content">
+                <PromptCompactionNotice block={block} />
+                <TurnHistoryView
+                  messages={prompt.messages}
+                  messageIndexes={turnHistoryBlock.messageIndexes}
+                  labels={{
+                    title: t('prompt.turnHistory.title'),
+                    step: t('prompt.turnHistory.step'),
+                    assistant: t('prompt.turnHistory.assistant'),
+                    assistantDecision: t('prompt.turnHistory.assistantDecision'),
+                    toolCalls: t('prompt.turnHistory.toolCalls'),
+                    toolCall: t('prompt.turnHistory.toolCall'),
+                    arguments: t('prompt.turnHistory.arguments'),
+                    noArguments: t('prompt.turnHistory.noArguments'),
+                    toolResult: t('prompt.turnHistory.toolResult'),
+                    noToolResult: t('prompt.turnHistory.noToolResult'),
+                    unmatchedToolResult: t('prompt.turnHistory.unmatchedToolResult'),
+                    observations: t('prompt.turnHistory.observations'),
+                    observation: t('prompt.turnHistory.observation'),
+                    noObservation: t('prompt.turnHistory.noObservation'),
+                    callId: t('prompt.turnHistory.callId'),
+                    message: t('prompt.turnHistory.message'),
+                    empty: t('prompt.turnHistory.empty'),
+                  }}
+                />
+              </div>
+            )
+          }
+          if (block.kind === 'session_history' && hasCompactionNotice(block)) {
+            return (
+              <div className="prompt-history-block-content">
+                <PromptCompactionNotice block={block} />
+                <pre className="prompt-history-transcript">{block.text}</pre>
+              </div>
+            )
+          }
+          return undefined
+        }}
         copyText={copyPromptText}
       />
       {toolSurfaceBlock && (

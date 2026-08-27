@@ -27,6 +27,8 @@ from ._events import (
     AcceptRuleRequestEvent,
     BuildConfirmRequestEvent,
     CancelledEvent,
+    ContextCompactionEvent,
+    ContextUsageEvent,
     ErrorEvent,
     FinalEvent,
     HumanRequestEvent,
@@ -46,16 +48,9 @@ from ._events import (
     ToolEvent,
     ToolResultEvent,
     TurnEvent,
-    UsageEvent,
     WorkflowConfirmRequestEvent,
     WorkflowProgressEvent,
     WorkflowResultEvent,
-)
-from ._providers_catalog import (
-    HIDDEN_PROVIDER_IDS,
-    PROVIDER_CATALOG,
-    PROVIDER_CATALOG_BY_ID,
-    visible_catalog,
 )
 from ._schemas import (
     AddProviderRequest,
@@ -68,6 +63,7 @@ from ._schemas import (
     CreateMountRequest,
     CredentialsRequest,
     FetchModelsRequest,
+    ModelLimits,
     SetActiveModelRequest,
     SetExecutionModeRequest,
     SetModelRequest,
@@ -104,7 +100,8 @@ __all__ = [
     "ToolEvent",
     "ToolResultEvent",
     "LoopAbortEvent",
-    "UsageEvent",
+    "ContextCompactionEvent",
+    "ContextUsageEvent",
     "StageEvent",
     "WorkflowProgressEvent",
     "WorkflowResultEvent",
@@ -138,16 +135,13 @@ __all__ = [
     "PatchScheduleRequest",
     # Providers (multi-provider)
     "AddProviderRequest",
+    "ModelLimits",
     "SetActiveModelRequest",
     "ToggleProviderRequest",
     "TestProviderRequest",
     "FetchModelsRequest",
     # skills
     "ToggleSkillRequest",
-    "PROVIDER_CATALOG",
-    "PROVIDER_CATALOG_BY_ID",
-    "HIDDEN_PROVIDER_IDS",
-    "visible_catalog",
     # Workflows
     "WorkflowFile",
     "WorkflowProgram",

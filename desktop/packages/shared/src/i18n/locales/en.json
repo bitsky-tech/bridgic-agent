@@ -220,6 +220,20 @@
         "label": "New schedule"
       }
     },
+    "contextUsage": {
+      "cacheRatio": "{{percentage}}% of this input",
+      "cacheTitle": "Cache hit",
+      "capacityUnknown": "Capacity unknown",
+      "label": "Context usage",
+      "pending": "Recalculate",
+      "pendingDetail": "Different models count tokens differently. This percentage will be recalculated after the next run with the selected model.",
+      "remainingCompact": "{{remaining}} remaining",
+      "title": "Context window",
+      "tokenValue": "{{tokens}} tokens",
+      "usedLabel": "Used",
+      "usedOnly": "{{used}} tokens",
+      "usedValue": "{{used}} / {{capacity}}"
+    },
     "emptySession": "Create or select a session first",
     "model": {
       "clearSearch": "Clear search",
@@ -966,8 +980,11 @@
       "modelCount": "{{n}} models",
       "models": {
         "add": "Add",
+        "context": "Context: {{n}} tokens",
+        "contextPlaceholder": "Context-window tokens (optional)",
         "empty": "No models — this provider will not appear in the picker. Add at least one model ID.",
         "loaded": "Loaded {{n}} models",
+        "output": "Output: {{n}} tokens",
         "placeholder": "Enter a model ID and press Enter to add, e.g. gpt-4o-mini",
         "remove": "Remove",
         "removeAria": "Remove {{model}}",
@@ -1544,6 +1561,7 @@
         "awaitingAnswer": "Awaiting your answer",
         "awaitingSubagent": "Waiting for subagents",
         "callingTool": "Calling a tool",
+        "compactingContext": "Compacting context",
         "generating": "Generating response",
         "runningWorkflow": "Running workflow",
         "thinking": "Thinking",
@@ -2261,6 +2279,7 @@
     "expand": "Expand"
   },
   "toast": {
+    "modelContextRecalculation": "Switched to {{model}}. Different models count tokens differently, so context usage will be recalculated after the next run.",
     "scheduleAllRunsStopRequested": "Requested all runs of “{{name}}” to stop",
     "scheduleDeleted": "Deleted “{{name}}”",
     "schedulePaused": "Paused “{{name}}”",

@@ -352,6 +352,12 @@ describe('Pipeline', () => {
     }
 
     await renderStreaming({
+      messageId: 'message', content: '', toolCalls: [], blocks: [], startedAt, compacting: true,
+    })
+    expect(host.textContent).toContain('正在压缩上下文')
+    expect(host.querySelector('[aria-label="正在压缩上下文"]')).not.toBeNull()
+
+    await renderStreaming({
       messageId: 'message', content: '', toolCalls: [], blocks: [], startedAt,
     })
     expect(host.textContent).toContain('正在思考')

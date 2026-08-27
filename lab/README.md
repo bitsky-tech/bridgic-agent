@@ -31,10 +31,10 @@ Set `BRIDGIC_AGENT_LAB_PORT` before either command to use a different local brow
 - The left Session pane and right Analysis pane can be resized by dragging their separators. Arrow keys, Home, and End also resize a focused separator; each pane can be collapsed, and its last width is kept in browser storage.
 - Child Agent Sessions are grouped under their root Session and collapsed by default. Searching for or selecting a child expands the relevant root group.
 - Selecting a Turn opens its persisted OTA rounds in the center. Selecting a round expands Overview, Prompt, and Tools directly inside the center timeline.
-- Prompt inspection separates the ordered Message input from the parallel Tool Definitions request field. The Message track contains five readable blocks—Persona, dynamic Context, Session history, current input, and structured Turn history—while Tool Definitions are shown beside it rather than as a final Message. The raw request dialog uses the same two-track structure instead of a JSON dump.
+- Prompt inspection separates the ordered Message input from the parallel Tool Definitions request field. The Message track contains five readable blocks—Persona, dynamic Context, Session history, current input, and structured Turn history—while Tool Definitions are shown beside it rather than as a final Message. Persisted Session and stage-specific Turn compaction summaries replace the raw prefixes they cover, matching the runtime's request projection. The raw request dialog uses the same two-track structure instead of a JSON dump.
 - The right Analysis pane starts collapsed so the execution trace keeps the primary workspace. When opened, Turn input/output Tokens and the Prompt cache hit/miss overview remain visible; only the longer Turn/Round cache details start collapsed and expand on demand.
 
-`state.db` currently persists input/output token totals per Turn, not per OTA round. It also does not persist Provider cache-read/cache-write token details, so the cache hit/miss values are structural estimates derived from reconstructed requests. Each model-request row shows an estimated input size. Output is shown only when a completed Turn contains exactly one model request, where the Turn total can be assigned without splitting; multi-request Turns display it as unavailable. If a Turn has no earlier same-model request to compare with, the Lab shows an explicit “no comparable request” state instead of a misleading 0% result.
+`state.db` currently persists cumulative input/output token totals and the latest model-call occupancy in each Turn's `context_usage`, not a usage snapshot per OTA round. The latest snapshot may contain cache-read tokens, but it cannot be assigned to every reconstructed request and does not retain per-round cache creation details, so the Lab's round-by-round cache hit/miss values remain structural estimates. Each model-request row shows an estimated input size. Output is shown only when a completed Turn contains exactly one model request, where the Turn total can be assigned without splitting; multi-request Turns display it as unavailable. If a Turn has no earlier same-model request to compare with, the Lab shows an explicit “no comparable request” state instead of a misleading 0% result. The read-only data source also accepts the legacy `input_tokens` / `output_tokens` columns when inspecting a database that has not yet been migrated by the backend.
 
 ## Local data API
 
@@ -58,7 +58,7 @@ Prompt assembly is implemented independently in TypeScript under `server/prompt/
 ```text
 messages:
   SYSTEM (persona + context)
-  → bounded prior Session messages
+  → prior Session messages
   → current user input + inferred current_time
   → completed OTA rounds before the selected round
 
@@ -66,7 +66,7 @@ tools:
   visible function definitions sent separately beside messages
 ```
 
-The eight persona variants are complete static snapshots of `src/amphi_agent/_prompt.py`, pinned by SHA-256 and checked byte-for-byte in tests. Prompt diff keeps ordered Message blocks and the unordered Tool surface in separate comparison sections, so a Tool Schema change is not reported as the last Message change. See `server/prompt/README.md` for the synchronization command and internal reconstruction model.
+The eight persona variants are complete static snapshots of the modular prompt source rooted at `src/amphi_agent/_prompt.py`, pinned by a source-graph SHA-256 and checked byte-for-byte in tests. Prompt diff keeps ordered Message blocks and the unordered Tool surface in separate comparison sections, so a Tool Schema change is not reported as the last Message change. See `server/prompt/README.md` for the synchronization command and internal reconstruction model.
 
 ## Verify
 

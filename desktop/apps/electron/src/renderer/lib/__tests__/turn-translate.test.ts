@@ -81,6 +81,66 @@ describe('translateTurnEvent', () => {
     })
   })
 
+  it('maps context compaction lifecycle without creating message content', () => {
+    const { events, warnings } = run([
+      { event: 'context_compaction', data: { active: true } },
+      { event: 'context_compaction', data: { active: false } },
+    ])
+    expect(warnings).toEqual([])
+    expect(events).toEqual([
+      { type: 'message_start', messageId: 'm1', role: 'assistant' },
+      { type: 'context_compaction', active: true },
+      { type: 'context_compaction', active: false },
+    ])
+  })
+
+  it('maps context usage into the renderer snapshot shape', () => {
+    const { events, warnings } = run([{
+      event: 'context_usage',
+      data: {
+        model_id: 'gpt-test',
+        input_tokens: 60,
+        output_tokens: 10,
+        cached_input_tokens: 42,
+        used_tokens: 60,
+        usable_tokens: 100,
+        percentage: 60,
+        source: 'provider',
+        breakdown: {
+          system_prompt_tokens: 10,
+          dynamic_context_tokens: 10,
+          tool_schema_tokens: 10,
+          session_history_tokens: 20,
+          current_input_tokens: 10,
+        },
+      },
+    }])
+    expect(warnings).toEqual([])
+    expect(events).toEqual([
+      { type: 'message_start', messageId: 'm1', role: 'assistant' },
+      {
+        type: 'context_usage',
+        usage: {
+          modelId: 'gpt-test',
+          inputTokens: 60,
+          outputTokens: 10,
+          cachedInputTokens: 42,
+          usedTokens: 60,
+          usableTokens: 100,
+          percentage: 60,
+          source: 'provider',
+          breakdown: {
+            systemPromptTokens: 10,
+            dynamicContextTokens: 10,
+            toolSchemaTokens: 10,
+            sessionHistoryTokens: 20,
+            currentInputTokens: 10,
+          },
+        },
+      },
+    ])
+  })
+
   it('drops empty token text (no text_delta)', () => {
     const { events } = run([{ event: 'token', data: { text: '' } }])
     expect(types(events)).toEqual(['message_start'])

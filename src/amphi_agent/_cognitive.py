@@ -1,17 +1,30 @@
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from bridgic.amphibious import CognitiveWorker, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
-from ..amphi_service.i18n import DEFAULT_LOCALE, backend_i18n, detect_locale
-from ..amphi_store import SessionTurnRecord
-from ._context import AmphiContext, AmphiOTAContext, _view
+from ..amphi_service.i18n import backend_i18n, detect_locale
+from ..amphi_store import SessionTurnRecord, TurnStatus
+from ._context import (
+    AmphiContext,
+    AmphiOTAContext,
+    ContextUsageBreakdown,
+    ContextUsageSnapshot,
+    _view,
+)
+from ._error import ContextWindowExceededError
+from .prompts.compaction import (
+    COMPACTION_SYSTEM_PROMPT,
+    render_session_compaction_prompt,
+    render_turn_compaction_prompt,
+)
 from ._skills import Skill, SkillGroup
 from ._prompt import (
     CLARIFY_PERSONA,
@@ -19,6 +32,7 @@ from ._prompt import (
     GENERATE_PERSONA,
     PERSONA,
     SUB_AGENT_PERSONA,
+    TURN_FAILED_MESSAGE,
     VERIFY_PERSONA,
     WORKFLOW_PERSONA,
     WORKFLOW_VALIDATE_PERSONA,
@@ -26,7 +40,13 @@ from ._prompt import (
     render_stage_persona,
     time_in_local_tz,
 )
-from ._state import BuildStageState, NormalStageState, WorkflowStageState
+from ._state import (
+    BuildStageState,
+    ContextCompactionState,
+    NormalStageState,
+    TurnCompactionState,
+    WorkflowStageState,
+)
 from ._tools import TOOL_LIBRARY
 from ._thinking_debug import write_thinking_debug
 from .tools import (
@@ -54,13 +74,22 @@ __all__ = [
     "render_input",
 ]
 
-SESSION_MESSAGE_RECORD_LIMIT = 100
 logger = logging.getLogger(__name__)
 # Marker on ``Message.extras`` for the per-round <runtime_state> USER tail: live
 # state (changed files, browser tabs) that must stay OUT of the cacheable request
 # prefix. Adapters treat it specially (Anthropic: no cache breakpoint on or after
 # it; OpenAI: the flag is stripped before the wire) and it is never persisted.
 VOLATILE_TAIL_EXTRA = "volatile_tail"
+CONTEXT_COMPACTION_PROVIDER_THRESHOLD = 0.95
+CONTEXT_COMPACTION_ESTIMATED_THRESHOLD = 0.90
+CONTEXT_COMPACTION_PROVIDER_TARGET = 0.60
+CONTEXT_COMPACTION_ESTIMATED_TARGET = 0.55
+CONTEXT_COMPACTION_KEEP_SESSION_TURNS = 4
+CONTEXT_COMPACTION_KEEP_TURN_ROUNDS = 4
+CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS = 32_000
+CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS = 2_048
+CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE = 8
+
 
 CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
     "bash",
@@ -162,9 +191,12 @@ def _shell_environment_summary(workspace: Optional[Any]) -> str:
 
 def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> str:
     """A raw turn input → prompt text, blocks inlined in order (mention → its
-    ALREADY-resolved mount-gated path, else ``@label``). Pure: no DB, no mutation —
-    the one renderer shared by sync routing (``init_state``) and the async
-    ``user_input_block`` (which resolves ``path_map`` first, then delegates here)."""
+    ALREADY-resolved mount-gated path, else ``@label``). No DB, no mutation — the one
+    renderer shared by sync routing (``init_state``), current input, and persisted
+    Session history. Cognitive callers resolve ``path_map`` first.
+
+    Not a pure function of its arguments: the intent sentences below read the active
+    locale when the input itself carries no language (see there for why)."""
     if isinstance(user_input, str):
         return user_input
     read_input = (
@@ -177,11 +209,26 @@ def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> 
         return str(read_input("input") or read_input("text") or "")
     path_map = path_map or {}
     # Intent sentences (the /build and workflow-run preambles) are injected into the
-    # model prompt and re-rendered on every resume of the same persisted turn, so
-    # their language must be a deterministic function of the persisted blocks — the
-    # ambient locale is request-scoped and can differ between the original turn and
-    # a later resume, splitting one turn's prompt across two languages. Derived from
-    # the text blocks (the user's own prose), falling back to the flattened input.
+    # model prompt as if the user had written them, so their language decides the whole
+    # turn's language: the persona's CRITICAL rule tells the model to match the user's
+    # input language, and it cannot tell a synthesized preamble from real prose.
+    # Read from the text blocks and NOTHING else: they are the only thing here the user
+    # actually typed. The flattened input is not a substitute — it splices in the slash
+    # label and every @mention label, which are named by whoever created that Workflow or
+    # folder. A CJK-named Workflow, or a mention of a CJK folder, would otherwise hand
+    # `detect_locale` a CJK character (it treats any CJK as decisive, before its
+    # path-stripping ever runs) and pick the language of a request the user never wrote.
+    #
+    # A slash-only turn therefore has no prose at all, and that is the normal case: a bare
+    # `/build`, or a Workflow run with nothing typed after it. It used to fall back to the
+    # product default (Chinese), which handed every non-Chinese user a Chinese request and
+    # flipped the entire turn's visible text to Chinese. The client's locale is the right
+    # fallback and is already "the user's language, else the language they picked in the
+    # app" — the same resolution every other display string follows.
+    # It is request-scoped, so a resume can in principle render this one sentence in a
+    # different language than the original turn; in practice the locale is re-derived
+    # from the same session, and a rare mismatch on one preamble is a far smaller defect
+    # than a guaranteed wrong language for every user outside zh.
     def _block_value(block: Any, name: str) -> Any:
         return block.get(name) if isinstance(block, dict) else getattr(block, name, None)
 
@@ -189,8 +236,8 @@ def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> 
         str(_block_value(b, "value") or "")
         for b in blocks
         if _block_value(b, "type") == "text"
-    ) or str(read_input("input") or read_input("text") or "")
-    intent_locale = detect_locale(prose) or DEFAULT_LOCALE
+    )
+    intent_locale = detect_locale(prose) or backend_i18n.current_locale()
     parts: List[str] = []
     for b in blocks:
         read = b.get if isinstance(b, dict) else lambda name, default=None: getattr(b, name, default)
@@ -276,6 +323,10 @@ class MainThink(CognitiveWorker):
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
+        messages, request_estimate = await self._prepare_context_window(messages, tools, ota_context, context)
+        breakdown_estimate = await self._estimate_context_breakdown(
+            messages, tools, ota_context, context,
+        )
         stream = ota_context.stream
         def publish(event: str, **payload: Any) -> None:
             # Keep the in-flight model output on the open OTA round. A user may
@@ -313,11 +364,522 @@ class MainThink(CognitiveWorker):
             extra_body=self.extra_body,
             context=context,
         )
-        self._record_usage(ota_context, result.usage)
+        self._record_model_usage(
+            ota_context, context, result, request_estimate, breakdown_estimate,
+        )
         record = ota_context._current_record()
         for key, value in result.capture.items():
             setattr(record, key, value)
         return result.tool_calls, result.content
+
+    @staticmethod
+    def _estimate_request_tokens(messages: Sequence[Message], tools: Sequence[Any]) -> int:
+        """Conservatively estimate final request tokens when no provider counter exists."""
+        def dump(value: Any) -> Any:
+            model_dump = getattr(value, "model_dump", None)
+            return model_dump(mode="json") if callable(model_dump) else value
+
+        payload = {
+            "messages": [dump(message) for message in messages],
+            "tools": [dump(tool) for tool in tools],
+        }
+        byte_count = len(json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8"))
+        return max(1, math.ceil(byte_count / 2) + len(messages) * 12 + len(tools) * 64 + 256)
+
+    @staticmethod
+    def _estimate_result_tokens(result: Any) -> int:
+        """Estimate assistant text and Tool Calls that will enter the next prompt."""
+        payload = {
+            "content": getattr(result, "content", ""),
+            "tool_calls": getattr(result, "tool_calls", []),
+        }
+        byte_count = len(json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8"))
+        return max(1, math.ceil(byte_count / 2))
+
+    async def _estimate_context_breakdown(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[Any],
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+    ) -> ContextUsageBreakdown:
+        """Estimate the final prompt's persisted context components."""
+        def dump(value: Any) -> Any:
+            model_dump = getattr(value, "model_dump", None)
+            return model_dump(mode="json") if callable(model_dump) else value
+
+        def serialized_tokens(value: Any) -> int:
+            byte_count = len(json.dumps(
+                dump(value),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8"))
+            return math.ceil(byte_count / 2)
+
+        def text_tokens(value: str) -> int:
+            return math.ceil(len(value.encode("utf-8")) / 2) if value else 0
+
+        system_prompt_tokens = 0
+        dynamic_context_tokens = 256
+        tool_schema_tokens = 0
+        session_history_tokens = 0
+        current_input_tokens = 0
+
+        current_user = await self.current_user_block(ota_context, context)
+        current_index = next((
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == Role.USER
+            and not messages[index].extras.get(VOLATILE_TAIL_EXTRA)
+            and messages[index].content == current_user
+        ), None)
+
+        for index, message in enumerate(messages):
+            if index == 0 and message.role == Role.SYSTEM:
+                marker = "\n\n<context>\n"
+                boundary = message.content.find(marker)
+                if boundary >= 0:
+                    system_text = message.content[:boundary]
+                    dynamic_text = message.content[boundary + 2:]
+                else:
+                    system_text = message.content
+                    dynamic_text = ""
+                system_prompt_tokens += text_tokens(system_text) + 12
+                dynamic_context_tokens += text_tokens(dynamic_text)
+                continue
+
+            tokens = serialized_tokens(message) + 12
+            if message.extras.get(VOLATILE_TAIL_EXTRA):
+                dynamic_context_tokens += tokens
+            elif index == current_index:
+                current_input_tokens += tokens
+            else:
+                session_history_tokens += tokens
+
+        if tools:
+            tool_schema_tokens += serialized_tokens([dump(tool) for tool in tools])
+            tool_schema_tokens += len(tools) * 64
+
+        return ContextUsageBreakdown(
+            system_prompt_tokens=system_prompt_tokens,
+            dynamic_context_tokens=dynamic_context_tokens,
+            tool_schema_tokens=tool_schema_tokens,
+            session_history_tokens=session_history_tokens,
+            current_input_tokens=current_input_tokens,
+        )
+
+    def _project_context_usage(self, ota_context: AmphiOTAContext, request_estimate: int, model_id: str) -> Tuple[int, str]:
+        """Combine the last measured occupancy with newly estimated prompt growth."""
+        previous = ota_context.context_usage
+        if previous.used_tokens <= 0 or previous.model_id != model_id:
+            return request_estimate, "estimated"
+        growth = max(0, request_estimate - previous.estimated_occupied_tokens)
+        scale = max(1.0, previous.used_tokens / max(1, previous.estimated_occupied_tokens))
+        projected = previous.used_tokens + math.ceil(growth * scale)
+        return max(request_estimate, projected), previous.source
+
+    async def _prepare_context_window(self, messages: List[Message], tools: List[Any], ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Message], int]:
+        """Run the shared preflight after every worker has assembled its final request."""
+        request_estimate = self._estimate_request_tokens(messages, tools)
+        usable_tokens = context.llm_provider.input_capacity()
+        model_id = context.llm_provider.model_id
+        projected_tokens, source = self._project_context_usage(ota_context, request_estimate, model_id)
+        if usable_tokens is not None:
+            threshold = (
+                CONTEXT_COMPACTION_PROVIDER_THRESHOLD
+                if source == "provider"
+                else CONTEXT_COMPACTION_ESTIMATED_THRESHOLD
+            )
+            if projected_tokens / usable_tokens >= threshold:
+                logger.debug(
+                    "Context compaction threshold reached for %s: projected=%s usable=%s source=%s",
+                    model_id or "(unknown model)",
+                    projected_tokens,
+                    usable_tokens,
+                    source,
+                )
+                target_ratio = (
+                    CONTEXT_COMPACTION_PROVIDER_TARGET
+                    if source == "provider"
+                    else CONTEXT_COMPACTION_ESTIMATED_TARGET
+                )
+                target = max(1, math.floor(usable_tokens * target_ratio))
+                messages = await self.compact_messages(
+                    messages, tools, ota_context, context, target,
+                )
+                request_estimate = self._estimate_request_tokens(messages, tools)
+        return messages, request_estimate
+
+    async def compact_messages(
+        self,
+        messages: List[Message],
+        tools: List[Any],
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        target: int,
+    ) -> List[Message]:
+        """Compact both growing history scopes with bounded rolling summaries."""
+        before_tokens = self._estimate_request_tokens(messages, tools)
+        input_capacity = context.llm_provider.input_capacity()
+        previous_usage = ota_context.context_usage
+        measured_over_target = (
+            previous_usage.model_id == context.llm_provider.model_id
+            and previous_usage.source == "provider"
+            and previous_usage.used_tokens > target
+        )
+        if before_tokens <= target and not measured_over_target:
+            return messages
+
+        summary_input_tokens = (
+            min(input_capacity // 2, CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS)
+            if input_capacity is not None
+            else CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS
+        )
+        summary_retained_tokens = min(
+            CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS,
+            max(128, summary_input_tokens // 4),
+        )
+        unit_tokens = max(128, math.floor(summary_input_tokens * 0.40))
+        can_call_model = self._llm is not None and (
+            input_capacity is None or input_capacity >= 4_096
+        )
+        original_compaction = ota_context.state.context_compaction
+        candidate = (
+            original_compaction.model_copy(deep=True)
+            if original_compaction is not None
+            else ContextCompactionState()
+        )
+
+        def text_tokens(value: str) -> int:
+            return math.ceil(len(value.encode("utf-8")) / 2) if value else 0
+
+        def trim_text(value: str, token_limit: int) -> str:
+            """Keep a bounded head and tail while making every omission explicit."""
+            encoded = value.encode("utf-8")
+            byte_limit = max(64, token_limit * 2)
+            if len(encoded) <= byte_limit:
+                return value
+            marker = f"\n...[{len(encoded) - byte_limit} bytes omitted during compaction]...\n".encode()
+            retained = max(16, byte_limit - len(marker))
+            head = math.floor(retained * 0.65)
+            tail = retained - head
+            return (
+                encoded[:head].decode("utf-8", errors="ignore")
+                + marker.decode()
+                + encoded[-tail:].decode("utf-8", errors="ignore")
+            )
+
+        def serialize_messages(history_messages: Sequence[Message]) -> str:
+            payload = [message.model_dump(mode="json") for message in history_messages]
+            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+        def summary_messages(user_prompt: str) -> List[Message]:
+            return [
+                Message.from_text(COMPACTION_SYSTEM_PROMPT, role=Role.SYSTEM),
+                Message.from_text(user_prompt, role=Role.USER),
+            ]
+
+        def record_summary_usage(result: Any) -> None:
+            input_tokens, output_tokens, _ = self._usage_values(result.usage)
+            if not input_tokens and not output_tokens:
+                return
+            self.spent_tokens += input_tokens + output_tokens
+            usage = ota_context.context_usage
+            ota_context.context_usage = usage.model_copy(update={
+                "input_tokens": usage.input_tokens + input_tokens,
+                "output_tokens": usage.output_tokens + output_tokens,
+            })
+
+        async def roll_summary(
+            previous_summary: str,
+            units: Sequence[Tuple[int, str]],
+            render_prompt: Callable[[str, str], str],
+        ) -> Tuple[str, Optional[int]]:
+            """Fold ordered atomic units through bounded model calls, then a bounded fallback."""
+            if not units or sum(text_tokens(text) for _, text in units) < 256:
+                return previous_summary, None
+
+            summary = trim_text(previous_summary.strip(), summary_retained_tokens)
+            through: Optional[int] = None
+            index = 0
+            summary_calls = 0
+            while index < len(units) and summary_calls < CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE:
+                chunk: List[Tuple[int, str]] = []
+                next_index = index
+                while next_index < len(units):
+                    trial = [*chunk, units[next_index]]
+                    history = "\n\n".join(text for _, text in trial)
+                    output_limit = min(
+                        summary_retained_tokens,
+                        max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
+                    )
+                    request = summary_messages(render_prompt(summary, history))
+                    if self._estimate_request_tokens(request, []) <= summary_input_tokens:
+                        chunk = trial
+                        next_index += 1
+                        continue
+                    if chunk:
+                        break
+                    reduced = trim_text(units[next_index][1], max(64, summary_input_tokens // 4))
+                    chunk = [(units[next_index][0], reduced)]
+                    next_index += 1
+                    break
+
+                if not chunk:
+                    break
+                history = "\n\n".join(text for _, text in chunk)
+                output_limit = min(
+                    summary_retained_tokens,
+                    max(96, math.floor((text_tokens(summary) + text_tokens(history)) * 0.35)),
+                )
+                request = summary_messages(render_prompt(summary, history))
+                fallback = trim_text(
+                    "\n\n".join(part for part in (summary, history) if part),
+                    output_limit,
+                )
+                compacted = ""
+                if can_call_model and self._estimate_request_tokens(request, []) <= summary_input_tokens:
+                    try:
+                        result = await self._llm.stream_turn(
+                            request,
+                            None,
+                            publish=lambda _event, **_payload: None,
+                        )
+                        record_summary_usage(result)
+                        compacted = str(result.content or "").strip()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Context summary call failed; using bounded fallback: %s: %s",
+                            type(exc).__name__,
+                            exc,
+                        )
+                summary = trim_text(compacted or fallback, output_limit)
+                through = chunk[-1][0]
+                index = next_index
+                summary_calls += 1
+
+            if index < len(units):
+                logger.debug(
+                    "Context summary reached its model-call bound; folding %s remaining units deterministically",
+                    len(units) - index,
+                )
+                for boundary, text in units[index:]:
+                    summary = trim_text(
+                        "\n\n".join(part for part in (summary, text) if part),
+                        summary_retained_tokens,
+                    )
+                    through = boundary
+            return summary, through
+
+        async def compact_session_history() -> bool:
+            turns = context.session.get_all()
+            raw_prefix = turns[:max(0, len(turns) - CONTEXT_COMPACTION_KEEP_SESSION_TURNS)]
+            units: List[Tuple[int, str]] = []
+            for turn in raw_prefix:
+                if turn.session_ordinal <= candidate.session_through_ordinal:
+                    continue
+                payload = trim_text(
+                    serialize_messages(self._session_messages([turn], context)),
+                    unit_tokens,
+                )
+                units.append((
+                    turn.session_ordinal,
+                    f'<session_turn ordinal="{turn.session_ordinal}" status="{turn.status.value}">\n'
+                    f"{payload}\n</session_turn>",
+                ))
+
+            def render(previous: str, history: str) -> str:
+                return render_session_compaction_prompt(previous, history)
+
+            summary, through = await roll_summary(candidate.session_summary, units, render)
+            if through is None or through <= candidate.session_through_ordinal:
+                return False
+            candidate.session_summary = summary
+            candidate.session_through_ordinal = through
+            return True
+
+        async def compact_turn_history() -> bool:
+            think = ota_context.think_status
+            mode = think.mode
+            stage = think.stage
+            turn_context, _ = self._stage_turn_context(ota_context, mode, stage)
+            records = turn_context.ota_record
+            turn_compaction = candidate.turn.get(mode, {}).get(
+                stage,
+                TurnCompactionState(),
+            )
+            prefix_end = max(0, len(records) - CONTEXT_COMPACTION_KEEP_TURN_ROUNDS)
+            start = min(turn_compaction.turn_through_round, len(records))
+            projected_state = ota_context.state.model_copy(update={"context_compaction": None})
+            units: List[Tuple[int, str]] = []
+            for index in range(start, prefix_end):
+                projected = turn_context.model_copy(update={
+                    "ota_record": [records[index]],
+                    "state": projected_state,
+                })
+                payload = trim_text(
+                    serialize_messages(self.turn_messages_block(projected, context)),
+                    unit_tokens,
+                )
+                units.append((
+                    index + 1,
+                    f'<turn_round number="{index + 1}">\n{payload}\n</turn_round>',
+                ))
+            user_request = await self.user_input_block(ota_context, context)
+
+            def render(previous: str, history: str) -> str:
+                return render_turn_compaction_prompt(
+                    previous,
+                    user_request,
+                    history,
+                )
+
+            summary, through = await roll_summary(turn_compaction.turn_summary, units, render)
+            if through is None or through <= turn_compaction.turn_through_round:
+                return False
+            candidate.turn.setdefault(mode, {})[stage] = turn_compaction.model_copy(update={
+                "turn_summary": summary,
+                "turn_through_round": through,
+            })
+            return True
+
+        async def reassemble() -> List[Message]:
+            rebuilt = await self.assemble_messages(ota_context, context)
+            return await self.append_runtime_state(rebuilt, ota_context, context)
+
+        stream = getattr(ota_context, "stream", None)
+        if stream is not None:
+            stream.publish("context_compaction", active=True)
+        try:
+            session_changed = await compact_session_history()
+            turn_changed = await compact_turn_history()
+            if session_changed or turn_changed:
+                ota_context.state.context_compaction = candidate
+                compacted_messages = await reassemble()
+                compacted_tokens = self._estimate_request_tokens(compacted_messages, tools)
+                if compacted_tokens < before_tokens:
+                    messages = compacted_messages
+                    before_tokens = compacted_tokens
+                else:
+                    ota_context.state.context_compaction = original_compaction
+                    logger.warning(
+                        "Discarded context compaction without a net token reduction: before=%s after=%s",
+                        before_tokens,
+                        compacted_tokens,
+                    )
+
+            if input_capacity is not None and before_tokens >= input_capacity:
+                raise ContextWindowExceededError(before_tokens, input_capacity)
+            if before_tokens > target:
+                logger.debug(
+                    "Context compaction completed above its soft target: estimated=%s target=%s",
+                    before_tokens,
+                    target,
+                )
+            return messages
+        finally:
+            if stream is not None:
+                stream.publish("context_compaction", active=False)
+
+    def _record_model_usage(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        result: Any,
+        request_estimate: int,
+        breakdown_estimate: ContextUsageBreakdown,
+    ) -> None:
+        """Record one model call's totals, input composition, and cache usage."""
+        def scale_breakdown(target: int) -> ContextUsageBreakdown:
+            names = (
+                "system_prompt_tokens",
+                "dynamic_context_tokens",
+                "tool_schema_tokens",
+                "session_history_tokens",
+                "current_input_tokens",
+            )
+            estimates = [getattr(breakdown_estimate, name) for name in names]
+            estimate_total = sum(estimates)
+            if target <= 0:
+                return ContextUsageBreakdown()
+            if estimate_total <= 0:
+                return ContextUsageBreakdown(dynamic_context_tokens=target)
+            nonzero_count = sum(value > 0 for value in estimates)
+            minimums = (
+                [1 if value > 0 else 0 for value in estimates]
+                if target >= nonzero_count else [0] * len(estimates)
+            )
+            remaining = target - sum(minimums)
+            exact = [remaining * value / estimate_total for value in estimates]
+            values = [minimum + math.floor(value) for minimum, value in zip(minimums, exact)]
+            for index in sorted(
+                range(len(values)),
+                key=lambda item: exact[item] - math.floor(exact[item]),
+                reverse=True,
+            )[:target - sum(values)]:
+                values[index] += 1
+            return ContextUsageBreakdown(**dict(zip(names, values)))
+
+        provider_input_tokens, provider_output_tokens, cached_input_tokens = self._usage_values(
+            result.usage
+        )
+        previous = ota_context.context_usage
+        total_input_tokens = previous.input_tokens + provider_input_tokens
+        total_output_tokens = previous.output_tokens + provider_output_tokens
+        if provider_input_tokens or provider_output_tokens:
+            self.spent_tokens += provider_input_tokens + provider_output_tokens
+
+        estimated_output = self._estimate_result_tokens(result)
+        has_provider_input = provider_input_tokens > 0
+        input_tokens = provider_input_tokens if has_provider_input else request_estimate
+        output_tokens = provider_output_tokens if provider_output_tokens > 0 else estimated_output
+        source = "provider" if has_provider_input else "estimated"
+        used_tokens = input_tokens
+        usable_tokens = context.llm_provider.input_capacity()
+        percentage = (
+            round(used_tokens / usable_tokens * 100, 1)
+            if usable_tokens is not None else None
+        )
+        snapshot = ContextUsageSnapshot(
+            model_id=context.llm_provider.model_id,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+            occupied_input_tokens=input_tokens,
+            occupied_output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
+            used_tokens=used_tokens,
+            usable_tokens=usable_tokens,
+            percentage=percentage,
+            source=source,
+            estimated_occupied_tokens=request_estimate,
+            breakdown=scale_breakdown(input_tokens),
+        )
+        ota_context.context_usage = snapshot
+        stream = getattr(ota_context, "stream", None)
+        if stream is not None:
+            stream.publish(
+                "context_usage",
+                model_id=snapshot.model_id,
+                input_tokens=snapshot.occupied_input_tokens,
+                output_tokens=snapshot.occupied_output_tokens,
+                cached_input_tokens=snapshot.cached_input_tokens,
+                used_tokens=snapshot.used_tokens,
+                usable_tokens=snapshot.usable_tokens,
+                percentage=snapshot.percentage,
+                source=snapshot.source,
+                breakdown=snapshot.breakdown.model_dump(mode="json"),
+            )
 
     ############################################################################
     # Dynamic prompt assembly
@@ -331,7 +893,7 @@ class MainThink(CognitiveWorker):
             SYSTEM:
                 You are Bridgic Agent, a general-purpose agent that helps users on
                 their machine. …(full persona)…
-                The tools currently available … <exact ToolSurface names>
+                Attached tool schemas define the exact ToolSurface.
 
                 <context>
                 <transcript>
@@ -365,7 +927,7 @@ class MainThink(CognitiveWorker):
             while retaining the same native message structure::
 
                 SYSTEM:
-                    …(the Child persona, rendered with only Child ToolSurface names)…
+                    …(the Child persona; attached schemas define its ToolSurface)…
 
                     <context>
                     <skills>
@@ -387,7 +949,7 @@ class MainThink(CognitiveWorker):
                     </Workspace>
                     </context>
 
-            # past turns (session_messages_block): bounded OTA replay
+            # past turns (session_messages_block): persisted OTA replay
             USER:  what python version is acme-api on?
             AI:    ToolCall(id=call_0, name=read_file, args={"path": "pyproject.toml"})
             TOOL:  (call_0) "[project]\nrequires-python = '>=3.13'"
@@ -785,43 +1347,75 @@ class MainThink(CognitiveWorker):
         return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
 
     async def session_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Past Turns replayed as bounded native user, assistant, and tool messages."""
-        return self._session_tail_messages(context.session.get_all())
+        """Replay the persisted Session summary followed by uncovered raw Turns."""
+        turns = context.session.get_all()
+        compaction = ota_context.state.context_compaction
+        if compaction is None or not compaction.session_summary:
+            return self._session_messages(turns, context)
+        remaining = [
+            turn
+            for turn in turns
+            if turn.session_ordinal > compaction.session_through_ordinal
+        ]
+        return [
+            self._compaction_summary_message(
+                "session_history",
+                compaction.session_summary,
+                "through_ordinal",
+                compaction.session_through_ordinal,
+            ),
+            *self._session_messages(remaining, context),
+        ]
 
-    def _session_tail_messages(
-        self,
-        turns: Sequence[SessionTurnRecord],
-    ) -> List[Message]:
-        """Recent persisted OTAs as native messages.
+    @staticmethod
+    def _compaction_summary_message(scope: str, summary: str, through_name: str, through: int) -> Message:
+        """Render one persisted summary as low-authority Assistant history."""
+        content = (
+            f"<{scope}_summary {through_name}=\"{through}\">\n"
+            f"{summary.strip()}\n"
+            f"</{scope}_summary>"
+        )
+        return Message.from_text(content, role=Role.AI)
 
-        Select complete turns from newest to oldest while the total number of
-        stored OTA records stays within ``SESSION_MESSAGE_RECORD_LIMIT``; then
-        replay them oldest-first as USER input, historical AI tool calls, TOOL
-        results, and the final answer round.
-        """
-        selected: List[SessionTurnRecord] = []
-        record_total = 0
-        for turn in reversed(turns):
-            ota = turn.ota_context_dump()
-            record_count = len(ota.get("ota_record") or [])
-            if record_total + record_count > SESSION_MESSAGE_RECORD_LIMIT:
-                break
-            selected.append(turn)
-            record_total += record_count
-
+    def _session_messages(self, turns: Sequence[SessionTurnRecord], context: AmphiContext) -> List[Message]:
+        """Replay persisted Turns oldest-first, reusing only the global normal-mode projection."""
         messages: List[Message] = []
-        for turn_index, turn in enumerate(reversed(selected)):
+        for turn in turns:
             ota = turn.ota_context_dump()
-            messages.append(Message.from_text(turn.user_input.text, role=Role.USER))
-            if ota.get("turn_error"):
-                continue  # keep the question; the failed agent reply is withheld
-            messages.extend(self._ota_messages(ota, turn_index))
+            messages.append(Message.from_text(
+                self._render_user_input(turn.user_input, context),
+                role=Role.USER,
+            ))
+            compaction_data = (turn.agent_state or {}).get("context_compaction")
+            compaction = (
+                ContextCompactionState.model_validate(compaction_data)
+                if compaction_data
+                else None
+            )
+            turn_compaction = (
+                compaction.turn.get("normal", {}).get("main")
+                if compaction is not None
+                else None
+            )
+            if turn_compaction is not None and turn_compaction.turn_summary:
+                messages.append(self._compaction_summary_message(
+                    "turn_history",
+                    turn_compaction.turn_summary,
+                    "through_round",
+                    turn_compaction.turn_through_round,
+                ))
+                ota["ota_record"] = (
+                    ota.get("ota_record") or []
+                )[turn_compaction.turn_through_round:]
+            messages.extend(self._ota_messages(ota, turn.session_ordinal))
+            if turn.status == TurnStatus.FAILED:
+                messages.append(Message.from_text(TURN_FAILED_MESSAGE, role=Role.AI))
         return messages
 
     def _ota_messages(self, ota: Dict[str, Any], turn_index: int) -> List[Message]:
         """One persisted OTA dump as AI/tool messages; intentionally separate from
-        ``turn_messages_block`` because session replay is whole-OTA, bounded by
-        persisted record count, and driven by ``think_result.tool_calls``.
+        ``turn_messages_block`` because session replay is whole-OTA and driven by
+        ``think_result.tool_calls``.
 
         Native tool replay is atomic: every call must have a persisted result.
         Interrupted rounds fall back to their visible text so a cancelled Turn
@@ -926,12 +1520,14 @@ class MainThink(CognitiveWorker):
                 messages.append(Message.from_text(question, role=Role.AI))
         return messages
 
-    async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """This turn's request rendered to prompt text — resolves the session's
-        ownership-gated mount table (the async concern), then delegates to the pure
-        ``render_input``. Single source for the block→text containment logic."""
-        user_input = ota_context.user_input
-        mention_ids = [b.id for b in getattr(user_input, "blocks", None) or [] if b.type == "mention"]
+    def _render_user_input(self, user_input: Any, context: AmphiContext) -> str:
+        """Render one current or persisted input with live, ownership-gated paths."""
+        blocks = _view(user_input, "blocks") or []
+        mention_ids = [
+            str(_view(block, "id"))
+            for block in blocks
+            if _view(block, "type") == "mention" and _view(block, "id")
+        ]
         workspace = context.workspace
         path_map = (
             workspace.reference_map(mention_ids)
@@ -940,13 +1536,18 @@ class MainThink(CognitiveWorker):
         )
         workflow_runs = context.workflow_runs
         if workflow_runs is not None:
-            for block in getattr(user_input, "blocks", None) or []:
-                if block.type != "mention" or getattr(block, "group", None) != "WorkflowRun":
+            for block in blocks:
+                if _view(block, "type") != "mention" or _view(block, "group") != "WorkflowRun":
                     continue
-                run = workflow_runs.get(block.id)
+                block_id = str(_view(block, "id") or "")
+                run = workflow_runs.get(block_id)
                 if run is not None and run.is_published:
-                    path_map[block.id] = str(run.result_dir)
+                    path_map[block_id] = str(run.result_dir)
         return render_input(user_input, path_map)
+
+    async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Render this Turn's request through the shared structured-input path."""
+        return self._render_user_input(ota_context.user_input, context)
 
     async def current_user_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Append volatile runtime metadata after this Invocation's user request."""
@@ -967,6 +1568,17 @@ class MainThink(CognitiveWorker):
             USER  "<observation>"                               (a stamped nudge, if any)
         """
         records = ota_context.ota_record
+        round_offset = 0
+        compaction = ota_context.state.context_compaction
+        think = ota_context.think_status
+        turn_compaction = (
+            compaction.turn.get(think.mode, {}).get(think.stage)
+            if compaction is not None
+            else None
+        )
+        if turn_compaction is not None and turn_compaction.turn_summary:
+            round_offset = turn_compaction.turn_through_round
+            records = records[round_offset:]
         MAX_ARG_VALUE_CHARS = 1200
 
         def step_call(step: Any, round_index: int, step_index: int) -> Tuple[Dict[str, Any], Dict[str, int], List[str]]:
@@ -1065,7 +1677,14 @@ class MainThink(CognitiveWorker):
                 break
 
         messages: List[Message] = []
-        for index, record in enumerate(records):
+        if turn_compaction is not None and turn_compaction.turn_summary:
+            messages.append(self._compaction_summary_message(
+                "turn_history",
+                turn_compaction.turn_summary,
+                "through_round",
+                turn_compaction.turn_through_round,
+            ))
+        for index, record in enumerate(records, start=round_offset):
             think = _view(_view(record, "think_result"), "step_content") or ""
             steps = _view(_view(record, "action_result"), "results") or []
             if steps:
@@ -1244,11 +1863,19 @@ class MainThink(CognitiveWorker):
         return skills.data() if skills is not None else {}
 
     @staticmethod
-    def _usage_pair(usage: Any) -> Tuple[int, int]:
-        """``(input_tokens, output_tokens)`` from a provider usage OBJECT or DICT."""
+    def _usage_values(usage: Any) -> Tuple[int, int, Optional[int]]:
+        """Normalize provider usage to input, output, and cache-read tokens."""
         if usage is None:
-            return 0, 0
+            return 0, 0, None
         get = usage.get if isinstance(usage, dict) else (lambda k: getattr(usage, k, None))
+
+        def nested_value(container: Any, key: str) -> Any:
+            if container is None:
+                return None
+            if isinstance(container, dict):
+                return container.get(key)
+            return getattr(container, key, None)
+
         inp = get("prompt_tokens")
         if inp is None:
             inp = get("input_tokens")
@@ -1261,24 +1888,21 @@ class MainThink(CognitiveWorker):
         out = get("completion_tokens")
         if out is None:
             out = get("output_tokens")
-        return int(inp or 0), int(out or 0)
-
-    def _record_usage(self, ota_context: AmphiOTAContext, usage: Any) -> None:
-        """Fold one call's usage into the turn (no-op when zero / missing):
-        1. add to ``self.spent_tokens`` (the per-worker meter the automa folds up).
-        2. accumulate ``ota_context.input_tokens`` / ``output_tokens`` (turn totals).
-        3. publish a live ``usage`` event so the client sees per-call cost.
-        """
-        inp, out = self._usage_pair(usage)
-        if not (inp or out):
-            return
-        self.spent_tokens += inp + out
-        ota_context.input_tokens += inp
-        ota_context.output_tokens += out
-        stream = getattr(ota_context, "stream", None)
-        if stream is not None:
-            stream.publish("usage", input_tokens=inp, output_tokens=out)
-
+        cached = get("cached_input_tokens")
+        if cached is None:
+            cached = get("cache_read_input_tokens")
+        if cached is None:
+            cached = nested_value(get("prompt_tokens_details"), "cached_tokens")
+        if cached is None:
+            cached = nested_value(get("input_tokens_details"), "cached_tokens")
+        input_tokens = max(0, int(inp or 0))
+        output_tokens = max(0, int(out or 0))
+        cached_input_tokens = (
+            min(input_tokens, max(0, int(cached)))
+            if cached is not None
+            else None
+        )
+        return input_tokens, output_tokens, cached_input_tokens
 
 ################################################################################################################
 # Child Agent — an isolated normal-mode worker with its own role and tool surface
@@ -1655,7 +2279,7 @@ class BuildThink(MainThink):
     )
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Resume the selected Build stage and append only explicit switch rounds."""
+        """Project one stable Build-stage trace with its entry and switch context."""
         def switches_to_target(record: Any) -> bool:
             steps = _view(_view(record, "action_result"), "results") or []
             for step in steps:
@@ -1669,27 +2293,39 @@ class BuildThink(MainThink):
 
         records = ota_context.ota_record
         scopes = [self._record_think_scope(record) for record in records]
-        projected: List[Any] = []
-        transitions: List[int] = []
         target_scope = (mode, stage)
+        mode_indexes = [
+            index for index, scope in enumerate(scopes)
+            if scope is not None and scope[0] == mode
+        ]
+        # The first Build stage owns the pre-Build entry prefix. Keeping that
+        # prefix on later stage re-entry makes persisted compaction boundaries
+        # refer to the same projected-round coordinates for the whole Turn.
+        selected = set(range(len(records))) if not mode_indexes else set()
+        if mode_indexes and scopes[mode_indexes[0]] == target_scope:
+            selected.update(range(mode_indexes[0]))
+        transitions: List[int] = []
         for index, (record, scope) in enumerate(zip(records, scopes)):
             if scope == target_scope:
-                projected.append(record)
-                continue
-            next_scope = scopes[index + 1] if index + 1 < len(scopes) else None
-            if scope is None or scope[0] != mode or scope[1] == stage or next_scope != target_scope:
-                continue
-            transitions.append(index)
+                selected.add(index)
             if switches_to_target(record):
-                projected.append(record)
-        if not transitions:
-            return ota_context, None
-        return ota_context.model_copy(update={
-            # Build stages retain their own prior trace. Only an explicit switch
-            # contributes its completed source-stage round to the target trace;
-            # automatic transitions keep their completion round in the source.
-            "ota_record": projected,
-        }), transitions[-1]
+                selected.add(index)
+                transitions.append(index)
+                continue
+            next_scope = scopes[index + 1] if index + 1 < len(scopes) else target_scope
+            if next_scope == target_scope and scope != target_scope:
+                transitions.append(index)
+                # A later cross-mode entry can carry the request that reopened
+                # Build, so retain its immediate handoff round as well.
+                if scope is None or scope[0] != mode:
+                    selected.add(index)
+        projected = [record for index, record in enumerate(records) if index in selected]
+        turn_context = (
+            ota_context
+            if len(projected) == len(records)
+            else ota_context.model_copy(update={"ota_record": projected})
+        )
+        return turn_context, transitions[-1] if transitions else None
 
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render the Build-stage persona with its exact current ToolSurface."""

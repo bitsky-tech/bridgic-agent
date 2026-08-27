@@ -44,6 +44,7 @@ import type {
   AgentMessage,
   AgentTurnStatus,
   AskUserQuestion,
+  ContextUsageSnapshot,
   PermissionItem,
   SubAgentMode,
   ThinkPosition,
@@ -268,9 +269,22 @@ export interface VersionResponse {
 // `api_key_set: bool` to signal "configured / not". OAuth flow endpoints
 // return 501 today; we don't expose them here until they ship.
 
+export interface ModelLimits {
+  context?: number
+  input?: number
+  output?: number
+  source?: 'provider' | 'models_dev' | 'manual'
+  source_provider_id?: string
+  source_model_id?: string
+}
+
 export interface ProviderModelInfo {
   id: string
+  name: string
   vision?: boolean
+  tool_call?: boolean
+  reasoning?: boolean
+  limits?: ModelLimits
 }
 
 /** Static catalog entry from `GET /providers`.
@@ -314,6 +328,7 @@ export interface ConfiguredProvider {
   protocol: 'openai' | 'anthropic' | 'openai-codex'
   display_name: string | null
   available_models: string[]
+  model_limits: Record<string, ModelLimits>
 }
 
 /** Body for `POST /me/providers/{provider_id}/toggle` — flip is_enabled. */
@@ -364,6 +379,13 @@ export interface FetchedModel {
   id: string
   /** Provider-supplied label; falls back to `id` when none is advertised. */
   name: string
+  vision?: boolean | null
+  tool_call?: boolean | null
+  reasoning?: boolean | null
+  limits?: ModelLimits
+  limits_source?: 'provider' | 'models_dev' | 'unknown'
+  source_provider_id?: string
+  source_model_id?: string
 }
 
 /** Response from `POST /me/providers/fetch-models` — always HTTP 200.
@@ -394,6 +416,7 @@ export interface AddProviderBody {
   protocol?: 'openai' | 'anthropic' | 'openai-codex'
   display_name?: string | null
   models?: string[]
+  model_limits?: Record<string, ModelLimits>
 }
 
 /** Body for `POST /me/active-model`. */
@@ -671,6 +694,30 @@ const workflowRunFileContentSchema = z.object({
   content: z.string().nullable(),
   truncated: z.boolean().default(false),
 }).passthrough()
+const contextUsageBreakdownSchema = z.object({
+  system_prompt_tokens: z.number().int().nonnegative().default(0),
+  dynamic_context_tokens: z.number().int().nonnegative().default(0),
+  tool_schema_tokens: z.number().int().nonnegative().default(0),
+  session_history_tokens: z.number().int().nonnegative().default(0),
+  current_input_tokens: z.number().int().nonnegative().default(0),
+})
+const contextUsageSnapshotSchema = z.object({
+  model_id: z.string(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  cached_input_tokens: z.number().int().nonnegative().nullable().default(null),
+  used_tokens: z.number(),
+  usable_tokens: z.number().nullable(),
+  percentage: z.number().nullable(),
+  source: z.enum(['provider', 'estimated']),
+  breakdown: contextUsageBreakdownSchema.default({
+    system_prompt_tokens: 0,
+    dynamic_context_tokens: 0,
+    tool_schema_tokens: 0,
+    session_history_tokens: 0,
+    current_input_tokens: 0,
+  }),
+})
 const sessionMessagesSchema = z
   .object({
     messages: z.array(z.object({
@@ -682,6 +729,7 @@ const sessionMessagesSchema = z
     // Cursor-pagination envelope (absent on older daemons → no more history).
     has_more: z.boolean().optional(),
     next_before: z.number().nullable().optional(),
+    context_usage: contextUsageSnapshotSchema.nullable().optional(),
     // The suspended session's unanswered ask (banner rehydration); absent /
     // null on idle sessions and older daemons.
     pending_request: z
@@ -783,6 +831,8 @@ export interface SessionTranscript {
   hasMore: boolean
   /** Cursor for the next page (before_ordinal); meaningless when hasMore=false. */
   nextBefore: number | null
+  /** Latest durable context-window occupancy; null before the first model response. */
+  contextUsage: ContextUsageSnapshot | null
   pendingRequest: {
     kind?: string
     prompt?: string
@@ -1302,6 +1352,23 @@ export class AmphiClient {
       messages: AgentMessage[]
       has_more?: boolean
       next_before?: number | null
+      context_usage?: {
+        model_id: string
+        input_tokens: number
+        output_tokens: number
+        cached_input_tokens: number | null
+        used_tokens: number
+        usable_tokens: number | null
+        percentage: number | null
+        source: 'provider' | 'estimated'
+        breakdown: {
+          system_prompt_tokens: number
+          dynamic_context_tokens: number
+          tool_schema_tokens: number
+          session_history_tokens: number
+          current_input_tokens: number
+        }
+      } | null
       pending_request?: {
         kind?: string
         prompt?: string
@@ -1341,6 +1408,25 @@ export class AmphiClient {
       messages: res.messages,
       hasMore: res.has_more ?? false,
       nextBefore: res.next_before ?? null,
+      contextUsage: res.context_usage
+        ? {
+            modelId: res.context_usage.model_id,
+            inputTokens: res.context_usage.input_tokens,
+            outputTokens: res.context_usage.output_tokens,
+            cachedInputTokens: res.context_usage.cached_input_tokens,
+            usedTokens: res.context_usage.used_tokens,
+            usableTokens: res.context_usage.usable_tokens,
+            percentage: res.context_usage.percentage,
+            source: res.context_usage.source,
+            breakdown: {
+              systemPromptTokens: res.context_usage.breakdown.system_prompt_tokens,
+              dynamicContextTokens: res.context_usage.breakdown.dynamic_context_tokens,
+              toolSchemaTokens: res.context_usage.breakdown.tool_schema_tokens,
+              sessionHistoryTokens: res.context_usage.breakdown.session_history_tokens,
+              currentInputTokens: res.context_usage.breakdown.current_input_tokens,
+            },
+          }
+        : null,
       pendingRequest: pending
         ? {
             kind: pending.kind,

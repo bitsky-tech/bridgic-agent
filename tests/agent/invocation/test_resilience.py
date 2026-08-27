@@ -82,8 +82,11 @@ async def test_cancel_parked_tree(agent_store: None, agent_model: str, test_sand
         status=TurnStatus.AWAITING_SUBAGENTS,
         final_answer=None,
         error=None,
-        input_tokens=2,
-        output_tokens=1,
+        context_usage={
+            "model_id": agent_model,
+            "input_tokens": 2,
+            "output_tokens": 1,
+        },
         model=agent_model,
     )
     child_turn = await turns.append_result(
@@ -105,8 +108,11 @@ async def test_cancel_parked_tree(agent_store: None, agent_model: str, test_sand
         status=TurnStatus.AWAITING_HUMAN,
         final_answer=None,
         error=None,
-        input_tokens=3,
-        output_tokens=1,
+        context_usage={
+            "model_id": agent_model,
+            "input_tokens": 3,
+            "output_tokens": 1,
+        },
         model=agent_model,
     )
     await sessions.update_turn_projection(
@@ -195,6 +201,8 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
         node_version=None,
     )
     monkeypatch.setattr(app_command_environment, "snapshot", lambda: snapshot)
+    trace_limit = 2 * 1024
+    monkeypatch.setattr(AgentInvocation, "MAX_OTA_CONTEXT_BYTES", trace_limit)
 
     sessions = SessionRepository()
     turns = SessionTurnRepository()
@@ -208,7 +216,7 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
     await sessions.save(session)
     llm = ScriptedLlm(model=agent_model)
     llm.enqueue_text(
-        "X" * (AgentInvocation.MAX_OTA_CONTEXT_BYTES + 1024),
+        "X" * (trace_limit + 1024),
         input_tokens=3,
         output_tokens=4,
     )
@@ -230,7 +238,8 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
         assert failed is not None
         assert failed.status is TurnStatus.FAILED
         assert failed.final_answer is None
-        assert "OTA context exceeded" in (failed.error or "")
+        assert failed.error == "This task produced too much information to save completely. Break it into smaller tasks and try again."
+        assert "OTA context exceeded" not in failed.error
 
         # Check 2: The fallback contains no oversized trace or stale dynamic tool surface.
         assert failed.ota_records == []

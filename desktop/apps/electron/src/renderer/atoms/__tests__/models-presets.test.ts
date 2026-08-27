@@ -98,13 +98,16 @@ describe('getConfiguredProviderDisplayName', () => {
 })
 
 describe('getProviderPreset', () => {
-  it('maps a catalog entry into the 5 form fields', () => {
+  it('maps catalog model limits into the persisted form state', () => {
     const entry = {
       id: 'deepseek',
       display_name: 'DeepSeek',
       protocol: 'openai',
       default_base_url: 'https://api.deepseek.com',
-      models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }],
+      models: [
+        { id: 'deepseek-chat', limits: { context: 128_000, output: 8_192 } },
+        { id: 'deepseek-reasoner' },
+      ],
     } as ProviderCatalogEntry
     const preset = getProviderPreset(entry)
     expect(preset.providerId).toBe('deepseek')
@@ -112,6 +115,13 @@ describe('getProviderPreset', () => {
     expect(preset.protocol).toBe('openai')
     expect(preset.baseUrl).toBe('https://api.deepseek.com')
     expect(preset.models).toEqual(['deepseek-chat', 'deepseek-reasoner'])
+    expect(preset.modelLimits).toEqual({
+      'deepseek-chat': {
+        context: 128_000,
+        output: 8_192,
+        source: 'models_dev',
+      },
+    })
   })
 
   it('maps the Kimi Code catalog entry to the OpenAI-compatible form', () => {

@@ -8,19 +8,16 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
-import time
 from functools import cache
 from pathlib import Path
 from typing import Mapping, MutableMapping, Optional
 
 from filelock import FileLock, Timeout as FileLockTimeout
 
-from ._errors import BundledRuntimeUnavailable
+from ._errors import BundledRuntimeUnavailable, EnvNotReady
 from ._probe import (
     BaseProbe,
-    UnreadableBaseGuard,
     is_directory,
     is_regular_file,
     probe_base,
@@ -248,10 +245,6 @@ class BundledUPythonRuntime:
     RUNTIME_DIR_NAME = "python_runtime"
     RUNTIME_MANIFEST_NAME = "runtime.json"
     PREPARE_TIMEOUT_SEC = 300
-    # Backoff doubles per attempt, so these two spend 0.2+0.4+0.8+1.6 = 3s
-    # waiting out a held handle before giving up.
-    PUBLISH_ATTEMPTS = 5
-    PUBLISH_BACKOFF_SEC = 0.2
 
     def __init__(
         self,
@@ -269,7 +262,6 @@ class BundledUPythonRuntime:
         self._process_lock = threading.Lock()
         self._python_fingerprint: Optional[tuple[Path, str]] = None
         self._ready = False
-        self._unreadable = UnreadableBaseGuard()
 
     @property
     def python_executable(self) -> Path:
@@ -343,12 +335,10 @@ class BundledUPythonRuntime:
         Path, optional
             Shared base interpreter, or ``None`` when no bundled Python exists.
 
-        Raises
-        ------
-        EnvNotReady
-            While the existing base cannot be read. Rebuilding is only ever the
-            answer to a base that reads as broken; one that stays unreadable
-            past :data:`~._probe.QUARANTINE_GRACE_SEC` is moved aside instead.
+        Existing files are never removed to answer a runtime update. When the
+        packaged interpreter changes, uv refreshes the venv metadata and
+        launchers in place while preserving site-packages and every other
+        user-installed file.
         """
         bundled_python = self.bundled_executable()
         if bundled_python is None:
@@ -365,27 +355,20 @@ class BundledUPythonRuntime:
         identity = self._runtime_identity(bundled_python)
 
         with self._process_lock:
-            try:
-                # An unreadable base falls through to the locked path rather
-                # than raising here: moving one aside is only safe while
-                # holding the cross-process lock.
-                if self._ready and self._probe(self.root, identity).usable:
-                    return self.python_executable
-                parent = self._prepare_parent()
-                try:
-                    with FileLock(parent / ".base.lock", timeout=self.PREPARE_TIMEOUT_SEC):
-                        self._recover_interrupted_install(identity)
-                        if not self._settle(self._probe(self.root, identity)).usable:
-                            self._create(uv_executable, bundled_python, identity)
-                        self._ensure_pip()
-                except FileLockTimeout as exc:
-                    raise RuntimeError(
-                        "Timed out waiting for the shared Python base"
-                    ) from exc
-                self._ready = True
+            if self._ready and self._probe(self.root, identity).usable:
                 return self.python_executable
-            finally:
-                self._unreadable.close_round()
+            parent = self._prepare_parent()
+            try:
+                with FileLock(parent / ".base.lock", timeout=self.PREPARE_TIMEOUT_SEC):
+                    self._recover_interrupted_install()
+                    self._prepare_base(uv_executable, bundled_python, identity)
+                    self._ensure_pip()
+            except FileLockTimeout as exc:
+                raise RuntimeError(
+                    "Timed out waiting for the shared Python base"
+                ) from exc
+            self._ready = True
+            return self.python_executable
 
     def executable(self) -> Optional[Path]:
         """Return the interpreter exposed to app-managed commands."""
@@ -456,7 +439,6 @@ class BundledUPythonRuntime:
         """Forget process-local readiness without deleting the shared base."""
         self._python_fingerprint = None
         self._ready = False
-        self._unreadable.forget()
         self.bundled_runtime_dir.cache_clear()
         self.bundled_executable.cache_clear()
         self.version.cache_clear()
@@ -485,13 +467,26 @@ class BundledUPythonRuntime:
             return
         target["PATH"] = f"{directory}{os.pathsep}{path}" if path else directory
 
-    def _create(
-        self,
-        uv_executable: Path,
-        bundled_python: Path,
-        identity: dict[str, str],
-    ) -> None:
-        stage = Path(tempfile.mkdtemp(prefix=".base.stage.", dir=self.root.parent))
+    def _prepare_base(self, uv_executable: Path, bundled_python: Path, identity: dict[str, str]) -> None:
+        probe = self._probe(self.root, identity)
+        if probe.usable:
+            return
+        if probe.unreadable:
+            raise EnvNotReady(probe.path, probe.error)
+        try:
+            self.root.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise EnvNotReady(self.root, exc) from exc
+        else:
+            if not is_directory(self.root):
+                raise RuntimeError(
+                    f"The shared Python base at {self.root} is not a directory; preserving it unchanged"
+                )
+        self._prepare_venv(uv_executable, bundled_python, identity)
+
+    def _prepare_venv(self, uv_executable: Path, bundled_python: Path, identity: dict[str, str]) -> None:
         environment = os.environ.copy()
         self.uv_runtime.bootstrap_env(environment)
         for name in ("VIRTUAL_ENV", "UV_PROJECT", "UV_PROJECT_ENVIRONMENT"):
@@ -502,109 +497,53 @@ class BundledUPythonRuntime:
         # base leaves bytecode inside the signed bundle.
         environment = no_bytecode_environment(environment)
         try:
-            try:
-                result = subprocess.run(
-                    [
-                        str(uv_executable),
-                        "venv",
-                        "--no-project",
-                        "--no-config",
-                        "--python",
-                        str(bundled_python),
-                        "--relocatable",
-                        str(stage),
-                    ],
-                    cwd=self.root.parent,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=self.PREPARE_TIMEOUT_SEC,
-                    **self._subprocess_kwargs(),
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError("Timed out preparing the shared Python base") from exc
-            if result.returncode == 0:
-                (stage / self.MANIFEST_NAME).write_text(
-                    json.dumps(identity, ensure_ascii=False, sort_keys=True),
-                    encoding="utf-8",
-                )
-            if result.returncode != 0 or not self._probe(stage, identity).usable:
-                detail = (
-                    result.stderr.strip()
-                    or result.stdout.strip()
-                    or "uv created no usable environment"
-                )
-                raise RuntimeError(f"Failed to prepare the shared Python base: {detail}")
-            self._publish(stage)
-        finally:
-            self._remove(stage)
-
-    def _detach_root(self) -> Optional[Path]:
-        """Move an existing base aside and return it, or ``None`` if absent.
-
-        The move doubles as the existence probe on purpose: ``Path.exists()``
-        swallows ``PermissionError`` into ``False``, which would skip the backup
-        and let the swap below fail against a destination that is still there.
-        """
-        backup = Path(tempfile.mkdtemp(prefix=".base.backup.", dir=self.root.parent))
-        backup.rmdir()
-        try:
-            os.replace(self.root, backup)
-        except FileNotFoundError:
-            return None
-        return backup
-
-    def _publish(self, stage: Path) -> None:
-        """Swap the staged environment into place, riding out held handles.
-
-        Windows denies a directory rename while any file inside it is open
-        elsewhere -- antivirus scanning the interpreter ``uv`` just copied is
-        the usual culprit, and it clears on its own. Both renames are
-        retried: the handle can just as easily sit in the outgoing base, held
-        by a child of a daemon that was killed rather than shut down. Each
-        attempt detaches again, because a base that reappeared is exactly what
-        a bare retry cannot clear.
-        """
-        last_error: Optional[BaseException] = None
-        for attempt in range(1, self.PUBLISH_ATTEMPTS + 1):
-            backup: Optional[Path] = None
-            try:
-                backup = self._detach_root()
-                os.replace(stage, self.root)
-            except BaseException as exc:
-                # A failed restore leaves state we can no longer reason about,
-                # so it propagates and keeps the backup for the next start.
-                self._restore(backup)
-                # An interrupt still unwinds; only the filesystem is retried.
-                if attempt == self.PUBLISH_ATTEMPTS or not isinstance(exc, OSError):
-                    raise
-                last_error = exc
-                time.sleep(self.PUBLISH_BACKOFF_SEC * 2 ** (attempt - 1))
-            else:
-                if last_error is not None:
-                    logger.warning(
-                        "Published the shared Python base on attempt %d after %r",
-                        attempt,
-                        last_error,
-                    )
-                if backup is not None:
-                    self._remove(backup)
-                return
-
-    def _restore(self, backup: Optional[Path]) -> None:
-        """Put a detached base back; failure preserves it for the next start."""
-        if backup is None:
-            return
-        try:
-            os.replace(backup, self.root)
-        except OSError:
-            logger.exception(
-                "Failed to restore the previous Python base; backup preserved at %s",
-                backup,
+            result = subprocess.run(
+                [
+                    str(uv_executable),
+                    "venv",
+                    "--no-project",
+                    "--no-config",
+                    "--python",
+                    str(bundled_python),
+                    "--relocatable",
+                    "--allow-existing",
+                    str(self.root),
+                ],
+                cwd=self.root.parent,
+                env=environment,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.PREPARE_TIMEOUT_SEC,
+                **self._subprocess_kwargs(),
             )
-            raise
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Timed out preparing the shared Python base") from exc
+        if result.returncode != 0:
+            detail = (
+                result.stderr.strip()
+                or result.stdout.strip()
+                or "uv created no usable environment"
+            )
+            raise RuntimeError(f"Failed to prepare the shared Python base: {detail}")
+        self._write_manifest(identity)
+        if not self._probe(self.root, identity).usable:
+            raise RuntimeError("Failed to prepare the shared Python base: uv created no usable environment")
+
+    def _write_manifest(self, identity: dict[str, str]) -> None:
+        destination = self.root / self.MANIFEST_NAME
+        temporary = destination.with_name(
+            f".{destination.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+        )
+        try:
+            temporary.write_text(
+                json.dumps(identity, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _runtime_identity(self, bundled_python: Path) -> dict[str, str]:
         resolved_python = bundled_python.expanduser().resolve()
@@ -799,48 +738,43 @@ class BundledUPythonRuntime:
             raise RuntimeError("The app-level Python directory is unavailable")
         return parent
 
-    def _recover_interrupted_install(self, identity: dict[str, str]) -> None:
+    def _recover_interrupted_install(self) -> None:
+        """Recover the last complete base without deleting any saved environment."""
         for stage in self.root.parent.glob(".base.stage.*"):
             self._remove(stage)
         backups = sorted(self.root.parent.glob(".base.backup.*"), reverse=True)
-        if self._settle(self._probe(self.root, identity)).usable:
-            for backup in backups:
-                self._remove(backup)
+        try:
+            self.root.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise EnvNotReady(self.root, exc) from exc
+        else:
             return
-        probes = {backup: self._probe(backup, identity) for backup in backups}
-        reusable = next(
-            (backup for backup, probe in probes.items() if probe.usable),
-            None,
-        )
-        if reusable is not None:
-            # Swapping onto leftovers fails again further down with a message
-            # that points at the swap rather than at whatever held the delete.
-            if not self._remove(self.root):
-                raise RuntimeError(
-                    f"Cannot reclaim the shared Python base at {self.root}"
-                )
-            os.replace(reusable, self.root)
-        for backup, probe in probes.items():
-            # A backup nobody could read may be the last intact copy, so it
-            # waits for a round that can actually tell what it holds.
-            if backup != reusable and not probe.unreadable:
-                self._remove(backup)
-
-    def _settle(self, probe: BaseProbe) -> BaseProbe:
-        """Return a root verdict to act on, moving a stuck base aside.
-
-        Only ever applied to :attr:`root`. A backup that reads as unreadable may
-        be the last intact copy, so it keeps waiting for a round that can tell.
-        """
-        return self._unreadable.settle(probe)
+        blocked_backup: Optional[tuple[Path, OSError]] = None
+        for backup in backups:
+            try:
+                if not is_directory(backup):
+                    continue
+                os.replace(backup, self.root)
+            except OSError as exc:
+                blocked_backup = (backup, exc)
+                continue
+            logger.warning(
+                "Restored the preserved Python base from %s; it will be migrated in place",
+                backup,
+            )
+            return
+        if blocked_backup is not None:
+            raise EnvNotReady(*blocked_backup)
 
     def _probe(self, root: Path, identity: dict[str, str]) -> BaseProbe:
         """Return a tri-state verdict for one candidate base.
 
         A directory whose DACL stopped granting the running user denies every
         read inside it, so an intact base reads as missing. The probe reports
-        that as unreadable rather than folding it into "broken", which is the
-        verdict every caller answers with a rebuild.
+        that as unreadable rather than folding it into "broken". Callers wait
+        for access to return; they never quarantine or replace the directory.
         """
         return probe_base(root, lambda: self._inspect(root, identity))
 
