@@ -51,9 +51,6 @@ const ALLOWED: Record<string, string> = {
   // file RESOLVES to derive from the i18n catalogs, never from literals.
   'desktop/apps/electron/src/renderer/atoms/human-request.ts': 'historical zh synonyms users free-type on the acceptance card; rendered labels derive from both catalogs',
 
-  // Raw tool output uses this heading as a visual cue, not as product-owned display copy.
-  'desktop/apps/electron/src/renderer/components/amphi/ToolViews.tsx': 'raw tool-output heading matcher',
-
   // A historical persisted provider default must be recognized after an upgrade.
   'desktop/apps/electron/src/renderer/atoms/models-presets.ts': 'legacy GLM display name stored by earlier app versions',
 

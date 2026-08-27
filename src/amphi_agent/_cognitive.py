@@ -9,7 +9,7 @@ from bridgic.amphibious import CognitiveWorker, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
-from ..amphi_service.i18n import DEFAULT_LOCALE, backend_i18n, detect_locale
+from ..amphi_service.i18n import backend_i18n, detect_locale
 from ..amphi_store import SessionTurnRecord
 from ._context import AmphiContext, AmphiOTAContext, _view
 from ._skills import Skill, SkillGroup
@@ -162,9 +162,12 @@ def _shell_environment_summary(workspace: Optional[Any]) -> str:
 
 def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> str:
     """A raw turn input → prompt text, blocks inlined in order (mention → its
-    ALREADY-resolved mount-gated path, else ``@label``). Pure: no DB, no mutation —
-    the one renderer shared by sync routing (``init_state``) and the async
-    ``user_input_block`` (which resolves ``path_map`` first, then delegates here)."""
+    ALREADY-resolved mount-gated path, else ``@label``). No DB, no mutation — the one
+    renderer shared by sync routing (``init_state``) and the async ``user_input_block``
+    (which resolves ``path_map`` first, then delegates here).
+
+    Not a pure function of its arguments: the intent sentences below read the active
+    locale when the input itself carries no language (see there for why)."""
     if isinstance(user_input, str):
         return user_input
     read_input = (
@@ -177,11 +180,26 @@ def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> 
         return str(read_input("input") or read_input("text") or "")
     path_map = path_map or {}
     # Intent sentences (the /build and workflow-run preambles) are injected into the
-    # model prompt and re-rendered on every resume of the same persisted turn, so
-    # their language must be a deterministic function of the persisted blocks — the
-    # ambient locale is request-scoped and can differ between the original turn and
-    # a later resume, splitting one turn's prompt across two languages. Derived from
-    # the text blocks (the user's own prose), falling back to the flattened input.
+    # model prompt as if the user had written them, so their language decides the whole
+    # turn's language: the persona's CRITICAL rule tells the model to match the user's
+    # input language, and it cannot tell a synthesized preamble from real prose.
+    # Read from the text blocks and NOTHING else: they are the only thing here the user
+    # actually typed. The flattened input is not a substitute — it splices in the slash
+    # label and every @mention label, which are named by whoever created that Workflow or
+    # folder. A CJK-named Workflow, or a mention of a CJK folder, would otherwise hand
+    # `detect_locale` a CJK character (it treats any CJK as decisive, before its
+    # path-stripping ever runs) and pick the language of a request the user never wrote.
+    #
+    # A slash-only turn therefore has no prose at all, and that is the normal case: a bare
+    # `/build`, or a Workflow run with nothing typed after it. It used to fall back to the
+    # product default (Chinese), which handed every non-Chinese user a Chinese request and
+    # flipped the entire turn's visible text to Chinese. The client's locale is the right
+    # fallback and is already "the user's language, else the language they picked in the
+    # app" — the same resolution every other display string follows.
+    # It is request-scoped, so a resume can in principle render this one sentence in a
+    # different language than the original turn; in practice the locale is re-derived
+    # from the same session, and a rare mismatch on one preamble is a far smaller defect
+    # than a guaranteed wrong language for every user outside zh.
     def _block_value(block: Any, name: str) -> Any:
         return block.get(name) if isinstance(block, dict) else getattr(block, name, None)
 
@@ -189,8 +207,8 @@ def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> 
         str(_block_value(b, "value") or "")
         for b in blocks
         if _block_value(b, "type") == "text"
-    ) or str(read_input("input") or read_input("text") or "")
-    intent_locale = detect_locale(prose) or DEFAULT_LOCALE
+    )
+    intent_locale = detect_locale(prose) or backend_i18n.current_locale()
     parts: List[str] = []
     for b in blocks:
         read = b.get if isinstance(b, dict) else lambda name, default=None: getattr(b, name, default)
@@ -928,7 +946,7 @@ class MainThink(CognitiveWorker):
 
     async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """This turn's request rendered to prompt text — resolves the session's
-        ownership-gated mount table (the async concern), then delegates to the pure
+        ownership-gated mount table (the async concern), then delegates to
         ``render_input``. Single source for the block→text containment logic."""
         user_input = ota_context.user_input
         mention_ids = [b.id for b in getattr(user_input, "blocks", None) or [] if b.type == "mention"]

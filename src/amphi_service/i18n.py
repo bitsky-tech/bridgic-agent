@@ -20,14 +20,17 @@ _logger = logging.getLogger(__name__)
 
 
 Locale = Literal["zh", "en"]
-DEFAULT_LOCALE: Locale = "zh"
+# Matches the GUI's pre-boot default (`fallbackLng` in the renderer's i18n init): with no
+# stated preference at all, both halves of the product now land on English. This was "zh"
+# historically, which left a header-less client reading Chinese under an English UI.
+DEFAULT_LOCALE: Locale = "en"
 
 
 def locale_from_accept_language(value: str | None) -> Locale:
     """Choose a supported locale from an HTTP ``Accept-Language`` value.
 
-    Unsupported or absent preferences preserve the product's historical
-    Chinese default.  Quality values determine preference order.  RFC 9110
+    Unsupported or absent preferences fall back to the product default.
+    Quality values determine preference order.  RFC 9110
     allows optional whitespace around ``;``, so the language tag is trimmed
     on its own.  A malformed or out-of-range quality (``q=bad``, ``inf``,
     ``1e5``) must not inherit the default 1.0 and outrank a well-formed

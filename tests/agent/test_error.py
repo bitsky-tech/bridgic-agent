@@ -27,7 +27,7 @@ def test_agent_empty_answer_has_a_specific_safe_public_error() -> None:
     assert error.recovery_attempts == 3
     assert public == PublicAgentError(
         code="empty_answer",
-        message="抱歉，这次任务没有生成回复。请重新运行一次；如果仍然没有回复，可以换一个模型再试。",
+        message="Sorry, no response was generated for this task. Run it again, or try another model if it still produces no response.",
         retryable=True,
         action="retry",
     )
@@ -50,7 +50,7 @@ def test_context_limit_unwraps_framework_error_without_exposing_provider_details
 
     assert public == PublicAgentError(
         code="context_too_large",
-        message="这次对话内容太多，当前模型无法继续处理。请精简内容，或新建一个对话后再试。",
+        message="This conversation has too much content for the current model. Shorten it or start a new conversation and try again.",
         retryable=False,
         action="new_session",
     )
@@ -114,7 +114,7 @@ def test_codex_auth_uses_a_plain_message_without_exposing_internal_details() -> 
 
     assert public == PublicAgentError(
         code="codex_auth_expired",
-        message="当前模型的登录已失效。请重新登录后再试。",
+        message="The selected model's sign-in has expired. Sign in again and try again.",
         retryable=False,
         action="relogin",
     )
@@ -128,7 +128,7 @@ def test_known_model_not_found_error_uses_the_plain_public_message() -> None:
 
     assert public == PublicAgentError(
         code="model_not_found",
-        message="当前选择的模型无法使用。请前往模型设置，选择其他模型后再试。",
+        message="The selected model cannot be used right now. Choose another model in settings and try again.",
         retryable=False,
         action="open_model_settings",
     )
