@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-import src.amphi_agent.runtime._node_env as node_env_module
 import src.amphi_agent.runtime._python_env as python_env_module
-from src.amphi_agent.runtime._errors import BundledRuntimeUnavailable
+from src.amphi_agent.runtime._errors import BundledRuntimeUnavailable, EnvNotReady
 from src.amphi_agent.runtime._node_env import BundledNodeBaseRuntime, BundledNodeRuntime
+from src.amphi_agent.runtime._probe import BaseProbe, ProbeResult
 from src.amphi_agent.runtime._python_env import BundledUPythonRuntime, BundledUvRuntime
 from src.amphi_agent.runtime._resources import BundledRuntimeResources
 from tests._support.sandbox import IsolatedPaths
@@ -38,9 +38,9 @@ def _python_base(paths: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> _Pyth
         argv = [str(part) for part in command]
         commands.append(argv)
         if len(argv) > 1 and argv[1] == "venv":
-            stage = Path(argv[-1])
-            bin_dir = stage / ("Scripts" if os.name == "nt" else "bin")
-            bin_dir.mkdir(parents=True)
+            base = Path(argv[-1])
+            bin_dir = base / ("Scripts" if os.name == "nt" else "bin")
+            bin_dir.mkdir(parents=True, exist_ok=True)
             (bin_dir / ("python.exe" if os.name == "nt" else "python")).write_text(
                 "shared-python",
                 encoding="utf-8",
@@ -49,7 +49,7 @@ def _python_base(paths: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> _Pyth
                 "shared-pip",
                 encoding="utf-8",
             )
-            (stage / "pyvenv.cfg").write_text("home = bundled\n", encoding="utf-8")
+            (base / "pyvenv.cfg").write_text("home = bundled\n", encoding="utf-8")
             return subprocess.CompletedProcess(command, 0, "", "")
         if "import pip" in argv:
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -211,13 +211,13 @@ def test_python_lifecycle(test_sandbox: IsolatedPaths, monkeypatch: pytest.Monke
     {
       "first_prepare": {"uv_venv_calls": 1},
       "same_identity": {"reused": true, "installed_files": "preserved"},
-      "new_identity": {"replaced": true, "old_files": "removed"}
+      "new_identity": {"migrated_in_place": true, "installed_files": "preserved"}
     }
 
     Checks:
     1. First preparation publishes one valid base without invoking a real runtime or network.
     2. A new runtime object reuses the compatible base and preserves installed files.
-    3. A changed packaged interpreter atomically replaces the incompatible base.
+    3. A changed packaged interpreter refreshes the venv without replacing its files.
     """
     bundled_python, commands, make_runtime = _python_base(test_sandbox, monkeypatch)
     first = make_runtime()
@@ -240,13 +240,36 @@ def test_python_lifecycle(test_sandbox: IsolatedPaths, monkeypatch: pytest.Monke
     bundled_python.write_text("python-v2", encoding="utf-8")
     replacement = make_runtime()
 
-    # Check 3: Identity drift installs a complete replacement and leaves no swap debris.
+    # Check 3: Identity drift rebinds the venv without deleting installed files.
     assert replacement.ensure() == replacement.python_executable
-    assert not installed.exists()
+    assert installed.read_text(encoding="utf-8") == "keep"
     assert (replacement.root / replacement.MANIFEST_NAME).read_text(encoding="utf-8") != old_manifest
     assert _venv_calls(commands) == 2
+    assert "--allow-existing" in next(
+        command for command in reversed(commands) if len(command) > 1 and command[1] == "venv"
+    )
     assert list(replacement.root.parent.glob(".base.stage.*")) == []
     assert list(replacement.root.parent.glob(".base.backup.*")) == []
+
+
+@pytest.mark.windows_runtime
+def test_python_invalid_metadata_is_repaired_in_place(
+    test_sandbox: IsolatedPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A damaged identity is repaired without discarding installed files."""
+    _bundled_python, commands, make_runtime = _python_base(test_sandbox, monkeypatch)
+    first = make_runtime()
+    first.ensure()
+    installed = first.root / "installed-package.txt"
+    installed.write_text("keep", encoding="utf-8")
+    (first.root / first.MANIFEST_NAME).write_text("{", encoding="utf-8")
+
+    repaired = make_runtime()
+    assert repaired.ensure() == repaired.python_executable
+    assert installed.read_text(encoding="utf-8") == "keep"
+    assert json.loads((repaired.root / repaired.MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert _venv_calls(commands) == 2
 
 
 @pytest.mark.windows_runtime
@@ -321,14 +344,14 @@ def test_python_recovery(test_sandbox: IsolatedPaths, monkeypatch: pytest.Monkey
       "backup": "restored as base",
       "installed_files": "preserved",
       "partial_stage": "removed",
-      "new_uv_venv": false
+      "runtime_update": "migrated in place"
     }
 
     Checks:
     1. An interrupted backup remains the reusable authority when the active base is absent.
-    2. Ensure restores that backup and clears abandoned staging without rebuilding.
+    2. A new runtime restores and migrates that backup without discarding its files.
     """
-    _bundled_python, commands, make_runtime = _python_base(test_sandbox, monkeypatch)
+    bundled_python, commands, make_runtime = _python_base(test_sandbox, monkeypatch)
     first = make_runtime()
     first.ensure()
     installed = first.root / "installed-package.txt"
@@ -346,30 +369,31 @@ def test_python_recovery(test_sandbox: IsolatedPaths, monkeypatch: pytest.Monkey
     assert (backup / installed_relative).read_text(encoding="utf-8") == "keep"
     assert (stage / "partial.txt").is_file()
 
+    bundled_python.write_text("python-v2", encoding="utf-8")
     recovered = make_runtime()
     assert recovered.ensure() == recovered.python_executable
 
-    # Check 2: Recovery reinstalls the complete backup without invoking uv again.
+    # Check 2: Recovery reinstalls and migrates the backup without losing its files.
     assert (recovered.root / installed_relative).read_text(encoding="utf-8") == "keep"
-    assert _venv_calls(commands) == 1
+    assert _venv_calls(commands) == 2
     assert not backup.exists()
     assert not stage.exists()
 
 
 @pytest.mark.windows_runtime
-def test_python_rollback(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Final failed Python publication:
+def test_python_migration_failure(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Final failed Python in-place migration:
 
     {
       "replacement": "failed",
-      "previous_base": "restored with its identity and installed files",
+      "previous_base": "left in place with its identity and installed files",
       "installed_files": "preserved",
       "swap_debris": []
     }
 
     Checks:
-    1. A publication error restores the compatible previous base before propagating.
-    2. Failed staging and backup directories are removed without losing installed files.
+    1. A uv refresh error propagates without replacing the previous base.
+    2. The existing manifest and installed files remain intact.
     """
     bundled_python, _commands, make_runtime = _python_base(test_sandbox, monkeypatch)
     first = make_runtime()
@@ -379,24 +403,23 @@ def test_python_rollback(test_sandbox: IsolatedPaths, monkeypatch: pytest.Monkey
     old_manifest = (first.root / first.MANIFEST_NAME).read_text(encoding="utf-8")
     bundled_python.write_text("python-v2", encoding="utf-8")
     replacement = make_runtime()
-    real_replace = os.replace
+    normal_run = python_env_module.subprocess.run
 
-    def fail_publish(source: Path, target: Path) -> None:
-        source_path = Path(source)
-        if source_path.name.startswith(".base.stage.") and Path(target) == replacement.root:
-            raise OSError("publication blocked")
-        real_replace(source, target)
+    def fail_refresh(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        argv = [str(part) for part in command]
+        if len(argv) > 1 and argv[1] == "venv":
+            return subprocess.CompletedProcess(command, 1, "", "refresh blocked")
+        return normal_run(command, **kwargs)
 
-    monkeypatch.setattr(BundledUPythonRuntime, "PUBLISH_ATTEMPTS", 1)
-    monkeypatch.setattr(python_env_module.os, "replace", fail_publish)
+    monkeypatch.setattr(python_env_module.subprocess, "run", fail_refresh)
 
-    # Check 1: A failed staged swap propagates only after restoring the previous root.
-    with pytest.raises(OSError, match="publication blocked"):
+    # Check 1: A failed refresh leaves the previous root active.
+    with pytest.raises(RuntimeError, match="refresh blocked"):
         replacement.ensure()
     assert (replacement.root / replacement.MANIFEST_NAME).read_text(encoding="utf-8") == old_manifest
     assert installed.read_text(encoding="utf-8") == "keep"
 
-    # Check 2: Rollback leaves only the complete previous base on disk.
+    # Check 2: No swap transaction is created around a user-owned environment.
     assert list(replacement.root.parent.glob(".base.stage.*")) == []
     assert list(replacement.root.parent.glob(".base.backup.*")) == []
 
@@ -408,13 +431,13 @@ def test_node_lifecycle(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
     {
       "first_prepare": {"resolver": true, "npm_shims": true},
       "same_identity": {"reused": true, "installed_packages": "preserved"},
-      "new_identity": {"replaced": true, "old_packages": "removed"}
+      "new_identity": {"migrated_in_place": true, "installed_packages": "preserved"}
     }
 
     Checks:
     1. First preparation publishes the resolver, npm shims, and package directories.
     2. A matching packaged Node reuses the base and retains installed packages.
-    3. A changed Node identity atomically installs a clean replacement.
+    3. A changed Node identity refreshes metadata without replacing packages.
     """
     bundled_node, make_runtime = _node_base(test_sandbox, monkeypatch)
     first = make_runtime()
@@ -441,12 +464,78 @@ def test_node_lifecycle(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
     bundled_node.write_text("node-v2", encoding="utf-8")
     replacement = make_runtime()
 
-    # Check 3: Identity drift replaces the entire base and cleans its staging transaction.
+    # Check 3: Identity drift updates metadata without deleting installed packages.
     assert replacement.ensure() == replacement.root
-    assert not installed.exists()
+    assert installed.read_text(encoding="utf-8") == "keep"
     assert (replacement.root / replacement.MANIFEST_NAME).read_text(encoding="utf-8") != old_manifest
     assert list(replacement.root.parent.glob(".base.stage.*")) == []
     assert list(replacement.root.parent.glob(".base.backup.*")) == []
+
+
+@pytest.mark.windows_runtime
+def test_node_invalid_metadata_is_repaired_in_place(
+    test_sandbox: IsolatedPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Damaged app support files are repaired without discarding npm packages."""
+    bundled_node, make_runtime = _node_base(test_sandbox, monkeypatch)
+    first = make_runtime()
+    first.ensure()
+    installed = first.modules_dir / "kept-package" / "index.js"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("keep", encoding="utf-8")
+    (first.root / first.MANIFEST_NAME).write_text("{", encoding="utf-8")
+    first.resolver_path.unlink()
+
+    repaired = make_runtime()
+    assert repaired.ensure() == repaired.root
+    assert installed.read_text(encoding="utf-8") == "keep"
+    assert repaired.resolver_path.is_file()
+    assert json.loads((repaired.root / repaired.MANIFEST_NAME).read_text(encoding="utf-8"))
+
+
+@pytest.mark.windows_runtime
+def test_unreadable_runtime_bases_are_never_quarantined(
+    test_sandbox: IsolatedPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated read failures leave both installed environments at their paths."""
+    _bundled_python, _commands, make_python = _python_base(test_sandbox, monkeypatch)
+    _bundled_node, make_node = _node_base(test_sandbox, monkeypatch)
+    python = make_python()
+    node = make_node()
+    python.ensure()
+    node.ensure()
+    python_installed = python.root / "installed-package.txt"
+    node_installed = node.modules_dir / "kept-package" / "index.js"
+    python_installed.write_text("keep", encoding="utf-8")
+    node_installed.parent.mkdir(parents=True)
+    node_installed.write_text("keep", encoding="utf-8")
+
+    denied = PermissionError("base access denied")
+    unreadable_python = make_python()
+    unreadable_node = make_node()
+    monkeypatch.setattr(
+        unreadable_python,
+        "_probe",
+        lambda root, _identity: BaseProbe(ProbeResult.UNREADABLE, root, denied),
+    )
+    monkeypatch.setattr(
+        unreadable_node,
+        "_probe_compatible",
+        lambda root, _identity: BaseProbe(ProbeResult.UNREADABLE, root, denied),
+    )
+
+    for _attempt in range(5):
+        with pytest.raises(EnvNotReady, match="base access denied"):
+            unreadable_python.ensure()
+        with pytest.raises(EnvNotReady, match="base access denied"):
+            unreadable_node.ensure()
+
+    assert python_installed.read_text(encoding="utf-8") == "keep"
+    assert node_installed.read_text(encoding="utf-8") == "keep"
+    assert list(python.root.parent.glob(".base.backup.*")) == []
+    assert list(node.root.parent.glob(".base.backup.*")) == []
 
 
 @pytest.mark.windows_runtime
@@ -697,7 +786,7 @@ def test_node_recovery(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPa
     1. A complete backup remains distinguishable from an abandoned partial stage.
     2. Ensure restores the backup and preserves the shared package tree.
     """
-    _bundled_node, make_runtime = _node_base(test_sandbox, monkeypatch)
+    bundled_node, make_runtime = _node_base(test_sandbox, monkeypatch)
     first = make_runtime()
     first.ensure()
     installed = first.modules_dir / "kept-package" / "index.js"
@@ -715,6 +804,7 @@ def test_node_recovery(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPa
     assert (backup / installed.relative_to(first.root)).read_text(encoding="utf-8") == "keep"
     assert (stage / "partial.txt").is_file()
 
+    bundled_node.write_text("node-v2", encoding="utf-8")
     recovered = make_runtime()
     assert recovered.ensure() == recovered.root
 
@@ -725,19 +815,19 @@ def test_node_recovery(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.windows_runtime
-def test_node_rollback(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Final failed Node publication:
+def test_node_migration_failure(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Final failed Node in-place migration:
 
     {
       "replacement": "failed",
-      "previous_base": "restored",
+      "previous_base": "left in place",
       "installed_packages": "preserved",
       "swap_debris": []
     }
 
     Checks:
-    1. A failed staged swap restores the previous Node base before raising.
-    2. Rollback removes the failed stage and transient backup.
+    1. A manifest refresh error propagates without replacing the previous Node base.
+    2. The existing manifest and installed packages remain intact.
     """
     bundled_node, make_runtime = _node_base(test_sandbox, monkeypatch)
     first = make_runtime()
@@ -748,22 +838,18 @@ def test_node_rollback(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPa
     old_manifest = (first.root / first.MANIFEST_NAME).read_text(encoding="utf-8")
     bundled_node.write_text("node-v2", encoding="utf-8")
     replacement = make_runtime()
-    real_replace = os.replace
 
-    def fail_publish(source: Path, target: Path) -> None:
-        source_path = Path(source)
-        if source_path.name.startswith(".base.stage.") and Path(target) == replacement.root:
-            raise OSError("publication blocked")
-        real_replace(source, target)
+    def fail_manifest(_self: BundledNodeBaseRuntime, _identity: dict[str, object]) -> None:
+        raise OSError("manifest refresh blocked")
 
-    monkeypatch.setattr(node_env_module.os, "replace", fail_publish)
+    monkeypatch.setattr(BundledNodeBaseRuntime, "_write_manifest", fail_manifest)
 
-    # Check 1: Publication failure propagates with the original package tree restored.
-    with pytest.raises(OSError, match="publication blocked"):
+    # Check 1: A failed refresh leaves the previous package tree active.
+    with pytest.raises(OSError, match="manifest refresh blocked"):
         replacement.ensure()
     assert (replacement.root / replacement.MANIFEST_NAME).read_text(encoding="utf-8") == old_manifest
     assert installed.read_text(encoding="utf-8") == "keep"
 
-    # Check 2: No transaction directory remains after the restored root is active.
+    # Check 2: No swap transaction is created around a user-owned environment.
     assert list(replacement.root.parent.glob(".base.stage.*")) == []
     assert list(replacement.root.parent.glob(".base.backup.*")) == []

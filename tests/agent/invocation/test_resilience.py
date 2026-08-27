@@ -238,7 +238,7 @@ async def test_trace_overflow(agent_store: None, agent_model: str, test_sandbox:
         assert failed is not None
         assert failed.status is TurnStatus.FAILED
         assert failed.final_answer is None
-        assert failed.error == "这次任务包含的步骤太多，结果无法完整保存。请把任务拆成几个较小的步骤后再试。"
+        assert failed.error == "This task produced too much information to save completely. Break it into smaller tasks and try again."
         assert "OTA context exceeded" not in failed.error
 
         # Check 2: The fallback contains no oversized trace or stale dynamic tool surface.

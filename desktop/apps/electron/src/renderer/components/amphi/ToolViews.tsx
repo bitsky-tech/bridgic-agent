@@ -165,7 +165,6 @@ function EditDiffView({ input }: { input: unknown }) {
 function termLineColor(ln: string): string {
   if (ln.startsWith('$')) return '#7DD3A8'
   if (ln.startsWith('—')) return '#3A3D4D'
-  if (ln.includes('报告')) return '#E8EAEF'
   return '#AEB2C0'
 }
 
