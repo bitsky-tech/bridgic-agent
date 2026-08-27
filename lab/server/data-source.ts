@@ -366,14 +366,16 @@ export class StateDataSource {
     }
 
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
+    const inputTokens = this.turnTokenExpression(database, 'input', 't.')
+    const outputTokens = this.turnTokenExpression(database, 'output', 't.')
     const rows = this.all<SessionRow>(database, `
       SELECT
         s.id, s.title, s.status, s.kind, s.parent_session_id, s.parent_call_id,
         s.subagent_mode, s.workspace_root, s.schedule_id, s.last_used_model,
         s.last_answer, s.created_at, s.updated_at,
         COUNT(t.id) AS turn_count,
-        COALESCE(SUM(t.input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(t.output_tokens), 0) AS output_tokens
+        COALESCE(SUM(${inputTokens}), 0) AS input_tokens,
+        COALESCE(SUM(${outputTokens}), 0) AS output_tokens
       FROM sessions AS s
       LEFT JOIN session_turns AS t ON t.session_id = s.id
       ${where}
@@ -536,26 +538,46 @@ export class StateDataSource {
     return this.turnColumns
   }
 
+  private turnTokenExpression(database: Database, token: 'input' | 'output', tableAlias = ''): string {
+    const columns = this.getTurnColumns(database)
+    const qualified = (column: string) => `${tableAlias}${column}`
+    if (columns.has('context_usage')) {
+      const usage = qualified('context_usage')
+      return `CAST(COALESCE(CASE WHEN json_valid(${usage}) THEN json_extract(${usage}, '$.${token}_tokens') END, 0) AS INTEGER)`
+    }
+    const legacyColumn = `${token}_tokens`
+    return columns.has(legacyColumn)
+      ? `CAST(COALESCE(${qualified(legacyColumn)}, 0) AS INTEGER)`
+      : '0'
+  }
+
   private turnSummaryColumns(database: Database): string {
     const columns = this.getTurnColumns(database)
     const duration = columns.has('duration_ms') ? 'duration_ms' : 'NULL AS duration_ms'
     const completedAt = columns.has('completed_at') ? 'completed_at' : 'NULL AS completed_at'
+    const inputTokens = this.turnTokenExpression(database, 'input')
+    const outputTokens = this.turnTokenExpression(database, 'output')
     return `
       id, session_id, session_ordinal, user_input, status, final_answer, error,
-      execution_mode, max_rounds, model, input_tokens, output_tokens, created_at,
+      execution_mode, max_rounds, model,
+      ${inputTokens} AS input_tokens,
+      ${outputTokens} AS output_tokens,
+      created_at,
       ${duration}, ${completedAt}
     `
   }
 
   private getSession(database: Database, sessionId: string): SessionItem | null {
+    const inputTokens = this.turnTokenExpression(database, 'input', 't.')
+    const outputTokens = this.turnTokenExpression(database, 'output', 't.')
     const row = this.get<SessionRow>(database, `
       SELECT
         s.id, s.title, s.status, s.kind, s.parent_session_id, s.parent_call_id,
         s.subagent_mode, s.workspace_root, s.schedule_id, s.last_used_model,
         s.last_answer, s.created_at, s.updated_at,
         COUNT(t.id) AS turn_count,
-        COALESCE(SUM(t.input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(t.output_tokens), 0) AS output_tokens
+        COALESCE(SUM(${inputTokens}), 0) AS input_tokens,
+        COALESCE(SUM(${outputTokens}), 0) AS output_tokens
       FROM sessions AS s
       LEFT JOIN session_turns AS t ON t.session_id = s.id
       WHERE s.id = ?

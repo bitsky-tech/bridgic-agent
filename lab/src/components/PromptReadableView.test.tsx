@@ -14,6 +14,7 @@ const blocks: PromptReadableBlock[] = [
     text: 'Line one\nLine two\nDo not truncate this final line.',
     fidelity: 'exact',
     sources: ['pinned persona source'],
+    badges: [{ label: 'Summary applied', tone: 'info' }],
     defaultExpanded: true,
   },
   {
@@ -71,6 +72,7 @@ describe('PromptReadableView', () => {
 
     expect(markup).toContain('<details')
     expect(markup).toContain('Do not truncate this final line.')
+    expect(markup).toContain('class="prompt-block-badge is-info">Summary applied</span>')
     expect(markup).toContain('prompt-message-assistant')
     expect(markup).toContain('read_file')
     expect(markup).toContain('/tmp/session/a.md')

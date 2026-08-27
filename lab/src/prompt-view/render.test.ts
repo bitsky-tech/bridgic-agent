@@ -135,7 +135,16 @@ describe('Prompt readable blocks', () => {
   })
 
   test('renders the history component from only its native message indexes', () => {
-    const view = buildPromptViewModel(prompt())
+    const reconstruction = prompt()
+    const historyComponent = reconstruction.components.find((item) => item.kind === 'session_history')
+    if (historyComponent) {
+      historyComponent.metadata = {
+        compactionApplied: true,
+        compactedTurns: 2,
+        includedTurns: 1,
+      }
+    }
+    const view = buildPromptViewModel(reconstruction)
     const history = view.blocks.find((block) => block.kind === 'session_history')
 
     expect(history?.text).toContain('USER · message 2\nRead the old file.')
@@ -145,6 +154,11 @@ describe('Prompt readable blocks', () => {
     expect(history?.text).toContain('The old file says hello.')
     expect(history?.text).not.toContain('Now inspect README.')
     expect(history?.text).not.toContain('current-call')
+    expect(history?.metadata).toEqual({
+      compactionApplied: true,
+      compactedTurns: 2,
+      includedTurns: 1,
+    })
   })
 })
 

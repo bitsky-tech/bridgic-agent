@@ -72,13 +72,23 @@ normally should not assemble the contract by hand.
 - `tools`: ordered visible tool names and schema summaries for that round.
 - `components`: persona, context, Session history, current input, prior-round
   replay, and tool-surface breakdown with message indexes. Session history uses
-  complete history, structured inputs, and failed-Turn markers.
+  structured inputs, failed-Turn markers, and persisted compaction summaries
+  followed by the uncovered raw tail. Historical Turns likewise apply their
+  persisted normal/Main Turn summaries, while the active Turn selects the
+  summary for its exact cognitive mode and stage.
 - `fidelity`: a score and explicit limitations for information not historically
   persisted in `state.db`.
 
 The selected OTA record itself is never replayed. The reconstruction represents
 the call boundary before that round ran, so only records with an index lower
 than `targetRoundIndex` appear in the current-Turn message block.
+
+`state.db` stores one final `context_compaction` projection per Turn rather than
+a version for every OTA round. The Lab applies that final projection to the
+latest persisted request, where it represents the runtime state at the call
+boundary. For an earlier round it uses the prior Turn's Session boundary and
+does not apply the later stage summary, preventing future execution history
+from leaking backwards; the affected components are explicitly marked partial.
 
 ## Persona source snapshot
 

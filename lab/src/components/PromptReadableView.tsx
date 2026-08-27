@@ -7,7 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react'
-import type { JsonValue } from '../api'
+import type { JsonObject, JsonValue } from '../api'
 import './PromptReadableView.css'
 
 export type PromptReadableFidelity = 'exact' | 'reconstructed' | 'unavailable'
@@ -23,7 +23,14 @@ export interface PromptReadableBlock {
   description?: string
   sources?: readonly string[]
   limitations?: readonly string[]
+  metadata?: JsonObject
+  badges?: readonly PromptReadableBadge[]
   defaultExpanded?: boolean
+}
+
+export interface PromptReadableBadge {
+  label: string
+  tone?: 'info' | 'warning'
 }
 
 export interface PromptReadableToolCall {
@@ -354,6 +361,18 @@ export function PromptReadableView({
                     <span className="prompt-block-heading">
                       <strong>{block.label}</strong>
                       {block.description && <span>{block.description}</span>}
+                      {block.badges && block.badges.length > 0 && (
+                        <span className="prompt-block-badges">
+                          {block.badges.map((badge) => (
+                            <span
+                              key={`${badge.tone ?? 'info'}:${badge.label}`}
+                              className={`prompt-block-badge is-${badge.tone ?? 'info'}`}
+                            >
+                              {badge.label}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                     </span>
                     {showFidelity && (
                       <span className={`prompt-fidelity-badge fidelity-${status}`}>

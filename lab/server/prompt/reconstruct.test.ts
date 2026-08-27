@@ -124,6 +124,165 @@ describe("rebuildPrompt", () => {
     expect(result.components.find((item) => item.id === "session-history")?.metadata?.includedTurns).toBe(2);
   });
 
+  test("replays persisted Turn summaries inside later Session history", () => {
+    const compacted = turn("turn-compacted", 0, "Earlier task", [
+      { think_result: { step_content: "Raw round covered by the summary" } },
+      { think_result: { step_content: "Recent raw round" } },
+    ], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          turn: {
+            normal: {
+              main: {
+                turn_summary: "Durable historical Turn summary",
+                turn_through_round: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+    const current = turn("turn-current", 1, "Continue", [{}]);
+
+    const result = rebuildPrompt(request([compacted, current], current.id, 0));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain(
+      '<turn_history_summary through_round="1">\nDurable historical Turn summary\n</turn_history_summary>',
+    );
+    expect(contents).toContain("Recent raw round");
+    expect(contents).not.toContain("Raw round covered by the summary");
+  });
+
+  test("applies the latest persisted Session and stage compaction projections", () => {
+    const old = turn("turn-old", 0, "Old request covered by Session summary", []);
+    const recent = turn("turn-recent", 1, "Recent raw request", [{
+      think_result: { step_content: "Recent raw answer" },
+    }]);
+    const current = turn("turn-current", 2, "Continue the current task", [
+      { think_result: { step_content: "Current round covered by Turn summary" } },
+      { think_result: { step_content: "Current raw round 2" } },
+      { think_result: { step_content: "Current raw round 3" } },
+      {},
+    ], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          session_summary: "Durable Session summary",
+          session_through_ordinal: 0,
+          turn: {
+            normal: {
+              main: {
+                turn_summary: "Durable current-Turn summary",
+                turn_through_round: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([old, recent, current], current.id, 3));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain(
+      '<session_history_summary through_ordinal="0">\nDurable Session summary\n</session_history_summary>',
+    );
+    expect(contents).not.toContain("Old request covered by Session summary");
+    expect(contents).toContain("Recent raw request");
+    expect(contents).toContain(
+      '<turn_history_summary through_round="1">\nDurable current-Turn summary\n</turn_history_summary>',
+    );
+    expect(contents).not.toContain("Current round covered by Turn summary");
+    expect(contents).toContain("Current raw round 2");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
+      compactionApplied: true,
+      compactedTurns: 1,
+      compactedThroughOrdinal: 0,
+      includedTurns: 1,
+      availableTurns: 2,
+      finalCompactionDeferred: false,
+    });
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
+      compactionApplied: true,
+      compactedRounds: 1,
+      compactedThroughRound: 1,
+      finalCompactionDeferred: false,
+    });
+  });
+
+  test("does not report diagnostics from Turns replaced by a Session summary", () => {
+    const covered = turn("turn-covered", 0, "Run the old Workflow", [], {
+      userInput: {
+        text: "Run the old Workflow",
+        blocks: [
+          { type: "slash", id: "workflow-old", label: "Old Workflow", resource: "workflow" },
+          { type: "mention", id: "run-missing", label: "Old result", group: "WorkflowRun" },
+        ],
+      },
+    });
+    const current = turn("turn-current", 1, "Continue", [{}], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          session_summary: "The covered Turn is represented here.",
+          session_through_ordinal: 0,
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([covered, current], current.id, 0));
+    const history = result.components.find((item) => item.id === "session-history");
+
+    expect(history?.fidelity).toBe("reconstructed");
+    expect(history?.limitations).toEqual([]);
+    expect(history?.metadata).toMatchObject({
+      compactionApplied: true,
+      compactedTurns: 1,
+      includedTurns: 0,
+    });
+  });
+
+  test("does not leak a final compaction summary into an earlier Round", () => {
+    const previous = turn("turn-previous", 0, "Earlier Session request", []);
+    const current = turn("turn-current", 1, "Continue", [
+      { think_result: { step_content: "Round 1" } },
+      { think_result: { step_content: "Round 2" } },
+      { think_result: { step_content: "Round 3" } },
+      { think_result: { step_content: "Round 4" } },
+      {},
+    ], {
+      agentState: {
+        think: { mode: "normal", stage: "main" },
+        context_compaction: {
+          session_summary: "Final Session summary must not travel backwards",
+          session_through_ordinal: 0,
+          turn: {
+            normal: {
+              main: {
+                turn_summary: "Final Turn summary must not travel backwards",
+                turn_through_round: 2,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([previous, current], current.id, 2));
+    const serialized = JSON.stringify(result.messages);
+
+    expect(serialized).not.toContain("must not travel backwards");
+    expect(serialized).toContain("Earlier Session request");
+    expect(serialized).toContain("Round 1");
+    expect(result.components.find((item) => item.id === "session-history")?.fidelity).toBe("partial");
+    expect(result.components.find((item) => item.id === "current-turn")?.fidelity).toBe("partial");
+    expect(result.components.find((item) => item.id === "session-history")?.metadata?.finalCompactionDeferred).toBe(true);
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata?.finalCompactionDeferred).toBe(true);
+    expect(result.fidelity.limitations.some((item) => item.toLowerCase().includes("not versioned per round"))).toBe(true);
+  });
+
   test("renders persisted structured inputs in Session history", () => {
     const previous = turn("turn-previous", 0, "/build Create report from references", [{
       think_result: { step_content: "Historical structured answer", tool_calls: [] },
@@ -285,6 +444,60 @@ describe("rebuildPrompt", () => {
       retainedBoundaryRound: false,
       retainedSwitchRounds: 0,
     });
+  });
+
+  test("keeps the pre-Build entry prefix for the first Build stage", () => {
+    const current = turn("turn-current", 0, "Build it", [
+      {
+        think_scope: { mode: "normal", stage: "main", session_history: "all_stages" },
+        think_result: { step_content: "Normal entry that opened Build" },
+      },
+      {
+        think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" },
+        think_result: { step_content: "Clarify history" },
+      },
+      { think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" } },
+    ], { agentState: { think: { mode: "build", stage: "clarify" } } });
+
+    const result = rebuildPrompt(request([current], current.id, 2));
+    const contents = result.messages.map((message) => message.content ?? "");
+
+    expect(contents).toContain("Normal entry that opened Build");
+    expect(contents).toContain("Clarify history");
+    expect(result.components.find((item) => item.id === "current-turn")?.metadata).toMatchObject({
+      completedRounds: 2,
+      availableRounds: 2,
+      omittedByStage: 0,
+      historyModel: "stage_scoped",
+    });
+  });
+
+  test("uses the active Build stage's compaction projection", () => {
+    const current = turn("turn-current", 0, "Generate it", [
+      { think_scope: { mode: "build", stage: "clarify", session_history: "all_stages" }, think_result: { step_content: "Clarify history" } },
+      { think_scope: { mode: "build", stage: "generate", session_history: "all_stages" }, think_result: { step_content: "Generate history covered by summary" } },
+      { think_scope: { mode: "build", stage: "generate", session_history: "all_stages" }, think_result: { step_content: "Generate raw tail" } },
+      { think_scope: { mode: "build", stage: "generate", session_history: "all_stages" } },
+    ], {
+      agentState: {
+        think: { mode: "build", stage: "generate" },
+        context_compaction: {
+          turn: {
+            normal: { main: { turn_summary: "Wrong scope summary", turn_through_round: 1 } },
+            build: { generate: { turn_summary: "Generate stage summary", turn_through_round: 1 } },
+          },
+        },
+      },
+    });
+
+    const result = rebuildPrompt(request([current], current.id, 3));
+    const serialized = JSON.stringify(result.messages);
+
+    expect(serialized).toContain("Generate stage summary");
+    expect(serialized).toContain("Generate raw tail");
+    expect(serialized).not.toContain("Generate history covered by summary");
+    expect(serialized).not.toContain("Wrong scope summary");
+    expect(serialized).not.toContain("Clarify history");
   });
 
   test("applies the Build switch history policy when a stage is re-entered", () => {

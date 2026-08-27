@@ -210,6 +210,33 @@
   white-space: nowrap;
 }
 
+.prompt-block-heading .prompt-block-badges {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  overflow: visible;
+  white-space: normal;
+}
+
+.prompt-block-heading .prompt-block-badge {
+  width: fit-content;
+  padding: 2px 6px;
+  overflow: visible;
+  border-radius: 999px;
+  color: var(--accent-strong, #0878d1);
+  background: color-mix(in srgb, var(--accent, #168cff) 10%, transparent);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.prompt-block-heading .prompt-block-badge.is-warning {
+  color: var(--warning, #b96300);
+  background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent);
+}
+
 .prompt-fidelity-badge {
   padding: 3px 7px;
   border-radius: 999px;
