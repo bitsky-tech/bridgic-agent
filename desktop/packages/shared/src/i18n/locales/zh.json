@@ -166,6 +166,23 @@
       "title": "删除工作流"
     }
   },
+  "cloud": {
+    "balance": "余额",
+    "channelName": "Bridgic 平台额度",
+    "credits": "{{n}} 点",
+    "email": "邮箱",
+    "emptyFields": "请填写邮箱和密码。",
+    "password": "密码",
+    "register": "注册",
+    "signIn": "登录",
+    "signOut": "退出登录",
+    "signedInAs": "已登录:{{email}}",
+    "signingIn": "登录中…",
+    "subtitle": "登录后可直接使用平台额度,无需自备 API Key。",
+    "title": "Bridgic 账号",
+    "toggleToRegister": "还没有账号?去注册",
+    "toggleToSignIn": "已有账号?去登录"
+  },
   "commentFeedback": {
     "cancelEsc": "取消（Esc）",
     "collapse": "收起",
@@ -1070,6 +1087,7 @@
     "settings": {
       "tabs": {
         "about": "关于",
+        "account": "账号",
         "appearance": "外观",
         "gateway": "网关",
         "mode": "执行模式",

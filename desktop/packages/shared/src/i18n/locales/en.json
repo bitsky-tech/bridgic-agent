@@ -166,6 +166,23 @@
       "title": "Delete workflow"
     }
   },
+  "cloud": {
+    "balance": "Balance",
+    "channelName": "Bridgic platform credits",
+    "credits": "{{n}} credits",
+    "email": "Email",
+    "emptyFields": "Enter both an email and a password.",
+    "password": "Password",
+    "register": "Create account",
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "signedInAs": "Signed in as {{email}}",
+    "signingIn": "Signing in…",
+    "subtitle": "Sign in to use platform credits without configuring your own API key.",
+    "title": "Bridgic account",
+    "toggleToRegister": "No account yet? Create one",
+    "toggleToSignIn": "Already have an account? Sign in"
+  },
   "commentFeedback": {
     "cancelEsc": "Cancel (Esc)",
     "collapse": "Collapse",
@@ -1070,6 +1087,7 @@
     "settings": {
       "tabs": {
         "about": "About",
+        "account": "Account",
         "appearance": "Appearance",
         "gateway": "Gateway",
         "mode": "Execution mode",
