@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from bridgic.amphibious import OTARecord
+from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Message
 
 from src.amphi_agent import (
@@ -194,6 +194,61 @@ async def test_turn_compaction_is_isolated_by_mode_and_stage(test_sandbox: Isola
     assert any("Compacted Explore history" in content for content in explore_contents)
     assert not any("Explore round 0" in content for content in explore_contents)
     assert any("Explore round 2" in content for content in explore_contents)
+
+
+async def test_initial_build_stage_compaction_boundary_survives_stage_reentry(test_sandbox: IsolatedPaths) -> None:
+    """The first Build stage keeps one stable projected-round coordinate system."""
+    class ContextFreeClarifyThink(ClarifyThink):
+        async def build_context_blocks(self, ota_context, context, *artifact_names):
+            return []
+
+    def record(mode: str, stage: str, index: int) -> OTARecord:
+        round_ = OTARecord(think_result={
+            "step_content": f"{mode}/{stage} round {index}: " + "stage history " * 200,
+            "tool_calls": [],
+        })
+        round_.think_scope = {"mode": mode, "stage": stage}
+        return round_
+
+    records = [
+        record("normal", "main", 0),
+        *[record("build", "clarify", index) for index in range(6)],
+    ]
+    llm = SummaryLlm("Compacted Clarify history")
+    worker = ContextFreeClarifyThink(llm)
+    ota_context = AmphiOTAContext(
+        user_input="Build the workflow",
+        prompt_time="2026-08-26 12:00 (UTC+08:00)",
+        ota_record=records,
+        state={"think": {"mode": "build", "stage": "clarify"}},
+    )
+    context = _context(str(test_sandbox.sessions / "initial-stage-reentry"), [], 200_000)
+    original = await worker.assemble_messages(ota_context, context)
+
+    await worker.compact_messages(original, [], ota_context, context, target=1)
+
+    compaction = ota_context.state.context_compaction
+    assert compaction is not None
+    clarify_state = compaction.turn["build"]["clarify"]
+    assert clarify_state.turn_through_round == 3
+    assert "normal/main round 0" in llm.calls[0][1].content
+
+    handoff = record("build", "explore", 0)
+    handoff.action_result = ActionResult(results=[ActionStepResult(
+        tool_id="call-explore-to-clarify",
+        tool_name="switch",
+        tool_arguments={"stage": "clarify"},
+        tool_result={"stage": "clarify"},
+    )])
+    ota_context.ota_record.extend([handoff, record("build", "clarify", 6)])
+    ota_context.transition_think(BuildStageState(stage="clarify"))
+
+    messages = await worker.assemble_messages(ota_context, context)
+    contents = [message.content for message in messages]
+    assert any("Compacted Clarify history" in content for content in contents)
+    assert not any("build/clarify round 0" in content for content in contents)
+    assert any("build/explore round 0" in content for content in contents)
+    assert any("build/clarify round 2" in content for content in contents)
 
 
 async def test_summary_input_is_bounded_when_one_atomic_turn_is_huge(test_sandbox: IsolatedPaths) -> None:

@@ -2261,7 +2261,7 @@ class BuildThink(MainThink):
     )
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Resume the selected Build stage and append only explicit switch rounds."""
+        """Project one stable Build-stage trace with its entry and switch context."""
         def switches_to_target(record: Any) -> bool:
             steps = _view(_view(record, "action_result"), "results") or []
             for step in steps:
@@ -2275,27 +2275,39 @@ class BuildThink(MainThink):
 
         records = ota_context.ota_record
         scopes = [self._record_think_scope(record) for record in records]
-        projected: List[Any] = []
-        transitions: List[int] = []
         target_scope = (mode, stage)
+        mode_indexes = [
+            index for index, scope in enumerate(scopes)
+            if scope is not None and scope[0] == mode
+        ]
+        # The first Build stage owns the pre-Build entry prefix. Keeping that
+        # prefix on later stage re-entry makes persisted compaction boundaries
+        # refer to the same projected-round coordinates for the whole Turn.
+        selected = set(range(len(records))) if not mode_indexes else set()
+        if mode_indexes and scopes[mode_indexes[0]] == target_scope:
+            selected.update(range(mode_indexes[0]))
+        transitions: List[int] = []
         for index, (record, scope) in enumerate(zip(records, scopes)):
             if scope == target_scope:
-                projected.append(record)
-                continue
-            next_scope = scopes[index + 1] if index + 1 < len(scopes) else None
-            if scope is None or scope[0] != mode or scope[1] == stage or next_scope != target_scope:
-                continue
-            transitions.append(index)
+                selected.add(index)
             if switches_to_target(record):
-                projected.append(record)
-        if not transitions:
-            return ota_context, None
-        return ota_context.model_copy(update={
-            # Build stages retain their own prior trace. Only an explicit switch
-            # contributes its completed source-stage round to the target trace;
-            # automatic transitions keep their completion round in the source.
-            "ota_record": projected,
-        }), transitions[-1]
+                selected.add(index)
+                transitions.append(index)
+                continue
+            next_scope = scopes[index + 1] if index + 1 < len(scopes) else target_scope
+            if next_scope == target_scope and scope != target_scope:
+                transitions.append(index)
+                # A later cross-mode entry can carry the request that reopened
+                # Build, so retain its immediate handoff round as well.
+                if scope is None or scope[0] != mode:
+                    selected.add(index)
+        projected = [record for index, record in enumerate(records) if index in selected]
+        turn_context = (
+            ota_context
+            if len(projected) == len(records)
+            else ota_context.model_copy(update={"ota_record": projected})
+        )
+        return turn_context, transitions[-1] if transitions else None
 
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render the Build-stage persona with its exact current ToolSurface."""
