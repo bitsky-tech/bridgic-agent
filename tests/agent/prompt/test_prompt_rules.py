@@ -386,6 +386,30 @@ def test_build_language_follows_the_reply_language_resolution() -> None:
         assert "earlier assistant messages" in persona, name
 
 
+def test_main_and_workflow_forbid_assistant_language_inference() -> None:
+    """Main and Workflow close the same assistant-history language channel Build closed:
+
+    {
+      "main": "tool results / earlier assistant messages",
+      "workflow": "Workflow source / tools / webpages / evidence / earlier assistant messages"
+    }
+
+    Checks:
+    1. Main's CRITICAL language rule forbids taking the language from earlier assistant
+       messages — the consistency gap left after Build gained an exclusion clause.
+    2. Workflow's exclusion list names earlier assistant messages, closing the r16
+       inference channel where a resumed Run claims the original language from history.
+    """
+    personas = _personas()
+    # Check 1: Main (and Child, which shares the same language rule template path).
+    for name in ("main", "child"):
+        assert "earlier assistant messages" in personas[name], name
+        assert "tool results" in personas[name], name
+    # Check 2: Workflow execute and validate personas.
+    for name in ("execute", "validate"):
+        assert "earlier assistant messages" in personas[name], name
+
+
 def test_build_structures() -> None:
     """Each Build stage retains its owned artifact and completion boundary."""
     personas = _personas()
