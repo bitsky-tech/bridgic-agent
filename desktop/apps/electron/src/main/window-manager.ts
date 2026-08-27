@@ -10,17 +10,18 @@ import {
 } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { release } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { clampZoomLevel, type WindowBounds } from '@app/shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { WindowCloseSource, type WindowCloseRequest } from '../shared/types'
-import { getGuiSettings, stepZoomLevel, updateWindowState } from './gui-settings'
+import { getGuiSettings, onGuiSettingsChanged, stepZoomLevel, updateWindowState } from './gui-settings'
 import { parseExternalUrl, redactExternalUrlForLog } from './handlers/external-url'
 import { windowLog } from './logger'
 import { titleBarOverlayFor } from './titlebar-overlay'
 import { pickStartupBounds } from './window-bounds'
 import { pickZoomDelta } from './zoom-keys'
 import { EmbeddedBrowserManager } from './embedded-browser-manager'
+import { EmbeddedPowerPointManager } from './embedded-powerpoint-manager'
 import { embeddedBrowserProfileDir } from './paths'
 import { isNativeWindowForeground, MainWindowVisibilityLatch } from './window-visibility'
 
@@ -57,6 +58,7 @@ function getWindowsBackgroundMaterial(): 'mica' | 'acrylic' | undefined {
 export class WindowManager {
   private mainWindow: BrowserWindow | null = null
   private readonly embeddedBrowser: EmbeddedBrowserManager
+  private readonly embeddedPowerPoint: EmbeddedPowerPointManager
   private readonly preloadPath: string
   private readonly devServerUrl: string | undefined
   private readonly rendererIndexHtml: string
@@ -123,6 +125,40 @@ export class WindowManager {
         }
       },
     )
+    this.embeddedPowerPoint = new EmbeddedPowerPointManager(
+      (options) => {
+        const view = new WebContentsView({
+          ...options,
+          webPreferences: {
+            ...options.webPreferences,
+            preload: this.preloadPath,
+            additionalArguments: this.additionalArguments,
+          },
+        })
+        view.webContents.setZoomLevel(clampZoomLevel(getGuiSettings().zoomLevel))
+        return view
+      },
+      async (view, sessionId) => {
+        if (this.devServerUrl) {
+          const base = this.devServerUrl.endsWith('/') ? this.devServerUrl : `${this.devServerUrl}/`
+          const url = new URL('powerpoint.html', base)
+          url.searchParams.set('sessionId', sessionId)
+          await view.webContents.loadURL(url.toString())
+          return
+        }
+        await view.webContents.loadFile(
+          join(dirname(this.rendererIndexHtml), 'powerpoint.html'),
+          { query: { sessionId } },
+        )
+      },
+      (snapshot) => {
+        const win = this.mainWindow
+        if (win && !win.isDestroyed()) {
+          win.webContents.send(IPC.events.embeddedPowerPointChanged, snapshot)
+        }
+      },
+    )
+    onGuiSettingsChanged((settings) => this.embeddedPowerPoint.applySettings(settings))
   }
 
   getMainWindow(): BrowserWindow | null {
@@ -131,6 +167,10 @@ export class WindowManager {
 
   getEmbeddedBrowser(): EmbeddedBrowserManager {
     return this.embeddedBrowser
+  }
+
+  getEmbeddedPowerPoint(): EmbeddedPowerPointManager {
+    return this.embeddedPowerPoint
   }
 
   private createEmbeddedBrowserSession(): Session {
@@ -275,6 +315,7 @@ export class WindowManager {
     // foreground requests arriving during load must target this same window.
     this.mainWindow = win
     this.embeddedBrowser.attachHost(win)
+    this.embeddedPowerPoint.attachHost(win)
     try {
       this.onMainWindowCreated?.(win)
     } catch (error) {
@@ -442,6 +483,7 @@ export class WindowManager {
       }
       this.clearPendingCloseTimeout()
       this.embeddedBrowser.detachHost(win)
+      this.embeddedPowerPoint.detachHost(win)
       if (this.mainWindow === win) {
         this.mainWindow = null
         this.visibility.reset()

@@ -109,6 +109,22 @@ export function installApiStub(): void {
       setBounds: async () => {},
       setVisible: async () => {},
     },
+    powerpoint: {
+      snapshot: async () => ({ sessions: [] }),
+      ensureSession: async (sessionId) => ({
+        sessionId,
+        targetId: null,
+        webContentsId: 0,
+        loading: false,
+        crashed: false,
+      }),
+      closeSession: async () => {},
+      activateSession: async () => {},
+      setBounds: async () => {},
+      setVisible: async () => {},
+      requestClose: async () => {},
+      setExpanded: async () => {},
+    },
     backend: {
       snapshot: async () => ({
         state: BackendState.Idle,
@@ -184,6 +200,9 @@ export function installApiStub(): void {
       onWindowFullScreenChanged: noopUnsub,
       onWindowCloseRequested: noopUnsub,
       onEmbeddedBrowserChanged: noopUnsub,
+      onEmbeddedPowerPointChanged: noopUnsub,
+      onPowerPointCloseRequested: noopUnsub,
+      onPowerPointExpandedChanged: noopUnsub,
       onFsChanged: noopUnsub,
     },
   }

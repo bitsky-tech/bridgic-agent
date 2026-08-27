@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from ._agent import AmphiAgent
 from ._browser import BrowserHost
+from ._powerpoint import PowerPointHost
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._error import PublicAgentError
 from ._memory import Memory
@@ -220,6 +221,9 @@ class AgentInvocation:
     browser_host : BrowserHost, optional
         App-owned browser host. A private host is created only for standalone
         Invocation use and is closed by :meth:`shutdown`.
+    powerpoint_host : PowerPointHost, optional
+        App-owned PowerPoint host. A private host is created only for standalone
+        Invocation use and is closed by :meth:`shutdown`.
     max_concurrent_children : int
         Per-root Session limit for simultaneously executing Child Agent attempts.
     """
@@ -249,6 +253,7 @@ class AgentInvocation:
         turn_repository: Optional[SessionTurnRepository] = None,
         mount_repository: Optional[SessionMountRepository] = None,
         browser_host: Optional[BrowserHost] = None,
+        powerpoint_host: Optional[PowerPointHost] = None,
         max_concurrent_children: int = MAX_CONCURRENT_CHILDREN,
     ) -> None:
         # Agent invocation task management
@@ -265,6 +270,8 @@ class AgentInvocation:
         self._mounts = mount_repository or SessionMountRepository()
         self._owns_browser_host = browser_host is None
         self._browser_host = browser_host or BrowserHost()
+        self._owns_powerpoint_host = powerpoint_host is None
+        self._powerpoint_host = powerpoint_host or PowerPointHost()
         self._session_events = session_events
         self._system_events = system_events
         self._history_renderer = history_renderer
@@ -780,6 +787,7 @@ class AgentInvocation:
                     record.id,
                     tool_result_dir=workspace.tool_result_dir,
                 ),
+                powerpoint=self._powerpoint_host.for_session(record.id),
                 invocations=self,
                 llm_provider=llm_provider,
                 execution_mode=execution_mode,
@@ -1441,6 +1449,7 @@ class AgentInvocation:
         await self.cancel(record.id)
         await self._delete_workspace_workflow_runs(tree)
         await self._browser_host.release_sessions(item.id for item in tree)
+        await self._powerpoint_host.release_sessions(item.id for item in tree)
         for item in reversed(tree):
             await self._turns.delete_for_session(item.user_id, item.id)
             await self._mounts.delete_for_session(item.id, item.user_id)
@@ -1457,6 +1466,7 @@ class AgentInvocation:
         await self.cancel(record.id)
         await self._delete_workspace_workflow_runs(tree)
         await self._browser_host.release_sessions(item.id for item in tree)
+        await self._powerpoint_host.release_sessions(item.id for item in tree)
         for child in reversed(tree[1:]):
             await self._turns.delete_for_session(child.user_id, child.id)
             await self._mounts.delete_for_session(child.id, child.user_id)
@@ -1484,6 +1494,8 @@ class AgentInvocation:
             await asyncio.gather(*background, return_exceptions=True)
         if self._owns_browser_host:
             await self._browser_host.shutdown()
+        if self._owns_powerpoint_host:
+            await self._powerpoint_host.shutdown()
 
     def is_running(self, session_id: str) -> bool:
         """Return whether this process owns an active task for the Session."""

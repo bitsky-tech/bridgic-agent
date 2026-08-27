@@ -106,6 +106,7 @@ export function writeGuiSettings(next: GuiSettings, excludeWebContentsId?: numbe
   if (previousTelemetryOptIn !== next.ui.telemetryOptIn) {
     notifyTelemetryConsentChanged(next.ui.telemetryOptIn)
   }
+  notifyGuiSettingsChanged(next)
   broadcastSettingsChanged(next, excludeWebContentsId)
 }
 
@@ -141,6 +142,23 @@ export function onLocaleApplied(rebuild: () => void): void {
 
 /** Telemetry consent subscribers, notified only after the settings file is safely persisted. */
 const telemetryConsentListeners = new Set<(consented: boolean) => void>()
+const guiSettingsListeners = new Set<(settings: GuiSettings) => void>()
+
+/** Register a main-process surface that must mirror live GUI settings. */
+export function onGuiSettingsChanged(listener: (settings: GuiSettings) => void): () => void {
+  guiSettingsListeners.add(listener)
+  return () => guiSettingsListeners.delete(listener)
+}
+
+function notifyGuiSettingsChanged(settings: GuiSettings): void {
+  for (const listener of guiSettingsListeners) {
+    try {
+      listener(settings)
+    } catch (error) {
+      mainLog.warn('[gui-settings] listener failed', error)
+    }
+  }
+}
 
 /**
  * Register a main-process consumer of the persisted telemetry preference.

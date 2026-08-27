@@ -9,6 +9,7 @@ import { registerFsWatchHandlers } from './fs-watch'
 import { registerIssueReportHandlers } from './issue-report'
 import { registerMarketHandlers } from './market'
 import { registerNotifyHandlers } from './notify'
+import { registerPowerPointHandlers } from './powerpoint'
 import { registerSettingsHandlers } from './settings'
 import { registerSpecCommentsHandlers } from './spec-comments'
 import { registerShellHandlers } from './shell'
@@ -35,6 +36,10 @@ export function registerAllHandlers(windowManager: WindowManager): void {
   // OS-level dark-mode probing remains under `registerSystemHandlers`.
   registerWindowHandlers(windowManager)
   registerBrowserHandlers(windowManager.getEmbeddedBrowser())
+  registerPowerPointHandlers(windowManager.getEmbeddedPowerPoint(), (channel, value) => {
+    const window = windowManager.getMainWindow()
+    if (window && !window.isDestroyed()) window.webContents.send(channel, value)
+  })
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after

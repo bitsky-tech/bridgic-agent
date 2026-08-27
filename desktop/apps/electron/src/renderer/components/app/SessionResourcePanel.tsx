@@ -25,6 +25,7 @@ import {
   rightPanelCollapsedAtom,
   setRightPanelCollapsedAtom,
 } from '@/atoms/layout'
+import { presentationExpandedAtom } from '@/atoms/presentation'
 import {
   consumeSessionModeExitCollapseRequestAtom,
   currentSessionModeExitCollapseRequestAtom,
@@ -182,6 +183,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const setFilesNeedsAttention = useSetAtom(setFilesNeedsAttentionAtom)
   const setBrowserHandoffPending = useSetAtom(setBrowserHandoffPendingAtom)
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
+  const setPresentationExpanded = useSetAtom(presentationExpandedAtom)
   const clearCollapseRequest = useSetAtom(clearRightPanelCollapseRequestAtom)
   const consumeModeExitCollapseRequest = useSetAtom(consumeSessionModeExitCollapseRequestAtom)
   const setFocusPane = useSetAtom(setSessionFocusPaneAtom)
@@ -193,6 +195,15 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const [pendingBrowserExit, setPendingBrowserExit] = useState<PendingBrowserExit | null>(null)
   const [settledModeHandoffKey, setSettledModeHandoffKey] = useState<string | null>(null)
   const hostWindowForeground = useHostWindowForeground()
+
+  useEffect(() => window.api.events.onPowerPointCloseRequested?.(() => {
+    setPresentationExpanded(false)
+    setRightCollapsed(true)
+  }) ?? (() => undefined), [setPresentationExpanded, setRightCollapsed])
+
+  useEffect(() => window.api.events.onPowerPointExpandedChanged?.((expanded) => {
+    setPresentationExpanded(expanded)
+  }) ?? (() => undefined), [setPresentationExpanded])
 
   const contentOpen = selectedModeSurface !== null || !rightCollapsed
 

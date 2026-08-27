@@ -1,5 +1,6 @@
 """Authenticated registration of the Electron embedded-browser controller."""
 
+import asyncio
 from ipaddress import ip_address
 from typing import Annotated, Any
 
@@ -48,19 +49,26 @@ class BrowserControllerHandler(BaseHandler):
         return self.response(self.state.browser_host.controller_status())
 
     async def put(self, request: BrowserControllerRegistrationRequest) -> Any:
-        await self.state.browser_host.register_controller(
-            controller_id=request.controller_id,
-            generation=request.generation,
-            control_url=str(request.control_url).rstrip("/"),
-            control_token=request.control_token,
-            cdp_endpoint=str(request.cdp_endpoint).rstrip("/"),
-            owner_pid=request.owner_pid,
+        registration = {
+            "controller_id": request.controller_id,
+            "generation": request.generation,
+            "control_url": str(request.control_url).rstrip("/"),
+            "control_token": request.control_token,
+            "cdp_endpoint": str(request.cdp_endpoint).rstrip("/"),
+            "owner_pid": request.owner_pid,
+        }
+        await asyncio.gather(
+            self.state.browser_host.register_controller(**registration),
+            self.state.powerpoint_host.register_controller(**registration),
         )
         return self.response(self.state.browser_host.controller_status())
 
     async def delete(self, request: BrowserControllerDeleteRequest) -> Any:
-        removed = await self.state.browser_host.unregister_controller(request.controller_id)
-        return self.response({"removed": removed})
+        browser_removed, powerpoint_removed = await asyncio.gather(
+            self.state.browser_host.unregister_controller(request.controller_id),
+            self.state.powerpoint_host.unregister_controller(request.controller_id),
+        )
+        return self.response({"removed": browser_removed or powerpoint_removed})
 
 
 __all__ = ["BrowserControllerHandler"]

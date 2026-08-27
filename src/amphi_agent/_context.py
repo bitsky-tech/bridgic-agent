@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from bridgic.amphibious import Context, OTAContext
 
 from ._browser import SessionBrowser
+from ._powerpoint import SessionPowerPoint
 from ._session import Session
 from ._memory import Memory
 from ._llm_provider import LlmProvider
@@ -128,6 +129,7 @@ class AmphiContext(Context):
     workflow_runs: Optional[WorkflowRunLibrary] = None
     workspace: Optional[Workspace] = None
     browser: Optional[SessionBrowser] = None
+    powerpoint: Optional[SessionPowerPoint] = None
     invocations: Optional[AgentInvocation] = None
     llm_provider: LlmProvider = Field(default_factory=LlmProvider)
     # User/trusted-Invocation base mode; the active Think may override it at admission time.

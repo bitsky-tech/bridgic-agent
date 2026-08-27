@@ -1,7 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { resolve } from 'path'
+import { dirname, resolve } from 'path'
+import { fileURLToPath } from 'url'
+
+const configDir = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   plugins: [
@@ -17,26 +20,27 @@ export default defineConfig({
     }),
     tailwindcss(),
   ],
-  root: resolve(__dirname, 'src/renderer'),
+  root: resolve(configDir, 'src/renderer'),
   base: './',
   build: {
-    outDir: resolve(__dirname, 'dist/renderer'),
+    outDir: resolve(configDir, 'dist/renderer'),
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'src/renderer/index.html'),
+        main: resolve(configDir, 'src/renderer/index.html'),
+        powerpoint: resolve(configDir, 'src/renderer/powerpoint.html'),
       },
     },
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src/renderer'),
-      '@shared': resolve(__dirname, 'src/shared'),
+      '@': resolve(configDir, 'src/renderer'),
+      '@shared': resolve(configDir, 'src/shared'),
       // Force a single React copy (Bun hoists to root; this avoids
       // "multiple React copies" errors from workspace packages).
-      'react': resolve(__dirname, '../../node_modules/react'),
-      'react-dom': resolve(__dirname, '../../node_modules/react-dom'),
+      'react': resolve(configDir, '../../node_modules/react'),
+      'react-dom': resolve(configDir, '../../node_modules/react-dom'),
     },
     dedupe: ['react', 'react-dom'],
   },

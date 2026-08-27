@@ -100,6 +100,16 @@ export const IPC = {
     setBounds: 'browser:setBounds',
     setVisible: 'browser:setVisible',
   },
+  powerpoint: {
+    snapshot: 'powerpoint:snapshot',
+    ensureSession: 'powerpoint:ensureSession',
+    closeSession: 'powerpoint:closeSession',
+    activateSession: 'powerpoint:activateSession',
+    setBounds: 'powerpoint:setBounds',
+    setVisible: 'powerpoint:setVisible',
+    requestClose: 'powerpoint:requestClose',
+    setExpanded: 'powerpoint:setExpanded',
+  },
   // Bridgic Agent Python daemon coordination — the live backend
   // control plane (discover / spawn / stop / clients). The renderer chats with
   // the daemon directly over HTTP+WS; these channels are the main-process
@@ -191,6 +201,9 @@ export const IPC = {
     windowFullScreenChanged: 'window-full-screen-changed',
     windowCloseRequested: 'window-close-requested',
     embeddedBrowserChanged: 'embedded-browser-changed',
+    embeddedPowerPointChanged: 'embedded-powerpoint-changed',
+    powerPointCloseRequested: 'powerpoint-close-requested',
+    powerPointExpandedChanged: 'powerpoint-expanded-changed',
     // A watched session-file directory changed on disk → renderer re-reads it.
     fsChanged: 'fs-changed',
   },

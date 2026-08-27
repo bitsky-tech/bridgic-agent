@@ -42,6 +42,7 @@ from ._browser import (
     BROWSER_TOOL_NAMES,
     browser_tool_specs,
 )
+from ._powerpoint import POWERPOINT_TOOL_NAMES, powerpoint_tool_specs
 from ._filesystem import (
     FILE_SYSTEM_TOOL_NAMES,
     edit_file_tool,
@@ -145,6 +146,8 @@ __all__ = [
     "BROWSER_BASIC_TOOL_NAMES",
     "BROWSER_ADVANCED_TOOL_NAMES",
     "BROWSER_TOOL_NAMES",
+    "POWERPOINT_TOOL_NAMES",
+    "powerpoint_tool_specs",
     "read_file_tool",
     "write_file_tool",
     "edit_file_tool",

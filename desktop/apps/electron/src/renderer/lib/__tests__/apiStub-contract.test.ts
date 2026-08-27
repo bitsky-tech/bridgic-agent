@@ -61,6 +61,21 @@ describe('apiStub IPC contract', () => {
     }
   })
 
+  it('stubs every embedded-PowerPoint channel declared in IPC', async () => {
+    const fakeWindow: { api?: { powerpoint: Record<string, unknown> } } = {}
+    ;(globalThis as { window?: unknown }).window = fakeWindow
+    const { installApiStub } = await import('../apiStub')
+    installApiStub()
+
+    const declared = Object.keys(IPC.powerpoint).sort()
+    const stubbed = Object.keys(fakeWindow.api?.powerpoint ?? {}).sort()
+
+    expect(stubbed).toEqual(declared)
+    for (const name of declared) {
+      expect(typeof fakeWindow.api?.powerpoint[name]).toBe('function')
+    }
+  })
+
   it('stubs every system channel and returns only allow-listed diagnostics', async () => {
     const fakeWindow: {
       api?: { system: Record<string, (...args: never[]) => Promise<unknown>> }

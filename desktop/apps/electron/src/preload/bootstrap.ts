@@ -5,6 +5,7 @@ import type {
   AutoUpdateEvent,
   BackendSnapshot,
   EmbeddedBrowserSnapshot,
+  EmbeddedPowerPointSnapshot,
   ElectronAPI,
   FsChangedEvent,
   GuiSettings,
@@ -95,6 +96,17 @@ const api: ElectronAPI = {
     setVisible: (visible, focusHost) =>
       ipcRenderer.invoke(IPC.browser.setVisible, visible, focusHost),
   },
+  powerpoint: {
+    snapshot: () => ipcRenderer.invoke(IPC.powerpoint.snapshot),
+    ensureSession: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.ensureSession, sessionId),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.powerpoint.setBounds, bounds),
+    setVisible: (visible, focusHost) =>
+      ipcRenderer.invoke(IPC.powerpoint.setVisible, visible, focusHost),
+    requestClose: () => ipcRenderer.invoke(IPC.powerpoint.requestClose),
+    setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
+  },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
     refresh: (expectedEndpointEpoch) =>
@@ -152,6 +164,12 @@ const api: ElectronAPI = {
       subscribe<WindowCloseRequest>(IPC.events.windowCloseRequested, callback),
     onEmbeddedBrowserChanged: (callback) =>
       subscribe<EmbeddedBrowserSnapshot>(IPC.events.embeddedBrowserChanged, callback),
+    onEmbeddedPowerPointChanged: (callback) =>
+      subscribe<EmbeddedPowerPointSnapshot>(IPC.events.embeddedPowerPointChanged, callback),
+    onPowerPointCloseRequested: (callback) =>
+      subscribe<void>(IPC.events.powerPointCloseRequested, callback),
+    onPowerPointExpandedChanged: (callback) =>
+      subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },
 }

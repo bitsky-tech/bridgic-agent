@@ -444,17 +444,22 @@ const fallbackPresentationWorkspace = createInitialPresentationWorkspace()
 const fallbackPresentationDocument = fallbackPresentationWorkspace.documents[0]!
 const presentationWorkspacesBySessionAtom = atom<ReadonlyMap<string, PresentationWorkspace>>(new Map())
 const expandedPresentationSessionsAtom = atom<ReadonlySet<string>>(new Set<string>())
+/** Dedicated PowerPoint renderers pin their exact Session independently of main navigation. */
+export const powerPointSessionIdOverrideAtom = atom<string | null>(null)
+export const presentationSessionIdAtom = atom((get) => (
+  get(powerPointSessionIdOverrideAtom) ?? get(viewedSessionIdAtom)
+))
 
 /** Every open presentation tab owned by the viewed Session. */
 export const currentPresentationWorkspaceAtom = atom(
   (get) => {
-    const sessionId = get(viewedSessionIdAtom)
+    const sessionId = get(presentationSessionIdAtom)
     return sessionId
       ? get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace
       : fallbackPresentationWorkspace
   },
   (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
-    const sessionId = get(viewedSessionIdAtom)
+    const sessionId = get(presentationSessionIdAtom)
     if (!sessionId) return
     const current = get(currentPresentationWorkspaceAtom)
     const next = typeof update === 'function' ? update(current) : update
@@ -489,11 +494,11 @@ export const currentPresentationDocumentAtom = atom(
 /** Whether the viewed Session's presentation owns the work area. */
 export const presentationExpandedAtom = atom(
   (get) => {
-    const sessionId = get(viewedSessionIdAtom)
+    const sessionId = get(presentationSessionIdAtom)
     return sessionId ? get(expandedPresentationSessionsAtom).has(sessionId) : false
   },
   (get, set, update: SessionStateUpdate<boolean>) => {
-    const sessionId = get(viewedSessionIdAtom)
+    const sessionId = get(presentationSessionIdAtom)
     if (!sessionId) return
     const current = get(expandedPresentationSessionsAtom)
     const isExpanded = current.has(sessionId)

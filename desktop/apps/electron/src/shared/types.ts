@@ -260,6 +260,20 @@ export interface EmbeddedBrowserSnapshot {
   sessions: EmbeddedBrowserSessionInfo[]
 }
 
+export type EmbeddedPowerPointBounds = EmbeddedBrowserBounds
+
+export interface EmbeddedPowerPointSessionInfo {
+  sessionId: string
+  targetId: string | null
+  webContentsId: number
+  loading: boolean
+  crashed: boolean
+}
+
+export interface EmbeddedPowerPointSnapshot {
+  sessions: EmbeddedPowerPointSessionInfo[]
+}
+
 /**
  * The shape exposed on `window.api` by the preload script.
  * Imported by both renderer and preload so the contract stays in sync.
@@ -359,6 +373,16 @@ export interface ElectronAPI {
     setBounds(bounds: EmbeddedBrowserBounds): Promise<void>
     setVisible(visible: boolean, focusHost?: boolean): Promise<void>
   }
+  powerpoint: {
+    snapshot(): Promise<EmbeddedPowerPointSnapshot>
+    ensureSession(sessionId: string): Promise<EmbeddedPowerPointSessionInfo>
+    closeSession(sessionId: string): Promise<void>
+    activateSession(sessionId: string | null): Promise<void>
+    setBounds(bounds: EmbeddedPowerPointBounds): Promise<void>
+    setVisible(visible: boolean, focusHost?: boolean): Promise<void>
+    requestClose(): Promise<void>
+    setExpanded(expanded: boolean): Promise<void>
+  }
   backend: {
     snapshot(): Promise<BackendSnapshot>
     /** Re-read and authenticate the existing daemon endpoint. This operation
@@ -447,6 +471,9 @@ export interface ElectronAPI {
     onWindowFullScreenChanged(callback: (fullScreen: boolean) => void): () => void
     onWindowCloseRequested(callback: (req: WindowCloseRequest) => void): () => void
     onEmbeddedBrowserChanged(callback: (snapshot: EmbeddedBrowserSnapshot) => void): () => void
+    onEmbeddedPowerPointChanged(callback: (snapshot: EmbeddedPowerPointSnapshot) => void): () => void
+    onPowerPointCloseRequested(callback: () => void): () => void
+    onPowerPointExpandedChanged(callback: (expanded: boolean) => void): () => void
     /** A watched session-file directory changed on disk — re-read that level. */
     onFsChanged(callback: (event: FsChangedEvent) => void): () => void
   }
@@ -458,6 +485,15 @@ declare global {
     /** Startup-only capability exposed by preload to the trusted top-level
      * renderer. It is absent in plain-browser previews and child frames. */
     __localResourceToken__?: string
+    /** Stable renderer-domain API invoked by the SessionPowerPoint CDP client. */
+    __bridgicPowerPoint?: {
+      protocolVersion: 1
+      sessionId: string
+      dispatch(request: {
+        method: 'list' | 'snapshot' | 'apply'
+        params?: Record<string, unknown>
+      }): { ok: true; value: unknown } | { ok: false; error: string }
+    }
   }
 }
 

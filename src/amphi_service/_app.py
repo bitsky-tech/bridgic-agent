@@ -86,7 +86,7 @@ from .runtime import (
     SessionService,
     SystemEventBroker,
 )
-from ..amphi_agent import AGENT_NAME, AgentInvocation, BrowserHost
+from ..amphi_agent import AGENT_NAME, AgentInvocation, BrowserHost, PowerPointHost
 from ..amphi_store import Repository
 from .runtime._history_md import render_history_markdown
 from .cache import ClientRegistry, LlmCache
@@ -176,11 +176,13 @@ class ServiceApp:
         system_events = SystemEventBroker()
         sessions = SessionService()
         browser_host = BrowserHost()
+        powerpoint_host = PowerPointHost()
         invocations = AgentInvocation(
             llms,
             session_events,
             system_events,
             browser_host=browser_host,
+            powerpoint_host=powerpoint_host,
             history_renderer=render_history_markdown,
         )
         scheduler = SchedulerService(invocations, sessions, system_events=system_events)
@@ -213,6 +215,7 @@ class ServiceApp:
             system_events=system_events,
             sessions=sessions,
             browser_host=browser_host,
+            powerpoint_host=powerpoint_host,
             gateway=gateway,
             scheduler=scheduler,
             agent_env=agent_env,
@@ -335,7 +338,10 @@ class ServiceApp:
                         try:
                             await self.state.browser_host.shutdown()
                         finally:
-                            await Repository.close()
+                            try:
+                                await self.state.powerpoint_host.shutdown()
+                            finally:
+                                await Repository.close()
 
     @staticmethod
     def _load_environment() -> None:

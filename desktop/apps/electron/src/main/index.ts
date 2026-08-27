@@ -182,12 +182,14 @@ const windowManager = new WindowManager({
 const embeddedBrowserController = new EmbeddedBrowserController(
   windowManager.getEmbeddedBrowser(),
   embeddedBrowserCdpEndpoint,
+  windowManager.getEmbeddedPowerPoint(),
 )
 const shutdownEmbeddedBrowser = async () => {
   try {
     await embeddedBrowserController.stop()
   } finally {
     await windowManager.getEmbeddedBrowser().shutdown()
+    windowManager.getEmbeddedPowerPoint().closeAll()
   }
 }
 let telemetryShutdownComplete = false

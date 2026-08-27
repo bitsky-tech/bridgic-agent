@@ -45,6 +45,7 @@ import {
   formatPresentationText,
   getPresentationPageSize,
   presentationExpandedAtom,
+  presentationSessionIdAtom,
   stripPresentationListMarkers,
   type PresentationAnimationEffect,
   type PresentationComment,
@@ -66,7 +67,6 @@ import {
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { setRightPanelCollapsedAtom } from '@/atoms/layout'
-import { viewedSessionIdAtom } from '@/atoms/navigation'
 import { requestExternalLinkAtom } from '@/atoms/external-link'
 import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
@@ -153,6 +153,8 @@ import {
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
+  onClose?: () => void
+  onExpandedChange?: (expanded: boolean) => void
 }
 
 type ExportState = 'idle' | 'exporting' | 'saved' | 'error'
@@ -1468,9 +1470,9 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
 }
 
 /** A focused PowerPoint-style editor embedded in the Session workbench. */
-export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPanelProps) {
+export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
-  const sessionId = useAtomValue(viewedSessionIdAtom)
+  const sessionId = useAtomValue(presentationSessionIdAtom)
   const [workspace, setWorkspace] = useAtom(currentPresentationWorkspaceAtom)
   const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
   const pageSize = getPresentationPageSize(document)
@@ -3180,7 +3182,11 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
         </HeaderButton>
         <HeaderButton
           label={t(expanded ? 'session.presentation.restore' : 'session.presentation.expand')}
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => {
+            const next = !expanded
+            setExpanded(next)
+            onExpandedChange?.(next)
+          }}
           pressed={expanded}
           testId="presentation-toggle-expanded"
         >
@@ -3190,7 +3196,8 @@ export function PresentationWorkbenchPanel({ active }: PresentationWorkbenchPane
           label={t('session.presentation.closePanel')}
           onClick={() => {
             setExpanded(false)
-            setRightCollapsed(true)
+            if (onClose) onClose()
+            else setRightCollapsed(true)
           }}
           testId="presentation-close-panel"
         >

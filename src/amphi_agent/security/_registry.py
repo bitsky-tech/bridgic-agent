@@ -471,6 +471,8 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"workspace_restore|workspace_restore_file", Capability.EDIT),   # rollback = modifying files
     (r"web_search|web_fetch", Capability.NETWORK),
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
+    (r"powerpoint_list|powerpoint_snapshot", Capability.MANAGE),
+    (r"powerpoint_apply|powerpoint_add_animation", Capability.MANAGE_WRITE),
     (r"mcp__.+", Capability.MCP),
     (
         r"switch|request_build|request_run_workflow|request_accept_rule|request_human_choice|request_human_task_confirm"

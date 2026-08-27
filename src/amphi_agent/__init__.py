@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
 from ._browser import BrowserHost
+from ._powerpoint import PowerPointHost, SessionPowerPoint
 from ._cognitive import MainThink
 from ._prompt import AGENT_NAME
 from ._context import (
@@ -64,6 +65,8 @@ __all__ = [
     "AGENT_NAME",
     "AmphiAgent",
     "BrowserHost",
+    "PowerPointHost",
+    "SessionPowerPoint",
     "AgentInvocation",
     "AppEnvironmentStatus",
     "InvocationBusyError",
