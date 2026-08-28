@@ -1,4 +1,5 @@
 import json
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -58,21 +59,25 @@ def _context(*, skills: SkillLibrary | None = None, child: bool = False) -> Amph
     return AmphiContext(session=Session(record, []), skills=skills)
 
 
+def _prompt_tool_names(system: str) -> tuple[str, ...]:
+    marker = "The tools currently available in this cognitive loop are: "
+    rendered = system.split(marker, maxsplit=1)[1].split(". Call them directly.", maxsplit=1)[0]
+    return tuple(re.findall(r"`([^`]+)`", rendered))
+
+
 async def test_llm_tool_surface() -> None:
     """Final model boundary:
 
     {
+      "prompt_tool_names": "same ordered names",
       "ota_tool_specs": "same ordered names",
       "llm_tool_schemas": "same complete ordered schemas"
     }
 
     Checks:
-    1. The Turn records a non-empty, duplicate-free ordered ToolSurface.
-    2. The LLM receives complete schemas for exactly those ToolSpecs, in the same order.
-
-    The Persona deliberately does not repeat the tool names. Their schemas are the
-    authoritative model-visible surface, so duplicating them in prose would spend
-    tokens and create a second source of truth.
+    1. The Persona advertises exactly the ToolSurface selected for this round.
+    2. The Turn records the same ordered Tool specs used to render the Persona.
+    3. The LLM receives complete schemas for exactly those ToolSpecs, in the same order.
     """
 
     llm = _RecordingLlm()
@@ -82,15 +87,19 @@ async def test_llm_tool_surface() -> None:
     )
 
     await MainThink(llm).thinking(ota_context, _context())
+    prompt_names = _prompt_tool_names(llm.messages[0].content)
     recorded_names = tuple(spec.tool_name for spec in ota_context.tools)
     expected_schemas = [spec.to_tool().model_dump() for spec in ota_context.tools]
     actual_schemas = [tool.model_dump() for tool in llm.tools]
 
-    # Check 1: The Turn records one stable ToolSpec for every executable tool.
+    # Check 1: The Persona advertises exactly the ToolSurface selected for this round.
+    assert prompt_names == recorded_names
+
+    # Check 2: The Turn records the same ordered Tool specs used to render the Persona.
     assert recorded_names
     assert len(recorded_names) == len(set(recorded_names))
 
-    # Check 2: The LLM receives complete schemas for exactly those ToolSpecs, in the same order.
+    # Check 3: The LLM receives complete schemas for exactly those ToolSpecs, in the same order.
     assert actual_schemas == expected_schemas
 
 
@@ -198,14 +207,23 @@ async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
 
     {
       "agent_bindings": "Main, Child, Build, and Workflow descriptors use their owned Personas",
+      "personas": "exact runtime ToolSpec names",
       "llm_schemas": "same complete schemas generated from those ToolSpecs"
     }
 
     Checks:
     1. Each public Agent Think descriptor sends the Persona owned by its declared mode.
-    2. Each mode records a non-empty, duplicate-free ToolSurface for the round.
+    2. Each assembled Persona renders the ToolSurface selected for that round exactly.
     3. The LLM receives the complete schemas generated from those ToolSpecs.
     """
+    def rendered_tool_names(system: str) -> tuple[str, ...]:
+        if "The tools currently available in this cognitive loop are:" in system:
+            return _prompt_tool_names(system)
+        pattern = r"The tools currently available in [A-Za-z]+ are: (.*?)\. Call them directly\."
+        match = re.search(pattern, system)
+        assert match is not None
+        return tuple(re.findall(r"`([^`]+)`", match.group(1)))
+
     async def context_blocks(_worker: Any, _ota_context: Any, _context: Any) -> list[str]:
         return []
 
@@ -260,12 +278,12 @@ async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
         assert identity in llm.messages[0].content
 
         runtime_names = tuple(spec.tool_name for spec in ota_context.tools)
+        prompt_names = rendered_tool_names(llm.messages[0].content)
         expected_schemas = [spec.to_tool().model_dump() for spec in ota_context.tools]
         actual_schemas = [tool.model_dump() for tool in llm.tools]
 
-        # Check 2: Each mode records one stable ToolSpec for every executable tool.
-        assert runtime_names
-        assert len(runtime_names) == len(set(runtime_names))
+        # Check 2: Each assembled Persona renders the ToolSurface selected for that round exactly.
+        assert prompt_names == runtime_names
 
         # Check 3: The LLM receives the complete schemas generated from those ToolSpecs.
         assert actual_schemas == expected_schemas

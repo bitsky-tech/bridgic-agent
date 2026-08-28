@@ -1,5 +1,24 @@
 """Prompts for bounded rolling compression of Session and current-Turn history."""
 
+from .render import _ui_language
+
+
+def _note_language_line() -> str:
+    """The note-language instruction, resolved per call from the active locale.
+
+    A summary re-enters later context as assistant history. Left unsteered, the
+    summarizer mirrors the chunk's language, so one polluted stretch of history
+    becomes a durable language signal pressing on every later reply — the same
+    pressure the Build-language rule removes. The locale is the product's resolved
+    "user's language, else the language they picked in the app", the same source
+    the safety classifier's reason fallback uses. Quoted material stays exact:
+    a translated path, command, or error message stops matching reality.
+    """
+    return (
+        f"Write the note in {_ui_language()}; keep quoted user wording, paths, "
+        "identifiers, commands, and error text exact in their original language."
+    )
+
 
 COMPACTION_SYSTEM_PROMPT = """You turn historical agent context into a compact handoff note for future work.
 
@@ -18,9 +37,10 @@ Write a dense working note, not a narrative recap. Combine related facts, remove
 def render_session_compaction_prompt(previous_summary: str, history: str) -> str:
     """Render one rolling update for cross-Turn Session history."""
     previous = previous_summary.strip() or "(none — create the first Session summary)"
+    note_language = _note_language_line()
     return f"""Update the Session handoff note with the next chronological history chunk.
 
-The new note replaces both the previous note and this chunk. Keep durable facts needed across future user requests; collapse transient step-by-step activity into its outcome.
+The new note replaces both the previous note and this chunk. Keep durable facts needed across future user requests; collapse transient step-by-step activity into its outcome. {note_language}
 
 <previous_session_summary>
 {previous}
@@ -34,9 +54,10 @@ The new note replaces both the previous note and this chunk. Keep durable facts 
 def render_turn_compaction_prompt(previous_summary: str, user_request: str, history: str) -> str:
     """Render one rolling update for completed rounds in the active Agent Turn."""
     previous = previous_summary.strip() or "(none — create the first current-Turn summary)"
+    note_language = _note_language_line()
     return f"""Update the current-task handoff note with the next chronological execution chunk.
 
-The user's request remains separately visible to the agent. Record progress toward it, material tool results, blockers, and the exact next useful step. The new note replaces both the previous note and this chunk; collapse routine execution details into their outcome.
+The user's request remains separately visible to the agent. Record progress toward it, material tool results, blockers, and the exact next useful step. The new note replaces both the previous note and this chunk; collapse routine execution details into their outcome. {note_language}
 
 <current_user_request>
 {user_request.strip()}
