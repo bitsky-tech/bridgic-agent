@@ -1,12 +1,13 @@
 import { useAtomValue, useSetAtom } from 'jotai'
-import { CircleUser, Wallet } from 'lucide-react'
-import { type FormEvent, useId, useState } from 'react'
+import { CircleUser, RefreshCw, Wallet } from 'lucide-react'
+import { type FormEvent, useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
   cloudAccountAtom,
   cloudBusyAtom,
   cloudErrorAtom,
+  cloudRefreshAtom,
   cloudRegisterAtom,
   cloudSignInAtom,
   cloudSignOutAtom,
@@ -31,6 +32,20 @@ export function SettingsAccountTab() {
   const signIn = useSetAtom(cloudSignInAtom)
   const register = useSetAtom(cloudRegisterAtom)
   const signOut = useSetAtom(cloudSignOutAtom)
+  const refresh = useSetAtom(cloudRefreshAtom)
+  const [refreshing, setRefreshing] = useState(false)
+
+  // Opening the tab loads the account, and on a cold start also recovers the
+  // session from the stored credential. Quiet, so the tab does not open on a
+  // spinner for what is usually an instant local read.
+  useEffect(() => {
+    void refresh({ quiet: true })
+  }, [refresh])
+
+  const refreshNow = () => {
+    setRefreshing(true)
+    void refresh().finally(() => setRefreshing(false))
+  }
 
   const emailId = useId()
   const passwordId = useId()
@@ -73,8 +88,21 @@ export function SettingsAccountTab() {
             <Wallet size={15} aria-hidden />
             {t('cloud.balance')}
           </span>
-          <span className="text-sm font-semibold tabular-nums text-text-primary">
-            {t('cloud.credits', { n: account.creditsBalance.toLocaleString() })}
+          <span className="flex items-center gap-2">
+            <span className="text-sm font-semibold tabular-nums text-text-primary">
+              {t('cloud.credits', { n: account.creditsBalance.toLocaleString() })}
+            </span>
+            <button
+              type="button"
+              onClick={refreshNow}
+              disabled={refreshing}
+              aria-label={t('cloud.refresh')}
+              title={t('cloud.refresh')}
+              className="rounded p-1 text-text-tertiary transition-colors
+                         hover:bg-bg-hover hover:text-text-secondary disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} aria-hidden />
+            </button>
           </span>
         </section>
 

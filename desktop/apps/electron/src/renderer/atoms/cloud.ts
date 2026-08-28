@@ -18,7 +18,7 @@ import type { Setter } from 'jotai'
 
 import { i18n } from '../lib/i18n'
 import { rlog } from '../lib/logger'
-import { addProviderAtom, deleteProviderAtom } from './models'
+import { addProviderAtom, deleteProviderAtom, fetchProviderApiKeyAtom } from './models'
 
 /** Slug the platform channel is stored under in `provider_credentials`. */
 export const CLOUD_PROVIDER_ID = 'bridgic'
@@ -182,28 +182,61 @@ export const cloudRegisterAtom = atom(
   },
 )
 
-/** Re-read the balance. Cheap enough to call after each turn. */
-export const cloudRefreshAtom = atom(null, async (get, set): Promise<void> => {
-  const token = get(_token)
-  if (!token) return
-  try {
-    const me = await cloudFetch<{
-      account_id: number
-      email: string
-      credits_balance: number
-    }>('/me', { token })
-    set(_account, {
-      accountId: me.account_id,
-      email: me.email,
-      creditsBalance: me.credits_balance,
-    })
-  } catch (err) {
-    // A failed refresh leaves the last known balance on screen. It is stale, not
-    // wrong, and the relay refuses a drained account regardless of what the UI
-    // last showed.
-    rlog.warn('[cloud] balance refresh failed', err)
-  }
-})
+/**
+ * Load the account, recovering the session first if this is a fresh app start.
+ *
+ * The token lives in memory, so a restart loses it — while the credential itself
+ * is still on the User row, and platform models still work. Without this the
+ * Account tab would show a sign-in form to someone who is signed in, and any
+ * refresh would have no token to refresh with.
+ *
+ * `quiet` suppresses the spinner for the automatic load on mount, so opening the
+ * tab does not flash a busy state; the manual refresh button passes false.
+ */
+export const cloudRefreshAtom = atom(
+  null,
+  async (get, set, options?: { quiet?: boolean }): Promise<void> => {
+    const quiet = options?.quiet ?? false
+    let token = get(_token)
+
+    if (!token) {
+      // Recover from the stored provider credential — its api_key IS the token.
+      const stored = await set(fetchProviderApiKeyAtom, CLOUD_PROVIDER_ID)
+      if (!stored) return // Genuinely signed out; leave the form as it is.
+      token = stored
+      set(_token, stored)
+    }
+
+    if (!quiet) set(_busy, true)
+    try {
+      const me = await cloudFetch<{
+        account_id: number
+        email: string
+        credits_balance: number
+      }>('/me', { token })
+      set(_account, {
+        accountId: me.account_id,
+        email: me.email,
+        creditsBalance: me.credits_balance,
+      })
+      set(_error, null)
+    } catch (err) {
+      // A rejected token means the account was suspended, or the password
+      // changed elsewhere. Drop the session rather than showing a balance that
+      // is no longer ours to show.
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('401') || message.toLowerCase().includes('credential')) {
+        set(_token, null)
+        set(_account, null)
+      } else {
+        rlog.warn('[cloud] balance refresh failed', err)
+      }
+      if (!quiet) set(_error, message)
+    } finally {
+      if (!quiet) set(_busy, false)
+    }
+  },
+)
 
 /**
  * Sign out, removing the stored credential.

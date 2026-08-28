@@ -174,6 +174,7 @@
     "emptyFields": "请填写邮箱和密码。",
     "hidePassword": "隐藏密码",
     "password": "密码",
+    "refresh": "刷新余额",
     "register": "注册",
     "showPassword": "显示密码",
     "signIn": "登录",
