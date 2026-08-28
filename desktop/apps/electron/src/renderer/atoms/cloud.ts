@@ -66,14 +66,26 @@ async function cloudFetch<T>(
   init: RequestInit & { token?: string | null } = {},
 ): Promise<T> {
   const { token, headers, ...rest } = init
-  const response = await fetch(`${CLOUD_BASE_URL}${path}`, {
-    ...rest,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-  })
+
+  let response: Response
+  try {
+    response = await fetch(`${CLOUD_BASE_URL}${path}`, {
+      ...rest,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+    })
+  } catch (cause) {
+    // fetch rejects for every transport-level failure with one opaque message
+    // ("Failed to fetch"), and the browser withholds the real reason on purpose
+    // — a refused connection, a DNS miss and a blocked CORS preflight are
+    // indistinguishable here. Surfacing that string tells the user nothing, so
+    // it is replaced with the one thing they can act on.
+    rlog.warn('[cloud] request failed before a response', cause)
+    throw new Error(i18n.t('cloud.unreachable'))
+  }
   if (!response.ok) {
     // The gateway puts a human-readable reason in `detail`; surface it rather
     // than a bare status, since "insufficient credits" and "wrong password" are

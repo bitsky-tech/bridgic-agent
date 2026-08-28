@@ -12,6 +12,7 @@ import {
   cloudSignOutAtom,
 } from '@/atoms/cloud'
 import { rlog } from '@/lib/logger'
+import { PasswordField } from './PasswordField'
 import { Btn, getBtnStyle, inputClasses } from './Primitives'
 import { SettingsTabLayout } from './SettingsTabLayout'
 
@@ -110,10 +111,8 @@ export function SettingsAccountTab() {
           <label htmlFor={passwordId} className="text-sm text-text-secondary">
             {t('cloud.password')}
           </label>
-          <input
+          <PasswordField
             id={passwordId}
-            className={inputClasses}
-            type="password"
             autoComplete={registering ? 'new-password' : 'current-password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}

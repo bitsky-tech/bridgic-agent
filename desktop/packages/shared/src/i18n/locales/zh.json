@@ -172,8 +172,10 @@
     "credits": "{{n}} 点",
     "email": "邮箱",
     "emptyFields": "请填写邮箱和密码。",
+    "hidePassword": "隐藏密码",
     "password": "密码",
     "register": "注册",
+    "showPassword": "显示密码",
     "signIn": "登录",
     "signOut": "退出登录",
     "signedInAs": "已登录:{{email}}",
@@ -181,7 +183,8 @@
     "subtitle": "登录后可直接使用平台额度,无需自备 API Key。",
     "title": "Bridgic 账号",
     "toggleToRegister": "还没有账号?去注册",
-    "toggleToSignIn": "已有账号?去登录"
+    "toggleToSignIn": "已有账号?去登录",
+    "unreachable": "无法连接 Bridgic 服务。请确认服务已启动后重试。"
   },
   "commentFeedback": {
     "cancelEsc": "取消（Esc）",

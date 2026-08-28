@@ -172,8 +172,10 @@
     "credits": "{{n}} credits",
     "email": "Email",
     "emptyFields": "Enter both an email and a password.",
+    "hidePassword": "Hide password",
     "password": "Password",
     "register": "Create account",
+    "showPassword": "Show password",
     "signIn": "Sign in",
     "signOut": "Sign out",
     "signedInAs": "Signed in as {{email}}",
@@ -181,7 +183,8 @@
     "subtitle": "Sign in to use platform credits without configuring your own API key.",
     "title": "Bridgic account",
     "toggleToRegister": "No account yet? Create one",
-    "toggleToSignIn": "Already have an account? Sign in"
+    "toggleToSignIn": "Already have an account? Sign in",
+    "unreachable": "Cannot reach the Bridgic service. Check that it is running, then try again."
   },
   "commentFeedback": {
     "cancelEsc": "Cancel (Esc)",
