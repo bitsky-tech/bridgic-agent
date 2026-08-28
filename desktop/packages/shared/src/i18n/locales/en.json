@@ -170,6 +170,8 @@
     "balance": "Balance",
     "channelName": "Bridgic platform credits",
     "credits": "{{n}} credits",
+    "creditsRate": "{{n}} credits = ¥1",
+    "creditsWorth": "≈ ¥{{yuan}}",
     "email": "Email",
     "emptyFields": "Enter both an email and a password.",
     "hidePassword": "Hide password",

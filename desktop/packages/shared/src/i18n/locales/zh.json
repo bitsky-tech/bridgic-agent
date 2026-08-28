@@ -170,6 +170,8 @@
     "balance": "余额",
     "channelName": "Bridgic 平台额度",
     "credits": "{{n}} 点",
+    "creditsRate": "{{n}} 点 = ¥1",
+    "creditsWorth": "≈ ¥{{yuan}}",
     "email": "邮箱",
     "emptyFields": "请填写邮箱和密码。",
     "hidePassword": "隐藏密码",

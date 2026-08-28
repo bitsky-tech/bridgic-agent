@@ -89,8 +89,21 @@ export function SettingsAccountTab() {
             {t('cloud.balance')}
           </span>
           <span className="flex items-center gap-2">
-            <span className="text-sm font-semibold tabular-nums text-text-primary">
-              {t('cloud.credits', { n: account.creditsBalance.toLocaleString() })}
+            <span className="flex flex-col items-end">
+              <span className="text-sm font-semibold tabular-nums text-text-primary">
+                {t('cloud.credits', { n: account.creditsBalance.toLocaleString() })}
+              </span>
+              {/* Credits are our own unit, so the balance is unreadable without
+                  the rate. The rate comes from the server; a zero means it has
+                  not arrived yet, and showing nothing beats showing a wrong
+                  conversion. */}
+              {account.creditsPerYuan > 0 && (
+                <span className="text-xs tabular-nums text-text-tertiary">
+                  {t('cloud.creditsWorth', {
+                    yuan: (account.creditsBalance / account.creditsPerYuan).toFixed(2),
+                  })}
+                </span>
+              )}
             </span>
             <button
               type="button"

@@ -33,6 +33,10 @@ export interface CloudAccount {
   accountId: number
   email: string
   creditsBalance: number
+  /** How many credits one yuan buys. Served by the gateway, never assumed:
+   *  a balance means nothing without it, and a hard-coded guess keeps being
+   *  wrong silently after operations changes the rate. */
+  creditsPerYuan: number
 }
 
 export interface CloudModel {
@@ -153,11 +157,15 @@ async function performSignIn(
     })
 
     set(_token, auth.access_token)
+    // The rate is not on the token response, so seed a placeholder and let the
+    // refresh below replace the whole record with the server's own numbers.
     set(_account, {
       accountId: auth.account_id,
       email: input.email,
       creditsBalance: auth.credits_balance,
+      creditsPerYuan: 0,
     })
+    await set(cloudRefreshAtom, { quiet: true })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     rlog.error('[cloud] sign-in failed', err)
@@ -213,11 +221,13 @@ export const cloudRefreshAtom = atom(
         account_id: number
         email: string
         credits_balance: number
+        credits_per_yuan: number
       }>('/me', { token })
       set(_account, {
         accountId: me.account_id,
         email: me.email,
         creditsBalance: me.credits_balance,
+        creditsPerYuan: me.credits_per_yuan,
       })
       set(_error, null)
     } catch (err) {

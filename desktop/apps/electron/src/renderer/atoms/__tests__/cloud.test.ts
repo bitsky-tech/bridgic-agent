@@ -76,6 +76,14 @@ function harness(
     if (url.endsWith('/auth/login')) {
       return jsonResponse({ access_token: 'tok-abc', account_id: 7, credits_balance: 50_000 })
     }
+    if (url.includes('8787') && url.endsWith('/me')) {
+      return jsonResponse({
+        account_id: 7,
+        email: 'a@b.com',
+        credits_balance: 50_000,
+        credits_per_yuan: 1000,
+      })
+    }
     if (url.includes('8787') && url.endsWith('/me/models')) {
       return jsonResponse([
         {
@@ -133,6 +141,9 @@ describe('cloud sign-in', () => {
       accountId: 7,
       email: 'a@b.com',
       creditsBalance: 50_000,
+      // Read back from the gateway rather than assumed: the balance is
+      // unreadable without it, and a hard-coded guess goes wrong silently.
+      creditsPerYuan: 1000,
     })
     expect(store.get(cloudSignedInAtom)).toBe(true)
   })
