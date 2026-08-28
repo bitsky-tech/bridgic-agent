@@ -280,6 +280,57 @@ def test_skill_contract() -> None:
         assert "must not use bash" in normalized or "never use bash" in normalized
 
 
+def test_build_language_follows_the_reply_language_resolution() -> None:
+    """The Build language resolves like every other display language:
+
+    {
+      "definition": "user input → the user's prior language → app UI language",
+      "forbidden_sources": "Workflow source / tool results / earlier assistant messages",
+      "removed": "the original Build request (unresolvable once history slides out)"
+    }
+
+    Checks:
+    1. Every Build stage defines the Build language by the reply-language resolution,
+       not by "the original Build request" — that anchor is unreadable whenever the
+       founding Turn has left the history window, and the model then inferred the
+       language from its own earlier output (a Chinese Workflow run flipped an
+       English session's Explore stage to Chinese).
+    2. Every Build stage forbids taking the language from earlier assistant messages.
+    """
+    personas = _personas()
+    for name in ("clarify", "explore", "generate", "verify"):
+        persona = personas[name]
+        # Check 1: The underdetermined anchor is gone; the resolution chain defines it.
+        assert "original Build request" not in persona, name
+        assert "resolved exactly like your reply language" in persona, name
+        # Check 2: Earlier assistant messages may not supply the language.
+        assert "earlier assistant messages" in persona, name
+
+
+def test_main_and_workflow_forbid_assistant_language_inference() -> None:
+    """Main and Workflow close the same assistant-history language channel Build closed:
+
+    {
+      "main": "tool results / earlier assistant messages",
+      "workflow": "Workflow source / tools / webpages / evidence / earlier assistant messages"
+    }
+
+    Checks:
+    1. Main's CRITICAL language rule forbids taking the language from earlier assistant
+       messages — the consistency gap left after Build gained an exclusion clause.
+    2. Workflow's exclusion list names earlier assistant messages, closing the r16
+       inference channel where a resumed Run claims the original language from history.
+    """
+    personas = _personas()
+    # Check 1: Main (and Child, which shares the same language rule template path).
+    for name in ("main", "child"):
+        assert "earlier assistant messages" in personas[name], name
+        assert "tool results" in personas[name], name
+    # Check 2: Workflow execute and validate personas.
+    for name in ("execute", "validate"):
+        assert "earlier assistant messages" in personas[name], name
+
+
 def test_build_structures() -> None:
     """Final Build Persona structures:
 
