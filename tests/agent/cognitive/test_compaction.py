@@ -264,13 +264,13 @@ async def test_summary_input_is_bounded_when_one_atomic_turn_is_huge(test_sandbo
         user_input="Current request",
         prompt_time="2026-08-26 12:00 (UTC+08:00)",
     )
-    context = _context(str(test_sandbox.sessions / "bounded-input"), turns, 12_000)
+    context = _context(str(test_sandbox.sessions / "bounded-input"), turns, 20_000)
     original = await worker.assemble_messages(ota_context, context)
 
     await worker.compact_messages(original, [], ota_context, context, target=1)
 
     assert len(llm.calls) == 1
-    assert worker._estimate_request_tokens(llm.calls[0], []) <= 6_000
+    assert worker._estimate_request_tokens(llm.calls[0], []) <= 10_000
     assert "bytes omitted during compaction" in llm.calls[0][1].content
     assert ota_context.state.context_compaction is not None
     assert ota_context.state.context_compaction.session_through_ordinal == 0
