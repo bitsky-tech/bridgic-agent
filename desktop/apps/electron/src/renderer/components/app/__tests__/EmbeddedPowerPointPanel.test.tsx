@@ -184,4 +184,65 @@ describe('EmbeddedPowerPointPanel', () => {
 
     await act(async () => root.unmount())
   })
+
+  it('keeps the native PPT surface inside the right-dock divider', async () => {
+    const calls: string[] = []
+    ;(window as typeof window & { api: ElectronAPI }).api = {
+      powerpoint: powerPointApi(calls),
+    } as ElectronAPI
+    const store = createStore()
+    const sessionId = 'session-ppt-divider'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setEmbeddedPowerPointSnapshotAtom, { sessions: [sessionInfo(sessionId)] })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(withZhTranslation(
+        <Provider store={store}>
+          <div data-browser-dock>
+            <div data-browser-dock-clip>
+              <EmbeddedPowerPointPanel active />
+            </div>
+          </div>
+        </Provider>,
+      ))
+    })
+    const clip = host.querySelector<HTMLElement>('[data-browser-dock-clip]')!
+    const viewport = host.querySelector<HTMLElement>(
+      '[data-testid="embedded-powerpoint-viewport"]',
+    )!
+    clip.getBoundingClientRect = () => ({
+      x: 421,
+      y: 44,
+      width: 679,
+      height: 720,
+      top: 44,
+      right: 1100,
+      bottom: 764,
+      left: 421,
+      toJSON: () => ({}),
+    })
+    viewport.getBoundingClientRect = () => ({
+      x: 420,
+      y: 44,
+      width: 680,
+      height: 720,
+      top: 44,
+      right: 1100,
+      bottom: 764,
+      left: 420,
+      toJSON: () => ({}),
+    })
+
+    await act(async () => {
+      animationFrame?.(0)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(calls).toContain('setBounds:421:44:679:720')
+    await act(async () => root.unmount())
+  })
 })

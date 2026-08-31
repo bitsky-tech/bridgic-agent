@@ -91,45 +91,6 @@ async function submitOpenDialog() {
 }
 
 describe('presentation Insert tab integration', () => {
-  it('migrates only the former default audio card to a centered compact icon', async () => {
-    const { root, store } = await mountPanel()
-    const presentation = store.get(currentPresentationDocumentAtom)
-    const slide = presentation.slides[0]!
-    const source = {
-      dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
-      fileName: 'legacy.mp3',
-      mimeType: 'audio/mpeg',
-    }
-    const legacy = {
-      ...createPresentationMediaElement('audio', source),
-      x: 100,
-      y: 200,
-      width: 520,
-      height: 72,
-      displayStyle: undefined,
-    }
-    const custom = { ...legacy, id: 'custom-audio', y: 320, width: 519 }
-    const currentCustom = { ...legacy, id: 'current-custom-audio', y: 440, displayStyle: 'compact' as const }
-
-    await act(async () => {
-      store.set(currentPresentationDocumentAtom, {
-        ...presentation,
-        slides: [{ ...slide, elements: [legacy, custom, currentCustom] }],
-      })
-      await Promise.resolve()
-    })
-
-    const migrated = store.get(currentPresentationDocumentAtom).slides[0]!.elements
-    expect(migrated[0]).toMatchObject({ type: 'audio', x: 328, y: 204, width: 64, height: 64, displayStyle: 'compact' })
-    expect(migrated[1]).toMatchObject({ id: 'custom-audio', x: 100, y: 320, width: 519, height: 72 })
-    expect(migrated[2]).toMatchObject({ id: 'current-custom-audio', x: 100, y: 440, width: 520, height: 72 })
-
-    await act(async () => {
-      root.unmount()
-      mountedRoots.delete(root)
-    })
-  })
-
   it('inserts editable tables, charts, links, and footers into the document model', async () => {
     const { host, root, store } = await mountPanel()
 

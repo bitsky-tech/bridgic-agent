@@ -601,6 +601,8 @@ describe('createPresentationPptx', () => {
     expect(slideRelationships).toContain('relationships/audio')
     expect(slideRelationships).toContain('relationships/video')
     expect(slideRelationships).toContain('relationships/chart')
+    expect(slideRelationships).toContain('Target="../charts/chart')
+    expect(slideRelationships).not.toContain('Target="/ppt/charts/')
     expect(slideRelationships).toContain('relationships/hyperlink')
     expect(slideRelationships).toContain('Target="https://example.com/docs?a=1&amp;b=2"')
     expect(slideRelationships).toContain('Target="https://example.com/image?a=1&amp;b=2"')
@@ -637,6 +639,15 @@ describe('createPresentationPptx', () => {
     expect(chartXml).toContain('<c:lineChart>')
     expect(chartXml).toContain('<c:pieChart>')
     expect(chartXml).toContain('<c:doughnutChart>')
+    for (const axialChartXml of chartXmlFiles.filter((xml) => xml.includes('<c:barChart>') || xml.includes('<c:lineChart>'))) {
+      const declaredAxisIds = new Set(Array.from(axialChartXml.matchAll(
+        /<c:(?:catAx|dateAx|valAx|serAx)\b[^>]*>\s*<c:axId\b[^>]*\bval="([^"]+)"[^>]*\/>/g,
+      ), (match) => match[1]!))
+      const referencedAxisIds = Array.from(axialChartXml.matchAll(
+        /<c:(?:barChart|lineChart)>[\s\S]*?<\/c:(?:barChart|lineChart)>/g,
+      )).flatMap((match) => Array.from(match[0].matchAll(/<c:axId\b[^>]*\bval="([^"]+)"[^>]*\/>/g), (axis) => axis[1]!))
+      expect(referencedAxisIds.every((axisId) => declaredAxisIds.has(axisId))).toBe(true)
+    }
     for (const pieFamilyXml of chartXmlFiles.filter((xml) => xml.includes('<c:pieChart>') || xml.includes('<c:doughnutChart>'))) {
       expect(pieFamilyXml.match(/<a:srgbClr val="6957D9"\/>/g)?.length).toBeGreaterThanOrEqual(2)
       expect(pieFamilyXml).toContain('<a:srgbClr val="2F8B78"/>')

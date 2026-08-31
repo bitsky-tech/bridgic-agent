@@ -249,8 +249,15 @@ describe('importPresentationPptx', () => {
         categories: ['Q1', 'Q2'],
         series: [{ name: 'Users', values: [12, 18] }],
         showLegend: true,
+        showValue: true,
         title: 'Quarterly users',
         colors: ['#6957D9'],
+        chartAreaFill: 'transparent',
+        plotAreaFill: '#111727',
+        categoryAxisLabelColor: '#C6CCE0',
+        valueAxisLabelColor: '#7F89A8',
+        gridLineColor: '#28314A',
+        dataLabelColor: '#F5F7FF',
       },
     ]
     const { importPresentationPptx } = await import('../presentationPptxImport')
@@ -265,6 +272,13 @@ describe('importPresentationPptx', () => {
       expect(chart.chartType).toBe('column')
       expect(chart.categories).toEqual(['Q1', 'Q2'])
       expect(chart.series[0]?.values).toEqual([12, 18])
+      expect(chart.showValue).toBe(true)
+      expect(chart.chartAreaFill).toBe('transparent')
+      expect(chart.plotAreaFill).toBe('#111727')
+      expect(chart.categoryAxisLabelColor).toBe('#C6CCE0')
+      expect(chart.valueAxisLabelColor).toBe('#7F89A8')
+      expect(chart.gridLineColor).toBe('#28314A')
+      expect(chart.dataLabelColor).toBe('#F5F7FF')
     }
   })
 })

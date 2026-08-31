@@ -199,7 +199,7 @@ export function AppLayout({
             data-content-open={rightContentOpen}
             className={cn(
               'relative flex flex-col bg-bg-surface',
-              !expandRight && rightContentOpen && 'border-l border-border-subtle',
+              !expandRight && rightContentOpen && 'border-l border-border-strong/60',
               expandRight && 'flex-1 min-w-0',
               !expandRight && !resizingRight
                 && 'transition-[width,min-width] duration-200 ease-out motion-reduce:transition-none',

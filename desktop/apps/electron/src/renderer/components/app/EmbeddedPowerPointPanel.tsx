@@ -38,12 +38,26 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
     let syncing = false
     let pending = true
 
+    const readBounds = () => {
+      const rect = viewport.getBoundingClientRect()
+      const clip = viewport.closest<HTMLElement>('[data-browser-dock-clip]')
+        ?.getBoundingClientRect()
+      const left = clip ? Math.max(rect.left, clip.left) : rect.left
+      const right = clip ? Math.min(rect.right, clip.right) : rect.right
+      return {
+        x: left,
+        y: rect.y,
+        width: Math.max(0, right - left),
+        height: rect.height,
+      }
+    }
+
     const sync = async () => {
       if (syncing || disposed || !pending) return
       syncing = true
       pending = false
       try {
-        const rect = viewport.getBoundingClientRect()
+        const rect = readBounds()
         if (rect.width <= 0 || rect.height <= 0) {
           await powerpoint.setVisible(false)
           publishSurfaceRect(null)

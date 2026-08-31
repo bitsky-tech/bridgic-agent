@@ -426,6 +426,8 @@ function PresentationTablePreview({ element }: { element: PresentationTableEleme
 function PresentationChartPreview({ element }: { element: PresentationChartElement }) {
   const layoutWidth = Math.max(180, element.width)
   const layoutHeight = Math.max(120, element.height)
+  const chartAreaFill = element.chartAreaFill ?? '#FFFFFF'
+  const plotAreaFill = element.plotAreaFill ?? 'transparent'
   const titleHeight = element.title ? 38 : 12
   const legendHeight = element.showLegend ? 34 : 8
   const plot = {
@@ -440,14 +442,15 @@ function PresentationChartPreview({ element }: { element: PresentationChartEleme
   else chartMarks = <CartesianChartMarks element={element} plot={plot} />
   return (
     <svg
-      className="absolute block overflow-hidden rounded-md bg-white"
+      className="absolute block overflow-hidden rounded-md"
       viewBox={`0 0 ${layoutWidth} ${layoutHeight}`}
       preserveAspectRatio="none"
       style={elementStyle(element)}
       data-testid="presentation-chart-preview"
     >
-      <rect x="0" y="0" width={layoutWidth} height={layoutHeight} fill="#FFFFFF" stroke="#E3E4EA" />
-      {element.title ? <text x={layoutWidth / 2} y="25" textAnchor="middle" fontFamily="Aptos, sans-serif" fontSize="18" fontWeight="600" fill="#20202B">{element.title}</text> : null}
+      <rect x="0" y="0" width={layoutWidth} height={layoutHeight} fill={chartAreaFill} stroke={chartAreaFill === 'transparent' ? 'transparent' : '#E3E4EA'} />
+      <rect x={plot.x} y={plot.y} width={plot.width} height={plot.height} fill={plotAreaFill} />
+      {element.title ? <text x={layoutWidth / 2} y="25" textAnchor="middle" fontFamily="Aptos, sans-serif" fontSize="18" fontWeight="600" fill={element.categoryAxisLabelColor ?? '#20202B'}>{element.title}</text> : null}
       {chartMarks}
       {element.showLegend ? <ChartLegend element={element} width={layoutWidth} y={layoutHeight - 18} /> : null}
     </svg>
@@ -490,7 +493,7 @@ function CartesianChartMarks({ element, plot }: { element: PresentationChartElem
   const marks: ReactNode[] = []
   for (let index = 0; index <= 4; index += 1) {
     const y = plot.y + ((plot.height / 4) * index)
-    marks.push(<line key={`grid-${index}`} x1={plot.x} x2={plot.x + plot.width} y1={y} y2={y} stroke="#E9EAF0" strokeWidth="1" />)
+    marks.push(<line key={`grid-${index}`} x1={plot.x} x2={plot.x + plot.width} y1={y} y2={y} stroke={element.gridLineColor ?? '#E9EAF0'} strokeWidth="1" />)
   }
   marks.push(<line key="zero-axis" data-testid="presentation-chart-zero-axis" x1={plot.x} x2={plot.x + plot.width} y1={zeroY} y2={zeroY} stroke="#AEB0BA" strokeWidth="1.5" />)
   if (element.chartType === 'line') {
@@ -517,22 +520,33 @@ function CartesianChartMarks({ element, plot }: { element: PresentationChartElem
         const valuePosition = valueY(value)
         const height = Math.abs(valuePosition - zeroY)
         marks.push(
-          <rect
-            key={`column-${categoryIndex}-${seriesIndex}`}
-            data-testid="presentation-chart-column"
-            x={plot.x + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth)}
-            y={Math.min(valuePosition, zeroY)}
-            width={Math.max(1, barWidth - 2)}
-            height={height}
-            rx="2"
-            fill={element.colors[seriesIndex % element.colors.length] ?? '#6957D9'}
-          />,
+          <g key={`column-${categoryIndex}-${seriesIndex}`}>
+            <rect
+              data-testid="presentation-chart-column"
+              x={plot.x + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth)}
+              y={Math.min(valuePosition, zeroY)}
+              width={Math.max(1, barWidth - 2)}
+              height={height}
+              rx="2"
+              fill={element.colors[seriesIndex % element.colors.length] ?? '#6957D9'}
+            />
+            {element.showValue ? (
+              <text
+                x={plot.x + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth) + (barWidth / 2)}
+                y={value >= 0 ? valuePosition - 5 : valuePosition + 13}
+                textAnchor="middle"
+                fontFamily="Aptos, sans-serif"
+                fontSize="10"
+                fill={element.dataLabelColor ?? '#20202B'}
+              >{value}</text>
+            ) : null}
+          </g>,
         )
       })
     })
   }
   element.categories.forEach((category, index) => {
-    marks.push(<text key={`label-${index}`} x={plot.x + ((index + 0.5) / categoryCount) * plot.width} y={plot.y + plot.height + 20} textAnchor="middle" fontFamily="Aptos, sans-serif" fontSize="12" fill="#666571">{category}</text>)
+    marks.push(<text key={`label-${index}`} x={plot.x + ((index + 0.5) / categoryCount) * plot.width} y={plot.y + plot.height + 20} textAnchor="middle" fontFamily="Aptos, sans-serif" fontSize="12" fill={element.categoryAxisLabelColor ?? '#666571'}>{category}</text>)
   })
   return <>{marks}</>
 }
@@ -550,21 +564,32 @@ function BarChartMarks({ element, plot }: { element: PresentationChartElement; p
       <line data-testid="presentation-chart-zero-axis" x1={zeroX} x2={zeroX} y1={plot.y} y2={plot.y + plot.height} stroke="#AEB0BA" strokeWidth="1.5" />
       {element.categories.map((category, categoryIndex) => (
         <g key={categoryIndex}>
-          <text x={plot.x - 10} y={plot.y + (categoryIndex * groupHeight) + (groupHeight / 2) + 4} textAnchor="end" fontFamily="Aptos, sans-serif" fontSize="12" fill="#666571">{category}</text>
+          <text x={plot.x - 10} y={plot.y + (categoryIndex * groupHeight) + (groupHeight / 2) + 4} textAnchor="end" fontFamily="Aptos, sans-serif" fontSize="12" fill={element.categoryAxisLabelColor ?? '#666571'}>{category}</text>
           {element.series.map((series, seriesIndex) => {
             const value = series.values[categoryIndex] ?? 0
             const valuePosition = valueX(value)
             return (
-              <rect
-                key={seriesIndex}
-                data-testid="presentation-chart-bar"
-                x={Math.min(valuePosition, zeroX)}
-                y={plot.y + (categoryIndex * groupHeight) + 4 + (seriesIndex * barHeight)}
-                width={Math.abs(valuePosition - zeroX)}
-                height={Math.max(1, barHeight - 2)}
-                rx="2"
-                fill={element.colors[seriesIndex % element.colors.length] ?? '#6957D9'}
-              />
+              <g key={seriesIndex}>
+                <rect
+                  data-testid="presentation-chart-bar"
+                  x={Math.min(valuePosition, zeroX)}
+                  y={plot.y + (categoryIndex * groupHeight) + 4 + (seriesIndex * barHeight)}
+                  width={Math.abs(valuePosition - zeroX)}
+                  height={Math.max(1, barHeight - 2)}
+                  rx="2"
+                  fill={element.colors[seriesIndex % element.colors.length] ?? '#6957D9'}
+                />
+                {element.showValue ? (
+                  <text
+                    x={value >= 0 ? valuePosition + 4 : valuePosition - 4}
+                    y={plot.y + (categoryIndex * groupHeight) + 4 + (seriesIndex * barHeight) + Math.max(10, barHeight - 5)}
+                    textAnchor={value >= 0 ? 'start' : 'end'}
+                    fontFamily="Aptos, sans-serif"
+                    fontSize="10"
+                    fill={element.dataLabelColor ?? '#20202B'}
+                  >{value}</text>
+                ) : null}
+              </g>
             )
           })}
         </g>
@@ -603,7 +628,7 @@ function PieChartMarks({ element, plot }: { element: PresentationChartElement; p
     return (
       <>
         <circle cx={cx} cy={cy} r={radius} fill={element.colors[positiveIndex % Math.max(1, element.colors.length)] ?? '#6957D9'} />
-        {element.chartType === 'doughnut' ? <circle cx={cx} cy={cy} r={radius * 0.56} fill="#FFFFFF" /> : null}
+        {element.chartType === 'doughnut' ? <circle cx={cx} cy={cy} r={radius * 0.56} fill={element.plotAreaFill === 'transparent' ? element.chartAreaFill ?? 'transparent' : element.plotAreaFill ?? '#FFFFFF'} /> : null}
       </>
     )
   }
@@ -637,7 +662,7 @@ function ChartLegend({ element, width, y }: { element: PresentationChartElement;
       {labels.map((label, index) => (
         <g key={index} transform={`translate(${start + (index * itemWidth)}, ${y})`}>
           <rect width="10" height="10" rx="2" fill={element.colors[index % element.colors.length] ?? '#6957D9'} />
-          <text x="16" y="9" fontFamily="Aptos, sans-serif" fontSize="11" fill="#666571">{label}</text>
+          <text x="16" y="9" fontFamily="Aptos, sans-serif" fontSize="11" fill={element.categoryAxisLabelColor ?? '#666571'}>{label}</text>
         </g>
       ))}
     </g>

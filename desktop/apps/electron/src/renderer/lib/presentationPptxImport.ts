@@ -778,11 +778,22 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const chartFile = chartPath ? archive.file(chartPath) : null
     if (!chartFile) return
     const chartDocument = parseXml(await chartFile.async('text'))
+    const plotArea = firstByLocalName(chartDocument, 'plotArea')
     const chartRoot = firstByLocalName(chartDocument, 'barChart')
       ?? firstByLocalName(chartDocument, 'lineChart')
       ?? firstByLocalName(chartDocument, 'pieChart')
       ?? firstByLocalName(chartDocument, 'doughnutChart')
     if (!chartRoot) return
+    const chartFill = (shapeProperties: Element | null, fallback: string): string => {
+      if (!shapeProperties) return fallback
+      if (directChildrenByLocalName(shapeProperties, 'noFill').length > 0) return 'transparent'
+      const solidFill = directChildrenByLocalName(shapeProperties, 'solidFill')[0]
+      if (solidFill && opacityFrom(solidFill) === 0) return 'transparent'
+      return solidFill ? colorFrom(solidFill, fallback, themeColors) : fallback
+    }
+    const chartChild = (root: Element | null, name: string): Element | null => (
+      root ? firstByLocalName(root, name) : null
+    )
     let chartType: PresentationChartElement['chartType'] = 'column'
     if (chartRoot.localName === 'lineChart') chartType = 'line'
     else if (chartRoot.localName === 'pieChart') chartType = 'pie'
@@ -801,6 +812,12 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const colors = seriesNodes.map((seriesNode, seriesIndex) => (
       colorFrom(firstByLocalName(firstByLocalName(seriesNode, 'spPr') ?? seriesNode, 'solidFill'), ['#4472C4', '#ED7D31', '#A5A5A5'][seriesIndex % 3]!, themeColors)
     ))
+    const chartAreaProperties = directChildrenByLocalName(chartDocument.documentElement, 'spPr')[0] ?? null
+    const plotAreaProperties = plotArea ? directChildrenByLocalName(plotArea, 'spPr')[0] ?? null : null
+    const categoryAxis = plotArea ? firstByLocalName(plotArea, 'catAx') : null
+    const valueAxis = plotArea ? firstByLocalName(plotArea, 'valAx') : null
+    const dataLabels = directChildrenByLocalName(chartRoot, 'dLbls')[0] ?? null
+    const showValue = Boolean(dataLabels && firstByLocalName(dataLabels, 'showVal')?.getAttribute('val') !== '0')
     const importedChart: PresentationChartElement = withGroup({
       id: createPresentationId('chart'),
       type: 'chart',
@@ -809,8 +826,15 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       categories: categories.length > 0 ? categories : series[0]?.values.map((_, valueIndex) => `${valueIndex + 1}`) ?? [],
       series,
       showLegend: Boolean(firstByLocalName(chartDocument, 'legend')),
+      showValue,
       title: elementsByLocalName(firstByLocalName(chartDocument, 'title') ?? chartDocument, 't').map((node) => node.textContent ?? '').join('').trim() || undefined,
       colors,
+      chartAreaFill: chartFill(chartAreaProperties, '#FFFFFF'),
+      plotAreaFill: chartFill(plotAreaProperties, 'transparent'),
+      categoryAxisLabelColor: colorFrom(chartChild(categoryAxis, 'txPr'), '#666571', themeColors),
+      valueAxisLabelColor: colorFrom(chartChild(valueAxis, 'txPr'), '#666571', themeColors),
+      gridLineColor: colorFrom(chartChild(chartChild(valueAxis, 'majorGridlines'), 'solidFill'), '#E9EAF0', themeColors),
+      dataLabelColor: colorFrom(chartChild(dataLabels, 'txPr'), '#20202B', themeColors),
     }, parentGroupId)
     elements.push(importedChart)
     if (sourceId) sourceShapeIds.set(sourceId, importedChart.id)

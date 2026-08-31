@@ -5,7 +5,6 @@ import type {
   PresentationTextElement,
 } from '@/atoms/presentation'
 import {
-  compactLegacyPresentationAudioElement,
   createPresentationChartElement,
   createPresentationFooter,
   createPresentationImageElement,
@@ -161,7 +160,6 @@ describe('presentation insert helpers', () => {
       y: 328,
       width: 64,
       height: 64,
-      displayStyle: 'compact',
       autoplay: false,
       loop: false,
       muted: false,
@@ -182,33 +180,6 @@ describe('presentation insert helpers', () => {
       loop: false,
       muted: false,
     })
-  })
-
-  it('compacts only the former default audio card and preserves its center', () => {
-    const source = {
-      dataUrl: 'data:audio/mpeg;base64,YXVkaW8=',
-      fileName: 'legacy.mp3',
-      mimeType: 'audio/mpeg',
-    }
-    const legacy = {
-      ...createPresentationMediaElement('audio', source),
-      x: 120.25,
-      y: 210.75,
-      width: 520,
-      height: 72,
-      displayStyle: undefined,
-    }
-    const compact = compactLegacyPresentationAudioElement(legacy)
-    expect(compact).toMatchObject({ x: 348.25, y: 214.75, width: 64, height: 64, displayStyle: 'compact' })
-    expect(compact.id).toBe(legacy.id)
-    expect(compact.source).toBe(legacy.source)
-    expect(compactLegacyPresentationAudioElement(compact)).toBe(compact)
-
-    const custom = { ...legacy, width: 519 }
-    expect(compactLegacyPresentationAudioElement(custom)).toBe(custom)
-
-    const currentCustom = { ...legacy, width: 520, displayStyle: 'compact' as const }
-    expect(compactLegacyPresentationAudioElement(currentCustom)).toBe(currentCustom)
   })
 
   it('validates supported media container signatures before insertion or export', () => {

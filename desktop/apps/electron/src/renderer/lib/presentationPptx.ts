@@ -275,10 +275,14 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
         return mimeType === 'video/quicktime' || /\.mov$/i.test(fileName) || /^data:video\/quicktime[;,]/i.test(dataUrl)
       })
     ))
+    const hasCharts = document.slides.some((slide) => (
+      Array.isArray(slide.elements) && (slide.elements as PresentationElement[]).some(isPresentationChartElement)
+    ))
     if (transitions.every((transition) => transition.effect === 'none')
       && !slidesWithAudio.some(Boolean)
       && !slidesWithAnimations.some(Boolean)
-      && !hasQuickTimeVideo) return bytes
+      && !hasQuickTimeVideo
+      && !hasCharts) return bytes
 
     const p14Namespace = 'http://schemas.microsoft.com/office/powerpoint/2010/main'
     const markupCompatibilityNamespace = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
@@ -653,8 +657,51 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       archive.file(contentTypesPath, correctedXml)
     }
 
+    const correctChartAxisReferences = async (archive: JSZip): Promise<void> => {
+      const chartPaths = Object.keys(archive.files).filter((path) => /^ppt\/charts\/chart\d+\.xml$/.test(path))
+      await Promise.all(chartPaths.map(async (chartPath) => {
+        const chartFile = archive.file(chartPath)
+        if (!chartFile) return
+        const xml = await chartFile.async('text')
+        const declaredAxisIds = new Set(Array.from(xml.matchAll(
+          /<c:(?:catAx|dateAx|valAx|serAx)\b[^>]*>\s*<c:axId\b[^>]*\bval="([^"]+)"[^>]*\/>/g,
+        ), (match) => match[1]!))
+        if (declaredAxisIds.size === 0) return
+        let correctedXml = xml
+        for (const chartTag of ['barChart', 'lineChart']) {
+          const chartPattern = new RegExp(`<c:${chartTag}\\b[\\s\\S]*?<\\/c:${chartTag}>`, 'g')
+          correctedXml = correctedXml.replace(chartPattern, (chartXml) => chartXml.replace(
+            /<c:axId\b[^>]*\bval="([^"]+)"[^>]*\/>/g,
+            (axisReference, axisId: string) => declaredAxisIds.has(axisId) ? axisReference : '',
+          ))
+        }
+        if (correctedXml !== xml) archive.file(chartPath, correctedXml)
+      }))
+    }
+
+    const correctChartRelationshipTargets = async (archive: JSZip): Promise<void> => {
+      const relationshipPaths = Object.keys(archive.files).filter(
+        (path) => /^ppt\/slides\/_rels\/slide\d+\.xml\.rels$/.test(path),
+      )
+      await Promise.all(relationshipPaths.map(async (relationshipPath) => {
+        const relationshipFile = archive.file(relationshipPath)
+        if (!relationshipFile) return
+        const xml = await relationshipFile.async('text')
+        const correctedXml = xml.replace(/<Relationship\b[^>]*\/>/g, (relationship) => {
+          if (!/\/relationships\/chart(['"])/.test(relationship)) return relationship
+          return relationship.replace(
+            /\bTarget=(['"])\/ppt\/charts\/([^'"]+)\1/,
+            (_target, quote: string, chartName: string) => `Target=${quote}../charts/${chartName}${quote}`,
+          )
+        })
+        if (correctedXml !== xml) archive.file(relationshipPath, correctedXml)
+      }))
+    }
+
     const archive = await JSZip.loadAsync(bytes)
     await correctMediaContentTypes(archive)
+    await correctChartAxisReferences(archive)
+    await correctChartRelationshipTargets(archive)
     await Promise.all(transitions.map(async (transition, index) => {
       if (transition.effect === 'none' && !slidesWithAudio[index] && !slidesWithAnimations[index]) return
       const slidePath = `ppt/slides/slide${index + 1}.xml`
@@ -889,6 +936,11 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           : exportedSeries.length
         const chartColors = Array.from({ length: colorCount }, (_, index) => baseColors[index % baseColors.length]!)
         const title = typeof element.title === 'string' ? element.title.trim() : ''
+        const chartFill = (fill: string | undefined, fallback: string) => (
+          fill === 'transparent'
+            ? { color: 'FFFFFF', transparency: 100 }
+            : { color: presentationColor(fill, fallback) }
+        )
         slide.addChart(chart.type, exportedSeries, {
           x: x(element.x),
           y: y(element.y),
@@ -896,11 +948,17 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           h: y(element.height),
           barDir: chart.barDir,
           chartColors,
+          chartArea: { fill: chartFill(element.chartAreaFill, 'FFFFFF') },
+          plotArea: { fill: chartFill(element.plotAreaFill, 'FFFFFF') },
+          catAxisLabelColor: presentationColor(element.categoryAxisLabelColor, '666571'),
+          valAxisLabelColor: presentationColor(element.valueAxisLabelColor, '666571'),
+          valGridLine: { color: presentationColor(element.gridLineColor, 'E9EAF0'), size: 1 },
           showLegend: Boolean(element.showLegend),
           legendPos: 'b',
           showTitle: Boolean(title),
           title: title || undefined,
-          showValue: false,
+          showValue: Boolean(element.showValue),
+          dataLabelColor: presentationColor(element.dataLabelColor, '20202B'),
           showPercent: false,
           objectName: typeof element.id === 'string' ? element.id : undefined,
         })

@@ -71,6 +71,7 @@ import { requestExternalLinkAtom } from '@/atoms/external-link'
 import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import { rlog } from '@/lib/logger'
 import {
   buildPresentationAnimationPlaybackSteps,
   getPresentationAnimationHiddenElementIds,
@@ -103,7 +104,6 @@ import {
   resolvePresentationCanvasSelectionScope,
 } from '@/lib/presentationGroups'
 import {
-  compactLegacyPresentationAudioElement,
   createPresentationChartElement,
   createPresentationFooter,
   createPresentationImageElement,
@@ -420,6 +420,8 @@ async function presentationMediaCanLoad(file: File, type: PresentationMediaEleme
 }
 
 type FabricModule = typeof import('fabric')
+
+const PRESENTATION_IMAGE_LOAD_TIMEOUT_MS = 8_000
 
 function fitFabricGroupToElement(group: FabricObject, element: PresentationElement): FabricObject {
   group.set({
@@ -1044,13 +1046,18 @@ function chartPieSlicePath(cx: number, cy: number, radius: number, start: number
 }
 
 function createChartFabricObject(fabric: FabricModule, element: Extract<PresentationElement, { type: 'chart' }>): FabricObject {
+  const chartAreaFill = element.chartAreaFill ?? '#FFFFFF'
+  const plotAreaFill = element.plotAreaFill ?? 'transparent'
+  const categoryAxisLabelColor = element.categoryAxisLabelColor ?? '#666571'
+  const gridLineColor = element.gridLineColor ?? '#E9EAF0'
+  const dataLabelColor = element.dataLabelColor ?? '#20202B'
   const objects: FabricObject[] = [new fabric.Rect({
     left: 0,
     top: 0,
     width: element.width,
     height: element.height,
-    fill: '#FFFFFF',
-    stroke: '#E3E4EA',
+    fill: chartAreaFill,
+    stroke: chartAreaFill === 'transparent' ? 'transparent' : '#E3E4EA',
     strokeWidth: 1,
   })]
   const titleHeight = element.title ? 46 : 14
@@ -1072,6 +1079,14 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
   const plotY = titleHeight
   const plotWidth = Math.max(80, element.width - plotX - 28)
   const plotHeight = Math.max(60, element.height - titleHeight - legendHeight - 34)
+  objects.push(new fabric.Rect({
+    left: plotX,
+    top: plotY,
+    width: plotWidth,
+    height: plotHeight,
+    fill: plotAreaFill,
+    stroke: 'transparent',
+  }))
   if (element.chartType === 'pie' || element.chartType === 'doughnut') {
     const values = element.series[0]?.values.map((value) => Math.max(0, value)) ?? []
     const total = Math.max(1, values.reduce((sum, value) => sum + value, 0))
@@ -1088,7 +1103,7 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
         fill: element.colors[positiveIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
       }))
       if (element.chartType === 'doughnut') {
-        objects.push(new fabric.Circle({ left: cx - (radius * 0.56), top: cy - (radius * 0.56), radius: radius * 0.56, fill: '#FFFFFF' }))
+        objects.push(new fabric.Circle({ left: cx - (radius * 0.56), top: cy - (radius * 0.56), radius: radius * 0.56, fill: plotAreaFill === 'transparent' ? chartAreaFill : plotAreaFill }))
       }
     } else if (positiveValues.length > 1) {
       let angle = 0
@@ -1118,7 +1133,7 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
         top: plotY + (categoryIndex * groupHeight) + (groupHeight / 2) - 9,
         width: plotX - 18,
         height: 20,
-        fill: '#666571',
+        fill: categoryAxisLabelColor,
         fontFamily: 'Aptos',
         fontSize: 12,
         textAlign: 'right',
@@ -1135,6 +1150,18 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
           ry: 2,
           fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
         }))
+        if (element.showValue) {
+          objects.push(new fabric.Textbox(String(value), {
+            left: value >= 0 ? valuePosition + 4 : valuePosition - 38,
+            top: plotY + (categoryIndex * groupHeight) + 2 + (seriesIndex * barHeight),
+            width: 34,
+            height: Math.max(12, barHeight),
+            fill: dataLabelColor,
+            fontFamily: 'Aptos',
+            fontSize: 10,
+            textAlign: value >= 0 ? 'left' : 'right',
+          }))
+        }
       })
     })
   } else {
@@ -1144,7 +1171,7 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
     const zeroY = valueY(0)
     for (let gridIndex = 0; gridIndex <= 4; gridIndex += 1) {
       const y = plotY + ((plotHeight / 4) * gridIndex)
-      objects.push(new fabric.Line([plotX, y, plotX + plotWidth, y], { stroke: '#E9EAF0', strokeWidth: 1 }))
+      objects.push(new fabric.Line([plotX, y, plotX + plotWidth, y], { stroke: gridLineColor, strokeWidth: 1 }))
     }
     objects.push(new fabric.Line([plotX, zeroY, plotX + plotWidth, zeroY], { stroke: '#AEB0BA', strokeWidth: 1.5 }))
     if (element.chartType === 'line') {
@@ -1180,6 +1207,18 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
             ry: 2,
             fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
           }))
+          if (element.showValue) {
+            objects.push(new fabric.Textbox(String(value), {
+              left: plotX + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth) - 4,
+              top: value >= 0 ? valuePosition - 18 : valuePosition + 2,
+              width: barWidth + 6,
+              height: 16,
+              fill: dataLabelColor,
+              fontFamily: 'Aptos',
+              fontSize: 10,
+              textAlign: 'center',
+            }))
+          }
         })
       })
     }
@@ -1189,7 +1228,7 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
         top: plotY + plotHeight + 7,
         width: plotWidth / categoryCount,
         height: 20,
-        fill: '#666571',
+        fill: categoryAxisLabelColor,
         fontFamily: 'Aptos',
         fontSize: 12,
         textAlign: 'center',
@@ -1217,7 +1256,7 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
         top: element.height - 29,
         width: itemWidth - 18,
         height: 18,
-        fill: '#666571',
+        fill: categoryAxisLabelColor,
         fontFamily: 'Aptos',
         fontSize: 11,
       }))
@@ -1336,8 +1375,10 @@ async function createPresentationFabricObject(
   }
   if (isPresentationShapeElement(element)) return createShapeFabricObject(fabric, element)
   if (isPresentationImageElement(element)) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), PRESENTATION_IMAGE_LOAD_TIMEOUT_MS)
     try {
-      const image = await fabric.FabricImage.fromURL(element.source.dataUrl)
+      const image = await fabric.FabricImage.fromURL(element.source.dataUrl, { signal: controller.signal })
       const naturalWidth = Math.max(1, image.width ?? element.width)
       const naturalHeight = Math.max(1, image.height ?? element.height)
       const frame = new fabric.Rect({
@@ -1402,6 +1443,8 @@ async function createPresentationFabricObject(
         muted: true,
       }
       return createPresentationMediaFabricObject(fabric, fallback)
+    } finally {
+      window.clearTimeout(timeout)
     }
   }
   if (isPresentationMediaElement(element)) return createPresentationMediaFabricObject(fabric, element)
@@ -1724,24 +1767,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       slideId: document.selectedSlideId,
     }
   }, [document, sessionId])
-
-  useEffect(() => {
-    const current = documentRef.current
-    let documentChanged = false
-    const slides = current.slides.map((slide) => {
-      let slideChanged = false
-      const elements = slide.elements.map((element) => {
-        if (element.type !== 'audio') return element
-        const compact = compactLegacyPresentationAudioElement(element)
-        if (compact === element) return element
-        slideChanged = true
-        documentChanged = true
-        return compact
-      })
-      return slideChanged ? { ...slide, elements } : slide
-    })
-    if (documentChanged) commitDocument({ ...current, slides }, false)
-  }, [commitDocument, document])
 
   useEffect(() => () => {
     fileInsertionTargetRef.current = {
@@ -2095,12 +2120,18 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     canvas.setDimensions({ width: pageSize.width, height: pageSize.height })
     canvas.backgroundColor = currentSlide.background
     objectIdsRef.current = new WeakMap()
-    void Promise.all(currentSlide.elements.map(async (element) => ({
-      element,
-      object: await createPresentationFabricObject(fabric, element, (object) => syncFabricObjectRef.current(object)),
-    }))).then((entries) => {
-      if (cancelled || canvasRef.current !== canvas) return
-      for (const { element, object } of entries) {
+    const elementOrder = new Map(currentSlide.elements.map((element, index) => [element.id, index]))
+    const slideNumber = documentRef.current.slides.findIndex((slide) => slide.id === currentSlide.id) + 1
+    createFooterFabricObjects(fabric, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
+    canvas.requestRenderAll()
+
+    currentSlide.elements.forEach((element, index) => {
+      void createPresentationFabricObject(
+        fabric,
+        element,
+        (object) => syncFabricObjectRef.current(object),
+      ).then((object) => {
+        if (cancelled || canvasRef.current !== canvas) return
         let hoverCursor = 'move'
         if (isPresentationMediaElement(element)) hoverCursor = 'default'
         else if (element.hyperlink && supportsPresentationElementHyperlink(element)) hoverCursor = 'pointer'
@@ -2116,21 +2147,30 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           hoverCursor,
         })
         objectIdsRef.current.set(object, element.id)
-        canvas.add(object)
+        const insertionIndex = canvas.getObjects().findIndex((existingObject) => {
+          const existingId = objectIdsRef.current.get(existingObject)
+          if (!existingId) return true
+          return (elementOrder.get(existingId) ?? Number.POSITIVE_INFINITY) > index
+        })
+        canvas.insertAt(insertionIndex < 0 ? canvas.getObjects().length : insertionIndex, object)
         if (isPresentationMediaElement(element)) mediaRuntime.register(element, object)
-      }
-      const slideNumber = documentRef.current.slides.findIndex((slide) => slide.id === currentSlide.id) + 1
-      createFooterFabricObjects(fabric, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
-      if (activeElementId) {
-        activateFabricElement(
-          activeElementId,
-          isolatedElementIdRef.current === activeElementId ? 'element' : 'group',
-        )
-        mediaRuntime.prepare(activeElementId)
-      }
-      canvas.requestRenderAll()
-    }).catch(() => {
-      if (!cancelled) canvas.requestRenderAll()
+        if (activeElementId) {
+          activateFabricElement(
+            activeElementId,
+            isolatedElementIdRef.current === activeElementId ? 'element' : 'group',
+          )
+          mediaRuntime.prepare(activeElementId)
+        }
+        canvas.requestRenderAll()
+      }).catch((error: unknown) => {
+        if (cancelled || canvasRef.current !== canvas) return
+        rlog.warn('[presentation] canvas element render failed', {
+          elementId: element.id,
+          elementType: element.type,
+          error,
+        })
+        canvas.requestRenderAll()
+      })
     })
     return () => {
       cancelled = true
@@ -2262,7 +2302,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     setAnimationPreviewRun(null)
     setTransitionPreviewRun(null)
     const current = documentRef.current
-    commitDocument({ ...current, selectedSlideId: slideId }, false)
+    if (current.selectedSlideId === slideId) return
+    const selected = { ...current, selectedSlideId: slideId }
+    documentRef.current = selected
+    setDocument(selected)
   }
 
   const addPresentation = () => {

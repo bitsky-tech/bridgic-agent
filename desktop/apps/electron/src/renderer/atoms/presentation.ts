@@ -228,7 +228,6 @@ export interface PresentationImageElement extends PresentationElementBase {
 export interface PresentationAudioElement extends PresentationElementBase {
   type: 'audio'
   source: PresentationFileSource
-  displayStyle?: 'compact'
   autoplay: boolean
   loop: boolean
   muted: boolean
@@ -268,8 +267,15 @@ export interface PresentationChartElement extends PresentationElementBase {
   categories: string[]
   series: PresentationChartSeries[]
   showLegend: boolean
+  showValue?: boolean
   title?: string
   colors: string[]
+  chartAreaFill?: string
+  plotAreaFill?: string
+  categoryAxisLabelColor?: string
+  valueAxisLabelColor?: string
+  gridLineColor?: string
+  dataLabelColor?: string
 }
 
 export type PresentationElement =

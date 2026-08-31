@@ -72,6 +72,22 @@ async function mountPanel(withTestContent = true, onClose?: () => void) {
 }
 
 describe('PresentationWorkbenchPanel', () => {
+  it('selects a slide without advancing the document revision', async () => {
+    const { host, root, store } = await mountPanel()
+    const initial = store.get(currentPresentationDocumentAtom)
+    const target = initial.slides[1]!
+    const preview = host.querySelectorAll<HTMLElement>('[data-testid="presentation-slide-preview"]')[1]!
+    const button = preview.closest<HTMLButtonElement>('button')!
+
+    await act(async () => button.click())
+
+    const selected = store.get(currentPresentationDocumentAtom)
+    expect(selected.selectedSlideId).toBe(target.id)
+    expect(selected.version).toBe(initial.version)
+
+    await act(async () => root.unmount())
+  })
+
   it('opens directly into one presentation with three ordinary text boxes', async () => {
     const { host, root, store } = await mountPanel(false)
     const presentation = store.get(currentPresentationDocumentAtom)

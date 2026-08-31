@@ -344,7 +344,8 @@ describe('AppLayout focused right pane', () => {
     const expected = RIGHT_PANEL_MIN + RIGHT_PANEL_RAIL_WIDTH
     const dock = host.querySelector<HTMLElement>('[data-testid="session-right-dock"]')!
     expect(dock.style.width).toBe(`${expected}px`)
-    expect(dock.className).toContain('border-border-subtle')
+    expect(dock.className).toContain('border-l')
+    expect(dock.className).toContain('border-border-strong/60')
     expect(host.querySelector<HTMLElement>('[data-testid="session-right-dock-stage"]')?.style.width)
       .toBe(`${expected}px`)
 
@@ -375,7 +376,7 @@ describe('AppLayout focused right pane', () => {
     const stage = host.querySelector<HTMLElement>('[data-testid="session-right-dock-stage"]')!
     const rememberedBrowserWidth = dock.style.width
     expect(dock.className).toContain('border-l')
-    expect(dock.className).toContain('border-border-subtle')
+    expect(dock.className).toContain('border-border-strong/60')
     expect(dock.style.boxShadow).toBe('')
     expect(stage.style.width).toBe(rememberedBrowserWidth)
     expect(host.querySelector('[data-testid="resize-handle-right"]')).not.toBeNull()
@@ -389,7 +390,7 @@ describe('AppLayout focused right pane', () => {
     await act(async () => store.set(setRightPanelCollapsedAtom, false))
     expect(dock.style.width).toBe(rememberedBrowserWidth)
     expect(dock.className).toContain('border-l')
-    expect(dock.className).toContain('border-border-subtle')
+    expect(dock.className).toContain('border-border-strong/60')
     expect(stage.style.width).toBe(rememberedBrowserWidth)
 
     await act(async () => {
