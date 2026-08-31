@@ -48,43 +48,29 @@ const pendingRunRow: ScheduleRun = {
 }
 
 describe('getScheduleStatus', () => {
-  it('needsAction 优先级最高', () => {
+  it('按 needsAction、running、paused、active 的优先级派生', () => {
     expect(getScheduleStatus(mk({ needsAction: 1, running: true, paused: true }))).toBe(
       ScheduleStatus.NeedsAction,
     )
-  })
-  it('running 次之', () => {
     expect(getScheduleStatus(mk({ running: true, paused: true }))).toBe(ScheduleStatus.Running)
-  })
-  it('paused 再次', () => {
     expect(getScheduleStatus(mk({ paused: true }))).toBe(ScheduleStatus.Paused)
-  })
-  it('默认 active', () => {
     expect(getScheduleStatus(mk({}))).toBe(ScheduleStatus.Active)
   })
 })
 
 describe('getPendingRun', () => {
-  it('取 needsAction 那次运行', () => {
+  it('只返回 needsAction 的运行', () => {
     const s = mk({ needsAction: 1, runs: [pendingRunRow] })
     expect(getPendingRun(s)?.sessionId).toBe('sess-1')
-  })
-  it('无挂起运行时 undefined', () => {
     expect(getPendingRun(mk({}))).toBeUndefined()
   })
 })
 
 describe('shouldRefreshSchedulesOnCompletion', () => {
-  it('有待审批(needsAction>0)→ 应重拉', () => {
+  it('只在存在待审批或运行中的计划时重拉', () => {
     expect(shouldRefreshSchedulesOnCompletion([mk({ needsAction: 1 })])).toBe(true)
-  })
-  it('有运行中 → 应重拉(等 run 落地成 completed)', () => {
     expect(shouldRefreshSchedulesOnCompletion([mk({ running: true })])).toBe(true)
-  })
-  it('既无待审批也无运行中 → 不重拉(普通聊天完成不触发 listSchedules)', () => {
     expect(shouldRefreshSchedulesOnCompletion([mk({}), mk({ id: 's2', paused: true })])).toBe(false)
-  })
-  it('空列表 → 不重拉', () => {
     expect(shouldRefreshSchedulesOnCompletion([])).toBe(false)
   })
 })

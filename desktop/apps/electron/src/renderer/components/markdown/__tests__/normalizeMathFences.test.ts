@@ -9,72 +9,42 @@ import { describe, expect, it } from 'bun:test'
 import { normalizeMathFences } from '../normalizeMathFences'
 
 describe('normalizeMathFences — 拆开会被吞掉的跨行围栏', () => {
-  it('$$ 紧跟内容 + 跨行(模型最常见的矩阵写法)', () => {
+  it('拆开粘连的开闭围栏并保留合法缩进', () => {
     const input = '$$\\begin{pmatrix}\na & b \\\\\nc & d\n\\end{pmatrix}$$'
     expect(normalizeMathFences(input)).toBe(
       '$$\n\\begin{pmatrix}\na & b \\\\\nc & d\n\\end{pmatrix}\n$$',
     )
-  })
-
-  it('只有开围栏紧跟内容时,也拆', () => {
     expect(normalizeMathFences('$$\\begin{vmatrix}\na\n$$')).toBe('$$\n\\begin{vmatrix}\na\n$$')
-  })
-
-  it('只有闭围栏被粘住时,也拆', () => {
     expect(normalizeMathFences('$$\na\n\\end{vmatrix}$$')).toBe('$$\na\n\\end{vmatrix}\n$$')
-  })
-
-  it('保留缩进(≤3 空格仍是 markdown 块级上下文)', () => {
     expect(normalizeMathFences('  $$\\begin{pmatrix}\na\n$$')).toBe('  $$\n\\begin{pmatrix}\na\n$$')
   })
 })
 
 describe('normalizeMathFences — 不得误伤当前渲染正常的写法', () => {
-  it('完整单行公式原样不动(它走行内 math,拆了会变 display 样式)', () => {
-    const input = '$$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$'
-    expect(normalizeMathFences(input)).toBe(input)
-  })
-
-  it('单行公式 + 后置文字,不动', () => {
-    const input = '$$a$$ 后面的文字'
-    expect(normalizeMathFences(input)).toBe(input)
-  })
-
-  it('一行里两个完整公式,不动', () => {
-    const input = '$$a$$ 中间 $$b$$'
-    expect(normalizeMathFences(input)).toBe(input)
-  })
-
-  it('已经合规的块级围栏,不动', () => {
-    const input = '$$\n\\begin{pmatrix}\na & b\n\\end{pmatrix}\n$$'
-    expect(normalizeMathFences(input)).toBe(input)
-  })
-
-  it('行内单 $ 公式,不动', () => {
-    const input = '质能方程 $E = mc^2$ 众所周知'
-    expect(normalizeMathFences(input)).toBe(input)
-  })
-
-  it('完全没有 $$ 的文档,逐字返回', () => {
-    const input = '# 标题\n\n普通段落 `code` **粗体**'
-    expect(normalizeMathFences(input)).toBe(input)
+  it('逐字保留单行、合规块级、行内和普通 Markdown', () => {
+    const unchanged = [
+      '$$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$',
+      '$$a$$ 后面的文字',
+      '$$a$$ 中间 $$b$$',
+      '$$\n\\begin{pmatrix}\na & b\n\\end{pmatrix}\n$$',
+      '质能方程 $E = mc^2$ 众所周知',
+      '# 标题\n\n普通段落 `code` **粗体**',
+    ]
+    for (const input of unchanged) {
+      expect(normalizeMathFences(input)).toBe(input)
+    }
   })
 })
 
 describe('normalizeMathFences — 代码块内一律不碰', () => {
-  it('``` 围栏里的 $$ 写法不被改写(否则会毁掉讲解 $$ 语法的示例)', () => {
+  it('跳过两类代码围栏但继续处理代码块外内容', () => {
     const input = '```md\n$$\\begin{pmatrix}\na\n\\end{pmatrix}$$\n```'
     expect(normalizeMathFences(input)).toBe(input)
-  })
+    const tildeInput = '~~~\n$$\\begin{x}\na\n\\end{x}$$\n~~~'
+    expect(normalizeMathFences(tildeInput)).toBe(tildeInput)
 
-  it('~~~ 围栏同样跳过', () => {
-    const input = '~~~\n$$\\begin{x}\na\n\\end{x}$$\n~~~'
-    expect(normalizeMathFences(input)).toBe(input)
-  })
-
-  it('代码块之外的照常处理', () => {
-    const input = '```\n$$\\begin{a}\n```\n\n$$\\begin{pmatrix}\nb\n\\end{pmatrix}$$'
-    const out = normalizeMathFences(input)
+    const mixedInput = '```\n$$\\begin{a}\n```\n\n$$\\begin{pmatrix}\nb\n\\end{pmatrix}$$'
+    const out = normalizeMathFences(mixedInput)
     // 代码块内那行原样
     expect(out).toContain('```\n$$\\begin{a}\n```')
     // 代码块外的被拆开
@@ -104,23 +74,15 @@ describe('normalizeMathFences — 真实回归用例', () => {
     '$$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$',
   ].join('\n')
 
-  it('两个跨行矩阵都被拆开,单行求和公式不动', () => {
+  it('修复真实回复，同时保留标题、单行公式和幂等性', () => {
     const out = normalizeMathFences(REAL)
     expect(out).toContain('$$\n\\begin{pmatrix}\na & b \\\\\nc & d\n\\end{pmatrix}\n$$')
     expect(out).toContain('$$\n\\det(A) = \\begin{vmatrix}')
     expect(out).toContain('\\end{vmatrix}\n$$')
     // 单行的求和公式保持原样(它本来就渲染正常)
     expect(out).toContain('$$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$')
-  })
-
-  it('markdown 标题不受影响', () => {
-    const out = normalizeMathFences(REAL)
     expect(out).toContain('### 线性代数')
     expect(out).toContain('### 求和与乘积')
-  })
-
-  it('幂等 —— 跑两遍与跑一遍结果相同', () => {
-    const once = normalizeMathFences(REAL)
-    expect(normalizeMathFences(once)).toBe(once)
+    expect(normalizeMathFences(out)).toBe(out)
   })
 })

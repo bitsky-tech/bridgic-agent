@@ -11,25 +11,13 @@ import { canSendNow } from '../canSendNow'
 const SESSION = 's-1'
 
 describe('canSendNow', () => {
-  it('会话就绪且空闲时可发送', () => {
+  it('只允许已有会话的空闲状态发送', () => {
     expect(canSendNow(SESSION, false, false)).toBe(true)
-  })
-
-  it('streaming 期间不可发送 —— 输入框此时是可用的,闸门只在这里', () => {
     // 回归:把 streaming 从 ChatInputZone 的 disabled 里摘掉后,这条是唯一
     // 阻止消息发给 serial-chat daemon 的守卫。删了它 = 用户发出去被拒。
     expect(canSendNow(SESSION, false, true)).toBe(false)
-  })
-
-  it('parked 审批(disabled)期间不可发送', () => {
     expect(canSendNow(SESSION, true, false)).toBe(false)
-  })
-
-  it('没有会话时不可发送', () => {
     expect(canSendNow(null, false, false)).toBe(false)
-  })
-
-  it('任一条件不满足即拒 —— 组合情形', () => {
     expect(canSendNow(null, true, true)).toBe(false)
     expect(canSendNow(SESSION, true, true)).toBe(false)
     expect(canSendNow(null, false, true)).toBe(false)

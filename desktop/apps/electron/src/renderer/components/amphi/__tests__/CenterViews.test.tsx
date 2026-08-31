@@ -145,23 +145,11 @@ describe('filterWorkflows', () => {
     { id: 'wf_3', name: 'Weekly Report' },
   ]
 
-  it('returns every row for a blank query', () => {
+  it('filters names and descriptions with normalized query text', () => {
     expect(filterWorkflows(rows, '   ').map((r) => r.id)).toEqual(['wf_1', 'wf_2', 'wf_3'])
-  })
-
-  it('matches on name', () => {
     expect(filterWorkflows(rows, '发票').map((r) => r.id)).toEqual(['wf_2'])
-  })
-
-  it('matches on description too', () => {
     expect(filterWorkflows(rows, '主题相关性').map((r) => r.id)).toEqual(['wf_1'])
-  })
-
-  it('ignores case and surrounding spaces, and tolerates a missing description', () => {
     expect(filterWorkflows(rows, '  WEEKLY ').map((r) => r.id)).toEqual(['wf_3'])
-  })
-
-  it('returns nothing when no row matches', () => {
     expect(filterWorkflows(rows, '不存在的关键词')).toEqual([])
   })
 })

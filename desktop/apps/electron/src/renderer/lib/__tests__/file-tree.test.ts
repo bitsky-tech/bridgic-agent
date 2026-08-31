@@ -30,38 +30,30 @@ describe('rebaseTree', () => {
 describe('graftTree', () => {
   const base: DirTreeNode[] = [folder('fapiao'), file('用户画像.xlsx')]
 
-  test('grafts a loaded level into the target node, immutably', () => {
-    const grafted = graftTree(base, 'fapiao', { children: [file('fapiao/行程单.pdf')] })
-    expect(grafted[0]?.children?.[0]?.relPath).toBe('fapiao/行程单.pdf')
+  test('grafts success and failure states immutably along the target chain', () => {
+    const topLevel = graftTree(base, 'fapiao', { children: [file('fapiao/行程单.pdf')] })
+    expect(topLevel[0]?.children?.[0]?.relPath).toBe('fapiao/行程单.pdf')
     // 原树不被修改(immutability)。
     expect(base[0]?.children).toBeUndefined()
     // 未涉及的兄弟节点引用复用。
-    expect(grafted[1]).toBe(base[1])
-  })
+    expect(topLevel[1]).toBe(base[1])
 
-  test('grafts deep targets through the ancestor chain only', () => {
-    const tree = [folder('a', [folder('a/b')])]
-    const grafted = graftTree(tree, 'a/b', { children: [file('a/b/c.txt')] })
-    expect(grafted[0]?.children?.[0]?.children?.[0]?.relPath).toBe('a/b/c.txt')
-  })
+    const deepTree = [folder('a', [folder('a/b')])]
+    const deep = graftTree(deepTree, 'a/b', { children: [file('a/b/c.txt')] })
+    expect(deep[0]?.children?.[0]?.children?.[0]?.relPath).toBe('a/b/c.txt')
 
-  test('marks unreadable on load failure (drops stale children)', () => {
-    const tree = [folder('a', [file('a/x.txt')])]
-    const grafted = graftTree(tree, 'a', { unreadable: true })
-    expect(grafted[0]?.unreadable).toBe(true)
-    expect(grafted[0]?.children).toBeUndefined()
-  })
+    const staleTree = [folder('a', [file('a/x.txt')])]
+    const failed = graftTree(staleTree, 'a', { unreadable: true })
+    expect(failed[0]?.unreadable).toBe(true)
+    expect(failed[0]?.children).toBeUndefined()
 
-  test('clears stale unreadable when a later load succeeds', () => {
-    const tree: DirTreeNode[] = [
+    const unreadableTree: DirTreeNode[] = [
       { name: 'a', kind: 'folder', relPath: 'a', sizeBytes: null, unreadable: true },
     ]
-    const grafted = graftTree(tree, 'a', { children: [] })
-    expect(grafted[0]?.unreadable).toBeUndefined()
-    expect(grafted[0]?.children).toEqual([])
-  })
+    const recovered = graftTree(unreadableTree, 'a', { children: [] })
+    expect(recovered[0]?.unreadable).toBeUndefined()
+    expect(recovered[0]?.children).toEqual([])
 
-  test('unknown relPath leaves the tree unchanged', () => {
     expect(graftTree(base, 'nope/nothing', { children: [] })).toEqual(base)
   })
 })
@@ -78,39 +70,25 @@ describe('findNode', () => {
 })
 
 describe('pruneExpanded', () => {
-  test('keeps a top-level expanded folder that still exists', () => {
-    const nodes = [folder('a'), file('b.txt')]
-    expect([...pruneExpanded(new Set(['a']), nodes)]).toEqual(['a'])
-  })
+  test('keeps only expansions that loaded tree levels can validate', () => {
+    expect([...pruneExpanded(new Set(['a']), [folder('a'), file('b.txt')])]).toEqual(['a'])
+    expect([...pruneExpanded(new Set(['a', 'gone']), [folder('a')])]).toEqual(['a'])
 
-  test('drops a top-level entry the (loaded) root no longer lists — vanished', () => {
-    const nodes = [folder('a')]
-    expect([...pruneExpanded(new Set(['a', 'gone']), nodes)]).toEqual(['a'])
-  })
-
-  test('drops an entry that became a file or unreadable', () => {
-    const nodes = [
+    const invalidNodes = [
       file('nowfile'),
       { name: 'noperm', kind: 'folder' as const, relPath: 'noperm', sizeBytes: null, unreadable: true as const },
     ]
-    expect([...pruneExpanded(new Set(['nowfile', 'noperm']), nodes)]).toEqual([])
-  })
+    expect([...pruneExpanded(new Set(['nowfile', 'noperm']), invalidNodes)]).toEqual([])
 
-  test('KEEPS a deep entry whose parent level is not loaded yet (reload window)', () => {
     // Root re-read dropped deeper levels: `a` has no children loaded → we
     // cannot yet judge `a/b`, so it must survive until the self-heal reloads.
-    const nodes = [folder('a')]
-    expect([...pruneExpanded(new Set(['a', 'a/b']), nodes)]).toEqual(['a', 'a/b'])
-  })
+    expect([...pruneExpanded(new Set(['a', 'a/b']), [folder('a')])]).toEqual(['a', 'a/b'])
 
-  test('drops a deep entry once its parent IS loaded and no longer lists it', () => {
-    const nodes = [folder('a', [file('a/keep.txt')])] // parent loaded, no a/b
-    expect([...pruneExpanded(new Set(['a', 'a/b']), nodes)]).toEqual(['a'])
-  })
+    const missingDeep = [folder('a', [file('a/keep.txt')])] // parent loaded, no a/b
+    expect([...pruneExpanded(new Set(['a', 'a/b']), missingDeep)]).toEqual(['a'])
 
-  test('keeps a deep entry the loaded parent still lists as a folder', () => {
-    const nodes = [folder('a', [folder('a/b')])]
-    expect([...pruneExpanded(new Set(['a', 'a/b']), nodes)]).toEqual(['a', 'a/b'])
+    const presentDeep = [folder('a', [folder('a/b')])]
+    expect([...pruneExpanded(new Set(['a', 'a/b']), presentDeep)]).toEqual(['a', 'a/b'])
   })
 })
 
