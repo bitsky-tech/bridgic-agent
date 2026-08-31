@@ -10,6 +10,7 @@ export interface SessionSurfaceRailTabsProps {
   browserNeedsAttention: boolean
   filesNeedsAttention: boolean
   hasBrowserOpenPage: boolean
+  hasExcelWorkbook: boolean
   isBrowserAgentActive: boolean
   isBrowserBusy: boolean
   isContentOpen: boolean
@@ -18,13 +19,14 @@ export interface SessionSurfaceRailTabsProps {
   selectedSurface: SessionWorkbenchSurface
 }
 
-/** Render the four independent Session tools with a Browser-specific activity state. */
+/** Render the independent Session tools with a Browser-specific activity state. */
 export function SessionSurfaceRailTabs({
   browserAriaLabel,
   browserLabel,
   browserNeedsAttention,
   filesNeedsAttention,
   hasBrowserOpenPage,
+  hasExcelWorkbook,
   isBrowserAgentActive,
   isBrowserBusy,
   isContentOpen,
@@ -61,6 +63,14 @@ export function SessionSurfaceRailTabs({
       testId: 'session-workbench-results',
     },
     {
+      ariaLabel: t('session.resourcePanel.excel'),
+      icon: Icons.spreadsheet(17),
+      isOpenInBackground: hasExcelWorkbook,
+      label: t('session.resourcePanel.excel'),
+      surface: SessionWorkbenchSurface.Excel,
+      testId: 'session-workbench-excel',
+    },
+    {
       ariaLabel: browserAriaLabel,
       icon: Icons.globe(17),
       label: browserLabel,
@@ -72,6 +82,7 @@ export function SessionSurfaceRailTabs({
 
   return tools.map((tool) => {
     const isBrowser = tool.surface === SessionWorkbenchSurface.Browser
+    const isExcel = tool.surface === SessionWorkbenchSurface.Excel
     const isFiles = tool.surface === SessionWorkbenchSurface.Files
     const isSelected = !isModeSelected && selectedSurface === tool.surface
     return (
@@ -83,6 +94,7 @@ export function SessionSurfaceRailTabs({
         key={tool.surface}
         label={tool.label}
         isOpenInBackground={tool.isOpenInBackground ?? false}
+        showActiveIndicator={!isExcel || hasExcelWorkbook}
         isBusy={isBrowser && isBrowserBusy}
         isPulsing={isBrowser && isBrowserAgentActive && !browserNeedsAttention}
         needsAttention={(isBrowser && browserNeedsAttention) || (isFiles && filesNeedsAttention)}

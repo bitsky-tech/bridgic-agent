@@ -12,6 +12,7 @@ import { SpecPreviewPane } from './SpecPreviewPane'
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel'
 import { WorkflowResultsPanel } from './WorkflowResultsPanel'
 import { WorkflowRunDetailsPane } from './WorkflowRunDetailsPane'
+import { ExcelWorkbenchPanel } from './ExcelWorkbenchPanel'
 import { cn } from '@/lib/cn'
 
 export interface SessionSurfaceContentProps {
@@ -36,6 +37,8 @@ export function SessionSurfaceContent({
   onNativeHidden,
   selectedModeSurface,
 }: SessionSurfaceContentProps) {
+  const excelActive = isToolActive(SessionWorkbenchSurface.Excel)
+
   return (
     <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
       <WorkbenchSurface
@@ -65,6 +68,13 @@ export function SessionSurfaceContent({
         testId="session-workbench-schedules-content"
       >
         <ScheduleWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Schedules)} />
+      </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={excelActive}
+        labelledBy="session-workbench-excel-tab"
+        testId="session-workbench-excel-content"
+      >
+        <ExcelWorkbenchPanel active={excelActive} />
       </WorkbenchSurface>
 
       <div

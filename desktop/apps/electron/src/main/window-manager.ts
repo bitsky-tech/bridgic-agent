@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   WebContentsView,
   app,
+  dialog,
   nativeTheme,
   screen,
   session,
@@ -17,10 +18,12 @@ import { WindowCloseSource, type WindowCloseRequest } from '../shared/types'
 import { getGuiSettings, stepZoomLevel, updateWindowState } from './gui-settings'
 import { parseExternalUrl, redactExternalUrlForLog } from './handlers/external-url'
 import { windowLog } from './logger'
+import { mt } from './i18n'
 import { titleBarOverlayFor } from './titlebar-overlay'
 import { pickStartupBounds } from './window-bounds'
 import { pickZoomDelta } from './zoom-keys'
 import { EmbeddedBrowserManager } from './embedded-browser-manager'
+import { ExcelHost } from './excel-host'
 import { embeddedBrowserProfileDir } from './paths'
 import { isNativeWindowForeground, MainWindowVisibilityLatch } from './window-visibility'
 
@@ -57,6 +60,7 @@ function getWindowsBackgroundMaterial(): 'mica' | 'acrylic' | undefined {
 export class WindowManager {
   private mainWindow: BrowserWindow | null = null
   private readonly embeddedBrowser: EmbeddedBrowserManager
+  private readonly excelHost: ExcelHost
   private readonly preloadPath: string
   private readonly devServerUrl: string | undefined
   private readonly rendererIndexHtml: string
@@ -101,8 +105,10 @@ export class WindowManager {
 
   constructor(opts: {
     preloadPath: string
+    excelPreloadPath: string
     devServerUrl?: string
     rendererIndexHtml: string
+    excelRendererHtml: string
     additionalArguments?: string[]
     backgroundColorOverride?: string
     onMainWindowCreated?: (window: BrowserWindow) => void
@@ -123,6 +129,34 @@ export class WindowManager {
         }
       },
     )
+    this.excelHost = new ExcelHost(
+      (options) => new WebContentsView(options),
+      opts.excelPreloadPath,
+      opts.devServerUrl,
+      opts.excelRendererHtml,
+      (snapshot) => {
+        const win = this.mainWindow
+        if (win && !win.isDestroyed()) {
+          win.webContents.send(IPC.events.excelHostChanged, snapshot)
+        }
+      },
+      async (count) => {
+        const window = this.mainWindow
+        const options = {
+          type: 'warning' as const,
+          buttons: [mt('main.excelQuit.cancel'), mt('main.excelQuit.discard')],
+          defaultId: 0,
+          cancelId: 0,
+          title: mt('main.excelQuit.title'),
+          message: mt('main.excelQuit.message', { count }),
+          detail: mt('main.excelQuit.detail'),
+        }
+        const result = window && !window.isDestroyed()
+          ? await dialog.showMessageBox(window, options)
+          : await dialog.showMessageBox(options)
+        return result.response === 1
+      },
+    )
   }
 
   getMainWindow(): BrowserWindow | null {
@@ -131,6 +165,10 @@ export class WindowManager {
 
   getEmbeddedBrowser(): EmbeddedBrowserManager {
     return this.embeddedBrowser
+  }
+
+  getExcelHost(): ExcelHost {
+    return this.excelHost
   }
 
   private createEmbeddedBrowserSession(): Session {
@@ -275,6 +313,7 @@ export class WindowManager {
     // foreground requests arriving during load must target this same window.
     this.mainWindow = win
     this.embeddedBrowser.attachHost(win)
+    this.excelHost.attachHost(win)
     try {
       this.onMainWindowCreated?.(win)
     } catch (error) {
@@ -442,6 +481,7 @@ export class WindowManager {
       }
       this.clearPendingCloseTimeout()
       this.embeddedBrowser.detachHost(win)
+      this.excelHost.detachHost(win)
       if (this.mainWindow === win) {
         this.mainWindow = null
         this.visibility.reset()
@@ -629,6 +669,14 @@ export function buildPreloadPath(): string {
   return join(__dirname, 'bootstrap-preload.cjs')
 }
 
+export function buildExcelPreloadPath(): string {
+  return join(__dirname, 'excel-host-preload.cjs')
+}
+
 export function buildRendererIndexHtml(): string {
   return join(__dirname, 'renderer/index.html')
+}
+
+export function buildExcelRendererIndexHtml(): string {
+  return join(__dirname, 'renderer/excel.html')
 }

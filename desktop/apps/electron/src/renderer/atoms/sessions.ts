@@ -334,6 +334,10 @@ export const removeSessionAtom = atom(null, (get, set, id: string) => {
   delete completionSeqById[id]
   set(_sessionCompletionSeqById, completionSeqById)
   if (get(activeSessionIdAtom) === id) set(activeSessionIdAtom, null)
+  const closeExcelTarget = window.api.excelHost?.closeSession(id)
+  void closeExcelTarget?.catch((err: unknown) => {
+    rlog.warn('[sessions] Excel target cleanup failed', { id, err })
+  })
   // Daemon is the source of truth — DELETE the daemon session. Drafts never
   // reached the daemon (no POST /sessions yet), so skip.
   if (!wasDraft) {

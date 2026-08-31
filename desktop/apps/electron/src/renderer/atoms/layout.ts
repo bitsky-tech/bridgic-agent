@@ -30,6 +30,7 @@ import { settingsAtom, updateSettingsAtom } from './settings'
 export const SIDEBAR_MIN = 200
 export const SIDEBAR_MAX = 300
 export const RIGHT_PANEL_MIN = 320
+export const EXCEL_DOCK_MIN = 720
 export { RIGHT_PANEL_RAIL_WIDTH }
 
 const clamp = (v: number, min: number, max: number): number =>
@@ -52,6 +53,11 @@ const browserDockWidthFamily = atomFamily(
   (_sessionId: string) => atom<number | null | undefined>(undefined),
 )
 
+/** Excel is intentionally wide and independent from ordinary panel/Browser widths. */
+const excelDockWidthFamily = atomFamily(
+  (_sessionId: string) => atom<number | null>(null),
+)
+
 /** Current ordinary right-surface content width in px, excluding its fixed rail. */
 export const rightPanelWidthAtom = atom((get) => {
   const sessionId = get(activeSessionIdAtom)
@@ -70,6 +76,13 @@ export const browserDockWidthAtom = atom((get): number | null => {
     if (remembered !== undefined) return remembered
   }
   return get(settingsAtom).layout.browserPanelWidth ?? null
+})
+
+/** Current Excel canvas width, excluding the fixed Session surface rail. */
+export const excelDockWidthAtom = atom((get): number => {
+  const sessionId = get(activeSessionIdAtom)
+  if (sessionId) return get(excelDockWidthFamily(sessionId)) ?? EXCEL_DOCK_MIN
+  return EXCEL_DOCK_MIN
 })
 /** Per-Session override. `null` means this Session has not been viewed yet and
  *  should inherit the persisted latest preference. */
@@ -99,6 +112,8 @@ export const rememberRightPanelStateAtom = atom(null, (get, set, sessionId: stri
   if (get(browserWidthAtom) === undefined) {
     set(browserWidthAtom, layout.browserPanelWidth ?? null)
   }
+  const excelWidthAtom = excelDockWidthFamily(sessionId)
+  if (get(excelWidthAtom) === null) set(excelWidthAtom, EXCEL_DOCK_MIN)
 })
 
 /** Pending Browser-safe collapse handoff, isolated so a switch cannot make the
@@ -164,6 +179,12 @@ export const setBrowserDockWidthAtom = atom(null, (get, set, width: number) => {
   }))
 })
 
+/** Remember the active Session's Excel canvas width for this app lifetime. */
+export const setExcelDockWidthAtom = atom(null, (get, set, width: number) => {
+  const sessionId = get(activeSessionIdAtom)
+  if (sessionId) set(excelDockWidthFamily(sessionId), Math.max(0, Math.round(width)))
+})
+
 /** Flip right-content collapse state. */
 export const toggleRightPanelCollapsedAtom = atom(null, (get, set) => {
   const next = !get(rightPanelCollapsedAtom)
@@ -209,6 +230,9 @@ export const remapRightPanelLayoutStateAtom = atom(
     if (browserWidth !== undefined) {
       set(browserDockWidthFamily(payload.targetSessionId), browserWidth)
     }
+    const sourceExcelWidthAtom = excelDockWidthFamily(payload.sourceSessionId)
+    const excelWidth = get(sourceExcelWidthAtom)
+    if (excelWidth !== null) set(excelDockWidthFamily(payload.targetSessionId), excelWidth)
     const sourceRequestAtom = rightPanelCollapseRequestFamily(payload.sourceSessionId)
     if (get(sourceRequestAtom)) {
       set(rightPanelCollapseRequestFamily(payload.targetSessionId), true)
@@ -216,6 +240,7 @@ export const remapRightPanelLayoutStateAtom = atom(
     set(sourceCollapsedAtom, null)
     set(sourcePanelWidthAtom, null)
     set(sourceBrowserWidthAtom, undefined)
+    set(sourceExcelWidthAtom, null)
     set(sourceRequestAtom, false)
   },
 )
@@ -225,6 +250,7 @@ export function purgeRightPanelLayoutState(sessionId: string): void {
   rightPanelCollapsedFamily.remove(sessionId)
   rightPanelWidthFamily.remove(sessionId)
   browserDockWidthFamily.remove(sessionId)
+  excelDockWidthFamily.remove(sessionId)
   rightPanelCollapseRequestFamily.remove(sessionId)
 }
 

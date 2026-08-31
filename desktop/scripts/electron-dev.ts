@@ -278,6 +278,8 @@ async function main(): Promise<void> {
   const mainOut = join(DIST_DIR, 'main.cjs')
   const preloadEntry = join(ELECTRON_DIR, 'src/preload/bootstrap.ts')
   const preloadOut = join(DIST_DIR, 'bootstrap-preload.cjs')
+  const excelPreloadEntry = join(ELECTRON_DIR, 'src/preload/excel-host.ts')
+  const excelPreloadOut = join(DIST_DIR, 'excel-host-preload.cjs')
 
   const procs: Subprocess[] = []
   const contexts: esbuild.BuildContext[] = []
@@ -321,14 +323,20 @@ async function main(): Promise<void> {
       external: ['electron'],
     })
     contexts.push(preloadCtx)
+    const excelPreloadCtx = await esbuild.context({
+      ...buildOptionsFor(excelPreloadEntry, excelPreloadOut, {}),
+      external: ['electron'],
+    })
+    contexts.push(excelPreloadCtx)
 
-    await Promise.all([mainCtx.rebuild(), preloadCtx.rebuild()])
+    await Promise.all([mainCtx.rebuild(), preloadCtx.rebuild(), excelPreloadCtx.rebuild()])
     verifyBundle(mainOut)
     verifyBundle(preloadOut)
-    console.log('✔ main/preload bundle verified')
+    verifyBundle(excelPreloadOut)
+    console.log('✔ main/preloads bundle verified')
 
-    await Promise.all([mainCtx.watch(), preloadCtx.watch()])
-    console.log('👀 watching main + preload (restart to apply their changes)\n')
+    await Promise.all([mainCtx.watch(), preloadCtx.watch(), excelPreloadCtx.watch()])
+    console.log('👀 watching main + preloads (restart to apply their changes)\n')
 
     console.log('📡 starting vite...')
     const vite = spawn({

@@ -94,8 +94,18 @@
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@univerjs/core": "^0.25.1",
+    "@univerjs/preset-sheets-conditional-formatting": "^0.25.1",
+    "@univerjs/preset-sheets-core": "^0.25.1",
+    "@univerjs/preset-sheets-data-validation": "^0.25.1",
+    "@univerjs/preset-sheets-drawing": "^0.25.1",
+    "@univerjs/preset-sheets-filter": "^0.25.1",
+    "@univerjs/preset-sheets-sort": "^0.25.1",
+    "@univerjs/themes": "^0.25.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "i18next": "^25.0.0",
     "i18next-browser-languagedetector": "^8.2.1",
     "jotai": "^2.16.0",
@@ -106,5 +116,8 @@
     "react-i18next": "^17.0.2",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.0.0"
+  },
+  "patchedDependencies": {
+    "@univerjs/ui@0.25.1": "patches/@univerjs%2Fui@0.25.1.patch"
   }
 }

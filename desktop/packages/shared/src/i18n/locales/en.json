@@ -383,6 +383,35 @@
     "workflowRunDeleteFailed": "Failed to delete run result: {{msg}}",
     "workflowRunExportFailed": "Failed to export run result: {{msg}}"
   },
+  "excel": {
+    "defaultFileName": "Workbook.xlsx",
+    "defaultWorkbookName": "Workbook",
+    "dismissError": "Dismiss error",
+    "emptyDescription": "Create a workbook or open an existing .xlsx file. Formulas, formatting, merged cells, row and column sizes, and multiple sheets are supported.",
+    "emptyTitle": "Excel workspace",
+    "exitExpanded": "Exit expanded view",
+    "expand": "Expand Excel workspace",
+    "hostCrashed": "Excel target stopped unexpectedly",
+    "hostFailed": "Could not start the Excel target",
+    "hostReady": "Session target ready",
+    "hostStarting": "Starting Session Excel target…",
+    "localOnly": "Workbooks stay on this device and are never uploaded.",
+    "new": "New",
+    "newWorkbook": "Create Excel",
+    "open": "Open",
+    "openFailed": "Could not open this workbook: {{message}}",
+    "opening": "Opening…",
+    "save": "Save",
+    "saveAs": "Save as",
+    "saveAsShort": "Save as",
+    "saveConflict": "This workbook changed on disk. Use Save as to keep your edits without overwriting the external changes.",
+    "saveFailed": "Could not save this workbook: {{message}}",
+    "saved": "Saved",
+    "saving": "Saving…",
+    "title": "Excel",
+    "unsaved": "Unsaved changes",
+    "unsavedReplace": "This workbook has unsaved changes. Discard them and continue?"
+  },
   "externalLink": {
     "description": "You are about to leave the app and visit this external link:",
     "dontAskAgain": "Do not ask again in this session",
@@ -617,6 +646,13 @@
   "main": {
     "browser": {
       "newTab": "New Tab"
+    },
+    "excelQuit": {
+      "cancel": "Cancel",
+      "detail": "Save the workbooks first, or choose discard to quit without saving.",
+      "discard": "Discard and Quit",
+      "message": "{{count}} Excel workspace(s) have unsaved changes.",
+      "title": "Unsaved Excel changes"
     },
     "menu": {
       "actualSize": "Actual Size",
@@ -1588,6 +1624,7 @@
       "browserLoadingShort": "Loading",
       "browserNeedsAttention": "Browser has new activity; open it to review",
       "browserOpened": "Browser is open",
+      "excel": "Excel",
       "files": "Files",
       "filesNeedsAttention": "New files were added; open Files to review",
       "modeRun": "Run",
@@ -2130,6 +2167,7 @@
     "restartNow": "Restart and update",
     "scheduledDescription": "Restarts and installs {{version}} once every agent task has finished.",
     "scheduledTitle": "Update scheduled",
+    "unsavedWorkbooks": "The update was not installed because Excel has unsaved changes. Save or close those workbooks, then try again.",
     "updateWhenIdle": "Update when idle"
   },
   "widget": {

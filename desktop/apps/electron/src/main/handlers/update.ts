@@ -31,14 +31,18 @@ import { BrowserWindow } from 'electron'
 import { pythonClient } from '../python-client'
 import { clearQuitConfirmed, markQuitConfirmed } from '../quit-with-daemon'
 import { loggedHandle } from './logged-handle'
+import type { ExcelHost } from '../excel-host'
 
 /** How long the install handover gets before we assume it did not happen. */
 const HANDOVER_GRACE_MS = 60_000
 
-export function registerUpdateHandlers(): void {
+export function registerUpdateHandlers(excelHost: ExcelHost): void {
   loggedHandle(IPC.update.installNow, async (): Promise<UpdateInstallResult> => {
     if (!hasStagedUpdate()) {
       return { ok: false as const, reason: 'no-update-staged' as const }
+    }
+    if (!await excelHost.confirmClose()) {
+      return { ok: false as const, reason: 'unsaved-workbooks' as const }
     }
 
     // Take the window away FIRST, before the gateway goes down.

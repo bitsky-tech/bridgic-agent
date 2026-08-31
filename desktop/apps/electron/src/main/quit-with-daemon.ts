@@ -176,7 +176,7 @@ export function clearQuitConfirmed(): void {
  * `beforeQuit` runs only after the user has confirmed the quit, and is awaited
  * before the final `app.quit()`.
  */
-export async function quitWithDaemon(beforeQuit?: () => Promise<void>): Promise<void> {
+export async function quitWithDaemon(beforeQuit?: () => Promise<boolean | void>): Promise<void> {
   if (quitInFlight) return
   quitInFlight = true
   try {
@@ -186,7 +186,7 @@ export async function quitWithDaemon(beforeQuit?: () => Promise<void>): Promise<
   }
 }
 
-async function runQuitFlow(beforeQuit?: () => Promise<void>): Promise<void> {
+async function runQuitFlow(beforeQuit?: () => Promise<boolean | void>): Promise<void> {
   let choice: QuitChoice = QuitChoice.StopAndQuit
   try {
     const others = await otherClients()
@@ -207,6 +207,15 @@ async function runQuitFlow(beforeQuit?: () => Promise<void>): Promise<void> {
   if (choice === QuitChoice.Cancel) {
     mainLog.info('[quit] cancelled by user')
     return
+  }
+
+  try {
+    if (await beforeQuit?.() === false) {
+      mainLog.info('[quit] cancelled because an embedded editor has unsaved changes')
+      return
+    }
+  } catch (error) {
+    mainLog.warn('[quit] preflight failed; quitting anyway', error)
   }
 
   // Hide the window **immediately** once we've decided to quit — the
@@ -243,11 +252,6 @@ async function runQuitFlow(beforeQuit?: () => Promise<void>): Promise<void> {
     }
   }
   mainLog.info('[quit] full quit', { stoppedDaemon: choice === QuitChoice.StopAndQuit })
-  try {
-    await beforeQuit?.()
-  } catch (error) {
-    mainLog.warn('[quit] browser shutdown failed; quitting anyway', error)
-  }
   // Set the flag before quitting: `before-quit` fires a second time, and that
   // pass must be let through instead of intercepted into another confirmation
   // run (otherwise infinite recursion).

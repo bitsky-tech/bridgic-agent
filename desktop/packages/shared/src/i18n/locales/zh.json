@@ -383,6 +383,35 @@
     "workflowRunDeleteFailed": "删除运行结果失败：{{msg}}",
     "workflowRunExportFailed": "导出执行结果失败：{{msg}}"
   },
+  "excel": {
+    "defaultFileName": "工作簿.xlsx",
+    "defaultWorkbookName": "工作簿",
+    "dismissError": "关闭错误提示",
+    "emptyDescription": "新建工作簿，或打开已有的 .xlsx 文件。支持公式、格式、合并单元格、行列尺寸和多个工作表。",
+    "emptyTitle": "Excel 工作台",
+    "exitExpanded": "退出展开视图",
+    "expand": "展开 Excel 工作台",
+    "hostCrashed": "Excel target 意外停止",
+    "hostFailed": "无法启动 Excel target",
+    "hostReady": "Session target 已就绪",
+    "hostStarting": "正在启动 Session Excel target…",
+    "localOnly": "工作簿只保留在本机，不会上传。",
+    "new": "新建",
+    "newWorkbook": "新建 Excel",
+    "open": "打开",
+    "openFailed": "无法打开此工作簿：{{message}}",
+    "opening": "正在打开…",
+    "save": "保存",
+    "saveAs": "另存为",
+    "saveAsShort": "另存为",
+    "saveConflict": "此工作簿已被外部程序修改。请使用“另存为”保留当前编辑，避免覆盖外部更改。",
+    "saveFailed": "无法保存此工作簿：{{message}}",
+    "saved": "已保存",
+    "saving": "正在保存…",
+    "title": "Excel",
+    "unsaved": "有未保存的更改",
+    "unsavedReplace": "当前工作簿有未保存的更改。要放弃这些更改并继续吗？"
+  },
   "externalLink": {
     "description": "即将离开应用，访问外部链接：",
     "dontAskAgain": "本会话不再询问",
@@ -617,6 +646,13 @@
   "main": {
     "browser": {
       "newTab": "新标签页"
+    },
+    "excelQuit": {
+      "cancel": "取消",
+      "detail": "请先保存工作簿，或选择放弃更改后退出。",
+      "discard": "放弃更改并退出",
+      "message": "有 {{count}} 个 Excel 工作台包含未保存的更改。",
+      "title": "Excel 更改尚未保存"
     },
     "menu": {
       "actualSize": "实际大小",
@@ -1588,6 +1624,7 @@
       "browserLoadingShort": "加载中",
       "browserNeedsAttention": "浏览器有新动态，点击查看",
       "browserOpened": "浏览器已打开",
+      "excel": "Excel",
       "files": "文件",
       "filesNeedsAttention": "已添加新文件，点击查看",
       "modeRun": "执行",
@@ -2130,6 +2167,7 @@
     "restartNow": "重启更新",
     "scheduledDescription": "所有 Agent 任务结束后自动重启并安装 {{version}}。",
     "scheduledTitle": "已安排更新",
+    "unsavedWorkbooks": "Excel 中还有未保存的更改，因此尚未安装更新。请先保存或关闭这些工作簿，然后重试。",
     "updateWhenIdle": "空闲时更新"
   },
   "widget": {

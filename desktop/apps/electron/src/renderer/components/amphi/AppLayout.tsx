@@ -32,10 +32,12 @@ import {
   SIDEBAR_MAX,
   SIDEBAR_MIN,
   browserDockWidthAtom,
+  excelDockWidthAtom,
   rightPanelCollapsedAtom,
   rightPanelWidthAtom,
   requestRightPanelCollapseAtom,
   setBrowserDockWidthAtom,
+  setExcelDockWidthAtom,
   setRightPanelWidthAtom,
   setSidebarWidthAtom,
   sidebarCollapsedAtom,
@@ -54,9 +56,9 @@ export interface AppLayoutProps {
   center: ReactNode
   right?: ReactNode
   rightCollapsed?: boolean
-  /** Browser uses a wider independent dock instead of the output-panel width. */
-  rightKind?: 'panel' | 'browser'
-  /** Expanded browser owns the complete work area beside the sidebar. */
+  /** Browser and Excel use wider independent docks instead of the output-panel width. */
+  rightKind?: 'panel' | 'browser' | 'excel'
+  /** An expanded wide tool owns the complete work area beside the sidebar. */
   rightExpanded?: boolean
   /** When false, render the custom TopBar chrome (the app default). */
   titleBar?: boolean
@@ -77,12 +79,14 @@ export function AppLayout({
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom)
   const rightPanelWidth = useAtomValue(rightPanelWidthAtom)
   const browserDockWidth = useAtomValue(browserDockWidthAtom)
+  const excelDockWidth = useAtomValue(excelDockWidthAtom)
   const sessionId = useAtomValue(activeSessionIdAtom)
   const focusPaneOpen = useAtomValue(sessionFocusPaneOpenAtom)
   const rightUserCollapsed = useAtomValue(rightPanelCollapsedAtom)
   const persistSidebarWidth = useSetAtom(setSidebarWidthAtom)
   const persistRightWidth = useSetAtom(setRightPanelWidthAtom)
   const setBrowserDockWidth = useSetAtom(setBrowserDockWidthAtom)
+  const setExcelDockWidth = useSetAtom(setExcelDockWidthAtom)
   const requestRightCollapse = useSetAtom(requestRightPanelCollapseAtom)
 
   // Transient drag widths — non-null only mid-drag. Overrides the persisted
@@ -90,7 +94,7 @@ export function AppLayout({
   const [dragSidebarW, setDragSidebarW] = useState<number | null>(null)
   const [dragRight, setDragRight] = useState<{
     sessionId: string | null
-    kind: 'panel' | 'browser'
+    kind: 'panel' | 'browser' | 'excel'
     width: number | null
   }>({ sessionId, kind: rightKind, width: null })
   if (dragRight.sessionId !== sessionId || dragRight.kind !== rightKind) {
@@ -118,15 +122,17 @@ export function AppLayout({
   const dragRightW = dragRight.sessionId === sessionId && dragRight.kind === rightKind
     ? dragRight.width
     : null
-  const preferredBrowserContentWidth = dragRightW === null
-    ? browserDockWidth
+  const wideDock = rightKind !== 'panel'
+  const rememberedWideContentWidth = rightKind === 'excel' ? excelDockWidth : browserDockWidth
+  const preferredWideContentWidth = dragRightW === null
+    ? rememberedWideContentWidth
     : Math.max(0, dragRightW - RIGHT_PANEL_RAIL_WIDTH)
-  const browserGeometry = browserDockGeometry(availableWorkWidth, preferredBrowserContentWidth)
-  const effectiveRightW = rightKind === 'browser'
-    ? browserGeometry.width
+  const wideGeometry = browserDockGeometry(availableWorkWidth, preferredWideContentWidth)
+  const effectiveRightW = wideDock
+    ? wideGeometry.width
     : Math.min(dragRightW ?? rightPanelWidth + RIGHT_PANEL_RAIL_WIDTH, rightMax)
-  const effectiveRightMin = rightKind === 'browser' ? browserGeometry.min : panelMin
-  const effectiveRightMax = rightKind === 'browser' ? browserGeometry.max : rightMax
+  const effectiveRightMin = wideDock ? wideGeometry.min : panelMin
+  const effectiveRightMax = wideDock ? wideGeometry.max : rightMax
 
   // Session context controls whether the dock exists; user collapse controls
   // only its content. Focused mode panes temporarily force that content open.
@@ -141,6 +147,8 @@ export function AppLayout({
   const persistDockWidth = (totalWidth: number) => {
     if (rightKind === 'browser') {
       setBrowserDockWidth(Math.max(0, totalWidth - RIGHT_PANEL_RAIL_WIDTH))
+    } else if (rightKind === 'excel') {
+      setExcelDockWidth(Math.max(0, totalWidth - RIGHT_PANEL_RAIL_WIDTH))
     } else {
       persistRightWidth(totalWidth - RIGHT_PANEL_RAIL_WIDTH)
     }

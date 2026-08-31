@@ -1,5 +1,5 @@
 /** Session-owned mode surfaces and independent workbench tools in one right-side dock. */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { viewedSessionIdAtom } from '@/atoms/amphi'
@@ -15,6 +15,7 @@ import {
   setBrowserHandoffPendingAtom,
   setSessionWorkbenchSurfaceAtom,
 } from '@/atoms/browser'
+import { activeExcelHostSessionAtom } from '@/atoms/excel'
 import {
   filesNeedsAttentionFamily,
   setFilesNeedsAttentionAtom,
@@ -39,6 +40,7 @@ import {
 import { useBrowserAttention } from '@/hooks/useBrowserAttention'
 import { useEmbeddedBrowserSurfaceEligible } from '@/hooks/useEmbeddedBrowserSurfaceEligible'
 import { useHostWindowForeground } from '@/hooks/useHostWindowForeground'
+import { rlog } from '@/lib/logger'
 import { SessionSurfaceRail } from './SessionSurfaceChrome'
 import { SessionSurfaceContent } from './SessionSurfaceContent'
 import { SessionSurfaceRailTabs } from './SessionSurfaceRailTabs'
@@ -173,6 +175,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const selectedModeSurface = useAtomValue(selectedSessionModeSurfaceAtom)
   const modeExitCollapseRequest = useAtomValue(currentSessionModeExitCollapseRequestAtom)
   const browserSession = useAtomValue(activeEmbeddedBrowserSessionAtom)
+  const excelHostSession = useAtomValue(activeExcelHostSessionAtom)
   const browserAgentActive = useAtomValue(currentBrowserAgentActiveAtom)
   const rightCollapsed = useAtomValue(rightPanelCollapsedAtom)
   const collapseRequest = useAtomValue(rightPanelCollapseRequestAtom)
@@ -191,6 +194,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const modeSurfaceHadFocusRef = useRef(false)
   const [nativeHideAcknowledgement, setNativeHideAcknowledgement] = useState(0)
   const [pendingBrowserExit, setPendingBrowserExit] = useState<PendingBrowserExit | null>(null)
+  const [excelExitPending, setExcelExitPending] = useState(false)
   const [settledModeHandoffKey, setSettledModeHandoffKey] = useState<string | null>(null)
   const hostWindowForeground = useHostWindowForeground()
 
@@ -206,6 +210,9 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   }, [pendingBrowserExit, setBrowserHandoffPending, viewedSessionId])
   const browserSelected = selectedModeSurface === null
     && workbenchSurface === SessionWorkbenchSurface.Browser
+  const excelSelected = selectedModeSurface === null
+    && workbenchSurface === SessionWorkbenchSurface.Excel
+  const excelHasNativeSurface = excelHostSession?.ready === true && !excelHostSession.crashed
   const pendingForViewedSession = pendingBrowserExit?.sessionId === viewedSessionId
     ? pendingBrowserExit
     : null
@@ -220,6 +227,10 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const resizeBrowserCollapsePending = panelCollapseRequested
     && workbenchSurface === SessionWorkbenchSurface.Browser
     && contentOpen
+  const resizeExcelCollapsePending = panelCollapseRequested
+    && excelSelected
+    && contentOpen
+    && excelHasNativeSurface
   const modeHandoffKey = selectedModeSurface !== null
     && workbenchSurface === SessionWorkbenchSurface.Browser
     && browserHasNativeSurface
@@ -274,12 +285,27 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
     setSettledModeHandoffKey(null)
   }
 
+  const beginExcelExit = useCallback((afterHidden: () => void) => {
+    if (excelExitPending || !viewedSessionId) return
+    const sourceSessionId = viewedSessionId
+    setExcelExitPending(true)
+    void window.api.excelHost.setVisible(false, true).then(
+      () => {
+        if (store.get(viewedSessionIdAtom) === sourceSessionId) afterHidden()
+      },
+      (error) => rlog.warn('[excel-host] native surface hide failed', error),
+    ).finally(() => {
+      if (store.get(viewedSessionIdAtom) === sourceSessionId) setExcelExitPending(false)
+    })
+  }, [excelExitPending, store, viewedSessionId])
+
   const beginBrowserExit = (exit: PendingBrowserExit) => {
     setBrowserHandoffPending({ sessionId: exit.sessionId, pending: true })
     setPendingBrowserExit(exit)
   }
 
   const selectTool = (surface: SessionWorkbenchSurface) => {
+    if (excelExitPending) return
     if (surface === SessionWorkbenchSurface.Browser && viewedSessionId) {
       setBrowserNeedsAttention({ sessionId: viewedSessionId, needsAttention: false })
     }
@@ -309,9 +335,21 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
         && browserSession
       ) {
         beginBrowserExit({ action: 'collapse', sessionId: browserSession.sessionId })
+      } else if (surface === SessionWorkbenchSurface.Excel && excelHasNativeSurface) {
+        beginExcelExit(() => setRightCollapsed(true))
       } else {
         setRightCollapsed(true)
       }
+      return
+    }
+    if (
+      surface !== SessionWorkbenchSurface.Excel
+      && excelSelected
+      && excelHasNativeSurface
+    ) {
+      clearCollapseRequest()
+      if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
+      beginExcelExit(() => commitToolSelection(surface))
       return
     }
     if (
@@ -336,8 +374,16 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   }
 
   const selectMode = () => {
+    if (excelExitPending) return
     clearCollapseRequest()
     if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
+    if (excelSelected && excelHasNativeSurface) {
+      beginExcelExit(() => {
+        openModeSurface()
+        setRightCollapsed(false)
+      })
+      return
+    }
     if (effectivePending !== null && browserSession) {
       if (selectedModeSurface !== null && contentOpen) {
         beginBrowserExit({ action: 'collapse', sessionId: browserSession.sessionId })
@@ -396,6 +442,19 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   useLayoutEffect(() => {
     if (!panelCollapseRequested) return
     if (resizeBrowserCollapsePending && browserHasNativeSurface && browserSession) return
+    if (resizeExcelCollapsePending) {
+      if (!excelExitPending) {
+        queueMicrotask(() => {
+          beginExcelExit(() => {
+            clearCollapseRequest()
+            if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
+            setFocusPane(null)
+            setRightCollapsed(true)
+          })
+        })
+      }
+      return
+    }
     clearCollapseRequest()
     if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
     setFocusPane(null)
@@ -403,10 +462,13 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   }, [
     browserHasNativeSurface,
     browserSession,
+    beginExcelExit,
     clearCollapseRequest,
     consumeModeExitCollapseRequest,
     panelCollapseRequested,
     resizeBrowserCollapsePending,
+    resizeExcelCollapsePending,
+    excelExitPending,
     setFocusPane,
     setRightCollapsed,
     viewedSessionId,
@@ -517,6 +579,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
           browserNeedsAttention={browserNeedsAttention}
           filesNeedsAttention={filesNeedsAttention}
           hasBrowserOpenPage={browserHasOpenPage}
+          hasExcelWorkbook={excelHostSession !== null}
           isBrowserAgentActive={browserAgentActive && browserActivityKind === 'agent'}
           isBrowserBusy={browserBusy}
           isContentOpen={contentOpen}

@@ -6,6 +6,7 @@ import type {
   BackendSnapshot,
   EmbeddedBrowserSnapshot,
   ElectronAPI,
+  ExcelHostSnapshot,
   FsChangedEvent,
   GuiSettings,
   WindowCloseRequest,
@@ -43,6 +44,11 @@ const api: ElectronAPI = {
   dialog: {
     open: (options) => ipcRenderer.invoke(IPC.dialog.open, options),
     save: (options) => ipcRenderer.invoke(IPC.dialog.save, options),
+  },
+  excel: {
+    open: () => ipcRenderer.invoke(IPC.excel.open),
+    save: (request) => ipcRenderer.invoke(IPC.excel.save, request),
+    saveAs: (request) => ipcRenderer.invoke(IPC.excel.saveAs, request),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settings.get),
@@ -94,6 +100,16 @@ const api: ElectronAPI = {
     setBounds: (bounds) => ipcRenderer.invoke(IPC.browser.setBounds, bounds),
     setVisible: (visible, focusHost) =>
       ipcRenderer.invoke(IPC.browser.setVisible, visible, focusHost),
+  },
+  excelHost: {
+    snapshot: () => ipcRenderer.invoke(IPC.excelHost.snapshot),
+    ensureSession: (sessionId, config) =>
+      ipcRenderer.invoke(IPC.excelHost.ensureSession, sessionId, config),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.excelHost.setBounds, bounds),
+    setVisible: (visible, focusHost) =>
+      ipcRenderer.invoke(IPC.excelHost.setVisible, visible, focusHost),
   },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
@@ -150,6 +166,8 @@ const api: ElectronAPI = {
       subscribe<WindowCloseRequest>(IPC.events.windowCloseRequested, callback),
     onEmbeddedBrowserChanged: (callback) =>
       subscribe<EmbeddedBrowserSnapshot>(IPC.events.embeddedBrowserChanged, callback),
+    onExcelHostChanged: (callback) =>
+      subscribe<ExcelHostSnapshot>(IPC.events.excelHostChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },
 }

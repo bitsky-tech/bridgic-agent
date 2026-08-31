@@ -165,7 +165,6 @@ the distributed packages.
                  THIRD-PARTY-LICENSES.txt.
                  https://github.com/KaTeX/KaTeX
 
-
 --------------------------------------------------------------------------------
 6. Bundled installer components
 --------------------------------------------------------------------------------
@@ -185,10 +184,26 @@ substituting a text their authors did not provide. The declared license and the
 canonical text apply:
 
   @posthog/core            MIT      https://github.com/PostHog/posthog-js
+  Radix UI packages        MIT      https://github.com/radix-ui/primitives
+    @radix-ui/react-compose-refs
+    @radix-ui/react-context
+    @radix-ui/react-direction
+    @radix-ui/react-id
+    @radix-ui/react-use-callback-ref
+    @radix-ui/react-use-escape-keydown
+    @radix-ui/react-use-layout-effect
+    @radix-ui/react-use-size
+  @univerjs/protocol        Apache-2.0
+                                    https://github.com/dream-num/univer
+  franc-min                 MIT      https://github.com/wooorm/franc
   html-parse-stringify     MIT      https://github.com/rayrutjes/html-parse-stringify
   lazy-val                 MIT      https://github.com/develar/lazy-val
+  ot-json1                  ISC      https://github.com/ottypes/json1
+  ot-text-unicode           ISC      https://github.com/ottypes/text-unicode
+  react-remove-scroll-bar   MIT      https://github.com/theKashey/react-remove-scroll-bar
   rehype-katex             MIT      https://github.com/remarkjs/remark-math
   remark-math              MIT      https://github.com/remarkjs/remark-math
+  unicount                  ISC      https://github.com/wooorm/unicount
   fastmcp-slim             Apache-2.0
   py-key-value-aio         Apache-2.0
 

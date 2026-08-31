@@ -95,6 +95,7 @@ export interface SurfaceRailButtonProps {
   label: string
   onClick: () => void
   isOpenInBackground?: boolean
+  showActiveIndicator?: boolean
   isBusy?: boolean
   isPulsing?: boolean
   isSelected: boolean
@@ -111,6 +112,7 @@ export function SurfaceRailButton({
   label,
   onClick,
   isOpenInBackground = false,
+  showActiveIndicator = true,
   isBusy = false,
   isPulsing = false,
   isSelected,
@@ -144,7 +146,7 @@ export function SurfaceRailButton({
         showAttention && 'animate-surface-attention border-status-warning/40 bg-status-warning-bg text-status-warning hover:bg-status-warning-bg hover:text-status-warning motion-reduce:animate-none',
       )}
     >
-      {isActive || isOpenInBackground || showAttention ? (
+      {(isActive && showActiveIndicator) || isOpenInBackground || showAttention ? (
         <span
           aria-hidden="true"
           className={cn(

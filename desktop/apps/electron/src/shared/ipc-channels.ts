@@ -28,6 +28,23 @@ export const IPC = {
     open: 'dialog:open',
     save: 'dialog:save',
   },
+  excel: {
+    open: 'excel:open',
+    save: 'excel:save',
+    saveAs: 'excel:saveAs',
+  },
+  excelHost: {
+    snapshot: 'excel-host:snapshot',
+    ensureSession: 'excel-host:ensureSession',
+    closeSession: 'excel-host:closeSession',
+    closeCurrentSession: 'excel-host:closeCurrentSession',
+    activateSession: 'excel-host:activateSession',
+    setBounds: 'excel-host:setBounds',
+    setVisible: 'excel-host:setVisible',
+    setDirty: 'excel-host:setDirty',
+    getRecoveryState: 'excel-host:getRecoveryState',
+    setRecoveryState: 'excel-host:setRecoveryState',
+  },
   /**
    * GuiSettings (single JSON blob at ~/.bridgic/amphi/gui-settings.json).
    * Whole-blob style — `get()` returns the entire shape, `set(next)`
@@ -190,6 +207,8 @@ export const IPC = {
     windowFullScreenChanged: 'window-full-screen-changed',
     windowCloseRequested: 'window-close-requested',
     embeddedBrowserChanged: 'embedded-browser-changed',
+    excelHostChanged: 'excel-host-changed',
+    excelHostConfigChanged: 'excel-host-config-changed',
     // A watched session-file directory changed on disk → renderer re-reads it.
     fsChanged: 'fs-changed',
   },

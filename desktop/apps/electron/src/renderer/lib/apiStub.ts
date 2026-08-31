@@ -42,6 +42,11 @@ export function installApiStub(): void {
       open: async () => ({ canceled: true, filePaths: [] }),
       save: async () => ({ canceled: true, filePath: '' }),
     },
+    excel: {
+      open: async () => ({ canceled: true as const }),
+      save: async () => ({ ok: false as const, reason: 'canceled' as const }),
+      saveAs: async () => ({ ok: false as const, reason: 'canceled' as const }),
+    },
     settings: {
       get: async () => memorySettings,
       set: async (next) => {
@@ -106,6 +111,21 @@ export function installApiStub(): void {
       goForward: async () => {},
       reload: async () => {},
       hasHorizontalOverflow: async () => false,
+      setBounds: async () => {},
+      setVisible: async () => {},
+    },
+    excelHost: {
+      snapshot: async () => ({ sessions: [] }),
+      ensureSession: async (sessionId) => ({
+        sessionId,
+        targetId: null,
+        webContentsId: 0,
+        ready: false,
+        crashed: false,
+        dirty: false,
+      }),
+      closeSession: async () => {},
+      activateSession: async () => {},
       setBounds: async () => {},
       setVisible: async () => {},
     },
@@ -183,6 +203,7 @@ export function installApiStub(): void {
       onWindowFullScreenChanged: noopUnsub,
       onWindowCloseRequested: noopUnsub,
       onEmbeddedBrowserChanged: noopUnsub,
+      onExcelHostChanged: noopUnsub,
       onFsChanged: noopUnsub,
     },
   }

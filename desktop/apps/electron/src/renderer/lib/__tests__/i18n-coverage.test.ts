@@ -128,7 +128,7 @@ const NAMESPACES = new Set(Object.keys(zh))
  *  ~80 of them would rot, and `tool.verb.getSchedule` shipped missing while one existed. */
 const KEY_LIKE = /['"]([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9_]+)+)['"]/g
 /** Filenames share the `word.word` shape and collide with namespaces like `workflow`. */
-const FILENAME = /\.(?:md|json|ts|tsx|js|jsx|css|png|svg|txt|ya?ml|py|sh|lock|log|exe|nsh|zip)$/
+const FILENAME = /\.(?:html|md|json|ts|tsx|js|jsx|css|png|svg|txt|ya?ml|py|sh|lock|log|exe|nsh|zip)$/
 
 /** `t('some.key', { …count… })` — the only calls i18next resolves through the
  *  `_one`/`_other` plural family instead of the bare path. */

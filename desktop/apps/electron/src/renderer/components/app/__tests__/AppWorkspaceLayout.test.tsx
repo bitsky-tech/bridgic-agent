@@ -20,6 +20,8 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
 const { settingsAtom } = await import('@/atoms/settings')
+const { excelExpandedAtom } = await import('@/atoms/excel')
+const { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } = await import('@/atoms/browser')
 const { materializeSessionAtom, newSessionAtom } = await import('@/atoms/sessions')
 const { AppWorkspaceLayout } = await import('../AppWorkspaceLayout')
 
@@ -37,7 +39,7 @@ describe('AppWorkspaceLayout Session dock composition', () => {
         <Provider store={store}>
           <AppWorkspaceLayout
             left={<div>left</div>}
-            center={<div>center</div>}
+            center={<div data-testid="center-content">center</div>}
             right={<div>session tools</div>}
           />
         </Provider>,
@@ -52,6 +54,13 @@ describe('AppWorkspaceLayout Session dock composition', () => {
 
     expect(host.querySelector('[data-testid="session-right-dock"]')).not.toBeNull()
     expect(host.textContent).toContain('session tools')
+
+    await act(async () => {
+      store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+      store.set(excelExpandedAtom, true)
+    })
+    expect(host.querySelector('[data-testid="center-content"]')?.parentElement?.className).toContain('hidden')
+    expect(host.querySelector('[data-testid="session-right-dock"]')?.className).toContain('flex-1')
 
     await act(async () => root.unmount())
     host.remove()
