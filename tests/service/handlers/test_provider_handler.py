@@ -50,6 +50,18 @@ def test_packaged_catalog_lookup() -> None:
     assert manual_unknown["source"] == "manual"
 
 
+def test_openrouter_model_discovery_requests_all_modalities() -> None:
+    url, headers, params = providers_handler._models_request(
+        "openai",
+        "openrouter-secret",
+        "https://openrouter.ai/api/v1",
+    )
+
+    assert url == "https://openrouter.ai/api/v1/models"
+    assert headers == {"authorization": "Bearer openrouter-secret"}
+    assert params == {"output_modalities": "all"}
+
+
 async def test_catalog(service_client: httpx.AsyncClient) -> None:
     """Returned provider catalog:
 

@@ -100,6 +100,7 @@ CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
     "grep",
     "web_search",
     "web_fetch",
+    "generate_image",
     "workspace_status",
     "workspace_diff",
     "workspace_history",
