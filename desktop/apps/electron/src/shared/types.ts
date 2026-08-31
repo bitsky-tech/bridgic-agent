@@ -274,6 +274,14 @@ export interface EmbeddedPowerPointSnapshot {
   sessions: EmbeddedPowerPointSessionInfo[]
 }
 
+export interface EmbeddedPowerPointOpenFileResult {
+  documentId: string
+  fileName: string
+  reused: boolean
+  slideCount: number
+  title: string
+}
+
 /**
  * The shape exposed on `window.api` by the preload script.
  * Imported by both renderer and preload so the contract stays in sync.
@@ -382,6 +390,8 @@ export interface ElectronAPI {
     setVisible(visible: boolean, focusHost?: boolean): Promise<void>
     requestClose(sessionId: string): Promise<void>
     setExpanded(expanded: boolean): Promise<void>
+    /** Import or reactivate a local PPTX in the exact Session-owned editor. */
+    openFile(sessionId: string, absPath: string): Promise<EmbeddedPowerPointOpenFileResult>
   }
   backend: {
     snapshot(): Promise<BackendSnapshot>
@@ -487,12 +497,20 @@ declare global {
     __localResourceToken__?: string
     /** Stable renderer-domain API invoked by the SessionPowerPoint CDP client. */
     __bridgicPowerPoint?: {
-      protocolVersion: 1
+      protocolVersion: 3
       sessionId: string
       dispatch(request: {
-        method: 'list' | 'snapshot' | 'apply'
+        method:
+          | 'view_ppt'
+          | 'inspect_ppt_assets'
+          | 'get_ppt_page'
+          | 'update_ppt_page'
+          | 'insert_ppt_page'
+          | 'remove_ppt_page'
+          | 'move_ppt_page'
+          | 'goto_ppt_page'
         params?: Record<string, unknown>
-      }): { ok: true; value: unknown } | { ok: false; error: string }
+      }): Promise<{ ok: true; value: unknown } | { ok: false; error: string; code?: string }>
     }
   }
 }

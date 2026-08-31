@@ -787,7 +787,7 @@ class AgentInvocation:
                     record.id,
                     tool_result_dir=workspace.tool_result_dir,
                 ),
-                powerpoint=self._powerpoint_host.for_session(record.id),
+                powerpoint=self._powerpoint_host.for_session(record.id, workspace_root=workspace.work_dir),
                 invocations=self,
                 llm_provider=llm_provider,
                 execution_mode=execution_mode,

@@ -20,7 +20,10 @@ describe('presentation text rendering', () => {
     expect(presentationRenderingFontFamily('思源宋体', '佛教历史')).toContain('Songti SC')
     expect(presentationRenderingFontFamily('思源黑体', '01')).toContain('PingFang SC')
     expect(presentationRenderingFontFamily('思源宋体', 'CONTENTS')).toContain('Songti SC')
-    expect(presentationRenderingFontFamily('Aptos', 'Buddhist History')).toBe('Aptos, "Helvetica Neue", Arial, sans-serif')
+    expect(presentationRenderingFontFamily('叶根友毛笔行书2.0版', '佛教历史')).toStartWith('"叶根友毛笔行书2.0版",')
+    expect(presentationRenderingFontFamily('叶根友毛笔行书2.0版', '佛教历史')).toContain('Kaiti SC')
+    expect(presentationRenderingFontFamily('经典繁方篆', '壹')).toContain('Kaiti SC')
+    expect(presentationRenderingFontFamily('Aptos', 'Buddhist History')).toBe('"Aptos", "Helvetica Neue", Arial, sans-serif')
   })
 
   it('converts PowerPoint point metrics into browser and Fabric units without losing tracking', () => {

@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from src.amphi_agent._cognitive import (
 )
 from src.amphi_agent.tools import (
     BROWSER_ADVANCED_TOOL_NAMES,
+    POWERPOINT_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
 )
@@ -191,6 +193,34 @@ def test_mode_tools() -> None:
     common = {"request_human_choice", "load_browser_tools", "view_skill"}
     for surface in (main, child, clarify, explore, generate, verify, execute, validate):
         assert common <= surface
+    for surface in (main, clarify, explore, generate, verify, execute, validate):
+        assert POWERPOINT_TOOL_NAMES <= surface
+    assert child.isdisjoint(POWERPOINT_TOOL_NAMES)
+
+
+async def test_powerpoint_uses_core_tools_and_bridgic_skill(prompt_store: None) -> None:
+    assert POWERPOINT_TOOL_NAMES == {
+        "view_ppt",
+        "get_ppt_page",
+        "update_ppt_page",
+        "insert_ppt_page",
+        "remove_ppt_page",
+        "move_ppt_page",
+        "goto_ppt_page",
+    }
+    assert {"bridgic-ppt", "pptx"} <= set(SkillLibrary.builtin_names())
+
+    skills = await SkillLibrary(USER_ID).load()
+    bridgic = skills.data()["bridgic-ppt"]
+    body = (Path(bridgic.skill_dir) / "SKILL.md").read_text(encoding="utf-8")
+    for marker in (
+        "Call `view_ppt` before research or extended planning",
+        "separate `insert_ppt_page` calls",
+        "Never send an entire deck in one tool argument",
+        "private version token",
+        "no separate export step",
+    ):
+        assert marker in body
 
 
 async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:

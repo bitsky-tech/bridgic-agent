@@ -7,8 +7,8 @@
  * The single-line label uses a three-level fallback, guaranteeing that **any** tool
  * makes "what was done to what" visible on a single line:
  *   1. `REGISTRY`'s ToolKind (8 built-in tools) —— also drives expanded-view dispatch;
- *   2. `TOOL_SPECS` single-line specs (the six families: skills / workspace /
- *      subagent / schedule / workflow / browser) —— **single line only**; the expanded
+ *   2. `TOOL_SPECS` single-line specs (skills / workspace / subagent / schedule /
+ *      workflow / browser / PowerPoint) —— **single line only**; the expanded
  *      view still goes through generic input/result JSON;
  *   3. `genericLabel` generic summary (unregistered tools + all MCP) —— picks the
  *      primary argument out of the input.
@@ -142,8 +142,8 @@ export interface ToolSpec {
 }
 
 /**
- * Tool name → single-line spec. Covers the backend's six families: skills / workspace /
- * subagent / schedule / workflow / browser; unregistered tools (including all MCP) fall
+ * Tool name → single-line spec. Covers the backend's user-facing tool families, including
+ * skills / workspace / subagent / schedule / workflow / browser / PowerPoint; unregistered tools fall
  * back to `genericLabel`.
  *
  * When adding a backend tool you **may leave this untouched** —— the fallback picks the
@@ -232,6 +232,20 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   browser_check: { verb: 'tool.verb.browserCheck', subjectKeys: ['ref'], subjectMono: true },
   browser_uncheck: { verb: 'tool.verb.browserUncheck', subjectKeys: ['ref'], subjectMono: true },
   load_browser_tools: { verb: 'tool.verb.loadBrowserTools' },
+
+  // ── PowerPoint ──
+  view_ppt: { verb: 'tool.verb.pptView', subjectKeys: ['target'], subjectAs: 'path' },
+  get_ppt_page: { verb: 'tool.verb.pptGetPage', subjectKeys: ['page_id'], subjectMono: true },
+  update_ppt_page: { verb: 'tool.verb.pptUpdatePage', subjectKeys: ['page_id'], subjectMono: true },
+  insert_ppt_page: { verb: 'tool.verb.pptInsertPage', subjectKeys: ['after_page_id'], subjectMono: true },
+  remove_ppt_page: { verb: 'tool.verb.pptRemovePage', subjectKeys: ['page_id'], subjectMono: true },
+  move_ppt_page: {
+    verb: 'tool.verb.pptMovePage',
+    subjectKeys: ['page_id'],
+    subjectMono: true,
+    noteKeys: ['target_page_id'],
+  },
+  goto_ppt_page: { verb: 'tool.verb.pptGotoPage', subjectKeys: ['page_id'], subjectMono: true },
 }
 
 /** Look up a tool's single-line spec; returns null when unregistered (the caller uses the generic fallback). */

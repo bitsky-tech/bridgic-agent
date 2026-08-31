@@ -13,10 +13,20 @@ export interface EmbeddedPowerPointPanelProps {
   active: boolean
 }
 
+interface PowerPointViewportBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 /** Renderer placeholder whose rectangle is occupied by the native Session PPT view. */
 export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps) {
   const sessionId = useAtomValue(viewedSessionIdAtom)
   const powerPointSession = useAtomValue(activeEmbeddedPowerPointSessionAtom)
+  const powerPointSurfaceKey = powerPointSession
+    ? `${powerPointSession.sessionId}:${powerPointSession.targetId ?? ''}:${powerPointSession.crashed}`
+    : null
   const surfaceBlocked = useAtomValue(browserSurfaceBlockedAtom)
   const publishSurfaceRect = useSetAtom(setNativePowerPointSurfaceRectAtom)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -28,7 +38,7 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
       publishSurfaceRect(null)
       return
     }
-    if (!active || surfaceBlocked || !sessionId || !powerPointSession || !viewport) {
+    if (!active || surfaceBlocked || !sessionId || !powerPointSurfaceKey || !viewport) {
       void powerpoint.setVisible(false)
       publishSurfaceRect(null)
       return
@@ -37,6 +47,9 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
     let frame = 0
     let syncing = false
     let pending = true
+    let attached = false
+    let visible = false
+    let lastBounds: PowerPointViewportBounds | null = null
 
     const readBounds = () => {
       const rect = viewport.getBoundingClientRect()
@@ -59,23 +72,31 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
       try {
         const rect = readBounds()
         if (rect.width <= 0 || rect.height <= 0) {
-          await powerpoint.setVisible(false)
+          if (visible) await powerpoint.setVisible(false)
+          visible = false
+          lastBounds = null
           publishSurfaceRect(null)
           return
         }
-        await powerpoint.ensureSession(sessionId)
-        if (disposed) return
-        await powerpoint.setBounds({
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        })
-        if (disposed) return
-        await powerpoint.activateSession(sessionId)
-        if (disposed) return
-        publishSurfaceRect({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
-        await powerpoint.setVisible(true)
+        if (!attached) {
+          await powerpoint.ensureSession(sessionId)
+          if (disposed) return
+        }
+        if (!sameBounds(lastBounds, rect)) {
+          await powerpoint.setBounds(rect)
+          if (disposed) return
+          lastBounds = rect
+          publishSurfaceRect(rect)
+        }
+        if (!attached) {
+          await powerpoint.activateSession(sessionId)
+          if (disposed) return
+          attached = true
+        }
+        if (!visible) {
+          await powerpoint.setVisible(true)
+          visible = true
+        }
       } catch (error) {
         publishSurfaceRect(null)
         rlog.warn('[embedded-powerpoint] native surface sync failed', error)
@@ -109,7 +130,13 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
       window.removeEventListener('scroll', schedule, true)
       void powerpoint.setVisible(false, true).finally(() => publishSurfaceRect(null))
     }
-  }, [active, powerPointSession, publishSurfaceRect, sessionId, surfaceBlocked])
+  }, [
+    active,
+    powerPointSurfaceKey,
+    publishSurfaceRect,
+    sessionId,
+    surfaceBlocked,
+  ])
 
   if (!sessionId) return null
   if (!powerPointSession) return <PowerPointLaunchEmptyState sessionId={sessionId} />
@@ -121,6 +148,11 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
       data-testid="embedded-powerpoint-viewport"
     />
   )
+}
+
+function sameBounds(left: PowerPointViewportBounds | null, right: PowerPointViewportBounds): boolean {
+  return left !== null && left.x === right.x && left.y === right.y
+    && left.width === right.width && left.height === right.height
 }
 
 type PowerPointLaunchState = 'creating' | 'error' | 'idle' | 'ready'

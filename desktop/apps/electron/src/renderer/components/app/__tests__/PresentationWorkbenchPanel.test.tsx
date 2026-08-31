@@ -9,9 +9,11 @@ const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider } = await import('jotai')
 const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom } = await import('@/atoms/presentation')
+const { toastAtom } = await import('@/atoms/toast')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
+const { installApiStub } = await import('@/lib/apiStub')
 const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
 
@@ -38,6 +40,7 @@ function installTransitionAnimationMock() {
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh')
+  installApiStub()
   transitionAnimationCalls = []
 })
 
@@ -226,8 +229,12 @@ describe('PresentationWorkbenchPanel', () => {
     expect(toolbarActions.querySelector('button[aria-label="保存"]')).toBeNull()
     expect(toolbarActions.querySelector('button[aria-label="上传"]')).toBeNull()
     expect(toolbarActions.querySelector('button[aria-label="分享"]')).toBeNull()
-    expect(toolbarActions.querySelector('button[aria-label="在文件管理器打开"]')).not.toBeNull()
+    expect(toolbarActions.querySelector('button[aria-label="在文件管理器打开"]')).toBeNull()
     expect(toolbarActions.querySelector('[data-testid="presentation-toggle-expanded"]')).toBeNull()
+    expect(host.querySelector('[data-testid="presentation-import-pptx"]')).toBeNull()
+    expect(host.querySelector('[data-testid="presentation-export-pptx"]')).not.toBeNull()
+    expect(host.querySelectorAll('[data-testid="presentation-toggle-ribbon"]')).toHaveLength(1)
+    expect(host.querySelector('button[aria-label="搜索"]')).toBeNull()
 
     const insert = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-insert"]')!
     await act(async () => insert.click())
@@ -463,6 +470,78 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => root.unmount())
   })
 
+  it('exports from the compact document bar and reveals the completed file', async () => {
+    const { host, root } = await mountPanel()
+    const originalSave = window.api.dialog.save
+    const originalWritePresentation = window.api.fs.writePresentation
+    const originalShowItemInFolder = window.api.shell.showItemInFolder
+    const outputPath = '/tmp/presentation-export-test.pptx'
+    let writtenPath = ''
+    let writtenBytes = 0
+    let revealedPath = ''
+    let resolveWrite: () => void = () => {}
+    const writeCompleted = new Promise<void>((resolve) => { resolveWrite = resolve })
+
+    window.api.dialog.save = async () => ({ canceled: false, filePath: outputPath })
+    window.api.fs.writePresentation = async (path, bytes) => {
+      writtenPath = path
+      writtenBytes = bytes.byteLength
+      resolveWrite()
+    }
+    window.api.shell.showItemInFolder = async (path) => { revealedPath = path }
+
+    try {
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-export-pptx"]')!.click())
+      await act(async () => {
+        await writeCompleted
+        await Promise.resolve()
+      })
+
+      expect(writtenPath).toBe(outputPath)
+      expect(writtenBytes).toBeGreaterThan(0)
+      const reveal = host.querySelector<HTMLButtonElement>('[data-testid="presentation-reveal-export"]')!
+      expect(reveal).not.toBeNull()
+      await act(async () => reveal.click())
+      expect(revealedPath).toBe(outputPath)
+      expect(host.textContent).not.toContain('重试导出')
+    } finally {
+      window.api.dialog.save = originalSave
+      window.api.fs.writePresentation = originalWritePresentation
+      window.api.shell.showItemInFolder = originalShowItemInFolder
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('surfaces export failures without turning the compact action into a retry banner', async () => {
+    const { host, root, store } = await mountPanel()
+    const originalSave = window.api.dialog.save
+    const originalWritePresentation = window.api.fs.writePresentation
+    let resolveWriteAttempt = () => {}
+    const writeAttempted = new Promise<void>((resolve) => { resolveWriteAttempt = resolve })
+
+    window.api.dialog.save = async () => ({ canceled: false, filePath: '/tmp/presentation-export-failure.pptx' })
+    window.api.fs.writePresentation = async () => {
+      resolveWriteAttempt()
+      throw new Error('simulated write failure')
+    }
+
+    try {
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-export-pptx"]')!.click())
+      await act(async () => {
+        await writeAttempted
+        await Promise.resolve()
+      })
+
+      expect(store.get(toastAtom)?.message).toBe('导出失败，请重试。')
+      expect(host.querySelector('[data-testid="presentation-export-pptx"]')?.getAttribute('aria-label')).toBe('导出 PPTX')
+      expect(host.textContent).not.toContain('重试导出')
+    } finally {
+      window.api.dialog.save = originalSave
+      window.api.fs.writePresentation = originalWritePresentation
+      await act(async () => root.unmount())
+    }
+  })
+
   it('applies and previews one animation for an entire grouped card', async () => {
     const { host, root, store } = await mountPanel()
     const initial = store.get(currentPresentationDocumentAtom)
@@ -656,7 +735,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('opens multiple presentation tabs and keeps the filmstrip controls at the bottom', async () => {
+  it('keeps one Session PPT document and the filmstrip controls at the bottom', async () => {
     const { host, root, store } = await mountPanel()
 
     expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(1)
@@ -665,27 +744,15 @@ describe('PresentationWorkbenchPanel', () => {
     expect(aside.className).toContain('h-full')
     expect(filmstripFooter.className).toContain('mt-auto')
 
-    const addDocument = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-document"]')!
     const documentTabs = host.querySelector<HTMLElement>('[data-testid="presentation-document-tabs"]')!
+    const exportDocument = host.querySelector<HTMLButtonElement>('[data-testid="presentation-export-pptx"]')!
     const expandPanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-expanded"]')!
     const closePanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-close-panel"]')!
     const documentHeader = documentTabs.parentElement!
-    expect(documentHeader.contains(addDocument)).toBe(true)
+    expect(host.querySelector('[data-testid="presentation-add-document"]')).toBeNull()
+    expect(documentHeader.contains(exportDocument)).toBe(true)
     expect(documentHeader.contains(expandPanel)).toBe(true)
     expect(documentHeader.contains(closePanel)).toBe(true)
-    await act(async () => addDocument.click())
-
-    expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(2)
-    const workspace = store.get(currentPresentationWorkspaceAtom)
-    expect(workspace.documents).toHaveLength(2)
-    expect(store.get(currentPresentationDocumentAtom).id).toBe(workspace.activeDocumentId)
-
-    const tabs = host.querySelectorAll<HTMLButtonElement>('[data-testid="presentation-document-tab"]')
-    await act(async () => tabs[0]?.click())
-    expect(store.get(currentPresentationWorkspaceAtom).activeDocumentId).toBe(workspace.documents[0]!.id)
-
-    const closeButtons = host.querySelectorAll<HTMLButtonElement>('[data-testid="presentation-close-document"]')
-    await act(async () => closeButtons[1]?.click())
     expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(1)
 
     await act(async () => root.unmount())

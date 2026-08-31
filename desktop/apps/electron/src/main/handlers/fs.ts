@@ -45,6 +45,7 @@ export function registerFsHandlers(): void {
       if (!path.isAbsolute(absPath) || path.extname(absPath).toLowerCase() !== '.pptx') {
         throw new Error('Presentation export path must end with .pptx')
       }
+      mkdirSync(path.dirname(absPath), { recursive: true })
       await writeFile(absPath, content)
     },
     { transformLogArgs: redactLocalPathLogArgs },

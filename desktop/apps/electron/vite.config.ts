@@ -45,7 +45,7 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'jotai'],
+    include: ['react', 'react-dom', 'jotai', 'pptxgenjs', 'jszip'],
     exclude: ['@app/ui'],
   },
   server: {

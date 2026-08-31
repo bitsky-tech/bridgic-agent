@@ -13,9 +13,14 @@ export interface SessionSurfaceRailTabsProps {
   hasPresentationOpen: boolean
   isBrowserAgentActive: boolean
   isBrowserBusy: boolean
+  isPowerPointAgentActive: boolean
+  isPowerPointBusy: boolean
   isContentOpen: boolean
   isModeSelected: boolean
   onSelect: (surface: SessionWorkbenchSurface) => void
+  powerPointAriaLabel: string
+  powerPointLabel: string
+  powerPointNeedsAttention: boolean
   selectedSurface: SessionWorkbenchSurface
 }
 
@@ -29,9 +34,14 @@ export function SessionSurfaceRailTabs({
   hasPresentationOpen,
   isBrowserAgentActive,
   isBrowserBusy,
+  isPowerPointAgentActive,
+  isPowerPointBusy,
   isContentOpen,
   isModeSelected,
   onSelect,
+  powerPointAriaLabel,
+  powerPointLabel,
+  powerPointNeedsAttention,
   selectedSurface,
 }: SessionSurfaceRailTabsProps) {
   const { t } = useTranslation()
@@ -66,12 +76,10 @@ export function SessionSurfaceRailTabs({
       testId: 'session-workbench-results',
     },
     {
-      ariaLabel: hasPresentationOpen
-        ? t('session.resourcePanel.presentationOpened')
-        : t('session.resourcePanel.presentation'),
+      ariaLabel: powerPointAriaLabel,
       icon: Icons.presentation(17),
       isOpenInBackground: hasPresentationOpen,
-      label: t('session.resourcePanel.presentation'),
+      label: powerPointLabel,
       showActiveIndicator: hasPresentationOpen,
       surface: SessionWorkbenchSurface.Presentation,
       testId: 'session-workbench-presentation',
@@ -90,6 +98,7 @@ export function SessionSurfaceRailTabs({
   return tools.map((tool) => {
     const isBrowser = tool.surface === SessionWorkbenchSurface.Browser
     const isFiles = tool.surface === SessionWorkbenchSurface.Files
+    const isPowerPoint = tool.surface === SessionWorkbenchSurface.Presentation
     const isSelected = !isModeSelected && selectedSurface === tool.surface
     return (
       <SurfaceRailButton
@@ -101,9 +110,16 @@ export function SessionSurfaceRailTabs({
         label={tool.label}
         isOpenInBackground={tool.isOpenInBackground ?? false}
         showActiveIndicator={tool.showActiveIndicator}
-        isBusy={isBrowser && isBrowserBusy}
-        isPulsing={isBrowser && isBrowserAgentActive && !browserNeedsAttention}
-        needsAttention={(isBrowser && browserNeedsAttention) || (isFiles && filesNeedsAttention)}
+        isBusy={(isBrowser && isBrowserBusy) || (isPowerPoint && isPowerPointBusy)}
+        isPulsing={(
+          (isBrowser && isBrowserAgentActive && !browserNeedsAttention)
+          || (isPowerPoint && isPowerPointAgentActive && !powerPointNeedsAttention)
+        )}
+        needsAttention={(
+          (isBrowser && browserNeedsAttention)
+          || (isFiles && filesNeedsAttention)
+          || (isPowerPoint && powerPointNeedsAttention)
+        )}
         isSelected={isSelected}
         testId={tool.testId}
         onClick={() => onSelect(tool.surface)}

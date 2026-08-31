@@ -1,372 +1,333 @@
 import {
-  PRESENTATION_PAGE_SIZES,
   createBlankPresentationDocument,
-  createBlankPresentationSlide,
-  createPresentationId,
-  type PresentationAnimationEffect,
   type PresentationDocument,
-  type PresentationElement,
-  type PresentationPageSizePreset,
+  type PresentationFileSource,
   type PresentationSlide,
   type PresentationWorkspace,
 } from '@/atoms/presentation'
+import {
+  compilePresentationSlideMarkdown,
+  decompilePresentationSlideMarkdown,
+  inspectPresentationMarkdownAssets,
+  type PresentationMarkdownAssets,
+} from '@/lib/presentationMarkdown'
+import { importPresentationPptx } from '@/lib/presentationPptxImport'
 
-export const POWERPOINT_PROTOCOL_VERSION = 1 as const
+export const POWERPOINT_PROTOCOL_VERSION = 3 as const
+
+export type PowerPointMethod =
+  | 'view_ppt'
+  | 'inspect_ppt_assets'
+  | 'get_ppt_page'
+  | 'update_ppt_page'
+  | 'insert_ppt_page'
+  | 'remove_ppt_page'
+  | 'move_ppt_page'
+  | 'goto_ppt_page'
 
 export interface PowerPointRequest {
-  method: 'list' | 'snapshot' | 'apply'
+  method: PowerPointMethod
   params?: Record<string, unknown>
+}
+
+export interface PowerPointRuntimeContext {
+  currentTarget: string | null
+  fileName: string
 }
 
 export interface PowerPointDispatchResult {
   result: unknown
   workspace?: PresentationWorkspace
+  target?: string
+  persist?: boolean
 }
 
-type PowerPointOperation = Record<string, unknown> & { type?: unknown }
+export class PowerPointProtocolError extends Error {
+  constructor(message: string, readonly code: 'deck_changed' | 'page_changed') {
+    super(message)
+    this.name = 'PowerPointProtocolError'
+  }
+}
 
-const ANIMATION_EFFECTS = new Set<PresentationAnimationEffect>([
-  'none', 'appear', 'fade', 'blinds', 'checkerboard', 'dissolve', 'flyIn', 'floatIn',
-  'split', 'wipeIn', 'zoomIn', 'zoom', 'fillColor', 'textColor', 'disappear', 'blindsOut',
-])
-const ANIMATION_STARTS = new Set(['onClick', 'withPrevious', 'afterPrevious'])
-const ANIMATION_TRIGGERS = new Set(['slideClick', 'elementClick'])
-
-/** Execute one stable renderer-domain request without depending on DOM structure. */
-export function executePowerPointRequest(
+/** Execute one page-level PPT request against the same native model used by the editor. */
+export async function executePowerPointRequest(
   current: PresentationWorkspace,
   request: PowerPointRequest,
-): PowerPointDispatchResult {
+  context: PowerPointRuntimeContext = { currentTarget: null, fileName: 'Untitled.pptx' },
+): Promise<PowerPointDispatchResult> {
   if (!request || typeof request !== 'object') throw new TypeError('PowerPoint request is required')
-  if (request.method === 'list') return { result: listWorkspace(current) }
-  if (request.method === 'snapshot') {
-    const documentId = optionalString(request.params?.document_id, 'document_id')
-    if (!documentId) return { result: structuredClone(current) }
-    return { result: structuredClone(requireDocument(current, documentId)) }
-  }
-  if (request.method !== 'apply') throw new Error(`Unsupported PowerPoint method: ${String(request.method)}`)
-  const operations = request.params?.operations
-  if (!Array.isArray(operations) || operations.length === 0) {
-    throw new TypeError('apply requires a non-empty operations array')
-  }
-  if (operations.length > 200) throw new Error('A PowerPoint batch may contain at most 200 operations')
+  const params = request.params ?? {}
 
-  let workspace = structuredClone(current)
-  const results: unknown[] = []
-  for (const raw of operations) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw new TypeError('Every PowerPoint operation must be an object')
+  if (request.method === 'view_ppt') {
+    const target = requiredString(params.target, 'target')
+    const fileName = requiredString(params.file_name, 'file_name')
+    if (context.currentTarget === target) {
+      return { result: { ...deckOverview(requireActiveDocument(current), fileName), reused: true }, target }
     }
-    const applied = applyOperation(workspace, raw as PowerPointOperation)
-    workspace = applied.workspace
-    results.push(applied.result)
+    const encoded = optionalString(params.content_base64, 'content_base64')
+    const document = encoded
+      ? await importPresentationPptx(decodeBase64(encoded), fileName)
+      : createBlankPresentationDocument(fileName.replace(/\.pptx$/i, ''))
+    const workspace = { activeDocumentId: document.id, documents: [document] }
+    return { result: { ...deckOverview(document, fileName), reused: false }, workspace, target, persist: !encoded }
   }
-  return {
-    workspace,
-    result: { applied: results.length, results, state: listWorkspace(workspace) },
-  }
-}
 
-function applyOperation(
-  workspace: PresentationWorkspace,
-  operation: PowerPointOperation,
-): { workspace: PresentationWorkspace; result: unknown } {
-  const type = requiredString(operation.type, 'type')
-  if (type === 'create_document') {
-    const document = createBlankPresentationDocument(optionalString(operation.title, 'title') ?? '')
+  if (request.method === 'inspect_ppt_assets') {
+    return { result: inspectPresentationMarkdownAssets(requiredString(params.markdown, 'markdown')) }
+  }
+
+  const document = requireActiveDocument(current)
+  if (request.method === 'get_ppt_page') {
+    return { result: pageView(document, requireSlide(document, requiredString(params.page_id, 'page_id'))) }
+  }
+
+  if (request.method === 'goto_ppt_page') {
+    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
+    const nextDocument = { ...document, selectedSlideId: slide.id }
     return {
-      workspace: { activeDocumentId: document.id, documents: [...workspace.documents, document] },
-      result: { document_id: document.id, slide_id: document.selectedSlideId },
+      result: { page_id: slide.id, index: document.slides.indexOf(slide), visible: true },
+      workspace: replaceDocument(current, nextDocument),
     }
   }
 
-  const documentId = optionalString(operation.document_id, 'document_id') ?? workspace.activeDocumentId
-  const document = requireDocument(workspace, documentId)
-
-  if (type === 'select_document') {
-    return { workspace: { ...workspace, activeDocumentId: document.id }, result: { document_id: document.id } }
-  }
-  if (type === 'rename_document') {
-    return replaceDocument(workspace, { ...document, title: requiredString(operation.title, 'title') })
-  }
-  if (type === 'close_document') {
-    const documents = workspace.documents.filter((item) => item.id !== document.id)
-    if (documents.length === 0) documents.push(createBlankPresentationDocument(''))
-    const activeDocumentId = workspace.activeDocumentId === document.id
-      ? documents[0]!.id
-      : workspace.activeDocumentId
-    return { workspace: { activeDocumentId, documents }, result: { document_id: document.id } }
-  }
-  if (type === 'set_page_size') {
-    const preset = requiredString(operation.preset, 'preset') as PresentationPageSizePreset
-    if (!(preset in PRESENTATION_PAGE_SIZES)) throw new Error(`Unsupported page-size preset: ${preset}`)
-    return replaceDocument(workspace, {
-      ...document,
-      pageSize: { ...PRESENTATION_PAGE_SIZES[preset] },
-    })
-  }
-  if (type === 'update_master') {
-    const patch = recordValue(operation.patch, 'patch')
-    return replaceDocument(workspace, {
-      ...document,
-      master: {
-        ...document.master,
-        ...(typeof patch.background === 'string' ? { background: patch.background } : {}),
-        ...(typeof patch.bodyFontFamily === 'string' ? { bodyFontFamily: patch.bodyFontFamily } : {}),
-        ...(typeof patch.titleFontFamily === 'string' ? { titleFontFamily: patch.titleFontFamily } : {}),
-        ...(isRecord(patch.footer) ? { footer: { ...document.master.footer, ...patch.footer } } : {}),
-      },
-    })
+  if (request.method === 'update_ppt_page') {
+    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
+    assertPageRevision(slide, requiredString(params.expected_revision, 'expected_revision'))
+    const compiled = compilePage(requiredString(params.markdown, 'markdown'), document, assetsValue(params.assets))
+    if ('invalid' in compiled) return { result: compiled.invalid }
+    const replacement = { ...compiled.slide, id: slide.id }
+    const slides = document.slides.map((item) => item.id === slide.id ? replacement : item)
+    const nextDocument = { ...document, slides, version: document.version + 1 }
+    return {
+      result: { status: 'ready', diagnostics: diagnostics(compiled.diagnostics), ...pageView(nextDocument, replacement) },
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
   }
 
-  if (type === 'add_slide') {
-    const slide = createBlankPresentationSlide(
-      optionalString(operation.name, 'name') ?? `Slide ${document.slides.length + 1}`,
-    )
-    if (typeof operation.background === 'string') slide.background = operation.background
-    if (typeof operation.layout === 'string') slide.layout = operation.layout as PresentationSlide['layout']
-    const afterSlideId = optionalString(operation.after_slide_id, 'after_slide_id')
-    const index = afterSlideId
-      ? document.slides.findIndex((item) => item.id === afterSlideId) + 1
+  if (request.method === 'insert_ppt_page') {
+    const compiled = compilePage(requiredString(params.markdown, 'markdown'), document, assetsValue(params.assets))
+    if ('invalid' in compiled) return { result: compiled.invalid }
+    const afterPageId = optionalString(params.after_page_id, 'after_page_id')
+    const insertionIndex = afterPageId
+      ? document.slides.findIndex((slide) => slide.id === afterPageId) + 1
       : document.slides.length
-    if (afterSlideId && index === 0) throw new Error(`Unknown slide: ${afterSlideId}`)
+    if (afterPageId && insertionIndex === 0) throw new Error(`Unknown PowerPoint page: ${afterPageId}`)
     const slides = [...document.slides]
-    slides.splice(index, 0, slide)
-    return replaceDocument(workspace, { ...document, slides, selectedSlideId: slide.id }, { slide_id: slide.id })
+    slides.splice(insertionIndex, 0, compiled.slide)
+    const nextDocument = { ...document, selectedSlideId: compiled.slide.id, slides, version: document.version + 1 }
+    return {
+      result: {
+        status: 'ready',
+        diagnostics: diagnostics(compiled.diagnostics),
+        ...deckOverview(nextDocument, context.fileName),
+        ...pageView(nextDocument, compiled.slide),
+      },
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
   }
 
-  const slideId = optionalString(operation.slide_id, 'slide_id') ?? document.selectedSlideId
-  const slide = requireSlide(document, slideId)
-  if (type === 'select_slide') {
-    return replaceDocument(workspace, { ...document, selectedSlideId: slide.id }, { slide_id: slide.id })
-  }
-  if (type === 'update_slide') {
-    const patch = recordValue(operation.patch, 'patch')
-    const next = {
-      ...slide,
-      ...(typeof patch.name === 'string' ? { name: patch.name } : {}),
-      ...(typeof patch.background === 'string' ? { background: patch.background } : {}),
-      ...(typeof patch.notes === 'string' ? { notes: patch.notes } : {}),
-      ...(typeof patch.layout === 'string' ? { layout: patch.layout as PresentationSlide['layout'] } : {}),
-    }
-    return replaceSlide(workspace, document, next)
-  }
-  if (type === 'delete_slide') {
-    if (document.slides.length === 1) throw new Error('A presentation must keep at least one slide')
-    const index = document.slides.findIndex((item) => item.id === slide.id)
+  if (request.method === 'remove_ppt_page') {
+    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
+    assertPageRevision(slide, requiredString(params.expected_revision, 'expected_revision'))
+    assertDeckRevision(document, requiredString(params.expected_deck_revision, 'expected_deck_revision'))
+    if (document.slides.length === 1) throw new Error('A PowerPoint must keep at least one page')
+    const oldIndex = document.slides.indexOf(slide)
     const slides = document.slides.filter((item) => item.id !== slide.id)
     const selectedSlideId = document.selectedSlideId === slide.id
-      ? slides[Math.min(index, slides.length - 1)]!.id
+      ? slides[Math.min(oldIndex, slides.length - 1)]!.id
       : document.selectedSlideId
-    return replaceDocument(workspace, { ...document, slides, selectedSlideId }, { slide_id: slide.id })
+    const nextDocument = { ...document, selectedSlideId, slides, version: document.version + 1 }
+    return {
+      result: deckOverview(nextDocument, context.fileName),
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
   }
-  if (type === 'set_transition') {
-    const transition = recordValue(operation.transition, 'transition')
-    return replaceSlide(workspace, document, {
-      ...slide,
-      transition: { ...slide.transition, ...transition },
+
+  if (request.method === 'move_ppt_page') {
+    assertDeckRevision(document, requiredString(params.expected_deck_revision, 'expected_deck_revision'))
+    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
+    const target = requireSlide(document, requiredString(params.target_page_id, 'target_page_id'))
+    const position = requiredString(params.position, 'position')
+    if (slide.id === target.id) throw new Error('A PowerPoint page cannot be moved relative to itself')
+    if (position !== 'before' && position !== 'after') throw new Error("position must be 'before' or 'after'")
+    const slides = document.slides.filter((item) => item.id !== slide.id)
+    const targetIndex = slides.findIndex((item) => item.id === target.id)
+    slides.splice(targetIndex + (position === 'after' ? 1 : 0), 0, slide)
+    const nextDocument = { ...document, slides, version: document.version + 1 }
+    return {
+      result: deckOverview(nextDocument, context.fileName),
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
+  }
+
+  throw new Error(`Unsupported PowerPoint method: ${String(request.method)}`)
+}
+
+function compilePage(markdown: string, document: PresentationDocument, assets: PresentationMarkdownAssets):
+  | { slide: PresentationSlide; diagnostics: string[] }
+  | { invalid: { status: 'invalid'; diagnostics: Array<Record<string, string>> } } {
+  try {
+    return compilePresentationSlideMarkdown(markdown, { assets, document, existingDocument: document })
+  } catch (error) {
+    return {
+      invalid: {
+        status: 'invalid',
+        diagnostics: [{
+          code: 'markdown_compile_error',
+          message: error instanceof Error ? error.message : String(error),
+          severity: 'error',
+        }],
+      },
+    }
+  }
+}
+
+function deckOverview(document: PresentationDocument, fileName: string): Record<string, unknown> {
+  const selectedIndex = Math.max(0, document.slides.findIndex((slide) => slide.id === document.selectedSlideId))
+  return {
+    identity: {
+      document_id: document.id,
+      name: document.title || fileName.replace(/\.pptx$/i, ''),
+      file_name: fileName,
+    },
+    meta: {
+      title: document.title,
+      theme: structuredClone(document.master),
+      page_size: structuredClone(document.pageSize),
+      total_pages: document.slides.length,
+      current_page_id: document.selectedSlideId,
+      current_page_index: selectedIndex,
+      current_position: selectedIndex + 1,
+    },
+    deck_revision: deckRevision(document),
+    pages: document.slides.map((slide, index) => pageSummary(slide, index)),
+  }
+}
+
+function pageSummary(slide: PresentationSlide, index: number): Record<string, unknown> {
+  const text = slide.elements.flatMap((element) => (
+    'text' in element && typeof element.text === 'string' ? [element.text.trim()] : []
+  )).filter(Boolean).join(' ')
+  return {
+    page_id: slide.id,
+    index,
+    title: slide.name,
+    layout: slide.layout ?? 'blank',
+    summary: text.slice(0, 240) || undefined,
+    has_content: slide.elements.length > 0 || Boolean(slide.notes?.trim()),
+    revision: pageRevision(slide),
+  }
+}
+
+function pageView(document: PresentationDocument, slide: PresentationSlide): Record<string, unknown> {
+  const index = document.slides.findIndex((item) => item.id === slide.id)
+  const assets = pageAssets(slide)
+  return {
+    page: {
+      ...pageSummary(slide, index),
+      markdown: decompilePresentationSlideMarkdown(slide),
+      asset_paths: assets.map((asset) => asset.path),
+    },
+    assets,
+  }
+}
+
+function pageAssets(slide: PresentationSlide): Array<{
+  path: string
+  file_name: string
+  mime_type: string
+  data_url?: string
+}> {
+  const found = new Map<string, {
+    path: string
+    file_name: string
+    mime_type: string
+    data_url?: string
+  }>()
+  for (const element of slide.elements) {
+    if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') continue
+    const safeName = element.source.fileName.replace(/[^A-Za-z0-9._-]+/g, '-') || `${element.id}.bin`
+    const path = element.source.path ?? `.ppt-assets/${element.id}-${safeName}`
+    if (found.has(path)) continue
+    found.set(path, {
+      path,
+      file_name: element.source.fileName,
+      mime_type: element.source.mimeType,
+      ...(!element.source.path ? { data_url: element.source.dataUrl } : {}),
     })
   }
-  if (type === 'add_comment') {
-    const comment = {
-      id: createPresentationId('comment'),
-      author: optionalString(operation.author, 'author') ?? 'Agent',
-      createdAt: new Date().toISOString(),
-      elementId: optionalString(operation.element_id, 'element_id'),
-      resolved: false,
-      text: requiredString(operation.text, 'text'),
-    }
-    return replaceSlide(workspace, document, {
-      ...slide,
-      comments: [...(slide.comments ?? []), comment],
-    }, { comment_id: comment.id })
-  }
-  if (type === 'add_element') {
-    const element = normalizeElement(recordValue(operation.element, 'element'))
-    return replaceSlide(workspace, document, {
-      ...slide,
-      elements: [...slide.elements, element],
-    }, { element_id: element.id })
-  }
-
-  const elementId = requiredString(operation.element_id, 'element_id')
-  const element = slide.elements.find((item) => item.id === elementId)
-  if (!element) throw new Error(`Unknown element: ${elementId}`)
-  if (type === 'delete_element') {
-    return replaceSlide(workspace, document, {
-      ...slide,
-      elements: slide.elements.filter((item) => item.id !== elementId),
-    }, { element_id: elementId })
-  }
-  if (type === 'update_element') {
-    const patch = recordValue(operation.patch, 'patch')
-    if ('id' in patch || 'type' in patch) throw new Error('Element id and type cannot be changed')
-    return replaceElement(workspace, document, slide, { ...element, ...patch } as PresentationElement)
-  }
-  if (type === 'reorder_element') {
-    const index = integerValue(operation.index, 'index')
-    const elements = slide.elements.filter((item) => item.id !== elementId)
-    elements.splice(Math.max(0, Math.min(index, elements.length)), 0, element)
-    return replaceSlide(workspace, document, { ...slide, elements }, { element_id: elementId })
-  }
-  if (type === 'add_animation') {
-    const effect = requiredString(operation.effect, 'effect') as PresentationAnimationEffect
-    if (!ANIMATION_EFFECTS.has(effect)) throw new Error(`Unsupported animation effect: ${effect}`)
-    const start = optionalString(operation.start, 'start') ?? 'onClick'
-    if (!ANIMATION_STARTS.has(start)) throw new Error(`Unsupported animation start: ${start}`)
-    const trigger = optionalString(operation.trigger, 'trigger')
-    if (trigger && !ANIMATION_TRIGGERS.has(trigger)) {
-      throw new Error(`Unsupported animation trigger: ${trigger}`)
-    }
-    const duration = optionalNumber(operation.duration, 'duration') ?? 0.5
-    const delay = optionalNumber(operation.delay, 'delay') ?? 0
-    if (duration < 0 || delay < 0) throw new Error('Animation duration and delay cannot be negative')
-    const animated = {
-      ...element,
-      animation: effect,
-      animationStart: start,
-      animationDuration: duration,
-      animationDelay: delay,
-      ...(trigger ? { animationTrigger: trigger } : {}),
-      ...(operation.color ? { animationColor: requiredString(operation.color, 'color') } : {}),
-    } as PresentationElement
-    return replaceElement(workspace, document, slide, animated)
-  }
-  if (type === 'clear_animation') {
-    const animated = { ...element }
-    delete animated.animation
-    delete animated.animationStart
-    delete animated.animationDuration
-    delete animated.animationDelay
-    delete animated.animationTrigger
-    delete animated.animationColor
-    return replaceElement(workspace, document, slide, animated)
-  }
-  throw new Error(`Unsupported PowerPoint operation: ${type}`)
+  return [...found.values()]
 }
 
-function normalizeElement(raw: Record<string, unknown>): PresentationElement {
-  const type = requiredString(raw.type, 'element.type')
-  const base = {
-    ...raw,
-    id: optionalString(raw.id, 'element.id') ?? createPresentationId(type),
-    type,
-    x: optionalNumber(raw.x, 'element.x') ?? 80,
-    y: optionalNumber(raw.y, 'element.y') ?? 80,
-    width: optionalNumber(raw.width, 'element.width') ?? 320,
-    height: optionalNumber(raw.height, 'element.height') ?? 120,
-    rotation: optionalNumber(raw.rotation, 'element.rotation') ?? 0,
+function pageRevision(slide: PresentationSlide): string {
+  return fingerprint(JSON.stringify(slide))
+}
+
+function deckRevision(document: PresentationDocument): string {
+  return fingerprint(JSON.stringify(document.slides.map((slide) => slide.id)))
+}
+
+function fingerprint(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
   }
-  if (type === 'text') {
-    return {
-      ...base,
-      type: 'text',
-      text: typeof raw.text === 'string' ? raw.text : '',
-      fontSize: optionalNumber(raw.fontSize, 'element.fontSize') ?? 28,
-      fontFamily: typeof raw.fontFamily === 'string' ? raw.fontFamily : 'Aptos',
-      fontWeight: (optionalNumber(raw.fontWeight, 'element.fontWeight') ?? 400) as 400,
-      color: typeof raw.color === 'string' ? raw.color : '#20202B',
-      align: (typeof raw.align === 'string' ? raw.align : 'left') as 'left',
-    }
-  }
-  if (type === 'image') {
-    return { ...base, type: 'image', source: recordValue(raw.source, 'element.source') as never, altText: String(raw.altText ?? ''), fit: raw.fit === 'cover' ? 'cover' : 'contain' }
-  }
-  if (type === 'table') {
-    return { ...base, type: 'table', cells: Array.isArray(raw.cells) ? raw.cells as string[][] : [['']], headerRow: raw.headerRow !== false, headerFill: String(raw.headerFill ?? '#E8EAF0'), bodyFill: String(raw.bodyFill ?? '#FFFFFF'), textColor: String(raw.textColor ?? '#20202B'), borderColor: String(raw.borderColor ?? '#B8BCC8'), fontSize: optionalNumber(raw.fontSize, 'element.fontSize') ?? 18 }
-  }
-  if (type === 'chart') {
-    return { ...base, type: 'chart', chartType: (raw.chartType as 'column') ?? 'column', categories: Array.isArray(raw.categories) ? raw.categories as string[] : [], series: Array.isArray(raw.series) ? raw.series as never : [], showLegend: raw.showLegend !== false, colors: Array.isArray(raw.colors) ? raw.colors as string[] : ['#5B67F1'] }
-  }
-  if (type === 'audio' || type === 'video') {
-    return { ...base, type, source: recordValue(raw.source, 'element.source') as never, autoplay: raw.autoplay === true, loop: raw.loop === true, muted: raw.muted === true } as PresentationElement
-  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function assertPageRevision(slide: PresentationSlide, expected: string): void {
+  if (pageRevision(slide) === expected) return
+  throw new PowerPointProtocolError(
+    `PowerPoint page ${slide.id} changed after it was read. Call get_ppt_page again before writing.`,
+    'page_changed',
+  )
+}
+
+function assertDeckRevision(document: PresentationDocument, expected: string): void {
+  if (deckRevision(document) === expected) return
+  throw new PowerPointProtocolError(
+    'The PowerPoint page order changed. Call view_ppt again before changing the structure.',
+    'deck_changed',
+  )
+}
+
+function diagnostics(items: string[]): Array<Record<string, string>> {
+  return items.map((message) => ({ code: 'markdown_notice', message, severity: 'warning' }))
+}
+
+function assetsValue(value: unknown): PresentationMarkdownAssets {
+  if (value === undefined) return {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('assets must be a mapping')
+  return value as Record<string, PresentationFileSource>
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const decoded = atob(value)
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0))
+}
+
+function replaceDocument(workspace: PresentationWorkspace, document: PresentationDocument): PresentationWorkspace {
   return {
-    ...base,
-    type: type as PresentationElement['type'],
-    fill: typeof raw.fill === 'string' ? raw.fill : '#5B67F1',
-    borderColor: typeof raw.borderColor === 'string' ? raw.borderColor : '#4348B8',
-    borderWidth: optionalNumber(raw.borderWidth, 'element.borderWidth') ?? 1,
-  } as PresentationElement
-}
-
-function listWorkspace(workspace: PresentationWorkspace): unknown {
-  return {
-    active_document_id: workspace.activeDocumentId,
-    presentations: workspace.documents.map((document) => ({
-      id: document.id,
-      title: document.title,
-      active: document.id === workspace.activeDocumentId,
-      slide_count: document.slides.length,
-      selected_slide_id: document.selectedSlideId,
-    })),
+    activeDocumentId: document.id,
+    documents: workspace.documents.map((item) => item.id === document.id ? document : item),
   }
 }
 
-function replaceDocument(
-  workspace: PresentationWorkspace,
-  document: PresentationDocument,
-  result: unknown = { document_id: document.id },
-): { workspace: PresentationWorkspace; result: unknown } {
-  const previous = requireDocument(workspace, document.id)
-  const versionedDocument = {
-    ...document,
-    version: Math.max(document.version, previous.version + 1),
-  }
-  return {
-    workspace: {
-      ...workspace,
-      documents: workspace.documents.map((item) => (
-        item.id === versionedDocument.id ? versionedDocument : item
-      )),
-    },
-    result,
-  }
-}
-
-function replaceSlide(
-  workspace: PresentationWorkspace,
-  document: PresentationDocument,
-  slide: PresentationSlide,
-  result: unknown = { slide_id: slide.id },
-): { workspace: PresentationWorkspace; result: unknown } {
-  return replaceDocument(workspace, {
-    ...document,
-    slides: document.slides.map((item) => item.id === slide.id ? slide : item),
-  }, result)
-}
-
-function replaceElement(
-  workspace: PresentationWorkspace,
-  document: PresentationDocument,
-  slide: PresentationSlide,
-  element: PresentationElement,
-): { workspace: PresentationWorkspace; result: unknown } {
-  return replaceSlide(workspace, document, {
-    ...slide,
-    elements: slide.elements.map((item) => item.id === element.id ? element : item),
-  }, { element_id: element.id })
-}
-
-function requireDocument(workspace: PresentationWorkspace, id: string): PresentationDocument {
-  const document = workspace.documents.find((item) => item.id === id)
-  if (!document) throw new Error(`Unknown presentation: ${id}`)
+function requireActiveDocument(workspace: PresentationWorkspace): PresentationDocument {
+  const document = workspace.documents.find((item) => item.id === workspace.activeDocumentId)
+  if (!document) throw new Error('The Session has no active PowerPoint')
   return document
 }
 
-function requireSlide(document: PresentationDocument, id: string): PresentationSlide {
-  const slide = document.slides.find((item) => item.id === id)
-  if (!slide) throw new Error(`Unknown slide: ${id}`)
+function requireSlide(document: PresentationDocument, pageId: string): PresentationSlide {
+  const slide = document.slides.find((item) => item.id === pageId)
+  if (!slide) throw new Error(`Unknown PowerPoint page: ${pageId}`)
   return slide
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function recordValue(value: unknown, name: string): Record<string, unknown> {
-  if (!isRecord(value)) throw new TypeError(`${name} must be an object`)
-  return value
 }
 
 function requiredString(value: unknown, name: string): string {
@@ -377,17 +338,5 @@ function requiredString(value: unknown, name: string): string {
 function optionalString(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
   if (typeof value !== 'string') throw new TypeError(`${name} must be a string`)
-  return value
-}
-
-function optionalNumber(value: unknown, name: string): number | undefined {
-  if (value === undefined || value === null) return undefined
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(`${name} must be a finite number`)
-  return value
-}
-
-function integerValue(value: unknown, name: string): number {
-  const number = optionalNumber(value, name)
-  if (number === undefined || !Number.isInteger(number)) throw new TypeError(`${name} must be an integer`)
-  return number
+  return value.trim() || undefined
 }

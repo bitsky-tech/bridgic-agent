@@ -80,6 +80,15 @@ function presentationVerticalAlignment(value: unknown): 'top' | 'middle' | 'bott
   return 'top'
 }
 
+function presentationTextDirection(value: unknown): 'eaVert' | 'horz' | 'vert' | 'vert270' | 'wordArtVert' | undefined {
+  if (value === 'eastAsianVertical') return 'eaVert'
+  if (value === 'vertical') return 'vert'
+  if (value === 'vertical270') return 'vert270'
+  if (value === 'stacked') return 'wordArtVert'
+  if (value === 'horizontal') return 'horz'
+  return undefined
+}
+
 function normalizePresentationFileSourceForExport(kind: PresentationFileKind, source: unknown) {
   if (!isRecord(source)
     || typeof source.dataUrl !== 'string'
@@ -770,11 +779,14 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
+          flipH: element.flipHorizontal,
+          flipV: element.flipVertical,
           margin: element.textInsets
             ? [element.textInsets.left * 0.75, element.textInsets.right * 0.75, element.textInsets.bottom * 0.75, element.textInsets.top * 0.75]
             : 0,
           breakLine: false,
           valign: presentationVerticalAlignment(element.verticalAlign),
+          vert: presentationTextDirection(element.textDirection),
           align: ['left', 'center', 'right', 'justify'].includes(element.align) ? element.align : 'left',
           bold: typeof element.fontWeight === 'number' && element.fontWeight >= 600,
           italic: Boolean(element.italic),
@@ -837,6 +849,9 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
               h: height,
             },
           rotate: element.rotation,
+          flipH: element.flipHorizontal,
+          flipV: element.flipVertical,
+          rounding: element.clipShape === 'ellipse',
           transparency: typeof element.opacity === 'number' ? Math.round((1 - Math.max(0, Math.min(1, element.opacity))) * 100) : undefined,
           altText: typeof element.altText === 'string' ? element.altText : '',
           objectName: typeof element.id === 'string' ? element.id : undefined,
@@ -981,6 +996,8 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
+          flipH: element.flipHorizontal,
+          flipV: element.flipVertical,
           objectName: typeof element.id === 'string' ? element.id : undefined,
           fill: lineShape
             ? { color: 'FFFFFF', transparency: 100 }

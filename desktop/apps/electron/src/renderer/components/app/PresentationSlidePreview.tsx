@@ -3,6 +3,7 @@ import { Pause, Play } from 'lucide-react'
 import {
   PRESENTATION_PAGE_SIZES,
   formatPresentationText,
+  layoutPresentationVerticalText,
   type PresentationChartElement,
   type PresentationChartSeries,
   type PresentationElement,
@@ -228,6 +229,10 @@ export function PresentationElementPreview({ element, interactive, suppressMedia
 }) {
   if (isPresentationTextElement(element)) {
     const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
+    const verticalLayout = element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked'
+      ? layoutPresentationVerticalText(element)
+      : null
+    const contentHeight = Math.max(1, element.height - insets.top - insets.bottom)
     return (
       <span
         className="absolute block"
@@ -254,13 +259,33 @@ export function PresentationElementPreview({ element, interactive, suppressMedia
           backgroundColor: element.highlightColor,
           letterSpacing: `${(element.characterSpacing ?? 0) / 1000}em`,
           paddingLeft: (element.indentLevel ?? 0) * 16,
-          display: 'flex',
-          alignItems: presentationVerticalAlignment(element.verticalAlign),
+          display: verticalLayout ? 'block' : 'flex',
+          alignItems: verticalLayout ? undefined : presentationVerticalAlignment(element.verticalAlign),
           ...(element.hyperlink ? { color: '#2563EB' } : {}),
         }}
         data-testid="presentation-text-preview"
       >
-        <span className="block w-full">{formatPresentationText(element)}</span>
+        {verticalLayout ? verticalLayout.columns.flatMap((column, columnIndex) => {
+          const columnHeight = element.fontSize + ((Math.max(1, Array.from(column).length) - 1) * verticalLayout.rowAdvance)
+          const availableHeight = Math.max(0, contentHeight - columnHeight)
+          let alignmentOffset = 0
+          if (element.verticalAlign === 'bottom') alignmentOffset = availableHeight
+          else if (element.verticalAlign === 'middle') alignmentOffset = availableHeight / 2
+          return Array.from(column).map((glyph, rowIndex) => (
+            <span
+              className="absolute block"
+              key={`${columnIndex}-${rowIndex}`}
+              style={{
+                left: Math.max(0, element.width - insets.left - insets.right - element.fontSize - (columnIndex * verticalLayout.columnAdvance)),
+                top: alignmentOffset + (rowIndex * verticalLayout.rowAdvance),
+                lineHeight: 1,
+                width: element.fontSize,
+              }}
+            >
+              {glyph}
+            </span>
+          ))
+        }) : <span className="block w-full">{formatPresentationText(element)}</span>}
       </span>
     )
   }
@@ -271,7 +296,10 @@ export function PresentationElementPreview({ element, interactive, suppressMedia
       const visibleWidth = Math.max(0.001, 1 - crop.left - crop.right)
       const visibleHeight = Math.max(0.001, 1 - crop.top - crop.bottom)
       return (
-        <span className="absolute block overflow-hidden" style={elementStyle(element)}>
+        <span
+          className="absolute block overflow-hidden"
+          style={{ ...elementStyle(element), borderRadius: element.clipShape === 'ellipse' ? '50%' : undefined }}
+        >
           <img
             alt={element.altText}
             className="absolute block max-w-none"
@@ -297,6 +325,7 @@ export function PresentationElementPreview({ element, interactive, suppressMedia
         style={{
           ...elementStyle(element),
           objectFit: element.fit,
+          borderRadius: element.clipShape === 'ellipse' ? '50%' : undefined,
           filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
         }}
       />

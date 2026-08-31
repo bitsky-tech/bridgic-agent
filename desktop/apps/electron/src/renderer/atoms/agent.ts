@@ -68,6 +68,7 @@ import {
   purgeBrowserAttentionAtom,
 } from './browser-attention'
 import { purgeFilesAttentionAtom } from './files-attention'
+import { purgePowerPointAttentionAtom } from './powerpoint-attention'
 import { purgePresentationSessionAtom } from './presentation'
 import {
   notifySessionWorkbenchActivityAtom,
@@ -585,6 +586,7 @@ export const purgeSessionAtom = atom(null, (get, set, id: string) => {
   set(clearSessionHumanRequestAtom, id)
   set(purgeBrowserAttentionAtom, id)
   set(purgeFilesAttentionAtom, id)
+  set(purgePowerPointAttentionAtom, id)
   set(purgePresentationSessionAtom, id)
   set(purgeSessionWorkbenchStateAtom, id)
   // build.ts owns the brief family; dynamic import keeps the dep acyclic.
@@ -927,6 +929,28 @@ export function isBrowserAgentActionToolName(name: string): boolean {
 export const currentBrowserAgentActiveAtom = atom((get) => (
   get(currentStreamingAtom)?.toolCalls.some(
     (call) => isBrowserAgentActionToolName(call.name) && call.result === undefined,
+  ) ?? false
+))
+
+/** PowerPoint tools that visibly change the live presentation surface. */
+const POWERPOINT_ACTION_TOOL_NAMES = new Set([
+  'view_ppt',
+  'update_ppt_page',
+  'insert_ppt_page',
+  'remove_ppt_page',
+  'move_ppt_page',
+  'goto_ppt_page',
+])
+
+/** Whether a tool is an Agent-controlled PowerPoint operation visible to the user. */
+export function isPowerPointAgentActionToolName(name: string): boolean {
+  return POWERPOINT_ACTION_TOOL_NAMES.has(name)
+}
+
+/** True only while the Agent has an unresolved visible PowerPoint operation. */
+export const currentPowerPointAgentActiveAtom = atom((get) => (
+  get(currentStreamingAtom)?.toolCalls.some(
+    (call) => isPowerPointAgentActionToolName(call.name) && call.result === undefined,
   ) ?? false
 ))
 
@@ -1407,6 +1431,14 @@ export const applyAgentEventAtom = atom(
               || position?.mode === 'run_workflow',
             sessionId,
             surface: SessionWorkbenchSurface.Browser,
+          })
+        } else if (isPowerPointAgentActionToolName(event.toolName)) {
+          const position = get(thinkingModeFamily(sessionId))
+          set(notifySessionWorkbenchActivityAtom, {
+            agentModeHasPriority: position?.mode === 'build'
+              || position?.mode === 'run_workflow',
+            sessionId,
+            surface: SessionWorkbenchSurface.Presentation,
           })
         }
         const cur = get(streamingFamily(sessionId))

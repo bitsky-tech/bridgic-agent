@@ -1,11 +1,12 @@
 const CJK_TEXT_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
-const CJK_FONT_PATTERN = /(思源|黑体|黑體|宋体|宋體|仿宋|楷|等线|等線|source han|noto (sans|serif) cjk|pingfang|hiragino|yahei|simhei|simsun|mincho|gothic|ming|songti)/i
+const CJK_FONT_PATTERN = /(思源|黑体|黑體|宋体|宋體|仿宋|楷|行书|行書|毛笔|毛筆|篆|隶|隸|书法|書法|草书|草書|等线|等線|source han|noto (sans|serif) cjk|pingfang|hiragino|yahei|simhei|simsun|mincho|gothic|ming|songti|calligraphy|brush)/i
 const CJK_SERIF_FONT_PATTERN = /(宋|明朝|明體|仿宋|楷|serif|mincho|ming|song|kai)/i
+const CJK_CALLIGRAPHIC_FONT_PATTERN = /(行书|行書|毛笔|毛筆|篆|隶|隸|书法|書法|草书|草書|calligraphy|brush)/i
 const CSS_PIXELS_PER_POINT = 96 / 72
 
 function quoteFontFamily(fontFamily: string): string {
-  const normalized = fontFamily.trim().replaceAll('"', '\\"')
-  return /[\s,]/.test(normalized) ? `"${normalized}"` : normalized
+  const normalized = fontFamily.trim().replaceAll('\\', '\\\\').replaceAll('"', '\\"')
+  return `"${normalized}"`
 }
 
 /** Canvas text needs grapheme wrapping for scripts that do not separate words with spaces. */
@@ -47,6 +48,9 @@ export function presentationRenderingFontFamily(fontFamily: string, text: string
   if (!presentationTextUsesCjk(text) && !CJK_FONT_PATTERN.test(requested)) {
     const aptosFallback = requested.toLowerCase() === 'aptos' ? '' : ', Aptos'
     return `${primary}${aptosFallback}, "Helvetica Neue", Arial, sans-serif`
+  }
+  if (CJK_CALLIGRAPHIC_FONT_PATTERN.test(requested)) {
+    return `${primary}, "Kaiti SC", STKaiti, "FangSong SC", STFangsong, "Songti SC", STSong, serif`
   }
   if (CJK_SERIF_FONT_PATTERN.test(requested)) {
     return `${primary}, "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", STSong, serif`

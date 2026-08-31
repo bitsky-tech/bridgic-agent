@@ -11,6 +11,7 @@ import {
   appendUserMessageAtom,
   currentAgentRunningAtom,
   currentBrowserAgentActiveAtom,
+  currentPowerPointAgentActiveAtom,
   contextUsageFamily,
   currentMessagesAtom,
   currentPendingFrameworkInteractionAtom,
@@ -21,6 +22,7 @@ import {
   hasPendingPermissionAtom,
   hasPendingTaskConfirmAtom,
   isBrowserAgentActionToolName,
+  isPowerPointAgentActionToolName,
   loadSessionMessagesAtom,
   messageFamily,
   prepareInteractionContinuationAtom,
@@ -41,6 +43,10 @@ import {
 } from '../build'
 import { currentSessionFocusPaneAtom } from '../session-focus-pane'
 import { browserNeedsAttentionFamily } from '../browser-attention'
+import {
+  powerPointNeedsAttentionFamily,
+  setPowerPointNeedsAttentionAtom,
+} from '../powerpoint-attention'
 import {
   SessionWorkbenchSurface,
   sessionWorkbenchSurfaceAtom,
@@ -850,6 +856,56 @@ describe('reducer: tool calls', () => {
     expect(store.get(browserNeedsAttentionFamily(id))).toBe(true)
   })
 
+  it('classifies visible PowerPoint actions and reveals their Session surface', () => {
+    const visibleActions = [
+      'view_ppt',
+      'update_ppt_page',
+      'insert_ppt_page',
+      'remove_ppt_page',
+      'move_ppt_page',
+      'goto_ppt_page',
+    ]
+    expect(visibleActions.every(isPowerPointAgentActionToolName)).toBe(true)
+    expect(isPowerPointAgentActionToolName('get_ppt_page')).toBe(false)
+
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
+    store.set(setRightPanelCollapsedAtom, true)
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'message_start', messageId: 'powerpoint-write', role: 'assistant' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'tool_call',
+        messageId: 'powerpoint-write',
+        toolUseId: 'view-deck',
+        toolName: 'view_ppt',
+        input: { target: 'quarterly-review' },
+      },
+    })
+
+    expect(store.get(currentPowerPointAgentActiveAtom)).toBe(true)
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(store.get(powerPointNeedsAttentionFamily(id))).toBe(true)
+
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'tool_result',
+        toolUseId: 'view-deck',
+        output: 'done',
+        isError: false,
+        durationMs: 20,
+      },
+    })
+    expect(store.get(currentPowerPointAgentActiveAtom)).toBe(false)
+  })
+
   it('keeps Agent mode ahead of Browser action auto-reveal', () => {
     const store = makeStore()
     const id = setupSession(store)
@@ -906,10 +962,16 @@ describe('reducer: tool calls', () => {
       needsAttention: true,
     })
     expect(store.get(filesNeedsAttentionFamily(backgroundSessionId))).toBe(true)
+    store.set(setPowerPointNeedsAttentionAtom, {
+      sessionId: backgroundSessionId,
+      needsAttention: true,
+    })
+    expect(store.get(powerPointNeedsAttentionFamily(backgroundSessionId))).toBe(true)
 
     store.set(purgeSessionAtom, backgroundSessionId)
     expect(store.get(browserNeedsAttentionFamily(backgroundSessionId))).toBe(false)
     expect(store.get(filesNeedsAttentionFamily(backgroundSessionId))).toBe(false)
+    expect(store.get(powerPointNeedsAttentionFamily(backgroundSessionId))).toBe(false)
     store.set(activeSessionIdAtom, backgroundSessionId)
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
   })

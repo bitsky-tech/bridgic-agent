@@ -83,6 +83,7 @@ const {
   setFilesNeedsAttentionAtom,
 } = await import('@/atoms/files-attention')
 const { browserNeedsAttentionFamily } = await import('@/atoms/browser-attention')
+const { powerPointNeedsAttentionFamily } = await import('@/atoms/powerpoint-attention')
 const {
   requestRightPanelCollapseAtom,
   rightPanelCollapseRequestAtom,
@@ -94,6 +95,7 @@ const { i18n } = await import('@/lib/i18n')
 const {
   BrowserAttentionAnnouncer,
   FilesAttentionAnnouncer,
+  PowerPointAttentionAnnouncer,
   SessionResourcePanel,
 } = await import('../SessionResourcePanel')
 
@@ -137,6 +139,18 @@ function startBrowserTool(
   })
 }
 
+function startPowerPointTool(
+  store: ReturnType<typeof createStore>,
+  sessionId: string,
+  toolUseId: string,
+  toolName = 'update_ppt_page',
+): void {
+  startBrowserTool(store, sessionId, toolUseId, toolName, {
+    page_id: 'page-1',
+    markdown: '# Updated page',
+  })
+}
+
 function finishBrowserTool(
   store: ReturnType<typeof createStore>,
   sessionId: string,
@@ -175,6 +189,7 @@ async function mountPanel(store: ReturnType<typeof createStore>) {
       <Provider store={store}>
         <BrowserAttentionAnnouncer />
         <FilesAttentionAnnouncer />
+        <PowerPointAttentionAnnouncer />
         <SessionResourcePanel />
       </Provider>,
     )
@@ -295,6 +310,58 @@ describe('SessionResourcePanel', () => {
     expect(presentation.querySelector(
       '[data-testid="session-workbench-presentation-status-indicator"]',
     )).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens the PPT surface when the Agent creates its Session target', async () => {
+    const store = createStore()
+    const sessionId = 'session-agent-ppt-open'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Files)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { host, root } = await mountPanel(store)
+
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'agent-ppt-target',
+          webContentsId: 43,
+          loading: false,
+          crashed: false,
+        }],
+      })
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(host.querySelector('[data-testid="session-workbench-presentation-content"]')?.getAttribute('aria-hidden'))
+      .toBe('false')
+
+    await act(async () => root.unmount())
+  })
+
+  it('does not replay PPT auto-open for a target that existed before the Session was viewed', async () => {
+    const store = createStore()
+    const sessionId = 'session-existing-ppt-target'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
+    store.set(setEmbeddedPowerPointSnapshotAtom, {
+      sessions: [{
+        sessionId,
+        targetId: 'existing-ppt-target',
+        webContentsId: 44,
+        loading: false,
+        crashed: false,
+      }],
+    })
+    const { host, root } = await mountPanel(store)
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Results)
+    expect(host.querySelector('[data-testid="session-workbench-results-content"]')?.getAttribute('aria-hidden'))
+      .toBe('false')
 
     await act(async () => root.unmount())
   })
@@ -987,6 +1054,82 @@ describe('SessionResourcePanel', () => {
     expect(browserButton.className).toContain('bg-accent-blue-subtle')
     expect(browserButton.className).not.toContain('animate-surface-attention')
     expect(browserButton.querySelector('.animate-pulse')).not.toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows foreground PowerPoint editing with the same busy pulse and settle dwell', async () => {
+    jest.useFakeTimers()
+    const store = createStore()
+    const sessionId = 'session-powerpoint-foreground-action'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Presentation)
+    const { host, root } = await mountPanel(store)
+    const powerPointButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-presentation"]',
+    )!
+
+    try {
+      await act(async () => {
+        startPowerPointTool(store, sessionId, 'ppt-foreground')
+      })
+
+      expect(powerPointButton.getAttribute('aria-busy')).toBe('true')
+      expect(powerPointButton.getAttribute('aria-label')).toBe('Bridgic 正在编辑 PPT')
+      expect(powerPointButton.textContent).toContain('编辑中')
+      expect(powerPointButton.getAttribute('data-attention')).toBeNull()
+      expect(powerPointButton.className).toContain('bg-accent-blue-subtle')
+      expect(powerPointButton.querySelector('.animate-pulse')).not.toBeNull()
+
+      await act(async () => {
+        finishBrowserTool(store, sessionId, 'ppt-foreground', 'done')
+      })
+      await act(async () => jest.advanceTimersByTime(399))
+      expect(powerPointButton.getAttribute('aria-busy')).toBe('true')
+      expect(powerPointButton.querySelector('.animate-pulse')).toBeNull()
+
+      await act(async () => jest.advanceTimersByTime(1))
+      expect(powerPointButton.getAttribute('aria-busy')).toBeNull()
+      expect(powerPointButton.getAttribute('aria-label')).toBe('PPT')
+    } finally {
+      await act(async () => root.unmount())
+      jest.useRealTimers()
+    }
+  })
+
+  it('holds unseen PowerPoint activity as a warning until selected', async () => {
+    const store = createStore()
+    const sessionId = 'session-powerpoint-background-action'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
+    store.set(setRightPanelCollapsedAtom, false)
+    const { host, root } = await mountPanel(store)
+    const powerPointButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-presentation"]',
+    )!
+
+    await act(async () => {
+      startPowerPointTool(store, sessionId, 'ppt-background')
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Results)
+    expect(store.get(powerPointNeedsAttentionFamily(sessionId))).toBe(true)
+    expect(powerPointButton.getAttribute('data-attention')).toBe('true')
+    expect(powerPointButton.getAttribute('aria-label')).toBe('Bridgic 正在编辑 PPT')
+    expect(powerPointButton.className).toContain('animate-surface-attention')
+    expect(powerPointButton.querySelector('.animate-pulse')).toBeNull()
+    expect(host.querySelector('[data-testid="powerpoint-attention-status"]')?.textContent)
+      .toBe('PPT 有新动态，点击查看')
+
+    await act(async () => {
+      powerPointButton.click()
+      await Promise.resolve()
+    })
+    expect(store.get(powerPointNeedsAttentionFamily(sessionId))).toBe(false)
+    expect(powerPointButton.getAttribute('data-attention')).toBeNull()
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
 
     await act(async () => root.unmount())
   })

@@ -8,27 +8,49 @@ function workspace(): PresentationWorkspace {
 }
 
 describe('PowerPoint renderer protocol', () => {
-  it('applies a structured batch and returns generated ids', () => {
+  it('opens a new target with metadata and one blank page summary', async () => {
+    const opened = await executePowerPointRequest(workspace(), {
+      method: 'view_ppt',
+      params: { target: '/workspace/roadmap.pptx', file_name: 'roadmap.pptx' },
+    })
+
+    expect(opened.target).toBe('/workspace/roadmap.pptx')
+    expect(opened.persist).toBeTrue()
+    expect(opened.result).toMatchObject({
+      identity: { document_id: expect.any(String), file_name: 'roadmap.pptx' },
+      meta: { total_pages: 1, current_position: 1 },
+      pages: [{ index: 0, has_content: false }],
+      reused: false,
+    })
+
+    const reopened = await executePowerPointRequest(opened.workspace!, {
+      method: 'view_ppt',
+      params: { target: '/workspace/roadmap.pptx', file_name: 'roadmap.pptx' },
+    }, { currentTarget: opened.target!, fileName: 'roadmap.pptx' })
+    expect(reopened.workspace).toBeUndefined()
+    expect(reopened.result).toMatchObject({ reused: true })
+  })
+
+  it('reads and atomically updates one page from semantic Markdown', async () => {
     const initial = workspace()
     const slideId = initial.documents[0]!.selectedSlideId
-    const applied = executePowerPointRequest(initial, {
-      method: 'apply',
+    const read = await executePowerPointRequest(initial, {
+      method: 'get_ppt_page',
+      params: { page_id: slideId },
+    })
+    const revision = (read.result as { page: { revision: string } }).page.revision
+    const applied = await executePowerPointRequest(initial, {
+      method: 'update_ppt_page',
       params: {
-        operations: [
-          {
-            type: 'add_element',
-            slide_id: slideId,
-            element: { type: 'text', text: 'Revenue grew 24%', x: 80, y: 90 },
-          },
-        ],
+        page_id: slideId,
+        expected_revision: revision,
+        markdown: `---\nid: ${slideId}\nname: Results\n---\n\n# Revenue grew 24%`,
+        assets: {},
       },
     })
 
-    const result = applied.result as { results: Array<{ element_id: string }> }
     const document = applied.workspace!.documents[0]!
-    expect(result.results[0]!.element_id).toStartWith('text-')
     expect(document.slides[0]!.elements[0]).toMatchObject({
-      id: result.results[0]!.element_id,
       type: 'text',
       text: 'Revenue grew 24%',
     })
@@ -36,45 +58,65 @@ describe('PowerPoint renderer protocol', () => {
     expect(initial.documents[0]!.slides[0]!.elements).toEqual([])
   })
 
-  it('adds animations through the same domain model used by the editor', () => {
+  it('rejects a stale page token without publishing a workspace', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
-    const withElement = executePowerPointRequest(initial, {
-      method: 'apply',
-      params: { operations: [{ type: 'add_element', element: { id: 'headline', type: 'text' } }] },
-    }).workspace!
-    const animated = executePowerPointRequest(withElement, {
-      method: 'apply',
+    const slideId = initial.documents[0]!.selectedSlideId
+    await expect(executePowerPointRequest(initial, {
+      method: 'update_ppt_page',
       params: {
-        operations: [{
-          type: 'add_animation',
-          slide_id: slide.id,
-          element_id: 'headline',
-          effect: 'fade',
-          start: 'afterPrevious',
-          duration: 0.8,
-        }],
+        page_id: slideId,
+        expected_revision: 'stale',
+        markdown: `---\nid: ${slideId}\n---\n\n# Changed`,
       },
-    }).workspace!
-
-    expect(animated.documents[0]!.slides[0]!.elements[0]).toMatchObject({
-      animation: 'fade',
-      animationStart: 'afterPrevious',
-      animationDuration: 0.8,
-    })
+    })).rejects.toEqual(expect.objectContaining({ code: 'page_changed' }))
+    expect(initial.documents[0]!.slides[0]!.elements).toEqual([])
   })
 
-  it('rejects an invalid batch before publishing a replacement workspace', () => {
+  it('returns compiler diagnostics without mutating the page', async () => {
     const initial = workspace()
-    expect(() => executePowerPointRequest(initial, {
-      method: 'apply',
+    const slideId = initial.documents[0]!.selectedSlideId
+    const read = await executePowerPointRequest(initial, {
+      method: 'get_ppt_page', params: { page_id: slideId },
+    })
+    const revision = (read.result as { page: { revision: string } }).page.revision
+    const invalid = await executePowerPointRequest(initial, {
+      method: 'update_ppt_page',
       params: {
-        operations: [
-          { type: 'rename_document', title: 'Changed only in the draft' },
-          { type: 'delete_slide' },
-        ],
+        page_id: slideId,
+        expected_revision: revision,
+        markdown: '# Missing frontmatter',
       },
-    })).toThrow('must keep at least one slide')
-    expect(initial.documents[0]!.title).toBe('Quarterly review')
+    })
+    expect(invalid.workspace).toBeUndefined()
+    expect(invalid.result).toMatchObject({ status: 'invalid' })
+    expect(initial.documents[0]!.slides[0]!.elements).toEqual([])
+  })
+
+  it('returns a workspace path for embedded assets without exposing it in Markdown', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    slide.elements = [{
+      id: 'hero',
+      type: 'image',
+      source: { dataUrl: 'data:image/png;base64,cG5n', fileName: 'hero.png', mimeType: 'image/png' },
+      altText: 'Hero',
+      fit: 'cover',
+      x: 20,
+      y: 20,
+      width: 320,
+      height: 180,
+      rotation: 0,
+    }]
+
+    const read = await executePowerPointRequest(initial, {
+      method: 'get_ppt_page', params: { page_id: slide.id },
+    })
+    const result = read.result as { assets: Array<Record<string, string>>; page: { markdown: string } }
+    expect(result.assets[0]).toMatchObject({
+      path: '.ppt-assets/hero-hero.png',
+      data_url: 'data:image/png;base64,cG5n',
+    })
+    expect(result.page.markdown).toContain('src="@existing/hero"')
+    expect(result.page.markdown).not.toContain('base64')
   })
 })

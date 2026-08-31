@@ -2,6 +2,7 @@ import { IPC } from '../../shared/ipc-channels'
 import type { EmbeddedPowerPointBounds } from '../../shared/types'
 import type { EmbeddedPowerPointManager } from '../embedded-powerpoint-manager'
 import { loggedHandle } from './logged-handle'
+import { redactLocalPathLogArgs } from './path-log'
 
 export function registerPowerPointHandlers(
   powerpoint: EmbeddedPowerPointManager,
@@ -51,4 +52,10 @@ export function registerPowerPointHandlers(
     if (typeof expanded !== 'boolean') throw new TypeError('PowerPoint expanded must be a boolean')
     emitToHost(IPC.events.powerPointExpandedChanged, expanded)
   })
+
+  loggedHandle(
+    IPC.powerpoint.openFile,
+    (_event, sessionId: string, absPath: string) => powerpoint.openFile(sessionId, absPath),
+    { transformLogArgs: redactLocalPathLogArgs },
+  )
 }

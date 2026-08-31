@@ -76,6 +76,13 @@ function powerPointApi(calls: string[]): ElectronAPI['powerpoint'] {
     setVisible: async (visible) => { calls.push(`setVisible:${visible}`) },
     requestClose: async () => undefined,
     setExpanded: async () => undefined,
+    openFile: async (_sessionId, absPath) => ({
+      documentId: 'document-1',
+      fileName: absPath.split('/').at(-1) ?? '',
+      reused: false,
+      slideCount: 1,
+      title: 'Deck',
+    }),
   }
 }
 
@@ -181,6 +188,13 @@ describe('EmbeddedPowerPointPanel', () => {
       `activateSession:${sessionId}`,
       'setVisible:true',
     ])
+
+    await act(async () => {
+      animationFrame?.(0)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(calls).toHaveLength(4)
 
     await act(async () => root.unmount())
   })

@@ -104,6 +104,147 @@ describe('importPresentationPptx', () => {
     }
   })
 
+  it('keeps color-keyed pictures visible and preserves picture mirroring', async () => {
+    const source = createInitialPresentationDocument()
+    const slide = source.slides[0]!
+    source.slides = [slide]
+    source.selectedSlideId = slide.id
+    slide.elements = [{
+      id: 'color-keyed-picture',
+      type: 'image',
+      x: 80,
+      y: 40,
+      width: 320,
+      height: 200,
+      rotation: 0,
+      altText: 'plum blossom',
+      fit: 'contain',
+      source: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+        fileName: 'plum.png',
+        mimeType: 'image/png',
+      },
+    }]
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const slideFile = archive.file('ppt/slides/slide1.xml')!
+    const slideXml = await slideFile.async('text')
+    const withColorKey = slideXml
+      .replace(
+        /<a:blip (r:embed="rId\d+")>/,
+        '<a:blip $1><a:clrChange><a:clrFrom><a:srgbClr val="FFFFFF"/></a:clrFrom><a:clrTo><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:clrTo></a:clrChange>',
+      )
+      .replace(/(<p:pic>[\s\S]*?<a:xfrm)(>)/, '$1 flipH="1" flipV="1"$2')
+    expect(withColorKey).not.toBe(slideXml)
+    archive.file('ppt/slides/slide1.xml', withColorKey)
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'color-key.pptx')
+    const image = imported.slides[0]!.elements.find((element) => element.type === 'image')
+
+    expect(image?.type).toBe('image')
+    if (image?.type === 'image') {
+      expect(image.opacity).toBeUndefined()
+      expect(image.flipHorizontal).toBe(true)
+      expect(image.flipVertical).toBe(true)
+    }
+  })
+
+  it('imports an ellipse shape with a picture fill as a clipped image instead of its theme fallback color', async () => {
+    const source = createInitialPresentationDocument()
+    const slide = source.slides[0]!
+    source.slides = [slide]
+    source.selectedSlideId = slide.id
+    slide.elements = [{
+      id: 'landscape-picture',
+      type: 'image',
+      x: 141,
+      y: 261,
+      width: 221,
+      height: 221,
+      rotation: 0,
+      altText: 'landscape',
+      fit: 'cover',
+      source: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+        fileName: 'landscape.png',
+        mimeType: 'image/png',
+      },
+    }]
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const slideFile = archive.file('ppt/slides/slide1.xml')!
+    const slideXml = await slideFile.async('text')
+    const picture = slideXml.match(/<p:pic>[\s\S]*?<\/p:pic>/)?.[0]
+    const relationshipId = picture?.match(/<a:blip r:embed="(rId\d+)"/)?.[1]
+    const transform = picture?.match(/<a:xfrm[\s\S]*?<\/a:xfrm>/)?.[0]
+    expect(picture).toBeTruthy()
+    expect(relationshipId).toBeTruthy()
+    expect(transform).toBeTruthy()
+    const pictureFilledEllipse = `<p:sp><p:nvSpPr><p:cNvPr id="42" name="Picture-filled ellipse" descr="landscape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${transform}<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill><a:ln><a:noFill/></a:ln></p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>`
+    archive.file('ppt/slides/slide1.xml', slideXml.replace(picture!, pictureFilledEllipse))
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+
+    const imported = await importPresentationPptx(
+      await archive.generateAsync({ type: 'uint8array' }),
+      'picture-filled-shape.pptx',
+    )
+    const image = imported.slides[0]!.elements[0]
+
+    expect(image?.type).toBe('image')
+    if (image?.type === 'image') {
+      expect(image.clipShape).toBe('ellipse')
+      expect(image.source.mimeType).toBe('image/png')
+      expect(image.source.dataUrl).toStartWith('data:image/png;base64,')
+      expect(image.altText).toBe('landscape')
+    }
+
+    const reimported = await importPresentationPptx(
+      await createPresentationPptx(imported),
+      'picture-filled-shape-round-trip.pptx',
+    )
+    expect(reimported.slides[0]!.elements[0]).toMatchObject({ type: 'image', clipShape: 'ellipse' })
+  })
+
+  it('imports East Asian vertical text and DrawingML preset colors', async () => {
+    const source = createInitialPresentationDocument()
+    const slide = source.slides[0]!
+    source.slides = [slide]
+    source.selectedSlideId = slide.id
+    slide.elements = [{
+      id: 'vertical-copy',
+      type: 'text',
+      x: 80,
+      y: 80,
+      width: 120,
+      height: 320,
+      rotation: 0,
+      text: '请输入文本内容\n请输入文本内容',
+      fontSize: 28,
+      fontFamily: 'Aptos',
+      fontWeight: 400,
+      color: '#20202B',
+      align: 'left',
+      wordWrap: true,
+    }]
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const slideFile = archive.file('ppt/slides/slide1.xml')!
+    const slideXml = await slideFile.async('text')
+    const withVerticalWhiteText = slideXml
+      .replace('<a:bodyPr', '<a:bodyPr vert="eaVert"')
+      .replace(/\s(?:lIns|tIns|rIns|bIns)="[^"]*"/g, '')
+      .replace(/<a:srgbClr val="20202B"\/>/, '<a:prstClr val="white"/>')
+    expect(withVerticalWhiteText).not.toBe(slideXml)
+    archive.file('ppt/slides/slide1.xml', withVerticalWhiteText)
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'vertical.pptx')
+    const text = imported.slides[0]!.elements.find((element) => element.type === 'text')
+
+    expect(text?.type).toBe('text')
+    if (text?.type === 'text') {
+      expect(text.textDirection).toBe('eastAsianVertical')
+      expect(text.color).toBe('#FFFFFF')
+      expect(text.textInsets).toEqual({ left: 9.6, top: 4.8, right: 9.6, bottom: 4.8 })
+    }
+  })
+
   it('prefers the East Asian run font for CJK text', async () => {
     const source = createInitialPresentationDocument()
     const slide = source.slides[0]!

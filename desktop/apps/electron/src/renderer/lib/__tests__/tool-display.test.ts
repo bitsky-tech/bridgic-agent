@@ -177,6 +177,22 @@ describe('toolLabel — 已登记工具族(spec 驱动)', () => {
     // 未在映射表里的枚举值原样显示,不吞。
     expect(toolLabel('generic', 'browser_scroll', { direction: 'sideways' }).subject).toBe('sideways')
   })
+  it('PPT 工具显示页面级动作和稳定页 id', () => {
+    expect(toolLabel('generic', 'view_ppt', { target: 'decks/review.pptx' })).toEqual({
+      verb: '打开 PPT',
+      subject: 'review.pptx',
+      subjectFull: 'decks/review.pptx',
+    })
+    expect(toolLabel('generic', 'update_ppt_page', { page_id: 'page-2' })).toEqual({
+      verb: '更新 PPT 页',
+      subject: 'page-2',
+      subjectMono: true,
+    })
+    expect(toolMeta('generic', 'move_ppt_page', {
+      page_id: 'page-2',
+      target_page_id: 'page-4',
+    }, '').detail).toBe('page-4')
+  })
   it('无参工具只显示动词', () => {
     expect(toolLabel('generic', 'workspace_status', {})).toEqual({ verb: '查看工作区状态', subject: '' })
     expect(toolLabel('generic', 'browser_snapshot', {})).toEqual({ verb: '页面快照', subject: '' })

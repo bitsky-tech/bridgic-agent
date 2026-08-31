@@ -11,7 +11,9 @@ import {
   presentationExpandedAtom,
   purgePresentationSessionAtom,
   formatPresentationText,
+  layoutPresentationVerticalText,
   stripPresentationListMarkers,
+  stripPresentationTextFormatting,
 } from '../presentation'
 
 describe('presentation atoms', () => {
@@ -68,6 +70,64 @@ describe('presentation atoms', () => {
     const displayText = formatPresentationText(element)
     expect(displayText).toBe('1. First point\n2. Second point')
     expect(stripPresentationListMarkers(displayText, element.listStyle)).toBe(element.text)
+  })
+
+  it('lays out East Asian vertical text as right-to-left columns without changing its source', () => {
+    const element = {
+      id: 'vertical-text',
+      type: 'text' as const,
+      x: 0,
+      y: 0,
+      width: 120,
+      height: 240,
+      rotation: 0,
+      text: '甲乙\n丙丁',
+      fontSize: 24,
+      fontFamily: 'Aptos',
+      fontWeight: 400 as const,
+      color: '#1D1D28',
+      align: 'left' as const,
+      textDirection: 'eastAsianVertical' as const,
+    }
+
+    const displayText = formatPresentationText(element)
+    expect(displayText).toBe('丙　甲\n丁　乙')
+    expect(stripPresentationTextFormatting(displayText, element)).toBe(element.text)
+  })
+
+  it('wraps East Asian vertical text to the text-frame height instead of overflowing in paragraph columns', () => {
+    const element = {
+      id: 'vertical-poem',
+      type: 'text' as const,
+      x: 0,
+      y: 0,
+      width: 311,
+      height: 173,
+      rotation: 0,
+      text: '万木冻欲折孤根暖独回 前村深雪里昨夜一枝开 \n风递幽香出禽窥素艳来 明年如应律先发映春台',
+      fontSize: 30.1067,
+      fontFamily: '叶根友毛笔行书2.0版',
+      fontWeight: 400 as const,
+      color: '#000000',
+      align: 'left' as const,
+      textDirection: 'eastAsianVertical' as const,
+      textInsets: { left: 9.6, top: 4.8, right: 9.6, bottom: 4.8 },
+    }
+
+    const layout = layoutPresentationVerticalText(element)
+
+    expect(layout.rowsPerColumn).toBe(5)
+    expect(layout.columns).toEqual([
+      '万木冻欲折',
+      '孤根暖独回',
+      '前村深雪里',
+      '昨夜一枝开',
+      '风递幽香出',
+      '禽窥素艳来',
+      '明年如应律',
+      '先发映春台',
+    ])
+    expect(stripPresentationTextFormatting(formatPresentationText(element), element)).toBe(element.text)
   })
 
   it('keeps documents and expanded state independent between Sessions', () => {

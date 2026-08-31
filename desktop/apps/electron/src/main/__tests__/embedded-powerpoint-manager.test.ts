@@ -1,5 +1,8 @@
 import { expect, it } from 'bun:test'
 import type { BrowserWindow, Rectangle, WebContentsView } from 'electron'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { EmbeddedPowerPointManager } from '../embedded-powerpoint-manager'
 
 class FakeDebugger {
@@ -19,6 +22,7 @@ class FakeContents {
   private readonly listeners = new Map<string, Array<() => void>>()
   zoomLevel = 0
   sent: Array<[string, unknown]> = []
+  executedScripts: string[] = []
 
   constructor(readonly id: number) {
     this.debugger = new FakeDebugger(`ppt-target-${id}`)
@@ -29,6 +33,17 @@ class FakeContents {
   send(channel: string, value: unknown): void { this.sent.push([channel, value]) }
   isDestroyed(): boolean { return this.destroyed }
   isLoading(): boolean { return false }
+  async executeJavaScript(script: string): Promise<unknown> {
+    this.executedScripts.push(script)
+    return {
+      ok: true,
+      value: {
+        identity: { document_id: 'opened-document', name: 'Opened deck' },
+        meta: { total_pages: 3 },
+        reused: false,
+      },
+    }
+  }
   on(event: string, listener: () => void): void {
     this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener])
   }
@@ -86,6 +101,25 @@ it('owns exactly one CDP target per Session and presents only the active one', a
   manager.applySettings({ zoomLevel: 2 } as never)
   expect(views[1]!.webContents.zoomLevel).toBe(2)
   expect(views[1]!.webContents.sent.at(-1)?.[0]).toBe('settings-changed')
+
+  const presentationDirectory = await mkdtemp(path.join(tmpdir(), 'bridgic-ppt-open-'))
+  try {
+    const presentationPath = path.join(presentationDirectory, 'deck.pptx')
+    await writeFile(presentationPath, new Uint8Array([4, 5, 6]))
+    expect(await manager.openFile('session-a', presentationPath)).toEqual({
+      documentId: 'opened-document',
+      fileName: 'deck.pptx',
+      reused: false,
+      slideCount: 3,
+      title: 'Opened deck',
+    })
+    expect(views[0]!.webContents.executedScripts.at(-1)).toContain('"method":"view_ppt"')
+    expect(views[0]!.webContents.executedScripts.at(-1)).toContain('"content_base64":"BAUG"')
+    await expect(manager.openFile('session-a', path.join(presentationDirectory, 'deck.txt')))
+      .rejects.toThrow('must end with .pptx')
+  } finally {
+    await rm(presentationDirectory, { recursive: true, force: true })
+  }
 
   manager.closeSession('session-b')
   expect(children).toHaveLength(1)

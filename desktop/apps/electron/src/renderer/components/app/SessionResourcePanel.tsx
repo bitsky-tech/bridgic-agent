@@ -3,7 +3,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { viewedSessionIdAtom } from '@/atoms/amphi'
-import { currentBrowserAgentActiveAtom } from '@/atoms/agent'
+import {
+  currentBrowserAgentActiveAtom,
+  currentPowerPointAgentActiveAtom,
+} from '@/atoms/agent'
 import {
   browserNeedsAttentionFamily,
   setBrowserNeedsAttentionAtom,
@@ -19,6 +22,10 @@ import {
   filesNeedsAttentionFamily,
   setFilesNeedsAttentionAtom,
 } from '@/atoms/files-attention'
+import {
+  powerPointNeedsAttentionFamily,
+  setPowerPointNeedsAttentionAtom,
+} from '@/atoms/powerpoint-attention'
 import {
   clearRightPanelCollapseRequestAtom,
   rightPanelCollapseRequestAtom,
@@ -41,6 +48,7 @@ import {
 import { useBrowserAttention } from '@/hooks/useBrowserAttention'
 import { useEmbeddedBrowserSurfaceEligible } from '@/hooks/useEmbeddedBrowserSurfaceEligible'
 import { useHostWindowForeground } from '@/hooks/useHostWindowForeground'
+import { usePowerPointAttention } from '@/hooks/usePowerPointAttention'
 import { SessionSurfaceRail } from './SessionSurfaceChrome'
 import { SessionSurfaceContent } from './SessionSurfaceContent'
 import { SessionSurfaceRailTabs } from './SessionSurfaceRailTabs'
@@ -51,13 +59,14 @@ type PendingBrowserExit = {
   surface?: SessionWorkbenchSurface
 }
 
-export const BROWSER_ACTIVITY_SETTLE_MS = 400
+export const SURFACE_ACTIVITY_SETTLE_MS = 400
+export const BROWSER_ACTIVITY_SETTLE_MS = SURFACE_ACTIVITY_SETTLE_MS
 
-type BrowserActivityKind = 'agent' | 'loading' | null
+type SurfaceActivityKind = 'agent' | 'loading' | null
 
 /** Filter one-frame activity and retain visible activity long enough to read. */
-function useBrowserActivityPresentation(liveKind: BrowserActivityKind): BrowserActivityKind {
-  const [visibleKind, setVisibleKind] = useState<BrowserActivityKind>(liveKind)
+function useSurfaceActivityPresentation(liveKind: SurfaceActivityKind): SurfaceActivityKind {
+  const [visibleKind, setVisibleKind] = useState<SurfaceActivityKind>(liveKind)
 
   useEffect(() => {
     if (liveKind !== null) {
@@ -69,7 +78,7 @@ function useBrowserActivityPresentation(liveKind: BrowserActivityKind): BrowserA
       return
     }
     if (visibleKind === null) return
-    const timer = window.setTimeout(() => setVisibleKind(null), BROWSER_ACTIVITY_SETTLE_MS)
+    const timer = window.setTimeout(() => setVisibleKind(null), SURFACE_ACTIVITY_SETTLE_MS)
     return () => window.clearTimeout(timer)
   }, [liveKind, visibleKind])
 
@@ -127,6 +136,46 @@ export function BrowserAttentionAnnouncer() {
   )
 }
 
+/** Stable app-level live region for unseen PowerPoint activity. */
+export function PowerPointAttentionAnnouncer() {
+  const { t } = useTranslation()
+  const store = useStore()
+  const viewedSessionId = useAtomValue(viewedSessionIdAtom)
+  const powerPointNeedsAttention = useAtomValue(
+    powerPointNeedsAttentionFamily(viewedSessionId ?? ''),
+  )
+  const statusRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const status = statusRef.current
+    if (!status) return
+    status.textContent = ''
+    if (!viewedSessionId || !powerPointNeedsAttention) return
+    let active = true
+    queueMicrotask(() => {
+      const stillNeedsAttention = store.get(viewedSessionIdAtom) === viewedSessionId
+        && store.get(powerPointNeedsAttentionFamily(viewedSessionId))
+      if (active && statusRef.current === status && stillNeedsAttention) {
+        status.textContent = t('session.resourcePanel.presentationNeedsAttention')
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [powerPointNeedsAttention, store, t, viewedSessionId])
+
+  return (
+    <span
+      ref={statusRef}
+      aria-atomic="true"
+      aria-live="polite"
+      className="sr-only"
+      data-testid="powerpoint-attention-status"
+      role="status"
+    />
+  )
+}
+
 /** Stable app-level live region for successfully added Files hidden behind another surface. */
 export function FilesAttentionAnnouncer() {
   const { t } = useTranslation()
@@ -177,12 +226,14 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const browserSession = useAtomValue(activeEmbeddedBrowserSessionAtom)
   const powerPointSession = useAtomValue(activeEmbeddedPowerPointSessionAtom)
   const browserAgentActive = useAtomValue(currentBrowserAgentActiveAtom)
+  const powerPointAgentActive = useAtomValue(currentPowerPointAgentActiveAtom)
   const rightCollapsed = useAtomValue(rightPanelCollapsedAtom)
   const collapseRequest = useAtomValue(rightPanelCollapseRequestAtom)
   const setWorkbenchSurface = useSetAtom(setSessionWorkbenchSurfaceAtom)
   const setBrowserNeedsAttention = useSetAtom(setBrowserNeedsAttentionAtom)
   const filesNeedsAttention = useAtomValue(filesNeedsAttentionFamily(viewedSessionId ?? ''))
   const setFilesNeedsAttention = useSetAtom(setFilesNeedsAttentionAtom)
+  const setPowerPointNeedsAttention = useSetAtom(setPowerPointNeedsAttentionAtom)
   const setBrowserHandoffPending = useSetAtom(setBrowserHandoffPendingAtom)
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
   const setPresentationExpanded = useSetAtom(presentationExpandedAtom)
@@ -191,6 +242,9 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const setFocusPane = useSetAtom(setSessionFocusPaneAtom)
   const openModeSurface = useSetAtom(openSessionModeSurfaceAtom)
   const railRef = useRef<HTMLDivElement>(null)
+  const autoOpenedPowerPointTargetRef = useRef<string | null>(powerPointSession
+    ? `${powerPointSession.sessionId}:${powerPointSession.targetId}`
+    : null)
   const lastFocusedRailTabRef = useRef<string | null>(null)
   const modeSurfaceHadFocusRef = useRef(false)
   const [nativeHideAcknowledgement, setNativeHideAcknowledgement] = useState(0)
@@ -256,10 +310,10 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   )
   const browserHasOpenPage = (browserSession?.tabs.length ?? 0) > 0
   const browserLoading = browserActiveTab?.loading ?? false
-  let liveBrowserActivityKind: BrowserActivityKind = null
+  let liveBrowserActivityKind: SurfaceActivityKind = null
   if (browserAgentActive) liveBrowserActivityKind = 'agent'
   else if (browserLoading) liveBrowserActivityKind = 'loading'
-  const browserActivityKind = useBrowserActivityPresentation(liveBrowserActivityKind)
+  const browserActivityKind = useSurfaceActivityPresentation(liveBrowserActivityKind)
   const browserBusy = browserActivityKind !== null
   const nativeHandoffPending = browserHasNativeSurface && effectivePending !== null
   const browserNeedsAttention = useBrowserAttention({
@@ -271,6 +325,19 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const selectedToolActive = (surface: SessionWorkbenchSurface) => (
     contentOpen && selectedModeSurface === null && workbenchSurface === surface
   )
+
+  const powerPointSeen = selectedToolActive(SessionWorkbenchSurface.Presentation)
+    && hostWindowForeground
+    && effectivePending === null
+    && !panelCollapseRequested
+  const powerPointNeedsAttention = usePowerPointAttention({
+    isPowerPointSeen: powerPointSeen,
+    sessionId: viewedSessionId,
+  })
+  const powerPointActivityKind = useSurfaceActivityPresentation(
+    powerPointAgentActive ? 'agent' : null,
+  )
+  const powerPointBusy = powerPointActivityKind !== null
 
   const filesSurfaceSeen = selectedToolActive(SessionWorkbenchSurface.Files)
     && hostWindowForeground
@@ -296,6 +363,9 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const selectTool = (surface: SessionWorkbenchSurface) => {
     if (surface === SessionWorkbenchSurface.Browser && viewedSessionId) {
       setBrowserNeedsAttention({ sessionId: viewedSessionId, needsAttention: false })
+    }
+    if (surface === SessionWorkbenchSurface.Presentation && viewedSessionId) {
+      setPowerPointNeedsAttention({ sessionId: viewedSessionId, needsAttention: false })
     }
     if (effectivePending !== null) {
       clearCollapseRequest()
@@ -348,6 +418,28 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
     if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
     commitToolSelection(surface)
   }
+
+  useEffect(() => {
+    const session = powerPointSession
+    const targetId = session?.targetId ?? null
+    if (!session || !targetId || session.crashed) {
+      autoOpenedPowerPointTargetRef.current = null
+      return
+    }
+    const key = `${session.sessionId}:${targetId}`
+    if (autoOpenedPowerPointTargetRef.current === key) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled || autoOpenedPowerPointTargetRef.current === key) return
+      autoOpenedPowerPointTargetRef.current = key
+      if (!selectedToolActive(SessionWorkbenchSurface.Presentation)) {
+        selectTool(SessionWorkbenchSurface.Presentation)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [powerPointSession?.crashed, powerPointSession?.sessionId, powerPointSession?.targetId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectMode = () => {
     clearCollapseRequest()
@@ -497,6 +589,17 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   let browserLabel = t('session.resourcePanel.browser')
   if (browserActivityKind === 'agent') browserLabel = t('session.resourcePanel.browserActiveShort')
   else if (browserActivityKind === 'loading') browserLabel = t('session.resourcePanel.browserLoadingShort')
+  let powerPointAriaLabel = t('session.resourcePanel.presentation')
+  if (powerPointActivityKind === 'agent') {
+    powerPointAriaLabel = t('session.resourcePanel.presentationAgentActive')
+  } else if (powerPointNeedsAttention) {
+    powerPointAriaLabel = t('session.resourcePanel.presentationNeedsAttention')
+  } else if (powerPointSession !== null) {
+    powerPointAriaLabel = t('session.resourcePanel.presentationOpened')
+  }
+  const powerPointLabel = powerPointActivityKind === 'agent'
+    ? t('session.resourcePanel.presentationActiveShort')
+    : t('session.resourcePanel.presentation')
 
   return (
     <div
@@ -534,9 +637,14 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
           hasPresentationOpen={powerPointSession !== null}
           isBrowserAgentActive={browserAgentActive && browserActivityKind === 'agent'}
           isBrowserBusy={browserBusy}
+          isPowerPointAgentActive={powerPointAgentActive && powerPointActivityKind === 'agent'}
+          isPowerPointBusy={powerPointBusy}
           isContentOpen={contentOpen}
           isModeSelected={selectedModeSurface !== null}
           onSelect={selectTool}
+          powerPointAriaLabel={powerPointAriaLabel}
+          powerPointLabel={powerPointLabel}
+          powerPointNeedsAttention={powerPointNeedsAttention}
           selectedSurface={workbenchSurface}
         />
       </SessionSurfaceRail>

@@ -10,6 +10,7 @@
  * subtree rows carry their mount-relative `path`.
  */
 import { useEffect, useMemo, useState } from 'react'
+import type { MouseEvent } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -64,6 +65,8 @@ export interface MountRowProps {
   onOpenRoot: () => void
   /** Double-click to open: a child file row (system default application). */
   onOpenChild: (node: DirTreeNode) => void
+  /** Identify files that an in-app viewer owns and opens on one click. */
+  openOnSingleClick: (name: string) => boolean
 }
 
 /** One mount root as a tree-style row; folder mounts expand into their
@@ -84,6 +87,7 @@ export function MountRow({
   onRevealChild,
   onOpenRoot,
   onOpenChild,
+  openOnSingleClick,
 }: MountRowProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -103,6 +107,7 @@ export function MountRow({
   const expandable = m.kind === 'folder' && m.exists
   // Double-clicking a file-type mount root = open with the system default application; stale paths (line-through) do not respond.
   const rootOpenable = m.kind === 'file' && m.exists
+  const rootOpensOnSingleClick = rootOpenable && openOnSingleClick(m.name)
   const toggleRoot = (): void => {
     if (!expandable) return
     if (!open) {
@@ -112,6 +117,14 @@ export function MountRow({
       void loadRoot({ sessionId, mountId: m.id, path: m.path })
     }
     setOpen((o) => !o)
+  }
+
+  const handleRootClick = (event: MouseEvent<HTMLDivElement>): void => {
+    if (rootOpensOnSingleClick && event.detail < 2) {
+      onOpenRoot()
+      return
+    }
+    toggleRoot()
   }
 
   const toggleChild = (node: DirTreeNode): void => {
@@ -163,9 +176,9 @@ export function MountRow({
   return (
     <div>
       <div
-        onClick={toggleRoot}
+        onClick={handleRootClick}
         onDoubleClick={() => {
-          if (rootOpenable) onOpenRoot()
+          if (rootOpenable && !rootOpensOnSingleClick) onOpenRoot()
         }}
         className={cn(
           'group relative flex items-center gap-1.5 px-2 py-[5px] rounded-md',
@@ -262,6 +275,7 @@ export function MountRow({
           onToggle={toggleChild}
           onMention={onMentionChild}
           onOpen={onOpenChild}
+          openOnSingleClick={(node) => openOnSingleClick(node.name)}
           absPathOf={(node) => `${m.path}/${node.relPath}`}
           menu={{
             menuFor: childMenuFor,
@@ -283,6 +297,8 @@ export interface MountSubtreeProps {
   onMention: (node: DirTreeNode) => void
   /** Double-clicking a child file = open with the system default application. */
   onOpen: (node: DirTreeNode) => void
+  /** Child files owned by an in-app viewer open on the first click. */
+  openOnSingleClick: (node: DirTreeNode) => boolean
   /** Full absolute path shown in the child row's hover tooltip (mount root + relPath). */
   absPathOf: (node: DirTreeNode) => string
   menu: TreeRowMenu
@@ -312,7 +328,7 @@ function MountSubtreeError({ reason }: { reason: Extract<DirListResult, { ok: fa
 }
 
 /** Expanded body under a folder mount root: loading / error / lazy tree. */
-function MountSubtree({ tree, expanded, onToggle, onMention, onOpen, absPathOf, menu }: MountSubtreeProps) {
+function MountSubtree({ tree, expanded, onToggle, onMention, onOpen, openOnSingleClick, absPathOf, menu }: MountSubtreeProps) {
   const { t } = useTranslation()
   if (tree === undefined) {
     return <div className={cn(SUBTREE_MSG_CLS, 'text-text-tertiary')}>{t('asset.common.loading')}</div>
@@ -330,6 +346,7 @@ function MountSubtree({ tree, expanded, onToggle, onMention, onOpen, absPathOf, 
           onToggle={onToggle}
           onMention={onMention}
           onOpen={onOpen}
+          openOnSingleClick={openOnSingleClick}
           absPathOf={absPathOf}
           menu={menu}
         />

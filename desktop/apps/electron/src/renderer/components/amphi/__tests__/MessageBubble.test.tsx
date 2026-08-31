@@ -477,6 +477,51 @@ describe('Pipeline', () => {
     host.remove()
   })
 
+  it('gives a pending PowerPoint edit a dedicated row state and activity label', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <Pipeline
+            session={{
+              id: 'powerpoint-tool-session',
+              messages: [],
+              streaming: {
+                messageId: 'powerpoint-tool-message',
+                content: '',
+                toolCalls: [{
+                  toolUseId: 'powerpoint-update',
+                  name: 'update_ppt_page',
+                  input: { page_id: 'page-1', markdown: '# Updated' },
+                }],
+                blocks: [{
+                  type: 'tool',
+                  toolUseId: 'powerpoint-update',
+                  name: 'update_ppt_page',
+                  input: { page_id: 'page-1', markdown: '# Updated' },
+                }],
+                startedAt: Date.now(),
+              },
+              pending: false,
+            }}
+          />
+        </Provider>,
+      )
+    })
+
+    expect(host.querySelector('[aria-label="正在编辑 PPT"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label="正在调用工具"]')).toBeNull()
+    expect(host.querySelector('[data-powerpoint-tool-state="running"]')).not.toBeNull()
+    expect(host.querySelector('[data-browser-tool-state="running"]')).toBeNull()
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   it('keeps Build mode out of the message activity row', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)

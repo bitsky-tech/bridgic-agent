@@ -124,6 +124,7 @@ export function installApiStub(): void {
       setVisible: async () => {},
       requestClose: async () => {},
       setExpanded: async () => {},
+      openFile: async () => { throw new Error('Opening PowerPoint files requires Electron') },
     },
     backend: {
       snapshot: async () => ({

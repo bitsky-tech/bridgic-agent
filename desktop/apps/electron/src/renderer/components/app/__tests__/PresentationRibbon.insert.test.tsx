@@ -53,7 +53,6 @@ describe('PresentationRibbon', () => {
           ribbonCollapsed={false}
           selectedElement={null}
           selectedText={null}
-          toolbarActions={null}
           viewOptions={{ gridlines: false, guides: false, notes: true, ruler: false, smartSnap: true }}
           onActiveTabChange={() => undefined}
           onAddShape={() => undefined}
@@ -67,7 +66,6 @@ describe('PresentationRibbon', () => {
           onApplyFormat={() => undefined}
           onCanvasScaleChange={() => undefined}
           onToggleComments={() => undefined}
-          onFindText={() => undefined}
           onFitCanvas={() => undefined}
           onEditMaster={() => undefined}
           onInsertAudio={() => calls.push('audio')}
@@ -159,7 +157,6 @@ describe('PresentationRibbon', () => {
           ribbonCollapsed={false}
           selectedElement={selectedElement}
           selectedText={selectedElement}
-          toolbarActions={null}
           viewOptions={{ gridlines: false, guides: false, notes: true, ruler: false, smartSnap: true }}
           onActiveTabChange={() => undefined}
           onAddShape={() => undefined}
@@ -173,7 +170,6 @@ describe('PresentationRibbon', () => {
           onApplyFormat={() => undefined}
           onCanvasScaleChange={() => undefined}
           onToggleComments={() => undefined}
-          onFindText={() => undefined}
           onFitCanvas={() => undefined}
           onEditMaster={() => undefined}
           onInsertAudio={() => undefined}

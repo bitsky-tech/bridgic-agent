@@ -24,7 +24,7 @@ import { extColor } from '@/lib/fileTree'
 import type { FileSearchHit } from '@shared/file-search'
 import type { MountSummary } from '@/lib/amphiClient'
 import { requestMentionInsertAtom } from '@/atoms/mounts'
-import { requestFileOpenAtom } from '@/atoms/fileOpen'
+import type { FileOpenTarget } from '@/atoms/fileOpen'
 import { Icons } from './Icons'
 import { RowActionMenu } from './RowActionMenu'
 import { Tooltip } from './Tooltip'
@@ -43,6 +43,7 @@ export interface SessionAssetsSearchProps {
   /** The two ⋯ menu actions. Supplied by the panel rather than built here: SessionAssetsPanel already
    *  has one clipboard + toast implementation, and copying it would leave two copies to keep in sync. */
   onCopyPath: (abs: string) => void
+  onOpen: (file: FileOpenTarget) => void
   onReveal: (abs: string) => void
 }
 
@@ -55,11 +56,11 @@ export function SessionAssetsSearch({
   query,
   mounts,
   onCopyPath,
+  onOpen,
   onReveal,
 }: SessionAssetsSearchProps) {
   const { t } = useTranslation()
   const requestMentionInsert = useSetAtom(requestMentionInsertAtom)
-  const requestFileOpen = useSetAtom(requestFileOpenAtom)
   // At most one row's menu is open at a time (a single value rather than per-row state), same as
   // SessionAssetsPanel. The key is `${mountId}:${relPath}` — a mount root's relPath is the empty
   // string, so relPath alone would collide.
@@ -105,7 +106,7 @@ export function SessionAssetsSearch({
             onClick={() => {
               if (!abs) return
               if (h.kind === 'folder') void window.api.shell.showItemInFolder(abs)
-              else requestFileOpen({ path: abs, name: h.name })
+              else onOpen({ path: abs, name: h.name })
             }}
             className={cn(
               'group relative flex items-center gap-1.5 px-2 py-[5px] rounded-md',

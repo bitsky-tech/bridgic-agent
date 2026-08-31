@@ -106,6 +106,7 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(IPC.powerpoint.setVisible, visible, focusHost),
     requestClose: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.requestClose, sessionId),
     setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
+    openFile: (sessionId, absPath) => ipcRenderer.invoke(IPC.powerpoint.openFile, sessionId, absPath),
   },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),

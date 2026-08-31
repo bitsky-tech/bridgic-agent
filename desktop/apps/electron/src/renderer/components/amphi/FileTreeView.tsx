@@ -17,6 +17,7 @@
  * icon, mono filename, right-aligned size, indent guide line.
  */
 import { useTranslation } from 'react-i18next'
+import type { MouseEvent } from 'react'
 import type { DirTreeNode } from '@shared/dir-tree'
 import { cn } from '@/lib/cn'
 import { extColor, formatSize } from '@/lib/fileTree'
@@ -39,6 +40,8 @@ export interface FileTreeViewProps {
   /** Double-click a FILE row → open it with the OS default program.
    *  Absent (e.g. @ popover) disables open-on-double-click; folders ignore it. */
   onOpen?: (node: DirTreeNode) => void
+  /** Files owned by an in-app viewer open on the first click instead. */
+  openOnSingleClick?: (node: DirTreeNode) => boolean
   /** Keyboard-selected row (@ popover); rendered with the hover background. */
   highlightRelPath?: string | null
   /** relPath → that row's **full absolute path**, used for the hover tooltip. When omitted the tooltip falls back to the file name.
@@ -67,6 +70,7 @@ export function FileTreeView({
   onMention,
   onPickFile,
   onOpen,
+  openOnSingleClick,
   highlightRelPath,
   absPathOf,
   menu,
@@ -82,6 +86,7 @@ export function FileTreeView({
           onMention={onMention}
           onPickFile={onPickFile}
           onOpen={onOpen}
+          openOnSingleClick={openOnSingleClick}
           highlightRelPath={highlightRelPath}
           absPathOf={absPathOf}
           menu={menu}
@@ -98,6 +103,7 @@ interface TreeNodeRowProps {
   onMention?: (node: DirTreeNode) => void
   onPickFile?: (node: DirTreeNode) => void
   onOpen?: (node: DirTreeNode) => void
+  openOnSingleClick?: (node: DirTreeNode) => boolean
   highlightRelPath?: string | null
   absPathOf?: (node: DirTreeNode) => string
   menu?: TreeRowMenu
@@ -110,6 +116,7 @@ function TreeNodeRow({
   onMention,
   onPickFile,
   onOpen,
+  openOnSingleClick,
   highlightRelPath,
   absPathOf,
   menu,
@@ -124,14 +131,15 @@ function TreeNodeRow({
   // Double-click to open applies to file rows only (folders keep single-click expansion); openable also makes the row show clickable feedback.
   const openable = !isFolder && onOpen !== undefined
 
-  const handleRowClick = (): void => {
+  const handleRowClick = (event: MouseEvent<HTMLDivElement>): void => {
     if (expandable) onToggle(node)
+    else if (openable && openOnSingleClick?.(node) && event.detail < 2) onOpen?.(node)
     else if (pickable) onPickFile(node)
   }
 
   // Double-clicking a file = open with the system default application; double-clicking a folder does nothing extra (single-click expansion as before).
   const handleDoubleClick = (): void => {
-    if (openable) onOpen?.(node)
+    if (openable && !openOnSingleClick?.(node)) onOpen?.(node)
   }
 
   const menuOpen = menu !== undefined && menu.menuFor === node.relPath
@@ -216,7 +224,7 @@ function TreeNodeRow({
       {isOpen && (
         <ExpandedBody
           node={node}
-          {...{ expanded, onToggle, onMention, onPickFile, onOpen, highlightRelPath, absPathOf, menu }}
+          {...{ expanded, onToggle, onMention, onPickFile, onOpen, openOnSingleClick, highlightRelPath, absPathOf, menu }}
         />
       )}
     </div>
@@ -250,6 +258,7 @@ function ExpandedBody({
   onMention,
   onPickFile,
   onOpen,
+  openOnSingleClick,
   highlightRelPath,
   absPathOf,
   menu,
@@ -282,6 +291,7 @@ function ExpandedBody({
             onMention={onMention}
             onPickFile={onPickFile}
             onOpen={onOpen}
+            openOnSingleClick={openOnSingleClick}
             highlightRelPath={highlightRelPath}
             absPathOf={absPathOf}
             menu={menu}

@@ -18,8 +18,10 @@ const {
 } = await import('@/lib/presentationInsert')
 const {
   createPresentationHistoryEntry,
+  createPresentationImageFabricClipPath,
   createPresentationMediaFabricObject,
   createPresentationMediaRuntime,
+  createPresentationVerticalTextFabricObject,
   estimatePresentationDocumentBytes,
   isPresentationRotationLocked,
   PresentationNumberField,
@@ -810,6 +812,144 @@ describe('presentation Insert runtime safeguards', () => {
     expect(textBox.style.textAlign).toBe('center')
     expect(textBox.style.letterSpacing).toBe('0.1em')
     expect(content.className).toContain('w-full')
+  })
+
+  it('renders East Asian vertical text in height-bound right-to-left columns', async () => {
+    const documentModel = createBlankPresentationDocument('Vertical poem')
+    const slide = documentModel.slides[0]!
+    slide.elements = [{
+      id: 'vertical-poem',
+      type: 'text',
+      x: 827,
+      y: 133,
+      width: 311,
+      height: 173,
+      rotation: 0,
+      text: '万木冻欲折孤根暖独回 前村深雪里昨夜一枝开 \n风递幽香出禽窥素艳来 明年如应律先发映春台',
+      fontSize: 30.1067,
+      fontFamily: '叶根友毛笔行书2.0版',
+      fontWeight: 400,
+      color: '#000000',
+      align: 'left',
+      verticalAlign: 'top',
+      textDirection: 'eastAsianVertical',
+      textInsets: { left: 9.6, top: 4.8, right: 9.6, bottom: 4.8 },
+    }]
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    await act(async () => {
+      root.render(<PresentationSlidePreview slide={slide} width={1280} selected={false} />)
+    })
+
+    const textBox = host.querySelector<HTMLElement>('[data-testid="presentation-text-preview"]')!
+    const glyphs = Array.from(textBox.children) as HTMLElement[]
+    expect(glyphs).toHaveLength(40)
+    expect(glyphs[0]!.textContent).toBe('万')
+    expect(glyphs[5]!.textContent).toBe('孤')
+    expect(glyphs[39]!.textContent).toBe('台')
+    expect(Number.parseFloat(glyphs[0]!.style.left)).toBeGreaterThan(Number.parseFloat(glyphs[35]!.style.left))
+    expect(Number.parseFloat(glyphs[4]!.style.top)).toBeGreaterThan(Number.parseFloat(glyphs[0]!.style.top))
+  })
+
+  it('keeps Fabric vertical text in the slide coordinate plane at its authored size', () => {
+    const getContext = HTMLCanvasElement.prototype.getContext
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: () => ({
+        font: '',
+        textBaseline: 'alphabetic',
+        measureText: (value: string) => ({ width: value.length * 24 }),
+      }),
+    })
+    const element = {
+      id: 'vertical-poem',
+      type: 'text' as const,
+      x: 827,
+      y: 133,
+      width: 311,
+      height: 173,
+      rotation: 0,
+      text: '万木冻欲折孤根暖独回 前村深雪里昨夜一枝开 \n风递幽香出禽窥素艳来 明年如应律先发映春台',
+      fontSize: 30.1067,
+      fontFamily: '叶根友毛笔行书2.0版',
+      fontWeight: 400 as const,
+      color: '#000000',
+      align: 'left' as const,
+      verticalAlign: 'top' as const,
+      textDirection: 'eastAsianVertical' as const,
+      textInsets: { left: 9.6, top: 4.8, right: 9.6, bottom: 4.8 },
+    }
+    try {
+      const group = createPresentationVerticalTextFabricObject(fabric, element)
+      const glyphs = group.getObjects().filter((object): object is InstanceType<typeof fabric.Text> => (
+        object instanceof fabric.Text
+      ))
+
+      expect(group).toMatchObject({
+        left: element.x,
+        top: element.y,
+        width: element.width,
+        height: element.height,
+        scaleX: 1,
+        scaleY: 1,
+      })
+      expect(group.getBoundingRect()).toMatchObject({
+        left: element.x,
+        top: element.y,
+        width: element.width,
+        height: element.height,
+      })
+      expect(glyphs).toHaveLength(40)
+      expect(glyphs[0]).toMatchObject({
+        text: '万',
+        fontFamily: expect.stringContaining('"叶根友毛笔行书2.0版"'),
+        fontSize: element.fontSize,
+        scaleX: 1,
+        scaleY: 1,
+      })
+      expect(glyphs[5]).toMatchObject({ text: '孤', fontSize: element.fontSize, scaleX: 1, scaleY: 1 })
+      expect(glyphs[39]).toMatchObject({ text: '台', fontSize: element.fontSize, scaleX: 1, scaleY: 1 })
+      for (const glyph of glyphs) {
+        const bounds = glyph.getBoundingRect()
+        expect(bounds.left).toBeGreaterThanOrEqual(element.x)
+        expect(bounds.top).toBeGreaterThanOrEqual(element.y)
+        expect(bounds.left + bounds.width).toBeLessThanOrEqual(element.x + element.width + 1)
+        expect(bounds.top + bounds.height).toBeLessThanOrEqual(element.y + element.height + 1)
+      }
+    } finally {
+      Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+        configurable: true,
+        value: getContext,
+      })
+    }
+  })
+
+  it('uses the same ellipse crop for picture-filled shapes in previews and Fabric', async () => {
+    const element = {
+      ...createPresentationImageElement(fileSource('image/png', 'landscape.png')),
+      x: 141,
+      y: 261,
+      width: 221,
+      height: 221,
+      clipShape: 'ellipse' as const,
+    }
+    const clipPath = createPresentationImageFabricClipPath(fabric, element)
+    expect(clipPath).toBeInstanceOf(fabric.Ellipse)
+    expect(clipPath).toMatchObject({ rx: element.width / 2, ry: element.height / 2 })
+
+    const documentModel = createBlankPresentationDocument('Picture-filled ellipse')
+    documentModel.slides[0]!.elements = [element]
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mountedRoots.add(root)
+    await act(async () => {
+      root.render(<PresentationSlidePreview slide={documentModel.slides[0]!} width={1280} selected={false} />)
+    })
+
+    expect(host.querySelector<HTMLImageElement>('img')?.style.borderRadius).toBe('50%')
   })
 
   it('draws negative Cartesian chart values on the opposite side of a shared zero axis', async () => {

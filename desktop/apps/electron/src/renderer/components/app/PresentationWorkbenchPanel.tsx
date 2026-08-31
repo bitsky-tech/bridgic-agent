@@ -22,31 +22,31 @@ import type {
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   FolderOpen,
   Grid2X2,
+  LoaderCircle,
   Maximize2,
   MessageSquareText,
   Minimize2,
   MonitorPlay,
   Play,
   Rows3,
-  Upload,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
 import {
   PRESENTATION_PAGE_SIZES,
-  createBlankPresentationDocument,
   createBlankPresentationSlide,
   createPresentationId,
   currentPresentationDocumentAtom,
-  currentPresentationWorkspaceAtom,
   formatPresentationText,
   getPresentationPageSize,
+  layoutPresentationVerticalText,
   presentationExpandedAtom,
   presentationSessionIdAtom,
-  stripPresentationListMarkers,
+  stripPresentationTextFormatting,
   type PresentationAnimationEffect,
   type PresentationComment,
   type PresentationDocument,
@@ -123,7 +123,7 @@ import {
   supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
-import { importPresentationPptx } from '@/lib/presentationPptxImport'
+import { createPresentationPptx } from '@/lib/presentationPptx'
 import {
   getPresentationShapeDefinition,
   getPresentationShapeSize,
@@ -156,8 +156,6 @@ export interface PresentationWorkbenchPanelProps {
   onClose?: () => void
   onExpandedChange?: (expanded: boolean) => void
 }
-
-type ExportState = 'idle' | 'exporting' | 'saved' | 'error'
 
 interface SlideshowTransitionRun {
   direction: PresentationTransitionPlaybackDirection
@@ -432,6 +430,8 @@ function fitFabricGroupToElement(group: FabricObject, element: PresentationEleme
     originY: 'top',
     scaleX: element.width / Math.max(1, group.width ?? element.width),
     scaleY: element.height / Math.max(1, group.height ?? element.height),
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
   })
   return group
 }
@@ -1282,6 +1282,8 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
       stroke: element.borderColor,
       strokeWidth: element.borderWidth,
       opacity: element.opacity ?? 1,
+      flipX: element.flipHorizontal,
+      flipY: element.flipVertical,
       shadow,
     })
   }
@@ -1300,6 +1302,8 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
       stroke: element.borderColor,
       strokeWidth: element.borderWidth,
       opacity: element.opacity ?? 1,
+      flipX: element.flipHorizontal,
+      flipY: element.flipVertical,
       shadow,
     })
   }
@@ -1319,6 +1323,8 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
     strokeLineJoin: 'round',
     strokeUniform: true,
     opacity: element.opacity ?? 1,
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
     shadow,
   })
   path.set({
@@ -1326,6 +1332,103 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
     scaleY: element.height / Math.max(1, path.height ?? 1),
   })
   return path
+}
+
+function createPresentationTextFabricOptions(fabric: FabricModule, element: PresentationTextElement, text: string) {
+  const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
+  return {
+    left: element.x + insets.left,
+    top: element.y + insets.top,
+    angle: element.rotation,
+    originX: 'left',
+    originY: 'top',
+    fill: element.hyperlink ? '#2563EB' : element.color,
+    fontFamily: presentationRenderingFontFamily(element.fontFamily, text),
+    fontSize: element.fontSize,
+    fontWeight: element.fontWeight,
+    fontStyle: element.italic ? 'italic' : 'normal',
+    lineHeight: element.lineHeight ?? 1.08,
+    textAlign: element.align,
+    underline: Boolean(element.underline || element.hyperlink),
+    linethrough: Boolean(element.strikethrough),
+    textBackgroundColor: element.highlightColor ?? '',
+    charSpacing: element.characterSpacing ?? 0,
+    padding: (element.indentLevel ?? 0) * 16,
+    opacity: element.opacity ?? 1,
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
+    shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.28)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
+    splitByGrapheme: shouldSplitPresentationTextByGrapheme(text, element.wordWrap !== false),
+  } as const
+}
+
+/** Compose PowerPoint vertical text in Fabric's center-based group coordinate plane. */
+export function createPresentationVerticalTextFabricObject(fabric: FabricModule, element: PresentationTextElement): FabricGroup {
+  const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
+  const layout = layoutPresentationVerticalText(element)
+  const textOptions = createPresentationTextFabricOptions(fabric, element, formatPresentationText(element))
+  const frame = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width: element.width,
+    height: element.height,
+    originX: 'center',
+    originY: 'center',
+    fill: 'rgba(0,0,0,0)',
+    strokeWidth: 0,
+  })
+  const contentWidth = Math.max(element.fontSize, element.width - insets.left - insets.right)
+  const glyphs = layout.columns.flatMap((column, columnIndex) => {
+    const columnLeft = insets.left + contentWidth - element.fontSize - (columnIndex * layout.columnAdvance)
+    const columnHeight = element.fontSize + ((Math.max(1, Array.from(column).length) - 1) * layout.rowAdvance)
+    const availableHeight = Math.max(0, element.height - insets.top - insets.bottom - columnHeight)
+    let alignmentOffset = 0
+    if (element.verticalAlign === 'bottom') alignmentOffset = availableHeight
+    else if (element.verticalAlign === 'middle') alignmentOffset = availableHeight / 2
+    return Array.from(column).map((glyph, rowIndex) => new fabric.Text(glyph, {
+      ...textOptions,
+      left: columnLeft - (element.width / 2),
+      top: insets.top + alignmentOffset + (rowIndex * layout.rowAdvance) - (element.height / 2),
+      angle: 0,
+      lineHeight: 1,
+      opacity: 1,
+      padding: 0,
+      flipX: false,
+      flipY: false,
+      originX: 'left',
+      originY: 'top',
+    }))
+  })
+  const group = new fabric.Group([frame, ...glyphs], {
+    left: element.x,
+    top: element.y,
+    width: element.width,
+    height: element.height,
+    angle: element.rotation,
+    originX: 'left',
+    originY: 'top',
+    opacity: element.opacity ?? 1,
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
+    strokeWidth: 0,
+    lockSkewingX: true,
+    lockSkewingY: true,
+    layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+  })
+  group.setCoords()
+  return group
+}
+
+export function createPresentationImageFabricClipPath(fabric: FabricModule, element: PresentationImageElement): FabricObject | undefined {
+  if (element.clipShape !== 'ellipse') return undefined
+  return new fabric.Ellipse({
+    left: 0,
+    top: 0,
+    originX: 'center',
+    originY: 'center',
+    rx: element.width / 2,
+    ry: element.height / 2,
+  })
 }
 
 async function createPresentationFabricObject(
@@ -1336,28 +1439,10 @@ async function createPresentationFabricObject(
   if (isPresentationTextElement(element)) {
     const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
     const text = formatPresentationText(element)
-    const textOptions = {
-      left: element.x + insets.left,
-      top: element.y + insets.top,
-      angle: element.rotation,
-      originX: 'left',
-      originY: 'top',
-      fill: element.hyperlink ? '#2563EB' : element.color,
-      fontFamily: presentationRenderingFontFamily(element.fontFamily, text),
-      fontSize: element.fontSize,
-      fontWeight: element.fontWeight,
-      fontStyle: element.italic ? 'italic' : 'normal',
-      lineHeight: element.lineHeight ?? 1.08,
-      textAlign: element.align,
-      underline: Boolean(element.underline || element.hyperlink),
-      linethrough: Boolean(element.strikethrough),
-      textBackgroundColor: element.highlightColor ?? '',
-      charSpacing: element.characterSpacing ?? 0,
-      padding: (element.indentLevel ?? 0) * 16,
-      opacity: element.opacity ?? 1,
-      shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.28)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
-      splitByGrapheme: shouldSplitPresentationTextByGrapheme(text, element.wordWrap !== false),
-    } as const
+    if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') {
+      return createPresentationVerticalTextFabricObject(fabric, element)
+    }
+    const textOptions = createPresentationTextFabricOptions(fabric, element, text)
     const textbox = element.wordWrap === false
       ? new fabric.IText(text, textOptions)
       : new fabric.Textbox(text, {
@@ -1430,6 +1515,7 @@ async function createPresentationFabricObject(
       }
       const group = fitFabricGroupToElement(new fabric.Group([frame, image]), element)
       group.set({
+        clipPath: createPresentationImageFabricClipPath(fabric, element),
         opacity: element.opacity ?? 1,
         shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
       })
@@ -1490,7 +1576,6 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
 export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
   const sessionId = useAtomValue(presentationSessionIdAtom)
-  const [workspace, setWorkspace] = useAtom(currentPresentationWorkspaceAtom)
   const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
   const pageSize = getPresentationPageSize(document)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
@@ -1521,7 +1606,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const [animationPreviewRun, setAnimationPreviewRun] = useState<AnimationPreviewRun | null>(null)
   const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
-  const [exportState, setExportState] = useState<ExportState>('idle')
+  const [exportingDocumentId, setExportingDocumentId] = useState<string | null>(null)
   const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
   const [masterDialogOpen, setMasterDialogOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -1530,7 +1615,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const imageInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
   const videoInputRef = useRef<HTMLInputElement>(null)
-  const presentationInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<FabricCanvas | null>(null)
   const fabricModuleRef = useRef<typeof import('fabric') | null>(null)
   const mediaRuntimeRef = useRef<PresentationMediaRuntime | null>(null)
@@ -1550,6 +1634,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const canvasSelectionFrameRef = useRef<number | null>(null)
   const pastRef = useRef<PresentationHistoryEntry[]>([])
   const futureRef = useRef<PresentationHistoryEntry[]>([])
+  const exportInFlightRef = useRef(false)
   const animationRunIdRef = useRef(0)
   const transitionRunIdRef = useRef(0)
   const fileInsertionTargetRef = useRef<PresentationFileInsertionTarget>({
@@ -1732,7 +1817,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           patch.height = Math.round(frameHeight)
         }
         const text = element.type === 'text'
-          ? stripPresentationListMarkers(object.text, element.listStyle)
+          ? stripPresentationTextFormatting(object.text, element)
           : object.text
         Object.assign(patch, { text })
       }
@@ -2308,36 +2393,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     setDocument(selected)
   }
 
-  const addPresentation = () => {
-    const nextIndex = workspace.documents.length + 1
-    const nextDocument = createBlankPresentationDocument(
-      t('session.presentation.untitledDocument', { index: nextIndex }),
-      t('session.presentation.slideName', { index: 1 }),
-    )
-    setWorkspace({
-      activeDocumentId: nextDocument.id,
-      documents: [...workspace.documents, nextDocument],
-    })
-  }
-
-  const selectPresentation = (documentId: string) => {
-    if (documentId === workspace.activeDocumentId) return
-    setWorkspace({ ...workspace, activeDocumentId: documentId })
-  }
-
-  const closePresentation = (documentId: string) => {
-    if (workspace.documents.length <= 1) {
-      setExpanded(false)
-      if (onClose) onClose()
-      else setRightCollapsed(true)
-      return
-    }
-    const closedIndex = workspace.documents.findIndex((item) => item.id === documentId)
-    const documents = workspace.documents.filter((item) => item.id !== documentId)
-    const activeDocumentId = documentId === workspace.activeDocumentId
-      ? documents[Math.min(Math.max(0, closedIndex), documents.length - 1)]!.id
-      : workspace.activeDocumentId
-    setWorkspace({ activeDocumentId, documents })
+  const closePresentation = () => {
+    setExpanded(false)
+    if (onClose) onClose()
+    else setRightCollapsed(true)
   }
 
   const addSlide = () => {
@@ -2580,25 +2639,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     setInsertDialog({ kind: 'link', ...(linkable ? { elementId: linkable.id } : {}) })
   }
 
-  const importPresentation = async (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.currentTarget
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    try {
-      const imported = await importPresentationPptx(await file.arrayBuffer(), file.name)
-      setWorkspace((current) => ({
-        activeDocumentId: imported.id,
-        documents: [...current.documents, imported],
-      }))
-      setSelectedElementId(null)
-      setRibbonTab('home')
-      showToast(t('session.presentation.imported', { name: file.name }))
-    } catch {
-      showToast(t('session.presentation.importFailed'))
-    }
-  }
-
   const submitInsertDialog = (value: PresentationInsertDialogValue) => {
     const state = insertDialog
     if (!state) return
@@ -2788,20 +2828,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     })
     isolatedElementIdRef.current = null
     activeGroupIdRef.current = groupId
-  }
-
-  const findText = (query: string) => {
-    const needle = query.toLocaleLowerCase()
-    const current = documentRef.current
-    for (const slide of current.slides) {
-      const element = slide.elements.find((item) => (
-        item.type === 'text' && item.text.toLocaleLowerCase().includes(needle)
-      ))
-      if (!element) continue
-      setSelectedElementId(element.id)
-      commitDocument({ ...current, selectedSlideId: slide.id }, false)
-      return
-    }
   }
 
   const updateCurrentSlide = (patch: Partial<PresentationSlide>, recordHistory = true) => {
@@ -3027,33 +3053,38 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   }
 
   const exportPresentation = async () => {
-    if (exportState === 'exporting') return
-    setExportState('exporting')
+    if (exportInFlightRef.current) return
+    const documentToExport = documentRef.current
+    exportInFlightRef.current = true
+    setExportingDocumentId(documentToExport.id)
     try {
-      const safeTitle = (documentRef.current.title || t('session.presentation.untitled'))
+      const safeTitle = (documentToExport.title || t('session.presentation.untitled'))
         .replace(/[\\/:*?"<>|]/g, '-')
       const result = await window.api.dialog.save({
         title: t('session.presentation.export'),
         defaultPath: `${safeTitle}.pptx`,
         filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
       })
-      if (result.canceled || !result.filePath) {
-        setExportState('idle')
-        return
-      }
-      const { createPresentationPptx } = await import('@/lib/presentationPptx')
-      const bytes = await createPresentationPptx(documentRef.current)
+      if (result.canceled || !result.filePath) return
+      const bytes = await createPresentationPptx(documentToExport)
       await window.api.fs.writePresentation(result.filePath, bytes)
-      const documentId = documentRef.current.id
-      setExportedPaths((paths) => ({ ...paths, [documentId]: result.filePath! }))
-      setExportState('saved')
-    } catch {
-      setExportState('error')
+      setExportedPaths((paths) => ({ ...paths, [documentToExport.id]: result.filePath! }))
+      showToast(t('session.presentation.exported'))
+    } catch (error) {
+      rlog.error('[presentation.export] Failed to export PowerPoint', error)
+      showToast(t('session.presentation.exportFailed'))
+    } finally {
+      exportInFlightRef.current = false
+      setExportingDocumentId((current) => current === documentToExport.id ? null : current)
     }
   }
 
   const previewWidth = compact ? 78 : 126
   const exportedPath = exportedPaths[document.id]
+  const documentTitle = document.title.trim() || t('session.presentation.untitled')
+  const documentFileName = documentTitle.toLowerCase().endsWith('.pptx')
+    ? documentTitle
+    : `${documentTitle}.pptx`
   const insertDialogElement = insertDialog?.elementId
     ? currentSlide?.elements.find((element) => element.id === insertDialog.elementId)
     : undefined
@@ -3095,11 +3126,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       applyAll: true,
     }
   }
-  let exportLabel = t('session.presentation.export')
-  if (exportState === 'exporting') exportLabel = t('session.presentation.exporting')
-  else if (exportState === 'saved') exportLabel = t('session.presentation.exported')
-  else if (exportState === 'error') exportLabel = t('session.presentation.exportFailed')
-
   const currentSlideIndex = currentSlide
     ? document.slides.findIndex((slide) => slide.id === currentSlide.id)
     : -1
@@ -3134,55 +3160,48 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           className="flex h-full min-w-0 flex-1 items-end gap-1 overflow-x-auto"
           data-testid="presentation-document-tabs"
         >
-          {workspace.documents.map((item) => {
-            const isActive = item.id === workspace.activeDocumentId
-            const displayTitle = item.title.trim() || t('session.presentation.untitled')
-            const fileName = displayTitle.toLowerCase().endsWith('.pptx')
-              ? displayTitle
-              : `${displayTitle}.pptx`
-            return (
+          <div className="group flex h-8 min-w-[132px] max-w-[220px] shrink-0 items-center rounded-t-lg border border-border-subtle border-b-bg-surface bg-bg-surface px-1 text-text-primary shadow-[0_-1px_8px_rgba(24,24,35,0.035)]">
+            <PresentationControlTooltip content={documentFileName} placement="bottom">
               <div
-                key={item.id}
-                className={cn(
-                  'group flex h-8 min-w-[132px] max-w-[220px] shrink-0 items-center rounded-t-lg border px-1 transition-colors',
-                  isActive
-                    ? 'border-border-subtle border-b-bg-surface bg-bg-surface text-text-primary shadow-[0_-1px_8px_rgba(24,24,35,0.035)]'
-                    : 'border-transparent text-text-tertiary hover:bg-bg-hover/80 hover:text-text-secondary',
-                )}
+                role="tab"
+                aria-selected="true"
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
+                data-testid="presentation-document-tab"
               >
-                <PresentationControlTooltip content={fileName} placement="bottom">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    onClick={() => selectPresentation(item.id)}
-                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
-                    data-testid="presentation-document-tab"
-                  >
-                    <span className={cn('shrink-0', isActive ? 'text-[#D97706]' : 'text-text-tertiary')}>
-                      <PresentationMark />
-                    </span>
-                    <span className="truncate">{fileName}</span>
-                  </button>
-                </PresentationControlTooltip>
-                <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: fileName })} placement="bottom">
-                  <button
-                    type="button"
-                    aria-label={t('session.presentation.closeDocument', { name: fileName })}
-                    onClick={() => closePresentation(item.id)}
-                    className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
-                    data-testid="presentation-close-document"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </PresentationControlTooltip>
+                <span className="shrink-0 text-[#D97706]"><PresentationMark /></span>
+                <span className="truncate">{documentFileName}</span>
               </div>
-            )
-          })}
+            </PresentationControlTooltip>
+            <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: documentFileName })} placement="bottom">
+              <button
+                type="button"
+                aria-label={t('session.presentation.closeDocument', { name: documentFileName })}
+                onClick={closePresentation}
+                className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
+                data-testid="presentation-close-document"
+              >
+                <X className="size-3" />
+              </button>
+            </PresentationControlTooltip>
+          </div>
         </div>
-        <HeaderButton label={t('session.presentation.newDocument')} onClick={addPresentation} testId="presentation-add-document">
-          <PlusIcon />
+        <HeaderButton
+          disabled={Boolean(exportingDocumentId)}
+          label={t(exportingDocumentId ? 'session.presentation.exporting' : 'session.presentation.export')}
+          onClick={() => void exportPresentation()}
+          testId="presentation-export-pptx"
+        >
+          {exportingDocumentId ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
         </HeaderButton>
+        {exportedPath ? (
+          <HeaderButton
+            label={t('asset.common.revealInFileManager')}
+            onClick={() => void window.api.shell.showItemInFolder(exportedPath)}
+            testId="presentation-reveal-export"
+          >
+            <FolderOpen className="size-4" />
+          </HeaderButton>
+        ) : null}
         <HeaderButton
           label={t(expanded ? 'session.presentation.restore' : 'session.presentation.expand')}
           onClick={() => {
@@ -3226,31 +3245,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         selectedElement={ribbonTab === 'animations' ? selectedAnimationElement : selectedElement}
         selectedText={selectedText}
         viewOptions={viewOptions}
-        toolbarActions={(
-          <>
-            <HeaderButton label={t('session.presentation.importPptx')} onClick={() => presentationInputRef.current?.click()} testId="presentation-import-pptx">
-              <Upload className="size-4" />
-            </HeaderButton>
-            <HeaderButton
-              label={t('asset.common.revealInFileManager')}
-              onClick={() => exportedPath && void window.api.shell.showItemInFolder(exportedPath)}
-              disabled={!exportedPath}
-            >
-              <FolderOpen className="size-4" />
-            </HeaderButton>
-            <button
-              type="button"
-              disabled={exportState === 'exporting'}
-              onClick={() => void exportPresentation()}
-              className={cn(
-                'h-7 shrink-0 rounded-md bg-brand-purple px-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60',
-                exportState === 'error' && 'bg-status-error',
-              )}
-            >
-              {exportLabel}
-            </button>
-          </>
-        )}
         onActiveTabChange={changeRibbonTab}
         onAddShape={addShape}
         onAddSlide={addSlide}
@@ -3263,7 +3257,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         onApplyFormat={patchElement}
         onCanvasScaleChange={setCanvasScale}
         onToggleComments={toggleCommentsPane}
-        onFindText={findText}
         onFitCanvas={fitCanvas}
         onEditMaster={() => setMasterDialogOpen(true)}
         onInsertAudio={() => audioInputRef.current?.click()}
@@ -3490,14 +3483,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       </div>
 
       <input
-        ref={presentationInputRef}
-        type="file"
-        accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        className="hidden"
-        data-testid="presentation-pptx-input"
-        onChange={(event) => void importPresentation(event)}
-      />
-      <input
         ref={imageInputRef}
         type="file"
         accept="image/png,image/jpeg,image/gif,image/svg+xml"
@@ -3559,7 +3544,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           }}
         />
       ) : null}
-      <span className="sr-only" aria-live="polite">{exportState === 'saved' ? t('session.presentation.exported') : ''}</span>
     </div>
   )
 }

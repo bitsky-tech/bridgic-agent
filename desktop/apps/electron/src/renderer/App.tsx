@@ -51,6 +51,7 @@ import { CenterView } from './components/app/CenterView'
 import {
   BrowserAttentionAnnouncer,
   FilesAttentionAnnouncer,
+  PowerPointAttentionAnnouncer,
   SessionResourcePanel,
 } from './components/app/SessionResourcePanel'
 import { SidebarContainer } from './components/app/SidebarContainer'
@@ -95,6 +96,7 @@ export default function App() {
     <>
       <BrowserAttentionAnnouncer />
       <FilesAttentionAnnouncer />
+      <PowerPointAttentionAnnouncer />
       <GatewayBootGate>
         <AppWorkspaceLayout
           left={<SidebarContainer />}

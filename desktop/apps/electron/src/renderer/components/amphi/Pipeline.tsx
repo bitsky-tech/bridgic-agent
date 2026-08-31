@@ -42,6 +42,7 @@ import {
   fetchOlderTranscriptAtom,
   hydratedSessionIdsAtom,
   isBrowserAgentActionToolName,
+  isPowerPointAgentActionToolName,
   transcriptPagingFamily,
   type AgentMessage,
   type AgentMessageToolCall,
@@ -719,11 +720,13 @@ export function MessageBubble({
       (block): block is Extract<MessageBlock, { type: 'tool' }> => block.type === 'tool' && !block.result,
     )
     if (runningTool) {
-      return {
-        label: isBrowserAgentActionToolName(runningTool.name)
-          ? t('session.pipeline.activity.usingBrowser')
-          : t('session.pipeline.activity.callingTool'),
+      let label = t('session.pipeline.activity.callingTool')
+      if (isBrowserAgentActionToolName(runningTool.name)) {
+        label = t('session.pipeline.activity.usingBrowser')
+      } else if (isPowerPointAgentActionToolName(runningTool.name)) {
+        label = t('session.pipeline.activity.usingPowerPoint')
       }
+      return { label }
     }
     const latestBlock = blocks?.at(-1)
     if (latestBlock?.type === 'workflow_step' && latestBlock.status === 'running') {

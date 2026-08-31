@@ -109,6 +109,7 @@ export const IPC = {
     setVisible: 'powerpoint:setVisible',
     requestClose: 'powerpoint:requestClose',
     setExpanded: 'powerpoint:setExpanded',
+    openFile: 'powerpoint:openFile',
   },
   // Bridgic Agent Python daemon coordination — the live backend
   // control plane (discover / spawn / stop / clients). The renderer chats with

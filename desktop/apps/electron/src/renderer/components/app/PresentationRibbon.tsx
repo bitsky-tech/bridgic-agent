@@ -50,7 +50,6 @@ import {
   RotateCw,
   Rows3,
   Ruler,
-  Search,
   SendToBack,
   Shapes,
   Sparkles,
@@ -138,7 +137,6 @@ interface PresentationRibbonProps {
   ribbonCollapsed: boolean
   selectedElement: PresentationElement | null
   selectedText: PresentationTextElement | null
-  toolbarActions: ReactNode
   viewOptions: PresentationViewOptions
   onActiveTabChange: (tab: PresentationRibbonTab) => void
   onAddShape: (type: PresentationShapeType) => void
@@ -152,7 +150,6 @@ interface PresentationRibbonProps {
   onApplyFormat: (elementId: string, patch: Partial<PresentationElement>) => void
   onCanvasScaleChange: (scale: number) => void
   onToggleComments: () => void
-  onFindText: (query: string) => void
   onFitCanvas: () => void
   onEditMaster: () => void
   onInsertAudio: () => void
@@ -282,7 +279,6 @@ export function PresentationRibbon({
   ribbonCollapsed,
   selectedElement,
   selectedText,
-  toolbarActions,
   viewOptions,
   onActiveTabChange,
   onAddShape,
@@ -296,7 +292,6 @@ export function PresentationRibbon({
   onApplyFormat,
   onCanvasScaleChange,
   onToggleComments,
-  onFindText,
   onFitCanvas,
   onEditMaster,
   onInsertAudio,
@@ -514,7 +509,6 @@ export function PresentationRibbon({
           ))}
         </nav>
         <div className="flex shrink-0 items-center gap-0.5 bg-bg-surface px-2" data-testid="presentation-toolbar-actions">
-          {toolbarActions}
           <PresentationTooltip content={t('session.presentation.collapseRibbon')}>
             <button
               type="button"
@@ -937,7 +931,6 @@ export function PresentationRibbon({
           />
         ) : null}
 
-        <RibbonTail onFindText={onFindText} onToggleRibbon={onToggleRibbon} />
         {statusNotice ? <span className="pointer-events-none sticky right-16 top-1 z-20 self-start rounded-md bg-text-primary px-2 py-1 text-[10px] text-bg-surface shadow-lg">{statusNotice}</span> : null}
       </section>
     </div>
@@ -1506,18 +1499,6 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, layersOpen, onAddS
   )
 }
 
-function RibbonTail({ onFindText, onToggleRibbon }: { onFindText: (query: string) => void; onToggleRibbon: () => void }) {
-  const { t } = useTranslation()
-  return (
-    <div className="sticky right-0 z-10 ml-auto flex shrink-0 items-center gap-0.5 border-l border-border-subtle/70 bg-bg-app/95 px-1 shadow-[-8px_0_12px_rgba(29,26,48,0.03)]">
-      <SearchControl iconOnly onFindText={onFindText} />
-      <PresentationTooltip content={t('session.presentation.collapseRibbon')}>
-        <button type="button" aria-label={t('session.presentation.collapseRibbon')} onClick={onToggleRibbon} className="flex size-8 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover"><ChevronsUpDown className="size-4" /></button>
-      </PresentationTooltip>
-    </div>
-  )
-}
-
 function TransitionOptions({ onChange, transition }: {
   onChange: (patch: Partial<PresentationTransition>) => void
   transition: PresentationTransition
@@ -1716,31 +1697,6 @@ function CompactRibbonMenu({ active = false, children, disabled = false, icon: I
       {iconOnly ? <PresentationTooltip content={open ? null : label}>{trigger}</PresentationTooltip> : trigger}
       {menu}
     </>
-  )
-}
-
-function SearchControl({ iconOnly = false, onFindText }: { iconOnly?: boolean; onFindText: (query: string) => void }) {
-  const { t } = useTranslation()
-  const [query, setQuery] = useState('')
-  return (
-    <CompactRibbonMenu icon={Search} iconOnly={iconOnly} label={t('session.presentation.search')}>
-      <form
-        className="flex items-center gap-2 p-1"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (query.trim()) onFindText(query.trim())
-        }}
-      >
-        <input
-          autoFocus
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t('session.presentation.searchPlaceholder')}
-          className="h-8 w-52 rounded-md border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-brand-purple"
-        />
-        <button type="submit" className="h-8 rounded-md bg-brand-purple px-3 text-xs font-semibold text-white">{t('session.presentation.search')}</button>
-      </form>
-    </CompactRibbonMenu>
   )
 }
 

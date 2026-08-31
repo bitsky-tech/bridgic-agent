@@ -21,6 +21,10 @@ import { rlog } from '@/lib/logger'
 import { settingsAtom, updateSettingsAtom } from './settings'
 import { showToastAtom } from './toast'
 import { ModalKind, openModalAtom } from './amphi'
+import { setPowerPointNeedsAttentionAtom } from './powerpoint-attention'
+import { setRightPanelCollapsedAtom } from './layout'
+import { viewedSessionIdAtom } from './navigation'
+import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workbench'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -29,6 +33,10 @@ export type FileOpenKeyKind = 'ext' | 'name'
 export interface FileOpenTarget {
   path: string
   name: string
+}
+
+export function isPowerPointFileTarget(file: Pick<FileOpenTarget, 'name'>): boolean {
+  return file.name.toLowerCase().endsWith('.pptx')
 }
 
 /**
@@ -63,6 +71,28 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
     return
   }
   set(openModalAtom, { type: ModalKind.FileOpenConfirm, path: file.path, name: file.name })
+})
+
+/** Route supported Session files into an in-app owner before falling back to the OS. */
+export const requestSessionFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
+  if (!isPowerPointFileTarget(file)) {
+    set(requestFileOpenAtom, file)
+    return
+  }
+  const sessionId = get(viewedSessionIdAtom)
+  if (!sessionId) return
+  try {
+    await window.api.powerpoint.openFile(sessionId, file.path)
+    const stillViewed = get(viewedSessionIdAtom) === sessionId
+    set(setPowerPointNeedsAttentionAtom, { sessionId, needsAttention: !stillViewed })
+    if (!stillViewed) return
+    set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Presentation)
+    set(setRightPanelCollapsedAtom, false)
+    set(showToastAtom, i18n.t('session.presentation.imported', { name: file.name }))
+  } catch (error) {
+    rlog.warn('[fileOpen] in-app PowerPoint import failed', error)
+    set(showToastAtom, i18n.t('session.presentation.importFailed'))
+  }
 })
 
 /**

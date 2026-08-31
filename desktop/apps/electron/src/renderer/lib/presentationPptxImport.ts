@@ -26,6 +26,8 @@ import { createDefaultPresentationTransition } from '@/lib/presentationTransitio
 
 const EMU_PER_INCH = 914_400
 const SLIDE_HEIGHT_PX = 720
+const DEFAULT_TEXT_HORIZONTAL_INSET_EMU = 91_440
+const DEFAULT_TEXT_VERTICAL_INSET_EMU = 45_720
 
 function elementsByLocalName(root: Document | Element, name: string): Element[] {
   return Array.from(root.getElementsByTagName('*')).filter((element) => element.localName === name)
@@ -96,7 +98,9 @@ async function themeColorsFromArchive(archive: JSZip): Promise<Map<string, strin
 }
 
 function numberAttribute(element: Element | null, name: string, fallback = 0): number {
-  const parsed = Number(element?.getAttribute(name))
+  const raw = element?.getAttribute(name)
+  if (raw === null || raw === undefined || raw === '') return fallback
+  const parsed = Number(raw)
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
@@ -129,21 +133,35 @@ const defaultThemeColors = new Map<string, string>([
   ['tx2', '1F1F1F'], ['bg2', 'E7E6E6'],
 ])
 
+const presetColors = new Map<string, string>([
+  ['black', '000000'], ['white', 'FFFFFF'], ['red', 'FF0000'], ['green', '008000'],
+  ['blue', '0000FF'], ['yellow', 'FFFF00'], ['cyan', '00FFFF'], ['magenta', 'FF00FF'],
+  ['gray', '808080'], ['grey', '808080'], ['dkGray', 'A9A9A9'], ['dkGrey', 'A9A9A9'],
+  ['ltGray', 'D3D3D3'], ['ltGrey', 'D3D3D3'], ['orange', 'FFA500'], ['purple', '800080'],
+])
+
+function selfOrFirstByLocalName(root: Element, name: string): Element | null {
+  return root.localName === name ? root : firstByLocalName(root, name)
+}
+
 function colorFrom(root: Element | null, fallback: string, themeColors: ReadonlyMap<string, string> = defaultThemeColors): string {
   if (!root) return fallback
-  const srgb = firstByLocalName(root, 'srgbClr')?.getAttribute('val')
+  const srgb = selfOrFirstByLocalName(root, 'srgbClr')?.getAttribute('val')
   if (srgb && /^[\dA-F]{6}$/i.test(srgb)) return `#${srgb.toUpperCase()}`
-  const system = firstByLocalName(root, 'sysClr')?.getAttribute('lastClr')
+  const system = selfOrFirstByLocalName(root, 'sysClr')?.getAttribute('lastClr')
   if (system && /^[\dA-F]{6}$/i.test(system)) return `#${system.toUpperCase()}`
-  const scheme = firstByLocalName(root, 'schemeClr')?.getAttribute('val')
+  const preset = selfOrFirstByLocalName(root, 'prstClr')?.getAttribute('val')
+  const presetValue = preset ? presetColors.get(preset) : null
+  if (presetValue) return `#${presetValue}`
+  const scheme = selfOrFirstByLocalName(root, 'schemeClr')?.getAttribute('val')
   const themed = scheme ? themeColors.get(scheme) : null
   return themed && /^[\dA-F]{6}$/i.test(themed) ? `#${themed.toUpperCase()}` : fallback
 }
 
 function opacityFrom(root: Element | null): number {
   if (!root) return 1
-  const alpha = firstByLocalName(root, 'alpha')
-  const alphaMod = firstByLocalName(root, 'alphaModFix')
+  const alpha = root.localName === 'alpha' ? root : directChildrenByLocalName(root, 'alpha')[0]
+  const alphaMod = root.localName === 'alphaModFix' ? root : directChildrenByLocalName(root, 'alphaModFix')[0]
   const raw = alpha?.getAttribute('val') ?? alphaMod?.getAttribute('amt')
   const parsed = Number(raw)
   return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed / 100_000)) : 1
@@ -152,7 +170,10 @@ function opacityFrom(root: Element | null): number {
 function importedColorFrom(root: Element | null, fallback: string, themeColors: ReadonlyMap<string, string> = defaultThemeColors): ImportedColor {
   const colorRoot = root ? firstByLocalName(root, 'solidFill') ?? root : null
   const colorNode = colorRoot
-    ? firstByLocalName(colorRoot, 'srgbClr') ?? firstByLocalName(colorRoot, 'sysClr') ?? firstByLocalName(colorRoot, 'schemeClr')
+    ? selfOrFirstByLocalName(colorRoot, 'srgbClr')
+      ?? selfOrFirstByLocalName(colorRoot, 'sysClr')
+      ?? selfOrFirstByLocalName(colorRoot, 'prstClr')
+      ?? selfOrFirstByLocalName(colorRoot, 'schemeClr')
     : null
   return {
     color: colorFrom(colorRoot, fallback, themeColors),
@@ -165,6 +186,15 @@ function textAlignmentFrom(value: string | null | undefined): PresentationTextEl
   if (value === 'r') return 'right'
   if (value === 'just') return 'justify'
   return 'left'
+}
+
+function textDirectionFrom(value: string | null | undefined): PresentationTextElement['textDirection'] | undefined {
+  if (value === 'eaVert') return 'eastAsianVertical'
+  if (value === 'vert') return 'vertical'
+  if (value === 'vert270') return 'vertical270'
+  if (value === 'wordArtVert' || value === 'wordArtVertRtl') return 'stacked'
+  if (value === 'horz') return 'horizontal'
+  return undefined
 }
 
 function transitionDurationFallback(speed: string | null): number {
@@ -228,6 +258,8 @@ function shapeGeometry(
     width: Math.max(8, Math.round(sourceWidth * coordinateTransform.scaleX * scaleX)),
     height: Math.max(8, Math.round(sourceHeight * coordinateTransform.scaleY * scaleY)),
     rotation: Math.round(numberAttribute(transform, 'rot') / 60_000 + coordinateTransform.rotation),
+    ...(transform?.getAttribute('flipH') === '1' ? { flipHorizontal: true } : {}),
+    ...(transform?.getAttribute('flipV') === '1' ? { flipVertical: true } : {}),
   }
 }
 
@@ -286,8 +318,8 @@ function textFrom(
   const importedColor = importedColorFrom(firstByLocalName(runProperties ?? textBody, 'solidFill') ?? fontReference, '#1D1D28', themeColors)
   const scaleX = pageSize.width / slideSizeEmu.width
   const scaleY = pageSize.height / slideSizeEmu.height
-  const hasInsets = ['lIns', 'tIns', 'rIns', 'bIns'].some((name) => bodyProperties?.hasAttribute(name))
   const anchor = bodyProperties?.getAttribute('anchor')
+  const textDirection = textDirectionFrom(bodyProperties?.getAttribute('vert'))
   let verticalAlign: PresentationTextElement['verticalAlign']
   if (anchor === 'ctr') verticalAlign = 'middle'
   else if (anchor === 'b') verticalAlign = 'bottom'
@@ -314,15 +346,14 @@ function textFrom(
     ...(importedColor.opacity < 1 ? { opacity: importedColor.opacity } : {}),
     align: textAlignmentFrom(alignment),
     verticalAlign,
+    ...(textDirection ? { textDirection } : {}),
     wordWrap: bodyProperties?.getAttribute('wrap') !== 'none',
-    ...(hasInsets ? {
-      textInsets: {
-        left: numberAttribute(bodyProperties, 'lIns') * scaleX,
-        top: numberAttribute(bodyProperties, 'tIns') * scaleY,
-        right: numberAttribute(bodyProperties, 'rIns') * scaleX,
-        bottom: numberAttribute(bodyProperties, 'bIns') * scaleY,
-      },
-    } : {}),
+    textInsets: {
+      left: numberAttribute(bodyProperties, 'lIns', DEFAULT_TEXT_HORIZONTAL_INSET_EMU) * scaleX,
+      top: numberAttribute(bodyProperties, 'tIns', DEFAULT_TEXT_VERTICAL_INSET_EMU) * scaleY,
+      right: numberAttribute(bodyProperties, 'rIns', DEFAULT_TEXT_HORIZONTAL_INSET_EMU) * scaleX,
+      bottom: numberAttribute(bodyProperties, 'bIns', DEFAULT_TEXT_VERTICAL_INSET_EMU) * scaleY,
+    },
     ...(lineSpacingPercent > 0 ? { lineHeight: lineSpacingPercent / 100_000 } : {}),
     ...(characterSpacing ? { characterSpacing } : {}),
     ...(baseline ? { baseline } : {}),
@@ -662,10 +693,47 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     groupId ? { ...element, groupId } : element
   ) as T
 
-  const importShape = (shape: Element, coordinateTransform: CoordinateTransform, parentGroupId?: string) => {
+  const imageSourceFromBlip = async (blip: Element | null, relationshipMap: ReadonlyMap<string, string>) => {
+    const svgBlip = blip ? firstByLocalName(blip, 'svgBlip') : null
+    const relationshipId = blip?.getAttribute('r:embed')
+      || blip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
+      || svgBlip?.getAttribute('r:embed')
+      || svgBlip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
+    const target = relationshipId ? relationshipMap.get(relationshipId) : null
+    const image = target ? archive.file(target) : null
+    if (!target || !image) return null
+    const mimeType = mimeTypeForPath(target)
+    return {
+      dataUrl: bytesToDataUrl(await image.async('uint8array'), mimeType),
+      fileName: target.slice(target.lastIndexOf('/') + 1),
+      mimeType,
+    }
+  }
+
+  const importShape = async (
+    shape: Element,
+    coordinateTransform: CoordinateTransform,
+    relationshipMap: ReadonlyMap<string, string>,
+    parentGroupId?: string,
+  ) => {
     const fallbackShape = placeholderPrototypeFor(shape)
     const geometry = shapeGeometry(shape, pageSize, slideSizeEmu, coordinateTransform, fallbackShape)
-    const visual = visualShapeFrom(shape, geometry, themeColors)
+    const shapeProperties = directChildrenByLocalName(shape, 'spPr')[0] ?? firstByLocalName(shape, 'spPr')
+    const blipFill = shapeProperties ? directChildrenByLocalName(shapeProperties, 'blipFill')[0] ?? null : null
+    const blip = blipFill ? firstByLocalName(blipFill, 'blip') : null
+    const imageSource = await imageSourceFromBlip(blip, relationshipMap)
+    const opacity = opacityFrom(blip)
+    const visual: PresentationShapeElement | PresentationImageElement | null = imageSource ? {
+      id: createPresentationId('image'),
+      type: 'image',
+      ...geometry,
+      altText: firstByLocalName(shape, 'cNvPr')?.getAttribute('descr') ?? '',
+      fit: 'cover',
+      ...(shapeTypeFrom(shape) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
+      ...(opacity < 1 ? { opacity } : {}),
+      shadow: Boolean(shapeProperties && firstByLocalName(shapeProperties, 'outerShdw')),
+      source: imageSource,
+    } : visualShapeFrom(shape, geometry, themeColors)
     const text = textFrom(shape, geometry, pageSize, slideSizeEmu, themeColors, fallbackShape)
     const groupId = parentGroupId ?? (visual && text ? createPresentationId('group') : undefined)
     if (visual) elements.push(withGroup(visual, groupId))
@@ -682,16 +750,9 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     parentGroupId?: string,
   ) => {
     const blip = firstByLocalName(picture, 'blip')
-    const svgBlip = blip ? firstByLocalName(blip, 'svgBlip') : null
-    const relationshipId = blip?.getAttribute('r:embed')
-      || blip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
-      || svgBlip?.getAttribute('r:embed')
-      || svgBlip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
-    const target = relationshipId ? relationshipMap.get(relationshipId) : null
-    const image = target ? archive.file(target) : null
-    if (!target || !image) return
+    const source = await imageSourceFromBlip(blip, relationshipMap)
+    if (!source) return
     const geometry = shapeGeometry(picture, pageSize, slideSizeEmu, coordinateTransform)
-    const mimeType = mimeTypeForPath(target)
     const cropNode = firstByLocalName(picture, 'srcRect')
     const crop = cropNode ? {
       left: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'l') / 100_000)),
@@ -706,14 +767,11 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       ...geometry,
       altText: firstByLocalName(picture, 'cNvPr')?.getAttribute('descr') ?? '',
       fit: crop ? 'cover' : 'contain',
+      ...(shapeTypeFrom(picture) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
       ...(crop ? { crop } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(firstByLocalName(picture, 'outerShdw')),
-      source: {
-        dataUrl: bytesToDataUrl(await image.async('uint8array'), mimeType),
-        fileName: target.slice(target.lastIndexOf('/') + 1),
-        mimeType,
-      },
+      source,
     }, parentGroupId)
     elements.push(importedImage)
     const sourceId = firstByLocalName(picture, 'cNvPr')?.getAttribute('id')
@@ -788,8 +846,9 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       if (!shapeProperties) return fallback
       if (directChildrenByLocalName(shapeProperties, 'noFill').length > 0) return 'transparent'
       const solidFill = directChildrenByLocalName(shapeProperties, 'solidFill')[0]
-      if (solidFill && opacityFrom(solidFill) === 0) return 'transparent'
-      return solidFill ? colorFrom(solidFill, fallback, themeColors) : fallback
+      if (!solidFill) return fallback
+      const imported = importedColorFrom(solidFill, fallback, themeColors)
+      return imported.opacity === 0 ? 'transparent' : imported.color
     }
     const chartChild = (root: Element | null, name: string): Element | null => (
       root ? firstByLocalName(root, name) : null
@@ -870,7 +929,7 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       if (node.nodeType !== 1) continue
       const child = node as Element
       if (skipPlaceholders && firstByLocalName(child, 'ph')) continue
-      if (child.localName === 'sp' || child.localName === 'cxnSp') importShape(child, coordinateTransform, parentGroupId)
+      if (child.localName === 'sp' || child.localName === 'cxnSp') await importShape(child, coordinateTransform, relationshipMap, parentGroupId)
       else if (child.localName === 'pic') await importPicture(child, coordinateTransform, relationshipMap, parentGroupId)
       else if (child.localName === 'graphicFrame') await importGraphicFrame(child, coordinateTransform, relationshipMap, parentGroupId)
       else if (child.localName === 'grpSp') {

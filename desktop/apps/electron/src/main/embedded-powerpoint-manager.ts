@@ -4,8 +4,11 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from 'electron'
+import { readFile, realpath, stat } from 'node:fs/promises'
+import path from 'node:path'
 import type {
   EmbeddedPowerPointBounds,
+  EmbeddedPowerPointOpenFileResult,
   EmbeddedPowerPointSessionInfo,
   EmbeddedPowerPointSnapshot,
 } from '../shared/types'
@@ -14,6 +17,7 @@ import { IPC } from '../shared/ipc-channels'
 import { windowLog } from './logger'
 
 const DEFAULT_OPERATIONAL_BOUNDS: Rectangle = { x: 0, y: 0, width: 1280, height: 800 }
+const MAX_OPEN_PRESENTATION_BYTES = 250 * 1024 * 1024
 
 interface EmbeddedPowerPointSurface {
   sessionId: string
@@ -22,6 +26,7 @@ interface EmbeddedPowerPointSurface {
   loading: boolean
   crashed: boolean
   ready: Promise<void>
+  openingFilesByPath: Map<string, Promise<EmbeddedPowerPointOpenFileResult>>
 }
 
 type ViewFactory = (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -75,14 +80,47 @@ export class EmbeddedPowerPointManager {
     return surface ? this.infoFor(surface) : null
   }
 
+  /** Import one local PPTX into the exact Session-owned native editor. */
+  async openFile(sessionId: string, candidatePath: string): Promise<EmbeddedPowerPointOpenFileResult> {
+    const id = this.normalizeSessionId(sessionId)
+    if (typeof candidatePath !== 'string' || !path.isAbsolute(candidatePath)) {
+      throw new Error('PowerPoint file path must be absolute')
+    }
+    if (path.extname(candidatePath).toLowerCase() !== '.pptx') {
+      throw new Error('PowerPoint file path must end with .pptx')
+    }
+    const canonicalPath = await realpath(candidatePath)
+    const fileStat = await stat(canonicalPath)
+    if (!fileStat.isFile()) throw new Error('PowerPoint file must be a regular file')
+    if (fileStat.size > MAX_OPEN_PRESENTATION_BYTES) {
+      throw new Error('PowerPoint file is too large to open')
+    }
+    await this.ensureSession(id)
+    const surface = this.surfaces.get(id)
+    if (!surface) throw new Error(`PowerPoint Session is unavailable: ${id}`)
+    const pending = surface.openingFilesByPath.get(canonicalPath)
+    if (pending) return pending
+    const opening = this.openFileInSurface(surface, canonicalPath)
+    surface.openingFilesByPath.set(canonicalPath, opening)
+    try {
+      return await opening
+    } finally {
+      if (surface.openingFilesByPath.get(canonicalPath) === opening) {
+        surface.openingFilesByPath.delete(canonicalPath)
+      }
+    }
+  }
+
   activateSession(sessionId: string | null): void {
     if (sessionId === null) {
+      if (this.activeSessionId === null) return
       this.activeSessionId = null
       this.syncVisibility()
       return
     }
     const id = this.normalizeSessionId(sessionId)
     if (!this.surfaces.has(id)) throw new Error(`PowerPoint Session is unavailable: ${id}`)
+    if (this.activeSessionId === id) return
     this.activeSessionId = id
     this.syncVisibility()
   }
@@ -100,12 +138,14 @@ export class EmbeddedPowerPointManager {
   setBounds(bounds: EmbeddedPowerPointBounds): void {
     const next = this.normalizeBounds(bounds)
     if (next.width === 0 || next.height === 0) return
+    if (sameRectangle(this.bounds, next)) return
     this.bounds = next
     this.syncVisibility()
   }
 
   setVisible(visible: boolean): void {
     if (typeof visible !== 'boolean') throw new TypeError('PowerPoint visible must be a boolean')
+    if (this.surfaceVisible === visible) return
     this.surfaceVisible = visible
     this.syncVisibility()
   }
@@ -153,6 +193,7 @@ export class EmbeddedPowerPointManager {
       loading: true,
       crashed: false,
       ready: Promise.resolve(),
+      openingFilesByPath: new Map(),
     }
     this.surfaces.set(sessionId, surface)
     view.setBounds(this.bounds)
@@ -223,6 +264,64 @@ export class EmbeddedPowerPointManager {
     }
   }
 
+  private async openFileInSurface(
+    surface: EmbeddedPowerPointSurface,
+    canonicalPath: string,
+  ): Promise<EmbeddedPowerPointOpenFileResult> {
+    const content = await readFile(canonicalPath)
+    const value = await this.dispatchToSurface(surface, {
+      method: 'view_ppt',
+      params: {
+        target: canonicalPath,
+        file_name: path.basename(canonicalPath),
+        content_base64: content.toString('base64'),
+      },
+    })
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('PowerPoint renderer returned an invalid file-open result')
+    }
+    const result = value as Record<string, unknown>
+    const identity = result.identity
+    const meta = result.meta
+    if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
+      throw new Error('PowerPoint renderer returned an invalid file identity')
+    }
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+      throw new Error('PowerPoint renderer returned invalid file metadata')
+    }
+    const identityValue = identity as Record<string, unknown>
+    const metaValue = meta as Record<string, unknown>
+    if (typeof identityValue.document_id !== 'string' || typeof metaValue.total_pages !== 'number') {
+      throw new Error('PowerPoint renderer returned an incomplete file-open result')
+    }
+    return {
+      documentId: identityValue.document_id,
+      fileName: path.basename(canonicalPath),
+      reused: result.reused === true,
+      slideCount: metaValue.total_pages,
+      title: typeof identityValue.name === 'string'
+        ? identityValue.name
+        : path.basename(canonicalPath, '.pptx'),
+    }
+  }
+
+  private async dispatchToSurface(
+    surface: EmbeddedPowerPointSurface,
+    request: { method: string; params?: Record<string, unknown> },
+  ): Promise<unknown> {
+    const contents = surface.view.webContents
+    if (contents.isDestroyed()) throw new Error('PowerPoint renderer is unavailable')
+    const response = await contents.executeJavaScript(
+      `globalThis.__bridgicPowerPoint?.dispatch(${JSON.stringify(request)})`,
+      true,
+    ) as { ok?: unknown; value?: unknown; error?: unknown } | undefined
+    if (!response) throw new Error('PowerPoint renderer domain API is unavailable')
+    if (response.ok !== true) {
+      throw new Error(typeof response.error === 'string' ? response.error : 'PowerPoint renderer request failed')
+    }
+    return response.value
+  }
+
   private syncVisibility(): void {
     const host = this.host
     for (const surface of this.surfaces.values()) {
@@ -282,4 +381,9 @@ export class EmbeddedPowerPointManager {
     this.syncVisibility()
     this.onStateChanged(this.snapshot())
   }
+}
+
+function sameRectangle(left: Rectangle, right: Rectangle): boolean {
+  return left.x === right.x && left.y === right.y
+    && left.width === right.width && left.height === right.height
 }

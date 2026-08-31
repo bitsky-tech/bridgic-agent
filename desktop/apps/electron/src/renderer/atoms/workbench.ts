@@ -1,4 +1,4 @@
-/** Session workbench selection plus event-time Browser/Files reveal arbitration. */
+/** Session workbench selection plus event-time Browser/PowerPoint/Files reveal arbitration. */
 import { atom } from 'jotai'
 import {
   setBrowserNeedsAttentionAtom,
@@ -6,6 +6,7 @@ import {
 import {
   setFilesNeedsAttentionAtom,
 } from './files-attention'
+import { setPowerPointNeedsAttentionAtom } from './powerpoint-attention'
 import {
   rightPanelCollapseRequestAtom,
   rightPanelCollapsedAtom,
@@ -60,9 +61,10 @@ export const setSessionWorkbenchSurfaceAtom = atom(
 export type AttentionWorkbenchSurface =
   | typeof SessionWorkbenchSurface.Browser
   | typeof SessionWorkbenchSurface.Files
+  | typeof SessionWorkbenchSurface.Presentation
 
 /**
- * Report one new Browser/File activity at the moment it happens.
+ * Report one new Browser/PowerPoint/File activity at the moment it happens.
  *
  * Attention is latched first. The first activity finding a genuinely empty
  * right column owns it; a simultaneous or later activity sees that new owner
@@ -86,8 +88,13 @@ export const notifySessionWorkbenchActivityAtom = atom(
         sessionId: payload.sessionId,
         needsAttention: true,
       })
-    } else {
+    } else if (payload.surface === SessionWorkbenchSurface.Files) {
       set(setFilesNeedsAttentionAtom, {
+        sessionId: payload.sessionId,
+        needsAttention: true,
+      })
+    } else {
+      set(setPowerPointNeedsAttentionAtom, {
         sessionId: payload.sessionId,
         needsAttention: true,
       })
