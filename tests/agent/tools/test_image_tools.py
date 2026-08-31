@@ -84,6 +84,27 @@ async def test_generate_image_prefers_active_provider_and_returns_preview_path(t
     assert image_path.suffix == ".png"
 
 
+async def test_generate_image_prefers_current_codex_hosted_tool(tool_harness: ToolHarness) -> None:
+    captured: list[str] = []
+
+    class CodexLlm:
+        protocol = "openai-codex"
+        configuration = SimpleNamespace(model="gpt-5.6-sol")
+
+        async def agenerate_image(self, prompt: str) -> str:
+            captured.append(prompt)
+            return base64.b64encode(_PNG).decode("ascii")
+
+    tool_harness.agent._llm = CodexLlm()
+
+    result = await generate_image("a glass city")
+
+    assert captured == ["a glass city"]
+    image_path = Path(result.splitlines()[-1])
+    assert image_path.read_bytes() == _PNG
+    assert result.startswith("Generated one image with openai-codex/gpt-5.6-sol.\n")
+
+
 async def test_generate_image_honors_explicit_provider_and_model(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     await _configure_provider("google", "gemini-2.5-flash-image", "google")
     selected: list[tuple[str, str]] = []

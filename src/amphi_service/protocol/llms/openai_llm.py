@@ -5,9 +5,10 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from ...i18n import backend_i18n
-from bridgic.core.model.types import Message
+from bridgic.core.model.types import Message, Role
 from bridgic.llms.openai import OpenAILlm
 
+from ._image_inputs import IMAGE_INPUTS_EXTRA, image_data_url, image_inputs_of
 from ._openai_params import is_kimi_code_endpoint, sanitize_openai_params, unsupported_param_of
 from ._streaming import (
     RATE_LIMIT_MAX_RETRIES,
@@ -175,15 +176,34 @@ class OpenAICompatLlm(OpenAILlm):
         on the model name, so they hold behind relays too; other endpoints pass through.
         """
         messages = kwargs.get("messages")
+        image_groups = [image_inputs_of(message) for message in messages] if messages else []
         if messages:
             kwargs = {**kwargs, "messages": [
                 msg.model_copy(update={
-                    "extras": {k: v for k, v in msg.extras.items() if k != _VOLATILE_TAIL_EXTRA}
+                    "extras": {
+                        key: value
+                        for key, value in (msg.extras or {}).items()
+                        if key not in {_VOLATILE_TAIL_EXTRA, IMAGE_INPUTS_EXTRA}
+                    }
                 })
-                if (msg.extras or {}).get(_VOLATILE_TAIL_EXTRA) else msg
+                if set((msg.extras or {})) & {_VOLATILE_TAIL_EXTRA, IMAGE_INPUTS_EXTRA}
+                else msg
                 for msg in messages
             ]}
         params = super()._build_parameters(*args, **kwargs)
+        wire_messages = params.get("messages") or []
+        for message, images, wire in zip(messages or [], image_groups, wire_messages):
+            if message.role != Role.USER or not images:
+                continue
+            original = wire.get("content", "")
+            content = list(original) if isinstance(original, list) else []
+            if isinstance(original, str) and original:
+                content.append({"type": "text", "text": original})
+            content.extend({
+                "type": "image_url",
+                "image_url": {"url": image_data_url(image), "detail": "auto"},
+            } for image in images)
+            wire["content"] = content
         params = sanitize_openai_params(params, base_url=getattr(self, "api_base", None))
         # Drop what this endpoint already rejected (learned by ``_create_stream`` /
         # ``achat``), so the probe and the safety classifier don't re-hit the 400.

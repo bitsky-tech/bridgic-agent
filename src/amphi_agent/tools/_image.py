@@ -238,12 +238,14 @@ async def _request_image(target: _ImageTarget, prompt: str) -> tuple[bytes, Opti
 
 
 async def generate_image(prompt: str, provider_id: str = "", model: str = "") -> str:
-    """Generate one image with a configured text-to-image model and display its file.
+    """Generate one image and display its file.
 
     Use this tool when the user asks to create or render a new image from a text
-    description. The tool automatically prefers the active configured provider,
-    then the first enabled text-to-image model. Pass ``provider_id`` or ``model``
-    only when the user explicitly requests a configured provider or model.
+    description. A current Codex subscription model is allowed to use its hosted
+    Responses image-generation tool. Otherwise the tool automatically prefers
+    the active configured provider, then the first enabled text-to-image model.
+    Pass ``provider_id`` or ``model`` only when the user explicitly requests a
+    configured provider or model.
 
     The generated raster image is saved under the current Session workspace.
     The returned absolute path occupies its own line so the desktop client can
@@ -275,18 +277,55 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
     if not user_id or work_dir is None:
         raise RuntimeError("generate_image requires an active Session workspace")
 
-    credentials = await ProviderRepository().list_for_user(user_id)
-    target = _select_target(credentials, provider_id, model)
-    try:
-        image, _mime_type = await _request_image(target, cleaned_prompt)
-        extension = _raster_extension(image)
-    except Exception as exc:
-        message = str(exc)
-        if target.credential.api_key:
-            message = message.replace(target.credential.api_key, "[redacted]")
-        raise RuntimeError(
-            f"image generation with {target.credential.provider_id}/{target.model} failed: {message}"
-        ) from None
+    requested_provider = provider_id.strip()
+    requested_model = model.strip()
+    current_llm = getattr(agent, "_llm", None)
+    current_protocol = getattr(current_llm, "protocol", "")
+    configuration = getattr(current_llm, "configuration", None)
+    current_model = str(getattr(configuration, "model", "") or "")
+    use_codex = (
+        current_protocol == "openai-codex"
+        and callable(getattr(current_llm, "agenerate_image", None))
+        and requested_provider in {"", "openai-codex"}
+        and requested_model in {"", current_model}
+    )
+
+    image: bytes
+    source: str
+    codex_error: Optional[Exception] = None
+    if use_codex:
+        try:
+            encoded = await current_llm.agenerate_image(cleaned_prompt)
+            image = _decode_base64_image(encoded)
+            source = f"openai-codex/{current_model}"
+        except Exception as exc:
+            codex_error = exc
+            if requested_provider or requested_model:
+                raise RuntimeError(
+                    f"image generation with openai-codex/{current_model} failed: {exc}"
+                ) from None
+
+    if not use_codex or codex_error is not None:
+        credentials = await ProviderRepository().list_for_user(user_id)
+        try:
+            target = _select_target(credentials, provider_id, model)
+        except ValueError as exc:
+            if codex_error is not None:
+                raise RuntimeError(
+                    f"image generation with openai-codex/{current_model} failed: {codex_error}; "
+                    f"no configured image-model fallback is available"
+                ) from None
+            raise
+        try:
+            image, _mime_type = await _request_image(target, cleaned_prompt)
+            source = f"{target.credential.provider_id}/{target.model}"
+        except Exception as exc:
+            message = str(exc)
+            if target.credential.api_key:
+                message = message.replace(target.credential.api_key, "[redacted]")
+            raise RuntimeError(f"image generation with {source} failed: {message}") from None
+
+    extension = _raster_extension(image)
 
     workspace_root = Path(work_dir).resolve()
     output_dir = workspace_root / "generated-images"
@@ -297,7 +336,7 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
     output_path.write_bytes(image)
     resolved_path = output_path.resolve()
     return (
-        f"Generated one image with {target.credential.provider_id}/{target.model}.\n"
+        f"Generated one image with {source}.\n"
         f"{resolved_path}"
     )
 

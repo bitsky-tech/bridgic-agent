@@ -14,6 +14,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from ._image_inputs import image_inputs_of, read_image_input
 from ._streaming import (
     StreamResult,
     convert_tools,
@@ -105,7 +106,19 @@ class GoogleLlm(BaseLlm):
                         id_to_name[block.id or ""] = block.name
                 contents.append(self._ai_message_to_content(msg))
             else:  # Role.USER
-                contents.append({"role": "user", "parts": [{"text": _text_of(msg)}]})
+                parts: List[Dict[str, Any]] = []
+                for image in image_inputs_of(msg):
+                    data, media_type = read_image_input(image)
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": media_type,
+                            "data": data,
+                        },
+                    })
+                text = _text_of(msg)
+                if text:
+                    parts.append({"text": text})
+                contents.append({"role": "user", "parts": parts})
         system = "\n\n".join(p for p in system_parts if p) or None
         return system, contents
 
