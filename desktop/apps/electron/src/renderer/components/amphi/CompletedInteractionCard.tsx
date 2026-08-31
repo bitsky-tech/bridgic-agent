@@ -55,7 +55,11 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
           </div>
           <div className="px-3.5 py-3.5">
             <div className="mb-1 text-xs font-semibold text-text-tertiary">{t('session.interaction.card.newMessageLabel')}</div>
-            <MarkdownMessage content={block.response} className="text-sm leading-6 text-text-primary" />
+            {/* The user's own words, rendered verbatim like the chat bubble and the task_confirm
+                feedback line below. Never Markdown: a path they typed must not become a link. */}
+            <div className="whitespace-pre-wrap break-words text-sm leading-6 text-text-primary">
+              {block.response}
+            </div>
           </div>
         </div>
       )
@@ -192,7 +196,10 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
                     <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-status-success">
                       {Icons.check(11)} {t('session.interaction.card.answerLabel')}
                     </div>
-                    <MarkdownMessage content={pair.answer} className="text-sm leading-6 text-text-primary" />
+                    {/* The answer is the user's; the question above it is the Agent's and stays Markdown. */}
+                    <div className="whitespace-pre-wrap break-words text-sm leading-6 text-text-primary">
+                      {pair.answer}
+                    </div>
                   </div>
                 </div>
               </li>

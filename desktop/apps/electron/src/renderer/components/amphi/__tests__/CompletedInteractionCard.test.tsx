@@ -218,4 +218,64 @@ describe('CompletedInteractionCard', () => {
     await act(async () => root.unmount())
     host.remove()
   })
+
+  // What the user typed is theirs; the card must not reinterpret it. A path they
+  // wrote stays the characters they wrote, matching the plain chat bubble and the
+  // task_confirm feedback line, which never went through Markdown either.
+  it('renders a replied message verbatim, never as a link', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const response = '/tmp/report.pdf'
+
+    await act(async () => {
+      root.render(
+        <CompletedInteractionCard
+          block={{
+            type: 'confirmation',
+            kind: 'confirmation_message',
+            question: '需要哪个文件？',
+            response,
+          }}
+        />,
+      )
+    })
+
+    expect(host.textContent).toContain(response)
+    expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('img')).toBeNull()
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('renders a question answer verbatim while the agent-authored context keeps Markdown', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CompletedInteractionCard
+          block={{
+            type: 'confirmation',
+            prompt: '/tmp/context.pdf',
+            question: '用哪个文件？',
+            response: '/tmp/answer.pdf',
+          }}
+        />,
+      )
+    })
+
+    // The answer is the user's own text.
+    const answerRow = host.querySelector('ol[aria-label="已确认的问答"] > li')
+    expect(answerRow?.textContent).toContain('/tmp/answer.pdf')
+    expect(answerRow?.querySelector('a')).toBeNull()
+    // The agent-authored context above it still renders as Markdown, links included.
+    const context = host.querySelector('section[aria-label="确认背景"]')
+    expect(context?.querySelector('a')?.getAttribute('href')).toBe('/tmp/context.pdf')
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
 })
