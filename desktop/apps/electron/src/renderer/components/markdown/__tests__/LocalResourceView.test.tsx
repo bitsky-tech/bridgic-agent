@@ -24,7 +24,6 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Provider } = await import('jotai')
 const { MarkdownMessage } = await import('../MarkdownMessage')
-const { LocalPathText } = await import('../LocalResourceView')
 
 async function render(node: ReactNode): Promise<{ host: HTMLDivElement; root: Root }> {
   const host = document.createElement('div')
@@ -155,20 +154,6 @@ describe('Markdown local resources', () => {
     await act(async () => image?.dispatchEvent(new Event('error')))
     expect(host.querySelector('img')).toBeNull()
     expect(host.querySelector('a')?.getAttribute('href')).toBe('/tmp/missing.png')
-    await act(async () => root.unmount())
-  })
-})
-
-describe('plain user-message local resources', () => {
-  it('upgrades only a standalone path line', async () => {
-    const { host, root } = await render(
-      <div className="whitespace-pre-wrap">
-        <LocalPathText text={'不要转换 /tmp/inline.png\n/tmp/standalone.png'} />
-      </div>,
-    )
-    expect(host.textContent).toContain('不要转换 /tmp/inline.png')
-    expect(host.querySelectorAll('img')).toHaveLength(1)
-    assertInternalSource(host.querySelector('img')?.getAttribute('src') ?? null, 'file:///tmp/standalone.png')
     await act(async () => root.unmount())
   })
 })

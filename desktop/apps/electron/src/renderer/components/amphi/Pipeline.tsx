@@ -52,7 +52,6 @@ import { useSmoothStream } from '@/hooks/useSmoothStream'
 import { useInfiniteScrollSentinel } from '@/hooks/useInfiniteScrollSentinel'
 import { useAutoHideScrollbar } from '@/hooks/useAutoHideScrollbar'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
-import { LocalPathText } from '@/components/markdown/LocalResourceView'
 import { MessageThinking } from './MessageThinking'
 import { MessageToolCall } from './MessageToolCall'
 import { MessageContent } from './MessageContent'
@@ -605,7 +604,7 @@ function TextMessageBody({
     if (hasBlocks) return <UserMessageBlocks blocks={blocks} />
     return (
       <div className="text-base text-text-primary leading-[1.65] whitespace-pre-wrap break-words">
-        <LocalPathText text={content} />
+        {content}
       </div>
     )
   }

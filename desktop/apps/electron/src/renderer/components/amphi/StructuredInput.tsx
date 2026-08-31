@@ -1,13 +1,10 @@
 import type { MessageBlock } from '@/atoms/agent'
 import type { ChatBlock } from '@shared/types'
 import { Quote } from 'lucide-react'
-import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/cn'
 import { getMentionBadgeClass, getMentionPrefix, SLASH_BADGE_CLASS } from '@/components/composer/segments'
 import { messageQuoteFromBlock } from '@/components/composer/messageQuote'
-import { LocalPathTextParts } from '@/components/markdown/LocalResourceView'
-import { splitLocalPathTextChunks } from '@/components/markdown/localResource'
 
 type StructuredInputBlock = MessageBlock | ChatBlock
 
@@ -16,39 +13,15 @@ export interface StructuredInputProps {
   className?: string
 }
 
-/** Render persisted composer input while preserving mention and slash tokens. */
+/** Render persisted composer input while preserving mention and slash tokens.
+ *
+ *  Text is rendered verbatim: what the user typed is never re-interpreted, so a pasted path stays
+ *  the characters they wrote rather than becoming a link or an inline preview. Guessing where a path
+ *  ends is not decidable from the text alone — paths may contain spaces, so `/tmp/a.docx make a deck`
+ *  parsed as one path and swallowed the request into the link target. */
 export function StructuredInput({ blocks, className }: StructuredInputProps) {
   const { t } = useTranslation()
   const badge = 'inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-sm text-xs select-none'
-  const localPathParts = useMemo(
-    () => splitLocalPathTextChunks(blocks.map((block) => {
-      if (messageQuoteFromBlock(block)) {
-        // The quote renders as a separate card. A line barrier prevents text on
-        // either side from becoming one synthetic path during analysis.
-        return { value: '\n\uFFFC\n', resourceEligible: false }
-      }
-      if (block.type === 'text') {
-        return {
-          value: 'value' in block ? block.value : block.text,
-          resourceEligible: true,
-        }
-      }
-      if (block.type === 'mention') {
-        return {
-          value: `${getMentionPrefix(block.group)}${block.label}`,
-          resourceEligible: false,
-        }
-      }
-      if (block.type === 'slash') {
-        return {
-          value: `/${block.resource ? block.label : block.id}`,
-          resourceEligible: false,
-        }
-      }
-      return { value: '\uFFFC', resourceEligible: false }
-    })),
-    [blocks],
-  )
   return (
     <span className={cn('whitespace-pre-wrap break-words', className)}>
       {blocks.map((block, index) => {
@@ -90,11 +63,7 @@ export function StructuredInput({ blocks, className }: StructuredInputProps) {
           )
         }
         if (block.type === 'text') {
-          return (
-            <span key={index}>
-              <LocalPathTextParts parts={localPathParts[index] ?? []} />
-            </span>
-          )
+          return <span key={index}>{'value' in block ? block.value : block.text}</span>
         }
         return null
       })}

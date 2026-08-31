@@ -1,13 +1,11 @@
-/** Local image/media preview plus the plain-text path renderer shared by user and Agent messages. */
-import { Fragment, type ReactNode, useState } from 'react'
+/** Local image/media preview for paths appearing in Agent Markdown output. */
+import { type ReactNode, useState } from 'react'
 import { useSetAtom } from 'jotai'
 import { openImageAtom } from '@/atoms/lightbox'
 import { FileLink } from './FileLink'
 import {
   parseLocalResourceReference,
-  splitLocalPathText,
   toLocalResourceDisplayUrl,
-  type LocalPathTextPart,
   type LocalResourceReference,
 } from './localResource'
 
@@ -75,28 +73,6 @@ export function LocalResourcePreview({ reference, children }: LocalResourcePrevi
       {fallback}
     </audio>
   )
-}
-
-/** Render already-contextualized plain-text parts. */
-export function LocalPathTextParts({ parts }: { parts: readonly LocalPathTextPart[] }) {
-  return (
-    <>
-      {parts.map((part, index) => {
-        if (part.type === 'text') return <Fragment key={index}>{part.value}</Fragment>
-        const preview = (
-          <LocalResourcePreview reference={part.reference}>{part.value}</LocalResourcePreview>
-        )
-        return part.reference.kind === 'file'
-          ? <Fragment key={index}>{preview}</Fragment>
-          : <span key={index} className="my-2 block max-w-full">{preview}</span>
-      })}
-    </>
-  )
-}
-
-/** Plain-text renderer used for user messages: preserve prose exactly, upgrade only whole path lines. */
-export function LocalPathText({ text }: { text: string }) {
-  return <LocalPathTextParts parts={splitLocalPathText(text)} />
 }
 
 /** Parse and render a local Markdown source, or return null for ordinary URLs. */

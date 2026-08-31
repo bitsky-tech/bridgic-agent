@@ -4,8 +4,6 @@ import {
   localResourceKind,
   parseLocalResourceReference,
   rewriteBareLocalPaths,
-  splitLocalPathText,
-  splitLocalPathTextChunks,
   toLocalResourceDisplayUrl,
 } from '../localResource'
 
@@ -93,63 +91,6 @@ describe('bare local paths in Markdown', () => {
       '```',
     ].join('\n')
     expect(rewriteBareLocalPaths(markdown)).toBe(markdown)
-  })
-
-  it('upgrades only complete lines in plain user text and preserves separators', () => {
-    const parts = splitLocalPathText('说明 /tmp/a.png\n/tmp/a.png\n下一行')
-    expect(parts.map((part) => part.type)).toEqual([
-      'text',
-      'text',
-      'resource',
-      'text',
-      'text',
-    ])
-    expect(parts.map((part) => part.value).join('')).toBe(
-      '说明 /tmp/a.png\n/tmp/a.png\n下一行',
-    )
-  })
-
-  it('leaves fenced and indented paths in plain user text untouched', () => {
-    const text = [
-      '```text',
-      '```not-a-close',
-      '/tmp/in-code.png',
-      '```',
-      '    /tmp/indented.png',
-    ].join('\n')
-    const parts = splitLocalPathText(text)
-    expect(parts.every((part) => part.type === 'text')).toBe(true)
-    expect(parts.map((part) => part.value).join('')).toBe(text)
-  })
-
-  it('preserves whitespace around a plain user path', () => {
-    const text = '  /tmp/a.png  '
-    const parts = splitLocalPathText(text)
-    expect(parts.map((part) => part.value).join('')).toBe(text)
-    expect(parts.map((part) => part.type)).toEqual(['text', 'resource', 'text'])
-  })
-
-  it('uses complete structured-message context across mention and text chunks', () => {
-    const inline = splitLocalPathTextChunks([
-      { value: '查看 ', resourceEligible: true },
-      { value: '@报告', resourceEligible: false },
-      { value: ' /tmp/inline.png', resourceEligible: true },
-    ])
-    expect(inline.flat().some((part) => part.type === 'resource')).toBe(false)
-
-    const fenced = splitLocalPathTextChunks([
-      { value: '```text\n', resourceEligible: true },
-      { value: '@报告', resourceEligible: false },
-      { value: '\n/tmp/in-code.png\n```', resourceEligible: true },
-    ])
-    expect(fenced.flat().some((part) => part.type === 'resource')).toBe(false)
-
-    const standalone = splitLocalPathTextChunks([
-      { value: '查看 ', resourceEligible: true },
-      { value: '@报告', resourceEligible: false },
-      { value: '\n/tmp/standalone.png', resourceEligible: true },
-    ])
-    expect(standalone[2]?.some((part) => part.type === 'resource')).toBe(true)
   })
 })
 

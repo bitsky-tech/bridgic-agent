@@ -7,10 +7,14 @@
  * elements use the internal URL while file links keep their original OS path and still go through
  * FileLink/openPath.
  *
- * Bare paths are deliberately recognised only when they occupy a complete line. That makes a user
- * or Agent pasting `/Users/me/report.pdf` useful without turning paths embedded in prose, logs, or
- * code into surprising UI. Fenced and indented code are excluded before Markdown is parsed (which
- * also preserves UNC backslashes that Markdown would otherwise consume as escapes).
+ * Bare paths are recognised only in Agent Markdown output, and only when they occupy a complete
+ * line, so that a path the Agent reports becomes useful without turning paths embedded in prose,
+ * logs, or code into surprising UI. Fenced and indented code are excluded before Markdown is parsed
+ * (which also preserves UNC backslashes that Markdown would otherwise consume as escapes).
+ *
+ * User input is never scanned: it renders verbatim. A path may contain spaces, so a line such as
+ * `/tmp/a.docx make a deck from this` has no decidable boundary — the whole line parsed as one path
+ * and swallowed the request into the link target.
  */
 import { createLocalResourceUrl } from '@shared/local-resource'
 import type { FileOpenTarget } from '@/atoms/fileOpen'
@@ -216,116 +220,4 @@ export function rewriteBareLocalPaths(markdown: string): string {
       return `${leading}${rewriteReferenceLine(reference)}`
     })
     .join('')
-}
-
-export type LocalPathTextPart =
-  | { type: 'text'; value: string }
-  | { type: 'resource'; value: string; reference: LocalResourceReference }
-
-export interface LocalPathTextChunk {
-  /** Visible text contributed to the complete structured message. */
-  value: string
-  /** False for mention/slash chips and other non-text blocks. */
-  resourceEligible: boolean
-}
-
-/** Split plain user-message text while preserving newlines; only complete path lines become resources. */
-export function splitLocalPathText(text: string): LocalPathTextPart[] {
-  let fence: MarkdownFence | null = null
-
-  return text.split(/(\r?\n)/).flatMap((value): LocalPathTextPart[] => {
-    if (/^\r?\n$/.test(value)) return [{ type: 'text', value }]
-    if (fence !== null) {
-      if (closesFence(value, fence)) fence = null
-      return [{ type: 'text', value }]
-    }
-    const opening = openingFence(value)
-    if (opening) {
-      fence = opening
-      return [{ type: 'text', value }]
-    }
-    if (/^(?: {4}|\t)/.test(value)) return [{ type: 'text', value }]
-
-    const leading = value.match(/^[ \t]*/)?.[0] ?? ''
-    const trailing = value.match(/[ \t]*$/)?.[0] ?? ''
-    const candidate = value.slice(leading.length, value.length - trailing.length)
-    const reference = parseLocalResourceReference(candidate)
-    if (!reference) return [{ type: 'text', value }]
-
-    const parts: LocalPathTextPart[] = []
-    if (leading) parts.push({ type: 'text', value: leading })
-    parts.push({ type: 'resource', value: candidate, reference })
-    if (trailing) parts.push({ type: 'text', value: trailing })
-    return parts
-  })
-}
-
-/**
- * Split text blocks with the context of the complete structured user message.
- *
- * Composer mentions and slash commands divide one visible line into multiple
- * persisted blocks. Analysing those blocks independently would make the suffix
- * of `look at @report /tmp/a.png` appear to be a standalone path and would lose
- * fenced-code state across a chip. Flattening first preserves the real line and
- * fence semantics; a resource is upgraded only when its full span belongs to one
- * eligible text block. Cross-block paths remain ordinary text rather than being
- * reconstructed speculatively.
- */
-export function splitLocalPathTextChunks(
-  chunks: readonly LocalPathTextChunk[],
-): LocalPathTextPart[][] {
-  const flattened = chunks.map((chunk) => chunk.value).join('')
-  const resourceSpans: Array<{
-    start: number
-    end: number
-    reference: LocalResourceReference
-  }> = []
-
-  let flatOffset = 0
-  for (const part of splitLocalPathText(flattened)) {
-    const end = flatOffset + part.value.length
-    if (part.type === 'resource') {
-      resourceSpans.push({ start: flatOffset, end, reference: part.reference })
-    }
-    flatOffset = end
-  }
-
-  let chunkStart = 0
-  return chunks.map((chunk) => {
-    const chunkEnd = chunkStart + chunk.value.length
-    if (!chunk.resourceEligible) {
-      chunkStart = chunkEnd
-      return [{ type: 'text', value: chunk.value }]
-    }
-
-    const contained = resourceSpans.filter(
-      (span) => span.start >= chunkStart && span.end <= chunkEnd,
-    )
-    if (contained.length === 0) {
-      chunkStart = chunkEnd
-      return [{ type: 'text', value: chunk.value }]
-    }
-
-    const parts: LocalPathTextPart[] = []
-    let cursor = chunkStart
-    for (const span of contained) {
-      if (span.start > cursor) {
-        parts.push({
-          type: 'text',
-          value: chunk.value.slice(cursor - chunkStart, span.start - chunkStart),
-        })
-      }
-      parts.push({
-        type: 'resource',
-        value: chunk.value.slice(span.start - chunkStart, span.end - chunkStart),
-        reference: span.reference,
-      })
-      cursor = span.end
-    }
-    if (cursor < chunkEnd) {
-      parts.push({ type: 'text', value: chunk.value.slice(cursor - chunkStart) })
-    }
-    chunkStart = chunkEnd
-    return parts
-  })
 }
