@@ -117,6 +117,37 @@ describe('Pipeline', () => {
     host.remove()
   })
 
+  // A reply to request_human carries no blocks (human-request.ts sends text only), so it renders
+  // through the plain-content branch rather than StructuredInput. A path typed there is still just
+  // the characters the user wrote, never a link.
+  it('renders a bare path in a blockless user message as plain text', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const text = '/Users/me/Documents/chapter 2.docx  use section 2.1 for the deck'
+    store.set(activeSessionIdAtom, 'blockless-session')
+    store.set(messageFamily('blockless-session'), [{
+      id: 'user-1', turnId: 'turn-1', role: AgentRole.User, text,
+      toolCalls: [], done: true, createdAt: 1,
+    }])
+
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <Pipeline />
+        </Provider>,
+      )
+    })
+
+    expect(host.textContent).toContain(text)
+    expect(host.querySelector('[class*="filelink"]')).toBeNull()
+    expect(host.querySelector('a[href*=".docx"]')).toBeNull()
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   it('shows primary-conversation actions and snapshots the paired Turn for feedback', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
