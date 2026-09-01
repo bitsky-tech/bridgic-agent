@@ -67,6 +67,7 @@ class AmphiOTAContext(OTAContext):
     stream: Optional[Any] = None
     state: AgentState = Field(default_factory=AgentState)
     browser_tool_loaded: bool = False
+    sheet_tool_loaded: bool = False
     workspace_tools_loaded: bool = False
     skills_tool_loaded: bool = False
     selected_skill_dirs: List[str] = Field(default_factory=list, exclude=True)

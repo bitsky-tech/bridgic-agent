@@ -11,39 +11,145 @@ interface FakeSheetOptions {
   values?: unknown[][]
 }
 
+const BORDER_STYLES = { none: 0, thin: 1, medium: 8, thick: 13 }
+
 function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
   const calls: string[] = []
-  const worksheets = sheets.map((options, index) => {
-    let values: unknown[][] = options.values ?? [[null]]
-    return {
-      getSheetId: () => `id-${index}`,
-      getSheetName: () => options.name,
-      getRange: (a1: string) => {
-        if (a1 === 'bad') return null as never
-        return {
-          clear: () => calls.push(`clear ${options.name}!${a1}`),
-          getValues: () => values,
-          setFormula: (formula: string) => calls.push(`formula ${options.name}!${a1} ${formula}`),
-          setValues: (next: { v: CellValue }[][]) => {
-            values = next.map((row) => row.map((cell) => cell.v))
-            calls.push(`write ${options.name}!${a1}`)
-          },
-        }
-      },
+  const worksheets: FakeWorksheet[] = []
+
+  interface FakeWorksheet {
+    cancelFreeze(): void
+    deleteColumns(position: number, howMany: number): void
+    deleteRows(position: number, howMany: number): void
+    getDataRange(): ReturnType<FakeWorksheet['getRange']>
+    getMaxColumns(): number
+    getMaxRows(): number
+    getRange(a1: string): {
+      breakApart(): void
+      clear(): void
+      getA1Notation(): string
+      getValues(): unknown[][]
+      merge(): void
+      mergeAcross(): void
+      mergeVertically(): void
+      setBackground(color: string): void
+      setBorder(type: string, style: number, color?: string): void
+      setFontColor(color: string | null): void
+      setFontSize(size: number | null): void
+      setFontStyle(style: string | null): void
+      setFontWeight(weight: string | null): void
+      setFormula(formula: string): void
+      setHorizontalAlignment(alignment: string): void
+      setNumberFormat(pattern: string): void
+      setValues(values: { v: CellValue }[][]): void
+      setVerticalAlignment(alignment: string): void
+      setWrap(wrap: boolean): void
     }
-  })
+    getSelection(): {
+      getActiveRange(): ReturnType<FakeWorksheet['getRange']> | null
+      getActiveRangeList(): ReturnType<FakeWorksheet['getRange']>[]
+    } | null
+    getSheetId(): string
+    getSheetName(): string
+    insertColumns(index: number, count?: number): void
+    insertRows(index: number, count?: number): void
+    setColumnWidths(start: number, count: number, width: number): void
+    setFrozenColumns(columns: number): void
+    setFrozenRows(rows: number): void
+    setName(name: string): void
+    setRowHeights(start: number, count: number, height: number): void
+  }
+
+  function makeSheet(options: FakeSheetOptions, index: number): FakeWorksheet {
+    let values: unknown[][] = options.values ?? [[null]]
+    let name = options.name
+    let selectionA1: string | null = null
+    const range = (a1: string) => ({
+      breakApart: () => calls.push(`break ${name}!${a1}`),
+      clear: () => calls.push(`clear ${name}!${a1}`),
+      getA1Notation: () => a1,
+      getValues: () => values,
+      merge: () => calls.push(`merge ${name}!${a1}`),
+      mergeAcross: () => calls.push(`mergeAcross ${name}!${a1}`),
+      mergeVertically: () => calls.push(`mergeVertically ${name}!${a1}`),
+      setBackground: (color: string) => calls.push(`background ${a1} ${color}`),
+      setBorder: (type: string, style: number, color?: string) =>
+        calls.push(`border ${a1} ${type} ${style} ${color ?? '-'}`),
+      setFontColor: (color: string | null) => calls.push(`fontColor ${a1} ${color}`),
+      setFontSize: (size: number | null) => calls.push(`fontSize ${a1} ${size}`),
+      setFontStyle: (style: string | null) => calls.push(`fontStyle ${a1} ${style}`),
+      setFontWeight: (weight: string | null) => calls.push(`fontWeight ${a1} ${weight}`),
+      setFormula: (formula: string) => calls.push(`formula ${name}!${a1} ${formula}`),
+      setHorizontalAlignment: (alignment: string) => calls.push(`hAlign ${a1} ${alignment}`),
+      setNumberFormat: (pattern: string) => calls.push(`numberFormat ${a1} ${pattern}`),
+      setValues: (next: { v: CellValue }[][]) => {
+        values = next.map((row) => row.map((cell) => cell.v))
+        calls.push(`write ${name}!${a1}`)
+      },
+      setVerticalAlignment: (alignment: string) => calls.push(`vAlign ${a1} ${alignment}`),
+      setWrap: (wrap: boolean) => calls.push(`wrap ${a1} ${wrap}`),
+    })
+    return {
+      cancelFreeze: () => calls.push(`cancelFreeze ${name}`),
+      deleteColumns: (position, howMany) => calls.push(`deleteColumns ${position} ${howMany}`),
+      deleteRows: (position, howMany) => calls.push(`deleteRows ${position} ${howMany}`),
+      getDataRange: () => range('A1:B2'),
+      getMaxColumns: () => 20,
+      getMaxRows: () => 100,
+      getRange: (a1: string) => (a1 === 'bad' ? (null as never) : range(a1)),
+      getSelection: () => (selectionA1 === null
+        ? null
+        : {
+          getActiveRange: () => range(selectionA1 as string),
+          getActiveRangeList: () => [range(selectionA1 as string)],
+        }),
+      getSheetId: () => `id-${index}`,
+      getSheetName: () => name,
+      insertColumns: (at, count) => calls.push(`insertColumns ${at} ${count}`),
+      insertRows: (at, count) => calls.push(`insertRows ${at} ${count}`),
+      setColumnWidths: (start, count, width) =>
+        calls.push(`columnWidths ${start} ${count} ${width}`),
+      setFrozenColumns: (columns) => calls.push(`frozenColumns ${columns}`),
+      setFrozenRows: (rows) => calls.push(`frozenRows ${rows}`),
+      setName: (next: string) => {
+        name = next
+      },
+      setRowHeights: (start, count, height) =>
+        calls.push(`rowHeights ${start} ${count} ${height}`),
+      // Exposed only to the tests, to stand in for a person selecting cells.
+      select: (a1: string | null) => {
+        selectionA1 = a1
+      },
+    } as FakeWorksheet & { select(a1: string | null): void }
+  }
+
+  sheets.forEach((options, index) => worksheets.push(makeSheet(options, index)))
+
   const workbook = {
+    deleteSheet: (sheetId: string) => {
+      const at = worksheets.findIndex((sheet) => sheet.getSheetId() === sheetId)
+      if (at >= 0) worksheets.splice(at, 1)
+      calls.push(`deleteSheet ${sheetId}`)
+    },
     getActiveSheet: () => worksheets[0]!,
     getName: () => 'Book',
     getSheets: () => worksheets,
     getSnapshot: () => ({ id: 'snapshot' }),
+    insertSheet: (name?: string) => {
+      const sheet = makeSheet({ name: name ?? 'Sheet2' }, worksheets.length)
+      worksheets.push(sheet)
+      calls.push(`insertSheet ${name}`)
+      return sheet
+    },
     redo: () => calls.push('redo'),
+    setActiveSheet: (sheetId: string) => calls.push(`activate ${sheetId}`),
     undo: () => calls.push('undo'),
   }
   return {
     calls,
     facade: { getActiveWorkbook: () => workbook },
     facadeWithoutWorkbook: { getActiveWorkbook: () => null },
+    worksheets: worksheets as (FakeWorksheet & { select(a1: string | null): void })[],
   }
 }
 
@@ -142,7 +248,7 @@ describe('SheetBridge — human/agent arbitration', () => {
   test('attributes changes to the agent or the person who made them', () => {
     let clock = 100
     const { facade } = fakeFacade()
-    const bridge = new SheetBridge(facade, () => (clock += 1))
+    const bridge = new SheetBridge(facade, BORDER_STYLES, () => (clock += 1))
     bridge.writeRange('A1', [['x']])
     bridge.noteExternalChange('B7')
     expect(bridge.recentChanges()).toEqual([
@@ -197,5 +303,159 @@ describe('SheetBridge — workbook operations', () => {
     const bridge = new SheetBridge(facadeWithoutWorkbook)
     expect(() => bridge.snapshot()).toThrow(/not ready/)
     expect(() => bridge.readRange('A1')).toThrow(/not ready/)
+  })
+})
+
+describe('SheetBridge — formatting', () => {
+  test('applies every requested style in one pass and skips the rest', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.format('A1:B2', {
+      background: '#fff2cc',
+      bold: true,
+      italic: false,
+      numberFormat: '#,##0.00',
+      wrap: true,
+    })
+    expect(calls).toEqual([
+      'background A1:B2 #fff2cc',
+      'fontWeight A1:B2 bold',
+      'fontStyle A1:B2 normal',
+      'wrap A1:B2 true',
+      'numberFormat A1:B2 #,##0.00',
+    ])
+    expect(bridge.status().revision).toBe(1)
+  })
+
+  test('refuses a format call that would change nothing', () => {
+    const { facade } = fakeFacade()
+    expect(() => new SheetBridge(facade, BORDER_STYLES).format('A1', {}))
+      .toThrow(/at least one property/)
+  })
+
+  test('border maps a style name to the page’s own enum value', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.border('A1:C3', 'all', 'medium', '#d9d9d9')
+    expect(calls).toEqual(['border A1:C3 all 8 #d9d9d9'])
+  })
+
+  test('border names an unknown type or style instead of guessing', () => {
+    const { facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(() => bridge.border('A1', 'diagonal' as never, 'thin')).toThrow(/unknown border type/)
+    expect(() => bridge.border('A1', 'all', 'wavy')).toThrow(/unknown border style/)
+  })
+
+  test('merge routes each mode to its own operation', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.merge('A1:C1', 'all')
+    bridge.merge('A2:C2', 'across')
+    bridge.merge('A3:C3', 'vertically')
+    bridge.merge('A4:C4', 'break')
+    expect(calls).toEqual([
+      'merge Sheet1!A1:C1',
+      'mergeAcross Sheet1!A2:C2',
+      'mergeVertically Sheet1!A3:C3',
+      'break Sheet1!A4:C4',
+    ])
+  })
+
+  test('formatting is refused while a person has a cell editor open', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.setHumanEditing(true)
+    expect(() => bridge.format('A1', { bold: true })).toThrow(/person is editing/)
+    expect(calls).toEqual([])
+  })
+})
+
+describe('SheetBridge — structure', () => {
+  test('inserts, deletes and resizes rows and columns', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.insertLines('rows', 2, 3)
+    bridge.deleteLines('columns', 1, 2)
+    bridge.resizeLines('rows', 0, 1, 32)
+    expect(calls).toEqual(['insertRows 2 3', 'deleteColumns 1 2', 'rowHeights 0 1 32'])
+    expect(bridge.recentChanges().map((change) => change.a1)).toEqual([
+      'Sheet1: insert 3 rows at 2',
+      'Sheet1: delete 2 columns at 1',
+      'Sheet1: resize 1 rows at 0 to 32px',
+    ])
+  })
+
+  test('an insert may target the end of the sheet but a delete may not', () => {
+    const { facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.insertLines('rows', 100, 1)
+    expect(() => bridge.deleteLines('rows', 100, 1)).toThrow(/between 0 and 99/)
+    expect(() => bridge.insertLines('rows', 101, 1)).toThrow(/between 0 and 100/)
+    expect(() => bridge.insertLines('rows', 0, 0)).toThrow(/one or more/)
+    expect(() => bridge.resizeLines('rows', 0, 1, 0)).toThrow(/positive number/)
+  })
+
+  test('freeze sets both axes and zero releases them', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.freeze(1, 2)
+    bridge.freeze(0, 0)
+    expect(calls).toEqual(['frozenRows 1', 'frozenColumns 2', 'cancelFreeze Sheet1'])
+    expect(() => bridge.freeze(-1, 0)).toThrow(/zero or more/)
+  })
+
+  test('structure changes are refused while a person is editing', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.setHumanEditing(true)
+    expect(() => bridge.insertLines('rows', 0, 1)).toThrow(/person is editing/)
+    expect(() => bridge.freeze(1, 0)).toThrow(/person is editing/)
+    expect(calls).toEqual([])
+  })
+})
+
+describe('SheetBridge — reading what the person did', () => {
+  test('dataRange reports the used rectangle and its shape', () => {
+    const { facade } = fakeFacade([{ name: 'Sheet1', values: [['a', 'b'], ['c', 'd']] }])
+    expect(new SheetBridge(facade, BORDER_STYLES).dataRange())
+      .toEqual({ a1: 'A1:B2', columns: 2, rows: 2 })
+  })
+
+  test('selection reports where the person is, and says so when nowhere', () => {
+    const { facade, worksheets } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(bridge.selection()).toEqual({ active: null, ranges: [] })
+    worksheets[0]!.select('C5:D6')
+    expect(bridge.selection()).toEqual({ active: 'C5:D6', ranges: ['C5:D6'] })
+  })
+
+  test('reading the selection stays available while the person types', () => {
+    const { facade, worksheets } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    worksheets[0]!.select('A1')
+    bridge.setHumanEditing(true)
+    expect(bridge.selection().active).toBe('A1')
+  })
+})
+
+describe('SheetBridge — sheet management', () => {
+  test('adds, renames, activates and removes sheets', () => {
+    const { calls, facade } = fakeFacade([{ name: 'Sheet1' }, { name: 'Data' }])
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(bridge.addSheet('Summary')).toEqual({ id: 'id-2', name: 'Summary' })
+    expect(bridge.renameSheet('Data', 'Raw')).toEqual({ id: 'id-1', name: 'Raw' })
+    expect(bridge.activateSheet('Raw')).toEqual({ id: 'id-1', name: 'Raw' })
+    bridge.removeSheet('Raw')
+    expect(calls).toEqual(['insertSheet Summary', 'activate id-1', 'deleteSheet id-1'])
+    expect(bridge.status().sheets.map((sheet) => sheet.name)).toEqual(['Sheet1', 'Summary'])
+  })
+
+  test('refuses to remove the last sheet or to use a blank name', () => {
+    const { facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(() => bridge.removeSheet('Sheet1')).toThrow(/at least one sheet/)
+    expect(() => bridge.addSheet('  ')).toThrow(/sheet name is required/)
+    expect(() => bridge.renameSheet('Nope', 'X')).toThrow(/no sheet named/)
   })
 })

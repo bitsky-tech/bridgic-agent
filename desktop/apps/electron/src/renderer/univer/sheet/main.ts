@@ -12,7 +12,7 @@
  * packages, so the handful of lines `createUniver` would have provided are
  * inlined below instead.
  */
-import { LocaleType, LogLevel, Univer } from '@univerjs/core'
+import { BorderStyleTypes, LocaleType, LogLevel, Univer } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core'
 import sheetsCoreEnUS from '@univerjs/preset-sheets-core/locales/en-US'
@@ -42,7 +42,17 @@ for (const entry of preset.plugins) {
 const univerAPI = FUniver.newAPI(univer)
 univerAPI.createWorkbook({ name: params.get('name') || 'Untitled' })
 
-const bridge = new SheetBridge(univerAPI)
+// The bridge takes these values rather than hard-coding numbers, because border
+// style is the one numeric enum on this facade and upstream may renumber it.
+const bridge = new SheetBridge(univerAPI, {
+  dashed: BorderStyleTypes.DASHED,
+  dotted: BorderStyleTypes.DOTTED,
+  double: BorderStyleTypes.DOUBLE,
+  medium: BorderStyleTypes.MEDIUM,
+  none: BorderStyleTypes.NONE,
+  thick: BorderStyleTypes.THICK,
+  thin: BorderStyleTypes.THIN,
+})
 
 // A person typing in a cell owns that edit; the bridge refuses agent writes
 // until they commit it, which is what makes shared editing safe without any

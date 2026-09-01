@@ -60,6 +60,7 @@ from .tools import (
     BROWSER_ADVANCED_TOOL_NAMES,
     BROWSER_TOOL_NAMES,
     DOC_TOOL_NAMES,
+    SHEET_ADVANCED_TOOL_NAMES,
     SHEET_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
@@ -1902,6 +1903,11 @@ class MainThink(CognitiveWorker):
                 s for s in specs
                 if s.tool_name not in BROWSER_ADVANCED_TOOL_NAMES
             ]
+        if not ota_context.sheet_tool_loaded:
+            specs = [
+                s for s in specs
+                if s.tool_name not in SHEET_ADVANCED_TOOL_NAMES
+            ]
         if not ota_context.workspace_tools_loaded:
             specs = [
                 s for s in specs
@@ -1919,6 +1925,8 @@ class MainThink(CognitiveWorker):
         )
         if ota_context.browser_tool_loaded:
             allowed |= BROWSER_ADVANCED_TOOL_NAMES
+        if ota_context.sheet_tool_loaded:
+            allowed |= SHEET_ADVANCED_TOOL_NAMES
         if ota_context.workspace_tools_loaded:
             allowed |= WORKSPACE_ADVANCED_TOOL_NAMES
         if ota_context.skills_tool_loaded:

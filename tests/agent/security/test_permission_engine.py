@@ -523,3 +523,38 @@ async def test_permission_logs_redact_call_arguments(test_sandbox: "IsolatedPath
     assert "bash" in caplog.text
     assert "Authorization" not in caplog.text
     assert "sk-super-secret" not in caplog.text
+
+
+def test_every_workbench_tool_is_classified() -> None:
+    """Final capability coverage:
+
+    {"unclassified_workbench_tools": []}
+
+    Checks:
+    1. No spreadsheet or document tool falls through to the unregistered class,
+       which the registry treats as "review" and would otherwise make every
+       call prompt the person.
+    2. The tools that only read are not classified as writes, and the tools
+       that touch the filesystem are.
+    """
+    from src.amphi_agent.security._classify import _tool_capability
+    from src.amphi_agent.security._types import Capability
+    from src.amphi_agent.tools import DOC_TOOL_NAMES, SHEET_TOOL_NAMES
+
+    workbench_tools = SHEET_TOOL_NAMES | DOC_TOOL_NAMES
+
+    # Check 1: nothing is left unregistered.
+    unclassified = sorted(
+        name for name in workbench_tools
+        if _tool_capability(name) is Capability.EXECUTE
+    )
+    assert unclassified == []
+
+    # Check 2: reads, in-app writes and file writes land in their own classes.
+    assert _tool_capability("sheet_read") is Capability.MANAGE
+    assert _tool_capability("sheet_selection") is Capability.MANAGE
+    assert _tool_capability("doc_read") is Capability.MANAGE
+    assert _tool_capability("sheet_format") is Capability.MANAGE_WRITE
+    assert _tool_capability("doc_append") is Capability.MANAGE_WRITE
+    assert _tool_capability("sheet_save") is Capability.EDIT
+    assert _tool_capability("doc_save") is Capability.EDIT

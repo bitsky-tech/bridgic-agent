@@ -20,6 +20,7 @@ from src.amphi_agent._cognitive import (
 )
 from src.amphi_agent.tools import (
     BROWSER_ADVANCED_TOOL_NAMES,
+    SHEET_ADVANCED_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
 )
@@ -108,6 +109,7 @@ def test_lazy_tools() -> None:
 
     {
       "browser_loaded": "+ browser advanced tools only",
+      "sheet_loaded": "+ sheet presentation tools only",
       "workspace_loaded": "+ Workspace advanced tools only",
       "skills_loaded": "+ Skill management tools only"
     }
@@ -125,6 +127,7 @@ def test_lazy_tools() -> None:
     # Check 1: The default surface withholds every advanced lazy group.
     advanced = (
         BROWSER_ADVANCED_TOOL_NAMES
+        | SHEET_ADVANCED_TOOL_NAMES
         | WORKSPACE_ADVANCED_TOOL_NAMES
         | SKILLS_ADVANCED_TOOL_NAMES
     )
@@ -133,6 +136,7 @@ def test_lazy_tools() -> None:
     # Check 2: Each load flag adds its own complete group without leaking another group.
     cases = (
         ("browser_tool_loaded", BROWSER_ADVANCED_TOOL_NAMES),
+        ("sheet_tool_loaded", SHEET_ADVANCED_TOOL_NAMES),
         ("workspace_tools_loaded", WORKSPACE_ADVANCED_TOOL_NAMES),
         ("skills_tool_loaded", SKILLS_ADVANCED_TOOL_NAMES),
     )

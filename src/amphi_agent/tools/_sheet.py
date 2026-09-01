@@ -13,14 +13,15 @@ person's edits without re-reading the whole grid.
 
 import json
 import os
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
+from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
 from ._filesystem import _resolve_file, display_path
 from ._workbench import get_workbench_browser, open_workbench, workbench_status
 
-SHEET_TOOL_NAMES = frozenset({
+SHEET_BASIC_TOOL_NAMES = frozenset({
     "sheet_open",
     "sheet_status",
     "sheet_read",
@@ -28,10 +29,45 @@ SHEET_TOOL_NAMES = frozenset({
     "sheet_formula",
     "sheet_clear",
     "sheet_changes",
+    "sheet_data_range",
+    "sheet_selection",
     "sheet_save",
+    "load_sheet_tools",
 })
 
+# Presentation and structure: everything a workbook needs to be readable rather
+# than merely correct. Loaded on demand so an ordinary turn is not paying for a
+# dozen tool descriptions it will never call.
+SHEET_ADVANCED_TOOL_NAMES = frozenset({
+    "sheet_format",
+    "sheet_border",
+    "sheet_merge",
+    "sheet_insert_lines",
+    "sheet_delete_lines",
+    "sheet_resize_lines",
+    "sheet_freeze",
+    "sheet_new_tab",
+    "sheet_rename_tab",
+    "sheet_delete_tab",
+    "sheet_switch_tab",
+})
+
+SHEET_TOOL_NAMES = SHEET_BASIC_TOOL_NAMES | SHEET_ADVANCED_TOOL_NAMES
+
 _MAX_WRITE_CELLS = 5_000
+
+
+async def _call(method: str, args: List[Any]) -> Any:
+    """Call the workbench bridge; the caller decides what the reply must look like."""
+    return await get_workbench_browser().call_workbench_bridge(method, args)
+
+
+async def _call_dict(method: str, args: List[Any]) -> dict:
+    """Call the bridge for an operation whose reply the tool actually reads."""
+    result = await _call(method, args)
+    if not isinstance(result, dict):
+        raise RuntimeError(f"The workbench page returned an unreadable reply to {method}")
+    return result
 
 
 def _require_a1(a1: str) -> str:
@@ -180,6 +216,308 @@ async def sheet_changes(limit: int = 20) -> str:
     return "\n".join(lines)
 
 
+async def sheet_data_range(sheet: Optional[str] = None) -> str:
+    """Report the rectangle that actually holds content.
+
+    Use this before reading: it is how the agent finds where a person's data
+    ends instead of guessing a range.
+
+    Args:
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        The used range in A1 notation with its shape.
+    """
+    result = await _call_dict("dataRange", [sheet])
+    return (
+        f"Used range: {result.get('a1')} "
+        f"({result.get('rows')} row(s) x {result.get('columns')} column(s))"
+    )
+
+
+async def sheet_selection(sheet: Optional[str] = None) -> str:
+    """Report what the person currently has selected.
+
+    Use this to work where they are looking, and to stay out of the range they
+    are about to edit.
+
+    Args:
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        The selected ranges, or a note that nothing is selected.
+    """
+    result = await _call_dict("selection", [sheet])
+    ranges = result.get("ranges") if isinstance(result, dict) else None
+    if not ranges:
+        return "Nobody has selected anything in this sheet."
+    return f"Selected: {', '.join(str(item) for item in ranges)} (active {result.get('active')})"
+
+
+async def load_sheet_tools() -> str:
+    """Load the presentation and structure sheet tools for the next step.
+
+    Call this when values alone are not enough — when the workbook needs
+    formatting, borders, merged cells, inserted or resized rows and columns,
+    frozen headers, or more than one sheet tab. The tools appear on the next
+    reasoning round, not in this one.
+    """
+    agent = current_agent.get(None)
+    ota_ctx = getattr(agent, "ota_ctx", None) if agent is not None else None
+    if ota_ctx is None:
+        raise RuntimeError("load_sheet_tools can only run inside an agent turn.")
+    ota_ctx.sheet_tool_loaded = True
+    return (
+        "Advanced sheet tools are loaded for the next reasoning step.\n\n"
+        "New sheet tools include:\n"
+        "- sheet_format: colors, bold/italic, size, alignment, wrapping, number format\n"
+        "- sheet_border: cell borders\n"
+        "- sheet_merge: merge or split cells\n"
+        "- sheet_insert_lines / sheet_delete_lines / sheet_resize_lines: rows and columns\n"
+        "- sheet_freeze: keep header rows and columns in view\n"
+        "- sheet_new_tab / sheet_rename_tab / sheet_delete_tab / sheet_switch_tab: sheets\n"
+        "\nContinue with the next reasoning step to call them."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Advanced sheet tools (loaded on demand via load_sheet_tools)
+# ---------------------------------------------------------------------------
+
+async def sheet_format(
+    a1: str,
+    background: Optional[str] = None,
+    font_color: Optional[str] = None,
+    font_size: Optional[int] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    horizontal_align: Optional[Literal["left", "center", "normal"]] = None,
+    vertical_align: Optional[Literal["top", "middle", "bottom"]] = None,
+    wrap: Optional[bool] = None,
+    number_format: Optional[str] = None,
+    sheet: Optional[str] = None,
+) -> str:
+    """Style a range: colors, weight, size, alignment, wrapping, number format.
+
+    Everything given is applied in one step; anything omitted is left as it is.
+    Colors are CSS hex such as ``#fff2cc``. ``number_format`` is an Excel
+    pattern such as ``#,##0.00`` or ``0.0%``.
+
+    Args:
+        a1: An A1 range such as ``A1:D1``.
+        background: Cell background color.
+        font_color: Text color.
+        font_size: Text size in points.
+        bold: Whether the text is bold.
+        italic: Whether the text is italic.
+        horizontal_align: Horizontal alignment.
+        vertical_align: Vertical alignment.
+        wrap: Whether text wraps inside the cell.
+        number_format: Excel number-format pattern.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation naming what was applied.
+    """
+    options = {
+        "background": background,
+        "bold": bold,
+        "fontColor": font_color,
+        "fontSize": font_size,
+        "horizontalAlign": horizontal_align,
+        "italic": italic,
+        "numberFormat": number_format,
+        "verticalAlign": vertical_align,
+        "wrap": wrap,
+    }
+    applied = {key: value for key, value in options.items() if value is not None}
+    if not applied:
+        raise ValueError("give at least one formatting option")
+    await _call("format", [_require_a1(a1), applied, sheet])
+    return f"Formatted {a1} ({', '.join(sorted(applied))})."
+
+
+async def sheet_border(
+    a1: str,
+    border_type: Literal[
+        "all", "bottom", "horizontal", "inside", "left",
+        "none", "outside", "right", "top", "vertical",
+    ] = "all",
+    style: Literal["thin", "medium", "thick", "dashed", "dotted", "double", "none"] = "thin",
+    color: Optional[str] = None,
+    sheet: Optional[str] = None,
+) -> str:
+    """Draw or clear borders on a range.
+
+    Args:
+        a1: An A1 range such as ``A1:D10``.
+        border_type: Which edges to draw.
+        style: Line style; ``none`` erases.
+        color: CSS hex color such as ``#d9d9d9``.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("border", [_require_a1(a1), border_type, style, color, sheet])
+    return f"Set {border_type} {style} borders on {a1}."
+
+
+async def sheet_merge(
+    a1: str,
+    mode: Literal["all", "across", "vertically", "break"] = "all",
+    sheet: Optional[str] = None,
+) -> str:
+    """Merge a range into one cell, merge it per row or per column, or split it.
+
+    Args:
+        a1: An A1 range such as ``A1:D1``.
+        mode: ``all`` merges everything, ``across`` merges each row, ``vertically``
+            merges each column, and ``break`` splits merged cells apart.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("merge", [_require_a1(a1), mode, sheet])
+    return f"Applied merge mode {mode} to {a1}."
+
+
+async def sheet_insert_lines(
+    axis: Literal["rows", "columns"],
+    index: int,
+    count: int = 1,
+    sheet: Optional[str] = None,
+) -> str:
+    """Insert empty rows or columns, shifting the existing ones down or right.
+
+    Args:
+        axis: Whether to insert rows or columns.
+        index: Zero-based position to insert at.
+        count: How many to insert.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("insertLines", [axis, index, count, sheet])
+    return f"Inserted {count} {axis} at {index}."
+
+
+async def sheet_delete_lines(
+    axis: Literal["rows", "columns"],
+    index: int,
+    count: int = 1,
+    sheet: Optional[str] = None,
+) -> str:
+    """Delete rows or columns along with their contents.
+
+    Args:
+        axis: Whether to delete rows or columns.
+        index: Zero-based position to delete from.
+        count: How many to delete.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("deleteLines", [axis, index, count, sheet])
+    return f"Deleted {count} {axis} at {index}."
+
+
+async def sheet_resize_lines(
+    axis: Literal["rows", "columns"],
+    index: int,
+    count: int,
+    pixels: int,
+    sheet: Optional[str] = None,
+) -> str:
+    """Set the height of rows or the width of columns.
+
+    Args:
+        axis: Whether to size rows or columns.
+        index: Zero-based position to start from.
+        count: How many to size.
+        pixels: Height or width in pixels.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("resizeLines", [axis, index, count, pixels, sheet])
+    return f"Sized {count} {axis} at {index} to {pixels}px."
+
+
+async def sheet_freeze(rows: int = 0, columns: int = 0, sheet: Optional[str] = None) -> str:
+    """Keep leading rows and columns in view while the rest scrolls.
+
+    Args:
+        rows: How many leading rows to freeze; ``0`` for none.
+        columns: How many leading columns to freeze; ``0`` for none.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("freeze", [rows, columns, sheet])
+    if rows == 0 and columns == 0:
+        return "Released the frozen rows and columns."
+    return f"Froze {rows} row(s) and {columns} column(s)."
+
+
+async def sheet_new_tab(name: str) -> str:
+    """Add a new sheet tab to the workbook.
+
+    Args:
+        name: The name for the new sheet.
+
+    Returns:
+        A short confirmation naming the created sheet.
+    """
+    result = await _call_dict("addSheet", [name])
+    return f"Added sheet {result.get('name')}."
+
+
+async def sheet_rename_tab(name: str, new_name: str) -> str:
+    """Rename one sheet tab.
+
+    Args:
+        name: The sheet to rename.
+        new_name: Its new name.
+
+    Returns:
+        A short confirmation.
+    """
+    result = await _call_dict("renameSheet", [name, new_name])
+    return f"Renamed {name} to {result.get('name')}."
+
+
+async def sheet_delete_tab(name: str) -> str:
+    """Delete one sheet tab and everything on it.
+
+    Args:
+        name: The sheet to delete.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("removeSheet", [name])
+    return f"Deleted sheet {name}."
+
+
+async def sheet_switch_tab(name: str) -> str:
+    """Bring one sheet tab to the front, for the person as well as the agent.
+
+    Args:
+        name: The sheet to show.
+
+    Returns:
+        A short confirmation.
+    """
+    result = await _call_dict("activateSheet", [name])
+    return f"Switched to sheet {result.get('name')}."
+
+
 async def sheet_save(file_path: str) -> str:
     """Save the open workbook to a JSON file in the Session workspace.
 
@@ -214,11 +552,27 @@ sheet_tool_specs = [
         sheet_formula,
         sheet_clear,
         sheet_changes,
+        sheet_data_range,
+        sheet_selection,
         sheet_save,
+        load_sheet_tools,
+        sheet_format,
+        sheet_border,
+        sheet_merge,
+        sheet_insert_lines,
+        sheet_delete_lines,
+        sheet_resize_lines,
+        sheet_freeze,
+        sheet_new_tab,
+        sheet_rename_tab,
+        sheet_delete_tab,
+        sheet_switch_tab,
     )
 ]
 
 __all__ = [
+    "SHEET_ADVANCED_TOOL_NAMES",
+    "SHEET_BASIC_TOOL_NAMES",
     "SHEET_TOOL_NAMES",
     "sheet_open",
     "sheet_status",
@@ -228,5 +582,19 @@ __all__ = [
     "sheet_clear",
     "sheet_changes",
     "sheet_save",
+    "sheet_data_range",
+    "sheet_selection",
+    "load_sheet_tools",
+    "sheet_format",
+    "sheet_border",
+    "sheet_merge",
+    "sheet_insert_lines",
+    "sheet_delete_lines",
+    "sheet_resize_lines",
+    "sheet_freeze",
+    "sheet_new_tab",
+    "sheet_rename_tab",
+    "sheet_delete_tab",
+    "sheet_switch_tab",
     "sheet_tool_specs",
 ]

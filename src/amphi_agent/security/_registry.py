@@ -488,7 +488,8 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
         r"|get_schedule|help|list_schedules|list_workflow_runs|read_workflow_run"
         # Opening and reading the embedded sheet workbench only touches the
         # App's own in-memory document, never the network or the filesystem.
-        r"|sheet_open|sheet_status|sheet_read|sheet_changes"
+        r"|sheet_open|sheet_status|sheet_read|sheet_changes|sheet_data_range"
+        r"|sheet_selection|sheet_switch_tab|load_sheet_tools"
         r"|doc_open|doc_status|doc_read",
         Capability.MANAGE,
     ),
@@ -503,7 +504,9 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
         r"|import_skills|uninstall_skill|set_skill_enabled"
         # Editing the open workbook changes in-app document state; the file on
         # disk only changes when sheet_save is called.
-        r"|sheet_write|sheet_formula|sheet_clear"
+        r"|sheet_write|sheet_formula|sheet_clear|sheet_format|sheet_border|sheet_merge"
+        r"|sheet_insert_lines|sheet_delete_lines|sheet_resize_lines|sheet_freeze"
+        r"|sheet_new_tab|sheet_rename_tab|sheet_delete_tab"
         r"|doc_append|doc_insert|doc_replace",
         Capability.MANAGE_WRITE,
     ),

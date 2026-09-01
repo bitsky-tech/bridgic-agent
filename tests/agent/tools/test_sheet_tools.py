@@ -6,7 +6,21 @@ import pytest
 
 from src.amphi_agent._browser import EmbeddedBrowserUnavailableError
 from src.amphi_agent.tools._sheet import (
+    load_sheet_tools,
+    sheet_border,
     sheet_changes,
+    sheet_data_range,
+    sheet_delete_lines,
+    sheet_delete_tab,
+    sheet_format,
+    sheet_freeze,
+    sheet_insert_lines,
+    sheet_merge,
+    sheet_new_tab,
+    sheet_rename_tab,
+    sheet_resize_lines,
+    sheet_selection,
+    sheet_switch_tab,
     sheet_clear,
     sheet_formula,
     sheet_open,
@@ -228,3 +242,146 @@ async def test_sheet_tools_require_a_session_browser(tool_harness: ToolHarness) 
     tool_harness.context.browser = None  # type: ignore[assignment]
     with pytest.raises(RuntimeError, match="require an active Session browser"):
         await sheet_status()
+
+
+async def test_sheet_reads_where_the_person_is(tool_harness: ToolHarness) -> None:
+    """Final workbench reads:
+
+    {"data_range": "A1:D20", "selection": ["B2:C3"]}
+
+    Checks:
+    1. The used range is reported with its shape, so a read needs no guessing.
+    2. A person's selection is reported as ranges plus the active one.
+    3. An empty selection says so rather than returning an empty list.
+    """
+    browser = _RecordingSheetBrowser({
+        "dataRange": {"a1": "A1:D20", "columns": 4, "rows": 20},
+        "selection": {"active": "B2:C3", "ranges": ["B2:C3"]},
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: the used range carries its shape.
+    assert "A1:D20" in await sheet_data_range()
+    assert "20 row(s) x 4 column(s)" in await sheet_data_range()
+
+    # Check 2: the selection names both the list and the active range.
+    assert "B2:C3" in await sheet_selection()
+
+    # Check 3: nothing selected is stated in words.
+    browser._replies["selection"] = {"active": None, "ranges": []}
+    assert "Nobody has selected" in await sheet_selection()
+
+
+async def test_sheet_format_sends_only_what_was_given(tool_harness: ToolHarness) -> None:
+    """Final formatting call:
+
+    {"applied": {"background": "#fff2cc", "bold": true}, "omitted": "everything else"}
+
+    Checks:
+    1. Only the options the caller supplied reach the page.
+    2. A call with no options at all is refused before it reaches the page.
+    3. Borders and merges forward their mode arguments unchanged.
+    """
+    browser = _RecordingSheetBrowser({
+        "format": {"a1": "A1:D1", "columns": 0, "rows": 0},
+        "border": {"a1": "A1:D10", "columns": 0, "rows": 0},
+        "merge": {"a1": "A1:D1", "columns": 0, "rows": 0},
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: omitted options are not sent as nulls.
+    await sheet_format("A1:D1", background="#fff2cc", bold=True)
+    assert browser.bridge_calls[0] == (
+        "format", ["A1:D1", {"background": "#fff2cc", "bold": True}, None],
+    )
+
+    # Check 2: a formatting call that changes nothing is refused locally.
+    with pytest.raises(ValueError, match="at least one formatting option"):
+        await sheet_format("A1")
+
+    # Check 3: border and merge arguments pass through in order.
+    await sheet_border("A1:D10", border_type="outside", style="medium", color="#d9d9d9")
+    assert browser.bridge_calls[1] == (
+        "border", ["A1:D10", "outside", "medium", "#d9d9d9", None],
+    )
+    await sheet_merge("A1:D1", mode="across")
+    assert browser.bridge_calls[2] == ("merge", ["A1:D1", "across", None])
+
+
+async def test_sheet_structure_tools(tool_harness: ToolHarness) -> None:
+    """Final structure calls:
+
+    {"insert": ["rows", 2, 3], "resize": ["columns", 0, 1, 140], "freeze": [1, 0]}
+
+    Checks:
+    1. Row and column edits forward the axis, position and count.
+    2. Resizing also forwards the pixel size.
+    3. Freezing with both axes at zero is reported as a release.
+    """
+    browser = _RecordingSheetBrowser({
+        "insertLines": "Sheet1: insert 3 rows at 2",
+        "deleteLines": "Sheet1: delete 1 columns at 1",
+        "resizeLines": "Sheet1: resize 1 columns at 0 to 140px",
+        "freeze": "Sheet1: freeze 1 rows and 0 columns",
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: axis, index and count travel together.
+    await sheet_insert_lines("rows", 2, 3)
+    await sheet_delete_lines("columns", 1)
+    assert browser.bridge_calls[0] == ("insertLines", ["rows", 2, 3, None])
+    assert browser.bridge_calls[1] == ("deleteLines", ["columns", 1, 1, None])
+
+    # Check 2: the pixel size is part of the resize call.
+    await sheet_resize_lines("columns", 0, 1, 140)
+    assert browser.bridge_calls[2] == ("resizeLines", ["columns", 0, 1, 140, None])
+
+    # Check 3: a zero freeze reads as a release.
+    assert "Froze 1 row(s)" in await sheet_freeze(1, 0)
+    assert "Released" in await sheet_freeze()
+
+
+async def test_sheet_tab_tools(tool_harness: ToolHarness) -> None:
+    """Final tab operations:
+
+    {"added": "Summary", "renamed": "Raw", "switched": "Raw", "deleted": "Raw"}
+
+    Checks:
+    1. Each tab operation reports the sheet the page actually produced.
+    2. Deleting forwards only the name, since the page resolves it.
+    """
+    browser = _RecordingSheetBrowser({
+        "addSheet": {"id": "id-2", "name": "Summary"},
+        "renameSheet": {"id": "id-1", "name": "Raw"},
+        "activateSheet": {"id": "id-1", "name": "Raw"},
+        "removeSheet": "Raw",
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: the page's own naming is what gets reported back.
+    assert "Summary" in await sheet_new_tab("Summary")
+    assert "Raw" in await sheet_rename_tab("Data", "Raw")
+    assert "Raw" in await sheet_switch_tab("Raw")
+
+    # Check 2: deletion forwards the name alone.
+    await sheet_delete_tab("Raw")
+    assert browser.bridge_calls[-1] == ("removeSheet", ["Raw"])
+
+
+async def test_load_sheet_tools_gates_the_advanced_surface(tool_harness: ToolHarness) -> None:
+    """Final tool-surface state:
+
+    {"sheet_tool_loaded": true}
+
+    Checks:
+    1. The advanced sheet tools stay unloaded until asked for.
+    2. Loading them sets the flag the tool surface reads and names what arrived.
+    """
+    # Check 1: nothing has loaded them yet.
+    assert tool_harness.ota_context.sheet_tool_loaded is False
+
+    # Check 2: the flag flips and the reply lists the new capabilities.
+    reply = await load_sheet_tools()
+    assert tool_harness.ota_context.sheet_tool_loaded is True
+    assert "sheet_format" in reply
+    assert "sheet_freeze" in reply
