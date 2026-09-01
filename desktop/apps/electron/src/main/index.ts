@@ -12,7 +12,7 @@ import { applyDesktopChannel } from './channel'
 const desktopChannel = applyDesktopChannel()
 
 import { app, nativeTheme, powerMonitor, protocol, screen, session } from 'electron'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import log, { mainLog, isDebugMode, telemetryLog } from './logger'
 import { WindowManager, buildPreloadPath, buildRendererIndexHtml } from './window-manager'
 import { setupDeepLink } from './deep-link'
@@ -47,6 +47,7 @@ import { applyTitleBarOverlay, isDarkAppearance } from './titlebar-overlay'
 import { isQuitConfirmed, quitWithDaemon } from './quit-with-daemon'
 import { openDaemonLogs } from './handlers/backend'
 import { EmbeddedBrowserController } from './embedded-browser-controller'
+import { UniverHost } from './univer-host'
 import { installWindowsSessionEndGuard } from './windows-session-end'
 import { parseLaunchIntent, shouldStartBackendForLaunch } from './launch-intent'
 import { initializeTrayWithFailOpen } from './window-visibility'
@@ -179,14 +180,17 @@ const windowManager = new WindowManager({
   backgroundColorOverride,
   onMainWindowCreated: (window) => usageTelemetry.attachMainWindow(window),
 })
+const univerHost = new UniverHost(dirname(rendererIndexHtml), devServerUrl)
 const embeddedBrowserController = new EmbeddedBrowserController(
   windowManager.getEmbeddedBrowser(),
   embeddedBrowserCdpEndpoint,
+  () => univerHost.pageUrl(),
 )
 const shutdownEmbeddedBrowser = async () => {
   try {
     await embeddedBrowserController.stop()
   } finally {
+    await univerHost.stop()
     await windowManager.getEmbeddedBrowser().shutdown()
   }
 }
@@ -399,6 +403,13 @@ function bootstrapPrimaryInstance(): void {
   // arriving during startup could select embedded mode before a WebContentsView
   // has anywhere to attach and unnecessarily fall back to an external window.
   try {
+    // The sheet host must bind before registration so the daemon learns its URL
+    // in the same payload rather than only after a later re-registration.
+    try {
+      await univerHost.start()
+    } catch (error) {
+      mainLog.warn('[univer] sheet host startup failed; the sheet workbench stays unavailable', error)
+    }
     await embeddedBrowserController.start()
     if (windowsSessionEnding) return
     const registerEmbeddedBrowser = (snapshot: ReturnType<typeof pythonClient.snapshot>) => {

@@ -468,6 +468,8 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"read_file", Capability.READ),
     (r"glob|grep", Capability.READ),
     (r"write_file|edit_file", Capability.EDIT),
+    # sheet_save writes a workbook file into the workspace like any other write.
+    (r"sheet_save", Capability.EDIT),
     (r"workspace_restore|workspace_restore_file", Capability.EDIT),   # rollback = modifying files
     (r"web_search|web_fetch|generate_image", Capability.NETWORK),
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
@@ -483,7 +485,10 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (
         r"workspace_status|workspace_diff|workspace_history|workspace_checkpoint"
         r"|load_workspace_tools|view_skill|manage_skills|list_skills"
-        r"|get_schedule|help|list_schedules|list_workflow_runs|read_workflow_run",
+        r"|get_schedule|help|list_schedules|list_workflow_runs|read_workflow_run"
+        # Opening and reading the embedded sheet workbench only touches the
+        # App's own in-memory document, never the network or the filesystem.
+        r"|sheet_open|sheet_status|sheet_read|sheet_changes",
         Capability.MANAGE,
     ),
     # In-app writes: creating/updating/deleting schedules, workflows, and skills — these only
@@ -494,7 +499,10 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     # through the LLM classifier.
     (
         r"create_schedule|update_schedule|delete_schedule|remove_workflow"
-        r"|import_skills|uninstall_skill|set_skill_enabled",
+        r"|import_skills|uninstall_skill|set_skill_enabled"
+        # Editing the open workbook changes in-app document state; the file on
+        # disk only changes when sheet_save is called.
+        r"|sheet_write|sheet_formula|sheet_clear",
         Capability.MANAGE_WRITE,
     ),
 ]

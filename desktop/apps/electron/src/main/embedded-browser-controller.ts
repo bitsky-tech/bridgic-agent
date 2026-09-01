@@ -24,6 +24,7 @@ interface ControllerRegistration {
   control_token: string
   cdp_endpoint: string
   owner_pid: number
+  sheet_url?: string
 }
 
 interface SessionRequest {
@@ -49,6 +50,8 @@ export class EmbeddedBrowserController {
   constructor(
     private readonly browser: EmbeddedBrowserManager,
     private readonly cdpEndpoint: string,
+    /** Where the App serves the embedded sheet page, or null when it serves none. */
+    private readonly sheetPageUrl: () => string | null = () => null,
   ) {}
 
   /** Enable Chromium's loopback DevTools endpoint before Electron becomes ready. */
@@ -168,6 +171,7 @@ export class EmbeddedBrowserController {
 
   private registration(): ControllerRegistration {
     if (!this.controlUrl) throw new Error('embedded browser controller is not running')
+    const sheetUrl = this.sheetPageUrl()
     return {
       controller_id: this.controllerId,
       generation: this.generation,
@@ -175,6 +179,7 @@ export class EmbeddedBrowserController {
       control_token: this.controlToken,
       cdp_endpoint: this.cdpEndpoint,
       owner_pid: process.pid,
+      ...(sheetUrl ? { sheet_url: sheetUrl } : {}),
     }
   }
 

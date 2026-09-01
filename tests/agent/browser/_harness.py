@@ -48,6 +48,9 @@ class FakeClient:
         self.snapshot = "page snapshot [ref=button-1]"
         self.snapshot_error: Exception | None = None
         self.action_error: BaseException | None = None
+        self.evaluated: list[str] = []
+        self.evaluate_reply = '{"ok": true, "value": null}'
+        self.evaluate_error: BaseException | None = None
 
     async def start_and_bind_embedded(self, target_id: str) -> None:
         self.events.append(("bind", target_id))
@@ -97,6 +100,12 @@ class FakeClient:
         if self.snapshot_error is not None:
             raise self.snapshot_error
         return self.snapshot
+
+    async def evaluate_javascript(self, code: str) -> str:
+        self.evaluated.append(code)
+        if self.evaluate_error is not None:
+            raise self.evaluate_error
+        return self.evaluate_reply
 
     async def get_current_page_info(self) -> str:
         self.events.append(("page_info", self._embedded_session_id))
@@ -189,7 +198,13 @@ class BrowserHarness:
             release_session,
         )
 
-    async def register(self, controller_id: str, generation: str) -> ControllerProbe:
+    async def register(
+        self,
+        controller_id: str,
+        generation: str,
+        *,
+        sheet_url: str | None = None,
+    ) -> ControllerProbe:
         probe = ControllerProbe(controller_id=controller_id, generation=generation)
         self.controllers[(controller_id, generation)] = probe
         await self.host.register_controller(
@@ -199,6 +214,7 @@ class BrowserHarness:
             control_token="test-token",
             cdp_endpoint="http://127.0.0.1:9222",
             owner_pid=12345,
+            sheet_url=sheet_url,
         )
         return probe
 

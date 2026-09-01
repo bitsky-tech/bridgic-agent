@@ -38,6 +38,7 @@ async def test_controller_lifecycle(service_client: httpx.AsyncClient) -> None:
         "controller_id": "desktop-browser",
         "generation": "generation-1",
         "owner_pid": 1234,
+        "sheet_available": False,
     }
 
     # Check 3: Removing a different controller id leaves the registration intact.
@@ -98,3 +99,48 @@ async def test_controller_validation(service_client: httpx.AsyncClient) -> None:
     response = await service_client.get("/api/browser/controller")
     assert response.status_code == 200
     assert response.json() == {"available": False}
+
+
+async def test_controller_sheet_url(service_client: httpx.AsyncClient) -> None:
+    """Final browser-controller state:
+
+    {
+      "sheet_available": true,
+      "rejected": ["public sheet page"]
+    }
+
+    Checks:
+    1. A loopback sheet page URL with a path registers and is reported as available.
+    2. A sheet page served from a public host is rejected.
+    3. The rejected request leaves the previously registered controller intact.
+    """
+    payload = {
+        "controller_id": "desktop-browser",
+        "generation": "generation-1",
+        "control_url": "http://127.0.0.1:43100",
+        "control_token": "secret-token-1234567890",
+        "cdp_endpoint": "http://127.0.0.1:43101",
+        "owner_pid": 1234,
+        "sheet_url": "http://127.0.0.1:43102/ab12/univer/index.html",
+    }
+
+    # Check 1: A loopback sheet page URL with a path registers as available.
+    response = await service_client.put("/api/browser/controller", json=payload)
+    assert response.status_code == 200
+    assert response.json()["sheet_available"] is True
+
+    # Check 2: A sheet page served from a public host is rejected.
+    response = await service_client.put(
+        "/api/browser/controller",
+        json={
+            **payload,
+            "generation": "generation-2",
+            "sheet_url": "http://203.0.113.10:43102/univer/index.html",
+        },
+    )
+    assert response.status_code == 422
+
+    # Check 3: The rejected request leaves the registered controller intact.
+    current = await service_client.get("/api/browser/controller")
+    assert current.json()["generation"] == "generation-1"
+    assert current.json()["sheet_available"] is True

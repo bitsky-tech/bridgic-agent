@@ -1,7 +1,7 @@
 """Authenticated registration of the Electron embedded-browser controller."""
 
 from ipaddress import ip_address
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 from pydantic import AnyHttpUrl, BaseModel, Field, ValidationInfo, field_validator
 
@@ -15,6 +15,8 @@ class BrowserControllerRegistrationRequest(BaseModel):
     control_token: Annotated[str, Field(min_length=16, max_length=512, repr=False)]
     cdp_endpoint: AnyHttpUrl
     owner_pid: Annotated[int, Field(ge=1)]
+    # Optional so an App built before the sheet workbench still registers.
+    sheet_url: Optional[AnyHttpUrl] = None
 
     @field_validator("control_url", "cdp_endpoint")
     @classmethod
@@ -32,6 +34,29 @@ class BrowserControllerRegistrationRequest(BaseModel):
             raise ValueError(
                 f"{info.field_name} must be a loopback origin without a path, query, or fragment"
             )
+        return value
+
+    @field_validator("sheet_url")
+    @classmethod
+    def require_loopback_page(cls, value: Optional[AnyHttpUrl]) -> Optional[AnyHttpUrl]:
+        """Allow a path here — unlike the origins above, this is a page URL.
+
+        The development build serves it from Vite on ``localhost``, so the host
+        check accepts that name alongside a literal loopback address.
+        """
+        if value is None:
+            return None
+        host = value.host
+        is_loopback = host == "localhost"
+        if not is_loopback and host is not None:
+            try:
+                is_loopback = ip_address(host).is_loopback
+            except ValueError:
+                is_loopback = False
+        if not is_loopback:
+            raise ValueError("sheet_url must be served from loopback")
+        if value.username is not None or value.password is not None:
+            raise ValueError("sheet_url must not contain credentials")
         return value
 
 
@@ -55,6 +80,7 @@ class BrowserControllerHandler(BaseHandler):
             control_token=request.control_token,
             cdp_endpoint=str(request.cdp_endpoint).rstrip("/"),
             owner_pid=request.owner_pid,
+            sheet_url=str(request.sheet_url) if request.sheet_url is not None else None,
         )
         return self.response(self.state.browser_host.controller_status())
 

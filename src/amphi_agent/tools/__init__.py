@@ -74,6 +74,18 @@ from ._schedule import (
     update_schedule,
     update_schedule_tool,
 )
+from ._sheet import (
+    SHEET_TOOL_NAMES,
+    sheet_changes,
+    sheet_clear,
+    sheet_formula,
+    sheet_open,
+    sheet_read,
+    sheet_save,
+    sheet_status,
+    sheet_tool_specs,
+    sheet_write,
+)
 from ._subagent import run_subagent, run_subagent_tool, start_subagent, start_subagent_tool
 from ._skills import (
     SKILLS_ADVANCED_TOOL_NAMES,
@@ -147,6 +159,16 @@ __all__ = [
     "EditWorkflow",
     "WorkflowStepReport",
     "browser_tool_specs",
+    "SHEET_TOOL_NAMES",
+    "sheet_changes",
+    "sheet_clear",
+    "sheet_formula",
+    "sheet_open",
+    "sheet_read",
+    "sheet_save",
+    "sheet_status",
+    "sheet_tool_specs",
+    "sheet_write",
     "BROWSER_BASIC_TOOL_NAMES",
     "BROWSER_ADVANCED_TOOL_NAMES",
     "BROWSER_TOOL_NAMES",

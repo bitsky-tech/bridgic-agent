@@ -59,6 +59,7 @@ from ._thinking_debug import write_thinking_debug
 from .tools import (
     BROWSER_ADVANCED_TOOL_NAMES,
     BROWSER_TOOL_NAMES,
+    SHEET_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
     switch_tool,
@@ -98,7 +99,7 @@ CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS = 2_048
 CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE = 8
 
 
-CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
+CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | SHEET_TOOL_NAMES | frozenset({
     "bash",
     "read_file",
     "write_file",
