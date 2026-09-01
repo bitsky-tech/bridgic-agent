@@ -339,14 +339,15 @@ def test_build_structures() -> None:
       "clarify": "task definition and acceptance review",
       "explore": "grounded CODE/AGENT/HUMAN implementation plan",
       "generate": "WORKFLOW.md, VALIDATE.md, and scripts package",
-      "verify": "read-only evidence and Overall Build verdict"
+      "verify": "real-environment evidence and Overall Build verdict"
     }
 
     Checks:
     1. Clarify preserves the required task definition and confirmation structure.
     2. Explore preserves its environment, task-flow, Skill-discovery, and handoff structure.
     3. Generate preserves the reusable package and execution/validation boundary.
-    4. Verify preserves read-only validation, verdict, evidence, and confirmation requirements.
+    4. Verify preserves real-environment testing, read-only validation, verdict, evidence,
+       and confirmation requirements.
     """
     personas = _personas()
     clarify = personas["clarify"]
@@ -381,6 +382,22 @@ def test_build_structures() -> None:
     assert "Overall Build verdict" in verify
     assert "smallest decisive real evidence" in verify
     assert "call `request_human_workflow_confirm`" in verify
+
+
+def test_verify_runs_in_the_real_environment_with_impact_confirmation() -> None:
+    """Verify exercises the real Workflow and asks before causing a real impact."""
+    verify = _personas()["verify"]
+
+    assert "Run the Workflow in the real prepared environment" in verify
+    assert "rather than replacing the path with mocks or invented success responses" in verify
+    assert "run the canonical script with real runtime arguments" in verify
+    assert "use `request_human_choice` before the operation" in verify
+    assert "state what will change, which real target is involved" in verify
+    assert "Continue only after the user clearly approves that test" in verify
+    assert "must not count as evidence that the real path passed" in verify
+    assert "Never execute an action that can change actual external or business state" not in verify
+    assert "# --- VERIFY_ONLY_BEGIN ---" not in verify
+    assert "temporary execution copy" not in verify
 
 
 def test_workflow_structures() -> None:
