@@ -219,6 +219,37 @@ describe('CompletedInteractionCard', () => {
     host.remove()
   })
 
+  // Rejecting a proposed rule and typing a replacement puts the user's own words into
+  // rule.text (resolveAcceptanceReviewSubmission -> confirmedAcceptanceRules), and a
+  // replayed card cannot tell those apart from the agent's original wording. So the
+  // whole list is verbatim.
+  it('renders acceptance rules verbatim, so a user-typed replacement is not a link', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const replacement = '/Users/me/Desktop/template v2.docx'
+
+    await act(async () => {
+      root.render(
+        <CompletedInteractionCard
+          block={{
+            type: 'confirmation',
+            kind: 'accept_rule',
+            question: 'Acceptance aligned',
+            response: replacement,
+            rules: [{ id: 'AC-001', text: replacement }],
+          }}
+        />,
+      )
+    })
+
+    expect(host.textContent).toContain(replacement)
+    expect(host.querySelector('a')).toBeNull()
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   // What the user typed is theirs; the card must not reinterpret it. A path they
   // wrote stays the characters they wrote, matching the plain chat bubble and the
   // task_confirm feedback line, which never went through Markdown either.
@@ -234,7 +265,7 @@ describe('CompletedInteractionCard', () => {
           block={{
             type: 'confirmation',
             kind: 'confirmation_message',
-            question: '需要哪个文件？',
+            question: 'Which file should I use?',
             response,
           }}
         />,
@@ -260,7 +291,7 @@ describe('CompletedInteractionCard', () => {
           block={{
             type: 'confirmation',
             prompt: '/tmp/context.pdf',
-            question: '用哪个文件？',
+            question: 'Which file?',
             response: '/tmp/answer.pdf',
           }}
         />,

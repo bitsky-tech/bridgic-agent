@@ -114,10 +114,13 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
                 <span className="mt-0.5 inline-flex h-6 items-center justify-center rounded-md bg-accent-blue-subtle px-2 text-xs font-semibold text-text-accent">
                   {t('session.interaction.card.ruleBadge', { n: index + 1 })}
                 </span>
-                <MarkdownMessage
-                  content={humanizeAcceptanceRuleText(rule.text)}
-                  className="min-w-0 text-sm leading-6 text-text-primary"
-                />
+                {/* Verbatim, because a rule's text is not reliably the Agent's. Rejecting a
+                    proposed rule and typing a replacement substitutes the user's own words
+                    (resolveAcceptanceReviewSubmission -> confirmedAcceptanceRules), and a
+                    replayed card only ever sees the resulting string. */}
+                <div className="min-w-0 whitespace-pre-wrap break-words text-sm leading-6 text-text-primary">
+                  {humanizeAcceptanceRuleText(rule.text)}
+                </div>
               </li>
             ))}
           </ol>
@@ -196,7 +199,12 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
                     <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-status-success">
                       {Icons.check(11)} {t('session.interaction.card.answerLabel')}
                     </div>
-                    {/* The answer is the user's; the question above it is the Agent's and stays Markdown. */}
+                    {/* Verbatim. The answer is the user's free-typed text, OR the label of the
+                        option they picked, which is the Agent's copy (resolveAnswer returns
+                        `free || picked[0]`) — and `response` is stored as one string, so a
+                        replayed card cannot tell which. Rendering an Agent label literally shows
+                        its `**markup**`; rendering user text as Markdown turns a path they typed
+                        into a link. The first is cosmetic, the second is the bug this fixes. */}
                     <div className="whitespace-pre-wrap break-words text-sm leading-6 text-text-primary">
                       {pair.answer}
                     </div>

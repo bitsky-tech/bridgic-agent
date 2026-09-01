@@ -53,13 +53,18 @@ describe('StructuredInput', () => {
 
   it('still renders mention and slash tokens as badges', async () => {
     const blocks: MessageBlock[] = [
-      { type: 'text', text: 'see ' },
+      { type: 'slash', id: 'build', label: 'build' },
+      { type: 'text', text: ' see ' },
       { type: 'mention', group: 'file', label: 'report.md', id: 'report' },
-      { type: 'text', text: ' /tmp/a.png' },
+      { type: 'text', text: '\n/tmp/a.png' },
     ]
     const host = await render(<StructuredInput blocks={blocks} />)
 
+    expect(host.querySelector('[data-input-token="slash"]')?.textContent).toContain('build')
     expect(host.querySelector('[data-input-token="mention"]')?.textContent).toContain('report.md')
+    // The trailing path is on a line of its own, which is exactly the shape the old
+    // scanner upgraded. It must stay text now.
     expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('img')).toBeNull()
   })
 })
