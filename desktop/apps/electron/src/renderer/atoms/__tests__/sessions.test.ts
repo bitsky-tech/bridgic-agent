@@ -61,19 +61,10 @@ describe('pickInitialSession (boot-time restore target)', () => {
     { id: 'b', title: 'B', createdAt: 0, updatedAt: 0 },
   ]
 
-  it('returns the last session id when it still exists', () => {
+  it('restores only a remembered session that still exists', () => {
     expect(pickInitialSession(metas, 'b')).toBe('b')
-  })
-
-  it('returns null when the last session was deleted on the daemon', () => {
     expect(pickInitialSession(metas, 'gone')).toBeNull()
-  })
-
-  it('returns null when there is no remembered session', () => {
     expect(pickInitialSession(metas, null)).toBeNull()
-  })
-
-  it('returns null when the session list is empty', () => {
     expect(pickInitialSession([], 'a')).toBeNull()
   })
 })
@@ -81,23 +72,14 @@ describe('pickInitialSession (boot-time restore target)', () => {
 describe('nextPersistedSessionId (boot-time restore source — "reopen = exact last view")', () => {
   const drafts = new Set(['draft-1'])
 
-  it('persists null while on a draft (新会话/Landing) so reopen returns to Landing, NOT the last real session', () => {
+  it('persists drafts, real sessions, and boot transients correctly', () => {
     // The reported bug: 点新会话后刷新跳回旧会话。Locking: a draft active id must
     // overwrite the remembered real id with null.
     expect(nextPersistedSessionId('draft-1', drafts, 'session_real')).toBeNull()
-  })
-
-  it('persists the real session id when a non-draft session is active', () => {
     expect(nextPersistedSessionId('session_real', drafts, null)).toBe('session_real')
-  })
-
-  it('keeps the remembered id untouched while active is null (boot transient before restore)', () => {
     // Must NOT clobber the id useSessionBootstrap is about to read.
     expect(nextPersistedSessionId(null, drafts, 'session_real')).toBe('session_real')
     expect(nextPersistedSessionId(null, drafts, null)).toBeNull()
-  })
-
-  it('is idempotent: a real active id already remembered yields the same value (caller skips write)', () => {
     expect(nextPersistedSessionId('session_real', drafts, 'session_real')).toBe('session_real')
   })
 })
@@ -107,28 +89,17 @@ describe('bootPendingAtom (闪 Landing 防抖占位)', () => {
     store.set(backendSnapshotAtom, { state, endpoint: null, lastError: null, compatibility: null })
   }
 
-  it('pending while bootstrap has not landed (default backend state)', () => {
+  it('stays pending only until bootstrap lands or the daemon is unavailable', () => {
     const store = makeStore()
     expect(store.get(bootPendingAtom)).toBe(true)
-  })
-
-  it('clears once bootstrap marks landed — center may now show Landing/Pipeline', () => {
-    const store = makeStore()
     store.set(markBootLandedAtom)
     expect(store.get(bootPendingAtom)).toBe(false)
-  })
-
-  it('releases the placeholder when the daemon is Unavailable (never lands) so Landing can show', () => {
-    const store = makeStore()
-    setBackendState(store, BackendState.Unavailable)
-    expect(store.get(bootPendingAtom)).toBe(false)
-  })
-
-  it('stays cleared after landing even if backend state keeps changing', () => {
-    const store = makeStore()
-    store.set(markBootLandedAtom)
     setBackendState(store, BackendState.Discovering)
     expect(store.get(bootPendingAtom)).toBe(false)
+
+    const unavailableStore = makeStore()
+    setBackendState(unavailableStore, BackendState.Unavailable)
+    expect(unavailableStore.get(bootPendingAtom)).toBe(false)
   })
 })
 
