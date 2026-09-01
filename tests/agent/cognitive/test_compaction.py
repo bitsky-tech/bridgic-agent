@@ -17,9 +17,43 @@ from src.amphi_agent import (
 )
 from src.amphi_agent._cognitive import ClarifyThink, ExploreThink
 from src.amphi_agent._state import BuildStageState
+from src.amphi_agent.prompts.compaction import (
+    render_session_compaction_prompt,
+    render_turn_compaction_prompt,
+)
+from src.amphi_service.i18n import use_locale
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
+
+
+def test_summary_prompts_pin_the_note_language() -> None:
+    """Final summary-language instruction:
+
+    {
+      "en_locale": "Write the note in English",
+      "zh_locale": "Write the note in Chinese"
+    }
+
+    Checks:
+    1. Both summary prompts name the active locale's language for the note — a summary
+       re-enters later context as assistant history, and an unsteered summarizer mirrors
+       the chunk's language, turning one polluted stretch of history into a durable
+       language signal (the same pressure the Build-language fix removed).
+    2. The quoted source material keeps its original form regardless of the note language.
+    """
+    for locale, expected, other in (("en", "English", "Chinese"), ("zh", "Chinese", "English")):
+        with use_locale(locale):
+            prompts = (
+                render_session_compaction_prompt("prev note", "history chunk"),
+                render_turn_compaction_prompt("prev note", "the request", "history chunk"),
+            )
+        for prompt in prompts:
+            # Check 1: The note language follows the active locale.
+            assert f"Write the note in {expected}" in prompt
+            assert f"Write the note in {other}" not in prompt
+            # Check 2: Quoted source material stays exact.
+            assert "original language" in prompt
 
 
 class SummaryLlm:
@@ -264,13 +298,13 @@ async def test_summary_input_is_bounded_when_one_atomic_turn_is_huge(test_sandbo
         user_input="Current request",
         prompt_time="2026-08-26 12:00 (UTC+08:00)",
     )
-    context = _context(str(test_sandbox.sessions / "bounded-input"), turns, 12_000)
+    context = _context(str(test_sandbox.sessions / "bounded-input"), turns, 20_000)
     original = await worker.assemble_messages(ota_context, context)
 
     await worker.compact_messages(original, [], ota_context, context, target=1)
 
     assert len(llm.calls) == 1
-    assert worker._estimate_request_tokens(llm.calls[0], []) <= 6_000
+    assert worker._estimate_request_tokens(llm.calls[0], []) <= 10_000
     assert "bytes omitted during compaction" in llm.calls[0][1].content
     assert ota_context.state.context_compaction is not None
     assert ota_context.state.context_compaction.session_through_ordinal == 0

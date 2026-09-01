@@ -1,5 +1,5 @@
 /**
- * Tests for lib/sendKeyAction.ts — resolveSendKeyAction 的发送/换行/放行归类。
+ * Tests for lib/sendKeyAction.ts — send, newline, and pass-through classification by resolveSendKeyAction.
  */
 import { describe, it, expect } from 'bun:test'
 import {
@@ -8,7 +8,7 @@ import {
   type SendKeyEvent,
 } from '../sendKeyAction'
 
-/** 造一个最小 keydown,默认非组合态、无修饰键。 */
+/** Build a minimal keydown event with no composition state or modifiers by default. */
 function mk(partial: Partial<SendKeyEvent> & { key: string }): SendKeyEvent {
   return {
     shiftKey: false,

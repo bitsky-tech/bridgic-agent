@@ -421,7 +421,7 @@ describe('spec preview + pending comments', () => {
     expect(store.get(specPreviewOpenAtom)).toBe(false)
     const id = store.set(newSessionAtom)
     expect(store.get(specPreviewOpenAtom)).toBe(false)
-    // 预览"有效打开"要求会话有说明书内容(见 specPreviewOpenAtom):先种一份 brief。
+    // An effectively open preview requires session brief content; seed one first.
     store.set(briefFamily(id), '# Task\n内容')
     store.set(openSpecPreviewAtom)
     expect(store.get(specPreviewOpenAtom)).toBe(true)
@@ -430,11 +430,11 @@ describe('spec preview + pending comments', () => {
   })
 
   it('preview open-state is isolated per session (switch shows the right session)', () => {
-    // 预览是会话自己的状态:A 打开后切到 B 看到 B 的(关),切回 A 仍开。
-    // 这正是根因修复——切会话不再"一刀关掉",而是各会话保留各自开合。
+    // Preview state belongs to each session: open A, switch to closed B, then return to open A.
+    // Switching sessions no longer closes every preview; each session retains its own state.
     const store = createStore()
     store.set(activeSessionIdAtom, 'sess-a')
-    store.set(briefFamily('sess-a'), '# Task\nA') // 预览有效打开需有 brief（见 specPreviewOpenAtom）
+    store.set(briefFamily('sess-a'), '# Task\nA') // An effectively open preview requires a brief.
     store.set(openSpecPreviewAtom)
     expect(store.get(specPreviewOpenAtom)).toBe(true)
 
@@ -446,15 +446,15 @@ describe('spec preview + pending comments', () => {
   })
 
   it('preview reads closed once the brief disappears (auto-hide, no manual close)', () => {
-    // 用户手动开、不会手动关:说明书一旦不存在,预览面板必须连带消失(右列回落
-    // 会话产出),而不是留一个"尚未生成"的空占位。
+    // If the user opens but never closes the preview, removing the brief must also hide the pane
+    // and return the right column to session output instead of leaving an empty placeholder.
     const store = createStore()
     const id = store.set(newSessionAtom)
     store.set(briefFamily(id), '# Task\n有内容')
     store.set(openSpecPreviewAtom)
     expect(store.get(specPreviewOpenAtom)).toBe(true)
-    store.set(briefFamily(id), null) // 说明书没了（切上下文 / 后端 404）
-    expect(store.get(specPreviewOpenAtom)).toBe(false) // 开关意图仍在,但面板不再有效打开
+    store.set(briefFamily(id), null) // The brief disappeared after a context switch or backend 404.
+    expect(store.get(specPreviewOpenAtom)).toBe(false) // Intent remains, but the pane is no longer effectively open.
   })
 
   it('add needs an active session; ignores blank; remove drops a single entry', () => {
@@ -475,7 +475,7 @@ describe('spec preview + pending comments', () => {
   it('clear empties the active session pending but keeps the preview open', () => {
     const store = createStore()
     const id = store.set(newSessionAtom)
-    store.set(briefFamily(id), '# Task\n内容') // 预览有效打开需有 brief（见 specPreviewOpenAtom）
+    store.set(briefFamily(id), '# Task\n内容') // An effectively open preview requires a brief.
     store.set(openSpecPreviewAtom)
     store.set(addPendingCommentAtom, { quote: 'q', text: 't' })
     store.set(clearPendingCommentsAtom)
@@ -561,11 +561,11 @@ describe('sendCommentBatchAtom', () => {
 })
 
 /**
- * 未提交草稿(SpecSessionDraft)的生命周期 —— 每个字段「什么时候该被清掉」。
+ * Lifecycle of unsubmitted SpecSessionDraft values: when each field must be cleared.
  *
- * 这些草稿从组件本地 state 提到会话级 atom 之后,原先靠「组件卸载」顺手完成的清理
- * 就不再自动发生了,必须在对应的写 atom 里显式做。漏一处的表现是「上一轮放弃掉的
- * 内容,在下一轮悄悄复活并被发出去」—— 用户不会把它和几周前的操作联系起来。
+ * Moving these drafts from component state to session atoms removed the cleanup previously
+ * provided by component unmount. Each write atom must now clear explicitly. Missing one cleanup
+ * resurrects abandoned content in a later turn and sends it without an obvious connection to the old action.
  */
 describe('spec session draft lifecycle', () => {
   function storeWithSession(sid: string) {
@@ -580,7 +580,7 @@ describe('spec session draft lifecycle', () => {
     store.set(addPendingCommentAtom, { quote: '被引用的原文', text: '这段删掉' })
 
     expect(store.get(pendingCommentsAtom)).toHaveLength(1)
-    // 入队与「框空了」必须是同一次转换,否则内容会既在队列里又留在输入框里。
+    // Enqueueing and clearing the composer must be one transition, or content exists in both places.
     expect(store.get(currentSpecDraftAtom).comment).toBeNull()
   })
 
@@ -592,8 +592,8 @@ describe('spec session draft lifecycle', () => {
     store.set(clearPendingCommentsAtom)
 
     expect(store.get(pendingCommentsAtom)).toHaveLength(0)
-    // 放着不清的话:下次为别的段落暂存评论时面板重新出现,这句会原样躺在输入框里
-    // 被一起发出去。
+    // Without clearing, reopening the pane for another paragraph restores this text in the
+    // composer and sends it with the new comment.
     expect(store.get(currentSpecDraftAtom).instruction).toBe('')
   })
 

@@ -1,8 +1,8 @@
 /**
  * Tests for atoms/agent.ts — reducer / appendUserMessageAtom / transcript
- * 懒加载并发防护 / hasConversationAtom 视图判定。
+ * Lazy-load concurrency guards and hasConversationAtom view selection.
  *
- * 用 jotai createStore() 隔离 atom store；不接 IPC（window.api 用 mock stub）。
+ * Isolate atom state with Jotai createStore(); IPC is replaced by a window.api mock.
  */
 import { describe, it, expect, mock } from 'bun:test'
 import { createStore } from 'jotai'
@@ -99,11 +99,11 @@ function setupSession(store: ReturnType<typeof createStore>): string {
 }
 
 /**
- * 造一个已实化的会话,走生产路径(draft → replaceDraftWithDaemonId)。
+ * Create a materialized session through the production draft -> replaceDraftWithDaemonId path.
  *
- * 未实化会话是单例(DRAFT_SESSION_ID),连着调两次 newSession 拿到的是同一个 id;
- * 需要**多个独立会话**的用例必须这样实化。字面量 id 也不行 —— 那样进不了
- * sessionsMeta,而 runningSessionIdsAtom 是遍历 meta 的。
+ * Unmaterialized sessions share DRAFT_SESSION_ID, so two consecutive newSession calls return
+ * the same ID. Tests that need **multiple independent sessions** must materialize them this way.
+ * Literal IDs are insufficient because they do not enter sessionsMeta, which runningSessionIdsAtom traverses.
  */
 function setupDaemonSession(store: ReturnType<typeof createStore>, daemonId: string): string {
   const draftId = store.set(newSessionAtom)
@@ -462,12 +462,13 @@ describe('reducer: message lifecycle', () => {
   })
 
   it('message_start commits an uncommitted parked turn (permission card survives resume openTurn)', () => {
-    // 复现"点允许后消息全消失"的 bug:挂起审批的那一轮 parked 后停在流式态(未固化),
-    // 审批续跑走 openTurn(新 message_start),若不先固化就会覆盖丢弃思考+审批卡。
+    // Reproduce the bug where all messages disappeared after approval. A parked approval turn
+    // remained streaming and uncommitted; resuming opened a new turn, which overwrote its thinking
+    // and approval card unless the parked turn was committed first.
     const store = makeStore()
     const id = setupSession(store)
     store.set(activeSessionIdAtom, id)
-    // 第一轮:思考 + 审批卡,停在流式态(不发 message_stop —— 模拟 parked)。
+    // First turn: thinking plus approval card remains streaming without message_stop to simulate parking.
     store.set(applyAgentEventAtom, {
       sessionId: id,
       event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
@@ -487,12 +488,13 @@ describe('reducer: message lifecycle', () => {
         questions: [{ question: 'q', options: [{ label: 'allow' }, { label: 'deny' }] }],
       },
     })
-    // 点允许 → 续跑 openTurn 起新一轮 m2。
+    // Approving resumes through openTurn and starts a new m2 turn.
     store.set(applyAgentEventAtom, {
       sessionId: id,
       event: { type: 'message_start', messageId: 'm2', role: 'assistant' },
     })
-    // 修复后:被挂起那轮已固化,审批卡保留在消息里(而非被 m2 覆盖丢弃);新一轮流式已开。
+    // After the fix, the parked turn is committed, its approval card survives instead of being
+    // replaced by m2, and the new streaming turn is open.
     const perm = store
       .get(currentMessagesAtom)
       .flatMap((m) => m.blocks ?? [])
@@ -1313,9 +1315,9 @@ describe('reducer: done / error / cancelled', () => {
   })
 
   it('error with no active streaming still appends an errored message', () => {
-    // 无 token 直接失败 / 建会话失败 / turn 已结束后迟到的 error —— 没有
-    // 进行中的流式态,reducer 仍须落一条纯错误气泡,否则 error 只进日志、
-    // UI 空白(用户实测:WS 401 报错时前端为空内容)。
+    // Missing tokens, session-creation failures, or late errors after a turn ends have no active
+    // streaming state. The reducer must still add a standalone error bubble; otherwise the error
+    // reaches only logs and the UI stays blank, as observed for WebSocket 401 failures.
     const store = makeStore()
     const id = setupSession(store)
     store.set(activeSessionIdAtom, id)
@@ -1393,7 +1395,7 @@ describe('reducer: cross-session independence', () => {
   it('streamingStates is per-session: session B does not see session A streaming', () => {
     const store = makeStore()
     const idA = setupSession(store)
-    // 字面量 id:未实化会话是单例,再调一次 newSession 拿到的还是 idA。
+    // Use a literal ID because unmaterialized sessions are singletons and another newSession returns idA.
     const idB = 'session_b'
     store.set(applyAgentEventAtom, {
       sessionId: idA,
@@ -1418,21 +1420,22 @@ describe('appendUserMessageAtom', () => {
     const id = store.set(newSessionAtom) // newSessionAtom also sets it active
     store.set(appendUserMessageAtom, { sessionId: id, text: 'hi' })
     const msgs = store.get(currentMessagesAtom)
-    // 第 1 条:乐观 user 气泡。第 2 条:无 backend token 时同步派发的网关
-    // 错误气泡 —— 修复前该 error 被 reducer 静默吞掉(UI 空白),现在落成
-    // 可见错误气泡(见 'error with no active streaming' 测试)。
+    // First is the optimistic user bubble; second is the synchronous gateway error emitted when
+    // no backend token exists. Before the fix, the reducer swallowed it and left a blank UI;
+    // now it becomes a visible error bubble.
     expect(msgs[0]!.text).toBe('hi')
     expect(msgs[0]!.role).toBe('user')
     expect(msgs[1]!.role).toBe('assistant')
-    // 只验「有可见错误」,不绑具体措辞:文案走 i18n(`gatewayUnavailableForChat`)
-    // 且已经改过一次,绑措辞会让每次改文案都红。这个测试要防的回归是 error
-    // 被 reducer 静默吞掉导致 UI 空白 —— 非空即达标。
+    // Assert only that an error is visible, not its exact i18n copy. The copy has changed before,
+    // and binding it would make wording edits fail this test. The regression is the reducer
+    // swallowing the error and leaving a blank UI, so non-empty content is sufficient.
     expect(msgs[1]!.error).toBeTruthy()
   })
 
   it('点「新会话」拿到的是空白会话 —— 上一次发送残留在草稿槽位上的内容被清掉', () => {
-    // 草稿槽位的 id 是单例,没送达 daemon 的那次发送会把乐观气泡 + 错误气泡留在上面,
-    // 而草稿会话又被侧边栏过滤掉 —— 用户点「+ 新会话」,迎面看到的是刚才发过的内容。
+    // The draft slot has a singleton ID. A send that never reaches the daemon leaves optimistic
+    // and error bubbles on it, while drafts are hidden from the sidebar. Opening New Session must
+    // not reveal the previously submitted content.
     const store = makeStore()
     const id = store.set(newSessionAtom)
     store.set(appendUserMessageAtom, { sessionId: id, text: 'hi' })
@@ -1773,7 +1776,7 @@ describe('appendUserMessageAtom', () => {
 })
 
 describe('loadSessionMessagesAtom', () => {
-  /** GET /sessions/{id}/messages 返回 {messages, pending_request};fetch 可手控 resolve。 */
+  /** Mock GET /sessions/{id}/messages returning {messages, pending_request} with manually resolved fetches. */
   function installDaemon(
     store: ReturnType<typeof makeStore>,
     messages: AgentMessage[],
@@ -1825,7 +1828,7 @@ describe('loadSessionMessagesAtom', () => {
     const store = makeStore()
     const { fetchMock, release } = installDaemon(store, [serverMsg])
     const p1 = store.set(loadSessionMessagesAtom, 'sess-1')
-    const p2 = store.set(loadSessionMessagesAtom, 'sess-1') // A→B→A 快速切换
+    const p2 = store.set(loadSessionMessagesAtom, 'sess-1') // Rapid A -> B -> A switch.
     release()
     await Promise.all([p1, p2])
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -1877,9 +1880,9 @@ describe('loadSessionMessagesAtom', () => {
   })
 
   it('刷新后乐观用户消息保留本地 id —— 换 key 会重挂气泡、重播入场动画', async () => {
-    // 每轮结束 daemon 都会推 session_completed,前端整份重拉 transcript。乐观消息本地
-    // id 是 `u-<uuid>`,daemon 给的是 `<session>:u0`,直接换过去 = React key 变了 =
-    // 整条气泡卸载重挂,150ms 的 animate-fade 再播一遍,用户看到的就是"闪一下"。
+    // The daemon emits session_completed after every turn and the frontend reloads the transcript.
+    // Optimistic messages use `u-<uuid>`, while the daemon returns `<session>:u0`. Replacing the ID
+    // changes the React key, remounts the bubble, and replays the 150 ms fade as a visible flash.
     const store = makeStore()
     const optimistic: AgentMessage = {
       id: 'u-local-uuid',
@@ -1913,9 +1916,9 @@ describe('loadSessionMessagesAtom', () => {
     await pending
 
     const rows = store.get(messageFamily('sess-echo'))
-    // 身份保住:key 不变,气泡不重挂。
+    // Preserve identity so the key stays stable and the bubble does not remount.
     expect(rows.map((m) => m.id)).toEqual(['u-local-uuid', 'sess-echo:0'])
-    // 内容仍然采用 daemon 那份(blocks 是本地乐观消息没有的)。
+    // Still use daemon content because it includes blocks absent from the optimistic message.
     expect(rows[0]!.blocks).toEqual([{ type: 'text', text: '你好' }])
   })
 
@@ -1923,7 +1926,7 @@ describe('loadSessionMessagesAtom', () => {
     const store = makeStore()
     const { release } = installDaemon(store, [serverMsg])
     const pending = store.set(loadSessionMessagesAtom, 'sess-2')
-    // 加载在途:用户发出乐观消息(整体替换若不防护,这条会被顶掉)
+    // While loading, the user sends an optimistic message that an unguarded replacement would erase.
     const optimistic: AgentMessage = {
       id: 'local-m1',
       role: AgentRole.User,
@@ -2141,8 +2144,8 @@ describe('hasConversationAtom', () => {
   })
 
   it('materialized session stays in conversation view even while messages are empty', () => {
-    // 回归保护:非 draft 切过去时 loadMessages 在途、currentMessages 短暂为 [],
-    // 不允许据此闪回 Landing。
+    // Regression: while switching to a non-draft session, loadMessages is pending and
+    // currentMessages is briefly empty. This must not flash back to Landing.
     const store = makeStore()
     const id = setupSession(store)
     store.set(materializeSessionAtom, id)
@@ -2293,7 +2296,7 @@ describe('reducer: title (session naming)', () => {
     store.set(messageFamily(id), [
       { id: 'u1', role: AgentRole.User, text: '帮我做一个很长的需求', toolCalls: [], done: true, createdAt: 1 },
     ])
-    // Backend title arrives first → title ≠ '新对话'.
+    // The backend title arrives first, so the title is no longer the default New Conversation.
     store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'title', title: '模型标题' } })
     // done(end_turn) must then NOT overwrite it with the truncated opener.
     store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'done', reason: 'end_turn' } })

@@ -61,19 +61,10 @@ describe('pickInitialSession (boot-time restore target)', () => {
     { id: 'b', title: 'B', createdAt: 0, updatedAt: 0 },
   ]
 
-  it('returns the last session id when it still exists', () => {
+  it('restores only a remembered session that still exists', () => {
     expect(pickInitialSession(metas, 'b')).toBe('b')
-  })
-
-  it('returns null when the last session was deleted on the daemon', () => {
     expect(pickInitialSession(metas, 'gone')).toBeNull()
-  })
-
-  it('returns null when there is no remembered session', () => {
     expect(pickInitialSession(metas, null)).toBeNull()
-  })
-
-  it('returns null when the session list is empty', () => {
     expect(pickInitialSession([], 'a')).toBeNull()
   })
 })
@@ -81,23 +72,14 @@ describe('pickInitialSession (boot-time restore target)', () => {
 describe('nextPersistedSessionId (boot-time restore source — "reopen = exact last view")', () => {
   const drafts = new Set(['draft-1'])
 
-  it('persists null while on a draft (新会话/Landing) so reopen returns to Landing, NOT the last real session', () => {
-    // The reported bug: 点新会话后刷新跳回旧会话。Locking: a draft active id must
+  it('persists drafts, real sessions, and boot transients correctly', () => {
+    // Reported bug: refreshing after selecting New Session returned to the old session. A draft active id must
     // overwrite the remembered real id with null.
     expect(nextPersistedSessionId('draft-1', drafts, 'session_real')).toBeNull()
-  })
-
-  it('persists the real session id when a non-draft session is active', () => {
     expect(nextPersistedSessionId('session_real', drafts, null)).toBe('session_real')
-  })
-
-  it('keeps the remembered id untouched while active is null (boot transient before restore)', () => {
     // Must NOT clobber the id useSessionBootstrap is about to read.
     expect(nextPersistedSessionId(null, drafts, 'session_real')).toBe('session_real')
     expect(nextPersistedSessionId(null, drafts, null)).toBeNull()
-  })
-
-  it('is idempotent: a real active id already remembered yields the same value (caller skips write)', () => {
     expect(nextPersistedSessionId('session_real', drafts, 'session_real')).toBe('session_real')
   })
 })
@@ -107,28 +89,17 @@ describe('bootPendingAtom (闪 Landing 防抖占位)', () => {
     store.set(backendSnapshotAtom, { state, endpoint: null, lastError: null, compatibility: null })
   }
 
-  it('pending while bootstrap has not landed (default backend state)', () => {
+  it('stays pending only until bootstrap lands or the daemon is unavailable', () => {
     const store = makeStore()
     expect(store.get(bootPendingAtom)).toBe(true)
-  })
-
-  it('clears once bootstrap marks landed — center may now show Landing/Pipeline', () => {
-    const store = makeStore()
     store.set(markBootLandedAtom)
     expect(store.get(bootPendingAtom)).toBe(false)
-  })
-
-  it('releases the placeholder when the daemon is Unavailable (never lands) so Landing can show', () => {
-    const store = makeStore()
-    setBackendState(store, BackendState.Unavailable)
-    expect(store.get(bootPendingAtom)).toBe(false)
-  })
-
-  it('stays cleared after landing even if backend state keeps changing', () => {
-    const store = makeStore()
-    store.set(markBootLandedAtom)
     setBackendState(store, BackendState.Discovering)
     expect(store.get(bootPendingAtom)).toBe(false)
+
+    const unavailableStore = makeStore()
+    setBackendState(unavailableStore, BackendState.Unavailable)
+    expect(unavailableStore.get(bootPendingAtom)).toBe(false)
   })
 })
 
@@ -169,8 +140,8 @@ describe('removeSessionAtom', () => {
 describe('setSessionDraftAtom', () => {
   it('stores per-session draft segments (preserving @ mention chips)', () => {
     const store = makeStore()
-    // 两个任意 session id —— 本 atom 只写 drafts map,不校验 session 是否存在。
-    // (不用两次 newSession 造:未实化会话是单例,两次拿到的是同一个 id。)
+    // Use two arbitrary session IDs because this atom only writes the drafts map and does not
+    // validate session existence. Calling newSession twice would return the same singleton draft ID.
     const a = 'session_a'
     const b = store.set(newSessionAtom)
     const aSegs: Segment[] = [
@@ -199,15 +170,15 @@ describe('setSessionDraftAtom', () => {
   })
 
   it('未实化会话用固定 id —— 重启后 seed 得回盘上的草稿', () => {
-    // 回归:draft id 曾是随机 uuid,重启后 bootstrap 建的是新 id,drafts.json
-    // 里的旧 key 永远匹配不上 = 用户看到"输入的内容重启后没了"。
+    // Regression: draft IDs were random UUIDs. After restart, bootstrap created a different ID,
+    // so the old drafts.json key never matched and typed content appeared lost.
     const first = makeStore()
     const id = first.set(newSessionAtom)
     const segments: Segment[] = [{ type: 'text', value: '重启前打的字' }]
     first.set(setSessionDraftAtom, { id, segments })
     const persisted = pruneDrafts(first.get(sessionDraftsAtom))
 
-    // 新一轮启动:全新 store,草稿从盘上灌回,bootstrap 落 Landing。
+    // Simulate a fresh launch: a new store loads drafts from disk and bootstraps to Landing.
     const restarted = makeStore()
     restarted.set(setAllDraftsAtom, persisted)
     const afterRestart = restarted.set(newSessionAtom)
@@ -218,10 +189,10 @@ describe('setSessionDraftAtom', () => {
   it('保存时清掉旧版随机 draft id,不误伤 daemon session', () => {
     const kept: Segment[] = [{ type: 'text', value: 'x' }]
     const pruned = pruneDrafts({
-      's-99e55a20-2003-4d85-ae72-f88d62fb5263': kept, // 旧版 draft,已成孤儿
+      's-99e55a20-2003-4d85-ae72-f88d62fb5263': kept, // Orphaned legacy draft.
       session_20260728_113228_e4e27cad: kept,
       'draft:new': kept,
-      's-not-a-uuid': kept, // 形状不符 → 不动它,判定刻意收得紧
+      's-not-a-uuid': kept, // Preserve shape mismatches; detection is intentionally strict.
     })
     expect(Object.keys(pruned).sort()).toEqual([
       'draft:new',
@@ -231,8 +202,8 @@ describe('setSessionDraftAtom', () => {
   })
 
   it('keeps the draft text when newSession reuses the active draft', () => {
-    // 回归:「+ 新会话」是从 工作流/Skills/资产 视图回 Landing 的唯一入口,
-    // 复用 draft 时清草稿会让「输入 → 切视图 → 切回来」丢掉未发送的内容。
+    // Regression: New Session is the only route back to Landing from Workflows, Skills, or Assets.
+    // Clearing a reused draft lost unsent text after switching away and back.
     const store = makeStore()
     const id = store.set(newSessionAtom)
     const segments: Segment[] = [{ type: 'text', value: '帮我查一下昨天的运行结果' }]
@@ -348,7 +319,7 @@ describe('hydrateSessionsFromDaemonAtom', () => {
     const ids = store.get(sessionsMetaAtom).map((m) => m.id)
     expect(ids).toContain('srv-1')
     expect(ids).toContain(draftId)
-    // draft 仍是 draft(没有被 daemon 行顶掉身份)
+    // The draft remains a draft instead of taking the daemon row's identity.
     expect(store.get(draftSessionIdsAtom).has(draftId)).toBe(true)
   })
 
@@ -497,8 +468,8 @@ describe('submitSessionDraftAtom — 发送后草稿不被异步回写复活', (
     store.set(submitSessionDraftAtom, { id, text: '你好' })
     expect(store.get(sessionDraftsAtom)[id]).toBeUndefined()
 
-    // useDraftSync 的 300ms 防抖 / 切 session flush 在提交之后才落地，
-    // 带着 FreeFormInput 尚未清空的同一份 segments 回写。
+    // useDraftSync's 300 ms debounce or session-switch flush lands after submission and writes
+    // back the same segments before FreeFormInput has cleared them.
     store.set(setSessionDraftAtom, { id, segments: sent })
 
     expect(store.get(sessionDraftsAtom)[id]).toBeUndefined()
@@ -513,7 +484,7 @@ describe('submitSessionDraftAtom — 发送后草稿不被异步回写复活', (
     store.set(setSessionDraftAtom, { id, segments: typed })
     expect(store.get(sessionDraftsAtom)[id]).toEqual(typed)
 
-    // 守卫已退休：此后即便再写入与原消息相同的内容也不再拦。
+    // The guard is retired; later writes matching the original message are no longer blocked.
     store.set(setSessionDraftAtom, { id, segments: sent })
     expect(store.get(sessionDraftsAtom)[id]).toEqual(sent)
   })
@@ -527,8 +498,8 @@ describe('submitSessionDraftAtom — 发送后草稿不被异步回写复活', (
 
     store.set(replaceDraftWithDaemonIdAtom, { draftId, daemonId })
 
-    // 防抖回写发生在换 id 之后，用的是新 id —— 守卫必须跟着迁移过来，
-    // 否则内容会落到新会话的输入框里（这正是用户报的现象）。
+    // A debounced write after the ID swap uses the new ID, so the guard must migrate with it;
+    // otherwise the submitted content reappears in the new session's composer.
     store.set(setSessionDraftAtom, { id: daemonId, segments: sent })
 
     expect(store.get(sessionDraftsAtom)[daemonId]).toBeUndefined()
@@ -541,11 +512,11 @@ describe('submitSessionDraftAtom — 发送后草稿不被异步回写复活', (
     store.set(setSessionDraftAtom, { id, segments: sent })
     store.set(submitSessionDraftAtom, { id, text: '你好' })
 
-    // 发送后 ~300ms,useDraftSync 把 FreeFormInput 已清空的内容防抖写回。
-    // 空内容指纹('')≠已发送文本,旧实现在这里就把墓碑退休了。
+    // About 300 ms after sending, useDraftSync writes back the cleared FreeFormInput.
+    // Its empty fingerprint differs from the sent text; the old implementation retired the tombstone here.
     store.set(setSessionDraftAtom, { id, segments: [{ type: 'text', value: '' }] })
 
-    // 再晚到的一笔携带已发送内容的回写(卸载 flush / 切会话 flush)必须仍被拦下。
+    // A later unmount or session-switch flush carrying the sent content must still be blocked.
     store.set(setSessionDraftAtom, { id, segments: sent })
     const after = store.get(sessionDraftsAtom)[id]
     expect(after === undefined || after.every((s) => s.type === 'text' && s.value === '')).toBe(true)
@@ -560,24 +531,24 @@ describe('submitSessionDraftAtom — 发送后草稿不被异步回写复活', (
 
     store.set(replaceDraftWithDaemonIdAtom, { draftId, daemonId })
 
-    // useDraftSync 的切会话/卸载 flush 闭包里存的还是旧 id ——
-    // 守卫若被"搬走"而不是"复制",这笔回写就会永久留在 draft:new,
-    // 之后每次点「新会话」都被 seed 回输入框(用户报的现象)。
+    // The useDraftSync switch/unmount closure still holds the old ID. If the guard is moved
+    // rather than copied, this write remains forever under draft:new and seeds the composer
+    // every time the user opens a new session.
     store.set(setSessionDraftAtom, { id: draftId, segments: sent })
 
     expect(store.get(sessionDraftsAtom)[draftId]).toBeUndefined()
   })
 
   it('回声窗口过后,用户重新敲出与已发送内容相同的草稿要能存住', () => {
-    // 用户报的现象:某会话第一条消息发的就是 "@",此后在这个会话里再打 "@",
-    // 切走再切回来就没了 —— 守卫比对命中后直接 return,没走到退休分支,
-    // 于是这一整个 app 生命周期内,凡是与已发送文本相同的草稿都写不进去。
-    // 守卫要防的只是发送后几百毫秒内的异步回声,超出窗口就该放行。
+    // Reported bug: when a session's first message was "@", typing "@" again and switching
+    // away made it disappear. A guard match returned before retirement, blocking any matching
+    // draft for the rest of the app lifetime. The guard should block only the asynchronous echo
+    // during the first few hundred milliseconds after submission.
     const store = createStore()
     const id = 'session_20260812_234103_4662b9d8'
     const at: Segment[] = [{ type: 'text', value: '@' }]
     store.set(submitSessionDraftAtom, { id, text: '@' })
-    // 发送后 ~300ms composer 自己的清空回写(不退休守卫)。
+    // About 300 ms after sending, the composer writes back its cleared state without retiring the guard.
     store.set(setSessionDraftAtom, { id, segments: [] })
 
     setSystemTime(new Date(Date.now() + SUBMIT_ECHO_WINDOW_MS + 1))

@@ -1,6 +1,6 @@
 /**
- * fileUrlToTarget 单测:file:// → 本地路径解析,含百分号解码、Windows 盘符、
- * 非 file: / 非法输入回落 null——正文 file 链接可点击的正确性前提。
+ * fileUrlToTarget tests: parse file:// into local paths, including percent decoding and Windows
+ * drive letters, while returning null for non-file or invalid input. This underpins clickable file links.
  */
 import { describe, it, expect } from 'bun:test'
 import { fileUrlToTarget } from '../fileUrl'

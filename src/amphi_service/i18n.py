@@ -575,6 +575,14 @@ class BackendI18n:
             "zh": "抱歉，这次任务没有生成回复。请重新运行一次；如果仍然没有回复，可以换一个模型再试。",
             "en": "Sorry, no response was generated for this task. Run it again, or try another model if it still produces no response.",
         },
+        "agent.error.image_input_unsupported": {
+            "zh": "当前模型“{model_display}”不支持图片输入。请切换到支持图片/视觉输入的模型，或移除消息中的图片后重试。",
+            "en": "The current model, {model_display}, does not support image input. Switch to a vision-capable model or remove the images and try again.",
+        },
+        "agent.error.image_input_invalid": {
+            "zh": "图片无法作为模型输入。请确认图片是 PNG、JPEG、GIF 或 WebP 格式，单张不超过 5 MB，并重新添加后再试。",
+            "en": "The image could not be sent to the model. Re-add a PNG, JPEG, GIF, or WebP image no larger than 5 MB and try again.",
+        },
         "agent.error.model_not_found": {
             "zh": "当前选择的模型无法使用。请前往模型设置，选择其他模型后再试。",
             "en": "The selected model cannot be used right now. Choose another model in settings and try again.",

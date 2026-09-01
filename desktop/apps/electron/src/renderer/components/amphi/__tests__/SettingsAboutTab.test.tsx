@@ -1,15 +1,14 @@
 /**
- * SettingsAboutTab —— 更新状态行的两条容易读错的语义。
+ * SettingsAboutTab: two easily misread update-status semantics.
  *
- * 这两条都是真机测出来的,不是设想的:
- *  - 后台已有检查/下载在跑时点「检查更新」,行不能被重置成「检查中」——
- *    那会把「已下载 45%」这个唯一有信息量的状态抹掉,按钮看起来像坏的;
- *  - 没有新版本时要说「已是最新」,而不是落进失败分支。用户在真机上看到
- *    「检查失败」时的第一反应就是这里缺了提示(实际那次是真失败,但这条
- *    路径本身必须有测试钉住)。
+ * Both came from real-device behavior rather than hypothetical cases:
+ *  - clicking Check for Updates while a background check or download is active must not reset
+ *    the row to Checking, which erases useful progress such as 45% and makes the button look broken;
+ *  - when no update exists, report Up to date rather than entering the failure branch. Users who
+ *    saw Check failed first suspected that this path lacked feedback, so it needs explicit coverage.
  *
- * 不断言具体措辞:文案走 i18n,绑措辞会让每次改文案都红(见 agent.test.ts
- * 里同样的教训)。第一条改为比较点击前后的整行文本是否**没变**。
+ * Do not assert exact i18n wording, which would make copy edits fail. For the first contract,
+ * compare the entire row before and after clicking and require it to remain **unchanged**.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -145,7 +144,7 @@ describe('SettingsAboutTab update row', () => {
 
     await click()
 
-    // 关键:'busy' 不能把进度行重置掉 —— 那正是「点了没反应」的来源。
+    // Key contract: 'busy' must not reset the progress row, which made the click appear ineffective.
     expect(host.textContent).toBe(duringDownload)
     expect(checkNow).toHaveBeenCalledTimes(1)
 
@@ -166,7 +165,7 @@ describe('SettingsAboutTab update row', () => {
 
     await emit({ type: 'error', message: 'HttpError: 404' })
 
-    // 失败必须可见 —— 静默会被读成「已经是最新了」。
+    // Failure must be visible; silence would be interpreted as already up to date.
     expect(host.textContent).toContain(i18n.t('modals.about.updateFailed'))
     await cleanup()
   })
@@ -176,20 +175,20 @@ describe('SettingsAboutTab update row', () => {
 
     await emit({ type: 'preparing' })
 
-    // 重建差分源约 44 秒,且只在装机后的首次更新出现。这段时间不给反馈,
-    // 点过「检查更新」的人看到的就是一行不动的字 —— 与卡死无法区分。
+    // Rebuilding differential sources takes about 44 seconds and appears only on the first update
+    // after installation. Without feedback, a static row after clicking is indistinguishable from a hang.
     expect(host.textContent).toContain(i18n.t('modals.about.updatePreparing'))
     await cleanup()
   })
 })
 
 /**
- * 授权声明和联系方式是**合同性文本**,不是装饰:这里显示的协议名必须和仓库实际
- * 附带的 `/LICENSE` 一致,不一致就是对外说错了自己的授权条款。
+ * License and contact information are **contractual text**, not decoration. The displayed license
+ * must match `/LICENSE`, or the product publicly states incorrect terms.
  *
- * 这一组盯的是地址和跳转目标这类**常量**,不是措辞 —— 所以可以直接断言字面量,
- * 与文件头「不绑措辞」的原则不冲突。上一版把个人 Gmail 当商业授权联系方式发了
- * 出去且没人发现,正是因为这块一条测试都没有。
+ * This group protects **constants** such as addresses and destinations rather than prose, so
+ * literal assertions do not conflict with avoiding copy coupling. A prior release exposed a
+ * personal Gmail address for commercial licensing because this area had no tests.
  */
 describe('SettingsAboutTab licence + contacts', () => {
   it('names AGPL and never Apache', async () => {
@@ -207,7 +206,7 @@ describe('SettingsAboutTab licence + contacts', () => {
     expect(host.textContent).toContain(COMMERCIAL_LICENSE_CONTACT)
     expect(host.textContent).toContain(SECURITY_CONTACT)
     expect(host.textContent).toContain(FEEDBACK_CONTACT)
-    // 个人邮箱一旦回流就是对外事故,单独钉死。
+    // Guard separately against accidentally reintroducing a personal address in the product.
     expect(host.textContent).not.toContain('gmail.com')
 
     await cleanup()
@@ -229,7 +228,7 @@ describe('SettingsAboutTab licence + contacts', () => {
     await clickTestId('about-copy-business')
 
     expect(writeText).toHaveBeenCalledWith(COMMERCIAL_LICENSE_CONTACT)
-    // 复制不该顺带唤起邮件客户端 —— 那是两个不同的意图。
+    // Copying must not also launch the mail client; these are distinct intents.
     expect(openExternal).not.toHaveBeenCalled()
 
     await cleanup()
@@ -258,20 +257,20 @@ describe('SettingsAboutTab licence + contacts', () => {
 })
 
 /**
- * 社区入口按界面语言分流。两个方向都会真的伤到人:把英文用户送进中文频道,他打开
- * 是一屏读不懂的消息;把微信二维码留在英文界面上,他连扫码的 App 都没装。
+ * Community entry points route by interface language. Both mistakes harm users: an English user
+ * sent to the Chinese channel sees unreadable content, while an English UI should not offer a WeChat QR code.
  *
- * Discord 的两个邀请链接在这里**写死字面量**,不引用常量 —— 这一组要钉的恰恰是
- * 「哪种语言对应哪个频道」,若引用常量,断言就退化成 `X === X`,把两个链接对调也
- * 照样是绿的。上面那组盯的是「地址不能写错」,所以引用常量是对的;这里盯的是
- * 「路由不能接反」,必须各自独立地写出期望值。
+ * The two Discord invitations are **literal values** here rather than imported constants because
+ * this group verifies which language maps to which channel. Importing them would reduce the assertion
+ * to `X === X` and remain green if links were swapped. The previous group validates addresses;
+ * this one independently validates routing.
  */
 const DISCORD_INVITE_ZH = 'https://discord.gg/XcEqrwKUXN'
 const DISCORD_INVITE_EN = 'https://discord.gg/yFYVSm9tPC'
 
 describe('SettingsAboutTab community links', () => {
   afterEach(async () => {
-    // test-setup 把整轮测试钉在中文上,借走了就得还,否则后面的文件拿到英文。
+    // test-setup fixes the suite language to Chinese; restore it after temporarily switching to English.
     await i18n.changeLanguage('zh')
   })
 
@@ -310,7 +309,7 @@ describe('SettingsAboutTab community links', () => {
     await i18n.changeLanguage('en')
     const { count, cleanup } = await mountAbout()
 
-    // 不是隐藏,是整行不存在 —— 折叠起来的入口对英文用户依然是噪音。
+    // The entire row must be absent, not merely collapsed, because even a hidden entry is noise for English users.
     expect(count('about-wechat-toggle')).toBe(0)
 
     await cleanup()
@@ -322,7 +321,7 @@ describe('SettingsAboutTab community links', () => {
     expect(count('about-wechat-qr')).toBe(0)
     await clickTestId('about-wechat-toggle')
     expect(count('about-wechat-qr')).toBe(1)
-    // 再点一次要能收回去,否则「关于」页会被一张二维码永久撑高。
+    // A second click must collapse it so a QR code does not permanently enlarge the About page.
     await clickTestId('about-wechat-toggle')
     expect(count('about-wechat-qr')).toBe(0)
 
@@ -334,10 +333,10 @@ describe('SettingsAboutTab update row honesty', () => {
   it('does not claim "up to date" before anything has been checked', async () => {
     const { host, cleanup } = await mountAbout()
 
-    // 回归防护,不是修 bug —— `unknown` 目前会提前 return null。
-    // 之所以值得钉住:后台检查发现更新后要重建差分源(约 44 秒),这段时间里
-    // 打开面板拿到的是 stagedVersion: null。哪天有人把 unknown 并进末尾那个
-    // else,面板就会在一个更新正在准备的当口断言「已是最新」。
+    // Regression guard rather than a current bug: `unknown` returns null today. It matters because
+    // rebuilding differential sources takes about 44 seconds after discovering an update, during
+    // which the panel receives stagedVersion: null. Folding unknown into the final else would
+    // incorrectly claim Up to date while an update is being prepared.
     expect(host.textContent).not.toContain(i18n.t('modals.about.updateUpToDate'))
     await cleanup()
   })
@@ -345,9 +344,9 @@ describe('SettingsAboutTab update row honesty', () => {
 
 describe('SettingsAboutTab check button feedback', () => {
   it('says something when a check is already running and the row is blank', async () => {
-    // 后台检查发现更新后要重建差分源(约 44 秒),整个窗口内没有任何事件到达
-    // 面板。此时打开 Settings 的用户看到的是空白一行,点「检查更新」拿到 busy,
-    // 若不落任何状态,按钮就像坏的一样。
+    // While the updater rebuilds differential sources for about 44 seconds, no event reaches the
+    // panel. A user opening Settings sees a blank row and receives busy on manual check, so busy
+    // must establish a visible state or the button appears broken.
     checkNow.mockImplementation(async () => 'busy')
     const { host, click, cleanup } = await mountAbout()
 
@@ -358,8 +357,8 @@ describe('SettingsAboutTab check button feedback', () => {
   })
 
   it('does not overwrite a more informative state with "checking"', async () => {
-    // 已知在下载 45% 时,「检查中」是信息量更低的说法 —— 这正是当初 busy
-    // 不动那一行的原因,不能因为上面那条把它退回去。
+    // When download progress is already 45%, Checking is less informative. The busy fallback above
+    // must not regress the original rule that preserves an existing progress row.
     checkNow.mockImplementation(async () => 'busy')
     const { host, emit, click, cleanup } = await mountAbout()
 

@@ -158,12 +158,12 @@ describe('FocusModeHeader', () => {
         )
       })
 
-      // 宽度**从断点算出来**,不写死数字 —— 此前是硬编码(860/896/908/890),
-      // 断点一调测试就红,而红的原因跟被测行为无关。四步语义:
-      // 跌破 COMPACT → 折叠;停在滞回区 → 保持折叠;越过 EXPANDED → 展开;
-      // 再跌回滞回区 → 保持展开(临界宽度上拖窗口不会来回抖)。
+      // Compute widths **from breakpoints** instead of hard-coding values. Earlier constants
+      // failed whenever breakpoints changed for reasons unrelated to behavior. Four steps:
+      // below COMPACT collapses; inside hysteresis stays collapsed; above EXPANDED expands;
+      // returning to hysteresis stays expanded to avoid jitter near the threshold.
       const belowCompact = COMPACT_HEADER_WIDTH - 20
-      const inHysteresis = COMPACT_HEADER_WIDTH + 16   // 介于两个阈值之间
+      const inHysteresis = COMPACT_HEADER_WIDTH + 16   // Between the two thresholds.
       const aboveExpanded = EXPANDED_HEADER_WIDTH + 6
       expect(inHysteresis).toBeGreaterThanOrEqual(COMPACT_HEADER_WIDTH)
       expect(inHysteresis).toBeLessThan(EXPANDED_HEADER_WIDTH)

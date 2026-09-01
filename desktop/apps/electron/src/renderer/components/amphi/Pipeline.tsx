@@ -720,6 +720,9 @@ export function MessageBubble({
       (block): block is Extract<MessageBlock, { type: 'tool' }> => block.type === 'tool' && !block.result,
     )
     if (runningTool) {
+      if (runningTool.name === 'generate_image') {
+        return { label: t('session.pipeline.activity.generatingImage') }
+      }
       let label = t('session.pipeline.activity.callingTool')
       if (isBrowserAgentActionToolName(runningTool.name)) {
         label = t('session.pipeline.activity.usingBrowser')

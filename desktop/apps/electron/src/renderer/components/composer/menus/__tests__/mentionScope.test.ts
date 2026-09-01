@@ -1,6 +1,6 @@
 /**
- * cycleMentionScope 纯逻辑单测:验证 ←/→ 在 5 个分类 Tab 间的环绕切换顺序,
- * 使键盘 Tab 切换与头部渲染顺序保持一致(§4.11 单一来源)。
+ * Pure cycleMentionScope tests verify ←/→ wrapping across five category tabs so keyboard
+ * navigation matches header rendering order (§4.11 single source of truth).
  */
 import { describe, expect, it } from 'bun:test'
 import { MENTION_SCOPES, cycleMentionScope } from '../mentionScope'

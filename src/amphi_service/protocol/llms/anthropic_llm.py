@@ -1,3 +1,4 @@
+import base64
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -13,6 +14,7 @@ from bridgic.core.model.types import (
 )
 from pydantic import BaseModel, Field
 
+from ._image_inputs import image_inputs_of, read_image_input
 from ._streaming import (
     RATE_LIMIT_MAX_RETRIES,
     StreamResult,
@@ -171,7 +173,10 @@ class AnthropicLlm(BaseLlm):
                 system_parts.append(_text_of(msg))
                 continue
             role = _bridgic_role_to_anthropic(msg.role)
-            content = _blocks_to_anthropic_content(msg.blocks)
+            content = _blocks_to_anthropic_content(
+                msg.blocks,
+                image_inputs_of(msg) if msg.role == Role.USER else None,
+            )
             if role == "assistant":
                 # Replay the turn's captured thinking blocks (carried on
                 # ``extras`` by turn_messages). A thinking-mode model (e.g.
@@ -713,9 +718,7 @@ def _bridgic_role_to_anthropic(role: Role) -> str:
     return "user"
 
 
-def _blocks_to_anthropic_content(
-    blocks: List[ContentBlock],
-) -> List[Dict[str, Any]]:
+def _blocks_to_anthropic_content(blocks: List[ContentBlock], image_inputs: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Map bridgic content blocks → Anthropic content block list.
 
     Bridgic uses :class:`TextBlock` / :class:`ToolCallBlock` /
@@ -724,6 +727,16 @@ def _blocks_to_anthropic_content(
     you know the field names.
     """
     out: List[Dict[str, Any]] = []
+    for image in image_inputs or []:
+        data, media_type = read_image_input(image)
+        out.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            },
+        })
     for block in blocks:
         if isinstance(block, TextBlock):
             out.append({"type": "text", "text": block.text})

@@ -53,3 +53,19 @@ def test_calculates_the_usable_input_capacity(limits: dict[str, object], expecte
     provider = LlmProvider(model_id="test-model", model_limits=limits)
 
     assert provider.input_capacity() == expected
+
+
+def test_image_input_capability_is_tristate_for_catalog_and_custom_models() -> None:
+    """Catalog models answer definitively while custom model ids remain permissive."""
+    assert LlmProvider(
+        model_id="gpt-5.6-sol",
+        provider_id="openai-codex",
+    ).supports_image_input() is True
+    assert LlmProvider(
+        model_id="deepseek-v4-pro",
+        provider_id="deepseek",
+    ).supports_image_input() is False
+    assert LlmProvider(
+        model_id="private-vision-model",
+        provider_id="custom-relay",
+    ).supports_image_input() is None

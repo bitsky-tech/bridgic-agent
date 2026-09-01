@@ -38,14 +38,14 @@ describe('COMPOSER_TIPS', () => {
   })
 
   it('keeps the pitfall tips, and keeps them inside the first rotation window', () => {
-    // 这几条对应代码里真实的硬判定（见 COMPOSER_TIPS 上的逐条出处），不是可有可无的
-    // 使用建议：不知道就会以为软件坏了（打 `文件@` 菜单不弹、粘长文以为丢了）。
-    // 轮完一圈要 条数×5s，而用户很少在输入框前停满一圈 —— 所以除了"必须还在"，
-    // 还要求它们全部落在开头这段窗口里，否则等于没加。
+    // These tips correspond to real hard-coded behavior documented in COMPOSER_TIPS, not optional
+    // advice. Without them, users may think the app is broken when `file@` opens no menu or a long
+    // paste is converted. A full rotation takes count * 5 seconds and users rarely wait that long,
+    // so critical tips must remain within the initial window, not merely somewhere in the list.
     //
-    // 窗口是**定值**，不是 `length / 2`：按比例算的话每加一条 tip 阈值就自动放宽
-    // 一格，断言会随表增长而悄悄失效；而"用户愿意在输入框前停多久"跟表有多长
-    // 无关。ROTATE_INTERVAL_MS = 5s，取 6 条 ≈ 30s。
+    // The window is a **fixed value**, not `length / 2`. A proportional threshold expands whenever
+    // a tip is added and silently weakens the assertion, while user patience is independent of list
+    // length. With ROTATE_INTERVAL_MS = 5s, six entries represent about 30 seconds.
     const FIRST_WINDOW = 6
     const PITFALLS = ['@ 与 /', 'Shift + Enter', '.txt 附件', '拖入文件']
     for (const marker of PITFALLS) {

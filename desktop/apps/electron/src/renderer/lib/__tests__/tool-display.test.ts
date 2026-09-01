@@ -24,7 +24,7 @@ import {
   writeContentOf,
 } from '../toolDisplay'
 
-/** 后端 `_agent.py` 溢出写文件哨兵的真实 4 行文本(测试夹具)。 */
+/** Real four-line file-overflow sentinel emitted by backend `_agent.py` (test fixture). */
 const OVERFLOW = [
   'Tool result exceeded inline limit and was written to file.',
   'Path: /Users/t/.bridgic/AmphiAgent/sessions/s_1/.internal/tool_results/2026-07-06_a4a901e4.txt',
@@ -122,13 +122,13 @@ describe('toolMeta', () => {
     expect(toolMeta('glob', 'glob', {}, OVERFLOW)).toEqual({})
   })
   it('入参派生的值走 detail(紧跟主语),不是 note(行尾)', () => {
-    // 位置语义:detail 是主语的一部分(「查看技能 X 的 Y 文件」),推到行尾会让
-    // 9 行同名 Skill 要横扫整屏才配得上对应文件。
+    // Position is semantic: detail belongs to the subject ("view file Y of skill X"). Moving
+    // it to the end makes nine same-named Skill rows require a full-width scan to match files.
     expect(toolMeta('generic', 'view_skill', { skill_dir: '/s/a', file_path: 'ref.md' }, '')).toEqual({
       detail: 'ref.md',
     })
     expect(toolMeta('generic', 'browser_input', { text: 'hi', ref: 'e42' }, '')).toEqual({ detail: 'e42' })
-    // noteKeys 缺省 / 取不到 → 无 detail,不编造。
+    // Missing or unresolved noteKeys produce no detail; do not invent one.
     expect(toolMeta('generic', 'view_skill', { skill_dir: '/s/a' }, '')).toEqual({})
     expect(toolMeta('generic', 'browser_click', { ref: 'e1' }, '')).toEqual({})
     expect(toolMeta('generic', 'mcp__x__y', { query: 'q' }, '')).toEqual({})
@@ -147,8 +147,8 @@ describe('toolMeta', () => {
 })
 
 describe('toolLabel — 已登记工具族(spec 驱动)', () => {
-  // 真实回归场景:一轮里三次 view_skill,前两次同技能不同文件。
-  // 旧行为三行都是「调用 view_skill」,完全分不清。
+  // Real regression: three view_skill calls in one turn, with the first two reading different
+  // files from the same skill. Previously all three rows said only "calling view_skill".
   it('view_skill 用技能名作主语、文件名作备注,三次调用彼此可分', () => {
     const a = { skill_dir: '/x/builtin_skills/hyperframes' }
     const b = { skill_dir: '/x/builtin_skills/remotion-best-practices', file_path: 'remotion-create/REFERENCE.md' }
@@ -174,7 +174,7 @@ describe('toolLabel — 已登记工具族(spec 驱动)', () => {
       subjectMono: true,
     })
     expect(toolLabel('generic', 'browser_scroll', { direction: 'down' }).subject).toBe('向下')
-    // 未在映射表里的枚举值原样显示,不吞。
+    // Preserve unmapped enum values instead of dropping them.
     expect(toolLabel('generic', 'browser_scroll', { direction: 'sideways' }).subject).toBe('sideways')
   })
   it('PPT 工具显示页面级动作和稳定页 id', () => {
@@ -231,7 +231,7 @@ describe('toolLabel — 未登记工具 / MCP 兜底', () => {
       subject: 'future_tool',
       subjectMono: true,
     })
-    // 长文本(正文 / HTML)不当主语:会把单行撑爆且没有辨识度。
+    // Do not use long body text or HTML as the subject; it overflows the row without adding identity.
     expect(toolLabel('generic', 'future_tool', { body: 'x'.repeat(200) }).subject).toBe('future_tool')
   })
   it('非对象入参不炸', () => {
