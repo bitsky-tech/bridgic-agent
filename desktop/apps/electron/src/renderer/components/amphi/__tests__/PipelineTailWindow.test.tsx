@@ -1,5 +1,5 @@
 /**
- * Pipeline tail-windowing — a huge transcript mounts only its最近 chunk, and a
+ * Pipeline tail-windowing — a huge transcript mounts only its most recent chunk, and a
  * top sentinel reveals older messages on demand.
  *
  * Driven through the legacy `messages` prop (same windowing code path as live

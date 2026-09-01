@@ -1,9 +1,9 @@
 /**
- * useActiveSessionReadReceipt —— "看过了才算已读" 的 nav 条件。
+ * useActiveSessionReadReceipt: navigation conditions for marking a session read only after it is viewed.
  *
- * activeSessionId 与 nav 正交:点「调度」/「我的资产」只换中央区,activeSessionId
- * 仍指着上一个会话。此时会话跑完不该被判成"你正在看它"——否则未读对钩在出现的
- * 同一帧就被清掉,用户永远看不到。
+ * activeSessionId is independent of navigation. Selecting Schedules or Assets changes only
+ * the center pane while activeSessionId still points to the previous session. Completion must
+ * not count as viewing it, or the unread mark disappears in the same frame it appears.
  */
 import { afterAll, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -18,9 +18,9 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
 const { DEFAULT_SETTINGS } = await import('@app/shared/types')
-// atoms/amphi ⇄ LeftSidebar 是循环依赖,且 amphi.ts 顶层就求值 `Object.values(NavKey)`。
-// 直接先 import LeftSidebar 会从错误的一端进环 → NavKey TDZ。从 amphi 这端进,
-// LeftSidebar 先初始化完,NavKey 才就绪。
+// atoms/amphi and LeftSidebar form a cycle, while amphi.ts evaluates `Object.values(NavKey)`
+// at module scope. Importing LeftSidebar first enters from the wrong side and hits NavKey's TDZ.
+// Enter through amphi so LeftSidebar initializes before NavKey is evaluated.
 const { settingsAtom } = await import('@/atoms/settings')
 await import('@/atoms/amphi')
 const { NavKey } = await import('@/components/amphi/LeftSidebar')
@@ -37,7 +37,7 @@ function Harness() {
   return null
 }
 
-/** Store 里造一个「活跃且带未读点」的会话,并把 nav 停在 `nav`。 */
+/** Create an active unread session in the store and leave navigation at `nav`. */
 function makeStore(nav: string) {
   const store = createStore()
   store.set(settingsAtom, {
@@ -72,7 +72,7 @@ describe('useActiveSessionReadReceipt', () => {
   it('keeps the unread mark while the user is on a non-Home nav', async () => {
     const { store, id } = makeStore(NavKey.Schedules)
     const root = await mount(store)
-    // 人在调度页,中央区根本没渲染这个会话——不算看过。
+    // While on Schedules, the session is not rendered in the center pane and does not count as viewed.
     expect(hasRedDot(store, id)).toBe(true)
     await act(async () => root.unmount())
   })

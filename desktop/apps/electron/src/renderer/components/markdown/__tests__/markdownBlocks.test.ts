@@ -1,6 +1,6 @@
 /**
- * splitMarkdownBlocks 单测:确认切块边界稳定(代码/表格/列表整块)且数学配平
- * (含空行的块级公式不被切裂)——逐块 memo 的正确性前提。
+ * splitMarkdownBlocks tests verify stable boundaries for complete code, table, and list blocks,
+ * plus balanced math so block formulas containing blank lines stay intact. This underpins per-block memoization.
  */
 import { describe, it, expect } from 'bun:test'
 import { splitMarkdownBlocks } from '../markdownBlocks'
@@ -19,7 +19,7 @@ describe('splitMarkdownBlocks', () => {
     const blocks = splitMarkdownBlocks(md)
     const fence = blocks.find((b) => b.includes('```ts'))
     expect(fence).toBeDefined()
-    // 起止围栏都在同一块里。
+    // Opening and closing fences remain in the same block.
     expect((fence!.match(/```/g) ?? []).length).toBe(2)
   })
 

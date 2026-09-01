@@ -1,8 +1,8 @@
 /**
- * 光标矩形跟随 —— 固化「菜单打开期间,祖先容器滚动/窗口 resize 后必须重新量」。
+ * Caret rectangle tracking: remeasure after ancestor scrolling or window resize while a menu is open.
  *
- * 回归背景:原实现只在打开和每次输入时量一次。首页 composer 处在 overflow-auto 容器里,
- * 打完 `@` 一滚页面,菜单(position:fixed)就留在原地,和输入框脱节。
+ * Regression: the original implementation measured only on open and input. The landing-page
+ * composer is inside an overflow-auto container, so scrolling after typing `@` left the fixed menu behind.
  */
 import { afterAll, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -19,7 +19,7 @@ const { act, useRef } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { useCaretRect } = await import('../useCaretRect')
 
-/** 可控的假 editor handle:只实现 getCaretRect,返回 `top` 由测试驱动。 */
+/** Controllable editor handle implementing only getCaretRect, with test-driven `top`. */
 function makeEditor(): { handle: { getCaretRect: () => DOMRect | null }; setTop: (t: number) => void; calls: () => number } {
   let top = 100
   let calls = 0
@@ -35,7 +35,7 @@ function makeEditor(): { handle: { getCaretRect: () => DOMRect | null }; setTop:
   }
 }
 
-/** rAF 在 happy-dom 下是异步的,throttleRaf 的回调要等一帧。 */
+/** rAF is asynchronous in happy-dom, so throttleRaf callbacks need one frame. */
 const nextFrame = (): Promise<void> =>
   new Promise((resolve) => { requestAnimationFrame(() => resolve()) })
 
@@ -58,7 +58,7 @@ describe('useCaretRect', () => {
     await act(async () => { root.render(<Probe active />) })
     expect(seen.at(-1)?.top).toBe(100)
 
-    // 容器滚动:事件不冒泡到 window,所以监听必须在捕获阶段 —— 这里从一个子节点派发来验证。
+    // Container scroll events do not bubble to window, so capture is required; dispatch from a child to verify it.
     editor.setTop(40)
     await act(async () => {
       host.dispatchEvent(new Event('scroll', { bubbles: false }))
@@ -66,7 +66,7 @@ describe('useCaretRect', () => {
     })
     expect(seen.at(-1)?.top).toBe(40)
 
-    // 关掉菜单后解绑:再滚不应该产生新的量测。
+    // Closing the menu removes listeners, so later scrolling must not trigger another measurement.
     await act(async () => { root.render(<Probe active={false} />) })
     const before = editor.calls()
     editor.setTop(999)

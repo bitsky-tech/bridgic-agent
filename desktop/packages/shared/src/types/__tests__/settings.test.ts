@@ -1,12 +1,13 @@
 /**
- * 界面缩放的纯逻辑守卫:夹取区间与百分比换算。
+ * Pure-logic guards for interface zoom: range clamping and percentage conversion.
  *
- * 这两个 helper 是主进程与渲染层**共用**的单一来源(菜单快捷键、设置面板、
- * 窗口创建时的恢复都走它们),所以它们的边界行为必须钉死在这里 —— 尤其是
- * `clampZoomLevel`:它是脏配置(手改 / 导入的 gui-settings.json)与"UI 被放大到
- * 没有任何控件可点、连撤销入口都点不到"之间唯一的一道闸。
+ * These two helpers are the single source of truth **shared** by the main process and
+ * renderer (menu shortcuts, settings, and window-state restoration all use them), so
+ * their boundary behavior must be locked down here. This is especially important for
+ * `clampZoomLevel`, the only guard between malformed configuration (an edited or
+ * imported gui-settings.json) and a UI zoomed so far that no control is reachable.
  *
- * 非显式依赖:无。纯函数,不碰 electron、不碰磁盘。
+ * Implicit dependencies: none. These pure functions do not touch Electron or disk.
  */
 import { describe, it, expect } from 'bun:test'
 import {
@@ -25,8 +26,8 @@ describe('clampZoomLevel', () => {
     }
     expect(clampZoomLevel(40)).toBe(ZOOM_LEVEL_MAX)
     expect(clampZoomLevel(-40)).toBe(ZOOM_LEVEL_MIN)
-    // 脏配置(手改 / 导入)里 zoomLevel 可能是 null → NaN。放任它进
-    // setZoomLevel 会让整窗渲染异常,且用户无从恢复。
+    // An edited or imported configuration can contain zoomLevel: null, which becomes
+    // NaN. Passing it to setZoomLevel breaks the whole window with no recovery path.
     expect(clampZoomLevel(Number.NaN)).toBe(0)
     expect(clampZoomLevel(Number.POSITIVE_INFINITY)).toBe(0)
   })
@@ -35,8 +36,8 @@ describe('clampZoomLevel', () => {
 describe('zoomPercent', () => {
   it('maps representative and clamped levels to percentages', () => {
     expect(zoomPercent(0)).toBe(100)
-    // 步长取 0.5(而非整数 1)就是为了这一档:整数步一上来跳到 120%,
-    // 对"字号偏小"这个诉求太粗。
+    // The 0.5 step exists for this level. An integer step would jump straight to 120%,
+    // which is too coarse when the user only finds the text slightly small.
     expect(zoomPercent(0.5)).toBe(110)
     expect(zoomPercent(999)).toBe(zoomPercent(ZOOM_LEVEL_MAX))
   })
@@ -48,8 +49,8 @@ describe('DEFAULT_SETTINGS', () => {
     expect(DEFAULT_SETTINGS.version).toBe(SETTINGS_VERSION)
     expect(DEFAULT_SETTINGS.ui.telemetryOptIn).toBe(true)
     expect(DEFAULT_SETTINGS.layout.rightPanelWidth).toBe(320)
-    // font.family / font.size 曾被写进 --font-family / --font-size,但 CSS 读的是
-    // --font-sans、且没有任何规则读 --font-size —— 死配置,已随 v2 迁移删除。
+    // font.family / font.size used to populate --font-family / --font-size, but CSS reads
+    // --font-sans and no rule reads --font-size. These dead settings were removed in v2.
     expect('font' in DEFAULT_SETTINGS).toBe(false)
   })
 })

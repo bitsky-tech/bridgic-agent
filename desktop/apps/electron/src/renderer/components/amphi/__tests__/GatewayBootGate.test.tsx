@@ -1,13 +1,12 @@
 /**
- * GatewayBootGate 的版本闸门分支。
+ * Version-gate branches in GatewayBootGate.
  *
- * 覆盖的都是「静默失败」类的约束——它们出错时不会抛异常，只会让用户在一个
- * 半升级的状态里继续用应用：
- *  - `incompatible` 必须**挡住** children（放行就等于让新 GUI 驱动旧 daemon）；
- *  - 在用户点按钮之前，**绝不**能调用 `resolveCompatibility`（重启会掐断
- *    其它客户端正在跑的活）；
- *  - `unknown`（daemon 没上报版本）走独立文案，不能复用「版本不匹配」的说法；
- *  - `compatibility` 为 null（开发构建没有 manifest）时闸门不生效。
+ * These constraints prevent silent failures that keep users running in a half-upgraded state:
+ *  - `incompatible` must **block** children so a new GUI cannot drive an old daemon;
+ *  - `resolveCompatibility` must **never** run before the user clicks, because a restart
+ *    interrupts work from other clients;
+ *  - `unknown`, where the daemon reports no version, needs distinct copy from a mismatch;
+ *  - a null `compatibility`, used by development builds without a manifest, disables the gate.
  */
 import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -96,7 +95,7 @@ describe('GatewayBootGate — version mismatch', () => {
 
     expect(host.querySelector('[data-testid="app-body"]')).toBeNull()
     expect(host.querySelector('[data-testid="boot-gate-resolve-compatibility"]')).not.toBeNull()
-    // 这一条是本文件的核心：渲染阻塞界面**不得**顺手把 daemon 重启了。
+    // Core contract: rendering the blocking screen must **not** restart the daemon as a side effect.
     expect(resolveCompatibility).not.toHaveBeenCalled()
 
     await cleanup()
@@ -168,10 +167,10 @@ describe('GatewayBootGate — version mismatch', () => {
     })
     const text = host.textContent ?? ''
 
-    // 对照两份真实渲染结果，而不是断言「不包含某个 fixture 里根本没有的版本号」——
-    // 后者恒真，连版本对照表渲染出来都发现不了。
+    // Compare two real renderings instead of asserting absence of a version not present in the
+    // fixture. The latter is always true and cannot detect an accidentally rendered comparison table.
     expect(text).not.toBe(mismatchText)
-    // 没有 actual 版本时不渲染版本对照表：一行「正在运行: —」只是噪音。
+    // Do not render the version table without an actual version; "Running: —" is only noise.
     expect(text).not.toContain('0.2.0')
     expect(host.querySelector('[data-testid="boot-gate-resolve-compatibility"]')).not.toBeNull()
 
@@ -186,8 +185,8 @@ describe('GatewayBootGate — version mismatch', () => {
   })
 
   it('names the number of clients a restart would disconnect', async () => {
-    // 这条钉住的是主进程侧的守卫：fetchGatewayClients 曾经只在 Ready 时放行，
-    // 于是这个警告 100% 落到最含糊的那句文案上，两条复数文案是死字符串。
+    // This locks down the main-process guard. fetchGatewayClients once ran only in Ready state,
+    // forcing every warning into the vaguest copy and leaving pluralized messages unreachable.
     getClients.mockImplementation(async () => ({
       ok: true,
       clients: [
@@ -208,8 +207,8 @@ describe('GatewayBootGate — version mismatch', () => {
   })
 
   it('offers no gateway restart when it is OUR install that is broken', async () => {
-    // manifest 读不出来 = 应用自身损坏。重启网关永远修不好它，给这个按钮
-    // 等于把用户推向一个必然失败的动作。
+    // An unreadable manifest means the app itself is damaged. Restarting the gateway cannot fix it,
+    // so offering that button would send users into a guaranteed failure.
     const { host, cleanup } = await renderGate(BackendState.Incompatible, {
       state: CompatibilityState.ManifestUnavailable,
       detail: 'file not found',
@@ -283,8 +282,8 @@ describe('GatewayBootGate — version mismatch', () => {
   })
 
   it('does not gate a development build with no manifest verdict', async () => {
-    // compatibility === null 表示「没评估」，不是「不匹配」。开发构建没有生成
-    // manifest，闸门必须完全不生效，否则 `bun run dev` 直接不可用。
+    // compatibility === null means not evaluated, not incompatible. Development builds have no
+    // generated manifest, so the gate must be disabled or `bun run dev` becomes unusable.
     const { host, cleanup } = await renderGate(BackendState.Ready, null)
 
     expect(host.querySelector('[data-testid="app-body"]')).not.toBeNull()

@@ -25,8 +25,8 @@ const { issueReportRequestAtom } = await import('@/atoms/issue-report')
 const { i18n } = await import('@/lib/i18n')
 const { DEFAULT_SETTINGS } = await import('@app/shared/types')
 const { SidebarContainer } = await import('../SidebarContainer')
-// SidebarContainer 之后再取 NavKey:atoms/amphi ⇄ LeftSidebar 是循环依赖,
-// 先从 LeftSidebar 那端进环会撞上 amphi.ts 顶层 `Object.values(NavKey)` 的 TDZ。
+// Resolve NavKey after SidebarContainer because atoms/amphi and LeftSidebar form a cycle.
+// Entering through LeftSidebar first hits the TDZ of module-scope `Object.values(NavKey)` in amphi.ts.
 const { NavKey } = await import('@/components/amphi/LeftSidebar')
 
 beforeAll(async () => {
@@ -536,9 +536,9 @@ describe('SidebarContainer Child Session statuses', () => {
 })
 
 /**
- * 未读对钩 × nav —— activeSessionId 与 nav 正交:点「调度」/「我的资产」只换
- * 中央区,上一个会话仍是 activeSessionId。此时它跑完必须照常出对钩,否则用户
- * 在调度页等结果就永远看不到完成信号。
+ * Unread marks versus navigation: activeSessionId is independent of nav. Selecting Schedules
+ * or Assets changes only the center pane and leaves the prior session active. If it completes,
+ * the unread mark must still appear so users waiting elsewhere can see the completion signal.
  */
 describe('SidebarContainer unread ✓ vs. the nav the user is on', () => {
   it('shows the ✓ on the active session once the user left Home nav', async () => {
@@ -550,7 +550,7 @@ describe('SidebarContainer unread ✓ vs. the nav the user is on', () => {
       { id: 'sess-a', title: '会话 A', tokens: 0, status: 'completed' },
     ])
     await store.set(hydrateSessionsFromDaemonAtom)
-    // 用户在 A 里提过问 → A 是 activeSessionId;然后切到调度页等结果。
+    // The user asked in A, making it active, then switched to Schedules to await the result.
     store.set(activeSessionIdAtom, 'sess-a')
     store.set(settingsAtom, {
       ...DEFAULT_SETTINGS,
@@ -619,7 +619,7 @@ describe('SidebarContainer unread ✓ vs. the nav the user is on', () => {
       },
     ])
     await store.set(hydrateSessionsFromDaemonAtom)
-    // 用户上次点开的是这个后台子会话,人已经切到调度页。
+    // The user last opened this background child session and has since switched to Schedules.
     store.set(activeSessionIdAtom, 'child-bg')
     store.set(settingsAtom, {
       ...DEFAULT_SETTINGS,
@@ -634,8 +634,8 @@ describe('SidebarContainer unread ✓ vs. the nav the user is on', () => {
       )
     })
 
-    // completed 不是 prominent 状态,不投影到父行主区 —— 它出现在「收起子会话」
-    // 后的计数按钮里,所以先折叠再断言。
+    // completed is not prominent and does not project onto the parent row. It appears in the child
+    // count button after collapsing children, so collapse before asserting.
     const collapse = host.querySelector<HTMLButtonElement>(
       '[data-testid="session-parent-bg"] [aria-label="收起子会话"]',
     )

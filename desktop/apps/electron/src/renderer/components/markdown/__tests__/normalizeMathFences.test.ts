@@ -1,9 +1,9 @@
 /**
- * normalizeMathFences 测试 —— 修坏的、且**不碰好的**。
+ * normalizeMathFences tests repair malformed input while **preserving valid input**.
  *
- * 这个函数的风险不在"修不好",而在"误伤":完整单行公式(`$$x=1$$`)当前走行内 math、
- * 渲染正常,若被拆成块级会从行内样式变 display 样式 —— 那是视觉回归。所以「不动」的
- * 用例和「拆开」的用例同等重要。
+ * The main risk is collateral damage rather than failed repair. A complete single-line formula
+ * such as `$$x=1$$` renders correctly as inline math; splitting it into a block changes to display
+ * styling and causes a visual regression. Preservation cases are therefore as important as repair cases.
  */
 import { describe, expect, it } from 'bun:test'
 import { normalizeMathFences } from '../normalizeMathFences'
@@ -45,16 +45,16 @@ describe('normalizeMathFences — 代码块内一律不碰', () => {
 
     const mixedInput = '```\n$$\\begin{a}\n```\n\n$$\\begin{pmatrix}\nb\n\\end{pmatrix}$$'
     const out = normalizeMathFences(mixedInput)
-    // 代码块内那行原样
+    // Preserve the line inside the code block.
     expect(out).toContain('```\n$$\\begin{a}\n```')
-    // 代码块外的被拆开
+    // Split the line outside the code block.
     expect(out).toContain('$$\n\\begin{pmatrix}\nb\n\\end{pmatrix}\n$$')
   })
 })
 
 describe('normalizeMathFences — 真实回归用例', () => {
-  // 摘自一条真实模型回复(会话 KaTeX 渲染测试):它导致 27 组公式里 26 组被吞进同一个
-  // 巨型 math 块、整篇回复变成红色报错。这是本函数存在的理由,原样钉住。
+  // Taken from a real model response in a KaTeX rendering session: it merged 26 of 27 formulas
+  // into one giant math block and turned the entire response into a red error. Preserve it as the motivating regression.
   const REAL = [
     '### 线性代数',
     '矩阵：',
@@ -79,7 +79,7 @@ describe('normalizeMathFences — 真实回归用例', () => {
     expect(out).toContain('$$\n\\begin{pmatrix}\na & b \\\\\nc & d\n\\end{pmatrix}\n$$')
     expect(out).toContain('$$\n\\det(A) = \\begin{vmatrix}')
     expect(out).toContain('\\end{vmatrix}\n$$')
-    // 单行的求和公式保持原样(它本来就渲染正常)
+    // Preserve the single-line summation formula because it already renders correctly.
     expect(out).toContain('$$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$')
     expect(out).toContain('### 线性代数')
     expect(out).toContain('### 求和与乘积')

@@ -2,7 +2,7 @@
  * Tests for `SkillConflictRow` pure helpers — newer-than / desc-changed / time format.
  *
  * Pure-logic only (no React render), mirroring the composer/__tests__ pure-fn style.
- * These back the conflict row's "较新" tag, "描述有改动" tag, and the modal's
+ * These back the conflict row's "Newer" tag, "Description changed" tag, and the modal's
  * `newerSkipped` count, so the null/ISO edge cases are the load-bearing part.
  */
 import { describe, it, expect } from 'bun:test'

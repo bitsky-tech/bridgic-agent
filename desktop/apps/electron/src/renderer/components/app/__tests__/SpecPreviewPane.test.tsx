@@ -546,12 +546,12 @@ describe('SpecPreviewPane task review diff', () => {
 })
 
 /**
- * 未提交的输入(还没点「加入」的评论、源码编辑框)必须按会话存活。
+ * Unsubmitted input, including unadded comments and source edits, must survive per session.
  *
- * 这个面板由 BuildProgressPanel 按 `specPreviewOpenAtom`(**按会话**存)分支渲染,
- * 所以切换会话 = 整个面板卸载。此前评论草稿是组件里的 useState,一卸载就没了 ——
- * 用户敲了一半去看别的会话,回来发现白敲。用「卸载 + 用同一个 store 重新挂载」精确
- * 复现这条路径;顺带钉死另一半:换到别的会话时草稿不能跟着串过去。
+ * BuildProgressPanel renders this pane from `specPreviewOpenAtom`, stored **per session**, so
+ * switching sessions unmounts it. Comment drafts once lived in component useState and vanished
+ * on unmount. Unmounting and remounting with the same store reproduces the path exactly and also
+ * verifies that drafts do not leak into another session.
  */
 describe('SpecPreviewPane unsent drafts are per-session', () => {
   async function remount(store: ReturnType<typeof createStore>) {
@@ -582,7 +582,7 @@ describe('SpecPreviewPane unsent drafts are per-session', () => {
     )
   }
 
-  /** 选中一段 diff 正文 → 点浮动「评论」→ 敲一半,不点「加入」。 */
+  /** Select diff text, open the floating Comment action, type partially, and do not add it. */
   async function startHalfTypedComment(sessionId: string, text: string) {
     const { host, root, store } = await renderDiffReview(sessionId, '# 任务\n旧正文', '# 任务\n新正文')
     await selectText(diffValueByText(host, 'added', '新正文'))
@@ -600,25 +600,25 @@ describe('SpecPreviewPane unsent drafts are per-session', () => {
     const { host, root, store } = await startHalfTypedComment('session-draft-keep', half)
     expect(commentTextarea(host)?.value).toBe(half)
 
-    // 切走 = 面板卸载。草稿此时既没进待发队列,也不该消失。
+    // Switching away unmounts the pane; the draft is neither queued nor allowed to disappear.
     await unmountReview(root, host)
     expect(store.get(pendingCommentsAtom)).toHaveLength(0)
 
     const back = await remount(store)
     expect(back.host.textContent).toContain(i18n.t('specPreview.commentSelection'))
-    expect(back.host.textContent).toContain('新正文') // 引文一起回来,否则评论没了靶子
+    expect(back.host.textContent).toContain('新正文') // Restore the quote so the comment keeps its target.
     expect(commentTextarea(back.host)?.value).toBe(half)
-    // 注:光标应落在已有内容之后(CommentComposer 挂载时手动 focus + setSelectionRange),
-    // 但这里断言不了 —— happy-dom 的 selectionStart 默认就是 value.length,把修复撤掉测试
-    // 照样绿。Chromium 下裸 focus() 才会把光标放在 0。只能靠人工确认。
+    // The caret should follow existing text through focus + setSelectionRange on mount, but happy-dom
+    // defaults selectionStart to value.length and cannot distinguish the fix. Bare focus() places it
+    // at zero in Chromium, so this remains a manual check.
     await unmountReview(back.root, back.host)
   })
 
   it('does not carry a half-typed comment into another session', async () => {
     const { host, root, store } = await startHalfTypedComment('session-draft-a', '只属于 A 的评论')
 
-    // 面板不卸载、只换会话(切到的会话也开着预览时就是这条路径)——草稿若是组件本地
-    // 状态就会原样留在屏幕上,引文来自 A 的文档,却会被记到 B 头上。
+    // If both sessions keep previews open, switching changes sessions without unmounting the pane.
+    // Component-local draft state would remain visible and attach a quote from A to session B.
     await act(async () => {
       store.set(activeSessionIdAtom, 'session-draft-b')
       store.set(thinkingModeFamily('session-draft-b'), { mode: 'build', stage: 'clarify' })
@@ -638,8 +638,8 @@ describe('SpecPreviewPane unsent drafts are per-session', () => {
     await selectText(diffValueByText(host, 'added', '新正文'))
     expect(floatingCommentButton(host)).not.toBeNull()
 
-    // 两个会话都开着预览时面板不卸载,气泡是本地 state 会原样留着。留着就能点 ——
-    // 引文取自 A 的文档,评论却按 B 的 sid 入队,和草稿串会话是同一型的 bug。
+    // With previews open in both sessions, the pane stays mounted and local bubble state would persist.
+    // Clicking it would queue A's quoted text under B's session ID, the same class of cross-session leak.
     await act(async () => {
       store.set(activeSessionIdAtom, 'session-bubble-b')
       store.set(thinkingModeFamily('session-bubble-b'), { mode: 'build', stage: 'clarify' })

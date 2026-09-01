@@ -33,9 +33,9 @@ describe('graftTree', () => {
   test('grafts success and failure states immutably along the target chain', () => {
     const topLevel = graftTree(base, 'fapiao', { children: [file('fapiao/行程单.pdf')] })
     expect(topLevel[0]?.children?.[0]?.relPath).toBe('fapiao/行程单.pdf')
-    // 原树不被修改(immutability)。
+    // The original tree remains unchanged.
     expect(base[0]?.children).toBeUndefined()
-    // 未涉及的兄弟节点引用复用。
+    // Unaffected sibling nodes retain their references.
     expect(topLevel[1]).toBe(base[1])
 
     const deepTree = [folder('a', [folder('a/b')])]
@@ -64,7 +64,7 @@ describe('findNode', () => {
     expect(findNode(tree, 'a/b/c.txt')?.name).toBe('c.txt')
     expect(findNode(tree, 'z.txt')?.kind).toBe('file')
     expect(findNode(tree, 'a/missing')).toBeNull()
-    // 祖先尚未加载(无 children)→ 找不到,而不是误匹配。
+    // An unloaded ancestor with no children yields no match instead of a false positive.
     expect(findNode([folder('x')], 'x/deep.txt')).toBeNull()
   })
 })

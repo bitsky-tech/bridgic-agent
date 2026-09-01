@@ -128,7 +128,7 @@ describe('CenterWorkflows', () => {
         />,
       )
     })
-    // 回归点:这里曾是个纯装饰的 <span>,敲字毫无反应。
+    // Regression: this used to be a decorative <span> that ignored keyboard input.
     const search = host.querySelector<HTMLInputElement>('input[placeholder="搜索工作流..."]')
     expect(search).not.toBeNull()
     expect(search!.value).toBe('')
@@ -184,7 +184,7 @@ describe('CenterAssets', () => {
         }, {
           // Folder mounts always arrive with item_count null — the daemon
           // refuses to read the directory (macOS TCC). The size cell must
-          // stay empty rather than print a fabricated "0 项".
+          // Stay empty rather than print a fabricated "0 items".
           id: 'mnt_2',
           session_id: 'session_1',
           session_title: 'Agent 上下文压缩论文',
