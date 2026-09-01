@@ -7,6 +7,10 @@ from typing import Callable, ClassVar, Iterable, Literal, Optional
 
 from ..amphi_service.i18n import backend_i18n
 from ..amphi_service.protocol.llms._codex_credentials import CodexAuthError
+from ..amphi_service.protocol.llms._image_inputs import (
+    ImageInputUnsupportedError,
+    ImageInputValidationError,
+)
 from ..amphi_service.protocol.llms._streaming import (
     ModelNotFoundError,
     is_daily_quota_error,
@@ -120,6 +124,17 @@ class PublicAgentError:
         "moderation blocked",
         "safety policy",
     )
+    _IMAGE_UNSUPPORTED_MARKERS: ClassVar[tuple[str, ...]] = (
+        "does not support image input",
+        "image input is not supported",
+        "image inputs are not supported",
+        "image input modality is not enabled",
+        "image_url is only supported by certain models",
+        "no endpoints found that support image input",
+        "model only supports text input",
+        "not support images",
+        "unsupported image input",
+    )
 
     @classmethod
     def from_exception(cls, exc: BaseException) -> "PublicAgentError":
@@ -129,6 +144,28 @@ class PublicAgentError:
 
         if any(isinstance(item, AgentEmptyAnswerError) for item in errors):
             return cls._localized("empty_answer", "agent.error.empty_answer", True, "retry")
+
+        image_unsupported = next((
+            item for item in errors if isinstance(item, ImageInputUnsupportedError)
+        ), None)
+        if image_unsupported is not None or cls._has_marker(errors, cls._IMAGE_UNSUPPORTED_MARKERS):
+            model_id = image_unsupported.model_id if image_unsupported is not None else ""
+            model_display = model_id or backend_i18n.text("llm.selected_model")
+            return cls._localized(
+                "image_input_unsupported",
+                "agent.error.image_input_unsupported",
+                False,
+                "switch_model",
+                model_display=model_display,
+            )
+
+        if any(isinstance(item, ImageInputValidationError) for item in errors):
+            return cls._localized(
+                "image_input_invalid",
+                "agent.error.image_input_invalid",
+                False,
+                "edit_input",
+            )
 
         codex_auth = next((item for item in errors if isinstance(item, CodexAuthError)), None)
         if codex_auth is not None:
@@ -276,10 +313,10 @@ class PublicAgentError:
         return any(cls._codes_of(error) & codes for error in errors)
 
     @classmethod
-    def _localized(cls, code: str, message_id: str, retryable: bool, action: Optional[AgentErrorAction]) -> "PublicAgentError":
+    def _localized(cls, code: str, message_id: str, retryable: bool, action: Optional[AgentErrorAction], **values: object) -> "PublicAgentError":
         return cls(
             code=code,
-            message=backend_i18n.text(message_id),
+            message=backend_i18n.text(message_id, **values),
             retryable=retryable,
             action=action,
         )

@@ -469,7 +469,7 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"glob|grep", Capability.READ),
     (r"write_file|edit_file", Capability.EDIT),
     (r"workspace_restore|workspace_restore_file", Capability.EDIT),   # rollback = modifying files
-    (r"web_search|web_fetch", Capability.NETWORK),
+    (r"web_search|web_fetch|generate_image", Capability.NETWORK),
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
     (r"mcp__.+", Capability.MCP),
     (

@@ -32,7 +32,7 @@ describe('listDir', () => {
     const res = await listDir(path.join(root, 'fapiao'))
     if (!res.ok) throw new Error('expected ok')
     expect(res.nodes.map((n) => n.name)).toEqual(['高德打车发票', '发票汇总.xlsx'])
-    expect(res.nodes[0]?.children).toBeUndefined() // 单层:子级等展开时再读
+    expect(res.nodes[0]?.children).toBeUndefined() // One level only; read children when expanded.
     expect(res.nodes[1]?.sizeBytes).toBe(2)
   })
 
@@ -59,7 +59,7 @@ describe('listDir', () => {
     fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, 'dangling'))
     const res = await listDir(root)
     if (!res.ok) throw new Error('expected ok')
-    // 排序基于 dirent(零 stat),软链不知道目标类型 → 按文件排在真目录后。
+    // Sorting uses Dirent without stat, so symlink target types are unknown and sort after real directories.
     expect(res.nodes.map((n) => n.name)).toEqual(['real', 'link'])
     expect(res.nodes.find((n) => n.name === 'link')?.kind).toBe('folder')
   })
@@ -130,7 +130,7 @@ describe('searchDir', () => {
 
   test('does not follow directory symlinks (loop safety)', async () => {
     write('real/inner.txt')
-    // 自环:real/loop → root,跟随会无限展开。
+    // Self-cycle: real/loop points to root and would expand forever if followed.
     fs.symlinkSync(root, path.join(root, 'real', 'loop'))
     const res = await searchDir({
       roots: [{ mountId: 'm', mountName: 'r', absPath: root }],

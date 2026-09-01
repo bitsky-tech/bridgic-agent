@@ -11,6 +11,13 @@ from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
 from ..amphi_service.i18n import backend_i18n, detect_locale
+from ..amphi_service.protocol.llms._image_inputs import (
+    IMAGE_INPUTS_EXTRA,
+    ImageInputUnsupportedError,
+    ImageInputValidationError,
+    inspect_image_input,
+    validate_image_inputs,
+)
 from ..amphi_store import SessionTurnRecord, TurnStatus
 from ._context import (
     AmphiContext,
@@ -100,6 +107,7 @@ CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
     "grep",
     "web_search",
     "web_fetch",
+    "generate_image",
     "workspace_status",
     "workspace_diff",
     "workspace_history",
@@ -981,7 +989,7 @@ class MainThink(CognitiveWorker):
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
-        messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
+        messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(ota_context, context)
         return messages
 
@@ -1382,9 +1390,11 @@ class MainThink(CognitiveWorker):
         messages: List[Message] = []
         for turn in turns:
             ota = turn.ota_context_dump()
-            messages.append(Message.from_text(
+            messages.append(self._user_message(
+                turn.user_input,
                 self._render_user_input(turn.user_input, context),
-                role=Role.USER,
+                context,
+                reject_unsupported=False,
             ))
             compaction_data = (turn.agent_state or {}).get("context_compaction")
             compaction = (
@@ -1545,6 +1555,61 @@ class MainThink(CognitiveWorker):
                     path_map[block_id] = str(run.result_dir)
         return render_input(user_input, path_map)
 
+    def _image_inputs(self, user_input: Any, context: AmphiContext) -> List[Dict[str, Any]]:
+        """Resolve owned image mentions into small provider-neutral descriptors."""
+        def resolve_path(base: str, relative: str) -> Optional[str]:
+            if not relative:
+                return os.path.realpath(base)
+            normalized = relative.replace("/", os.sep)
+            if os.path.isabs(normalized):
+                return None
+            real_base = os.path.realpath(base)
+            candidate = os.path.realpath(os.path.join(real_base, normalized))
+            if candidate == real_base or candidate.startswith(real_base + os.sep):
+                return candidate
+            return None
+
+        blocks = _view(user_input, "blocks") or []
+        mentions = [
+            block for block in blocks
+            if _view(block, "type") == "mention" and _view(block, "id")
+        ]
+        workspace = context.workspace
+        if workspace is None or not mentions:
+            return []
+        path_map = workspace.reference_map([
+            str(_view(block, "id")) for block in mentions
+        ])
+        images: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for block in mentions:
+            block_id = str(_view(block, "id") or "")
+            base = path_map.get(block_id)
+            if not base:
+                continue
+            path = resolve_path(base, str(_view(block, "path") or ""))
+            if not path or path in seen:
+                continue
+            image = inspect_image_input(path, str(_view(block, "label") or block_id))
+            if image is not None:
+                images.append(image)
+                seen.add(path)
+        return validate_image_inputs(images)
+
+    def _user_message(self, user_input: Any, text: str, context: AmphiContext, *, reject_unsupported: bool) -> Message:
+        """Create a user Message and attach images only when the model can accept them."""
+        try:
+            images = self._image_inputs(user_input, context)
+        except ImageInputValidationError:
+            if reject_unsupported:
+                raise
+            images = []
+        support = context.llm_provider.supports_image_input()
+        if images and support is False and reject_unsupported:
+            raise ImageInputUnsupportedError(context.llm_provider.model_id)
+        extras = {IMAGE_INPUTS_EXTRA: images} if images and support is not False else {}
+        return Message.from_text(text, role=Role.USER, extras=extras)
+
     async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render this Turn's request through the shared structured-input path."""
         return self._render_user_input(ota_context.user_input, context)
@@ -1553,6 +1618,15 @@ class MainThink(CognitiveWorker):
         """Append volatile runtime metadata after this Invocation's user request."""
         request = await self.user_input_block(ota_context, context)
         return f"{request}\n\n{self.current_time_block(ota_context, context)}"
+
+    async def current_user_message(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Message:
+        """Build the current multimodal user Message with capability validation."""
+        return self._user_message(
+            ota_context.user_input,
+            await self.current_user_block(ota_context, context),
+            context,
+            reject_unsupported=True,
+        )
 
     def turn_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
         """Render this turn's completed rounds for the next model call.
@@ -1981,7 +2055,7 @@ class WorkflowRunThink(MainThink):
         )
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
-        messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
+        messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
@@ -2569,7 +2643,7 @@ class ClarifyThink(BuildThink):
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
-        messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
+        messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
@@ -2828,7 +2902,7 @@ class ExploreThink(BuildThink):
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
-        messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
+        messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
@@ -2929,7 +3003,7 @@ class GenerateThink(BuildThink):
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
-        messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
+        messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
@@ -3023,7 +3097,7 @@ class VerifyThink(BuildThink):
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
-        messages.append(Message.from_text(await self.current_user_block(ota_context, context), role=Role.USER))
+        messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
 

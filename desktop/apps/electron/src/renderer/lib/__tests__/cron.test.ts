@@ -1,11 +1,11 @@
 /**
- * Tests for lib/cron.ts::describeCronCN — 6-field cron → 中文人话。
+ * Tests for lib/cron.ts::describeCronCN — six-field cron to readable Chinese.
  */
 import { describe, it, expect } from 'bun:test'
 import { buildCron, CronPeriod, describeCron, pad2, parseCronToState, type CronState } from '../cron'
 import { i18n } from '../i18n'
 
-// 中文文案的唯一来源是 zh.json —— cron.ts 里那份手抄的 33 条中文表已删除。
+// zh.json is the single source of Chinese copy; the duplicated 33-entry table was removed from cron.ts.
 const describeCronCN = (cron: string): string =>
   describeCron(cron, (key, options) => String(i18n.getFixedT('zh')(key, options)))
 
@@ -28,12 +28,12 @@ describe('describeCronCN', () => {
     expect(describeCronCN('0 */5 * * * *')).toBe('每 5 分钟')
     expect(describeCronCN('0 0 */2 * * *')).toBe('每 2 小时')
 
-    // 回归:`0 30 */2 * * *` 在每 2 小时的第 30 分触发,描成「每 2 小时」会让人误以为整点跑。
+    // Regression: `0 30 */2 * * *` runs at minute 30 every two hours; omitting the minute implies an on-the-hour run.
     expect(describeCronCN('0 30 */2 * * *')).toBe('0 30 */2 * * *')
-    // 回归:曾把工作日误读成「每周一」、每 2 小时误读成「每天 00:00」。
+    // Regression: weekdays were once read as Mondays, and every two hours as daily at midnight.
     expect(describeCronCN('0 0 9 * * 1-5')).toBe('0 0 9 * * 1-5')
     expect(describeCronCN('0 15,45 * * * *')).toBe('0 15,45 * * * *')
-    // 「N 日 或 周五」若只描成「每月 N 日」会静默丢掉周约束 —— 违反不误读不变式。
+    // Describing "day N or Friday" as only "day N monthly" silently drops the weekday constraint.
     expect(describeCronCN('0 0 9 15 * 5')).toBe('0 0 9 15 * 5')
     expect(describeCronCN('0 0 9 15 6 5')).toBe('0 0 9 15 6 5')
     expect(describeCronCN('0 0 14 1 1,4,7,10 5')).toBe('0 0 14 1 1,4,7,10 5')

@@ -1,13 +1,13 @@
 /**
- * 回归:运行历史行的「停止本次运行」必须只停那一次 run。
+ * Regression: Stop This Run in history must stop only that run.
  *
- * 曾经每行都调 schedule 级 `POST /schedules/{id}/kill`(后端 `_scheduler.kill` 会
- * `cancel()` 该 schedule **全部**在飞 run)—— overlap 策略下同时有多次运行时,点任意
- * 一行会把其他运行一起干掉。正解是 run 级 `POST /sessions/{sessionId}/stop`
- * (`_invocation.cancel` 只取消这一个 Session tree,含其子 Agent)。
+ * Each row once called schedule-level `POST /schedules/{id}/kill`; backend `_scheduler.kill`
+ * cancels **all** active runs for that schedule. Under overlap, stopping one history row also
+ * killed others. The correct run-level endpoint is `POST /sessions/{sessionId}/stop`, whose
+ * `_invocation.cancel` affects only that Session tree and its child agents.
  *
- * 用真 DOM(happy-dom)渲染 + mock fetch 断言**实际打出的 URL**,因为 bug 在调用点
- * 传参(传了 schedule id 而非 run 的 sessionId),atom 级单测覆盖不到。
+ * Render with happy-dom and assert the **actual requested URL** through mocked fetch because the
+ * bug was at the call site, passing schedule ID instead of the run's sessionId, beyond atom-level coverage.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -29,7 +29,7 @@ const { ScheduleDetail } = await import('../ScheduleDetail')
 
 const EMPTY_KPI = { successRate: 0, runs: 0, avgTok: 0, avgSec: 0, totalTok: 0 }
 
-/** 一条同时有两次在飞运行的调度(overlap 策略:到点照常再起,不等上一次跑完)。 */
+/** Schedule with two active runs under overlap, which starts on time without waiting for the prior run. */
 const schedule: Schedule = {
   id: 'sched_1',
   name: '测试子Agent调度',
@@ -62,7 +62,7 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-/** 渲染详情页,返回 root + 每次请求的 pathname 记录。 */
+/** Render the detail page and return the root plus requested pathnames. */
 async function render() {
   const store = createStore()
   store.set(backendSnapshotAtom, {
@@ -81,7 +81,7 @@ async function render() {
     const url = typeof input === 'string' ? input : input.toString()
     const { pathname } = new URL(url)
     if (init?.method === 'POST') posted.push(pathname)
-    // 列表摘要:让 atom 侧的 target 查得到(killScheduleAtom 靠 target.running 判定)。
+    // Seed the list summary so atoms can find the target; killScheduleAtom checks target.running.
     const body =
       pathname === '/schedules'
         ? [{
@@ -90,8 +90,8 @@ async function render() {
             desc: schedule.desc,
             cron: schedule.cron,
             enabled: true,
-            // status 报 needsAction(挂起审批优先),running 独立为 true —— 正是本次
-            // bug 的真实形态:有 10 个待审批的同时还有 run 在飞。
+            // status reports needsAction because pending approval wins, while running remains independently
+            // true. This reproduces active runs coexisting with ten pending approvals.
             status: 'needsAction',
             running: true,
             needs_action: 10,
@@ -135,7 +135,7 @@ describe('ScheduleDetail 运行历史', () => {
     })
 
     expect(posted).toContain('/sessions/sess_a/stop')
-    // 另一次在飞运行(sess_b)不受影响,更不能走 schedule 级全停。
+    // The other active run, sess_b, remains unaffected and no schedule-level stop is issued.
     expect(posted).not.toContain('/sessions/sess_b/stop')
     expect(posted).not.toContain('/schedules/sched_1/kill')
 
@@ -144,7 +144,7 @@ describe('ScheduleDetail 运行历史', () => {
 
   it('顶部「停止全部运行」才是 schedule 级(POST /schedules/{id}/kill)', async () => {
     const { root, posted } = await render()
-    // Btn 渲染成 <div>(见 Primitives.tsx),故按文本精确匹配定位最内层那个。
+    // Btn renders as <div> in Primitives.tsx, so locate the innermost node by exact text.
     const killAll = Array.from(document.querySelectorAll('div')).find(
       (el) => el.textContent?.trim() === '停止全部运行',
     ) as HTMLElement | undefined

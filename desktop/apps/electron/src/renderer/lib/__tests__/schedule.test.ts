@@ -1,5 +1,5 @@
 /**
- * Tests for lib/schedule.ts — getScheduleStatus 派生 + getPendingRun。
+ * Tests for lib/schedule.ts — getScheduleStatus derivation and getPendingRun.
  */
 import { describe, it, expect } from 'bun:test'
 import {

@@ -6,8 +6,9 @@
  * test writes to its own temp dir. Covers the round-trip, the never-throw
  * fallbacks (missing / corrupt / non-object file → {}), and the atomic write.
  *
- * 这份测试原本只覆盖 drafts;spec-comments 那份逐字重复的实现一直裸奔。三者
- * 合并到同一实现后,这里的每条断言同时守着三个 blob。
+ * This test originally covered only drafts, while the duplicated spec-comments implementation
+ * had no coverage. After consolidating all three behind one implementation, every assertion
+ * here protects all three blobs.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -50,7 +51,7 @@ describe('json-blob round-trip', () => {
   })
 
   it('round-trips nested arrays (input-history stores Segment[][])', () => {
-    // 输入历史的值比 drafts 深一层 —— 每个会话是「多条输入」的数组。
+    // Input-history values are one level deeper than drafts: each session stores an array of entries.
     const file = tmpPath()
     const history = {
       's1': [[{ type: 'text', value: '第二条' }], [{ type: 'text', value: '第一条' }]],
@@ -84,7 +85,7 @@ describe('json-blob never throws', () => {
   })
 
   it('non-object JSON (array) → {}', () => {
-    // JSON.parse('[]') 是 object,但 map 语义下数组是脏数据,必须挡掉。
+    // JSON.parse('[]') is an object, but an array is invalid for map semantics and must be rejected.
     const file = tmpPath()
     writeFileSync(file, '[1,2,3]', 'utf-8')
     expect(readJsonBlob(file, 'test')).toEqual({})

@@ -373,7 +373,7 @@ describe('run-index pagination', () => {
     const runs = await store.set(hydrateSessionWorkflowRunsAtom, 'session_1')
 
     expect(runs).toHaveLength(437)
-    expect(store.get(activeSessionWorkflowRunsAtom)).toHaveLength(0) // 非活跃会话
+    expect(store.get(activeSessionWorkflowRunsAtom)).toHaveLength(0) // Inactive session.
     expect(urls.every((url) => url.includes('session_id=session_1'))).toBe(true)
   })
 })
@@ -395,9 +395,9 @@ describe('workflow failure toasts', () => {
     return store
   }
 
-  // 这几条文案的模板都是「…失败：{{msg}}」—— 占位符必须由调用点填上。
-  // 之前写成 `err instanceof Error ? err.message : t(key)` 的三元,两条分支都是坏的:
-  // 抛 Error 时只剩裸的技术串(丢掉本地化外壳),抛非 Error 时 {{msg}} 原样漏进 toast。
+  // These messages all use the template "... failed: {{msg}}", so callers must fill the placeholder.
+  // The previous `err instanceof Error ? err.message : t(key)` ternary broke both branches:
+  // Error values lost the localized wrapper, while non-Error values leaked {{msg}} into the toast.
   it('frames an Error reason with the localized prefix instead of showing it bare', async () => {
     const store = readyStore()
     globalThis.fetch = mock(async () => {
@@ -412,7 +412,7 @@ describe('workflow failure toasts', () => {
   it('never leaks the {{msg}} placeholder when the thrown value is not an Error', async () => {
     const store = readyStore()
     globalThis.fetch = mock(async () => {
-      throw 'socket hang up' // 非 Error 抛出:fetch 层和某些 polyfill 都会这么干
+      throw 'socket hang up' // fetch layers and some polyfills can throw non-Error values.
     }) as never
 
     expect(await store.set(renameWorkflowAtom, { workflowId: 'wf_1', name: '新名字' })).toBe(false)

@@ -11,6 +11,8 @@
   Baidu and returns links with snippets.
 * ``web_fetch_tool`` — fetches public web content, converts HTML to markdown,
   and applies a prompt with the running agent's LLM.
+* ``generate_image_tool`` — routes a text prompt to an enabled image-output
+  model and saves the generated image in the Session workspace for preview.
 * workspace versioning (``workspace_status`` / ``workspace_diff`` /
   ``workspace_history`` / checkpoint / restore) — product-level workspace
   management backed by the session-local Git repository.
@@ -51,6 +53,7 @@ from ._filesystem import (
     write_file_tool,
 )
 from ._help import help, help_tool
+from ._image import generate_image, generate_image_tool
 from ._request_human import (
     request_accept_rule_tool,
     request_build_tool,
@@ -127,6 +130,8 @@ __all__ = [
     "bash_tool",
     "help",
     "help_tool",
+    "generate_image",
+    "generate_image_tool",
     "web_search_tool",
     "web_fetch_tool",
     "edit_workflow",

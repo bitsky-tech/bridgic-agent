@@ -1498,6 +1498,19 @@
       "saved": "已保存"
     },
     "defaultTitle": "新对话",
+    "imageGeneration": {
+      "details": "图片生成详情",
+      "prompt": "提示词",
+      "promptUnavailable": "未提供提示词",
+      "reveal": "在文件中显示",
+      "status": {
+        "completed": "已完成",
+        "failed": "失败",
+        "running": "生成中"
+      },
+      "title": "图片生成",
+      "working": "正在构图与绘制…"
+    },
     "interaction": {
       "card": {
         "acceptRuleDeferredTitle": "完成标准稍后再对齐",
@@ -1563,6 +1576,7 @@
         "callingTool": "正在调用工具",
         "compactingContext": "正在压缩上下文",
         "generating": "正在生成回复",
+        "generatingImage": "正在生成图片",
         "runningWorkflow": "正在执行工作流",
         "thinking": "正在思考",
         "usingBrowser": "正在操作浏览器",
