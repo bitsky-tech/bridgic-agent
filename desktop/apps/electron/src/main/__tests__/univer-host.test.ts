@@ -1,7 +1,7 @@
 /**
- * Tests for the loopback host that serves the embedded sheet page. The path
- * resolver is the security-relevant part: it is the only thing standing between
- * a request URL and the filesystem.
+ * Tests for the loopback host that serves the embedded workbench pages. The
+ * path resolver is the security-relevant part: it is the only thing standing
+ * between a request URL and the filesystem.
  */
 import { describe, expect, test } from 'bun:test'
 import { contentTypeFor, resolveAssetPath, UniverHost } from '../univer-host'
@@ -11,8 +11,10 @@ const PREFIX = 'abc123'
 
 describe('resolveAssetPath', () => {
   test('resolves a page and its assets under the prefix', () => {
-    expect(resolveAssetPath(ROOT, PREFIX, `/${PREFIX}/univer/index.html`))
-      .toBe('/app/renderer/univer/index.html')
+    expect(resolveAssetPath(ROOT, PREFIX, `/${PREFIX}/univer/sheet/index.html`))
+      .toBe('/app/renderer/univer/sheet/index.html')
+    expect(resolveAssetPath(ROOT, PREFIX, `/${PREFIX}/univer/doc/index.html`))
+      .toBe('/app/renderer/univer/doc/index.html')
     expect(resolveAssetPath(ROOT, PREFIX, `/${PREFIX}/assets/univer-a1b2.js?v=1`))
       .toBe('/app/renderer/assets/univer-a1b2.js')
   })
@@ -23,8 +25,8 @@ describe('resolveAssetPath', () => {
   })
 
   test('refuses a request that does not carry the prefix', () => {
-    expect(resolveAssetPath(ROOT, PREFIX, '/univer/index.html')).toBeNull()
-    expect(resolveAssetPath(ROOT, PREFIX, '/other/univer/index.html')).toBeNull()
+    expect(resolveAssetPath(ROOT, PREFIX, '/univer/sheet/index.html')).toBeNull()
+    expect(resolveAssetPath(ROOT, PREFIX, '/other/univer/sheet/index.html')).toBeNull()
     expect(resolveAssetPath(ROOT, PREFIX, `/${PREFIX}`)).toBeNull()
     expect(resolveAssetPath(ROOT, PREFIX, `/${PREFIX}/`)).toBeNull()
   })
@@ -60,24 +62,24 @@ describe('contentTypeFor', () => {
   })
 })
 
-describe('UniverHost — page URL', () => {
+describe('UniverHost — workbench base URL', () => {
   test('defers to the Vite dev server instead of binding a second port', async () => {
     const host = new UniverHost(ROOT, 'http://localhost:5173/')
     await host.start()
-    expect(host.pageUrl()).toBe('http://localhost:5173/univer/index.html')
+    expect(host.baseUrl()).toBe('http://localhost:5173/univer/')
     await host.stop()
   })
 
-  test('reports no page until the host has started', () => {
-    expect(new UniverHost(ROOT).pageUrl()).toBeNull()
+  test('reports no base until the host has started', () => {
+    expect(new UniverHost(ROOT).baseUrl()).toBeNull()
   })
 
-  test('serves the page from an unguessable loopback path once started', async () => {
+  test('serves the pages from an unguessable loopback path once started', async () => {
     const host = new UniverHost(ROOT)
     await host.start()
-    const url = host.pageUrl()
-    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{32}\/univer\/index\.html$/)
+    const base = host.baseUrl()
+    expect(base).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{32}\/univer\/$/)
     await host.stop()
-    expect(host.pageUrl()).toBeNull()
+    expect(host.baseUrl()).toBeNull()
   })
 })

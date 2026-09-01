@@ -203,7 +203,7 @@ class BrowserHarness:
         controller_id: str,
         generation: str,
         *,
-        sheet_url: str | None = None,
+        workbench_url: str | None = None,
     ) -> ControllerProbe:
         probe = ControllerProbe(controller_id=controller_id, generation=generation)
         self.controllers[(controller_id, generation)] = probe
@@ -214,7 +214,7 @@ class BrowserHarness:
             control_token="test-token",
             cdp_endpoint="http://127.0.0.1:9222",
             owner_pid=12345,
-            sheet_url=sheet_url,
+            workbench_url=workbench_url,
         )
         return probe
 

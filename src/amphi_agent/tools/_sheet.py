@@ -1,11 +1,9 @@
 """Spreadsheet tools backed by the App's embedded Univer workbench.
 
-The workbench is an ordinary page inside the Session's embedded browser, so it
-appears in the same right-side dock as any other page the agent opens and a
-person can type in it directly. These tools reach the page's agent bridge
-(``window.__univerBridge``) instead of the generic ``browser_evaluate_javascript``
-tool: the bridge returns structured values, and the generic path would attach a
-full accessibility snapshot of a canvas-rendered grid to every single call.
+These tools reach the page's agent bridge (``window.__univerBridge``) instead of
+the generic ``browser_evaluate_javascript`` tool: the bridge returns structured
+values, and the generic path would attach a full accessibility snapshot of a
+canvas-rendered grid to every single call.
 
 Shared editing is arbitrated by the page, not here: while a person has a cell
 editor open the bridge refuses writes, and the resulting message tells the agent
@@ -13,17 +11,14 @@ to retry. ``sheet_changes`` reports who touched what so the agent can see a
 person's edits without re-reading the whole grid.
 """
 
-import asyncio
 import json
 import os
 from typing import Any, List, Optional
-from urllib.parse import quote
 
-from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
-from .._browser import SessionBrowser
 from ._filesystem import _resolve_file, display_path
+from ._workbench import get_workbench_browser, open_workbench, workbench_status
 
 SHEET_TOOL_NAMES = frozenset({
     "sheet_open",
@@ -36,18 +31,7 @@ SHEET_TOOL_NAMES = frozenset({
     "sheet_save",
 })
 
-_READY_TIMEOUT_SECONDS = 30.0
-_READY_POLL_SECONDS = 0.5
-_MAX_READ_CELLS = 5_000
-
-
-def _get_browser() -> SessionBrowser:
-    agent = current_agent.get(None)
-    ctx = getattr(agent, "ctx", None) if agent is not None else None
-    browser = getattr(ctx, "browser", None) if ctx is not None else None
-    if browser is None:
-        raise RuntimeError("sheet tools require an active Session browser")
-    return browser
+_MAX_WRITE_CELLS = 5_000
 
 
 def _require_a1(a1: str) -> str:
@@ -55,31 +39,6 @@ def _require_a1(a1: str) -> str:
     if not value:
         raise ValueError('a1 is required, for example "A1" or "A1:C3"')
     return value
-
-
-async def _status(browser: SessionBrowser) -> dict:
-    status = await browser.call_sheet_bridge("status")
-    if not isinstance(status, dict):
-        raise RuntimeError("The sheet page returned an unreadable status")
-    return status
-
-
-async def _await_ready(browser: SessionBrowser) -> dict:
-    """Poll the freshly navigated page until its workbook exists."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _READY_TIMEOUT_SECONDS
-    last_error: Optional[str] = None
-    while loop.time() < deadline:
-        try:
-            status = await _status(browser)
-        except RuntimeError as exc:
-            last_error = str(exc)
-        else:
-            if status.get("ready"):
-                return status
-            last_error = "the workbook has not finished loading"
-        await asyncio.sleep(_READY_POLL_SECONDS)
-    raise RuntimeError(f"The sheet page did not become ready: {last_error}")
 
 
 def _render_status(status: dict) -> str:
@@ -108,21 +67,12 @@ async def sheet_open(name: str = "Untitled", language: str = "en") -> str:
     Returns:
         The workbook, its sheets, and whether a person is editing right now.
     """
-    browser = _get_browser()
-    page_url = browser.sheet_page_url()
-    lang = "zh" if str(language).lower().startswith("zh") else "en"
-    separator = "&" if "?" in page_url else "?"
-    workbook_name = quote((name or "").strip() or "Untitled", safe="")
-    url = f"{page_url}{separator}lang={lang}&name={workbook_name}"
-    # The navigation result carries a page snapshot that is meaningless for a
-    # canvas-rendered grid, so the workbench's own status is reported instead.
-    await browser.invoke("navigate_to", url)
-    return _render_status(await _await_ready(browser))
+    return _render_status(await open_workbench("sheet", name, language))
 
 
 async def sheet_status() -> str:
     """Report the open workbook, its sheets, and whether a person is editing."""
-    return _render_status(await _status(_get_browser()))
+    return _render_status(await workbench_status(get_workbench_browser()))
 
 
 async def sheet_read(a1: str, sheet: Optional[str] = None) -> str:
@@ -135,12 +85,12 @@ async def sheet_read(a1: str, sheet: Optional[str] = None) -> str:
     Returns:
         A JSON array of rows; an empty cell reads as ``null``.
     """
-    result = await _get_browser().call_sheet_bridge(
+    result = await get_workbench_browser().call_workbench_bridge(
         "readRange", [_require_a1(a1), sheet],
     )
     values = result.get("values") if isinstance(result, dict) else None
     if not isinstance(values, list):
-        raise RuntimeError("The sheet page returned an unreadable range")
+        raise RuntimeError("The workbench page returned an unreadable range")
     return json.dumps(values, ensure_ascii=False)
 
 
@@ -163,11 +113,11 @@ async def sheet_write(a1: str, values: List[List[Any]], sheet: Optional[str] = N
     if not values:
         raise ValueError("values must contain at least one row")
     cells = sum(len(row) for row in values)
-    if cells > _MAX_READ_CELLS:
+    if cells > _MAX_WRITE_CELLS:
         raise ValueError(
-            f"values covers {cells} cells; write at most {_MAX_READ_CELLS} in one call"
+            f"values covers {cells} cells; write at most {_MAX_WRITE_CELLS} in one call"
         )
-    result = await _get_browser().call_sheet_bridge(
+    result = await get_workbench_browser().call_workbench_bridge(
         "writeRange", [_require_a1(a1), values, sheet],
     )
     rows = result.get("rows") if isinstance(result, dict) else len(values)
@@ -189,7 +139,7 @@ async def sheet_formula(a1: str, formula: str, sheet: Optional[str] = None) -> s
     text = (formula or "").strip()
     if not text.startswith("="):
         raise ValueError('formula must start with "=", for example "=SUM(B2:B10)"')
-    await _get_browser().call_sheet_bridge("setFormula", [_require_a1(a1), text, sheet])
+    await get_workbench_browser().call_workbench_bridge("setFormula", [_require_a1(a1), text, sheet])
     return f"Set {a1} to {text}."
 
 
@@ -203,7 +153,7 @@ async def sheet_clear(a1: str, sheet: Optional[str] = None) -> str:
     Returns:
         A short confirmation.
     """
-    await _get_browser().call_sheet_bridge("clearRange", [_require_a1(a1), sheet])
+    await get_workbench_browser().call_workbench_bridge("clearRange", [_require_a1(a1), sheet])
     return f"Cleared {a1}."
 
 
@@ -219,7 +169,7 @@ async def sheet_changes(limit: int = 20) -> str:
     Returns:
         One line per edit, newest last, or a note that nothing has changed.
     """
-    changes = await _get_browser().call_sheet_bridge("recentChanges", [limit])
+    changes = await get_workbench_browser().call_workbench_bridge("recentChanges", [limit])
     if not isinstance(changes, list) or not changes:
         return "No edits have been recorded since the workbook was opened."
     lines = [
@@ -243,7 +193,7 @@ async def sheet_save(file_path: str) -> str:
     Returns:
         A short confirmation with the written path.
     """
-    snapshot = await _get_browser().call_sheet_bridge("snapshot")
+    snapshot = await get_workbench_browser().call_workbench_bridge("snapshot")
     abs_path = _resolve_file(file_path)
     parent = os.path.dirname(abs_path)
     if parent:

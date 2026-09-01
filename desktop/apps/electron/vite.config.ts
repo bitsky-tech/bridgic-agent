@@ -26,7 +26,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),
-        univer: resolve(__dirname, 'src/renderer/univer/index.html'),
+        univerDoc: resolve(__dirname, 'src/renderer/univer/doc/index.html'),
+        univerSheet: resolve(__dirname, 'src/renderer/univer/sheet/index.html'),
       },
     },
   },

@@ -38,23 +38,31 @@ _EMBEDDED_TAB_CLOSE_TIMEOUT_SECONDS = 5.0
 _EMBEDDED_POPUP_OWNERSHIP_TIMEOUT_SECONDS = 1.0
 _SESSION_STATE_TIMEOUT_SECONDS = 1.0
 _SNAPSHOT_REF_PATTERN = re.compile(r"\[ref=([^\]]+)\]")
-_SHEET_UNAVAILABLE_MESSAGE = (
-    "The sheet workbench is unavailable because the desktop app is not running or "
-    "is an older version without it. Open the desktop app (it may remain hidden in "
-    "the tray) and retry."
+_WORKBENCH_UNAVAILABLE_MESSAGE = (
+    "The workbench is unavailable because the desktop app is not running or is an "
+    "older version without it. Open the desktop app (it may remain hidden in the "
+    "tray) and retry."
 )
-# Runs inside the sheet page. The reply is always a JSON string so it survives
+# Runs inside a workbench page. It is async because the document facade's write
+# operations return promises; the reply is always a JSON string so it survives
 # both the Playwright and the CDP evaluate paths unchanged.
-_SHEET_BRIDGE_CALL_TEMPLATE = """() => {
+_WORKBENCH_BRIDGE_CALL_TEMPLATE = """async () => {
     const bridge = window.__univerBridge;
     if (!bridge) {
         return JSON.stringify({
             ok: false,
-            error: 'the sheet page is not open in this Session — call sheet_open first',
+            error: 'no workbench is open in this Session — open one first',
+        });
+    }
+    const method = %s;
+    if (typeof bridge[method] !== 'function') {
+        return JSON.stringify({
+            ok: false,
+            error: 'the open workbench is a ' + bridge.kind + ', which has no ' + method,
         });
     }
     try {
-        return JSON.stringify({ ok: true, value: bridge[%s](...%s) ?? null });
+        return JSON.stringify({ ok: true, value: (await bridge[method](...%s)) ?? null });
     } catch (error) {
         return JSON.stringify({ ok: false, error: String((error && error.message) || error) });
     }
@@ -153,9 +161,9 @@ class _EmbeddedBrowserController:
     control_token: str
     cdp_endpoint: str
     owner_pid: int
-    # The loopback page the App serves for the embedded sheet workbench. It is
-    # optional so an older App keeps registering successfully without it.
-    sheet_url: Optional[str] = None
+    # Where the App serves its embedded workbench pages. It is optional so an
+    # older App keeps registering successfully without it.
+    workbench_url: Optional[str] = None
 
     async def health(self) -> None:
         await asyncio.to_thread(self._request, "GET", "/v1/health", None)
@@ -219,7 +227,7 @@ class _EmbeddedBrowserController:
             "controller_id": self.controller_id,
             "generation": self.generation,
             "owner_pid": self.owner_pid,
-            "sheet_available": self.sheet_url is not None,
+            "workbench_available": self.workbench_url is not None,
         }
 
     def _session_tabs(
@@ -1159,23 +1167,25 @@ class SessionBrowser:
             raise RuntimeError("Cannot bind browser snapshot output after the client has started")
         self.tool_result_dir = resolved
 
-    def sheet_page_url(self) -> str:
-        """Return the App-served sheet page URL, or explain why there is none."""
-        url = self._host.sheet_page_url()
-        if not url:
-            raise EmbeddedBrowserUnavailableError(_SHEET_UNAVAILABLE_MESSAGE)
-        return url
+    def workbench_page_url(self, kind: str) -> str:
+        """Return the App-served page for one workbench, or explain why there is none."""
+        base = self._host.workbench_base_url()
+        if not base:
+            raise EmbeddedBrowserUnavailableError(_WORKBENCH_UNAVAILABLE_MESSAGE)
+        return f"{base.rstrip('/')}/{kind}/index.html"
 
-    async def call_sheet_bridge(self, method: str, args: Optional[list[Any]] = None) -> Any:
-        """Call one method on the sheet page's agent bridge and return its value.
+    async def call_workbench_bridge(
+        self, method: str, args: Optional[list[Any]] = None,
+    ) -> Any:
+        """Call one method on the open workbench's agent bridge and return its value.
 
         This deliberately does not go through :meth:`invoke`. Every operation
         there is followed by a page-settling wait and a full accessibility
         snapshot, which is the right behaviour for driving an unknown web page
-        and the wrong behaviour here: the sheet page is ours, its canvas has no
-        useful snapshot, and a read loop cannot afford seconds per call.
+        and the wrong behaviour here: the workbench page is ours, a canvas has
+        no useful snapshot, and a read loop cannot afford seconds per call.
         """
-        code = _SHEET_BRIDGE_CALL_TEMPLATE % (
+        code = _WORKBENCH_BRIDGE_CALL_TEMPLATE % (
             json.dumps(method),
             json.dumps(list(args or [])),
         )
@@ -1197,14 +1207,16 @@ class SessionBrowser:
             payload = json.loads(raw)
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
-                "The sheet page returned an unreadable reply — reopen it with sheet_open"
+                "The workbench page returned an unreadable reply — reopen the workbench"
             ) from exc
         if not isinstance(payload, dict) or "ok" not in payload:
             raise RuntimeError(
-                "The sheet page returned an unexpected reply — reopen it with sheet_open"
+                "The workbench page returned an unexpected reply — reopen the workbench"
             )
         if not payload.get("ok"):
-            raise RuntimeError(str(payload.get("error") or "the sheet page refused the call"))
+            raise RuntimeError(
+                str(payload.get("error") or "the workbench page refused the call")
+            )
         return payload.get("value")
 
     def _client_is_live(self, client: _SessionBrowserClient) -> bool:
@@ -1458,7 +1470,7 @@ class BrowserHost:
         control_token: str,
         cdp_endpoint: str,
         owner_pid: int,
-        sheet_url: Optional[str] = None,
+        workbench_url: Optional[str] = None,
     ) -> None:
         """Publish the Electron browser controller preferred by future sessions."""
         controller = _EmbeddedBrowserController(
@@ -1468,7 +1480,7 @@ class BrowserHost:
             control_token=control_token,
             cdp_endpoint=cdp_endpoint,
             owner_pid=owner_pid,
-            sheet_url=sheet_url,
+            workbench_url=workbench_url,
         )
         async with self._lock:
             previous = self._controller
@@ -1494,10 +1506,10 @@ class BrowserHost:
         controller = self._controller
         return controller.public_status() if controller is not None else {"available": False}
 
-    def sheet_page_url(self) -> Optional[str]:
-        """Return the App-served sheet page, or None when the App offers none."""
+    def workbench_base_url(self) -> Optional[str]:
+        """Return where the App serves its workbenches, or None when it serves none."""
         controller = self._controller
-        return controller.sheet_url if controller is not None else None
+        return controller.workbench_url if controller is not None else None
 
     async def release_sessions(self, session_ids: Iterable[str]) -> None:
         """Release selected Session surfaces without affecting siblings or login state."""

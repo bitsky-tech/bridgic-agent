@@ -20,13 +20,6 @@ import sheetsCoreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN'
 import { SheetBridge } from './bridge'
 import '@univerjs/preset-sheets-core/lib/index.css'
 
-declare global {
-  interface Window {
-    /** The agent's entry point into this workbook; see `bridge.ts`. */
-    __univerBridge?: SheetBridge
-  }
-}
-
 const params = new URLSearchParams(window.location.search)
 const useChinese = (params.get('lang') ?? 'en').toLowerCase().startsWith('zh')
 const locale = useChinese ? LocaleType.ZH_CN : LocaleType.EN_US

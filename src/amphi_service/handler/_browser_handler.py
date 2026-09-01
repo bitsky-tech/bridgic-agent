@@ -15,8 +15,8 @@ class BrowserControllerRegistrationRequest(BaseModel):
     control_token: Annotated[str, Field(min_length=16, max_length=512, repr=False)]
     cdp_endpoint: AnyHttpUrl
     owner_pid: Annotated[int, Field(ge=1)]
-    # Optional so an App built before the sheet workbench still registers.
-    sheet_url: Optional[AnyHttpUrl] = None
+    # Optional so an App built before the workbenches still registers.
+    workbench_url: Optional[AnyHttpUrl] = None
 
     @field_validator("control_url", "cdp_endpoint")
     @classmethod
@@ -36,10 +36,10 @@ class BrowserControllerRegistrationRequest(BaseModel):
             )
         return value
 
-    @field_validator("sheet_url")
+    @field_validator("workbench_url")
     @classmethod
     def require_loopback_page(cls, value: Optional[AnyHttpUrl]) -> Optional[AnyHttpUrl]:
-        """Allow a path here — unlike the origins above, this is a page URL.
+        """Allow a path here — unlike the origins above, this is a page base URL.
 
         The development build serves it from Vite on ``localhost``, so the host
         check accepts that name alongside a literal loopback address.
@@ -54,9 +54,9 @@ class BrowserControllerRegistrationRequest(BaseModel):
             except ValueError:
                 is_loopback = False
         if not is_loopback:
-            raise ValueError("sheet_url must be served from loopback")
+            raise ValueError("workbench_url must be served from loopback")
         if value.username is not None or value.password is not None:
-            raise ValueError("sheet_url must not contain credentials")
+            raise ValueError("workbench_url must not contain credentials")
         return value
 
 
@@ -80,7 +80,9 @@ class BrowserControllerHandler(BaseHandler):
             control_token=request.control_token,
             cdp_endpoint=str(request.cdp_endpoint).rstrip("/"),
             owner_pid=request.owner_pid,
-            sheet_url=str(request.sheet_url) if request.sheet_url is not None else None,
+            workbench_url=(
+                str(request.workbench_url) if request.workbench_url is not None else None
+            ),
         )
         return self.response(self.state.browser_host.controller_status())
 

@@ -74,6 +74,17 @@ from ._schedule import (
     update_schedule,
     update_schedule_tool,
 )
+from ._doc import (
+    DOC_TOOL_NAMES,
+    doc_append,
+    doc_insert,
+    doc_open,
+    doc_read,
+    doc_replace,
+    doc_save,
+    doc_status,
+    doc_tool_specs,
+)
 from ._sheet import (
     SHEET_TOOL_NAMES,
     sheet_changes,
@@ -159,6 +170,15 @@ __all__ = [
     "EditWorkflow",
     "WorkflowStepReport",
     "browser_tool_specs",
+    "DOC_TOOL_NAMES",
+    "doc_append",
+    "doc_insert",
+    "doc_open",
+    "doc_read",
+    "doc_replace",
+    "doc_save",
+    "doc_status",
+    "doc_tool_specs",
     "SHEET_TOOL_NAMES",
     "sheet_changes",
     "sheet_clear",

@@ -6,6 +6,7 @@
       "name": "electron-bun-template",
       "dependencies": {
         "@radix-ui/react-dropdown-menu": "^2.1.16",
+        "@univerjs/preset-docs-core": "0.25.1",
         "@univerjs/preset-sheets-core": "0.25.1",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -684,6 +685,8 @@
     "@univerjs/icons": ["@univerjs/icons@1.4.0", "", { "peerDependencies": { "react": "*", "react-dom": "*" } }, "sha512-ohBfPk+EyLuSc+1Rvz06jiMDgEydwc6lLUOQyUjS/W3zBKYLhbXaEP4qq7/YQH8OhzkTsRQGvsTgYSg1roRXgg=="],
 
     "@univerjs/network": ["@univerjs/network@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-5sqyI9qKyn/fb+IMIoW6nQPJHlpJr1/WscCyDG4PmMtpMm/ipN/CZu31FIyMyM1jLOeJX1uMeldflviEq4iorA=="],
+
+    "@univerjs/preset-docs-core": ["@univerjs/preset-docs-core@0.25.1", "", { "dependencies": { "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/network": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-V98oGWbMa2NjvHZEMFyHvVu0DXp8h4i/soJilAdK+mV+Ja0i2Eofj/Wsmoj9LT++nC1pXfGfNzpezy04uR/EVw=="],
 
     "@univerjs/preset-sheets-core": ["@univerjs/preset-sheets-core@0.25.1", "", { "dependencies": { "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/network": "0.25.1", "@univerjs/rpc": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-formula": "0.25.1", "@univerjs/sheets-formula-ui": "0.25.1", "@univerjs/sheets-numfmt": "0.25.1", "@univerjs/sheets-numfmt-ui": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-hCxvFUcWBZLEUf1SUOmqHvf3MN/17LW7AQYLcWIJIGQP2laa0XIrW1kXrTfmh8G0BTwDes286FIPf5y70SC0YA=="],
 

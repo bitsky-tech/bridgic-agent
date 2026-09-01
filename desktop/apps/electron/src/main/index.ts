@@ -184,7 +184,7 @@ const univerHost = new UniverHost(dirname(rendererIndexHtml), devServerUrl)
 const embeddedBrowserController = new EmbeddedBrowserController(
   windowManager.getEmbeddedBrowser(),
   embeddedBrowserCdpEndpoint,
-  () => univerHost.pageUrl(),
+  () => univerHost.baseUrl(),
 )
 const shutdownEmbeddedBrowser = async () => {
   try {
@@ -408,7 +408,7 @@ function bootstrapPrimaryInstance(): void {
     try {
       await univerHost.start()
     } catch (error) {
-      mainLog.warn('[univer] sheet host startup failed; the sheet workbench stays unavailable', error)
+      mainLog.warn('[univer] workbench host startup failed; the workbenches stay unavailable', error)
     }
     await embeddedBrowserController.start()
     if (windowsSessionEnding) return

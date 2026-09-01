@@ -109,6 +109,9 @@ const HUMAN_EDITING_MESSAGE
   = 'a person is editing a cell right now — retry once sheet_status reports humanEditing=false'
 
 export class SheetBridge {
+  /** Names the open workbench so a mismatched tool call can say which one it is. */
+  readonly kind = 'spreadsheet'
+
   private readonly changes: SheetChange[] = []
   private humanEditing = false
   private revision = 0

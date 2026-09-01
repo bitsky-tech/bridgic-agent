@@ -35,23 +35,23 @@ class _RecordingSheetBrowser:
         self,
         replies: Optional[dict[str, Any]] = None,
         *,
-        page_url: Optional[str] = "http://127.0.0.1:5100/ab12/univer/index.html",
+        page_url: Optional[str] = "http://127.0.0.1:5100/ab12/univer/",
     ) -> None:
         self.bridge_calls: list[tuple[str, list[Any]]] = []
         self.invocations: list[tuple[str, tuple[Any, ...]]] = []
         self._page_url = page_url
         self._replies: dict[str, Any] = {"status": _STATUS, **(replies or {})}
 
-    def sheet_page_url(self) -> str:
+    def workbench_page_url(self, kind: str) -> str:
         if self._page_url is None:
             raise EmbeddedBrowserUnavailableError("the desktop app is not running")
-        return self._page_url
+        return f"{self._page_url}{kind}/index.html"
 
     async def invoke(self, method: str, *args: Any) -> str:
         self.invocations.append((method, args))
         return f"{method} result"
 
-    async def call_sheet_bridge(self, method: str, args: Optional[list[Any]] = None) -> Any:
+    async def call_workbench_bridge(self, method: str, args: Optional[list[Any]] = None) -> Any:
         self.bridge_calls.append((method, list(args or [])))
         if method not in self._replies:
             raise RuntimeError(f"unexpected bridge call: {method}")
@@ -62,7 +62,7 @@ async def test_sheet_open_navigates_and_reports_state(tool_harness: ToolHarness)
     """Final sheet-open state:
 
     {
-      "navigated": "http://127.0.0.1:5100/ab12/univer/index.html?lang=zh&name=Q3%20Budget",
+      "navigated": "http://127.0.0.1:5100/ab12/univer/sheet/index.html?lang=zh&name=Q3%20Budget",
       "reported_workbook": "Budget"
     }
 
@@ -80,7 +80,7 @@ async def test_sheet_open_navigates_and_reports_state(tool_harness: ToolHarness)
     # Checks 1 and 2: one navigation, carrying the encoded page parameters.
     assert browser.invocations == [(
         "navigate_to",
-        ("http://127.0.0.1:5100/ab12/univer/index.html?lang=zh&name=Q3%20Budget",),
+        ("http://127.0.0.1:5100/ab12/univer/sheet/index.html?lang=zh&name=Q3%20Budget",),
     )]
     # Check 3: the workbench's own state is reported, not "navigate_to result".
     assert "Budget" in result

@@ -1,5 +1,5 @@
 /**
- * Serves the built Univer sheet page over loopback HTTP.
+ * Serves the built Univer workbench pages over loopback HTTP.
  *
  * The Session dock renders the page through the embedded browser, and that
  * browser only navigates to http(s) URLs (see EmbeddedBrowserManager's
@@ -18,7 +18,7 @@ import { join, normalize, sep } from 'node:path'
 import { mainLog } from './logger'
 
 const LOOPBACK_HOST = '127.0.0.1'
-const PAGE_PATH = 'univer/index.html'
+const BASE_PATH = 'univer/'
 
 const CONTENT_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -88,13 +88,19 @@ export class UniverHost {
     }
     this.server = server
     this.origin = `http://${LOOPBACK_HOST}:${address.port}`
-    mainLog.info(`[univer] sheet host ready on port ${address.port}`)
+    mainLog.info(`[univer] workbench host ready on port ${address.port}`)
   }
 
-  /** The URL the agent navigates to, or null while the host is not running. */
-  pageUrl(): string | null {
-    if (this.devServerUrl) return `${this.devServerUrl.replace(/\/$/, '')}/${PAGE_PATH}`
-    return this.origin ? `${this.origin}/${this.prefix}/${PAGE_PATH}` : null
+  /**
+   * Where the workbench pages live, or null while the host is not running.
+   *
+   * One base rather than one URL per workbench: the daemon stores a single
+   * value and the agent appends `sheet/index.html` or `doc/index.html`, so
+   * adding a workbench needs no new field on the wire.
+   */
+  baseUrl(): string | null {
+    if (this.devServerUrl) return `${this.devServerUrl.replace(/\/$/, '')}/${BASE_PATH}`
+    return this.origin ? `${this.origin}/${this.prefix}/${BASE_PATH}` : null
   }
 
   async stop(): Promise<void> {
