@@ -105,7 +105,7 @@ class BuildState(BaseModel):
 
 
 class RunWorkflowState(BaseModel):
-    """Durable identity, input, and cursor for one active Workflow Run."""
+    """Durable identity, input, and execution cursor for one active Workflow Run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -113,7 +113,7 @@ class RunWorkflowState(BaseModel):
     generation: str
     workflow_name: str
     workflow_input: UserInput
-    stage: Literal["execute", "validate"] = "execute"
+    stage: Literal["execute"] = "execute"
     step_index: int = Field(default=0, ge=0)
 
     @field_validator("workflow_id", "generation", "workflow_name")
@@ -977,7 +977,7 @@ class RunWorkflowSpace:
 
     @property
     def stage(self) -> str:
-        """The active execute or validate stage."""
+        """The active execution stage."""
         return self._state.stage
 
     @property

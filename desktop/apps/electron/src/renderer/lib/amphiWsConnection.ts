@@ -25,7 +25,6 @@
  */
 import type {
   AgentEvent,
-  AcceptRuleFrame,
   BackendEndpoint,
   BuildConfirmFrame,
   TurnEvent,
@@ -205,16 +204,6 @@ export class AmphiWsConnection {
   chat(sessionId: string, input: string, blocks: ChatBlock[]): void {
     if (!this.openTurn(sessionId)) return
     this.send({ type: CLIENT_FRAME.Chat, session_id: sessionId, input, blocks })
-  }
-
-  /** Resume Clarify with the user's per-rule decisions and optional supplement. */
-  acceptRule(sessionId: string, payload: Omit<AcceptRuleFrame, 'type' | 'session_id'>): void {
-    if (!this.openTurn(sessionId)) return
-    this.send({
-      type: CLIENT_FRAME.AcceptRule,
-      session_id: sessionId,
-      ...payload,
-    })
   }
 
   /** Resume Main after the user decides whether to enter Workflow Build. */

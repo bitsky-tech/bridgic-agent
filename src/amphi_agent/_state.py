@@ -40,10 +40,10 @@ class BuildStageState(BaseModel):
 
 
 class WorkflowStageState(BaseModel):
-    """The current cognitive stage and section inside one saved Workflow run."""
+    """The current execution section inside one saved Workflow run."""
 
     mode: Literal["run_workflow"] = "run_workflow"
-    stage: Literal["execute", "validate"] = "execute"
+    stage: Literal["execute"] = "execute"
     workflow_id: str = Field(min_length=1)
     generation: str = Field(min_length=1)
     step_index: int = Field(default=0, ge=0)

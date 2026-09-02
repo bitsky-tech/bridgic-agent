@@ -19,7 +19,6 @@ function workflowRun(index: number) {
     source_session_id: 'session_1',
     workflow_input: { text: `运行 ${index}`, blocks: [] },
     status: 'completed',
-    validation_status: 'passed',
     created_at: new Date(Date.UTC(2026, 6, 22, 8, 0, index)).toISOString(),
     finished_at: new Date(Date.UTC(2026, 6, 22, 8, 1, index)).toISOString(),
   }
@@ -73,7 +72,6 @@ describe('hydrateAssetsAtom', () => {
           source_session_id: 'session_1',
           workflow_input: { text: '筛选论文', blocks: [] },
           status: 'completed',
-          validation_status: 'passed',
           created_at: '2026-07-22T08:00:00Z',
           finished_at: '2026-07-22T08:01:00Z',
         }])

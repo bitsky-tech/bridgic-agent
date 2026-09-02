@@ -6,7 +6,6 @@ from src.amphi_agent._prompt import (
     SUB_AGENT_PERSONA,
     VERIFY_PERSONA,
     WORKFLOW_PERSONA,
-    WORKFLOW_VALIDATE_PERSONA,
     render_main_persona,
     render_stage_persona,
 )
@@ -28,7 +27,6 @@ def _personas() -> dict[str, str]:
         "generate": render_stage_persona(stage_tools, template=GENERATE_PERSONA),
         "verify": render_stage_persona(stage_tools, template=VERIFY_PERSONA),
         "execute": render_stage_persona(stage_tools, template=WORKFLOW_PERSONA),
-        "validate": render_stage_persona(stage_tools, template=WORKFLOW_VALIDATE_PERSONA),
     }
 
 
@@ -68,14 +66,14 @@ def test_core_rules() -> None:
         assert "MUST match the language of the user's input message" in personas[name]
         assert "prefer core tools" in personas[name]
         assert "`switch(mode=\"normal\")` never means “the Build is finished”" in personas[name]
-    for name in ("execute", "validate"):
+    for name in ("execute",):
         assert "language established by the user's original Workflow request" in personas[name]
         assert "prefer the core tool" in personas[name]
         assert "report_workflow_step" in personas[name]
 
     # Check 4: Every rendered Persona carries the same failed-Turn guidance in Context.
     assert set(personas) == {
-        "main", "child", "clarify", "explore", "generate", "verify", "execute", "validate",
+        "main", "child", "clarify", "explore", "generate", "verify", "execute",
     }
     guidance = (
         "- <turn_failed>: marks a historical Turn that failed before completion. "
@@ -316,9 +314,8 @@ def test_main_and_workflow_forbid_assistant_language_inference() -> None:
     for name in ("main", "child"):
         assert "earlier assistant messages" in personas[name], name
         assert "tool results" in personas[name], name
-    # Check 2: Workflow execute and validate personas.
-    for name in ("execute", "validate"):
-        assert "earlier assistant messages" in personas[name], name
+    # Check 2: Workflow execution persona.
+    assert "earlier assistant messages" in personas["execute"]
 
 
 def test_build_structures() -> None:
@@ -334,7 +331,7 @@ def test_build_structures() -> None:
     Checks:
     1. Clarify preserves the required task definition and confirmation structure.
     2. Explore preserves its environment, task-flow, Skill-discovery, and handoff structure.
-    3. Generate preserves the reusable package and execution/validation boundary.
+    3. Generate preserves the reusable execution package.
     4. Verify preserves real-environment execution testing, verdict, evidence,
        and confirmation requirements.
     """
@@ -386,7 +383,7 @@ def test_verify_runs_in_the_real_environment_with_impact_confirmation() -> None:
     verify = _personas()["verify"]
 
     assert "Run the Workflow in the real prepared environment" in verify
-    assert "rather than replacing the path with mocks or invented success responses" in verify
+    assert "using its real tools, dependencies, sources, integrations, and result handling" in verify
     assert "run the canonical script with real runtime arguments" in verify
     assert "use `request_human_choice` before the operation" in verify
     assert "state what will change, which real target is involved" in verify
@@ -402,33 +399,29 @@ def test_workflow_structures() -> None:
 
     {
       "shared": ["immutable source", "current section authority", "result boundaries"],
-      "execute": "background/execution.md",
-      "validate": "background/validation.md"
+      "execute": "background/execution.md"
     }
 
     Checks:
-    1. Execute and Validate preserve source immutability and persisted cursor authority.
-    2. Both stages keep final deliverables separate from intermediate work.
-    3. Each stage reports through its own persisted background document.
+    1. Execute preserves source immutability and persisted cursor authority.
+    2. Execute keeps final deliverables separate from intermediate work.
+    3. Execute reports through its persisted background document.
     """
     personas = _personas()
 
-    # Check 1: Execute and Validate preserve source immutability and persisted cursor authority.
-    for name in ("execute", "validate"):
-        persona = personas[name]
-        assert "Workflow source is immutable during a Run" in persona
-        assert "`Current section` identifies the active section" in persona
-        assert "`Current instruction` is the complete body" in persona
-        assert "sole authority for what to do in this round" in persona
+    # Check 1: Execute preserves source immutability and persisted cursor authority.
+    execute = personas["execute"]
+    assert "Workflow source is immutable during a Run" in execute
+    assert "`Current section` identifies the active section" in execute
+    assert "`Current instruction` is the complete body" in execute
+    assert "sole authority for what to do in this round" in execute
 
-    # Check 2: Both stages keep final deliverables separate from intermediate work.
-    for name in ("execute", "validate"):
-        persona = personas[name]
-        assert "Write every intermediate file under `background/work/`" in persona
-        assert "Write to the final result directory only" in persona
+    # Check 2: Execute keeps final deliverables separate from intermediate work.
+    assert "Write every intermediate file under `background/work/`" in execute
+    assert "Write to the final result directory only" in execute
 
-    # Check 3: Each stage reports through its own persisted background document.
-    assert "background/execution.md" in personas["execute"]
-    assert "background/validation.md" in personas["validate"]
-    for name in ("execute", "validate"):
-        assert "call `report_workflow_step`" in personas[name]
+    # Check 3: Execute reports through its persisted background document.
+    assert "background/execution.md" in execute
+    assert "call `report_workflow_step`" in execute
+    assert "VALIDATE.md" not in execute
+    assert "background/validation.md" not in execute

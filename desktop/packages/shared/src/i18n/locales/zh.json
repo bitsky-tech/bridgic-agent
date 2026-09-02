@@ -405,7 +405,7 @@
       "clarify": "对齐需求，锁定说明书",
       "explore": "实地探查目标环境结构",
       "generate": "编写并组织工作流代码",
-      "verify": "运行校验产出与验收"
+      "verify": "运行工作流并验证实际行为与产出"
     },
     "stages": {
       "clarify": "任务创建",
@@ -451,31 +451,6 @@
     }
   },
   "humanRequest": {
-    "acceptance": {
-      "accept": "采用",
-      "acceptDesc": "保留这条，作为运行结果的完成标准。",
-      "criteriaConfirmed": "完成标准已对齐",
-      "desc": "逐条选择采用、不采用，或者在“其他”中填写替代的完成标准。",
-      "executionOnly": "不设置完成标准",
-      "executionOnlyConfirmed": "已选择不设置完成标准",
-      "executionOnlyHint": "仅执行工作流",
-      "executionOnlySummary": "该工作流未设置完成标准，运行时只执行步骤，无需结果校验；执行报错仍会正常失败。",
-      "executionOnlyTitle": "生成的工作流不设置完成标准，因此运行时无需结果校验",
-      "finalOutcome": "最终结果",
-      "multiDone": "完成标准已全部处理",
-      "multiPending": "{{n}} 项完成标准待处理",
-      "next": "下一条",
-      "otherPlaceholder": "输入替代的完成标准…",
-      "position": "第 {{current}} 项，共 {{total}} 项",
-      "reject": "不采用",
-      "rejectDesc": "删除这条，不用它判断运行结果。",
-      "singleDone": "完成标准已处理",
-      "singlePending": "最终结果待处理",
-      "standardN": "标准 {{n}}",
-      "submit": "确认并继续",
-      "suggestionCount": "{{n}} 项建议",
-      "title": "最后怎么算完成"
-    },
     "answerRemaining": "去回答剩余 {{n}} 题 →",
     "collapse": "收起",
     "expand": "展开",
@@ -494,7 +469,6 @@
     "none": "都不选择",
     "other": "其他",
     "otherPlaceholder": "输入自定义回答…",
-    "processedCount": "已处理 {{done}}/{{total}}",
     "promptAria": "问题背景",
     "questionN": "问题 {{n}}",
     "selectAll": "全选",
@@ -1241,10 +1215,7 @@
       "clarify": "对齐需求，锁定说明书",
       "explore": "实地探查目标环境结构",
       "generate": "编写并组织工作流代码",
-      "verify": "运行校验产出与验收"
-    },
-    "check": {
-      "nth": "第 {{n}} 项检查"
+      "verify": "运行工作流并验证实际行为与产出"
     },
     "childStatus": {
       "awaitingHuman": "子 Agent：等待你的回答",
@@ -1265,17 +1236,12 @@
     },
     "detailsButton": "运行详情",
     "executeDoneWaitEnd": "执行阶段已完成，等待结束",
-    "executeDoneWaitValidate": "执行阶段已完成，等待验证",
     "headerTitle": "工作流运行",
     "initializing": "正在初始化",
     "phase": {
       "execute": {
         "desc": "按工作流步骤完成任务",
         "label": "执行"
-      },
-      "validate": {
-        "desc": "检查运行结果是否符合预期",
-        "label": "验证"
       }
     },
     "progress": {
@@ -1298,15 +1264,11 @@
     },
     "summary": "{{steps}} 步完成 · {{calls}} 次调用",
     "tab": {
-      "execute": "执行工作流",
-      "validate": "验证结果"
+      "execute": "执行工作流"
     },
-    "tablistAria": "工作流运行阶段",
     "unit": {
-      "check": "项",
       "step": "步"
-    },
-    "validateDoneWaitEnd": "验证阶段已完成，等待结束"
+    }
   },
   "schedule": {
     "action": {
@@ -1513,10 +1475,6 @@
     },
     "interaction": {
       "card": {
-        "acceptRuleDeferredTitle": "完成标准稍后再对齐",
-        "acceptanceCount": "共 {{n}} 项",
-        "acceptanceDesc": "工作流完成后会按这些标准检查结果",
-        "acceptanceTitle": "已对齐的完成标准",
         "answerLabel": "您的回答",
         "buildConfirmedBadge": "已确认构建",
         "buildDesc": "是否将当前任务沉淀为可重复运行的工作流",
@@ -1526,25 +1484,19 @@
         "feedbackLabel": "您的修改意见：",
         "newMessageDesc": "你发来了新消息，Agent 会结合新内容继续调整",
         "newMessageLabel": "你的新消息",
-        "noAcceptanceDesc": "工作流运行时只执行步骤，无需结果校验；执行报错仍会明确失败",
-        "noAcceptanceTitle": "未设置完成标准",
         "qaDesc": "本次任务中与您确认的信息",
         "qaListLabel": "已确认的问答",
         "qaTitle": "需求确认",
         "questionLabel": "Agent 向您确认",
-        "ruleBadge": "标准 {{n}}",
         "taskRevisedBadge": "已要求修改",
         "taskTitle": "任务说明书确认",
         "workflowTitle": "工作流保存确认"
       },
       "hideRecord": "收起记录",
       "label": {
-        "acceptRuleDeferred": "完成标准稍后再对齐，已收到新消息",
-        "acceptanceAligned": "已对齐 {{n}} 项工作流完成标准",
         "buildConfirmed": "已确认开始构建工作流",
         "buildOnce": "已选择仅执行一次",
         "confirmed": "已与您确认",
-        "noAcceptanceRule": "已选择不设置完成标准",
         "permissionDone": "已完成工具权限确认",
         "replied": "已回复{{question}}",
         "taskConfirmed": "已确认任务说明书",
@@ -1553,7 +1505,6 @@
         "workflowSaved": "已确认并保存工作流"
       },
       "permissionDetail": "允许 {{allowed}} 项 · 拒绝 {{denied}} 项",
-      "ruleItem": "标准 {{index}} {{text}}",
       "showRecord": "查看记录"
     },
     "menu": {
@@ -1579,8 +1530,7 @@
         "generatingImage": "正在生成图片",
         "runningWorkflow": "正在执行工作流",
         "thinking": "正在思考",
-        "usingBrowser": "正在操作浏览器",
-        "validatingWorkflow": "正在验证工作流"
+        "usingBrowser": "正在操作浏览器"
       },
       "defaultEmpty": "向 AI 发起对话，开始这个会话…",
       "duration": "用时 {{duration}}",
@@ -2276,8 +2226,7 @@
       "scriptFiles": "脚本文件",
       "selectWorkflow": "请选择一个工作流",
       "source": {
-        "taskFlow": "任务流程",
-        "validation": "验证方法"
+        "taskFlow": "任务流程"
       },
       "sourceFilesLabel": "执行源文件 · {{count}}",
       "tabs": {
@@ -2291,13 +2240,11 @@
       "citeResult": "引用结果",
       "description": {
         "completed": "所有执行步骤均已完成。本次运行已结束，无需继续处理。",
-        "completedVerified": "所有执行和验证步骤均已完成。本次运行已结束，无需继续处理。",
         "failed": "本次运行已结束。需要时可查看失败详情。"
       },
       "resultFiles": "{{count}} 个结果文件",
       "status": {
         "completed": "执行已完成",
-        "completedVerified": "执行与验证已完成",
         "failed": "执行失败"
       },
       "title": {
@@ -2379,17 +2326,14 @@
     },
     "detailsTitle": "执行过程",
     "executionCompleteAwaitingEnd": "执行阶段已完成，等待结束",
-    "executionCompleteAwaitingValidation": "执行阶段已完成，等待验证",
     "executionCompleted": "执行完成",
     "executionWorkflow": "执行工作流",
     "fallbackExecutionStep": "第 {{index}} 步",
-    "fallbackValidationStep": "第 {{index}} 项检查",
     "initializing": "正在初始化",
     "noSteps": "尚未加载阶段步骤",
     "overallProgress": "总进度",
     "phase": {
-      "execute": "执行",
-      "validate": "验证"
+      "execute": "执行"
     },
     "phaseAria": "工作流运行阶段",
     "progress": {
@@ -2406,11 +2350,7 @@
     "title": "工作流运行",
     "toolCalls": "工具调用",
     "unit": {
-      "check": "项",
       "step": "步"
-    },
-    "validationCompleteAwaitingEnd": "验证阶段已完成，等待结束",
-    "validationCompleted": "验证完成",
-    "validationResults": "验证结果"
+    }
   }
 }

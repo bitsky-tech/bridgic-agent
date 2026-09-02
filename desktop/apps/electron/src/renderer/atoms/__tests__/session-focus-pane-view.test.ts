@@ -45,7 +45,6 @@ function enterRun(
     phase: 'execute',
     stepIndex: 0,
     executionSteps: ['执行一步'],
-    validationSteps: [],
   })
 }
 
@@ -110,7 +109,6 @@ describe('Session mode surface exit ownership', () => {
             workflowId: 'wf-mode-surface',
             workflowName: '模式表面测试',
             status: outcome === 'success' ? 'completed' : 'failed',
-            validationStatus: outcome === 'success' ? 'passed' : 'failed',
             createdAt: '2026-08-13T08:00:00Z',
           },
         })

@@ -226,7 +226,6 @@ class WorkflowProgressEvent(TurnEvent):
     status: str
     summary: Optional[str] = None
     execution_steps: Optional[List[str]] = None
-    validation_steps: Optional[List[str]] = None
 
     def payload(self) -> Dict[str, Any]:
         return {
@@ -240,7 +239,6 @@ class WorkflowProgressEvent(TurnEvent):
             "status": self.status,
             "summary": self.summary,
             "execution_steps": self.execution_steps or [],
-            "validation_steps": self.validation_steps or [],
         }
 
 
@@ -254,7 +252,6 @@ class WorkflowResultEvent(TurnEvent):
     workflow_id: str
     workflow_name: str
     status: str
-    validation_status: str
     created_at: str
     result_file_count: int
     summary: Optional[str] = None
@@ -265,7 +262,6 @@ class WorkflowResultEvent(TurnEvent):
             "workflow_id": self.workflow_id,
             "workflow_name": self.workflow_name,
             "status": self.status,
-            "validation_status": self.validation_status,
             "created_at": self.created_at,
             "result_file_count": self.result_file_count,
             "summary": self.summary,
@@ -388,19 +384,6 @@ class TaskConfirmRequestEvent(TurnEvent):
             "workflow_id": self.workflow_id,
             "original_task_markdown": self.original_task_markdown,
         }
-
-
-@dataclass(frozen=True)
-class AcceptRuleRequestEvent(TurnEvent):
-    """Clarify asks the user to review proposed acceptance rules."""
-
-    name: ClassVar[str] = "accept_rule_request"
-
-    request_id: str
-    rules: List[str]
-
-    def payload(self) -> Dict[str, Any]:
-        return {"request_id": self.request_id, "rules": self.rules}
 
 
 @dataclass(frozen=True)
@@ -638,7 +621,6 @@ __all__ = [
     "PermissionRequestEvent",
     "BuildConfirmRequestEvent",
     "TaskConfirmRequestEvent",
-    "AcceptRuleRequestEvent",
     "WorkflowConfirmRequestEvent",
     "FinalEvent",
     "CancelledEvent",

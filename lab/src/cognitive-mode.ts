@@ -1,7 +1,7 @@
 import type { JsonObject, JsonValue, OtaRound } from './api'
 
 export type BuildCognitiveStage = 'clarify' | 'explore' | 'generate' | 'verify'
-export type WorkflowCognitiveStage = 'execute' | 'validate'
+export type WorkflowCognitiveStage = 'execute'
 
 export type CognitiveModeDescriptor =
   | { id: 'general-agent'; mode: 'normal'; stage: 'main' }
@@ -31,13 +31,12 @@ function buildStage(value: JsonValue | undefined): BuildCognitiveStage | null {
     : null
 }
 
-function workflowStageFromResult(round: OtaRound): WorkflowCognitiveStage | null {
+function isWorkflowResult(round: OtaRound): boolean {
   for (const result of round.actionResult?.results ?? []) {
     if (result.toolName !== 'report_workflow_step') continue
-    const phase = string(object(result.toolResult)?.phase)
-    if (phase === 'execute' || phase === 'validate') return phase
+    return true
   }
-  return null
+  return false
 }
 
 function persistedThinkScope(round: OtaRound): { mode: string; stage: string } | null {
@@ -63,13 +62,8 @@ export function resolveRoundCognitiveMode(round: OtaRound, context: CognitiveMod
     if (persistedBuildStage) {
       return { id: `build-${persistedBuildStage}`, mode: 'build', stage: persistedBuildStage }
     }
-    if (thinkScope.mode === 'run_workflow'
-      && (thinkScope.stage === 'execute' || thinkScope.stage === 'validate')) {
-      return {
-        id: `workflow-${thinkScope.stage}`,
-        mode: 'run_workflow',
-        stage: thinkScope.stage,
-      }
+    if (thinkScope.mode === 'run_workflow') {
+      return { id: 'workflow-execute', mode: 'run_workflow', stage: 'execute' }
     }
     return { id: 'general-agent', mode: 'normal', stage: 'main' }
   }
@@ -81,21 +75,15 @@ export function resolveRoundCognitiveMode(round: OtaRound, context: CognitiveMod
     return { id: `build-${persistedBuildStage}`, mode: 'build', stage: persistedBuildStage }
   }
 
-  const reportedWorkflowStage = workflowStageFromResult(round)
-  if (reportedWorkflowStage) {
-    return {
-      id: `workflow-${reportedWorkflowStage}`,
-      mode: 'run_workflow',
-      stage: reportedWorkflowStage,
-    }
+  if (isWorkflowResult(round)) {
+    return { id: 'workflow-execute', mode: 'run_workflow', stage: 'execute' }
   }
 
   const think = object(context.agentState?.think)
   const mode = string(think?.mode)
   const stage = string(think?.stage)
   if (mode === 'run_workflow') {
-    const workflowStage = stage === 'validate' ? 'validate' : 'execute'
-    return { id: `workflow-${workflowStage}`, mode: 'run_workflow', stage: workflowStage }
+    return { id: 'workflow-execute', mode: 'run_workflow', stage: 'execute' }
   }
 
   // A present null marker is written by current backends for a non-Build round.

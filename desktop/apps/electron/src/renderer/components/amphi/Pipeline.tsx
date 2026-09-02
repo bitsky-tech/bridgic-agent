@@ -730,11 +730,7 @@ export function MessageBubble({
     }
     const latestBlock = blocks?.at(-1)
     if (latestBlock?.type === 'workflow_step' && latestBlock.status === 'running') {
-      return {
-        label: latestBlock.phase === 'validate'
-          ? t('session.pipeline.activity.validatingWorkflow')
-          : t('session.pipeline.activity.runningWorkflow'),
-      }
+      return { label: t('session.pipeline.activity.runningWorkflow') }
     }
     if (latestBlock?.type === 'text' || content) return { label: t('session.pipeline.activity.generating') }
     return { label: t('session.pipeline.activity.thinking') }

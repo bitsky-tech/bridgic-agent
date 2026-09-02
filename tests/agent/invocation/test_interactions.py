@@ -142,12 +142,6 @@ def _write_package(root: Path) -> None:
         "# Create report\n\nWrite the requested report to result/report.txt.\n",
         encoding="utf-8",
     )
-    (source / "VALIDATE.md").write_text(
-        "# Check report\n\nConfirm result/report.txt contains the requested report.\n",
-        encoding="utf-8",
-    )
-
-
 def _tool_result(turn: SessionTurnRecord, tool_name: str) -> dict[str, Any]:
     for record in reversed(turn.ota_records or []):
         action = record.get("action_result") or {}

@@ -104,10 +104,6 @@ const humanRequestDataSchema = z.object({
   questions: z.array(askUserQuestionSchema).default([]),
   request_id: z.string().nullable().optional(),
 })
-const acceptRuleDataSchema = z.object({
-  request_id: z.string(),
-  rules: z.array(z.string()).min(1),
-})
 const buildConfirmDataSchema = z.object({
   request_id: z.string(),
   goal: z.string(),
@@ -132,21 +128,19 @@ const workflowProgressDataSchema = z.object({
   workflow_id: z.string(),
   generation: z.string(),
   workflow_name: z.string(),
-  phase: z.enum(['execute', 'validate']),
+  phase: z.literal('execute'),
   step_index: z.number().int().nonnegative(),
   step_count: z.number().int().positive(),
   title: z.string(),
   status: z.enum(['running', 'success', 'failure']),
   summary: z.string().nullable().optional(),
   execution_steps: z.array(z.string()).optional(),
-  validation_steps: z.array(z.string()).optional(),
 })
 const workflowResultDataSchema = z.object({
   run_id: z.string(),
   workflow_id: z.string(),
   workflow_name: z.string(),
   status: z.enum(['completed', 'failed']),
-  validation_status: z.enum(['passed', 'failed', 'not_required']),
   created_at: z.string(),
   result_file_count: z.number().int().nonnegative().optional(),
   summary: z.string().nullable().optional(),
@@ -370,17 +364,6 @@ export function translateTurnEvent(
       })
       return { events, state: next }
     }
-    case TURN_EVENT.AcceptRuleRequest: {
-      const r = acceptRuleDataSchema.safeParse(frame.data)
-      if (!r.success)
-        return { events, state: next, warning: 'accept_rule_request payload invalid — skipped' }
-      events.push({
-        type: 'accept_rule_request',
-        requestId: r.data.request_id,
-        rules: r.data.rules,
-      })
-      return { events, state: next }
-    }
     case TURN_EVENT.BuildConfirmRequest: {
       const r = buildConfirmDataSchema.safeParse(frame.data)
       if (!r.success)
@@ -425,7 +408,6 @@ export function translateTurnEvent(
         status: r.data.status,
         summary: r.data.summary ?? null,
         executionSteps: r.data.execution_steps,
-        validationSteps: r.data.validation_steps,
       })
       return { events, state: next }
     }
@@ -439,7 +421,6 @@ export function translateTurnEvent(
         workflowId: r.data.workflow_id,
         workflowName: r.data.workflow_name,
         status: r.data.status,
-        validationStatus: r.data.validation_status,
         createdAt: r.data.created_at,
         ...(r.data.result_file_count === undefined
           ? {}

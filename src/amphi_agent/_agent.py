@@ -32,7 +32,6 @@ from ._cognitive import (
     GenerateThink,
     MainThink,
     SubAgentThink,
-    ValidateThink,
     VerifyThink,
     WorkflowThink,
     render_input,
@@ -82,7 +81,6 @@ from ..amphi_store import (
     TurnStatus,
     UserInput,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from ..amphi_service.i18n import activate_locale, backend_i18n, detect_locale
 from ..amphi_service.protocol._ws_messages import (
@@ -168,9 +166,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     generate = think_unit(GenerateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
     verify = think_unit(VerifyThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
-    # Saved Workflow runtime — one cognitive unit for each persisted stage.
+    # Saved Workflow runtime.
     execute = think_unit(WorkflowThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    validate = think_unit(ValidateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
     def __init__(self, max_rounds: int = DEFAULT_MAX_ROUNDS, verbose: bool = False) -> None:
         super().__init__(verbose=verbose)
@@ -202,7 +199,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         self.thinking_modes = {
             "build": ("clarify", "explore", "generate", "verify"),
-            "run_workflow": ("execute", "validate"),
+            "run_workflow": ("execute",),
         }
 
 
@@ -772,21 +769,13 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         durable_summary if result.status == "failure" else result.summary
                     )
                     if result.status == "success":
-                        next_stage = current_status.stage
                         next_step_index = current_status.step_index + 1
-                        if (
-                            current_status.stage == "execute"
-                            and next_step_index == len(stage_steps)
-                            and source.validation_steps
-                        ):
-                            next_stage = "validate"
-                            next_step_index = 0
                         state.checkpoint_cursor(
                             expected_workflow_id=current_status.workflow_id,
                             expected_generation=current_status.generation,
                             expected_stage=current_status.stage,
                             expected_step_index=current_status.step_index,
-                            stage=next_stage,
+                            stage=current_status.stage,
                             step_index=next_step_index,
                         )
                     step.tool_result = {
@@ -822,7 +811,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                                 context,
                                 current_status,
                                 status=WorkflowRunStatus.FAILED,
-                                validation_status=WorkflowValidationStatus.FAILED,
                             )
                         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
                             step.success = False
@@ -839,7 +827,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             **step.tool_result,
                             "run_id": published.run_id,
                             "run_status": published.status.value,
-                            "validation_status": published.validation_status.value,
                             "created_at": published.created_at.isoformat(),
                             "published_result_dir": str(published.result_dir.resolve()),
                         }
@@ -859,20 +846,12 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             step_index=state.step_index,
                         )
                         ota_context.transition_think(next_status)
-                        if next_status.stage != current_status.stage:
-                            self._stamp_stage_handoff(
-                                ota_context,
-                                current_status,
-                                next_status,
-                                "All execution sections succeeded; validation starts automatically.",
-                            )
                         published = await self._settle_workflow_boundary(ota_context, context)
                         if published is not None:
                             step.tool_result = {
                                 **step.tool_result,
                                 "run_id": published.run_id,
                                 "run_status": published.status.value,
-                                "validation_status": published.validation_status.value,
                                 "created_at": published.created_at.isoformat(),
                                 "published_result_dir": str(published.result_dir.resolve()),
                             }
@@ -2565,15 +2544,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         except (RuntimeError, ValueError):
             return 0
         remaining = len(source.steps(status.stage)) - status.step_index
-        if status.stage == "execute":
-            remaining += (
-                1 + len(source.validation_steps) + 1
-                if source.validation_steps
-                else 1
-            )
-        else:
-            remaining += 1
-        return max(remaining, 1)
+        return max(remaining + 1, 1)
 
     def _publish_workflow_progress(
         self,
@@ -2610,10 +2581,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _workflow_sections(source: Any) -> Dict[str, List[str]]:
-        """Return the serialized execution and validation section titles."""
+        """Return the serialized execution section titles."""
         return {
             "execution_steps": [step.title for step in source.execution_steps],
-            "validation_steps": [step.title for step in source.validation_steps],
         }
 
     @classmethod
@@ -2623,7 +2593,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         expected: WorkflowStageState,
         *,
         status: WorkflowRunStatus,
-        validation_status: WorkflowValidationStatus,
     ) -> Any:
         """Validate an active terminal boundary and publish its immutable result."""
         workflow_runs = context.workflow_runs
@@ -2645,18 +2614,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             failure = run.result_dir / "failure.md"
             if failure.is_symlink() or not failure.is_file():
                 raise ValueError("Failed Run Workflow requires a durable failure report")
-        elif space.stage == "validate":
-            if (
-                not source.validation_steps
-                or space.step_index != len(source.validation_steps)
-                or validation_status is not WorkflowValidationStatus.PASSED
-            ):
-                raise ValueError("Run Workflow validation has not reached its completion boundary")
-        elif (
-            space.step_index != len(source.execution_steps)
-            or source.validation_steps
-            or validation_status is not WorkflowValidationStatus.NOT_REQUIRED
-        ):
+        elif space.step_index != len(source.execution_steps):
             raise ValueError("Run Workflow execution has not reached its completion boundary")
 
         return await workflow_runs.publish_run_workflow(
@@ -2669,7 +2627,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             source_session_id=context.session.id,
             workflow_input=space.workflow_input,
             status=status,
-            validation_status=validation_status,
         )
 
     async def _settle_workflow_boundary(
@@ -2687,8 +2644,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         Notes
         -----
         The durable ``.run/.state.json`` cursor is authoritative. This method
-        therefore also repairs older or interrupted Runs left at an execution
-        completion boundary before deterministic stage advancement existed.
+        therefore also settles Runs left at an execution completion boundary
+        when terminal publication is interrupted.
         """
         status = ota_context.think_status
         if not isinstance(status, WorkflowStageState):
@@ -2702,49 +2659,13 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 f"Workflow Run state points outside {status.stage} sections."
             )
 
-        workspace = context.workspace
-        state = workspace.run_workflow if workspace is not None else None
-        if state is None:
-            raise RuntimeError("Workflow Run space is not bound.")
-        if status.stage == "execute" and source.validation_steps:
-            state.checkpoint_cursor(
-                expected_workflow_id=status.workflow_id,
-                expected_generation=status.generation,
-                expected_stage=status.stage,
-                expected_step_index=status.step_index,
-                stage="validate",
-                step_index=0,
-            )
-            next_status = WorkflowStageState(
-                workflow_id=state.workflow_id,
-                generation=state.generation,
-                stage=state.stage,
-                step_index=state.step_index,
-            )
-            ota_context.transition_think(next_status)
-            self._stamp_stage_handoff(
-                ota_context,
-                status,
-                next_status,
-                "All execution sections succeeded; validation starts automatically.",
-            )
-            return None
-
-        validation_status = (
-            WorkflowValidationStatus.PASSED
-            if status.stage == "validate"
-            else WorkflowValidationStatus.NOT_REQUIRED
-        )
         published = await self._publish_workflow_run(
             context,
             status,
             status=WorkflowRunStatus.COMPLETED,
-            validation_status=validation_status,
         )
         terminal_summary = (
-            f"Workflow `{published.workflow_name}` completed all execution and validation sections successfully."
-            if validation_status is WorkflowValidationStatus.PASSED
-            else f"Workflow `{published.workflow_name}` completed all execution sections; result validation was not requested."
+            f"Workflow `{published.workflow_name}` completed all execution sections successfully."
         )
         await self._finish_workflow_run(
             ota_context,
@@ -2773,7 +2694,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "workflow_id": published.workflow_id,
             "workflow_name": published.workflow_name,
             "status": published.status.value,
-            "validation_status": published.validation_status.value,
             "created_at": published.created_at.isoformat(),
             "result_file_count": result_file_count,
             "summary": summary,
@@ -2827,7 +2747,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 workflow_id=published.workflow_id,
                 workflow_name=published.workflow_name,
                 status=published.status.value,
-                validation_status=published.validation_status.value,
                 created_at=published.created_at.isoformat(),
                 result_file_count=result_file_count,
                 summary=summary,

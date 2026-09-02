@@ -140,7 +140,6 @@ export type {
   SetLocaleFrame,
   SubscribeFrame,
   ChatFrame,
-  AcceptRuleFrame,
   BuildConfirmFrame,
   TaskConfirmFrame,
   WorkflowConfirmFrame,

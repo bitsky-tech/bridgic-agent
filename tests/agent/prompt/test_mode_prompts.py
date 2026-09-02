@@ -9,7 +9,6 @@ from src.amphi_agent._cognitive import (
     ExploreThink,
     GenerateThink,
     SubAgentThink,
-    ValidateThink,
     VerifyThink,
     WorkflowThink,
 )
@@ -60,10 +59,6 @@ async def test_message_scopes() -> None:
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
 
-    class ContextFreeValidateThink(ValidateThink):
-        async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
-            return []
-
     async def assemble(worker: MainThink, state: dict[str, object], child: bool) -> tuple[list[Role], list[str]]:
         ota_context = AmphiOTAContext(
             user_input="Current build request",
@@ -94,7 +89,6 @@ async def test_message_scopes() -> None:
         (GenerateThink(), {"mode": "build", "stage": "generate"}, False),
         (VerifyThink(), {"mode": "build", "stage": "verify"}, False),
         (ContextFreeWorkflowThink(), {**workflow_state, "stage": "execute"}, False),
-        (ContextFreeValidateThink(), {**workflow_state, "stage": "validate"}, False),
     )
 
     for worker, state, child in cases:
@@ -116,12 +110,8 @@ async def test_message_scopes() -> None:
 
 
 async def test_workflow_stage_message_scope() -> None:
-    """Automatic Workflow stages keep only their own trace."""
+    """Workflow execution keeps its own trace."""
     class ContextFreeWorkflowThink(WorkflowThink):
-        async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
-            return []
-
-    class ContextFreeValidateThink(ValidateThink):
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
 
@@ -135,24 +125,6 @@ async def test_workflow_stage_message_scope() -> None:
         "workflow_id": "workflow-a",
         "generation": "generation-a",
     }
-    validate_ota = AmphiOTAContext(
-        user_input="Run the workflow",
-        prompt_time=PROMPT_TIME,
-        state={"think": {**workflow_state, "stage": "validate", "step_index": 0}},
-        ota_record=[
-            record("execute", "Older execution history"),
-            record("execute", "Final execution handoff"),
-            record("validate", "Validation progress"),
-        ],
-    )
-    validate_messages = await ContextFreeValidateThink().assemble_messages(validate_ota, _context())
-    validate_contents = [message.content for message in validate_messages]
-    assert "Older execution history" not in validate_contents
-    assert "Final execution handoff" not in validate_contents
-    assert "Past request" in validate_contents
-    assert "Past answer" in validate_contents
-    assert "Validation progress" in validate_contents
-
     execute_ota = AmphiOTAContext(
         user_input="Run the workflow",
         prompt_time=PROMPT_TIME,

@@ -51,7 +51,6 @@ const workflowResult: MessageBlock = {
   workflowId: 'wf-report',
   workflowName: '生成报告',
   status: 'completed',
-  validationStatus: 'passed',
   createdAt: '2026-08-03T06:00:00Z',
 }
 

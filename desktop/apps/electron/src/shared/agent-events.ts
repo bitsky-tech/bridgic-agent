@@ -110,10 +110,9 @@ export interface WorkflowRunState {
   generation: string
   workflowName: string
   sourceSessionId: string
-  phase: 'execute' | 'validate'
+  phase: 'execute'
   stepIndex: number
   executionSteps: string[]
-  validationSteps: string[]
 }
 
 /** Persisted composition of the latest model call's input context. */
@@ -183,11 +182,6 @@ export type AgentEvent =
       requestId?: string
     }
   | {
-      type: 'accept_rule_request'
-      requestId: string
-      rules: string[]
-    }
-  | {
       type: 'build_confirm_request'
       requestId: string
       goal: string
@@ -215,14 +209,13 @@ export type AgentEvent =
       workflowId: string
       generation: string
       workflowName: string
-      phase: 'execute' | 'validate'
+      phase: 'execute'
       stepIndex: number
       stepCount: number
       title: string
       status: 'running' | 'success' | 'failure'
       summary?: string | null
       executionSteps?: string[]
-      validationSteps?: string[]
     }
   | {
       type: 'workflow_result'
@@ -230,7 +223,6 @@ export type AgentEvent =
       workflowId: string
       workflowName: string
       status: 'completed' | 'failed'
-      validationStatus: 'passed' | 'failed' | 'not_required'
       createdAt: string
       resultFileCount?: number
       summary?: string | null

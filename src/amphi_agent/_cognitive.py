@@ -42,7 +42,6 @@ from ._prompt import (
     TURN_FAILED_MESSAGE,
     VERIFY_PERSONA,
     WORKFLOW_PERSONA,
-    WORKFLOW_VALIDATE_PERSONA,
     render_main_persona,
     render_stage_persona,
     time_in_local_tz,
@@ -74,7 +73,6 @@ __all__ = [
     "SubAgentThink",
     "CHILD_TOOL_NAMES",
     "ToolSurface",
-    "ValidateThink",
     "VerifyThink",
     "WorkflowRunThink",
     "WorkflowThink",
@@ -1329,7 +1327,7 @@ class MainThink(CognitiveWorker):
         if runs:
             run_lines = [
                 f"- {run.workflow_name} result (run_id: {run.run_id}, "
-                f"status: {run.status.value}, validation: {run.validation_status.value}, "
+                f"status: {run.status.value}, "
                 f"result path: {json.dumps(str(run.result_dir), ensure_ascii=False)}, "
                 f"intermediate work path: "
                 f"{json.dumps(str(run.background_work_dir), ensure_ascii=False)}, "
@@ -2184,14 +2182,9 @@ class WorkflowRunThink(MainThink):
         run = workflow_runs.require_run_workflow(run_space.root)
         durable = run_space
         execution_lines = [
-            f"- [{'x' if state.stage == 'validate' or index < state.step_index else ' '}] "
+            f"- [{'x' if index < state.step_index else ' '}] "
             f"{step.index}. {step.title}"
             for index, step in enumerate(source.execution_steps)
-        ]
-        validation_lines = [
-            f"- [{'x' if state.stage == 'validate' and index < state.step_index else ' '}] "
-            f"{step.index}. {step.title}"
-            for index, step in enumerate(source.validation_steps)
         ]
         result_dir = str(run.result_dir)
         work_dir = str(run.background_work_dir)
@@ -2231,8 +2224,6 @@ class WorkflowRunThink(MainThink):
             + step_position
             + "Execution sections:\n"
             + "\n".join(execution_lines)
-            + "\nValidation sections:\n"
-            + "\n".join(validation_lines)
             + f"\n{current_block}"
             "</workflow_run>"
         )
@@ -2298,22 +2289,6 @@ class WorkflowThink(WorkflowRunThink):
     ) -> Optional[str]:
         """Ensure an execution report belongs to the active WORKFLOW.md section."""
         return await self.report_legality_reason(call, ota_context, context, "execute")
-
-
-class ValidateThink(WorkflowRunThink):
-    """Validate real Workflow outputs through the current VALIDATE.md section."""
-
-    persona: str = WORKFLOW_VALIDATE_PERSONA
-    workflow_stage: str = "validate"
-
-    async def legality_check(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Ensure a validation report belongs to the active VALIDATE.md section."""
-        return await self.report_legality_reason(call, ota_context, context, "validate")
 
 
 ################################################################################################################
@@ -3097,19 +3072,13 @@ class VerifyThink(BuildThink):
             return None
 
         package = self.build_package(context)
-        execution_only = bool(package and package.validation_disabled)
         body = package.read_document("verify.md") if package is not None else None
         if not body:
             return (
                 "confirm rejected: write verify.md with the isolated test scope, what "
                 "actually ran, what was substituted or not run for safety, "
-                + (
-                    "and the execution-only verification verdict before "
-                    if execution_only
-                    else "and a result or explicit safety limitation for every runtime "
-                    "acceptance check in VALIDATE.md before "
-                )
-                + "calling request_human_workflow_confirm."
+                "and the overall verification verdict before calling "
+                "request_human_workflow_confirm."
             )
         document_reason = self.human_document_reason("verify.md", body)
         if document_reason:

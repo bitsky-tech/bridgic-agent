@@ -123,7 +123,7 @@ Read the input, create the report, and validate its contents.
         "verify.md",
         """# Verification
 
-The isolated checks completed, but one acceptance check failed.
+The isolated checks completed, but one Workflow check failed.
 
 ## Overall verdict
 FAIL

@@ -372,25 +372,6 @@ describe('human_request routing (choose vs free-text)', () => {
   })
 })
 
-describe('acceptance-rule review routing', () => {
-  it('maps the dedicated request with system-unassigned candidate text', () => {
-    const { events } = run([
-      {
-        event: 'accept_rule_request',
-        data: {
-          request_id: 'accept-1',
-          rules: ['报告文件存在', '报告包含本周完成事项'],
-        },
-      },
-    ])
-    expect(types(events)).toEqual(['message_start', 'accept_rule_request'])
-    const request = events[1]
-    if (request?.type !== 'accept_rule_request') throw new Error('expected acceptance review')
-    expect(request.requestId).toBe('accept-1')
-    expect(request.rules).toEqual(['报告文件存在', '报告包含本周完成事项'])
-  })
-})
-
 describe('workflow confirm request routing', () => {
   it('maps workflow_confirm_request into a workflow confirm event', () => {
     const { events, warnings, state } = run([
@@ -433,7 +414,6 @@ describe('workflow progress routing', () => {
         status: 'running',
         summary: null,
         execution_steps: ['收集数据', '生成报告'],
-        validation_steps: ['检查报告'],
       },
     }])
 
@@ -445,7 +425,6 @@ describe('workflow progress routing', () => {
     expect(event.title).toBe('收集数据')
     expect(event.status).toBe('running')
     expect(event.executionSteps).toEqual(['收集数据', '生成报告'])
-    expect(event.validationSteps).toEqual(['检查报告'])
     expect(warnings).toEqual([])
   })
 })
@@ -459,7 +438,6 @@ describe('workflow result routing', () => {
         workflow_id: 'wf-report',
         workflow_name: '生成报告',
         status: 'completed',
-        validation_status: 'passed',
         created_at: '2026-08-03T06:00:00Z',
         result_file_count: 1,
         summary: '报告已生成并通过验证。',
@@ -473,7 +451,6 @@ describe('workflow result routing', () => {
       workflowId: 'wf-report',
       workflowName: '生成报告',
       status: 'completed',
-      validationStatus: 'passed',
       createdAt: '2026-08-03T06:00:00Z',
       resultFileCount: 1,
       summary: '报告已生成并通过验证。',
@@ -565,11 +542,11 @@ describe('stage frames', () => {
 
   it('carries the Workflow Run cognitive stage', () => {
     const { events, warnings } = run([
-      { event: 'stage', data: { mode: 'run_workflow', stage: 'validate' } },
+      { event: 'stage', data: { mode: 'run_workflow', stage: 'execute' } },
     ])
     const stage = events[1]
     if (stage?.type !== 'stage') throw new Error('expected stage')
-    expect(stage.position).toEqual({ mode: 'run_workflow', stage: 'validate' })
+    expect(stage.position).toEqual({ mode: 'run_workflow', stage: 'execute' })
     expect(warnings).toEqual([])
   })
 

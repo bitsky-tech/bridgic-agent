@@ -7,7 +7,6 @@ from ...amphi_agent import (
     InvocationStateError,
 )
 from ..protocol import (
-    WsAcceptRuleMessage,
     WsBuildConfirmMessage,
     WsChatMessage,
     WsChoiceAnswerMessage,
@@ -82,7 +81,6 @@ class ChatHandler(WsHandler):
 
         if isinstance(msg, (
             WsChatMessage,
-            WsAcceptRuleMessage,
             WsBuildConfirmMessage,
             WsTaskConfirmMessage,
             WsWorkflowConfirmMessage,
@@ -134,7 +132,7 @@ class ChatHandler(WsHandler):
 
     async def _on_message(
         self,
-        msg: WsChatMessage | WsAcceptRuleMessage | WsBuildConfirmMessage | WsTaskConfirmMessage | WsWorkflowConfirmMessage | WsPermissionAnswer | WsChoiceAnswerMessage,
+        msg: WsChatMessage | WsBuildConfirmMessage | WsTaskConfirmMessage | WsWorkflowConfirmMessage | WsPermissionAnswer | WsChoiceAnswerMessage,
     ) -> None:
         # Check user
         user = await self.require_user()
