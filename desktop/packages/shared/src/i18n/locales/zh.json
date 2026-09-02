@@ -2051,6 +2051,7 @@
       "full": "全文"
     },
     "verb": {
+      "analyzeImage": "理解图片",
       "bash": "执行",
       "browserBack": "后退",
       "browserCheck": "勾选",

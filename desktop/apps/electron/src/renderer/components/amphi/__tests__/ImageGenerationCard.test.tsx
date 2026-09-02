@@ -133,3 +133,36 @@ describe('ImageGenerationCard', () => {
     host.remove()
   })
 })
+
+describe('read_image presentation', () => {
+  it('renders visual analysis as wrapped Markdown instead of numbered source code', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <ToolCallRow call={{
+          toolUseId: 'image-analysis',
+          name: 'read_image',
+          input: { file_path: '/tmp/reference.png' },
+          result: {
+            output: 'Image analysis for /tmp/reference.png:\n**Composition:** centered subject',
+            isError: false,
+            durationMs: 1_200,
+          },
+        }} />,
+      )
+    })
+
+    expect(host.textContent).toContain('理解图片')
+    expect(host.textContent).not.toContain('全文')
+
+    await act(async () => host.querySelector<HTMLButtonElement>('button')?.click())
+    expect(host.querySelector('strong')?.textContent).toBe('Composition:')
+    expect(host.querySelector('pre')).toBeNull()
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+})

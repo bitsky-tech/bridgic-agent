@@ -17,7 +17,10 @@ from src.amphi_service.protocol.llms import supports_image_generation
 from src.amphi_service.protocol.llms._image_inputs import (
     IMAGE_INPUTS_EXTRA,
     ImageInputUnsupportedError,
+    ImageInputValidationError,
+    MAX_IMAGE_INPUT_BYTES,
     inspect_image_input,
+    read_image_input,
 )
 from src.amphi_store import ProviderCredential, ProviderRepository
 from tests.agent.tools._harness import ToolHarness
@@ -134,6 +137,33 @@ async def test_generate_image_uses_network_permission(tool_harness: ToolHarness)
     assert verdict.verdict == "ask"
 
 
+async def test_generate_image_reference_reaches_auto_mode_safety_review(tool_harness: ToolHarness) -> None:
+    reference_call = StepToolCall(
+        tool="generate_image",
+        tool_arguments=[
+            ToolArgument(name="prompt", value="keep the composition"),
+            ToolArgument(name="reference_image_path", value="reference.png"),
+        ],
+    )
+    text_only_call = StepToolCall(
+        tool="generate_image",
+        tool_arguments=[ToolArgument(name="prompt", value="a lighthouse")],
+    )
+    engine = PermissionEngine(
+        str(tool_harness.workspace.work_dir),
+        mode=ExecutionMode.AUTO,
+    )
+
+    reference_verdict, text_only_verdict = await engine.evaluate([
+        reference_call,
+        text_only_call,
+    ])
+
+    assert reference_verdict.verdict == "ask"
+    assert reference_verdict.boundary == "in_workspace"
+    assert text_only_verdict.verdict == "allow"
+
+
 async def test_generate_image_prefers_active_provider_and_returns_preview_path(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     await _configure_provider("google", "gemini-2.5-flash-image", "google")
     await _configure_provider("openai", "gpt-image-2")
@@ -242,6 +272,39 @@ async def test_generate_image_requires_a_configured_image_model(tool_harness: To
 
     with pytest.raises(ValueError, match="no enabled text-to-image model"):
         await generate_image("a lighthouse")
+
+
+async def test_generate_image_preserves_provider_failure_details(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    await _configure_provider("openai", "gpt-image-2")
+
+    async def request_image(*_args: object, **_kwargs: object) -> tuple[bytes, str]:
+        raise RuntimeError("provider overloaded")
+
+    monkeypatch.setattr(image_module, "_request_image", request_image)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"image generation with openai/gpt-image-2 failed: provider overloaded",
+    ):
+        await generate_image("a lighthouse")
+
+
+def test_tool_images_can_reuse_files_up_to_generation_limit(tool_harness: ToolHarness) -> None:
+    image_path = tool_harness.workspace.work_dir / "large-generated.png"
+    image_bytes = _PNG + b"x" * MAX_IMAGE_INPUT_BYTES
+    image_path.write_bytes(image_bytes)
+
+    with pytest.raises(ImageInputValidationError, match="Image exceeds"):
+        inspect_image_input(str(image_path))
+
+    descriptor = image_module._inspect_session_image(
+        str(image_path),
+        tool_harness.workspace.work_dir,
+    )
+
+    assert descriptor["size_bytes"] == len(image_bytes)
+    assert descriptor["max_bytes"] == image_module._MAX_IMAGE_BYTES
+    assert read_image_input(descriptor) == (image_bytes, "image/png")
 
 
 @pytest.mark.parametrize(

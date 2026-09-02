@@ -40,6 +40,7 @@ function toolIcon(kind: ToolKind, name: string, isError: boolean): JSX.Element {
   if (isError) return Icons.xCircle(14)
   if (kind === 'write' || kind === 'edit') return Icons.edit(13)
   if (kind === 'read') return Icons.file(13)
+  if (kind === 'image_read') return Icons.eye(14)
   if (kind === 'bash') return Icons.terminal(14)
   if (kind === 'grep') return Icons.search(14)
   if (kind === 'glob') return Icons.folder(14)

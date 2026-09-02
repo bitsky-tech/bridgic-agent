@@ -2051,6 +2051,7 @@
       "full": "Full text"
     },
     "verb": {
+      "analyzeImage": "Analyze image",
       "bash": "Run",
       "browserBack": "Back",
       "browserCheck": "Check",

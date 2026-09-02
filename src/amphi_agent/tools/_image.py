@@ -23,6 +23,7 @@ from ...amphi_service.protocol.llms._image_inputs import (
     IMAGE_INPUTS_EXTRA,
     ImageInputUnsupportedError,
     ImageInputValidationError,
+    MAX_REUSABLE_IMAGE_BYTES,
     image_data_url,
     inspect_image_input,
     read_image_input,
@@ -32,7 +33,7 @@ from ...amphi_store import ProviderCredential, ProviderRepository
 
 
 _IMAGE_TIMEOUT = httpx.Timeout(180.0, connect=10.0)
-_MAX_IMAGE_BYTES = 32 * 1024 * 1024
+_MAX_IMAGE_BYTES = MAX_REUSABLE_IMAGE_BYTES
 _MAX_ENCODED_IMAGE_LENGTH = ((_MAX_IMAGE_BYTES + 2) // 3) * 4 + 16
 _SUPPORTED_PROTOCOLS = frozenset({"openai", "google"})
 _MAX_IMAGE_ANALYSIS_PROMPT_LENGTH = 32_000
@@ -324,10 +325,14 @@ def _inspect_session_image(file_path: str, work_dir: Any, argument_name: str = "
         if candidate.is_absolute()
         else (Path(work_dir).resolve() / candidate).resolve()
     )
-    image = inspect_image_input(str(resolved_path), resolved_path.name)
+    image = inspect_image_input(
+        str(resolved_path),
+        resolved_path.name,
+        max_bytes=_MAX_IMAGE_BYTES,
+    )
     if image is None:
         raise ImageInputValidationError(f"File is not a supported image: {resolved_path}")
-    return validate_image_inputs([image])[0]
+    return validate_image_inputs([image], max_total_bytes=_MAX_IMAGE_BYTES)[0]
 
 
 async def read_image(file_path: str, prompt: str = "") -> str:
@@ -501,9 +506,9 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
                     f"no configured image-model fallback is available"
                 ) from None
             raise
+        source = f"{target.credential.provider_id}/{target.model}"
         try:
             image, _mime_type = await _request_image(target, cleaned_prompt, reference)
-            source = f"{target.credential.provider_id}/{target.model}"
         except Exception as exc:
             message = str(exc)
             if target.credential.api_key:

@@ -243,6 +243,14 @@ LOCAL_FILE_ARGUMENTS: Dict[str, str] = {
     "generate_image": "reference_image_path",
 }
 
+# A non-empty argument in this mapping means the network tool uploads local
+# bytes rather than merely producing a downloaded file. The argument-sensitive
+# distinction keeps text-only generation frictionless while ensuring reference
+# images reach auto-mode safety review before leaving the Session boundary.
+NETWORK_UPLOAD_FILE_ARGUMENTS: Dict[str, str] = {
+    "generate_image": "reference_image_path",
+}
+
 # ── Read-only shell commands (capability READ) ──
 READ_COMMANDS: List[str] = [
     r"\s*pwd\s*",

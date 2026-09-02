@@ -12,6 +12,7 @@ IMAGE_INPUTS_EXTRA = "image_inputs"
 MAX_IMAGE_INPUTS = 10
 MAX_IMAGE_INPUT_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_INPUT_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_REUSABLE_IMAGE_BYTES = 32 * 1024 * 1024
 
 _IMAGE_EXTENSIONS = frozenset({
     ".avif",
@@ -55,14 +56,19 @@ def _media_type(data: bytes) -> Optional[str]:
     return None
 
 
-def inspect_image_input(path: str, name: str = "") -> Optional[Dict[str, Any]]:
+def inspect_image_input(path: str, name: str = "", *, max_bytes: int = MAX_IMAGE_INPUT_BYTES) -> Optional[Dict[str, Any]]:
     """Return one lightweight descriptor when ``path`` is a supported image.
 
     Magic bytes, rather than the filename or uploaded MIME value, decide whether
     a file becomes model-visible image content. Image-looking filenames fail
     explicitly when their bytes are unavailable or unsupported; ordinary files
-    remain ordinary file mentions.
+    remain ordinary file mentions. User-message callers keep the default 5 MB
+    bound; trusted image tools can opt into the reusable 32 MB ceiling.
     """
+    if max_bytes <= 0 or max_bytes > MAX_REUSABLE_IMAGE_BYTES:
+        raise ValueError(
+            f"max_bytes must be between 1 and {MAX_REUSABLE_IMAGE_BYTES}"
+        )
     resolved = os.path.realpath(os.path.abspath(path))
     suffix = Path(resolved).suffix.casefold()
     image_looking = suffix in _IMAGE_EXTENSIONS
@@ -88,29 +94,40 @@ def inspect_image_input(path: str, name: str = "") -> Optional[Dict[str, Any]]:
         return None
     if size_bytes <= 0:
         raise ImageInputValidationError(f"Image file is empty: {resolved}")
-    if size_bytes > MAX_IMAGE_INPUT_BYTES:
+    if size_bytes > max_bytes:
         raise ImageInputValidationError(
-            f"Image exceeds {MAX_IMAGE_INPUT_BYTES} bytes: {resolved}"
+            f"Image exceeds {max_bytes} bytes: {resolved}"
         )
-    return {
+    descriptor = {
         "path": resolved,
         "media_type": media_type,
         "size_bytes": size_bytes,
         "name": name or Path(resolved).name,
     }
+    if max_bytes != MAX_IMAGE_INPUT_BYTES:
+        descriptor["max_bytes"] = max_bytes
+    return descriptor
 
 
-def validate_image_inputs(inputs: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    """Bound one message's image count and total encoded source size."""
+def validate_image_inputs(inputs: Iterable[Mapping[str, Any]], *, max_total_bytes: int = MAX_IMAGE_INPUT_TOTAL_BYTES) -> List[Dict[str, Any]]:
+    """Bound one message's image count and total encoded source size.
+
+    Ordinary messages retain the default 20 MB aggregate limit. A trusted
+    single-image tool can opt into the reusable-image ceiling explicitly.
+    """
+    if max_total_bytes <= 0 or max_total_bytes > MAX_REUSABLE_IMAGE_BYTES:
+        raise ValueError(
+            f"max_total_bytes must be between 1 and {MAX_REUSABLE_IMAGE_BYTES}"
+        )
     normalized = [dict(item) for item in inputs]
     if len(normalized) > MAX_IMAGE_INPUTS:
         raise ImageInputValidationError(
             f"A message can contain at most {MAX_IMAGE_INPUTS} images"
         )
     total = sum(max(0, int(item.get("size_bytes") or 0)) for item in normalized)
-    if total > MAX_IMAGE_INPUT_TOTAL_BYTES:
+    if total > max_total_bytes:
         raise ImageInputValidationError(
-            f"Image inputs exceed {MAX_IMAGE_INPUT_TOTAL_BYTES} total bytes"
+            f"Image inputs exceed {max_total_bytes} total bytes"
         )
     return normalized
 
@@ -126,7 +143,12 @@ def read_image_input(image: Mapping[str, Any]) -> Tuple[bytes, str]:
     path = str(image.get("path") or "")
     expected_type = str(image.get("media_type") or "")
     expected_size = int(image.get("size_bytes") or 0)
-    inspected = inspect_image_input(path, str(image.get("name") or ""))
+    max_bytes = int(image.get("max_bytes") or MAX_IMAGE_INPUT_BYTES)
+    inspected = inspect_image_input(
+        path,
+        str(image.get("name") or ""),
+        max_bytes=max_bytes,
+    )
     if (
         inspected is None
         or inspected["media_type"] != expected_type
@@ -153,6 +175,7 @@ __all__ = [
     "ImageInputValidationError",
     "MAX_IMAGE_INPUT_BYTES",
     "MAX_IMAGE_INPUTS",
+    "MAX_REUSABLE_IMAGE_BYTES",
     "image_data_url",
     "image_inputs_of",
     "inspect_image_input",
