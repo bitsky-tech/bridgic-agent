@@ -42,6 +42,11 @@ const browserApi: ElectronAPI['browser'] = {
 }
 ;(window as typeof window & { api: ElectronAPI }).api = {
   browser: browserApi,
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
   events: {
     onWindowForegroundChanged: (callback: (foreground: boolean) => void) => {
       onWindowForegroundChanged = callback
@@ -114,7 +119,7 @@ afterAll(async () => {
 
 function browserSnapshot(sessionId: string, tab: EmbeddedBrowserTabInfo = emptyTab) {
   return {
-    sessions: [{ sessionId, activeTabId: tab.tabId, tabs: [tab] }],
+    sessions: [{ sessionId, activeTabId: tab.tabId, tabs: [tab], workbenches: [] }],
   }
 }
 
@@ -183,7 +188,7 @@ async function mountPanel(store: ReturnType<typeof createStore>) {
 }
 
 describe('SessionResourcePanel', () => {
-  it('keeps one permanent Bridgic launcher above four undivided independent tools', async () => {
+  it('keeps one permanent Bridgic launcher above six undivided independent tools', async () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-tools')
     const { host, root } = await mountPanel(store)
@@ -203,11 +208,13 @@ describe('SessionResourcePanel', () => {
       'session-workbench-files',
       'session-workbench-workflows',
       'session-workbench-results',
+      'session-workbench-sheet',
+      'session-workbench-doc',
       'session-workbench-browser',
     ])
     const toolList = host.querySelector('[data-testid="session-workbench-files"]')?.parentElement
-    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(4)
-    expect(toolList?.children).toHaveLength(4)
+    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(6)
+    expect(toolList?.children).toHaveLength(6)
 
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     const files = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
@@ -665,6 +672,8 @@ describe('SessionResourcePanel', () => {
         'session-workbench-files',
         'session-workbench-workflows',
         'session-workbench-results',
+        'session-workbench-sheet',
+        'session-workbench-doc',
         'session-workbench-browser',
       ])
 
@@ -1004,7 +1013,7 @@ describe('SessionResourcePanel', () => {
 
     await act(async () => {
       store.set(setEmbeddedBrowserSnapshotAtom, {
-        sessions: [{ sessionId, activeTabId: null, tabs: [] }],
+        sessions: [{ sessionId, activeTabId: null, tabs: [], workbenches: [] }],
       })
     })
     expect(browserButton.getAttribute('data-attention')).toBeNull()
@@ -1076,6 +1085,7 @@ describe('SessionResourcePanel', () => {
           sessionId,
           activeTabId: emptyTab.tabId,
           tabs: [emptyTab, popupTab],
+          workbenches: [],
         }],
       })
     })
@@ -1202,7 +1212,7 @@ describe('SessionResourcePanel', () => {
     })
     await act(async () => {
       store.set(setEmbeddedBrowserSnapshotAtom, {
-        sessions: [{ sessionId, activeTabId: null, tabs: [] }],
+        sessions: [{ sessionId, activeTabId: null, tabs: [], workbenches: [] }],
       })
     })
 
@@ -1237,7 +1247,7 @@ describe('SessionResourcePanel', () => {
 
     await act(async () => {
       store.set(setEmbeddedBrowserSnapshotAtom, {
-        sessions: [{ sessionId, activeTabId: null, tabs: [] }],
+        sessions: [{ sessionId, activeTabId: null, tabs: [], workbenches: [] }],
       })
       await Promise.resolve()
     })
@@ -1589,8 +1599,8 @@ describe('SessionResourcePanel', () => {
     store.set(briefFamily(secondSession), '# B\n\n第二会话内容。')
     store.set(embeddedBrowserSnapshotAtom, {
       sessions: [
-        { sessionId: firstSession, activeTabId: 'tab-a', tabs: [{ ...emptyTab, tabId: 'tab-a' }] },
-        { sessionId: secondSession, activeTabId: 'tab-b', tabs: [{ ...emptyTab, tabId: 'tab-b' }] },
+        { sessionId: firstSession, activeTabId: 'tab-a', tabs: [{ ...emptyTab, tabId: 'tab-a' }], workbenches: [] },
+        { sessionId: secondSession, activeTabId: 'tab-b', tabs: [{ ...emptyTab, tabId: 'tab-b' }], workbenches: [] },
       ],
     })
     store.set(activeSessionIdAtom, firstSession)

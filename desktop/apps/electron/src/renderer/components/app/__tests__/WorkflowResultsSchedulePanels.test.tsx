@@ -7,6 +7,11 @@ GlobalRegistrator.register()
 
 const testWindow = window as unknown as { api?: Record<string, unknown> }
 testWindow.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
   ...testWindow.api,
   settings: {
     get: async () => DEFAULT_SETTINGS,

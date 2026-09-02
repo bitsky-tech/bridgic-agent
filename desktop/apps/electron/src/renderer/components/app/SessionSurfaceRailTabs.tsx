@@ -10,6 +10,8 @@ export interface SessionSurfaceRailTabsProps {
   browserNeedsAttention: boolean
   filesNeedsAttention: boolean
   hasBrowserOpenPage: boolean
+  hasDocOpen: boolean
+  hasSheetOpen: boolean
   isBrowserAgentActive: boolean
   isBrowserBusy: boolean
   isContentOpen: boolean
@@ -25,6 +27,8 @@ export function SessionSurfaceRailTabs({
   browserNeedsAttention,
   filesNeedsAttention,
   hasBrowserOpenPage,
+  hasDocOpen,
+  hasSheetOpen,
   isBrowserAgentActive,
   isBrowserBusy,
   isContentOpen,
@@ -59,6 +63,22 @@ export function SessionSurfaceRailTabs({
       label: t('session.resourcePanel.results'),
       surface: SessionWorkbenchSurface.Results,
       testId: 'session-workbench-results',
+    },
+    {
+      ariaLabel: t('session.workbench.sheet.title'),
+      icon: Icons.sheet(17),
+      isOpenInBackground: hasSheetOpen,
+      label: t('session.workbench.sheet.label'),
+      surface: SessionWorkbenchSurface.Sheet,
+      testId: 'session-workbench-sheet',
+    },
+    {
+      ariaLabel: t('session.workbench.doc.title'),
+      icon: Icons.document(17),
+      isOpenInBackground: hasDocOpen,
+      label: t('session.workbench.doc.label'),
+      surface: SessionWorkbenchSurface.Doc,
+      testId: 'session-workbench-doc',
     },
     {
       ariaLabel: browserAriaLabel,

@@ -109,6 +109,11 @@ export function installApiStub(): void {
       setBounds: async () => {},
       setVisible: async () => {},
     },
+    workbench: {
+      ensure: async () => {},
+      activate: async () => {},
+      close: async () => {},
+    },
     backend: {
       snapshot: async () => ({
         state: BackendState.Idle,

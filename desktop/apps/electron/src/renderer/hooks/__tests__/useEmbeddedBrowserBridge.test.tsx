@@ -66,7 +66,7 @@ describe('useEmbeddedBrowserBridge', () => {
     })
 
     const current = {
-      sessions: [{ sessionId: 'session-current', activeTabId: null, tabs: [] }],
+      sessions: [{ sessionId: 'session-current', activeTabId: null, tabs: [], workbenches: [] }],
     }
     await act(async () => {
       onChanged?.(current)
@@ -85,6 +85,7 @@ describe('useEmbeddedBrowserBridge', () => {
         sessionId: 'session-background',
         activeTabId: 'tab-original',
         tabs: [browserTab('tab-original')],
+        workbenches: [],
       }],
     }
     const browser = {
@@ -117,6 +118,7 @@ describe('useEmbeddedBrowserBridge', () => {
         sessions: [{
           ...initial.sessions[0]!,
           tabs: [...initial.sessions[0]!.tabs, popup],
+          workbenches: [],
         }],
       })
     })
@@ -151,6 +153,7 @@ describe('useEmbeddedBrowserBridge', () => {
         sessionId: 'session-race',
         activeTabId: 'tab-popup',
         tabs: [browserTab('tab-original'), browserTab('tab-popup')],
+        workbenches: [],
       }],
     }
     await act(async () => onChanged?.(pushed))
@@ -162,6 +165,7 @@ describe('useEmbeddedBrowserBridge', () => {
           sessionId: 'session-race',
           activeTabId: 'tab-original',
           tabs: [browserTab('tab-original')],
+          workbenches: [],
         }],
       })
       await initialPromise
@@ -198,12 +202,14 @@ describe('useEmbeddedBrowserBridge', () => {
         sessionId: 'session-transient-popup',
         activeTabId: 'tab-original',
         tabs: [browserTab('tab-original')],
+        workbenches: [],
       }],
     }
     const withPopup: EmbeddedBrowserSnapshot = {
       sessions: [{
         ...original.sessions[0]!,
         tabs: [browserTab('tab-original'), browserTab('tab-popup')],
+        workbenches: [],
       }],
     }
     await act(async () => {
@@ -248,6 +254,7 @@ describe('useEmbeddedBrowserBridge', () => {
         sessionId: 'session-transient-after-failure',
         activeTabId: 'tab-popup',
         tabs: [browserTab('tab-popup')],
+        workbenches: [],
       }],
     }
     const afterClose: EmbeddedBrowserSnapshot = {
@@ -255,6 +262,7 @@ describe('useEmbeddedBrowserBridge', () => {
         sessionId: 'session-transient-after-failure',
         activeTabId: null,
         tabs: [],
+        workbenches: [],
       }],
     }
     await act(async () => {
@@ -298,6 +306,7 @@ describe('useEmbeddedBrowserBridge', () => {
         sessionId: 'session-after-failure',
         activeTabId: 'tab-first-push',
         tabs: [browserTab('tab-first-push')],
+        workbenches: [],
       }],
     }))
 

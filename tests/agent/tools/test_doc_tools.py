@@ -29,21 +29,17 @@ class _RecordingDocBrowser:
         base_url: Optional[str] = "http://127.0.0.1:5100/ab12/univer/",
     ) -> None:
         self.bridge_calls: list[tuple[str, list[Any]]] = []
-        self.invocations: list[tuple[str, tuple[Any, ...]]] = []
+        self.opened: list[tuple[str, str, str]] = []
         self._base_url = base_url
         self._replies: dict[str, Any] = {"status": _STATUS, **(replies or {})}
 
-    def workbench_page_url(self, kind: str) -> str:
+    async def open_workbench(self, kind: str, *, language: str = "en", name: str = "Untitled") -> None:
         if self._base_url is None:
             raise EmbeddedBrowserUnavailableError("the desktop app is not running")
-        return f"{self._base_url}{kind}/index.html"
-
-    async def invoke(self, method: str, *args: Any) -> str:
-        self.invocations.append((method, args))
-        return f"{method} result"
+        self.opened.append((kind, language, name))
 
     async def call_workbench_bridge(
-        self, method: str, args: Optional[list[Any]] = None,
+        self, kind: str, method: str, args: Optional[list[Any]] = None,
     ) -> Any:
         self.bridge_calls.append((method, list(args or [])))
         if method not in self._replies:
@@ -54,30 +50,23 @@ class _RecordingDocBrowser:
 async def test_doc_open_navigates_to_the_document_page(tool_harness: ToolHarness) -> None:
     """Final document-open state:
 
-    {
-      "navigated": ".../univer/doc/index.html?lang=zh&name=Weekly%20Notes",
-      "reported_document": "Notes"
-    }
+    {"opened": ["doc", "zh", "Weekly Notes"], "reported_document": "Notes"}
 
     Checks:
-    1. Opening navigates to the document page, not the spreadsheet one.
-    2. The name and language reach the page as encoded query parameters.
-    3. The reply describes the document instead of the navigation's snapshot.
+    1. Opening asks for the document workbench, not the spreadsheet one.
+    2. The name and language the agent chose travel with the request.
+    3. The reply describes the document, not the page.
     """
     browser = _RecordingDocBrowser()
     tool_harness.context.browser = browser  # type: ignore[assignment]
 
     result = await doc_open("Weekly Notes", language="zh")
 
-    # Checks 1 and 2: one navigation, to the doc page, with encoded parameters.
-    assert browser.invocations == [(
-        "navigate_to",
-        ("http://127.0.0.1:5100/ab12/univer/doc/index.html?lang=zh&name=Weekly%20Notes",),
-    )]
+    # Checks 1 and 2: one open request naming the workbench and the agent's choices.
+    assert browser.opened == [("doc", "zh", "Weekly Notes")]
     # Check 3: the workbench's own state is reported.
     assert "Notes" in result
     assert "Characters: 12" in result
-    assert "navigate_to result" not in result
 
 
 async def test_doc_reads_and_writes(tool_harness: ToolHarness) -> None:

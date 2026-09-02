@@ -493,6 +493,7 @@ describe('EmbeddedBrowserManager', () => {
     expect(snapshots.at(-1)?.sessions[0]).toMatchObject({
       activeTabId: 'tab-1',
       tabs: [{ tabId: 'tab-1' }],
+      workbenches: [],
     })
   })
 
@@ -634,6 +635,7 @@ describe('EmbeddedBrowserManager', () => {
       sessionId: 'session-a',
       activeTabId: null,
       tabs: [],
+      workbenches: [],
     })
     expect(views).toHaveLength(3)
 

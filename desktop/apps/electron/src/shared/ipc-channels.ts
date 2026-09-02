@@ -100,6 +100,11 @@ export const IPC = {
     setBounds: 'browser:setBounds',
     setVisible: 'browser:setVisible',
   },
+  workbench: {
+    ensure: 'workbench:ensure',
+    activate: 'workbench:activate',
+    close: 'workbench:close',
+  },
   // Bridgic Agent Python daemon coordination — the live backend
   // control plane (discover / spawn / stop / clients). The renderer chats with
   // the daemon directly over HTTP+WS; these channels are the main-process

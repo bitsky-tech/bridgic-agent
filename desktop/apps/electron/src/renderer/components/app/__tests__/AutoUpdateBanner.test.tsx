@@ -64,6 +64,11 @@ beforeEach(() => {
   // opt in explicitly. The module-level flag persists across tests otherwise.
   setAgentRunning(false)
   ;(globalThis as unknown as { window: Record<string, unknown> }).window.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
     events: {
       onAutoUpdate: (cb: UpdateListener) => {
         listener = cb

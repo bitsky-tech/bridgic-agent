@@ -133,7 +133,14 @@ function browserApiCalls() {
     },
     setVisible: async (visible) => { calls.push(`setVisible:${visible}`) },
   }
-  ;(window as typeof window & { api: ElectronAPI }).api = { browser: api } as ElectronAPI
+  ;(window as typeof window & { api: ElectronAPI }).api = {
+    browser: api,
+    workbench: {
+      ensure: async () => undefined,
+      activate: async () => undefined,
+      close: async () => undefined,
+    },
+  } as unknown as ElectronAPI
   return calls
 }
 
@@ -281,6 +288,7 @@ describe('EmbeddedBrowserPanel', () => {
         sessionId: 'session-a',
         activeTabId: 'tab-a',
         tabs: [tab(), tab({ tabId: 'tab-b', title: 'Second tab', canGoBack: false })],
+        workbenches: [],
       }],
     })
 
@@ -355,6 +363,7 @@ describe('EmbeddedBrowserPanel', () => {
         sessionId: 'session-a',
         activeTabId: 'tab-a',
         tabs: [tab(), tab({ tabId: 'tab-b', title: 'Second tab' })],
+        workbenches: [],
       }],
     })
     let presentationVisible = false
@@ -472,6 +481,7 @@ describe('EmbeddedBrowserPanel', () => {
         sessionId: 'session-a',
         activeTabId: 'tab-a',
         tabs: [tab({ title: 'New tab', url: 'about:blank' })],
+        workbenches: [],
       }],
     })
     const renderPanel = () => withZhTranslation(
@@ -518,6 +528,7 @@ describe('EmbeddedBrowserPanel', () => {
               title: 'Loading example',
               url: 'https://example.com/search',
             })],
+            workbenches: [],
           }],
         })
         await flushMicrotasks()
@@ -536,6 +547,7 @@ describe('EmbeddedBrowserPanel', () => {
               title: 'Example search',
               url: 'https://example.com/search',
             })],
+            workbenches: [],
           }],
         })
         await flushMicrotasks()
@@ -563,6 +575,7 @@ describe('EmbeddedBrowserPanel', () => {
               title: 'Updated title',
               url: 'https://example.com/search',
             })],
+            workbenches: [],
           }],
         })
         await flushMicrotasks()
@@ -584,7 +597,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
 
     await act(async () => {
@@ -616,7 +629,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
 
     await act(async () => {
@@ -681,7 +694,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
 
     await act(async () => {
@@ -752,7 +765,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
 
     await act(async () => {
@@ -821,7 +834,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
     const renderPanel = (presentationVisible: boolean) => withZhTranslation(
       <Provider store={store}>
@@ -904,7 +917,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
     const renderPanel = (presentationVisible: boolean) => withZhTranslation(
       <Provider store={store}>
@@ -976,6 +989,7 @@ describe('EmbeddedBrowserPanel', () => {
           sessionId,
           activeTabId: `tab-${sessionId}`,
           tabs: [tab({ tabId: `tab-${sessionId}`, targetId: `target-${sessionId}` })],
+          workbenches: [],
         }}
       />,
     )
@@ -1032,7 +1046,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
     const renderWithDialog = (dialogOpen: boolean) => withZhTranslation(
       <Provider store={store}>
@@ -1094,7 +1108,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()] }],
+      sessions: [{ sessionId: 'session-a', activeTabId: 'tab-a', tabs: [tab()], workbenches: [] }],
     })
 
     await act(async () => {
@@ -1135,7 +1149,7 @@ describe('EmbeddedBrowserPanel', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-empty')
     store.set(embeddedBrowserSnapshotAtom, {
-      sessions: [{ sessionId: 'session-empty', activeTabId: null, tabs: [] }],
+      sessions: [{ sessionId: 'session-empty', activeTabId: null, tabs: [], workbenches: [] }],
     })
 
     await act(async () => {
@@ -1160,6 +1174,7 @@ describe('EmbeddedBrowserPanel', () => {
         activeTabId: 'tab-a',
         // Chromium reports the literal URL as the title of a blank page.
         tabs: [tab({ title: 'about:blank', url: 'about:blank' })],
+        workbenches: [],
       }],
     })
 
@@ -1199,6 +1214,7 @@ describe('EmbeddedBrowserPanel', () => {
           sessionId: 'session-blank',
           activeTabId: 'tab-a',
           tabs: [tab({ url: 'https://example.com/docs' })],
+          workbenches: [],
         }],
       })
       await flushMicrotasks()

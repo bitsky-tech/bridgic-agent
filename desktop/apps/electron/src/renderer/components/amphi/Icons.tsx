@@ -72,6 +72,18 @@ export const Icons = {
       <path d="M9 2v3h3" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   ),
+  sheet: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M2 6.5h12M2 10h12M6.5 6.5v7" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  ),
+  document: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M4 2h5l3 3v8a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M5.5 8h5M5.5 10.5h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  ),
   play: (s = 16) => (
     <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
       <path d="M5 3l8 5-8 5V3z" fill="currentColor" />

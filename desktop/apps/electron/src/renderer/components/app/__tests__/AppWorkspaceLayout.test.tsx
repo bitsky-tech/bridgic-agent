@@ -6,6 +6,11 @@ import type { ElectronAPI } from '@shared/types'
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 ;(window as typeof window & { api: ElectronAPI }).api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
   settings: {
     get: async () => DEFAULT_SETTINGS,
     set: async () => undefined,

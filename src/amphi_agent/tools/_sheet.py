@@ -59,7 +59,7 @@ _MAX_WRITE_CELLS = 5_000
 
 async def _call(method: str, args: List[Any]) -> Any:
     """Call the workbench bridge; the caller decides what the reply must look like."""
-    return await get_workbench_browser().call_workbench_bridge(method, args)
+    return await get_workbench_browser().call_workbench_bridge("sheet", method, args)
 
 
 async def _call_dict(method: str, args: List[Any]) -> dict:
@@ -108,7 +108,7 @@ async def sheet_open(name: str = "Untitled", language: str = "en") -> str:
 
 async def sheet_status() -> str:
     """Report the open workbook, its sheets, and whether a person is editing."""
-    return _render_status(await workbench_status(get_workbench_browser()))
+    return _render_status(await workbench_status("sheet"))
 
 
 async def sheet_read(a1: str, sheet: Optional[str] = None) -> str:
@@ -121,9 +121,7 @@ async def sheet_read(a1: str, sheet: Optional[str] = None) -> str:
     Returns:
         A JSON array of rows; an empty cell reads as ``null``.
     """
-    result = await get_workbench_browser().call_workbench_bridge(
-        "readRange", [_require_a1(a1), sheet],
-    )
+    result = await _call_dict("readRange", [_require_a1(a1), sheet])
     values = result.get("values") if isinstance(result, dict) else None
     if not isinstance(values, list):
         raise RuntimeError("The workbench page returned an unreadable range")
@@ -153,9 +151,7 @@ async def sheet_write(a1: str, values: List[List[Any]], sheet: Optional[str] = N
         raise ValueError(
             f"values covers {cells} cells; write at most {_MAX_WRITE_CELLS} in one call"
         )
-    result = await get_workbench_browser().call_workbench_bridge(
-        "writeRange", [_require_a1(a1), values, sheet],
-    )
+    result = await _call_dict("writeRange", [_require_a1(a1), values, sheet])
     rows = result.get("rows") if isinstance(result, dict) else len(values)
     columns = result.get("columns") if isinstance(result, dict) else 0
     return f"Wrote {rows} row(s) x {columns} column(s) at {a1}."
@@ -175,7 +171,7 @@ async def sheet_formula(a1: str, formula: str, sheet: Optional[str] = None) -> s
     text = (formula or "").strip()
     if not text.startswith("="):
         raise ValueError('formula must start with "=", for example "=SUM(B2:B10)"')
-    await get_workbench_browser().call_workbench_bridge("setFormula", [_require_a1(a1), text, sheet])
+    await _call("setFormula", [_require_a1(a1), text, sheet])
     return f"Set {a1} to {text}."
 
 
@@ -189,7 +185,7 @@ async def sheet_clear(a1: str, sheet: Optional[str] = None) -> str:
     Returns:
         A short confirmation.
     """
-    await get_workbench_browser().call_workbench_bridge("clearRange", [_require_a1(a1), sheet])
+    await _call("clearRange", [_require_a1(a1), sheet])
     return f"Cleared {a1}."
 
 
@@ -205,7 +201,7 @@ async def sheet_changes(limit: int = 20) -> str:
     Returns:
         One line per edit, newest last, or a note that nothing has changed.
     """
-    changes = await get_workbench_browser().call_workbench_bridge("recentChanges", [limit])
+    changes = await _call("recentChanges", [limit])
     if not isinstance(changes, list) or not changes:
         return "No edits have been recorded since the workbook was opened."
     lines = [
@@ -531,7 +527,7 @@ async def sheet_save(file_path: str) -> str:
     Returns:
         A short confirmation with the written path.
     """
-    snapshot = await get_workbench_browser().call_workbench_bridge("snapshot")
+    snapshot = await _call("snapshot", [])
     abs_path = _resolve_file(file_path)
     parent = os.path.dirname(abs_path)
     if parent:

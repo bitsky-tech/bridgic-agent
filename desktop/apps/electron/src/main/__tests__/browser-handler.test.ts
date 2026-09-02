@@ -24,7 +24,7 @@ describe('browser IPC handlers', () => {
     } as unknown as EmbeddedBrowserManager
 
     testIpcHandlers.clear()
-    registerBrowserHandlers(browser)
+    registerBrowserHandlers(browser, () => 'http://127.0.0.1:1/ab/univer/sheet/index.html')
     const inspect = testIpcHandlers.get(IPC.browser.hasHorizontalOverflow)
 
     expect(await inspect?.({} as IpcMainInvokeEvent, 'session-a', 'tab-a')).toBe(true)
@@ -45,7 +45,7 @@ describe('browser IPC handlers', () => {
     } as unknown as IpcMainInvokeEvent
 
     testIpcHandlers.clear()
-    registerBrowserHandlers(browser)
+    registerBrowserHandlers(browser, () => 'http://127.0.0.1:1/ab/univer/sheet/index.html')
     const setVisible = testIpcHandlers.get(IPC.browser.setVisible)
     expect(setVisible).toBeDefined()
 

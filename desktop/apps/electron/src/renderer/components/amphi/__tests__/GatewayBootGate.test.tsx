@@ -47,6 +47,11 @@ beforeEach(() => {
   // Only the three members this component touches; the gate never reaches for
   // anything else, and a fuller fake would just hide that.
   ;(globalThis as unknown as { window: Record<string, unknown> }).window.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
     backend: { getClients, resolveCompatibility },
     app: { quit },
   }

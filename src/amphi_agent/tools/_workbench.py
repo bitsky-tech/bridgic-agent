@@ -1,15 +1,14 @@
 """Shared plumbing for the App's embedded Univer workbenches.
 
-Both workbenches — the spreadsheet and the document — are ordinary pages inside
-the Session's embedded browser, so they appear in the same right-side dock as
-any other page the agent opens and a person can edit them directly. Opening one
-and waiting for it to become usable is identical either way; only what the
-bridge then offers differs, which is why the tools themselves are separate.
+Each workbench — the spreadsheet and the document — owns its own position in the
+Session's right-side dock, backed by its own page, so a person can work in one
+while the agent works in the other. Opening one and waiting for it to become
+usable is identical either way; only what the bridge then offers differs, which
+is why the tools themselves are separate.
 """
 
 import asyncio
 from typing import Optional
-from urllib.parse import quote
 
 from bridgic.amphibious.builtin_tools import current_agent
 
@@ -29,34 +28,38 @@ def get_workbench_browser() -> SessionBrowser:
     return browser
 
 
-async def workbench_status(browser: SessionBrowser) -> dict:
-    """Ask the open workbench what it currently holds."""
-    status = await browser.call_workbench_bridge("status")
+async def workbench_status(kind: str) -> dict:
+    """Ask one open workbench what it currently holds."""
+    status = await get_workbench_browser().call_workbench_bridge(kind, "status")
     if not isinstance(status, dict):
         raise RuntimeError("The workbench page returned an unreadable status")
     return status
 
 
 async def open_workbench(kind: str, name: str, language: str) -> dict:
-    """Navigate this Session to one workbench page and wait until it is usable."""
+    """Open one workbench in this Session's dock and wait until it is usable.
+
+    Opening does not present it. The person decides what the dock shows, so a
+    workbook prepared for a Session they are not watching stays in the
+    background until they select its dock position.
+    """
     browser = get_workbench_browser()
-    page_url = browser.workbench_page_url(kind)
-    lang = "zh" if str(language).lower().startswith("zh") else "en"
-    title = quote((name or "").strip() or "Untitled", safe="")
-    # The navigation result carries a page snapshot that is meaningless for a
-    # canvas-rendered workbench, so the caller reports its own status instead.
-    await browser.invoke("navigate_to", f"{page_url}?lang={lang}&name={title}")
-    return await _await_ready(browser)
+    await browser.open_workbench(
+        kind,
+        language="zh" if str(language).lower().startswith("zh") else "en",
+        name=(name or "").strip() or "Untitled",
+    )
+    return await _await_ready(kind)
 
 
-async def _await_ready(browser: SessionBrowser) -> dict:
-    """Poll the freshly navigated page until its document exists."""
+async def _await_ready(kind: str) -> dict:
+    """Poll the freshly opened page until its document exists."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _READY_TIMEOUT_SECONDS
     last_error: Optional[str] = None
     while loop.time() < deadline:
         try:
-            status = await workbench_status(browser)
+            status = await workbench_status(kind)
         except RuntimeError as exc:
             last_error = str(exc)
         else:

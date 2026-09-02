@@ -103,6 +103,22 @@ export class UniverHost {
     return this.origin ? `${this.origin}/${this.prefix}/${BASE_PATH}` : null
   }
 
+  /**
+   * The full page URL for one workbench.
+   *
+   * The URL shape lives here so the renderer and the agent open the same page
+   * the same way; both go through this rather than composing paths themselves.
+   */
+  pageUrl(kind: string, options: { language?: string; name?: string } = {}): string | null {
+    const base = this.baseUrl()
+    if (!base) return null
+    const query = new URLSearchParams({
+      lang: (options.language ?? 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en',
+      name: options.name?.trim() || 'Untitled',
+    })
+    return `${base}${kind}/index.html?${query.toString()}`
+  }
+
   async stop(): Promise<void> {
     const server = this.server
     this.server = null

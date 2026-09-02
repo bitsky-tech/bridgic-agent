@@ -1658,6 +1658,12 @@
       "result": "结果"
     },
     "workbench": {
+      "close": "关闭工作台",
+      "doc": {
+        "hint": "正在打开共享文档，你和 Agent 可以同时编辑。",
+        "label": "文档",
+        "title": "文档"
+      },
       "files": {
         "searchPlaceholder": "搜索当前会话文件…",
         "title": "文件"
@@ -1685,6 +1691,11 @@
         "noMatch": "没有找到与“{{query}}”匹配的调度",
         "searchPlaceholder": "搜索调度名称或描述…",
         "title": "调度"
+      },
+      "sheet": {
+        "hint": "正在打开共享表格，你和 Agent 可以同时编辑。",
+        "label": "表格",
+        "title": "电子表格"
       },
       "workflows": {
         "built": "可使用",

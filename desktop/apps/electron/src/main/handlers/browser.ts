@@ -1,9 +1,29 @@
 import { IPC } from '../../shared/ipc-channels'
-import type { EmbeddedBrowserBounds } from '../../shared/types'
+import type { EmbeddedBrowserBounds, WorkbenchKind } from '../../shared/types'
 import type { EmbeddedBrowserManager } from '../embedded-browser-manager'
 import { loggedHandle } from './logged-handle'
 
-export function registerBrowserHandlers(browser: EmbeddedBrowserManager): void {
+export function registerBrowserHandlers(
+  browser: EmbeddedBrowserManager,
+  workbenchPageUrl: (kind: WorkbenchKind, options?: { language?: string }) => string | null,
+): void {
+  loggedHandle(IPC.workbench.ensure, async (_event, sessionId: string, kind: WorkbenchKind) => {
+    const url = workbenchPageUrl(kind)
+    if (!url) throw new Error('the workbench host is not running')
+    await browser.ensureWorkbench(sessionId, kind, url)
+  })
+
+  loggedHandle(
+    IPC.workbench.activate,
+    (_event, sessionId: string, kind: WorkbenchKind | null) => {
+      browser.activateWorkbench(sessionId, kind)
+    },
+  )
+
+  loggedHandle(IPC.workbench.close, (_event, sessionId: string, kind: WorkbenchKind) => {
+    browser.closeWorkbench(sessionId, kind)
+  })
+
   loggedHandle(IPC.browser.snapshot, () => browser.snapshot())
 
   loggedHandle(IPC.browser.closeSession, (_event, sessionId: string) => {

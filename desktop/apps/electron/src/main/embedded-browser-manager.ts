@@ -13,6 +13,7 @@ import type {
   EmbeddedBrowserSessionInfo,
   EmbeddedBrowserSnapshot,
   EmbeddedBrowserTabInfo,
+  WorkbenchKind,
 } from '../shared/types'
 import { mt } from './i18n'
 import { windowLog } from './logger'
@@ -130,11 +131,27 @@ interface EmbeddedBrowserTabRecord {
   ready: Promise<void>
 }
 
+/**
+ * One Session's workbench page (a spreadsheet or a document).
+ *
+ * A workbench is a native view like a browser tab, and for the same reason —
+ * it must keep running for a Session the person is not currently looking at,
+ * so the agent can work in it. It is deliberately *not* a tab: it has no
+ * navigation, never appears in the tab strip, and owns its own dock position.
+ */
+interface WorkbenchRecord {
+  kind: WorkbenchKind
+  view: WebContentsView
+  targetId: string | null
+  ready: Promise<void>
+}
+
 interface EmbeddedBrowserSessionSurface {
   sessionId: string
   tabs: Map<string, EmbeddedBrowserTabRecord>
   activeTabId: string | null
   mruTabIds: string[]
+  workbenches: Map<WorkbenchKind, WorkbenchRecord>
 }
 
 type ViewFactory = (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -146,6 +163,8 @@ export class EmbeddedBrowserManager {
   private host: BrowserWindow | null = null
   private readonly surfaces = new Map<string, EmbeddedBrowserSessionSurface>()
   private activeSessionId: string | null = null
+  /** Which of the active Session's surfaces the dock is presenting. */
+  private activeKind: WorkbenchKind | 'browser' = 'browser'
   private bounds: Rectangle = { ...DEFAULT_OPERATIONAL_BOUNDS }
   private surfaceVisible = false
   private readonly configuredSessions = new WeakSet<Session>()
@@ -190,7 +209,7 @@ export class EmbeddedBrowserManager {
   async sessionTabs(sessionId: string): Promise<EmbeddedBrowserSessionInfo> {
     const id = this.normalizeSessionId(sessionId)
     const surface = this.surfaces.get(id)
-    if (!surface) return { sessionId: id, activeTabId: null, tabs: [] }
+    if (!surface) return { sessionId: id, activeTabId: null, tabs: [], workbenches: [] }
     const active = this.activeRecord(surface)
     if (active) await active.ready
     return this.infoFor(surface)
@@ -246,10 +265,14 @@ export class EmbeddedBrowserManager {
     this.surfaces.delete(id)
     if (this.activeSessionId === id) this.activeSessionId = null
     const records = [...surface.tabs.values()]
+    const workbenches = [...surface.workbenches.values()]
     surface.tabs.clear()
     surface.activeTabId = null
     surface.mruTabIds.length = 0
+    surface.workbenches.clear()
+    if (this.activeSessionId === null) this.activeKind = 'browser'
     for (const record of records) this.disposeRecord(record)
+    for (const workbench of workbenches) this.disposeWorkbench(workbench)
     this.publishState()
   }
 
@@ -265,6 +288,7 @@ export class EmbeddedBrowserManager {
       throw new Error(`embedded browser Session has no active tab: ${surface.sessionId}`)
     }
     this.activeSessionId = surface.sessionId
+    this.activeKind = 'browser'
     this.syncVisibility()
   }
 
@@ -351,18 +375,67 @@ export class EmbeddedBrowserManager {
     this.syncVisibility()
   }
 
+  /**
+   * Ensure one Session's workbench page exists and return its CDP target.
+   *
+   * Creating it does not present it: the agent may prepare a workbook for a
+   * Session nobody is looking at, and doing so must not steal the dock from
+   * whatever the person is reading.
+   */
+  async ensureWorkbench(sessionId: string, kind: WorkbenchKind, url: string): Promise<string> {
+    const surface = this.getOrCreateSurface(sessionId)
+    let record = surface.workbenches.get(kind)
+    if (!record) record = this.createWorkbenchRecord(surface, kind, url)
+    await record.ready
+    if (!record.targetId) throw new Error(`workbench ${kind} has no target`)
+    return record.targetId
+  }
+
+  /** The CDP target of one Session's workbench, or null when it has none open. */
+  workbenchTarget(sessionId: string, kind: WorkbenchKind): string | null {
+    const surface = this.surfaces.get(this.normalizeSessionId(sessionId))
+    const record = surface?.workbenches.get(kind)
+    if (!record || record.view.webContents.isDestroyed()) return null
+    return record.targetId
+  }
+
+  /** Present one Session's workbench, or hand the dock back to its browser. */
+  activateWorkbench(sessionId: string, kind: WorkbenchKind | null): void {
+    const id = this.normalizeSessionId(sessionId)
+    this.activeSessionId = id
+    this.activeKind = kind ?? 'browser'
+    this.syncVisibility()
+  }
+
+  /** Release one Session's workbench page and its native view. */
+  closeWorkbench(sessionId: string, kind: WorkbenchKind): void {
+    const surface = this.surfaces.get(this.normalizeSessionId(sessionId))
+    const record = surface?.workbenches.get(kind)
+    if (!surface || !record) return
+    surface.workbenches.delete(kind)
+    if (this.activeKind === kind) this.activeKind = 'browser'
+    this.disposeWorkbench(record)
+    this.syncVisibility()
+    this.publishState()
+  }
+
   /** Release every Session surface owned by the current App window. */
   closeAll(): void {
     const records = [...this.surfaces.values()].flatMap((surface) => [...surface.tabs.values()])
+    const workbenches = [...this.surfaces.values()]
+      .flatMap((surface) => [...surface.workbenches.values()])
     for (const surface of this.surfaces.values()) {
       surface.tabs.clear()
       surface.activeTabId = null
       surface.mruTabIds.length = 0
+      surface.workbenches.clear()
     }
     this.surfaces.clear()
     this.activeSessionId = null
+    this.activeKind = 'browser'
     this.surfaceVisible = false
     for (const record of records) this.disposeRecord(record)
+    for (const workbench of workbenches) this.disposeWorkbench(workbench)
     this.publishState()
   }
 
@@ -400,6 +473,7 @@ export class EmbeddedBrowserManager {
       tabs: new Map(),
       activeTabId: null,
       mruTabIds: [],
+      workbenches: new Map(),
     }
     this.surfaces.set(id, surface)
     return surface
@@ -461,6 +535,73 @@ export class EmbeddedBrowserManager {
     this.syncVisibility()
     this.publishState()
     return record
+  }
+
+  private createWorkbenchRecord(
+    surface: EmbeddedBrowserSessionSurface,
+    kind: WorkbenchKind,
+    url: string,
+  ): WorkbenchRecord {
+    const host = this.host
+    if (!host || host.isDestroyed()) throw new Error('main window is unavailable')
+
+    const view = this.createView({
+      webPreferences: { ...WEB_PREFERENCES, session: this.getBrowserSession() },
+    })
+    const record: WorkbenchRecord = { kind, view, targetId: null, ready: Promise.resolve() }
+    surface.workbenches.set(kind, record)
+    view.webContents.setBackgroundThrottling(false)
+    view.setBounds(this.bounds)
+    view.setVisible(false)
+    host.contentView.addChildView(view)
+    view.webContents.once('destroyed', () => {
+      if (surface.workbenches.get(kind) === record) surface.workbenches.delete(kind)
+      this.publishState()
+    })
+    record.ready = this.initializeWorkbench(surface, record, url)
+    void record.ready.catch((error) => {
+      windowLog.warn(
+        `[embedded-browser] workbench creation failed session=${surface.sessionId} kind=${kind}`,
+        error,
+      )
+    })
+    this.syncVisibility()
+    this.publishState()
+    return record
+  }
+
+  private async initializeWorkbench(
+    surface: EmbeddedBrowserSessionSurface,
+    record: WorkbenchRecord,
+    url: string,
+  ): Promise<void> {
+    try {
+      await record.view.webContents.loadURL(url)
+      record.targetId = await this.resolveTargetId(record.view)
+      if (surface.workbenches.get(record.kind) !== record) {
+        throw new Error(`workbench closed during creation: ${record.kind}`)
+      }
+      this.publishState()
+    } catch (error) {
+      if (surface.workbenches.get(record.kind) === record) {
+        surface.workbenches.delete(record.kind)
+        this.disposeWorkbench(record)
+        this.publishState()
+      }
+      throw error
+    }
+  }
+
+  private disposeWorkbench(record: WorkbenchRecord): void {
+    const host = this.host
+    if (host && !host.isDestroyed()) {
+      try {
+        host.contentView.removeChildView(record.view)
+      } catch {
+        // The view may already have been detached by a closing window.
+      }
+    }
+    if (!record.view.webContents.isDestroyed()) record.view.webContents.close()
   }
 
   private async initializeRecord(
@@ -685,6 +826,9 @@ export class EmbeddedBrowserManager {
       tabs: [...surface.tabs.values()]
         .filter((record) => !record.view.webContents.isDestroyed())
         .map((record) => this.tabInfo(record)),
+      workbenches: [...surface.workbenches.values()]
+        .filter((record) => !record.view.webContents.isDestroyed())
+        .map((record) => record.kind),
     }
   }
 
@@ -700,34 +844,43 @@ export class EmbeddedBrowserManager {
   }
 
   private syncVisibility(): void {
-    let operationalRecord: EmbeddedBrowserTabRecord | null = null
+    let operationalView: WebContentsView | null = null
     if (this.activeSessionId !== null) {
       const activeSurface = this.surfaces.get(this.activeSessionId)
-      operationalRecord = activeSurface ? this.activeRecord(activeSurface) : null
+      if (activeSurface) {
+        operationalView = this.activeKind === 'browser'
+          ? this.activeRecord(activeSurface)?.view ?? null
+          : activeSurface.workbenches.get(this.activeKind)?.view ?? null
+      }
     }
 
     // Hide every inactive native view before moving or revealing the active one.
-    // This keeps tab/Session switches from briefly stacking two WebContentsViews.
+    // This keeps tab/Session/workbench switches from briefly stacking two
+    // WebContentsViews.
     for (const surface of this.surfaces.values()) {
-      for (const record of surface.tabs.values()) {
-        if (record.view.webContents.isDestroyed()) continue
-        if (record !== operationalRecord) {
-          record.view.setVisible(false)
-          record.view.setBounds(this.bounds)
+      const views = [
+        ...[...surface.tabs.values()].map((record) => record.view),
+        ...[...surface.workbenches.values()].map((record) => record.view),
+      ]
+      for (const view of views) {
+        if (view.webContents.isDestroyed()) continue
+        if (view !== operationalView) {
+          view.setVisible(false)
+          view.setBounds(this.bounds)
         }
       }
     }
 
-    if (!operationalRecord || operationalRecord.view.webContents.isDestroyed()) return
+    if (!operationalView || operationalView.webContents.isDestroyed()) return
 
     // A never-presented WebContentsView does not establish the compositor state
     // Playwright needs for actionability checks. Keep the current page drawn while
     // the dock is hidden, but park all except one pixel outside the host so it is
     // visually absent without becoming an out-of-view NativeViewHost.
-    operationalRecord.view.setBounds(
+    operationalView.setBounds(
       this.surfaceVisible ? this.bounds : this.parkedOperationalBounds(),
     )
-    operationalRecord.view.setVisible(true)
+    operationalView.setVisible(true)
   }
 
   private parkedOperationalBounds(): Rectangle {

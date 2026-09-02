@@ -49,6 +49,7 @@ class FakeClient:
         self.snapshot_error: Exception | None = None
         self.action_error: BaseException | None = None
         self.evaluated: list[str] = []
+        self.evaluated_targets: list[str] = []
         self.evaluate_reply = '{"ok": true, "value": null}'
         self.evaluate_error: BaseException | None = None
 
@@ -107,6 +108,10 @@ class FakeClient:
             raise self.evaluate_error
         return self.evaluate_reply
 
+    async def evaluate_on_target(self, target_id: str, code: str) -> str:
+        self.evaluated_targets.append(target_id)
+        return await self.evaluate_javascript(code)
+
     async def get_current_page_info(self) -> str:
         self.events.append(("page_info", self._embedded_session_id))
         return f"page:{self._embedded_session_id}"
@@ -127,6 +132,7 @@ class ControllerProbe:
     listed: list[str] = field(default_factory=list)
     released: list[str] = field(default_factory=list)
     surfaces: dict[str, _EmbeddedSessionTabs] = field(default_factory=dict)
+    workbenches: list[tuple[str, str, bool, str, str]] = field(default_factory=list)
 
 
 class BrowserHarness:
@@ -180,6 +186,19 @@ class BrowserHarness:
                 ),
             )
 
+        async def workbench_target(
+            controller: _EmbeddedBrowserController,
+            session_id: str,
+            kind: str,
+            *,
+            create: bool = False,
+            language: str = "en",
+            name: str = "Untitled",
+        ) -> str:
+            probe = self.probe(controller)
+            probe.workbenches.append((session_id, kind, create, language, name))
+            return f"workbench-{session_id}-{kind}"
+
         async def release_session(controller: _EmbeddedBrowserController, session_id: str) -> None:
             probe = self.probe(controller)
             probe.released.append(session_id)
@@ -192,6 +211,11 @@ class BrowserHarness:
             ensure_session,
         )
         monkeypatch.setattr(browser_module._EmbeddedBrowserController, "list_tabs", list_tabs)
+        monkeypatch.setattr(
+            browser_module._EmbeddedBrowserController,
+            "workbench_target",
+            workbench_target,
+        )
         monkeypatch.setattr(
             browser_module._EmbeddedBrowserController,
             "release_session",

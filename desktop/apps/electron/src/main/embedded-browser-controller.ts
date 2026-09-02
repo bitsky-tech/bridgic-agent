@@ -8,7 +8,11 @@ import {
   CLIENT_TYPE_HEADER,
   GATEWAY_API_PATHS,
 } from '../shared/app-meta'
-import type { EmbeddedBrowserSessionInfo, EmbeddedBrowserTabInfo } from '../shared/types'
+import type {
+  EmbeddedBrowserSessionInfo,
+  EmbeddedBrowserTabInfo,
+  WorkbenchKind,
+} from '../shared/types'
 import type { BackendEndpoint } from './python-client/types'
 import type { EmbeddedBrowserManager } from './embedded-browser-manager'
 import { mainLog } from './logger'
@@ -36,6 +40,14 @@ interface TabRequest extends SessionRequest {
   url?: unknown
 }
 
+interface WorkbenchRequest extends SessionRequest {
+  kind?: unknown
+  language?: unknown
+  name?: unknown
+  /** Open the workbench when it is not already there; defaults to false. */
+  create?: unknown
+}
+
 /** Electron-owned loopback bridge used by the Python BrowserHost. */
 export class EmbeddedBrowserController {
   private readonly controllerId = randomUUID()
@@ -52,6 +64,11 @@ export class EmbeddedBrowserController {
     private readonly cdpEndpoint: string,
     /** Where the App serves the embedded workbench pages, or null when it serves none. */
     private readonly workbenchBaseUrl: () => string | null = () => null,
+    /** One workbench page URL, carrying the name and language the agent asked for. */
+    private readonly workbenchPageUrl: (
+      kind: WorkbenchKind,
+      options?: { language?: string; name?: string },
+    ) => string | null = () => null,
   ) {}
 
   /** Enable Chromium's loopback DevTools endpoint before Electron becomes ready. */
@@ -242,6 +259,25 @@ export class EmbeddedBrowserController {
         this.sendJson(response, 200, this.sessionWire(info))
         return
       }
+      if (request.method === 'POST' && request.url === '/v1/sessions/workbench') {
+        const body = await this.readJson<WorkbenchRequest>(request)
+        const kind = this.workbenchKind(body.kind)
+        const sessionId = this.sessionId(body.session_id)
+        if (body.create !== true) {
+          const existing = this.browser.workbenchTarget(sessionId, kind)
+          if (!existing) throw new Error(`no ${kind} workbench is open in this Session`)
+          this.sendJson(response, 200, { target_id: existing })
+          return
+        }
+        const url = this.workbenchPageUrl(kind, {
+          language: typeof body.language === 'string' ? body.language : undefined,
+          name: typeof body.name === 'string' ? body.name : undefined,
+        })
+        if (!url) throw new Error('the workbench host is not running')
+        const targetId = await this.browser.ensureWorkbench(sessionId, kind, url)
+        this.sendJson(response, 200, { target_id: targetId })
+        return
+      }
       if (request.method === 'POST' && request.url === '/v1/sessions/release') {
         const body = await this.readJson<SessionRequest>(request)
         this.browser.closeSession(this.sessionId(body.session_id))
@@ -291,6 +327,13 @@ export class EmbeddedBrowserController {
       throw new Error('session_id is required')
     }
     return value.trim()
+  }
+
+  private workbenchKind(value: unknown): WorkbenchKind {
+    if (value !== 'sheet' && value !== 'doc') {
+      throw new Error('kind must be "sheet" or "doc"')
+    }
+    return value
   }
 
   private targetId(value: unknown): string {

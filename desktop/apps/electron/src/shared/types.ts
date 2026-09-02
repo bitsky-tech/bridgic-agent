@@ -250,10 +250,15 @@ export interface EmbeddedBrowserTabInfo {
   crashed: boolean
 }
 
+/** The workbench pages the App can present beside a Session's browser. */
+export type WorkbenchKind = 'sheet' | 'doc'
+
 export interface EmbeddedBrowserSessionInfo {
   sessionId: string
   activeTabId: string | null
   tabs: EmbeddedBrowserTabInfo[]
+  /** Which workbenches this Session currently has open, in any order. */
+  workbenches: WorkbenchKind[]
 }
 
 export interface EmbeddedBrowserSnapshot {
@@ -358,6 +363,13 @@ export interface ElectronAPI {
     hasHorizontalOverflow(sessionId: string, tabId: string): Promise<boolean>
     setBounds(bounds: EmbeddedBrowserBounds): Promise<void>
     setVisible(visible: boolean, focusHost?: boolean): Promise<void>
+  }
+  workbench: {
+    /** Open the Session's workbench page if needed; does not present it. */
+    ensure(sessionId: string, kind: WorkbenchKind): Promise<void>
+    /** Present one workbench, or pass `null` to hand the dock back to the browser. */
+    activate(sessionId: string, kind: WorkbenchKind | null): Promise<void>
+    close(sessionId: string, kind: WorkbenchKind): Promise<void>
   }
   backend: {
     snapshot(): Promise<BackendSnapshot>

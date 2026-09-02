@@ -37,6 +37,7 @@ _EMBEDDED_CLEANUP_TIMEOUT_SECONDS = 5.0
 _EMBEDDED_TAB_CLOSE_TIMEOUT_SECONDS = 5.0
 _EMBEDDED_POPUP_OWNERSHIP_TIMEOUT_SECONDS = 1.0
 _SESSION_STATE_TIMEOUT_SECONDS = 1.0
+_WORKBENCH_EVALUATE_TIMEOUT_SECONDS = 30.0
 _SNAPSHOT_REF_PATTERN = re.compile(r"\[ref=([^\]]+)\]")
 _WORKBENCH_UNAVAILABLE_MESSAGE = (
     "The workbench is unavailable because the desktop app is not running or is an "
@@ -176,6 +177,34 @@ class _EmbeddedBrowserController:
             {"session_id": session_id},
         )
         return self._session_tabs(response, session_id)
+
+    async def workbench_target(
+        self,
+        session_id: str,
+        kind: str,
+        *,
+        create: bool = False,
+        language: str = "en",
+        name: str = "Untitled",
+    ) -> str:
+        """Return the CDP target of one Session's workbench page.
+
+        ``create`` is what separates opening a workbench from working in one:
+        without it a closed workbench is an error the agent can report, rather
+        than a fresh empty workbook silently replacing the person's.
+        """
+        payload: dict[str, Any] = {"session_id": session_id, "kind": kind}
+        if create:
+            payload.update({"create": True, "language": language, "name": name})
+        response = await asyncio.to_thread(
+            self._request, "POST", "/v1/sessions/workbench", payload,
+        )
+        target_id = response.get("target_id")
+        if not isinstance(target_id, str) or not target_id:
+            raise EmbeddedBrowserUnavailableError(
+                "The App did not return a workbench page for this Session",
+            )
+        return target_id
 
     async def list_tabs(self, session_id: str) -> _EmbeddedSessionTabs:
         response = await asyncio.to_thread(
@@ -887,6 +916,38 @@ class _SessionBrowserClient(Browser):
             f"Electron target {target_id!r} did not attach to the Session client",
         )
 
+    async def evaluate_on_target(self, target_id: str, code: str) -> Any:
+        """Run one arrow function in a specific Electron target and return its value.
+
+        The workbench pages are not this client's current page — the person may
+        be looking at a browser tab while the agent works in a workbook — so
+        this deliberately does not switch pages. It uses raw CDP for the same
+        reason bridgic does: ``page.evaluate`` never resolves its main context
+        on a page Playwright did not create.
+        """
+        context, page = await self._wait_for_embedded_target_page(target_id)
+        session = await context.new_cdp_session(page)
+        try:
+            raw = await asyncio.wait_for(
+                session.send(
+                    "Runtime.evaluate",
+                    {
+                        "expression": f"({code})()",
+                        "returnByValue": True,
+                        "awaitPromise": True,
+                    },
+                ),
+                timeout=_WORKBENCH_EVALUATE_TIMEOUT_SECONDS,
+            )
+        finally:
+            with suppress(Exception):
+                await session.detach()
+        details = raw.get("exceptionDetails")
+        if details:
+            described = raw.get("result", {}).get("description") or details.get("text")
+            raise RuntimeError(f"The workbench page raised: {described}")
+        return raw.get("result", {}).get("value")
+
     async def _activate_page_facilities(self, page: Page) -> None:
         async with self._facility_lock:
             if self._closing or self._page is not page:
@@ -1167,17 +1228,20 @@ class SessionBrowser:
             raise RuntimeError("Cannot bind browser snapshot output after the client has started")
         self.tool_result_dir = resolved
 
-    def workbench_page_url(self, kind: str) -> str:
-        """Return the App-served page for one workbench, or explain why there is none."""
-        base = self._host.workbench_base_url()
-        if not base:
-            raise EmbeddedBrowserUnavailableError(_WORKBENCH_UNAVAILABLE_MESSAGE)
-        return f"{base.rstrip('/')}/{kind}/index.html"
+    async def open_workbench(
+        self, kind: str, *, language: str = "en", name: str = "Untitled",
+    ) -> None:
+        """Open one workbench page for this Session without presenting it.
+
+        The dock decides what the person is looking at; opening a workbook for
+        a Session they are not watching must not pull them away from it.
+        """
+        await self._workbench_target(kind, create=True, language=language, name=name)
 
     async def call_workbench_bridge(
-        self, method: str, args: Optional[list[Any]] = None,
+        self, kind: str, method: str, args: Optional[list[Any]] = None,
     ) -> Any:
-        """Call one method on the open workbench's agent bridge and return its value.
+        """Call one method on a workbench page's agent bridge and return its value.
 
         This deliberately does not go through :meth:`invoke`. Every operation
         there is followed by a page-settling wait and a full accessibility
@@ -1189,11 +1253,11 @@ class SessionBrowser:
             json.dumps(method),
             json.dumps(list(args or [])),
         )
+        target_id = await self._workbench_target(kind)
         async with self._operation_lock:
             client = await self._host._client_for(self)
-            client = await self._sync_embedded_client(client)
             try:
-                raw = await client.evaluate_javascript(code)
+                raw = await client.evaluate_on_target(target_id, code)
             except asyncio.CancelledError:
                 raise
             except EmbeddedBrowserUnavailableError:
@@ -1203,6 +1267,20 @@ class SessionBrowser:
             except _EmbeddedTargetAttachTimeout:
                 await self._host._discard_stale_client(self, client)
                 raise
+        return self._workbench_reply(raw)
+
+    async def _workbench_target(
+        self, kind: str, *, create: bool = False, language: str = "en", name: str = "Untitled",
+    ) -> str:
+        controller = self._host._controller
+        if controller is None or controller.workbench_url is None:
+            raise EmbeddedBrowserUnavailableError(_WORKBENCH_UNAVAILABLE_MESSAGE)
+        return await controller.workbench_target(
+            self.session_id, kind, create=create, language=language, name=name,
+        )
+
+    @staticmethod
+    def _workbench_reply(raw: Any) -> Any:
         try:
             payload = json.loads(raw)
         except (TypeError, ValueError) as exc:

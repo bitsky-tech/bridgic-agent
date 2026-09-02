@@ -8,6 +8,7 @@ import {
   ModeSurfaceGate,
   WorkbenchSurface,
 } from './SessionSurfaceChrome'
+import { SessionWorkbenchPanel } from './SessionWorkbenchPanel'
 import { SpecPreviewPane } from './SpecPreviewPane'
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel'
 import { WorkflowResultsPanel } from './WorkflowResultsPanel'
@@ -16,9 +17,13 @@ import { cn } from '@/lib/cn'
 
 export interface SessionSurfaceContentProps {
   isBrowserActive: boolean
+  /** The workbench presenting the native surface, or null when none is. */
+  activeWorkbench: 'sheet' | 'doc' | null
   isNativeHandoffPending: boolean
   isToolActive: (surface: SessionWorkbenchSurface) => boolean
   modeSurfaceKey: string
+  /** The one panel allowed to confirm the native surface is hidden. */
+  nativeHandoffOwner: 'browser' | 'sheet' | 'doc' | null
   nativeHideAcknowledgement: number
   onNativeHideFailed: () => void
   onNativeHidden: () => void
@@ -27,10 +32,12 @@ export interface SessionSurfaceContentProps {
 
 /** Keep workbench tools mounted while presenting one tool or Agent mode surface. */
 export function SessionSurfaceContent({
+  activeWorkbench,
   isBrowserActive,
   isNativeHandoffPending,
   isToolActive,
   modeSurfaceKey,
+  nativeHandoffOwner,
   nativeHideAcknowledgement,
   onNativeHideFailed,
   onNativeHidden,
@@ -67,6 +74,37 @@ export function SessionSurfaceContent({
         <ScheduleWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Schedules)} />
       </WorkbenchSurface>
 
+      {(['sheet', 'doc'] as const).map((kind) => {
+        const isActive = activeWorkbench === kind
+        return (
+          <div
+            key={kind}
+            id={`session-workbench-${kind}-content`}
+            role="tabpanel"
+            aria-hidden={!isActive}
+            aria-labelledby={`session-workbench-${kind}-tab`}
+            className={cn(
+              'absolute inset-0 z-0',
+              isActive ? 'visible' : 'invisible pointer-events-none',
+            )}
+            data-testid={`session-workbench-${kind}-content`}
+          >
+            <SessionWorkbenchPanel
+              kind={kind}
+              presentationVisible={isActive}
+              onPresentationHidden={
+                isNativeHandoffPending && nativeHandoffOwner === kind ? onNativeHidden : undefined
+              }
+              onPresentationHideFailed={
+                isNativeHandoffPending && nativeHandoffOwner === kind
+                  ? onNativeHideFailed
+                  : undefined
+              }
+            />
+          </div>
+        )
+      })}
+
       <div
         id="session-workbench-browser-content"
         role="tabpanel"
@@ -80,8 +118,14 @@ export function SessionSurfaceContent({
       >
         <EmbeddedBrowserPanel
           presentationVisible={isBrowserActive}
-          onPresentationHidden={isNativeHandoffPending ? onNativeHidden : undefined}
-          onPresentationHideFailed={isNativeHandoffPending ? onNativeHideFailed : undefined}
+          onPresentationHidden={
+            isNativeHandoffPending && nativeHandoffOwner === 'browser' ? onNativeHidden : undefined
+          }
+          onPresentationHideFailed={
+            isNativeHandoffPending && nativeHandoffOwner === 'browser'
+              ? onNativeHideFailed
+              : undefined
+          }
         />
       </div>
 

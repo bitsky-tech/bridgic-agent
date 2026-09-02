@@ -185,6 +185,7 @@ const embeddedBrowserController = new EmbeddedBrowserController(
   windowManager.getEmbeddedBrowser(),
   embeddedBrowserCdpEndpoint,
   () => univerHost.baseUrl(),
+  (kind, options) => univerHost.pageUrl(kind, options),
 )
 const shutdownEmbeddedBrowser = async () => {
   try {
@@ -314,7 +315,7 @@ function bootstrapPrimaryInstance(): void {
   // local-file bridge.
   installLocalResourceProtocol(session.defaultSession, localResourceToken)
 
-  registerAllHandlers(windowManager)
+  registerAllHandlers(windowManager, (kind, options) => univerHost.pageUrl(kind, options))
 
   // Dev-only: project icon.png is NOT bundled into the prod app (only
   // dist/** ships per electron-builder.yml), but in dev the source

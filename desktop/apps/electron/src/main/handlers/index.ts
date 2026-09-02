@@ -1,3 +1,4 @@
+import type { WorkbenchKind } from '../../shared/types'
 import type { WindowManager } from '../window-manager'
 import { registerAppHandlers } from './app'
 import { registerBackendHandlers } from './backend'
@@ -16,7 +17,10 @@ import { registerSystemHandlers } from './system'
 import { registerUpdateHandlers } from './update'
 import { registerWindowHandlers } from './window'
 
-export function registerAllHandlers(windowManager: WindowManager): void {
+export function registerAllHandlers(
+  windowManager: WindowManager,
+  workbenchPageUrl: (kind: WorkbenchKind, options?: { language?: string }) => string | null,
+): void {
   registerAppHandlers()
   registerShellHandlers()
   registerDialogHandlers()
@@ -34,7 +38,7 @@ export function registerAllHandlers(windowManager: WindowManager): void {
   // Theme is part of GuiSettings (settings.theme) — no separate IPC namespace.
   // OS-level dark-mode probing remains under `registerSystemHandlers`.
   registerWindowHandlers(windowManager)
-  registerBrowserHandlers(windowManager.getEmbeddedBrowser())
+  registerBrowserHandlers(windowManager.getEmbeddedBrowser(), workbenchPageUrl)
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after

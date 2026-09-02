@@ -95,6 +95,11 @@ const api: ElectronAPI = {
     setVisible: (visible, focusHost) =>
       ipcRenderer.invoke(IPC.browser.setVisible, visible, focusHost),
   },
+  workbench: {
+    ensure: (sessionId, kind) => ipcRenderer.invoke(IPC.workbench.ensure, sessionId, kind),
+    activate: (sessionId, kind) => ipcRenderer.invoke(IPC.workbench.activate, sessionId, kind),
+    close: (sessionId, kind) => ipcRenderer.invoke(IPC.workbench.close, sessionId, kind),
+  },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
     refresh: (expectedEndpointEpoch) =>

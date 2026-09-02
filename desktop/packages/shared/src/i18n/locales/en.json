@@ -1658,6 +1658,12 @@
       "result": "Result"
     },
     "workbench": {
+      "close": "Close the workbench",
+      "doc": {
+        "hint": "Opening a shared document. You and the agent can edit it at the same time.",
+        "label": "Doc",
+        "title": "Document"
+      },
       "files": {
         "searchPlaceholder": "Search files in this session…",
         "title": "Files"
@@ -1685,6 +1691,11 @@
         "noMatch": "No schedules match “{{query}}”",
         "searchPlaceholder": "Search schedule names or descriptions…",
         "title": "Scheduled"
+      },
+      "sheet": {
+        "hint": "Opening a shared spreadsheet. You and the agent can edit it at the same time.",
+        "label": "Sheet",
+        "title": "Spreadsheet"
       },
       "workflows": {
         "built": "Ready",

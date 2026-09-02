@@ -52,20 +52,20 @@ class _RecordingSheetBrowser:
         page_url: Optional[str] = "http://127.0.0.1:5100/ab12/univer/",
     ) -> None:
         self.bridge_calls: list[tuple[str, list[Any]]] = []
-        self.invocations: list[tuple[str, tuple[Any, ...]]] = []
+        self.opened: list[tuple[str, str, str]] = []
         self._page_url = page_url
         self._replies: dict[str, Any] = {"status": _STATUS, **(replies or {})}
 
-    def workbench_page_url(self, kind: str) -> str:
+    async def open_workbench(
+        self, kind: str, *, language: str = "en", name: str = "Untitled",
+    ) -> None:
         if self._page_url is None:
             raise EmbeddedBrowserUnavailableError("the desktop app is not running")
-        return f"{self._page_url}{kind}/index.html"
+        self.opened.append((kind, language, name))
 
-    async def invoke(self, method: str, *args: Any) -> str:
-        self.invocations.append((method, args))
-        return f"{method} result"
-
-    async def call_workbench_bridge(self, method: str, args: Optional[list[Any]] = None) -> Any:
+    async def call_workbench_bridge(
+        self, kind: str, method: str, args: Optional[list[Any]] = None,
+    ) -> Any:
         self.bridge_calls.append((method, list(args or [])))
         if method not in self._replies:
             raise RuntimeError(f"unexpected bridge call: {method}")
@@ -91,33 +91,29 @@ async def test_sheet_open_navigates_and_reports_state(tool_harness: ToolHarness)
 
     result = await sheet_open("Q3 Budget", language="zh-CN")
 
-    # Checks 1 and 2: one navigation, carrying the encoded page parameters.
-    assert browser.invocations == [(
-        "navigate_to",
-        ("http://127.0.0.1:5100/ab12/univer/sheet/index.html?lang=zh&name=Q3%20Budget",),
-    )]
-    # Check 3: the workbench's own state is reported, not "navigate_to result".
+    # Checks 1 and 2: one open request naming the workbench and the agent's choices.
+    assert browser.opened == [("sheet", "zh", "Q3 Budget")]
+    # Check 3: the workbench's own state is reported.
     assert "Budget" in result
     assert "Sheet1, Data" in result
     assert "A person is editing a cell right now: no" in result
-    assert "navigate_to result" not in result
 
 
 async def test_sheet_open_without_the_app(tool_harness: ToolHarness) -> None:
     """Final sheet-open state:
 
-    {"navigated": false, "error": "desktop app is not running"}
+    {"opened": [], "error": "desktop app is not running"}
 
     Checks:
     1. A missing App surfaces its own explanation rather than a page error.
-    2. No navigation is attempted when there is no page to navigate to.
+    2. Nothing is opened when there is no App to open it in.
     """
     browser = _RecordingSheetBrowser(page_url=None)
     tool_harness.context.browser = browser  # type: ignore[assignment]
 
     with pytest.raises(EmbeddedBrowserUnavailableError):
         await sheet_open()
-    assert browser.invocations == []
+    assert browser.opened == []
 
 
 async def test_sheet_reads_and_writes(tool_harness: ToolHarness) -> None:

@@ -18,6 +18,11 @@ beforeEach(async () => {
   revealedPath = ''
   await i18n.changeLanguage('zh')
   ;(globalThis as unknown as { window: Record<string, unknown> }).window.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
     shell: {
       showItemInFolder: (path: string) => { revealedPath = path },
     },

@@ -15,12 +15,17 @@ pretend otherwise:
 
 import json
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
 from ._filesystem import _resolve_file, display_path
 from ._workbench import get_workbench_browser, open_workbench, workbench_status
+
+
+async def _call(method: str, args: Optional[list] = None) -> Any:
+    """Call the document workbench's bridge; the caller checks the reply shape."""
+    return await get_workbench_browser().call_workbench_bridge("doc", method, args)
 
 DOC_TOOL_NAMES = frozenset({
     "doc_open",
@@ -83,7 +88,7 @@ async def doc_status() -> str:
     The length is the cheapest way to notice that a person has been typing:
     compare it with the length from an earlier call before trusting an offset.
     """
-    return _render_status(await workbench_status(get_workbench_browser()))
+    return _render_status(await workbench_status("doc"))
 
 
 async def doc_read() -> str:
@@ -96,7 +101,7 @@ async def doc_read() -> str:
     Returns:
         The document text.
     """
-    result = await get_workbench_browser().call_workbench_bridge("read")
+    result = await _call("read")
     text = result.get("text") if isinstance(result, dict) else None
     if not isinstance(text, str):
         raise RuntimeError("The workbench page returned an unreadable document")
@@ -115,9 +120,7 @@ async def doc_append(text: str) -> str:
     Returns:
         A short confirmation with the document's new length.
     """
-    result = await get_workbench_browser().call_workbench_bridge(
-        "append", [_require_text(text)],
-    )
+    result = await _call("append", [_require_text(text)])
     return f"Appended {len(text)} character(s); the document is now {_length(result)}."
 
 
@@ -134,9 +137,7 @@ async def doc_insert(text: str, offset: int) -> str:
     Returns:
         A short confirmation with the document's new length.
     """
-    result = await get_workbench_browser().call_workbench_bridge(
-        "insert", [_require_text(text), _require_offset("offset", offset)],
-    )
+    result = await _call("insert", [_require_text(text), _require_offset("offset", offset)])
     return (
         f"Inserted {len(text)} character(s) at {offset}; "
         f"the document is now {_length(result)}."
@@ -161,9 +162,7 @@ async def doc_replace(start_offset: int, end_offset: int, text: str) -> str:
     end = _require_offset("end_offset", end_offset)
     if end < start:
         raise ValueError("end_offset must not be before start_offset")
-    result = await get_workbench_browser().call_workbench_bridge(
-        "replace", [start, end, _require_text(text)],
-    )
+    result = await _call("replace", [start, end, _require_text(text)])
     return (
         f"Replaced characters {start}-{end}; the document is now {_length(result)}."
     )
@@ -182,7 +181,7 @@ async def doc_save(file_path: str) -> str:
     Returns:
         A short confirmation with the written path.
     """
-    snapshot = await get_workbench_browser().call_workbench_bridge("snapshot")
+    snapshot = await _call("snapshot")
     abs_path = _resolve_file(file_path)
     parent = os.path.dirname(abs_path)
     if parent:

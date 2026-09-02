@@ -8,6 +8,11 @@ afterAll(async () => {
 })
 
 window.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
   backend: {
     getClients: mock(async () => ({ ok: true, clients: [] })),
   },

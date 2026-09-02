@@ -241,13 +241,36 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
     browserActiveTab,
   )
   const browserHasOpenPage = (browserSession?.tabs.length ?? 0) > 0
+  // Exactly one native surface is presented at a time, so a workbench counts as
+  // active on the same terms the browser does.
+  const activeWorkbench = contentOpen
+    && effectivePending === null
+    && selectedModeSurface === null
+    && (workbenchSurface === SessionWorkbenchSurface.Sheet
+      || workbenchSurface === SessionWorkbenchSurface.Doc)
+    ? workbenchSurface
+    : null
+  const hasSheetOpen = browserSession?.workbenches.includes('sheet') ?? false
+  const hasDocOpen = browserSession?.workbenches.includes('doc') ?? false
+  // Exactly one panel may confirm a native hide. A selected, open workbench owns
+  // the surface; otherwise it is the browser's, which is what it was before
+  // workbenches existed. Letting a second panel acknowledge would release the
+  // Agent-mode gate while the native view was still drawn over it.
+  let nativeHandoffOwner: 'browser' | 'sheet' | 'doc' | null = null
+  if (workbenchSurface === SessionWorkbenchSurface.Sheet && hasSheetOpen) {
+    nativeHandoffOwner = 'sheet'
+  } else if (workbenchSurface === SessionWorkbenchSurface.Doc && hasDocOpen) {
+    nativeHandoffOwner = 'doc'
+  } else if (browserHasNativeSurface) {
+    nativeHandoffOwner = 'browser'
+  }
   const browserLoading = browserActiveTab?.loading ?? false
   let liveBrowserActivityKind: BrowserActivityKind = null
   if (browserAgentActive) liveBrowserActivityKind = 'agent'
   else if (browserLoading) liveBrowserActivityKind = 'loading'
   const browserActivityKind = useBrowserActivityPresentation(liveBrowserActivityKind)
   const browserBusy = browserActivityKind !== null
-  const nativeHandoffPending = browserHasNativeSurface && effectivePending !== null
+  const nativeHandoffPending = nativeHandoffOwner !== null && effectivePending !== null
   const browserNeedsAttention = useBrowserAttention({
     isBrowserSeen: browserSurfaceEligible && hostWindowForeground,
     sessionId: viewedSessionId,
@@ -490,7 +513,9 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
       data-testid="session-resource-panel"
     >
       <SessionSurfaceContent
+        activeWorkbench={activeWorkbench}
         isBrowserActive={browserActive}
+        nativeHandoffOwner={nativeHandoffOwner}
         isNativeHandoffPending={nativeHandoffPending}
         isToolActive={selectedToolActive}
         modeSurfaceKey={`${viewedSessionId ?? 'none'}:${selectedModeSurface ?? 'none'}`}
@@ -517,6 +542,8 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
           browserNeedsAttention={browserNeedsAttention}
           filesNeedsAttention={filesNeedsAttention}
           hasBrowserOpenPage={browserHasOpenPage}
+          hasDocOpen={hasDocOpen}
+          hasSheetOpen={hasSheetOpen}
           isBrowserAgentActive={browserAgentActive && browserActivityKind === 'agent'}
           isBrowserBusy={browserBusy}
           isContentOpen={contentOpen}

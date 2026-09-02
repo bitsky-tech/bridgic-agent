@@ -61,6 +61,11 @@ beforeEach(() => {
   checkNow.mockImplementation(async () => 'started')
   getStatus.mockImplementation(async () => ({ isEnabled: true, stagedVersion: null }))
   ;(globalThis as unknown as { window: Record<string, unknown> }).window.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
     events: {
       onAutoUpdate: (cb: UpdateListener) => {
         listener = cb

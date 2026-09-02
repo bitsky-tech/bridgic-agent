@@ -38,6 +38,11 @@ const { ImageLightbox } = await import('../ImageLightbox')
 
 beforeEach(() => {
   ;(globalThis as unknown as { window: Record<string, unknown> }).window.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
     window: { setTrafficLightsVisible: async () => {} },
   }
 })

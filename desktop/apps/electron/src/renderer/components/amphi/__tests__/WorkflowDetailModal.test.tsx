@@ -7,6 +7,11 @@ GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const testWindow = window as unknown as { api?: Record<string, unknown> }
 testWindow.api = {
+  workbench: {
+    ensure: async () => undefined,
+    activate: async () => undefined,
+    close: async () => undefined,
+  },
   ...testWindow.api,
   settings: {
     set: async () => {},
