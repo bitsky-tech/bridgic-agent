@@ -101,7 +101,10 @@ describe('PresentationWorkbenchPanel', () => {
     expect(presentation.slides[0]?.elements).toHaveLength(3)
     expect(presentation.slides[0]?.elements.every((element) => element.type === 'text')).toBe(true)
     expect(presentation.slides[0]?.elements.every((element) => !('placeholder' in element))).toBe(true)
+    expect(host.querySelector('[data-testid="presentation-app-header"]')?.textContent).toContain('PowerPoint')
+    expect(host.querySelector('[data-testid="presentation-app-header"]')?.textContent).toContain('Session target 已就绪 · PRESENTA')
     expect(host.querySelector('[data-testid="presentation-document-tab"]')?.textContent).toBe('未命名演示文稿.pptx')
+    expect(host.querySelector('[data-testid="presentation-document-status"]')?.textContent).toBe('有未导出的更改')
     expect(host.querySelectorAll('[data-testid="presentation-slide-preview"]')).toHaveLength(1)
     expect(host.textContent).not.toContain('Ideas that move forward')
 
@@ -504,6 +507,7 @@ describe('PresentationWorkbenchPanel', () => {
       await act(async () => reveal.click())
       expect(revealedPath).toBe(outputPath)
       expect(host.textContent).not.toContain('重试导出')
+      expect(host.querySelector('[data-testid="presentation-document-status"]')?.textContent).toBe('已导出')
     } finally {
       window.api.dialog.save = originalSave
       window.api.fs.writePresentation = originalWritePresentation
@@ -735,7 +739,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('keeps one Session PPT document and the filmstrip controls at the bottom', async () => {
+  it('separates app controls from document actions and keeps filmstrip controls at the bottom', async () => {
     const { host, root, store } = await mountPanel()
 
     expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(1)
@@ -748,12 +752,21 @@ describe('PresentationWorkbenchPanel', () => {
     const exportDocument = host.querySelector<HTMLButtonElement>('[data-testid="presentation-export-pptx"]')!
     const expandPanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-expanded"]')!
     const closePanel = host.querySelector<HTMLButtonElement>('[data-testid="presentation-close-panel"]')!
+    const addSlide = host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-slide-header"]')!
+    const appHeader = host.querySelector<HTMLElement>('[data-testid="presentation-app-header"]')!
     const documentHeader = documentTabs.parentElement!
-    expect(host.querySelector('[data-testid="presentation-add-document"]')).toBeNull()
+    expect(addSlide).not.toBeNull()
     expect(documentHeader.contains(exportDocument)).toBe(true)
-    expect(documentHeader.contains(expandPanel)).toBe(true)
-    expect(documentHeader.contains(closePanel)).toBe(true)
+    expect(documentHeader.contains(addSlide)).toBe(true)
+    expect(documentHeader.contains(expandPanel)).toBe(false)
+    expect(documentHeader.contains(closePanel)).toBe(false)
+    expect(appHeader.contains(expandPanel)).toBe(true)
+    expect(appHeader.contains(closePanel)).toBe(true)
     expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(1)
+
+    const initialSlideCount = store.get(currentPresentationDocumentAtom).slides.length
+    await act(async () => addSlide.click())
+    expect(store.get(currentPresentationDocumentAtom).slides).toHaveLength(initialSlideCount + 1)
 
     await act(async () => root.unmount())
   })

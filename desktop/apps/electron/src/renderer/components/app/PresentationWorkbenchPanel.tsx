@@ -23,6 +23,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FilePlus2,
   FolderOpen,
   Grid2X2,
   LoaderCircle,
@@ -1601,6 +1602,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const [filmstripCollapsed, setFilmstripCollapsed] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [exportedPaths, setExportedPaths] = useState<Record<string, string>>({})
+  const [exportedVersions, setExportedVersions] = useState<Record<string, number>>({})
   const [inspectorMode, setInspectorMode] = useState<'animation' | 'comments' | 'layers' | 'properties'>('properties')
   const [ribbonTab, setRibbonTab] = useState<PresentationRibbonTab>('home')
   const [slideshowOpen, setSlideshowOpen] = useState(false)
@@ -3142,6 +3144,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       const bytes = await createPresentationPptx(documentToExport)
       await window.api.fs.writePresentation(result.filePath, bytes)
       setExportedPaths((paths) => ({ ...paths, [documentToExport.id]: result.filePath! }))
+      setExportedVersions((versions) => ({ ...versions, [documentToExport.id]: documentToExport.version }))
       showToast(t('session.presentation.exported'))
     } catch (error) {
       rlog.error('[presentation.export] Failed to export PowerPoint', error)
@@ -3154,6 +3157,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
 
   const previewWidth = compact ? 78 : 126
   const exportedPath = exportedPaths[document.id]
+  const hasUnexportedChanges = exportedVersions[document.id] !== document.version
+  const sessionTarget = sessionId ? sessionId.slice(0, 8).toUpperCase() : '—'
   const documentTitle = document.title.trim() || t('session.presentation.untitled')
   const documentFileName = documentTitle.toLowerCase().endsWith('.pptx')
     ? documentTitle
@@ -3226,55 +3231,21 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-bg-app text-text-primary"
       data-testid="presentation-workbench-panel"
     >
-      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border-subtle/70 bg-bg-app px-2 pt-1">
-        <div
-          role="tablist"
-          aria-label={t('session.presentation.documentTabs')}
-          className="flex h-full min-w-0 flex-1 items-end gap-1 overflow-x-auto"
-          data-testid="presentation-document-tabs"
-        >
-          <div className="group flex h-8 min-w-[132px] max-w-[220px] shrink-0 items-center rounded-t-lg border border-border-subtle border-b-bg-surface bg-bg-surface px-1 text-text-primary shadow-[0_-1px_8px_rgba(24,24,35,0.035)]">
-            <PresentationControlTooltip content={documentFileName} placement="bottom">
-              <div
-                role="tab"
-                aria-selected="true"
-                className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
-                data-testid="presentation-document-tab"
-              >
-                <span className="shrink-0 text-[#D97706]"><PresentationMark /></span>
-                <span className="truncate">{documentFileName}</span>
-              </div>
-            </PresentationControlTooltip>
-            <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: documentFileName })} placement="bottom">
-              <button
-                type="button"
-                aria-label={t('session.presentation.closeDocument', { name: documentFileName })}
-                onClick={closePresentation}
-                className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
-                data-testid="presentation-close-document"
-              >
-                <X className="size-3" />
-              </button>
-            </PresentationControlTooltip>
+      <div
+        className="flex h-12 shrink-0 items-center gap-3 border-b border-border-subtle/70 bg-bg-surface/95 px-3"
+        data-testid="presentation-app-header"
+      >
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#FFF3E4] text-[#D97706] dark:bg-[#4A331C] dark:text-[#F2A64A]">
+          <PresentationMark />
+        </div>
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="truncate text-sm font-semibold text-text-primary">
+            {t('session.presentation.applicationName')}
+          </div>
+          <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
+            {t('session.presentation.sessionTargetReady', { target: sessionTarget })}
           </div>
         </div>
-        <HeaderButton
-          disabled={Boolean(exportingDocumentId)}
-          label={t(exportingDocumentId ? 'session.presentation.exporting' : 'session.presentation.export')}
-          onClick={() => void exportPresentation()}
-          testId="presentation-export-pptx"
-        >
-          {exportingDocumentId ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
-        </HeaderButton>
-        {exportedPath ? (
-          <HeaderButton
-            label={t('asset.common.revealInFileManager')}
-            onClick={() => void window.api.shell.showItemInFolder(exportedPath)}
-            testId="presentation-reveal-export"
-          >
-            <FolderOpen className="size-4" />
-          </HeaderButton>
-        ) : null}
         <HeaderButton
           label={t(expanded ? 'session.presentation.restore' : 'session.presentation.expand')}
           onClick={() => {
@@ -3298,6 +3269,74 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         >
           <X className="size-4" />
         </HeaderButton>
+      </div>
+
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle/70 bg-bg-app px-2">
+        <div
+          role="tablist"
+          aria-label={t('session.presentation.documentTabs')}
+          className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          data-testid="presentation-document-tabs"
+        >
+          <div className="group flex h-8 min-w-[132px] max-w-[240px] shrink-0 items-center rounded-lg border border-border-subtle bg-bg-surface px-1 text-text-primary shadow-sm">
+            <PresentationControlTooltip content={documentFileName} placement="bottom">
+              <div
+                role="tab"
+                aria-selected="true"
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
+                data-testid="presentation-document-tab"
+              >
+                <span className="shrink-0 text-[#D97706]"><PresentationMark /></span>
+                <span className="truncate">{documentFileName}</span>
+                {hasUnexportedChanges ? <span className="size-1.5 shrink-0 rounded-full bg-[#F59E0B]" aria-hidden="true" /> : null}
+              </div>
+            </PresentationControlTooltip>
+            <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: documentFileName })} placement="bottom">
+              <button
+                type="button"
+                aria-label={t('session.presentation.closeDocument', { name: documentFileName })}
+                onClick={closePresentation}
+                className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
+                data-testid="presentation-close-document"
+              >
+                <X className="size-3" />
+              </button>
+            </PresentationControlTooltip>
+          </div>
+        </div>
+        <DocumentActionButton
+          label={t('session.presentation.newSlide')}
+          onClick={addSlide}
+          testId="presentation-add-slide-header"
+        >
+          <FilePlus2 className="size-3.5" />
+        </DocumentActionButton>
+        <DocumentActionButton
+          disabled={Boolean(exportingDocumentId)}
+          label={t(exportingDocumentId ? 'session.presentation.exporting' : 'session.presentation.export')}
+          onClick={() => void exportPresentation()}
+          testId="presentation-export-pptx"
+        >
+          {exportingDocumentId ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+        </DocumentActionButton>
+        {exportedPath ? (
+          <DocumentActionButton
+            label={t('asset.common.revealInFileManager')}
+            onClick={() => void window.api.shell.showItemInFolder(exportedPath)}
+            testId="presentation-reveal-export"
+          >
+            <FolderOpen className="size-3.5" />
+          </DocumentActionButton>
+        ) : null}
+        <span
+          className={cn(
+            'max-w-[120px] shrink-0 truncate text-[10px]',
+            hasUnexportedChanges ? 'text-text-tertiary' : 'text-status-success',
+          )}
+          data-testid="presentation-document-status"
+        >
+          {t(hasUnexportedChanges ? 'session.presentation.unexportedChanges' : 'session.presentation.exported')}
+        </span>
       </div>
 
       <PresentationRibbon
@@ -3703,6 +3742,30 @@ function HeaderButton({ children, disabled, label, onClick, pressed, testId }: {
         )}
       >
         {children}
+      </button>
+    </PresentationControlTooltip>
+  )
+}
+
+function DocumentActionButton({ children, disabled, label, onClick, testId }: {
+  children: ReactNode
+  disabled?: boolean
+  label: string
+  onClick: () => void
+  testId?: string
+}) {
+  return (
+    <PresentationControlTooltip content={label} placement="bottom">
+      <button
+        type="button"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        data-testid={testId}
+        className="flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-bg-surface px-2.5 text-[11px] font-medium text-text-secondary shadow-sm hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {children}
+        <span>{label}</span>
       </button>
     </PresentationControlTooltip>
   )
