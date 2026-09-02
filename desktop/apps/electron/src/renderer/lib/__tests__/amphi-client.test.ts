@@ -589,6 +589,42 @@ describe('AmphiClient session transcript', () => {
     })
   })
 
+  it('rehydrates persisted presentation production progress', async () => {
+    installFetchStub({
+      messages: [],
+      pending_request: null,
+      thinking_mode: {
+        mode: 'presentation',
+        stage: 'ppt_compose',
+        presentation_goal: 'Explain the strategy',
+        presentation_step_index: 1,
+        presentation_reports: [{
+          stage: 'ppt_compose',
+          step_id: 'build_slide_shells',
+          summary: 'Created twelve slide shells.',
+          evidence: ['slides 1-12'],
+        }],
+      },
+      workflow_run: null,
+    })
+    const client = new AmphiClient({ baseUrl: 'http://x', token: 'tok' })
+
+    const transcript = await client.getSessionMessages('session_1')
+
+    expect(transcript.thinkingMode).toEqual({
+      mode: 'presentation',
+      stage: 'ppt_compose',
+      presentationGoal: 'Explain the strategy',
+      presentationStepIndex: 1,
+      presentationReports: [{
+        stage: 'ppt_compose',
+        stepId: 'build_slide_shells',
+        summary: 'Created twelve slide shells.',
+        evidence: ['slides 1-12'],
+      }],
+    })
+  })
+
   it('rehydrates the latest durable context usage snapshot', async () => {
     installFetchStub({
       messages: [],

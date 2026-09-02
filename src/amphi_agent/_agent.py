@@ -6,7 +6,7 @@ import secrets
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
 from bridgic.amphibious import (
@@ -32,6 +32,9 @@ from ._cognitive import (
     render_input,
 )
 from .cognitive import (
+    PRESENTATION_STAGE_ARTIFACTS,
+    PRESENTATION_STAGE_ORDER,
+    PRESENTATION_STAGE_STEPS,
     ClarifyThink,
     ExploreThink,
     GenerateThink,
@@ -62,6 +65,7 @@ from ._state import (
     ContextCompactionState,
     NormalStageState,
     PresentationStageState,
+    PresentationStepRecord,
     RoundPermission,
     CallVerdict,
     SubAgentCall,
@@ -85,6 +89,7 @@ from .tools._request_human import (
     RequestHumanWorkflowConfirm,
 )
 from .tools._bash import current_execution_mode, current_tool_call_id
+from .tools._presentation import PresentationStepReport
 from .tools._subagent import BackgroundSubagentRequest, SubagentRequest
 from .tools._workflow import EditWorkflow, WorkflowStepReport
 from ..amphi_store import (
@@ -203,6 +208,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "request_human_choice",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
+            "report_presentation_step",
             "report_workflow_step",
             "run_subagent",
             "start_subagent",
@@ -217,6 +223,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "request_human_choice",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
+            "report_presentation_step",
             "report_workflow_step",
         }
 
@@ -631,6 +638,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         request_accept_rule: park Clarify for the one-time acceptance-rule review.
         request_build: enter Build or ask how to resolve Build intent.
         request_presentation: enter the dedicated presentation pipeline.
+        report_presentation_step: retain one production result and advance its cursor.
         request_run_workflow: start or resolve one Session-owned Run.
         edit_workflow: restore one saved Workflow into Build for modification.
         report_workflow_step: persist one section result and advance or stop.
@@ -675,6 +683,14 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         target_mode,
                         sig.get("stage"),
                     )
+                if isinstance(current_status, PresentationStageState) and isinstance(next_status, PresentationStageState):
+                    current_index = PRESENTATION_STAGE_ORDER.index(current_status.stage)
+                    target_index = PRESENTATION_STAGE_ORDER.index(next_status.stage)
+                    if target_index <= current_index:
+                        self._invalidate_presentation_artifacts(
+                            context,
+                            PRESENTATION_STAGE_ORDER[target_index:],
+                        )
                 ota_context.transition_think(next_status)
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
                     self._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
@@ -691,12 +707,50 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             elif step.tool_name == "request_presentation":
                 result = step.tool_result
                 if isinstance(result, RequestPresentation):
-                    ota_context.transition_think(PresentationStageState())
+                    self._invalidate_presentation_artifacts(context, PRESENTATION_STAGE_ORDER)
+                    ota_context.transition_think(PresentationStageState(goal=result.goal))
                     step.tool_result = {
                         "mode": "presentation",
                         "stage": "ppt_brief",
                         "goal": result.goal,
                         "message": "The presentation request entered the dedicated pipeline.",
+                    }
+
+            # Complete current Presentation production step
+            elif step.tool_name == "report_presentation_step":
+                result = step.tool_result
+                current_status = ota_context.think_status
+                if isinstance(result, PresentationStepReport) and isinstance(current_status, PresentationStageState):
+                    stage_steps = PRESENTATION_STAGE_STEPS.get(current_status.stage, ())
+                    if current_status.step_index >= len(stage_steps):
+                        raise RuntimeError("Cannot report a completed Presentation stage.")
+                    current_step = stage_steps[current_status.step_index]
+                    report = PresentationStepRecord(
+                        stage=current_status.stage,
+                        step_id=current_step.step_id,
+                        summary=result.summary,
+                        evidence=result.evidence,
+                    )
+                    reports = [
+                        item
+                        for item in current_status.reports
+                        if (item.stage, item.step_id) != (report.stage, report.step_id)
+                    ]
+                    reports.append(report)
+                    next_status = current_status.model_copy(update={
+                        "step_index": current_status.step_index + 1,
+                        "reports": reports,
+                    })
+                    ota_context.transition_think(next_status)
+                    step.tool_result = {
+                        "mode": "presentation",
+                        "stage": current_status.stage,
+                        "step_index": current_status.step_index,
+                        "step_count": len(stage_steps),
+                        "step_id": current_step.step_id,
+                        "summary": result.summary,
+                        "evidence": result.evidence,
+                        "next_step_index": next_status.step_index,
                     }
 
             # Request Build
@@ -2524,6 +2578,14 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         payload = {"mode": status.mode, "stage": stage}
         if workflow_id is not None:
             payload["workflow_id"] = workflow_id
+        if isinstance(status, PresentationStageState):
+            payload.update({
+                "presentation_goal": status.goal,
+                "presentation_step_index": status.step_index,
+                "presentation_reports": [
+                    report.model_dump(mode="json") for report in status.reports
+                ],
+            })
         ota_context.stream.publish("stage", **payload)
 
     @staticmethod
@@ -2536,7 +2598,18 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         if isinstance(current_status, BuildStageState):
             return current_status.model_copy(update={"stage": str(target_stage)})
         if isinstance(current_status, PresentationStageState):
-            return current_status.model_copy(update={"stage": str(target_stage)})
+            target = str(target_stage)
+            current_index = PRESENTATION_STAGE_ORDER.index(current_status.stage)
+            target_index = PRESENTATION_STAGE_ORDER.index(target)
+            reports = current_status.reports
+            if target_index <= current_index:
+                retained_stages = set(PRESENTATION_STAGE_ORDER[:target_index])
+                reports = [report for report in reports if report.stage in retained_stages]
+            return current_status.model_copy(update={
+                "stage": target,
+                "step_index": 0,
+                "reports": reports,
+            })
         if isinstance(current_status, WorkflowStageState):
             step_index = current_status.step_index if target_stage == current_status.stage else 0
             return current_status.model_copy(update={
@@ -2614,6 +2687,28 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             context.workflow_runs.close_run_workflow()
         if context.workflows is not None:
             context.workflows.close_package()
+
+    @staticmethod
+    def _invalidate_presentation_artifacts(context: AmphiContext, stages: Iterable[str]) -> None:
+        """Remove exact derived contracts that no longer belong to the active cursor."""
+        workspace = context.workspace
+        if workspace is None:
+            return
+        for stage in stages:
+            relative = PRESENTATION_STAGE_ARTIFACTS.get(stage)
+            if relative is None:
+                continue
+            path = workspace.work_dir / relative
+            if path.parent.is_symlink():
+                raise RuntimeError(
+                    f"Cannot invalidate Presentation artifact through symlinked directory `{path.parent}`."
+                )
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Cannot invalidate stale Presentation artifact `{relative}`: {exc}."
+                ) from exc
 
     @staticmethod
     async def _open_run_workflow(context: AmphiContext) -> Any:
@@ -3431,9 +3526,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         # Entering presentation mode changes the next ThinkUnit. Keep that state
         # transition atomic, matching the existing Build and Workflow entry rule.
-        presentation_controls = {"request_presentation"}
+        presentation_controls = {"report_presentation_step", "request_presentation"}
         if len(calls) > 1 and any(getattr(call, "tool", None) in presentation_controls for call in calls):
-            reason = "Presentation control rejected: presentation entry must run alone."
+            reason = "Presentation control rejected: entry and step reports must run alone."
             resolved = [
                 verdict.model_copy(update={
                     "verdict": Permission.DENY.value,
@@ -3733,11 +3828,33 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         records = getattr(ota_context, "ota_record", None) or []
         if not records:
             return
-        note = (
-            "[presentation] The current stage is still active. Continue the stage's work, "
-            "then invoke the switch tool for the next presentation stage. Return to normal "
-            "only after ppt_review finishes or the user explicitly asks to leave."
-        )
+        status = ota_context.think_status
+        if not isinstance(status, PresentationStageState):
+            return
+        steps = PRESENTATION_STAGE_STEPS.get(status.stage, ())
+        if status.stage == "ppt_brief":
+            note = (
+                "[presentation] Brief is still active. Complete `.presentation/brief.md`, then "
+                "call switch(stage=\"ppt_plan\", reason=...). Do not call "
+                "report_presentation_step; Brief has no production-step cursor."
+            )
+        elif status.step_index < len(steps):
+            current = steps[status.step_index]
+            note = (
+                f"[presentation] Production step `{current.step_id}` is still active. Complete "
+                "only that step, then call report_presentation_step with its concrete result "
+                "and evidence."
+            )
+        else:
+            current_index = PRESENTATION_STAGE_ORDER.index(status.stage)
+            if status.stage == "ppt_review":
+                handoff = 'switch(mode="normal", reason=...)'
+            else:
+                handoff = f'switch(stage="{PRESENTATION_STAGE_ORDER[current_index + 1]}", reason=...)'
+            note = (
+                f"[presentation] Every production step in `{status.stage}` is reported. Call "
+                f"{handoff} now; do not repeat a completed step."
+            )
         record = records[-1]
         existing = getattr(record, "observation_result", None)
         record.observation_result = f"{existing}\n{note}" if existing else note

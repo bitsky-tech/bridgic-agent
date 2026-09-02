@@ -1178,9 +1178,11 @@
     }
   },
   "presentationMode": {
+    "completedDetails": "查看已完成步骤",
     "open": "PPT 制作进度",
     "progress": "第 {{current}} / {{total}} 阶段",
     "stageAria": "PPT 制作阶段",
+    "stageReady": "本阶段已完成 · 正在准备交接",
     "stages": {
       "ppt_brief": {
         "description": "明确受众、用途、核心信息、限制条件与成功标准。",
@@ -1200,9 +1202,25 @@
       }
     },
     "status": {
+      "failed": "执行失败",
       "needsInput": "需要输入",
       "paused": "已暂停",
       "running": "进行中"
+    },
+    "stepProgress": "{{current}} / {{total}} 项任务",
+    "steps": {
+      "audit_evidence": "核验事实、数据与引用",
+      "audit_narrative": "从头到尾检查叙事逻辑",
+      "build_slide_shells": "搭建模板与页面骨架",
+      "collect_evidence": "收集内容、资料与来源",
+      "confirm_delivery": "修正缺陷并确认交付",
+      "create_visuals": "生成图片、图表与背景",
+      "design_visual_direction": "选择模板与视觉方向",
+      "fill_slide_content": "填充文案、数据与引用",
+      "inspect_visual_quality": "检查版式与视觉质量",
+      "map_slides": "形成逐页制作蓝图",
+      "polish_deck": "统一层级与视觉一致性",
+      "shape_chapters": "设计章节与叙事脉络"
     },
     "title": "PPT 制作"
   },

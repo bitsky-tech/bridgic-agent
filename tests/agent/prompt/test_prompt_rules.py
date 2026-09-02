@@ -10,6 +10,12 @@ from src.amphi_agent._prompt import (
     render_main_persona,
     render_stage_persona,
 )
+from src.amphi_agent.prompts.presentation import (
+    PRESENTATION_BRIEF_PERSONA,
+    PRESENTATION_COMPOSE_PERSONA,
+    PRESENTATION_PLAN_PERSONA,
+    PRESENTATION_REVIEW_PERSONA,
+)
 from src.amphi_service.i18n import use_locale
 from src.amphi_agent.tools import (
     request_accept_rule_tool,
@@ -21,6 +27,14 @@ from src.amphi_agent.tools import (
 def _personas() -> dict[str, str]:
     main_tools = ["read_file", "request_human_choice", "run_subagent"]
     stage_tools = ["read_file", "request_human_choice", "switch"]
+    presentation_tools = [
+        "read_file",
+        "request_human_choice",
+        "run_subagent",
+        "view_ppt",
+        "report_presentation_step",
+        "switch",
+    ]
     return {
         "main": render_main_persona(main_tools, template=PERSONA),
         "child": render_main_persona(["read_file", "request_human_choice"], template=SUB_AGENT_PERSONA),
@@ -30,6 +44,10 @@ def _personas() -> dict[str, str]:
         "verify": render_stage_persona(stage_tools, template=VERIFY_PERSONA),
         "execute": render_stage_persona(stage_tools, template=WORKFLOW_PERSONA),
         "validate": render_stage_persona(stage_tools, template=WORKFLOW_VALIDATE_PERSONA),
+        "ppt_brief": render_stage_persona(presentation_tools, template=PRESENTATION_BRIEF_PERSONA),
+        "ppt_plan": render_stage_persona(presentation_tools, template=PRESENTATION_PLAN_PERSONA),
+        "ppt_compose": render_stage_persona(presentation_tools, template=PRESENTATION_COMPOSE_PERSONA),
+        "ppt_review": render_stage_persona(presentation_tools, template=PRESENTATION_REVIEW_PERSONA),
     }
 
 
@@ -64,7 +82,7 @@ def test_core_rules() -> None:
     assert "do not re-attempt the exact same tool call" in main
     assert "Before reporting a task complete, verify it actually works" in main
 
-    # Check 3: Build and Workflow Personas retain language, tool priority, and owned completion rules.
+    # Check 3: Special-mode Personas retain language, tool priority, and owned completion rules.
     for name in ("clarify", "explore", "generate", "verify"):
         assert "MUST match the language of the user's input message" in personas[name]
         assert "prefer core tools" in personas[name]
@@ -73,10 +91,16 @@ def test_core_rules() -> None:
         assert "language established by the user's original Workflow request" in personas[name]
         assert "prefer the core tool" in personas[name]
         assert "report_workflow_step" in personas[name]
+    for name in ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"):
+        assert "Match the language of the user's current input" in personas[name]
+        assert "prefer the core tool" in personas[name]
+        assert "report_presentation_step" in personas[name]
+        assert "Main owns the final user-facing delivery summary" in personas[name]
 
     # Check 4: Every rendered Persona carries the same failed-Turn guidance in Context.
     assert set(personas) == {
         "main", "child", "clarify", "explore", "generate", "verify", "execute", "validate",
+        "ppt_brief", "ppt_plan", "ppt_compose", "ppt_review",
     }
     guidance = (
         "- <turn_failed>: marks a historical Turn that failed before completion. "
@@ -217,6 +241,9 @@ def test_delegation_prompt() -> None:
     assert "Child delegation is an ordinary execution option" in run_only
     assert "`run_subagent`" in run_only
     assert "`start_subagent`" not in run_only
+    assert "exact paths for involved files" in run_only
+    assert "exact paths when files or Build artifacts are involved" not in run_only
+    assert "the expected output, and a clear read/write scope" not in run_only
 
     # Check 3: A full delegation surface explains both supported execution paths.
     assert "`run_subagent`" in both
@@ -418,3 +445,30 @@ def test_workflow_structures() -> None:
     assert "background/validation.md" in personas["validate"]
     for name in ("execute", "validate"):
         assert "call `report_workflow_step`" in personas[name]
+
+
+def test_presentation_structures() -> None:
+    """Presentation stages share a deck-specific operating and communication contract."""
+    personas = _personas()
+    names = ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review")
+
+    for name in names:
+        persona = personas[name]
+        assert "Session-owned live PowerPoint presentation" in persona
+        assert "Tool availability does not broaden the current stage" in persona
+        assert "dedicated PowerPoint tools" in persona
+        assert "never use `bash` to inspect a Skill" in persona
+        assert "right-side progress surface already shows" in persona
+        assert "`switch(mode=\"normal\")` ends the active presentation pipeline state" in persona
+        assert "<presentation_progress>" in persona
+        assert "<presentation_artifacts>" in persona
+        assert "`run_subagent`" in persona
+        assert "`start_subagent`" not in persona
+
+    brief = " ".join(personas["ppt_brief"].split())
+    assert "communication contract that Plan can" in brief
+    assert "Inspect user-supplied or explicitly referenced material" in brief
+    assert "# Brief artifact contract" in brief
+    assert "Choose the template strategy and visual system" in personas["ppt_plan"]
+    assert "Call `view_ppt` before the first compose step" in personas["ppt_compose"]
+    assert "Inspect the live deck rather than" in personas["ppt_review"]

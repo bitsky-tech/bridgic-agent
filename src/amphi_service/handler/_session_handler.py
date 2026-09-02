@@ -1112,6 +1112,12 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
     position = {"mode": think.get("mode"), "stage": think.get("stage")}
     if think.get("mode") == "build" and think.get("workflow_id"):
         position["workflow_id"] = think["workflow_id"]
+    if think.get("mode") == "presentation":
+        position.update({
+            "presentation_goal": think.get("goal"),
+            "presentation_step_index": think.get("step_index") or 0,
+            "presentation_reports": think.get("reports") or [],
+        })
     return position
 
 

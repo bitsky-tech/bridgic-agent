@@ -791,6 +791,14 @@ const sessionMessagesSchema = z
         mode: z.enum(['build', 'normal', 'presentation', 'run_workflow']),
         stage: z.string().nullable().optional(),
         workflow_id: z.string().nullable().optional(),
+        presentation_goal: z.string().nullable().optional(),
+        presentation_step_index: z.number().int().nonnegative().optional(),
+        presentation_reports: z.array(z.object({
+          stage: z.string(),
+          step_id: z.string(),
+          summary: z.string(),
+          evidence: z.array(z.string()).default([]),
+        })).default([]),
       })
       .nullable()
       .optional(),
@@ -1381,6 +1389,14 @@ export class AmphiClient {
         mode: ThinkPosition['mode']
         stage?: string | null
         workflow_id?: string | null
+        presentation_goal?: string | null
+        presentation_step_index?: number
+        presentation_reports?: Array<{
+          stage: string
+          step_id: string
+          summary: string
+          evidence: string[]
+        }>
       } | null
       workflow_run?: {
         workflow_id: string
@@ -1443,6 +1459,18 @@ export class AmphiClient {
             stage: res.thinking_mode.stage ?? null,
             ...(res.thinking_mode.workflow_id
               ? { workflowId: res.thinking_mode.workflow_id }
+              : {}),
+            ...(res.thinking_mode.mode === 'presentation'
+              ? {
+                  presentationGoal: res.thinking_mode.presentation_goal ?? null,
+                  presentationStepIndex: res.thinking_mode.presentation_step_index ?? 0,
+                  presentationReports: (res.thinking_mode.presentation_reports ?? []).map(report => ({
+                    stage: report.stage,
+                    stepId: report.step_id,
+                    summary: report.summary,
+                    evidence: report.evidence,
+                  })),
+                }
               : {}),
           }
         : null,

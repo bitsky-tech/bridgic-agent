@@ -45,6 +45,11 @@ from ._browser import (
     browser_tool_specs,
 )
 from ._powerpoint import POWERPOINT_TOOL_NAMES, powerpoint_tool_specs
+from ._presentation import (
+    PresentationStepReport,
+    report_presentation_step,
+    report_presentation_step_tool,
+)
 from ._filesystem import (
     FILE_SYSTEM_TOOL_NAMES,
     edit_file_tool,
@@ -154,6 +159,9 @@ __all__ = [
     "BROWSER_TOOL_NAMES",
     "POWERPOINT_TOOL_NAMES",
     "powerpoint_tool_specs",
+    "PresentationStepReport",
+    "report_presentation_step",
+    "report_presentation_step_tool",
     "read_file_tool",
     "write_file_tool",
     "edit_file_tool",

@@ -171,8 +171,8 @@ const continuationFamily = atomFamily((_sessionId: string) =>
  *  time the HTTP response arrives. */
 const liveRevisionFamily = atomFamily((_sessionId: string) => atom(0))
 
-/** Per-session think position, driven by the live `stage` frames and the transcript's
- *  thinking_mode. Build uses stage names, Workflow uses execute/validate, normal uses main/null. */
+/** Per-session think position, driven by live `stage` frames and transcript hydration.
+ * Presentation positions also carry their durable substep cursor and reports. */
 export const thinkingModeFamily = atomFamily((_sessionId: string) =>
   atom<ThinkPosition | null>(null),
 )

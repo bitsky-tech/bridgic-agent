@@ -3,6 +3,9 @@
 from .build import BuildThink, ClarifyThink, ExploreThink, GenerateThink, VerifyThink
 
 from .presentation import (
+    PRESENTATION_STAGE_ARTIFACTS,
+    PRESENTATION_STAGE_ORDER,
+    PRESENTATION_STAGE_STEPS,
     PresentationBriefThink,
     PresentationComposeThink,
     PresentationPlanThink,
@@ -16,6 +19,9 @@ __all__ = [
     "ClarifyThink",
     "ExploreThink",
     "GenerateThink",
+    "PRESENTATION_STAGE_ARTIFACTS",
+    "PRESENTATION_STAGE_ORDER",
+    "PRESENTATION_STAGE_STEPS",
     "PresentationBriefThink",
     "PresentationComposeThink",
     "PresentationPlanThink",

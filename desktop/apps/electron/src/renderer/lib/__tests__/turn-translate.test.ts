@@ -575,13 +575,41 @@ describe('stage frames', () => {
 
   it('carries the presentation pipeline stage', () => {
     const { events } = translateTurnEvent(
-      { event: 'stage', data: { mode: 'presentation', stage: 'ppt_plan' } },
+      {
+        event: 'stage',
+        data: {
+          mode: 'presentation',
+          stage: 'ppt_plan',
+          presentation_goal: 'Explain the strategy',
+          presentation_step_index: 2,
+          presentation_reports: [{
+            stage: 'ppt_plan',
+            step_id: 'design_visual_direction',
+            summary: 'Selected a restrained editorial visual system.',
+            evidence: ['visual direction'],
+          }],
+        },
+      },
       'message-presentation',
       initialTranslatorState,
     )
 
     const stage = events.find((event) => event.type === 'stage')
-    expect(stage).toEqual({ type: 'stage', position: { mode: 'presentation', stage: 'ppt_plan' } })
+    expect(stage).toEqual({
+      type: 'stage',
+      position: {
+        mode: 'presentation',
+        stage: 'ppt_plan',
+        presentationGoal: 'Explain the strategy',
+        presentationStepIndex: 2,
+        presentationReports: [{
+          stage: 'ppt_plan',
+          stepId: 'design_visual_direction',
+          summary: 'Selected a restrained editorial visual system.',
+          evidence: ['visual direction'],
+        }],
+      },
+    })
   })
 
   it('carries the normal presentation frame (mode:normal, stage:null) through', () => {

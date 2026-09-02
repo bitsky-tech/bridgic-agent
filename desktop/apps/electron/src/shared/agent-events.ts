@@ -97,11 +97,22 @@ export interface PermissionItem {
  * `thinking_mode` (state rehydration on reload). Open `string` on `stage` because
  * display policy maps the units it knows.
  */
+export interface PresentationProgressReport {
+  stage: string
+  stepId: string
+  summary: string
+  evidence: string[]
+}
+
 export interface ThinkPosition {
   mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
   stage: string | null
   /** Present while Build is editing an existing saved Workflow. */
   workflowId?: string | null
+  /** Presentation-only durable cursor and completed production reports. */
+  presentationGoal?: string | null
+  presentationStepIndex?: number
+  presentationReports?: PresentationProgressReport[]
 }
 
 /** Session-level projection of one active saved Workflow run. */

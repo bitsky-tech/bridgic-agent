@@ -360,6 +360,14 @@ export type TurnEvent =
         mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
         stage: string | null
         workflow_id?: string | null
+        presentation_goal?: string | null
+        presentation_step_index?: number
+        presentation_reports?: Array<{
+          stage: string
+          step_id: string
+          summary: string
+          evidence: string[]
+        }>
       }
     }
   | { event: typeof TURN_EVENT.Title; data: { title: string } }

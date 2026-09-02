@@ -12,6 +12,7 @@ from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink
 from src.amphi_agent._cognitive import (
     SubAgentThink,
 )
+from src.amphi_agent._state import PresentationStageState
 from src.amphi_agent.cognitive import (
     ClarifyThink,
     ExploreThink,
@@ -111,6 +112,38 @@ async def test_llm_tool_surface() -> None:
     assert actual_schemas == expected_schemas
 
 
+@pytest.mark.parametrize(("worker_type", "stage", "label", "expects_report"), [
+    (PresentationBriefThink, "ppt_brief", "Brief", False),
+    (PresentationPlanThink, "ppt_plan", "Plan", True),
+    (PresentationComposeThink, "ppt_compose", "Compose", True),
+    (PresentationReviewThink, "ppt_review", "Review", True),
+])
+async def test_presentation_llm_tool_surface(worker_type: Any, stage: str, label: str, expects_report: bool) -> None:
+    """Every presentation stage advertises and sends the same tools to the model."""
+    llm = _RecordingLlm()
+    ota_context = AmphiOTAContext(
+        user_input="Create a presentation",
+        ota_record=[OTARecord()],
+    )
+    ota_context.transition_think(PresentationStageState(stage=stage, goal="Create a presentation"))
+
+    await worker_type(llm).thinking(ota_context, _context())
+
+    marker = f"The tools currently available in {label} are: "
+    prompt_names = tuple(re.findall(
+        r"`([^`]+)`",
+        llm.messages[0].content.split(marker, maxsplit=1)[1].split(". Call them directly.", maxsplit=1)[0],
+    ))
+    recorded_names = tuple(spec.tool_name for spec in ota_context.tools)
+    expected_schemas = [spec.to_tool().model_dump() for spec in ota_context.tools]
+    actual_schemas = [tool.model_dump() for tool in llm.tools]
+
+    assert "switch" in prompt_names
+    assert ("report_presentation_step" in prompt_names) is expects_report
+    assert prompt_names == recorded_names
+    assert actual_schemas == expected_schemas
+
+
 def test_lazy_tools() -> None:
     """Final lazy ToolSurface expansion:
 
@@ -194,6 +227,7 @@ def test_mode_tools() -> None:
     # Check 1: Main and Child expose their distinct root and delegated capabilities.
     assert {"run_subagent", "start_subagent"} <= main
     assert "request_presentation" in main
+    assert "report_presentation_step" not in main
     assert "switch" not in main
     assert {"run_subagent", "start_subagent", "request_build"}.isdisjoint(child)
     assert "request_human_choice" in child
@@ -210,12 +244,17 @@ def test_mode_tools() -> None:
     presentation_surfaces = (ppt_brief, ppt_plan, ppt_compose, ppt_review)
     for surface in presentation_surfaces:
         assert "switch" in surface
+        assert "run_subagent" in surface
+        assert "start_subagent" not in surface
         assert POWERPOINT_TOOL_NAMES <= surface
         assert {"request_build", "request_presentation", "request_run_workflow"}.isdisjoint(surface)
+    assert "report_presentation_step" not in ppt_brief
+    assert all("report_presentation_step" in surface for surface in (ppt_plan, ppt_compose, ppt_review))
 
     # Check 4: Workflow stages expose reporting and exit controls without mode-entry controls.
     for surface in (execute, validate):
         assert {"switch", "report_workflow_step"} <= surface
+        assert "report_presentation_step" not in surface
         assert {"request_build", "request_presentation", "edit_workflow", "help"}.isdisjoint(surface)
 
     # Check 5: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.

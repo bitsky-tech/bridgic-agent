@@ -1178,9 +1178,11 @@
     }
   },
   "presentationMode": {
+    "completedDetails": "View completed steps",
     "open": "PPT creation progress",
     "progress": "Stage {{current}} of {{total}}",
     "stageAria": "PPT creation stages",
+    "stageReady": "Stage complete · preparing handoff",
     "stages": {
       "ppt_brief": {
         "description": "Clarify the audience, purpose, core message, constraints, and success criteria.",
@@ -1200,9 +1202,25 @@
       }
     },
     "status": {
+      "failed": "Failed",
       "needsInput": "Needs input",
       "paused": "Paused",
       "running": "Running"
+    },
+    "stepProgress": "{{current}}/{{total}} tasks",
+    "steps": {
+      "audit_evidence": "Verify facts, data, and citations",
+      "audit_narrative": "Audit the narrative end to end",
+      "build_slide_shells": "Build template and slide shells",
+      "collect_evidence": "Collect content, evidence, and sources",
+      "confirm_delivery": "Fix defects and confirm delivery",
+      "create_visuals": "Create images, charts, and backgrounds",
+      "design_visual_direction": "Choose template and visual direction",
+      "fill_slide_content": "Fill text, data, and citations",
+      "inspect_visual_quality": "Inspect layout and visual quality",
+      "map_slides": "Map every slide into a production blueprint",
+      "polish_deck": "Polish hierarchy and consistency",
+      "shape_chapters": "Shape chapters and narrative arc"
     },
     "title": "PPT creation"
   },

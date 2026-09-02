@@ -189,12 +189,9 @@ class StageEvent(TurnEvent):
     """The turn's thinking position moved — the two-layer think loop's position.
 
     Emitted by ``on_agent`` each time it aims a think unit. ``mode`` is the loop
-    (``"normal"`` plain chat | ``"build"`` the pipeline); ``stage`` is the unit
-    within it (``"main"`` for normal; ``"clarify"`` | ``"explore"`` |
-    ``"generate"`` | ``"verify"`` for build; ``null`` on the close frame a clean
-    build exit emits on its way back to normal). A client
-    drives its focus-mode rail off this: show the rail while ``mode == "build"``,
-    highlight ``stage``. Stage names ARE the wire names (no ``_think`` suffix).
+    (normal chat or a dedicated pipeline); ``stage`` is the unit within it.
+    Presentation progress is projected from the runtime-owned cognitive state,
+    so clients never infer the cursor from model prose or tool arguments.
     """
 
     name: ClassVar[str] = "stage"
@@ -202,11 +199,20 @@ class StageEvent(TurnEvent):
     mode: str
     stage: Optional[str] = None
     workflow_id: Optional[str] = None
+    presentation_goal: Optional[str] = None
+    presentation_step_index: Optional[int] = None
+    presentation_reports: Optional[List[Dict[str, Any]]] = None
 
     def payload(self) -> Dict[str, Any]:
         payload = {"mode": self.mode, "stage": self.stage}
         if self.workflow_id:
             payload["workflow_id"] = self.workflow_id
+        if self.mode == "presentation":
+            payload.update({
+                "presentation_goal": self.presentation_goal,
+                "presentation_step_index": self.presentation_step_index or 0,
+                "presentation_reports": self.presentation_reports or [],
+            })
         return payload
 
 

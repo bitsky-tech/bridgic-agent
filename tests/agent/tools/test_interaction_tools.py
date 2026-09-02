@@ -3,6 +3,7 @@ import json
 import pytest
 
 from src.amphi_agent.tools._help import help as product_help
+from src.amphi_agent.tools._presentation import PresentationToolRejection, report_presentation_step
 from src.amphi_agent.tools._request_human import (
     RequestHumanRejection,
     request_accept_rule,
@@ -81,6 +82,24 @@ async def test_presentation_request() -> None:
     assert request.goal == "Create a product launch deck"
     with pytest.raises(RequestHumanRejection, match="goal.*non-empty"):
         await request_presentation("  ")
+
+
+async def test_presentation_step_report() -> None:
+    """Presentation progress keeps concrete summaries and repairs string-shaped evidence."""
+    report = await report_presentation_step(
+        "  Selected an editorial visual system.  ",
+        ["  visual direction  ", "", "https://example.com/reference"],
+    )
+
+    assert report.summary == "Selected an editorial visual system."
+    assert report.evidence == ["visual direction", "https://example.com/reference"]
+    legacy = await report_presentation_step(
+        "Recorded the durable brief.",
+        "['.presentation/brief.md']",  # type: ignore[arg-type]
+    )
+    assert legacy.evidence == [".presentation/brief.md"]
+    with pytest.raises(PresentationToolRejection, match="summary.*non-empty"):
+        await report_presentation_step("  ")
 
 
 async def test_choice_card() -> None:

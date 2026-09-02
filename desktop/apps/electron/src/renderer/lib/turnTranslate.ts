@@ -188,6 +188,14 @@ const stageDataSchema = z.object({
   mode: z.enum(['build', 'normal', 'presentation', 'run_workflow']),
   stage: z.string().nullable().optional(),
   workflow_id: z.string().nullable().optional(),
+  presentation_goal: z.string().nullable().optional(),
+  presentation_step_index: z.number().int().nonnegative().optional(),
+  presentation_reports: z.array(z.object({
+    stage: z.string(),
+    step_id: z.string(),
+    summary: z.string(),
+    evidence: z.array(z.string()).default([]),
+  })).default([]),
 })
 const titleDataSchema = z.object({ title: z.string() })
 
@@ -507,6 +515,16 @@ export function translateTurnEvent(
         stage: r.data.stage ?? null,
       }
       if (r.data.workflow_id) position.workflowId = r.data.workflow_id
+      if (r.data.mode === 'presentation') {
+        position.presentationGoal = r.data.presentation_goal ?? null
+        position.presentationStepIndex = r.data.presentation_step_index ?? 0
+        position.presentationReports = r.data.presentation_reports.map(report => ({
+          stage: report.stage,
+          stepId: report.step_id,
+          summary: report.summary,
+          evidence: report.evidence,
+        }))
+      }
       events.push({
         type: 'stage',
         position,

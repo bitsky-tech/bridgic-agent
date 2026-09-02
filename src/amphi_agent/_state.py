@@ -1,10 +1,12 @@
+from ast import literal_eval
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypeAlias, Union
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_serializer, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 __all__ = [
-    "InStage", "NormalStageState", "BuildStageState", "PresentationStageState", "WorkflowStageState",
+    "InStage", "NormalStageState", "BuildStageState", "PresentationStageState",
+    "PresentationStepRecord", "WorkflowStageState",
     "InteractionState", "AwaitingFeedback", "AwaitingPermission", "AwaitingTaskConfirm",
     "AwaitingAcceptRule", "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
     "AwaitingBuildConflict", "AwaitingWorkflowRunChoice",
@@ -39,11 +41,62 @@ class BuildStageState(BaseModel):
         return payload
 
 
+class PresentationStepRecord(BaseModel):
+    """One completed production step retained across presentation stages and turns."""
+
+    stage: Literal["ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"]
+    step_id: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    evidence: List[str] = Field(default_factory=list)
+
+    @classmethod
+    def normalize_evidence(cls, value: Any) -> List[str]:
+        """Accept legacy string-shaped tool arguments without splitting them into characters."""
+        def parse_list(text: str) -> Optional[List[Any]]:
+            if not (text.startswith("[") and text.endswith("]")):
+                return None
+            try:
+                parsed = literal_eval(text)
+            except (SyntaxError, ValueError):
+                return None
+            return list(parsed) if isinstance(parsed, (list, tuple)) else None
+
+        if value is None:
+            return []
+        if isinstance(value, str):
+            text = value.strip()
+            value = parse_list(text) or ([text] if text else [])
+        elif isinstance(value, (list, tuple)):
+            items = list(value)
+            if items and all(isinstance(item, str) and len(item) == 1 for item in items):
+                joined = "".join(items).strip()
+                value = parse_list(joined) or items
+            else:
+                value = items
+        else:
+            value = [value]
+
+        normalized: List[str] = []
+        for item in value:
+            text = str(item).strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def _validate_evidence(cls, value: Any) -> List[str]:
+        return cls.normalize_evidence(value)
+
+
 class PresentationStageState(BaseModel):
     """The current cognitive stage inside the Session's presentation pipeline."""
 
     mode: Literal["presentation"] = "presentation"
     stage: Literal["ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"] = "ppt_brief"
+    step_index: int = Field(default=0, ge=0)
+    goal: Optional[str] = Field(default=None, min_length=1)
+    reports: List[PresentationStepRecord] = Field(default_factory=list)
 
 
 class WorkflowStageState(BaseModel):
