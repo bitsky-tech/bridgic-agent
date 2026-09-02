@@ -338,7 +338,7 @@ def test_build_structures() -> None:
     {
       "clarify": "task definition and final deliverables",
       "explore": "grounded CODE/AGENT/HUMAN implementation plan",
-      "generate": "WORKFLOW.md, VALIDATE.md, and scripts package",
+      "generate": "WORKFLOW.md and scripts package",
       "verify": "real-environment evidence and Overall Build verdict"
     }
 
@@ -370,12 +370,12 @@ def test_build_structures() -> None:
     assert "acceptance check" not in explore
     assert "Before calling `switch`, check that the stage is actually complete" in explore
 
-    # Check 3: Generate preserves the reusable package and execution/validation boundary.
+    # Check 3: Generate preserves the reusable execution package.
     assert "complete, reusable Workflow package under `.build/workflow/`" in generate
     assert "`WORKFLOW.md`" in generate
-    assert "`VALIDATE.md`" in generate
+    assert "`VALIDATE.md`" not in generate
     assert "`scripts/*.py`" in generate
-    assert "Keep execution and validation independent" in generate
+    assert "acceptance criteria" not in generate
     assert "Before calling `switch`, check that Generate is actually complete" in generate
 
     # Check 4: Verify preserves read-only validation, verdict, evidence, and confirmation requirements.
