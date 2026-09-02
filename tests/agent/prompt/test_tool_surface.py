@@ -176,6 +176,7 @@ def test_mode_tools() -> None:
     verify = names(VerifyThink())
     execute = names(WorkflowThink())
     validate = names(ValidateThink())
+    surfaces = (main, child, clarify, explore, generate, verify, execute, validate)
 
     # Check 1: Main and Child expose their distinct root and delegated capabilities.
     assert {"run_subagent", "start_subagent"} <= main
@@ -185,9 +186,9 @@ def test_mode_tools() -> None:
 
     # Check 2: Build stages expose only the control actions owned by each stage.
     assert "switch" in clarify & explore & generate & verify
-    assert {"request_accept_rule", "request_human_task_confirm"} <= clarify
+    assert "request_human_task_confirm" in clarify
     assert "request_human_workflow_confirm" in verify
-    assert "request_accept_rule" not in explore | generate | verify
+    assert all("request_accept_rule" not in surface for surface in surfaces)
     assert "request_human_task_confirm" not in explore | generate | verify
     assert "request_human_workflow_confirm" not in clarify | explore | generate
 
@@ -198,7 +199,7 @@ def test_mode_tools() -> None:
 
     # Check 4: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     common = {"request_human_choice", "load_browser_tools", "view_skill"}
-    for surface in (main, child, clarify, explore, generate, verify, execute, validate):
+    for surface in surfaces:
         assert common <= surface
 
 

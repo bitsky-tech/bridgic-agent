@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_serializer, model_validator
 __all__ = [
     "InStage", "NormalStageState", "BuildStageState", "WorkflowStageState",
     "InteractionState", "AwaitingFeedback", "AwaitingPermission", "AwaitingTaskConfirm",
-    "AwaitingAcceptRule", "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
+    "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
     "AwaitingBuildConflict", "AwaitingWorkflowRunChoice",
     "SubAgentCall", "AwaitingSubAgent", "SubAgentResult", "SubAgentsCompleted", "AgentResult",
     "AgentState", "ContextCompactionState", "TurnCompactionState",
@@ -76,12 +76,6 @@ class AwaitingPermission(BaseModel):
 
 class AwaitingTaskConfirm(BaseModel):
     task_confirm: Dict[str, Any] = Field(default_factory=dict)
-
-
-class AwaitingAcceptRule(BaseModel):
-    """Acceptance-rule candidates waiting for the user's structured review."""
-
-    accept_rule: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AwaitingWorkflowConfirm(BaseModel):
@@ -254,7 +248,6 @@ class SubAgentsCompleted(BaseModel):
 InteractionState = Union[
     AwaitingFeedback,
     AwaitingPermission,
-    AwaitingAcceptRule,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
@@ -266,7 +259,6 @@ AgentResult: TypeAlias = Union[
     str,
     AwaitingFeedback,
     AwaitingPermission,
-    AwaitingAcceptRule,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,

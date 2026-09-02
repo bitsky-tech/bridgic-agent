@@ -18,7 +18,6 @@ from src.amphi_agent._invocation import (
 )
 from src.amphi_agent._state import (
     AgentState,
-    AwaitingAcceptRule,
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
     AwaitingTaskConfirm,
@@ -158,113 +157,6 @@ def _tool_result(turn: SessionTurnRecord, tool_name: str) -> dict[str, Any]:
                 assert isinstance(result, dict)
                 return result
     raise AssertionError(f"No persisted result for {tool_name}")
-
-
-async def test_build_reviews(interactions: _Harness) -> None:
-    """Final reviewed Build turn:
-
-    {
-      "turn": {"count": 1, "status": "completed"},
-      "acceptance": {"status": "confirmed", "rules": ["AC-001"]},
-      "task": {"status": "confirmed", "retained_stage": "explore"},
-      "answer": "The reviewed Build is ready for its next stage."
-    }
-
-    Checks:
-    1. Build acceptance review is returned and persisted as its specialized disposition.
-    2. A stale structured answer is rejected without changing the pending Turn.
-    3. The matching review answer replaces that Turn with a task-confirmation request.
-    4. Task confirmation records the reviewed file and completes the same logical Turn.
-    """
-    record = await interactions.create_session("build-reviews")
-    interactions.llm.enqueue_tool(
-        "request_build",
-        {"goal": "Create a reusable report workflow", "mode": "start"},
-        call_id="call-build-start",
-    )
-    interactions.llm.enqueue_tool(
-        "request_accept_rule",
-        {"rules": '["A checked report is delivered."]'},
-        call_id="call-acceptance",
-    )
-
-    # Check 1: The actual Agent result crosses Invocation outcome mapping and Store persistence.
-    acceptance = await interactions.run(record.id, "Create a reusable report workflow.")
-    assert acceptance.outcome.disposition is InvocationDisposition.AWAITING_ACCEPT_RULE
-    assert isinstance(acceptance.interaction, AwaitingAcceptRule)
-    request_id = acceptance.interaction.accept_rule["request_id"]
-    pending = await interactions.turns.latest(record.id, USER_ID)
-    assert pending is not None
-    assert pending.status is TurnStatus.AWAITING_HUMAN
-    assert pending.agent_state["interaction"]["accept_rule"]["request_id"] == request_id
-
-    # Check 2: A nonmatching card response cannot consume or replace the durable tail.
-    with pytest.raises(InvocationStaleAnswerError):
-        await interactions.invocation.arun(record.id, {
-            "type": "accept_rule",
-            "request_id": "stale-acceptance",
-            "mode": "criteria",
-            "decisions": ["accept"],
-        })
-    unchanged = await interactions.turns.latest(record.id, USER_ID)
-    assert unchanged is not None
-    assert unchanged.id == pending.id
-    assert unchanged.status is TurnStatus.AWAITING_HUMAN
-
-    task_path = Path(record.workspace_root) / ".work" / ".build" / "task.md"
-    task_markdown = "# Report workflow\n\nCreate and validate the requested report.\n"
-    task_path.write_text(task_markdown, encoding="utf-8")
-    interactions.llm.enqueue_tool(
-        "request_human_task_confirm",
-        {},
-        call_id="call-task-confirm",
-    )
-
-    # Check 3: The valid review resumes the held trace and parks on the next business boundary.
-    task = await interactions.run(record.id, {
-        "type": "accept_rule",
-        "request_id": request_id,
-        "mode": "criteria",
-        "decisions": ["accept"],
-    })
-    assert task.outcome.disposition is InvocationDisposition.AWAITING_TASK_CONFIRM
-    assert isinstance(task.interaction, AwaitingTaskConfirm)
-    task_request_id = task.interaction.task_confirm["request_id"]
-    assert task.interaction.task_confirm["task_markdown"] == task_markdown.strip()
-
-    interactions.llm.enqueue_tool(
-        "switch",
-        {"mode": "normal", "reason": "Pause after the reviewed task."},
-        call_id="call-exit-build",
-    )
-    interactions.llm.enqueue_text("The reviewed Build is ready for its next stage.")
-    completed = await interactions.run(record.id, {
-        "type": "task_confirm",
-        "request_id": task_request_id,
-        "action": "confirm",
-    })
-
-    # Check 4: Both decisions survive in one completed Turn and the Build retains Explore.
-    assert completed.outcome.disposition is InvocationDisposition.COMPLETED
-    turns = await interactions.turns.list_conversation(USER_ID, record.id)
-    assert len(turns) == 1
-    assert turns[0].status is TurnStatus.COMPLETED
-    assert turns[0].session_ordinal == 0
-    assert turns[0].final_answer == "The reviewed Build is ready for its next stage."
-    assert _tool_result(turns[0], "request_accept_rule")["rules"] == [{
-        "id": "AC-001",
-        "text": "A checked report is delivered.",
-        "source": "agent_proposed_user_accepted",
-    }]
-    assert _tool_result(turns[0], "request_human_task_confirm")["status"] == "confirmed"
-    workspace = await interactions.workspace(record)
-    checkpoint = workspace.build_checkpoint()
-    assert checkpoint is not None
-    assert checkpoint.stage == "explore"
-    assert checkpoint.last_task_confirmation == {
-        "request_id": task_request_id,
-        "task_markdown": task_markdown.strip(),
-    }
 
 
 async def test_build_confirm(interactions: _Harness) -> None:

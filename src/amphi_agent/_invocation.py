@@ -28,7 +28,6 @@ from ._state import (
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
     AwaitingWorkflowRunChoice,
-    AwaitingAcceptRule,
     AwaitingFeedback,
     AwaitingPermission,
     AwaitingTaskConfirm,
@@ -111,7 +110,6 @@ class InvocationDisposition(str, Enum):
     AWAITING_SUBAGENTS = "awaiting_subagents"
     AWAITING_FEEDBACK = "awaiting_feedback"
     AWAITING_PERMISSION = "awaiting_permission"
-    AWAITING_ACCEPT_RULE = "awaiting_accept_rule"
     AWAITING_TASK_CONFIRM = "awaiting_task_confirm"
     AWAITING_WORKFLOW_CONFIRM = "awaiting_workflow_confirm"
     AWAITING_BUILD_CONFIRM = "awaiting_build_confirm"
@@ -231,7 +229,6 @@ class AgentInvocation:
     MAX_CONCURRENT_CHILDREN = 10
     INTERACTION_ANSWER_TYPES = frozenset({
         "build_confirm",
-        "accept_rule",
         "permission_answer",
         "task_confirm",
         "workflow_confirm",
@@ -613,10 +610,6 @@ class AgentInvocation:
         elif "task_confirm" in interaction:
             expected_type = "task_confirm"
             pending = interaction.get("task_confirm")
-            expected_id = pending.get("request_id") if isinstance(pending, dict) else None
-        elif "accept_rule" in interaction:
-            expected_type = "accept_rule"
-            pending = interaction.get("accept_rule")
             expected_id = pending.get("request_id") if isinstance(pending, dict) else None
         elif "workflow_confirm" in interaction:
             expected_type = "workflow_confirm"
@@ -1596,13 +1589,6 @@ class AgentInvocation:
                 questions=interaction.questions,
                 request_id=interaction.request_id,
             )
-        elif isinstance(interaction, AwaitingAcceptRule):
-            payload = interaction.accept_rule or {}
-            publisher.publish(
-                "accept_rule_request",
-                request_id=str(payload.get("request_id") or ""),
-                rules=payload.get("candidate_rules") or [],
-            )
         elif isinstance(interaction, AwaitingTaskConfirm):
             payload = interaction.task_confirm or {}
             publisher.publish(
@@ -1714,13 +1700,6 @@ class AgentInvocation:
             if ota_context.interaction_status != agent_result:
                 raise InvocationStateError("Agent feedback result does not match its interaction state")
             disposition = InvocationDisposition.AWAITING_FEEDBACK
-            answer = ""
-        elif isinstance(agent_result, AwaitingAcceptRule):
-            if ota_context.interaction_status != agent_result:
-                raise InvocationStateError(
-                    "Agent acceptance-rule result does not match its interaction state"
-                )
-            disposition = InvocationDisposition.AWAITING_ACCEPT_RULE
             answer = ""
         elif isinstance(agent_result, AwaitingBuildConfirm):
             if ota_context.interaction_status != agent_result:

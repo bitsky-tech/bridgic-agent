@@ -15,7 +15,6 @@ from src.amphi_agent import (
     WorkflowRunLibrary,
 )
 from src.amphi_agent._state import (
-    AwaitingAcceptRule,
     AwaitingBuildConflict,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
@@ -26,7 +25,6 @@ from src.amphi_agent._state import (
 )
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.tools._request_human import (
-    RequestAcceptRule,
     RequestBuild,
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
@@ -284,46 +282,13 @@ async def test_build_reviews(orchestration: _Harness) -> None:
     """Final reviewed Build contract:
 
     {
-      "acceptance": {"rules": [{"id": "AC-001", "source": "agent_proposed_user_accepted"}]},
       "task": {"status": "confirmed", "next_stage": "explore"}
     }
 
     Checks:
-    1. An accepted outcome rule is folded into the held tool result with its durable review receipt.
-    2. Confirming the current task.md advances both cognition and durable Build state to Explore.
+    1. Confirming the current task.md advances both cognition and durable Build state to Explore.
     """
     await _prepare_build(orchestration, "clarify")
-    acceptance = _ota(
-        "Create a reusable report workflow",
-        _step(
-            "request_accept_rule",
-            RequestAcceptRule(["A checked report is delivered."], "accept-1"),
-        ),
-        BuildStageState(stage="clarify"),
-    )
-    await _apply(orchestration, acceptance)
-    assert isinstance(acceptance.interaction_status, AwaitingAcceptRule)
-    pending_acceptance = _pending(acceptance, "turn-acceptance")
-    orchestration.context.session = Session(orchestration.record, [pending_acceptance])
-    accepted = AmphiOTAContext(user_input={
-        "type": "accept_rule",
-        "request_id": "accept-1",
-        "mode": "criteria",
-        "decisions": ["accept"],
-    })
-    await orchestration.agent.init_state(accepted, orchestration.context)
-
-    # Check 1: The confirmed rule has a stable system id and durable review receipt.
-    acceptance_result = _payload(accepted, "request_accept_rule")
-    assert acceptance_result["status"] == "confirmed"
-    assert acceptance_result["rules"] == [{
-        "id": "AC-001",
-        "text": "A checked report is delivered.",
-        "source": "agent_proposed_user_accepted",
-    }]
-    assert orchestration.workspace.build is not None
-    assert orchestration.workspace.build.acceptance_contract == {"request_id": "accept-1"}
-
     task = _ota(
         "Create a reusable report workflow",
         _step("request_human_task_confirm", RequestHumanTaskConfirm("task-1")),
@@ -340,7 +305,7 @@ async def test_build_reviews(orchestration: _Harness) -> None:
     })
     await orchestration.agent.init_state(confirmed, orchestration.context)
 
-    # Check 2: Task approval resumes the held Turn at Explore in memory and on disk.
+    # Check 1: Task approval resumes the held Turn at Explore in memory and on disk.
     assert _payload(confirmed, "request_human_task_confirm")["status"] == "confirmed"
     assert confirmed.think_status == BuildStageState(stage="explore")
     checkpoint = orchestration.workspace.build_checkpoint()

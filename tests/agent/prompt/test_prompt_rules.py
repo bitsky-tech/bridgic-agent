@@ -12,7 +12,6 @@ from src.amphi_agent._prompt import (
 )
 from src.amphi_service.i18n import use_locale
 from src.amphi_agent.tools import (
-    request_accept_rule_tool,
     request_human_choice_tool,
     request_human_workflow_confirm_tool,
 )
@@ -150,7 +149,6 @@ def test_build_tool_contracts() -> None:
     """Final Build interaction payloads:
 
     {
-      "request_accept_rule": {"rules": "JSON list with one or two final outcomes"},
       "request_human_workflow_confirm": {
         "prompt": {"default_name": "required", "summary": "optional"}
       }
@@ -158,14 +156,12 @@ def test_build_tool_contracts() -> None:
 
     Checks:
     1. Clarify defines the task and final deliverables without an acceptance review.
-    2. The acceptance Tool schema requires that content as one JSON-list string.
-    3. Verify defines the workflow naming payload and ends on that confirmation call.
-    4. The workflow-confirm Tool schema requires the same JSON object through one string field.
+    2. Verify defines the workflow naming payload and ends on that confirmation call.
+    3. The workflow-confirm Tool schema requires the same JSON object through one string field.
     """
     personas = _personas()
     clarify = personas["clarify"]
     verify = personas["verify"]
-    acceptance_schema = request_accept_rule_tool.to_tool().parameters
     workflow_schema = request_human_workflow_confirm_tool.to_tool().parameters
 
     # Check 1: Clarify defines the task and final deliverables without an acceptance review.
@@ -173,18 +169,11 @@ def test_build_tool_contracts() -> None:
     assert "call `request_human_task_confirm`" in clarify
     assert "request_accept_rule" not in clarify
 
-    # Check 2: The acceptance Tool schema requires that content as one JSON-list string.
-    assert acceptance_schema["required"] == ["rules"]
-    assert acceptance_schema["properties"]["rules"]["type"] == "string"
-    assert "JSON list containing one or two direct final-result statements" in (
-        acceptance_schema["properties"]["rules"]["description"]
-    )
-
-    # Check 3: Verify defines the workflow naming payload and ends on that confirmation call.
+    # Check 2: Verify defines the workflow naming payload and ends on that confirmation call.
     assert 'with JSON `{"default_name": "...", "summary": "..."}`' in verify
     assert "End the turn on that tool call" in verify
 
-    # Check 4: The workflow-confirm Tool schema requires the same JSON object through one string field.
+    # Check 3: The workflow-confirm Tool schema requires the same JSON object through one string field.
     assert workflow_schema["required"] == ["prompt"]
     assert workflow_schema["properties"]["prompt"]["type"] == "string"
     prompt_description = workflow_schema["properties"]["prompt"]["description"]

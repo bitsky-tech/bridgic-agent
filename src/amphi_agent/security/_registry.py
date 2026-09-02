@@ -473,7 +473,7 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
     (r"mcp__.+", Capability.MCP),
     (
-        r"switch|request_build|request_run_workflow|request_accept_rule|request_human_choice|request_human_task_confirm"
+        r"switch|request_build|request_run_workflow|request_human_choice|request_human_task_confirm"
         r"|request_human_workflow_confirm|edit_workflow|report_workflow_step"
         r"|run_subagent|start_subagent",
         Capability.CONTROL,

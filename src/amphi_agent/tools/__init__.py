@@ -55,7 +55,6 @@ from ._filesystem import (
 from ._help import help, help_tool
 from ._image import generate_image, generate_image_tool
 from ._request_human import (
-    request_accept_rule_tool,
     request_build_tool,
     request_run_workflow_tool,
     request_human_choice_tool,
@@ -169,7 +168,6 @@ __all__ = [
     "WORKSPACE_BASIC_TOOL_NAMES",
     "WORKSPACE_ADVANCED_TOOL_NAMES",
     "WORKSPACE_TOOL_NAMES",
-    "request_accept_rule_tool",
     "request_human_choice_tool",
     "request_build_tool",
     "request_run_workflow_tool",

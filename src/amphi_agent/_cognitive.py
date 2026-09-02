@@ -311,7 +311,6 @@ class MainThink(CognitiveWorker):
         for spec in TOOL_LIBRARY.all()
         if spec.tool_name not in {
             "report_workflow_step",
-            "request_accept_rule",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
         }
@@ -1163,7 +1162,7 @@ class MainThink(CognitiveWorker):
             - Build work directory (active, writable): /…/.work/.build
             - Workflow final result directory (active, writable): /…/.work/.run/result
             - Workflow background work directory (active, writable): /…/.work/.run/background/work
-            - Retained Build: stage: generate, operation: create, acceptance: established
+            - Retained Build: stage: generate, operation: create
             - Retained Workflow Run: Example (workflow_id: wf_1, stage: execute,
               step_index: 1, owner: this Session)
             - Mounted directories / files: ["/Users/me/project"]
@@ -1216,18 +1215,12 @@ class MainThink(CognitiveWorker):
                 if build_checkpoint is not None:
                     workflow_id = build_checkpoint.workflow_id
                     operation = "edit" if workflow_id else "create"
-                    acceptance_review = (
-                        "presented"
-                        if build_checkpoint.acceptance_contract is not None
-                        else "not presented"
-                    )
                     details = [
                         f"stage: {build_checkpoint.stage}",
                         f"operation: {operation}",
                     ]
                     if workflow_id:
                         details.append(f"workflow_id: {workflow_id}")
-                    details.append(f"acceptance review: {acceptance_review}")
                     lines.append("- Retained Build: " + ", ".join(details))
 
             run_checkpoint = workspace.run_workflow_checkpoint()
@@ -2449,7 +2442,7 @@ class BuildThink(MainThink):
             operation_lines.extend([
                 "Baseline: Restored from the saved Workflow.",
                 "Preservation: Preserve every unaffected requirement, plan, source file, "
-                "validation check, and dependency.",
+                "and dependency.",
             ])
         else:
             operation_lines = [
@@ -2457,11 +2450,6 @@ class BuildThink(MainThink):
                 "Workflow id: (none; allocated after final confirmation)",
                 "Baseline: New Workflow; no saved baseline is being edited.",
             ]
-        operation_lines.append(
-            "Acceptance review: "
-            + ("presented" if build.acceptance_review_presented else "not presented")
-            + ". task.md is the sole durable source of truth for acceptance criteria."
-        )
         return (
             "<build_workspace>\n"
             + "\n".join(operation_lines)
@@ -2577,7 +2565,6 @@ class ClarifyThink(BuildThink):
 
     persona: str = CLARIFY_PERSONA
     allowed_tools = BuildThink.allowed_tools | {
-        "request_accept_rule",
         "request_human_task_confirm",
     }
 
@@ -2670,27 +2657,10 @@ class ClarifyThink(BuildThink):
             ``None`` when legal; otherwise an actionable rejection reason.
         """
         tool_name = getattr(call, "tool", None)
-        if tool_name == "request_accept_rule":
-            build = self.build_space(context)
-            if build is None:
-                return "acceptance review rejected: there is no active Build."
-            if build.acceptance_review_presented:
-                return (
-                    "acceptance review rejected: this Build already has its one-time "
-                    "acceptance outline; refine task.md and the validation design around "
-                    "that outline instead of presenting another review."
-                )
-            return None
         if tool_name == "request_human_task_confirm":
             reason = self.task_validation_reason(context)
             if reason:
                 return f"task confirmation rejected: {reason}"
-            build = self.build_space(context)
-            if build is None or not build.acceptance_review_presented:
-                return (
-                    "task confirmation rejected: call request_accept_rule and obtain "
-                    "the one-time acceptance outline first."
-                )
             return None
         if tool_name != "switch":
             return None

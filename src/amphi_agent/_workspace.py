@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
+from typing import Callable, Dict, Iterable, List, Literal, Optional, Sequence
 from uuid import uuid4
 
 from dulwich import porcelain
@@ -67,25 +67,8 @@ class BuildState(BaseModel):
 
     stage: Literal["clarify", "explore", "generate", "verify"] = "clarify"
     workflow_id: Optional[str] = None
-    acceptance_contract: Optional[dict[str, str]] = None
     edit_task_baseline: Optional[str] = None
     last_task_confirmation: Optional[dict[str, str]] = None
-
-    @field_validator("acceptance_contract", mode="before")
-    @classmethod
-    def _validate_acceptance_contract(
-        cls,
-        value: object,
-    ) -> Optional[dict[str, str]]:
-        """Retain only the one-time review identity from old or new state."""
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise ValueError("Build acceptance contract is invalid")
-        request_id = value.get("request_id")
-        if not isinstance(request_id, str) or not request_id.strip():
-            raise ValueError("Build acceptance contract request id is invalid")
-        return {"request_id": request_id}
 
     @field_validator("workflow_id")
     @classmethod
@@ -804,25 +787,6 @@ class BuildSpace:
         return state.workflow_id if state is not None else None
 
     @property
-    def acceptance_contract(self) -> Optional[dict[str, str]]:
-        """The one-time acceptance-review receipt for this Build."""
-        state = self.checkpoint()
-        if state is None or state.acceptance_contract is None:
-            return None
-        return dict(state.acceptance_contract)
-
-    @property
-    def acceptance_review_request_id(self) -> Optional[str]:
-        """Identity of this Build's already-presented one-time AC review."""
-        contract = self.acceptance_contract
-        return contract["request_id"] if contract is not None else None
-
-    @property
-    def acceptance_review_presented(self) -> bool:
-        """Whether this Build has already presented its one-time AC review."""
-        return self.acceptance_review_request_id is not None
-
-    @property
     def last_task_confirmation(self) -> Optional[dict[str, str]]:
         """The exact ``task.md`` snapshot reviewed in the previous card."""
         state = self.checkpoint()
@@ -849,8 +813,6 @@ class BuildSpace:
                 state = self.checkpoint()
                 if state is None:
                     raise FileNotFoundError(f"Build directory is missing or invalid: {self.root}")
-                # Rewriting the parsed checkpoint physically removes legacy
-                # acceptance-contract fields other than its request identity.
                 self._write_state(state)
                 return
             if operation != "create":
@@ -905,28 +867,6 @@ class BuildSpace:
             current.model_copy(update={"edit_task_baseline": task_markdown})
         )
 
-    def start_acceptance_review(self, request_id: str) -> str:
-        """Record only that the one-time AC review has been presented.
-
-        Candidate and selected rules deliberately stay out of ``.state.json``.
-        They travel in the interaction/tool result, while ``task.md`` remains
-        the Build's sole durable acceptance-criteria source of truth.
-        """
-        if not isinstance(request_id, str) or not request_id:
-            raise ValueError("acceptance review requires a request id")
-        existing = self.acceptance_review_request_id
-        if existing is not None:
-            if existing != request_id:
-                raise ValueError("This Build already has an acceptance review")
-            return existing
-        current = self._state or BuildState()
-        self._write_state(
-            current.model_copy(update={
-                "acceptance_contract": {"request_id": request_id},
-            })
-        )
-        return request_id
-
     ############################################################################
     # Helper Method
     ############################################################################
@@ -946,10 +886,11 @@ class BuildSpace:
         ):
             return None
         try:
-            return BuildState.model_validate_json(
-                self._state_path.read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeError, ValueError):
+            payload = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                payload.pop("acceptance_contract", None)
+            return BuildState.model_validate(payload)
+        except (OSError, UnicodeError, ValueError, TypeError):
             return None
 
     @property
