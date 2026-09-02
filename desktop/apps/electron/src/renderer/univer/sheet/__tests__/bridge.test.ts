@@ -300,8 +300,9 @@ describe('SheetBridge — reads and writes', () => {
   test('write rejects a shape that is not rows of cells', () => {
     const { facade } = fakeFacade()
     const bridge = new SheetBridge(facade)
-    expect(() => bridge.writeRange('A1', [])).toThrow(SheetBridgeError)
-    expect(() => bridge.writeRange('A1', ['a' as unknown as CellValue[]])).toThrow(SheetBridgeError)
+    expect(() => bridge.writeRange('A1', [])).toThrow(/non-empty array of rows/)
+    expect(() => bridge.writeRange('A1', ['a' as unknown as CellValue[]]))
+      .toThrow(/for example \[\["Product", "Price"\]/)
   })
 
   test('setFormula requires a leading "="', () => {

@@ -315,11 +315,12 @@ export class SheetBridge {
   }
 
   writeRange(a1: string, values: CellValue[][], sheetName?: string): WriteResult {
-    if (!Array.isArray(values) || values.length === 0) {
-      throw new SheetBridgeError('values must be a non-empty array of rows')
-    }
-    if (values.some((row) => !Array.isArray(row))) {
-      throw new SheetBridgeError('values must be an array of rows, each an array of cells')
+    // The tools check this before calling, so reaching here means something
+    // bypassed them; say the shape anyway rather than only that it is wrong.
+    if (!Array.isArray(values) || values.length === 0 || values.some((row) => !Array.isArray(row))) {
+      throw new SheetBridgeError(
+        'values must be a non-empty array of rows, for example [["Product", "Price"], ["Mouse", 89]]',
+      )
     }
     return this.mutate(a1, sheetName, (range) => {
       range.setValues(values.map((row) => row.map((cell) => ({ v: cell }))))

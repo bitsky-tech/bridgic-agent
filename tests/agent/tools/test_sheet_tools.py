@@ -177,7 +177,7 @@ async def test_sheet_write_rejects_bad_input(tool_harness: ToolHarness) -> None:
     browser = _RecordingSheetBrowser({"writeRange": {}})
     tool_harness.context.browser = browser  # type: ignore[assignment]
 
-    with pytest.raises(ValueError, match="at least one row"):
+    with pytest.raises(ValueError, match="non-empty array of rows"):
         await sheet_write("A1", [])
     with pytest.raises(ValueError, match="a1 is required"):
         await sheet_write("  ", [["a"]])

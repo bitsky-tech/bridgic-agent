@@ -18,6 +18,15 @@ from typing import Any, List, Literal, Optional
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
+from ._arguments import (
+    require_bool,
+    require_choice,
+    require_int,
+    require_number,
+    require_rows,
+    require_str_list,
+    require_text,
+)
 from ._filesystem import _resolve_file, display_path
 from ._workbench import get_workbench_browser, open_workbench, workbench_status
 
@@ -69,6 +78,15 @@ SHEET_ADVANCED_TOOL_NAMES = frozenset({
 SHEET_TOOL_NAMES = SHEET_BASIC_TOOL_NAMES | SHEET_ADVANCED_TOOL_NAMES
 
 _MAX_WRITE_CELLS = 5_000
+_BORDER_TYPES = (
+    "all", "bottom", "horizontal", "inside", "left",
+    "none", "outside", "right", "top", "vertical",
+)
+_BORDER_STYLES = ("thin", "medium", "thick", "dashed", "dotted", "double", "none")
+# A read is the one operation whose size the caller cannot see in advance, so it
+# is capped here the way the browser's page snapshots are: an unbounded read of
+# a large sheet would spend the whole context window in one call.
+_MAX_READ_CHARACTERS = 20_000
 
 
 async def _call(method: str, args: List[Any]) -> Any:
@@ -85,10 +103,9 @@ async def _call_dict(method: str, args: List[Any]) -> dict:
 
 
 def _require_a1(a1: str) -> str:
-    value = (a1 or "").strip()
-    if not value:
+    if not isinstance(a1, str) or not a1.strip():
         raise ValueError('a1 is required, for example "A1" or "A1:C3"')
-    return value
+    return a1.strip()
 
 
 def _render_status(status: dict) -> str:
@@ -133,13 +150,27 @@ async def sheet_read(a1: str, sheet: Optional[str] = None) -> str:
         sheet: Sheet name; the active sheet is used when omitted.
 
     Returns:
-        A JSON array of rows; an empty cell reads as ``null``.
+        A JSON array of rows; an empty cell reads as ``null``. A range too large
+        to return is cut off at a row boundary, with a note saying so — call
+        ``sheet_data_range`` first to see how far the data actually goes.
     """
     result = await _call_dict("readRange", [_require_a1(a1), sheet])
     values = result.get("values") if isinstance(result, dict) else None
     if not isinstance(values, list):
         raise RuntimeError("The workbench page returned an unreadable range")
-    return json.dumps(values, ensure_ascii=False)
+    rendered = json.dumps(values, ensure_ascii=False)
+    if len(rendered) <= _MAX_READ_CHARACTERS:
+        return rendered
+    kept = list(values)
+    # Drop whole rows, never a partial one: the reply stays valid JSON.
+    while kept and len(json.dumps(kept, ensure_ascii=False)) > _MAX_READ_CHARACTERS:
+        kept.pop()
+    omitted = len(values) - len(kept)
+    return (
+        f"{json.dumps(kept, ensure_ascii=False)}\n"
+        f"[{omitted} more row(s) were not returned because the range is too large. "
+        f"Read a smaller range, or call sheet_data_range to see where the data ends.]"
+    )
 
 
 async def sheet_write(a1: str, values: List[List[Any]], sheet: Optional[str] = None) -> str:
@@ -152,14 +183,15 @@ async def sheet_write(a1: str, values: List[List[Any]], sheet: Optional[str] = N
 
     Args:
         a1: Where the first row and column land, such as ``A1``.
-        values: Rows of cell values (strings, numbers, booleans, or ``null``).
+        values: An array of ROWS, where each row is itself an array of cell
+            values (strings, numbers, booleans, or ``null``). For example
+            ``[["Product", "Price"], ["Mouse", 89]]``.
         sheet: Sheet name; the active sheet is used when omitted.
 
     Returns:
         A short confirmation with the written shape.
     """
-    if not values:
-        raise ValueError("values must contain at least one row")
+    values = require_rows(values)
     cells = sum(len(row) for row in values)
     if cells > _MAX_WRITE_CELLS:
         raise ValueError(
@@ -182,7 +214,7 @@ async def sheet_formula(a1: str, formula: str, sheet: Optional[str] = None) -> s
     Returns:
         A short confirmation.
     """
-    text = (formula or "").strip()
+    text = require_text("formula", formula).strip()
     if not text.startswith("="):
         raise ValueError('formula must start with "=", for example "=SUM(B2:B10)"')
     await _call("setFormula", [_require_a1(a1), text, sheet])
@@ -215,7 +247,7 @@ async def sheet_changes(limit: int = 20) -> str:
     Returns:
         One line per edit, newest last, or a note that nothing has changed.
     """
-    changes = await _call("recentChanges", [limit])
+    changes = await _call("recentChanges", [require_int("limit", limit, minimum=1)])
     if not isinstance(changes, list) or not changes:
         return "No edits have been recorded since the workbook was opened."
     lines = [
@@ -336,14 +368,14 @@ async def sheet_format(
     """
     options = {
         "background": background,
-        "bold": bold,
+        "bold": None if bold is None else require_bool("bold", bold),
         "fontColor": font_color,
-        "fontSize": font_size,
+        "fontSize": None if font_size is None else require_int("font_size", font_size, minimum=1),
         "horizontalAlign": horizontal_align,
-        "italic": italic,
+        "italic": None if italic is None else require_bool("italic", italic),
         "numberFormat": number_format,
         "verticalAlign": vertical_align,
-        "wrap": wrap,
+        "wrap": None if wrap is None else require_bool("wrap", wrap),
     }
     applied = {key: value for key, value in options.items() if value is not None}
     if not applied:
@@ -374,7 +406,13 @@ async def sheet_border(
     Returns:
         A short confirmation.
     """
-    await _call("border", [_require_a1(a1), border_type, style, color, sheet])
+    await _call("border", [
+        _require_a1(a1),
+        require_choice("border_type", border_type, _BORDER_TYPES),
+        require_choice("style", style, _BORDER_STYLES),
+        color,
+        sheet,
+    ])
     return f"Set {border_type} {style} borders on {a1}."
 
 
@@ -394,7 +432,11 @@ async def sheet_merge(
     Returns:
         A short confirmation.
     """
-    await _call("merge", [_require_a1(a1), mode, sheet])
+    await _call("merge", [
+        _require_a1(a1),
+        require_choice("mode", mode, ("all", "across", "vertically", "break")),
+        sheet,
+    ])
     return f"Applied merge mode {mode} to {a1}."
 
 
@@ -415,7 +457,12 @@ async def sheet_insert_lines(
     Returns:
         A short confirmation.
     """
-    await _call("insertLines", [axis, index, count, sheet])
+    await _call("insertLines", [
+        require_choice("axis", axis, ("rows", "columns")),
+        require_int("index", index, minimum=0),
+        require_int("count", count, minimum=1),
+        sheet,
+    ])
     return f"Inserted {count} {axis} at {index}."
 
 
@@ -436,7 +483,12 @@ async def sheet_delete_lines(
     Returns:
         A short confirmation.
     """
-    await _call("deleteLines", [axis, index, count, sheet])
+    await _call("deleteLines", [
+        require_choice("axis", axis, ("rows", "columns")),
+        require_int("index", index, minimum=0),
+        require_int("count", count, minimum=1),
+        sheet,
+    ])
     return f"Deleted {count} {axis} at {index}."
 
 
@@ -459,7 +511,13 @@ async def sheet_resize_lines(
     Returns:
         A short confirmation.
     """
-    await _call("resizeLines", [axis, index, count, pixels, sheet])
+    await _call("resizeLines", [
+        require_choice("axis", axis, ("rows", "columns")),
+        require_int("index", index, minimum=0),
+        require_int("count", count, minimum=1),
+        require_int("pixels", pixels, minimum=1),
+        sheet,
+    ])
     return f"Sized {count} {axis} at {index} to {pixels}px."
 
 
@@ -474,6 +532,8 @@ async def sheet_freeze(rows: int = 0, columns: int = 0, sheet: Optional[str] = N
     Returns:
         A short confirmation.
     """
+    rows = require_int("rows", rows, minimum=0)
+    columns = require_int("columns", columns, minimum=0)
     await _call("freeze", [rows, columns, sheet])
     if rows == 0 and columns == 0:
         return "Released the frozen rows and columns."
@@ -489,7 +549,7 @@ async def sheet_new_tab(name: str) -> str:
     Returns:
         A short confirmation naming the created sheet.
     """
-    result = await _call_dict("addSheet", [name])
+    result = await _call_dict("addSheet", [require_text("name", name)])
     return f"Added sheet {result.get('name')}."
 
 
@@ -503,7 +563,9 @@ async def sheet_rename_tab(name: str, new_name: str) -> str:
     Returns:
         A short confirmation.
     """
-    result = await _call_dict("renameSheet", [name, new_name])
+    result = await _call_dict(
+        "renameSheet", [require_text("name", name), require_text("new_name", new_name)],
+    )
     return f"Renamed {name} to {result.get('name')}."
 
 
@@ -516,7 +578,7 @@ async def sheet_delete_tab(name: str) -> str:
     Returns:
         A short confirmation.
     """
-    await _call("removeSheet", [name])
+    await _call("removeSheet", [require_text("name", name)])
     return f"Deleted sheet {name}."
 
 
@@ -529,7 +591,7 @@ async def sheet_switch_tab(name: str) -> str:
     Returns:
         A short confirmation.
     """
-    result = await _call_dict("activateSheet", [name])
+    result = await _call_dict("activateSheet", [require_text("name", name)])
     return f"Switched to sheet {result.get('name')}."
 
 
@@ -551,7 +613,10 @@ async def sheet_sort(
     Returns:
         A short confirmation.
     """
-    await _call("sortRange", [_require_a1(a1), column, ascending, sheet])
+    ascending = require_bool("ascending", ascending)
+    await _call("sortRange", [
+        _require_a1(a1), require_int("column", column, minimum=0), ascending, sheet,
+    ])
     direction = "ascending" if ascending else "descending"
     return f"Sorted {a1} by column {column}, {direction}."
 
@@ -574,7 +639,7 @@ async def sheet_filter(
     Returns:
         A short confirmation.
     """
-    if action == "remove":
+    if require_choice("action", action, ("add", "remove")) == "remove":
         await _call("removeFilter", [sheet])
         return "Removed the filter."
     if not a1:
@@ -601,9 +666,10 @@ async def sheet_find_replace(
     Returns:
         How many cells matched and, when replacing, how many changed.
     """
-    if not (find or "").strip():
-        raise ValueError("find is required")
-    result = await _call_dict("findReplace", [find, replace, match_case])
+    find = require_text("find", find)
+    result = await _call_dict(
+        "findReplace", [find, replace, require_bool("match_case", match_case)],
+    )
     matches = result.get("matches")
     if replace is None:
         return f"{matches} cell(s) contain {find!r}."
@@ -627,7 +693,7 @@ async def sheet_link(
     Returns:
         A short confirmation.
     """
-    await _call("setHyperlink", [_require_a1(a1), url, label, sheet])
+    await _call("setHyperlink", [_require_a1(a1), require_text("url", url), label, sheet])
     return f"Linked {a1} to {url}."
 
 
@@ -646,9 +712,7 @@ async def sheet_comment(a1: str, text: str, sheet: Optional[str] = None) -> str:
     Returns:
         A short confirmation.
     """
-    if not (text or "").strip():
-        raise ValueError("text is required")
-    await _call("addComment", [_require_a1(a1), text, sheet])
+    await _call("addComment", [_require_a1(a1), require_text("text", text), sheet])
     return f"Commented on {a1}."
 
 
@@ -677,16 +741,16 @@ async def sheet_validate(
     Returns:
         A short confirmation.
     """
-    spec: dict = {"type": rule}
+    spec: dict = {"type": require_choice("rule", rule, ("list", "numberBetween", "checkbox"))}
     if rule == "list":
         if not values:
             raise ValueError("values is required for a list rule")
-        spec["values"] = values
+        spec["values"] = require_str_list("values", values)
     elif rule == "numberBetween":
         if minimum is None or maximum is None:
             raise ValueError("minimum and maximum are required for a numberBetween rule")
-        spec["min"] = minimum
-        spec["max"] = maximum
+        spec["min"] = require_number("minimum", minimum)
+        spec["max"] = require_number("maximum", maximum)
     await _call("setDataValidation", [_require_a1(a1), spec, sheet])
     return f"Constrained {a1} to {rule}."
 
@@ -723,23 +787,25 @@ async def sheet_highlight(
     Returns:
         A short confirmation.
     """
-    spec: dict = {"when": when}
+    conditions = ("greaterThan", "lessThan", "between", "textContains", "duplicates")
+    spec: dict = {"when": require_choice("when", when, conditions)}
     if when in ("greaterThan", "lessThan"):
         if value is None:
             raise ValueError(f"value is required for a {when} rule")
-        spec["value"] = value
+        spec["value"] = require_number("value", value)
     elif when == "between":
         if minimum is None or maximum is None:
             raise ValueError("minimum and maximum are required for a between rule")
-        spec["min"] = minimum
-        spec["max"] = maximum
+        spec["min"] = require_number("minimum", minimum)
+        spec["max"] = require_number("maximum", maximum)
     elif when == "textContains":
-        if not text:
-            raise ValueError("text is required for a textContains rule")
-        spec["text"] = text
-    for key, item in (("background", background), ("fontColor", font_color), ("bold", bold)):
-        if item is not None:
-            spec[key] = item
+        spec["text"] = require_text("text", text)
+    if background is not None:
+        spec["background"] = background
+    if font_color is not None:
+        spec["fontColor"] = font_color
+    if bold is not None:
+        spec["bold"] = require_bool("bold", bold)
     if not any(key in spec for key in ("background", "fontColor", "bold")):
         raise ValueError("give at least one of background, font_color or bold")
     await _call("addConditionalFormat", [_require_a1(a1), spec, sheet])
@@ -760,7 +826,7 @@ async def sheet_save(file_path: str) -> str:
         A short confirmation with the written path.
     """
     snapshot = await _call("snapshot", [])
-    abs_path = _resolve_file(file_path)
+    abs_path = _resolve_file(require_text("file_path", file_path))
     parent = os.path.dirname(abs_path)
     if parent:
         os.makedirs(parent, exist_ok=True)

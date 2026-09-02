@@ -116,7 +116,7 @@ async def test_doc_writes_reject_bad_input(tool_harness: ToolHarness) -> None:
 
     Checks:
     1. Blank text is refused before it reaches the page.
-    2. A negative offset is refused with the unit it expects.
+    2. A negative offset is refused with the bound it expects.
     3. A span whose end precedes its start is refused locally.
     """
     browser = _RecordingDocBrowser({"append": {}})
@@ -124,7 +124,7 @@ async def test_doc_writes_reject_bad_input(tool_harness: ToolHarness) -> None:
 
     with pytest.raises(ValueError, match="text is required"):
         await doc_append("   ")
-    with pytest.raises(ValueError, match="whole number of characters"):
+    with pytest.raises(ValueError, match="offset must be 0 or more"):
         await doc_insert("x", -1)
     with pytest.raises(ValueError, match="must not be before"):
         await doc_replace(9, 2, "x")

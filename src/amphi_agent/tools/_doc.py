@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
+from ._arguments import require_int, require_text
 from ._filesystem import _resolve_file, display_path
 from ._workbench import get_workbench_browser, open_workbench, workbench_status
 
@@ -38,11 +39,14 @@ DOC_TOOL_NAMES = frozenset({
 })
 
 _MAX_WRITE_CHARACTERS = 100_000
+# Reading is capped for the same reason the spreadsheet's is. Cutting the tail
+# is safe here in a way cutting the head would not be: offsets count from the
+# start, so every offset in what is returned still addresses the same text.
+_MAX_READ_CHARACTERS = 20_000
 
 
 def _require_text(text: str) -> str:
-    if not (text or "").strip():
-        raise ValueError("text is required")
+    text = require_text("text", text)
     if len(text) > _MAX_WRITE_CHARACTERS:
         raise ValueError(
             f"text is {len(text)} characters; write at most "
@@ -52,9 +56,7 @@ def _require_text(text: str) -> str:
 
 
 def _require_offset(name: str, offset: int) -> int:
-    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
-        raise ValueError(f"{name} must be a whole number of characters from the start")
-    return offset
+    return require_int(name, offset, minimum=0)
 
 
 def _render_status(status: dict) -> str:
@@ -99,13 +101,20 @@ async def doc_read() -> str:
     Paragraph and section breaks read as newlines.
 
     Returns:
-        The document text.
+        The document text. A long document is cut off at the end, with a note
+        saying how much is missing; offsets in what is returned stay correct.
     """
     result = await _call("read")
     text = result.get("text") if isinstance(result, dict) else None
     if not isinstance(text, str):
         raise RuntimeError("The workbench page returned an unreadable document")
-    return text
+    if len(text) <= _MAX_READ_CHARACTERS:
+        return text
+    return (
+        f"{text[:_MAX_READ_CHARACTERS]}\n"
+        f"[The document continues for {len(text) - _MAX_READ_CHARACTERS} more character(s). "
+        f"Offsets above are still correct; use doc_status for the full length.]"
+    )
 
 
 async def doc_append(text: str) -> str:
@@ -182,7 +191,7 @@ async def doc_save(file_path: str) -> str:
         A short confirmation with the written path.
     """
     snapshot = await _call("snapshot")
-    abs_path = _resolve_file(file_path)
+    abs_path = _resolve_file(require_text("file_path", file_path))
     parent = os.path.dirname(abs_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
