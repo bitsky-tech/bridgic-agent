@@ -504,14 +504,14 @@ describe('Pipeline', () => {
                 content: '',
                 toolCalls: [{
                   toolUseId: 'powerpoint-update',
-                  name: 'update_ppt_page',
-                  input: { page_id: 'page-1', markdown: '# Updated' },
+                  name: 'edit_ppt_page',
+                  input: { page_id: 'page-1', ref: 'title', replacement: '<PptText>Updated</PptText>' },
                 }],
                 blocks: [{
                   type: 'tool',
                   toolUseId: 'powerpoint-update',
-                  name: 'update_ppt_page',
-                  input: { page_id: 'page-1', markdown: '# Updated' },
+                  name: 'edit_ppt_page',
+                  input: { page_id: 'page-1', ref: 'title', replacement: '<PptText>Updated</PptText>' },
                 }],
                 startedAt: Date.now(),
               },

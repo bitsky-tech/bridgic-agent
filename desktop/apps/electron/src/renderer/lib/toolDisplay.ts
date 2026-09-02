@@ -236,7 +236,15 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   // ── PowerPoint ──
   view_ppt: { verb: 'tool.verb.pptView', subjectKeys: ['target'], subjectAs: 'path' },
   get_ppt_page: { verb: 'tool.verb.pptGetPage', subjectKeys: ['page_id'], subjectMono: true },
-  update_ppt_page: { verb: 'tool.verb.pptUpdatePage', subjectKeys: ['page_id'], subjectMono: true },
+  update_ppt_design: { verb: 'tool.verb.pptUpdateDesign', subjectKeys: ['theme', 'page_size'] },
+  edit_ppt_page: { verb: 'tool.verb.pptEditPage', subjectKeys: ['page_id'], noteKeys: ['ref'], subjectMono: true },
+  insert_ppt_element: { verb: 'tool.verb.pptInsertElement', subjectKeys: ['page_id'], subjectMono: true },
+  remove_ppt_element: {
+    verb: 'tool.verb.pptRemoveElement',
+    subjectKeys: ['page_id'],
+    noteKeys: ['ref'],
+    subjectMono: true,
+  },
   insert_ppt_page: { verb: 'tool.verb.pptInsertPage', subjectKeys: ['after_page_id'], subjectMono: true },
   remove_ppt_page: { verb: 'tool.verb.pptRemovePage', subjectKeys: ['page_id'], subjectMono: true },
   move_ppt_page: {

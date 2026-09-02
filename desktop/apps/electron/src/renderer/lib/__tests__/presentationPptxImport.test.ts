@@ -7,6 +7,7 @@ import { createPresentationPptx } from '../presentationPptx'
 describe('importPresentationPptx', () => {
   it('round-trips editable slides, geometry, notes and page size', async () => {
     const source = createInitialPresentationDocument()
+    source.master.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
     source.pageSize = PRESENTATION_PAGE_SIZES.standard
     source.slides[0]!.notes = 'Presenter note'
     const animated = source.slides[0]!.elements.find((element) => element.type === 'text')!
@@ -19,6 +20,7 @@ describe('importPresentationPptx', () => {
 
     expect(imported.title).toBe('round-trip')
     expect(imported.pageSize).toEqual(PRESENTATION_PAGE_SIZES.standard)
+    expect(imported.master.accentColors).toEqual(source.master.accentColors)
     expect(imported.slides).toHaveLength(source.slides.length)
     expect(imported.slides[0]!.notes).toContain('Presenter note')
     expect(imported.slides[0]!.elements.some((element) => element.type === 'text')).toBe(true)

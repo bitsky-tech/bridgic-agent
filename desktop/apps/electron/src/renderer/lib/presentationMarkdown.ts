@@ -16,6 +16,7 @@ import {
   type PresentationTextElement,
   type PresentationTransition,
 } from '@/atoms/presentation'
+import { normalizePresentationDesignColor, presentationThemeTextColors } from '@/lib/presentationDesign'
 
 export type PresentationMarkdownAssets = Record<string, PresentationFileSource>
 
@@ -36,6 +37,17 @@ interface CompilePresentationSlideMarkdownOptions extends CompilePresentationMar
 interface CompilePresentationSlideMarkdownResult {
   diagnostics: string[]
   slide: PresentationSlide
+}
+
+interface CompilePresentationElementMarkdownOptions extends CompilePresentationMarkdownOptions {
+  document: PresentationDocument
+  elementId?: string
+  slide: PresentationSlide
+}
+
+interface CompilePresentationElementMarkdownResult {
+  diagnostics: string[]
+  element: PresentationElement
 }
 
 interface ParsedSlideSource {
@@ -109,7 +121,7 @@ const ANIMATION_STARTS = new Set(['onClick', 'withPrevious', 'afterPrevious'])
 const ANIMATION_TRIGGERS = new Set(['slideClick', 'elementClick'])
 const MEDIA_COMPONENT_NAMES = new Set<NativeComponent['name']>(['PptImage', 'PptAudio', 'PptVideo'])
 const COMMON_COMPONENT_ATTRS = new Set([
-  'id', 'x', 'y', 'width', 'height', 'rotation', 'opacity', 'groupId', 'shadow',
+  'id', 'ref', 'x', 'y', 'width', 'height', 'rotation', 'opacity', 'groupId', 'shadow',
   'flipHorizontal', 'flipVertical',
   'animation', 'animationDuration', 'animationDelay', 'animationStart', 'animationTrigger',
   'animationColor', 'href', 'slideHref', 'tooltip',
@@ -203,9 +215,56 @@ export function compilePresentationSlideMarkdown(
   return { diagnostics, slide }
 }
 
+/** Compile exactly one canonical Ppt* element fragment against a live slide. */
+export function compilePresentationElementMarkdown(
+  markdown: string,
+  options: CompilePresentationElementMarkdownOptions,
+): CompilePresentationElementMarkdownResult {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new TypeError('PowerPoint element Markdown is required')
+  const components = parseNativeComponents(markdown)
+  if (!components || components.length !== 1) {
+    throw new Error('PowerPoint element Markdown must contain exactly one Ppt* element')
+  }
+  const component = components[0]!
+  const requested = componentRef(component.attrs)
+  if (options.elementId) {
+    if (requested && requested !== options.elementId) {
+      throw new Error(`PowerPoint element ref must remain ${options.elementId}`)
+    }
+    component.attrs.ref = options.elementId
+    delete component.attrs.id
+  } else if (requested) {
+    throw new Error('A new PowerPoint element must not provide id or ref; the editor assigns its ref')
+  }
+  const usedElementIds = new Set(options.document.slides.flatMap((slide) => (
+    slide.elements.flatMap((element) => element.id === options.elementId ? [] : [element.id])
+  )))
+  const diagnostics: string[] = []
+  const context: ElementCompilerContext = {
+    assets: options.assets ?? {},
+    cursor: { full: 56, left: 76, right: 76, slot: 'full' },
+    diagnostics,
+    elementOrdinal: options.slide.elements.length,
+    existingDocument: options.existingDocument ?? options.document,
+    pageSize: options.document.pageSize,
+    slideId: options.slide.id,
+    usedElementIds,
+  }
+  return { diagnostics, element: compileNativeComponent(component, context) }
+}
+
 /** Return the local paths referenced by parsed Markdown without mutating any presentation state. */
 export function inspectPresentationMarkdownAssets(markdown: string): string[] {
   const paths = new Set<string>()
+  if (markdown.trimStart().startsWith('<Ppt')) {
+    const components = parseNativeComponents(markdown)
+    if (!components || components.length !== 1) {
+      throw new Error('PowerPoint element Markdown must contain exactly one Ppt* element')
+    }
+    const component = components[0]!
+    if (MEDIA_COMPONENT_NAMES.has(component.name)) collectAssetPath(component.attrs.src, paths)
+    return [...paths]
+  }
   for (const source of parsePresentationMarkdown(markdown)) {
     const parsed = extractNotes(source.body)
     const tokens = marked.lexer(parsed.body, { gfm: true })
@@ -231,6 +290,11 @@ export function decompilePresentationSlideMarkdown(
   slide: PresentationSlide,
 ): string {
   return decompileSlide(slide)
+}
+
+/** Produce one canonical Agent-editable element fragment with a stable ref. */
+export function decompilePresentationElementMarkdown(element: PresentationElement): string {
+  return decompileElement(element)
 }
 
 function parsePresentationMarkdown(markdown: string): ParsedSlideSource[] {
@@ -343,7 +407,7 @@ function compileSlideSource(
   }
   return {
     ...template,
-    background: optionalString(frontmatter.background) ?? '#FFFFFF',
+    background: optionalString(frontmatter.background) ?? context.existingDocument?.master.background ?? '#FFFFFF',
     ...(frontmatter.comments === undefined ? {} : { comments: parseComments(frontmatter.comments, id) }),
     elements,
     ...(frontmatter.footer === undefined ? {} : { footer: parseFooter(frontmatter.footer, 'footer') }),
@@ -524,13 +588,14 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   }
   if (component.name === 'PptText') {
     const defaults = allocateBox(context, numberAttr(attrs.height, 80))
+    const textColors = presentationThemeTextColors(context.existingDocument?.master.background ?? '#FFFFFF')
     return withCommonAttrs({
       ...defaults,
-      id: reserveElementId(context, attrs.id, 'text'),
+      id: reserveElementId(context, componentRef(attrs), 'text'),
       type: 'text',
       text: decodeEntities(component.body),
       fontSize: numberAttr(attrs.fontSize, 28),
-      fontFamily: attrs.fontFamily ?? 'Aptos',
+      fontFamily: attrs.fontFamily ?? context.existingDocument?.master.bodyFontFamily ?? 'Aptos',
       fontWeight: enumNumberAttr(attrs.fontWeight, new Set([400, 500, 600, 700]), 400),
       italic: booleanAttr(attrs.italic, false),
       underline: booleanAttr(attrs.underline, false),
@@ -541,7 +606,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
       lineHeight: numberAttr(attrs.lineHeight, 1.08),
       indentLevel: numberAttr(attrs.indentLevel, 0),
       listStyle: enumAttr(attrs.listStyle, new Set<NonNullable<PresentationTextElement['listStyle']>>(['none', 'bullet', 'number']), 'none'),
-      color: attrs.color ?? '#20202B',
+      color: attrs.color ?? textColors.secondary,
       align: enumAttr(attrs.align, new Set(['left', 'center', 'right', 'justify']), 'left'),
       verticalAlign: enumAttr(attrs.verticalAlign, new Set<NonNullable<PresentationTextElement['verticalAlign']>>(['top', 'middle', 'bottom']), 'top'),
       textDirection: enumAttr(attrs.textDirection, new Set<NonNullable<PresentationTextElement['textDirection']>>([
@@ -561,19 +626,20 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptShape') {
     const kind = enumAttr(attrs.kind ?? attrs.type, SHAPE_TYPES, 'rect')
     const defaults = allocateBox(context, numberAttr(attrs.height, 120))
+    const accent = context.existingDocument?.master.accentColors[0] ?? '#5B67F1'
     return withCommonAttrs({
       ...defaults,
-      id: reserveElementId(context, attrs.id, kind),
+      id: reserveElementId(context, componentRef(attrs), kind),
       type: kind,
-      fill: attrs.fill ?? '#5B67F1',
-      borderColor: attrs.borderColor ?? '#4348B8',
+      fill: attrs.fill ?? accent,
+      borderColor: attrs.borderColor ?? accent,
       borderWidth: numberAttr(attrs.borderWidth, 1),
       ...(attrs.radius === undefined ? {} : { radius: numberAttr(attrs.radius, 0) }),
     }, attrs)
   }
   if (component.name === 'PptImage') {
     const defaults = allocateBox(context, numberAttr(attrs.height, 260))
-    const id = reserveElementId(context, attrs.id, 'image')
+    const id = reserveElementId(context, componentRef(attrs), 'image')
     return withCommonAttrs({
       ...defaults,
       id,
@@ -597,7 +663,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptAudio' || component.name === 'PptVideo') {
     const type = component.name === 'PptAudio' ? 'audio' : 'video'
     const defaults = allocateBox(context, numberAttr(attrs.height, type === 'audio' ? 80 : 260))
-    const id = reserveElementId(context, attrs.id, type)
+    const id = reserveElementId(context, componentRef(attrs), type)
     return withCommonAttrs({
       ...defaults,
       id,
@@ -611,24 +677,28 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptTable') {
     const cells = parseMarkdownTable(component.body)
     const defaults = allocateBox(context, numberAttr(attrs.height, Math.max(100, cells.length * 42)))
+    const background = context.existingDocument?.master.background ?? '#FFFFFF'
+    const accent = context.existingDocument?.master.accentColors[0] ?? '#5B67F1'
+    const textColors = presentationThemeTextColors(background)
     return withCommonAttrs({
       ...defaults,
-      id: reserveElementId(context, attrs.id, 'table'),
+      id: reserveElementId(context, componentRef(attrs), 'table'),
       type: 'table',
       cells,
       headerRow: booleanAttr(attrs.headerRow, true),
-      headerFill: attrs.headerFill ?? '#E8EAF0',
-      bodyFill: attrs.bodyFill ?? '#FFFFFF',
-      textColor: attrs.textColor ?? '#20202B',
+      headerFill: attrs.headerFill ?? accent,
+      bodyFill: attrs.bodyFill ?? background,
+      textColor: attrs.textColor ?? textColors.primary,
       borderColor: attrs.borderColor ?? '#B8BCC8',
       fontSize: numberAttr(attrs.fontSize, 18),
     }, attrs)
   }
   const chartData = parseChartData(component.body)
   const defaults = allocateBox(context, numberAttr(attrs.height, 300))
+  const chartColors = context.existingDocument?.master.accentColors ?? ['#5B67F1']
   return withCommonAttrs({
     ...defaults,
-    id: reserveElementId(context, attrs.id, 'chart'),
+    id: reserveElementId(context, componentRef(attrs), 'chart'),
     type: 'chart',
     chartType: enumAttr(attrs.type ?? attrs.chartType, new Set(['column', 'bar', 'line', 'pie', 'doughnut']), 'column'),
     categories: chartData.categories,
@@ -636,7 +706,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
     showLegend: booleanAttr(attrs.showLegend, true),
     showValue: booleanAttr(attrs.showValue, false),
     ...(attrs.title ? { title: attrs.title } : {}),
-    colors: stringListAttr(attrs.colors, ['#5B67F1']),
+    colors: stringListAttr(attrs.colors, chartColors),
     ...(attrs.chartAreaFill ? { chartAreaFill: attrs.chartAreaFill } : {}),
     ...(attrs.plotAreaFill ? { plotAreaFill: attrs.plotAreaFill } : {}),
     ...(attrs.categoryAxisLabelColor ? { categoryAxisLabelColor: attrs.categoryAxisLabelColor } : {}),
@@ -660,17 +730,20 @@ function createTextElement(
     listStyle?: PresentationTextElement['listStyle']
   },
 ): PresentationTextElement {
+  const master = context.existingDocument?.master
+  const title = options.fontWeight >= 600 || options.fontSize >= 30
+  const textColors = presentationThemeTextColors(master?.background ?? '#FFFFFF')
   return {
     ...allocateBox(context, options.height),
     id: reserveElementId(context, options.explicitId, options.kind),
     type: 'text',
     text,
     fontSize: options.fontSize,
-    fontFamily: options.fontFamily ?? 'Aptos',
+    fontFamily: options.fontFamily ?? (title ? master?.titleFontFamily : master?.bodyFontFamily) ?? 'Aptos',
     fontWeight: options.fontWeight,
     italic: options.italic ?? false,
     listStyle: options.listStyle ?? 'none',
-    color: '#20202B',
+    color: title ? textColors.primary : textColors.secondary,
     align: 'left',
     rotation: 0,
   }
@@ -737,11 +810,26 @@ function allocateBox(context: ElementCompilerContext, height: number): Pick<Pres
 
 function reserveElementId(context: ElementCompilerContext, requested: string | undefined, kind: string): string {
   context.elementOrdinal += 1
-  const base = requested ?? `${context.slideId}-${kind}-${context.elementOrdinal}`
-  validateId(base, 'element id')
-  if (context.usedElementIds.has(base)) throw new Error(`Duplicate element id: ${base}`)
-  context.usedElementIds.add(base)
-  return base
+  if (requested) {
+    validateId(requested, 'element ref')
+    if (context.usedElementIds.has(requested)) throw new Error(`Duplicate element ref: ${requested}`)
+    context.usedElementIds.add(requested)
+    return requested
+  }
+  let generated = `${context.slideId}-${kind}-${context.elementOrdinal}`
+  while (context.usedElementIds.has(generated)) {
+    context.elementOrdinal += 1
+    generated = `${context.slideId}-${kind}-${context.elementOrdinal}`
+  }
+  context.usedElementIds.add(generated)
+  return generated
+}
+
+function componentRef(attrs: Record<string, string>): string | undefined {
+  const id = optionalString(attrs.id)
+  const ref = optionalString(attrs.ref)
+  if (id && ref && id !== ref) throw new Error('PowerPoint element id and ref must match when both are provided')
+  return ref ?? id
 }
 
 function resolveMediaSource(
@@ -800,11 +888,21 @@ function parseMaster(raw: unknown, fallback: PresentationDocument['master']): Pr
   if (raw === undefined || raw === null) return structuredClone(fallback)
   if (!isRecord(raw)) throw new TypeError('master must be a mapping')
   return {
+    accentColors: raw.accentColors === undefined
+      ? [...fallback.accentColors]
+      : parseColorList(raw.accentColors, 'master.accentColors'),
     background: optionalString(raw.background) ?? fallback.background,
     bodyFontFamily: optionalString(raw.bodyFontFamily) ?? fallback.bodyFontFamily,
     footer: raw.footer === undefined ? { ...fallback.footer } : parseFooter(raw.footer, 'master.footer'),
     titleFontFamily: optionalString(raw.titleFontFamily) ?? fallback.titleFontFamily,
   }
+}
+
+function parseColorList(raw: unknown, name: string): string[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.some((value) => typeof value !== 'string')) {
+    throw new TypeError(`${name} must be a non-empty string array`)
+  }
+  return raw.map((value) => normalizePresentationDesignColor(value as string))
 }
 
 function parseFooter(raw: unknown, name: string): PresentationFooter {
@@ -932,7 +1030,7 @@ function decompileSlide(slide: PresentationSlide): string {
 
 function decompileElement(element: PresentationElement): string {
   const common: Record<string, unknown> = {
-    id: element.id,
+    ref: element.id,
     x: element.x,
     y: element.y,
     width: element.width,

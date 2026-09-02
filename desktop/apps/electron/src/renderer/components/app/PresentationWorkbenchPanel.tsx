@@ -44,6 +44,7 @@ import {
   formatPresentationText,
   getPresentationPageSize,
   layoutPresentationVerticalText,
+  presentationAgentChangeAtom,
   presentationExpandedAtom,
   presentationSessionIdAtom,
   stripPresentationTextFormatting,
@@ -76,6 +77,7 @@ import {
   buildPresentationAnimationPlaybackSteps,
   getPresentationAnimationHiddenElementIds,
 } from '@/lib/presentationAnimationPreview'
+import { buildPresentationTextRevealFrames } from '@/lib/presentationAgentTransition'
 import {
   clearPresentationAnimation,
   copyPresentationAnimationPatch,
@@ -1576,6 +1578,7 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
 export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
   const sessionId = useAtomValue(presentationSessionIdAtom)
+  const agentChange = useAtomValue(presentationAgentChangeAtom)
   const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
   const pageSize = getPresentationPageSize(document)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
@@ -1637,6 +1640,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const exportInFlightRef = useRef(false)
   const animationRunIdRef = useRef(0)
   const transitionRunIdRef = useRef(0)
+  const consumedAgentChangeIdRef = useRef(0)
   const fileInsertionTargetRef = useRef<PresentationFileInsertionTarget>({
     documentId: document.id,
     generation: 0,
@@ -1747,7 +1751,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     const secondaryText = dark ? '#C7C8D8' : '#666571'
     commitDocument({
       ...current,
-      master: { ...current.master, background },
+      master: { ...current.master, accentColors: [...colors], background },
       slides: current.slides.map((slide) => ({
         ...slide,
         background,
@@ -2193,6 +2197,73 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     const mediaRuntime = mediaRuntimeRef.current
     if (!active || !canvas || !fabric || !mediaRuntime || !currentSlide) return
     let cancelled = false
+    const revealFrameIds = new Set<number>()
+    const visibleAgentChange = agentChange
+      && agentChange.slideId === currentSlide.id
+      && agentChange.changeId > consumedAgentChangeIdRef.current
+      ? agentChange
+      : null
+    if (visibleAgentChange) consumedAgentChangeIdRef.current = visibleAgentChange.changeId
+    const revealedElementIds = new Set(visibleAgentChange?.elementIds ?? [])
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const scheduleRevealFrame = (callback: FrameRequestCallback) => {
+      const frameId = window.requestAnimationFrame((time) => {
+        revealFrameIds.delete(frameId)
+        callback(time)
+      })
+      revealFrameIds.add(frameId)
+    }
+    const animateAgentObject = (object: FabricObject, element: PresentationElement, index: number) => {
+      if (!visibleAgentChange || reducedMotion || !revealedElementIds.has(element.id)) return
+      const delayMs = Math.min(240, index * 32)
+      const targetOpacity = element.opacity ?? 1
+      if (
+        visibleAgentChange.kind === 'content'
+        && isPresentationTextElement(element)
+        && element.textDirection !== 'eastAsianVertical'
+        && element.textDirection !== 'stacked'
+        && object instanceof fabric.IText
+      ) {
+        const fullText = formatPresentationText(element)
+        const frames = buildPresentationTextRevealFrames(fullText)
+        const startedAt = performance.now() + delayMs
+        const durationMs = Math.min(900, Math.max(240, frames.length * 38))
+        object.set({ opacity: targetOpacity, text: '' })
+        const tick = (time: number) => {
+          if (cancelled || object.canvas !== canvas) return
+          if (time < startedAt) {
+            scheduleRevealFrame(tick)
+            return
+          }
+          const progress = Math.min(1, (time - startedAt) / durationMs)
+          const frameIndex = Math.min(frames.length - 1, Math.floor(progress * frames.length))
+          object.set({ text: frames[frameIndex] })
+          object.setCoords()
+          canvas.requestRenderAll()
+          if (progress < 1) scheduleRevealFrame(tick)
+          else object.set({ text: fullText })
+        }
+        scheduleRevealFrame(tick)
+        return
+      }
+      const startedAt = performance.now() + delayMs
+      const durationMs = visibleAgentChange.kind === 'design' ? 320 : 240
+      object.set({ opacity: 0 })
+      const tick = (time: number) => {
+        if (cancelled || object.canvas !== canvas) return
+        if (time < startedAt) {
+          scheduleRevealFrame(tick)
+          return
+        }
+        const progress = Math.min(1, (time - startedAt) / durationMs)
+        const eased = 1 - ((1 - progress) ** 3)
+        object.set({ opacity: targetOpacity * eased })
+        canvas.requestRenderAll()
+        if (progress < 1) scheduleRevealFrame(tick)
+        else object.set({ opacity: targetOpacity })
+      }
+      scheduleRevealFrame(tick)
+    }
     mediaRuntime.reset()
     // Rebuilding Fabric objects is an implementation detail, not a user
     // deselection. Ignore the synchronous selection:cleared event so Ribbon
@@ -2238,6 +2309,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           return (elementOrder.get(existingId) ?? Number.POSITIVE_INFINITY) > index
         })
         canvas.insertAt(insertionIndex < 0 ? canvas.getObjects().length : insertionIndex, object)
+        animateAgentObject(object, element, index)
         if (isPresentationMediaElement(element)) mediaRuntime.register(element, object)
         if (activeElementId) {
           activateFabricElement(
@@ -2259,9 +2331,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     })
     return () => {
       cancelled = true
+      for (const frameId of revealFrameIds) window.cancelAnimationFrame(frameId)
       if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
-  }, [activateFabricElement, active, canvasGeneration, currentSlide, pageSize])
+  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, pageSize])
 
   const undo = useCallback(() => {
     const previous = pastRef.current.pop()

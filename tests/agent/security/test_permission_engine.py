@@ -111,14 +111,17 @@ async def test_powerpoint_tools_use_read_and_write_management_capabilities(test_
         _tool_call("get_ppt_page", page_id="page-a"),
         _tool_call("goto_ppt_page", page_id="page-a"),
         _tool_call("view_ppt", target="deck.pptx"),
-        _tool_call("update_ppt_page", page_id="page-a", markdown="# Page"),
+        _tool_call("update_ppt_design", theme="midnight"),
+        _tool_call("edit_ppt_page", page_id="page-a", ref="title", replacement="<PptText>Page</PptText>"),
+        _tool_call("insert_ppt_element", page_id="page-a", element="<PptShape kind=\"rect\" />"),
+        _tool_call("remove_ppt_element", page_id="page-a", ref="title"),
         _tool_call("insert_ppt_page", markdown="# Page"),
     ]
 
     verdicts = await engine.evaluate(calls)
 
     assert [verdict.capability for verdict in verdicts[:2]] == ["manage"] * 2
-    assert [verdict.capability for verdict in verdicts[2:]] == ["manage_write"] * 3
+    assert [verdict.capability for verdict in verdicts[2:]] == ["manage_write"] * 6
 
 
 async def test_path_boundaries(test_sandbox: "IsolatedPaths") -> None:

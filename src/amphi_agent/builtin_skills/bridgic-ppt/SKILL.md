@@ -1,55 +1,81 @@
 ---
 name: bridgic-ppt
-description: Create, open, inspect, edit, and save presentations through Bridgic's live PowerPoint editor. Use for PowerPoint or PPTX work that should remain visible and editable in the app.
+description: Plan, create, restyle, inspect, and edit presentations through Bridgic's live PowerPoint editor. Use for PowerPoint or PPTX work that should remain visible and editable in the app.
 ---
 
-# Work with Bridgic PowerPoint
+# Build PowerPoint presentations in Bridgic
 
-Use the live PowerPoint tools as the only authoring surface. Do not create a separate Markdown deck file, use pptxgenjs or OOXML, operate the editor through browser or DOM tools, or generate coordinate-level `PptShape` and `PptText` trees.
+Use the live PowerPoint tools as the only authoring surface. Do not create a separate Markdown deck, use pptxgenjs or OOXML, operate the editor through browser or DOM tools, or generate coordinate-level object trees unless a page genuinely needs a supported `Ppt*` component.
 
-## Start the live document
+## Choose the workflow
 
-Call `view_ppt` before research or extended planning. A name creates or opens a `.pptx` in the Session workspace; a path targets that file. This establishes the Session-owned presentation and immediately exposes the PowerPoint surface and Agent activity to the user.
+- **New deck:** follow all seven steps below.
+- **Edit a few pages:** open, inspect the target pages, update them, and run focused checks.
+- **Restyle a deck:** open, update the global design, then inspect representative dense, visual, and data-heavy pages.
+- **Restructure a deck:** open, plan the new page map, make structural changes serially, then update independent pages in parallel.
+- **Review or repair:** open, identify concrete failures, read only affected pages, and fix the smallest useful scope.
 
-`view_ppt` returns the title, theme, size, current position, ordered page ids, and a short summary for every page. It deliberately does not return every page's Markdown. A new PPT starts with one blank page: read and update that page, then add the remaining pages with separate `insert_ppt_page` calls. Never send an entire deck in one tool argument.
+## Standard production method
 
-## Author one page at a time
+### 1. Establish the assignment
 
-Write compact semantic Markdown for exactly one logical page. Prefer ordinary headings, paragraphs, lists, images, tables, speaker notes, and small theme or layout directives supported by the live compiler. Keep content concise enough to fit the slide. Do not wrap the page in a Markdown code fence.
+Identify the audience, presentation setting, desired decision or action, language, approximate length, brand constraints, and required evidence. Infer ordinary missing details when the request already makes the intent clear.
 
-Every page begins with a small YAML frontmatter block. Use `blank`, `title`, `titleContent`, or `twoContent` for layout (`cover`, `title-content`, and `two-cols` are accepted aliases). A typical inserted page is:
+### 2. Open and inspect the live document
 
-```markdown
----
-name: Market shift
-layout: two-cols
-background: "#F7F4ED"
----
+Call `view_ppt` before research or extended planning. It creates or opens the Session-owned `.pptx`, shows the PowerPoint surface immediately, and returns document design, page size, current position, ordered page ids, and short page summaries. It deliberately does not return every page's Markdown.
 
-# Three forces reshape the market
+For an existing deck, decide whether the task is a local edit, a structural rewrite, a global restyle, or a full rebuild. Call `get_ppt_page` only for pages whose exact content or assets are needed.
 
-::left::
+### 3. Plan the story and page map
 
-- Faster product cycles
-- Lower switching costs
+Create an internal page map before detailed authoring. For every page define its role in the argument, one core takeaway, an appropriate slide archetype, and the evidence or asset it requires. Titles should usually state the conclusion, not merely name the topic.
 
-::right::
+Read [references/workflow.md](references/workflow.md) for narrative patterns, page-map guidance, and the production passes used for new and existing decks.
 
-![A concise alt description](assets/market-shift.png)
+### 4. Establish the design system
 
-<!-- notes
-Connect the three forces to the recommendation on the next page.
--->
-```
+Use `update_ppt_design` for document-wide theme, background, accent palette, title/body typography, page size, footer, numbering, and shared transition. Do this before detailed page production when creating or fully restyling a deck so later Markdown inherits the same design.
 
-Use Session-workspace-relative paths for images and media. Tables use ordinary Markdown table syntax. Preserve the `id` and any unfamiliar supported fields when editing Markdown returned by `get_ppt_page`.
+Read [references/design-system.md](references/design-system.md) when choosing or changing the visual system.
 
-Use `get_ppt_page` when a page's current source or asset paths are needed. Before updating or removing an existing page, read it first. The Session remembers a private version token and supplies it automatically; never invent or pass a revision. If the user changed the page after the read, the write is rejected without mutation and the Agent must read that page again.
+### 5. Build in passes and parallelize independent pages
 
-Compilation is atomic. If a write returns diagnostics, the previous page remains unchanged; correct the reported problems and retry only that page. On a conflict, read only the affected page again and reconcile the user's current content.
+Do not default to completing page 1, then page 2, then page 3.
 
-Use `insert_ppt_page`, `remove_ppt_page`, and `move_ppt_page` for later structural changes rather than rebuilding the deck.
+For a new deck:
 
-## Verify and deliver
+1. Read the initial blank page and insert the cover elements into it.
+2. Insert compact page skeletons serially to establish stable page ids and final order.
+3. Read the skeleton pages that will be edited.
+4. Prepare research, assets, and element fragments for independent pages concurrently.
+5. Call `edit_ppt_page` concurrently for different, already-read page ids when the pages do not depend on one another.
+6. Keep structural calls such as insert, remove, and move serial when order matters.
 
-Use `goto_ppt_page` to keep the page being discussed visible. Fix only the affected page. The live document is saved to the target selected by `view_ppt` after every successful edit, so there is no separate export step.
+For an existing deck, use `edit_ppt_page` to replace exactly one existing ref, `insert_ppt_element` to add one element, and `remove_ppt_element` to delete one. Do not regenerate unchanged page Markdown. Independent page reads and writes may run concurrently after the page map is settled. Multiple calls for different refs on the same page may be emitted together; the Session commits them serially in call order. Never edit the same ref concurrently or combine a structural page mutation with writes whose target order depends on it.
+
+Every element write targets one page and one semantic element. Tool arguments stay flat: a ref plus one replacement fragment, or one new element fragment. The renderer validates each element atomically and presents successful Agent changes progressively in the visible canvas. Never send an entire deck in one tool argument or encode multiple element edits inside one argument.
+
+Read [references/tool-reference.md](references/tool-reference.md) before a multi-page or concurrent operation. Read [references/page-authoring.md](references/page-authoring.md) for semantic Markdown, supported components, assets, and stable ids.
+
+### 6. Verify each result
+
+Watch the live page after every write. Compilation diagnostics leave the previous page unchanged. Correct only the affected page. On a version conflict, read that page or the deck overview again and reconcile the user's current content rather than retrying a stale write.
+
+Use `goto_ppt_page` when a particular page should remain visible while discussing or reviewing it.
+
+### 7. Review the complete deck and deliver
+
+Check the title sequence as a coherent argument, page density, hierarchy, alignment, contrast, typography, repeated layouts, chart consistency, asset quality, page order, and final call to action. Read [references/quality-check.md](references/quality-check.md) for the final review.
+
+The live document is saved to the target selected by `view_ppt` after every successful mutation. There is no separate export step.
+
+## Non-negotiable state rules
+
+- Read an existing page before editing, inserting into, or removing from it. The Session supplies a private version token; never invent or pass one.
+- Treat returned refs like browser accessibility refs: use them only for real existing elements and preserve them when editing.
+- Make one element change per tool call. Use `insert_ppt_element` and `remove_ppt_element` instead of simulating creation or deletion through replacement text.
+- Call `view_ppt` before `update_ppt_design`. A document-wide write is rejected if the live deck changed after the overview was read.
+- Preserve returned `ref` values and unfamiliar supported fields when editing canonical element Markdown. Do not provide `id` or `ref` when inserting a new element.
+- Use Session-workspace-relative asset paths. Never embed absolute paths, remote URLs, or Base64 payloads in page Markdown.
+- Keep structural commits serial when page order is part of their meaning.

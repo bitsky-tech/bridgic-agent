@@ -1,12 +1,39 @@
 import { describe, expect, it } from 'bun:test'
 import { createBlankPresentationDocument } from '@/atoms/presentation'
 import {
+  compilePresentationElementMarkdown,
   compilePresentationMarkdown,
+  compilePresentationSlideMarkdown,
   decompilePresentationSlideMarkdown,
   inspectPresentationMarkdownAssets,
 } from '../presentationMarkdown'
 
 describe('presentation Markdown compiler', () => {
+  it('inherits document-wide typography and palette for later semantic pages', () => {
+    const document = createBlankPresentationDocument('Designed deck')
+    document.master = {
+      ...document.master,
+      accentColors: ['#CC5500', '#118844'],
+      background: '#17182B',
+      bodyFontFamily: 'Arial',
+      titleFontFamily: 'Georgia',
+    }
+    const compiled = compilePresentationSlideMarkdown(`---
+id: designed
+---
+
+# A designed title
+
+Supporting evidence
+
+<PptShape id="accent" kind="rect" />`, { document }).slide
+
+    expect(compiled.elements[0]).toMatchObject({ color: '#FFFFFF', fontFamily: 'Georgia' })
+    expect(compiled.background).toBe('#17182B')
+    expect(compiled.elements[1]).toMatchObject({ color: '#C7C8D8', fontFamily: 'Arial' })
+    expect(compiled.elements[2]).toMatchObject({ fill: '#CC5500', borderColor: '#CC5500' })
+  })
+
   it('compiles Slidev framing, YAML, Markdown blocks, slots, tables, and notes', () => {
     const markdown = `---
 title: Product review
@@ -241,6 +268,8 @@ id: adjacent
     const markdown = decompilePresentationSlideMarkdown(slide)
     expect(markdown).toContain('<PptText')
     expect(markdown).toContain('<PptChart')
+    expect(markdown).toContain('ref="text"')
+    expect(markdown).not.toContain('id="text"')
     expect(markdown).toContain('src="@existing/image"')
     expect(markdown).toContain('clipShape="ellipse"')
     expect(markdown).not.toContain('base64')
@@ -267,6 +296,31 @@ id: adjacent
       categories: ['Q1', 'Q2'],
       series: [{ name: 'ARR', values: [12, 18] }],
     })
+  })
+
+  it('compiles a single editable fragment while preserving or assigning its ref', () => {
+    const document = createBlankPresentationDocument('Element edits')
+    const slide = document.slides[0]!
+    slide.elements = [{
+      id: 'title', type: 'text', text: 'Before', x: 20, y: 20, width: 300, height: 60,
+      rotation: 0, fontSize: 30, fontFamily: 'Aptos', fontWeight: 700, color: '#111111', align: 'left',
+    }]
+
+    const edited = compilePresentationElementMarkdown(
+      '<PptText ref="title" x="20" y="20" width="300" height="60" fontSize="30">After</PptText>',
+      { document, elementId: 'title', slide },
+    ).element
+    const inserted = compilePresentationElementMarkdown(
+      '<PptShape kind="ellipse" x="400" y="20" width="80" height="80" />',
+      { document, slide },
+    ).element
+
+    expect(edited).toMatchObject({ id: 'title', text: 'After' })
+    expect(inserted.id).not.toBe('title')
+    expect(() => compilePresentationElementMarkdown('<PptText ref="title">Duplicate</PptText>', {
+      document,
+      slide,
+    })).toThrow('must not provide id or ref')
   })
 
   it('uses one parser for local asset discovery and compilation', () => {
@@ -300,6 +354,10 @@ id: media
       },
     }).document
     expect(document.slides[0]!.elements.map((element) => element.type)).toEqual(['image', 'audio'])
+    expect(inspectPresentationMarkdownAssets('<PptImage src="assets/detail.png" />')).toEqual([
+      'assets/detail.png',
+    ])
+    expect(inspectPresentationMarkdownAssets('<PptImage ref="hero" src="@existing/hero" />')).toEqual([])
   })
 
   it('rejects duplicate refs, unknown component attributes, and arbitrary executable Vue', () => {
@@ -309,7 +367,7 @@ id: duplicate
 
 # One {#same}
 
-# Two {#same}`)).toThrow('Duplicate element id')
+# Two {#same}`)).toThrow('Duplicate element ref')
     expect(() => compilePresentationMarkdown(`---
 id: typo
 ---

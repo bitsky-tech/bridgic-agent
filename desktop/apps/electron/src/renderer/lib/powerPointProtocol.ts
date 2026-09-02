@@ -1,11 +1,19 @@
 import {
   createBlankPresentationDocument,
+  type PresentationAgentChange,
   type PresentationDocument,
   type PresentationFileSource,
   type PresentationSlide,
   type PresentationWorkspace,
 } from '@/atoms/presentation'
 import {
+  applyPresentationDesign,
+  normalizePresentationDesignColor,
+  type PresentationDesignPatch,
+  type PresentationThemePresetId,
+} from '@/lib/presentationDesign'
+import {
+  compilePresentationElementMarkdown,
   compilePresentationSlideMarkdown,
   decompilePresentationSlideMarkdown,
   inspectPresentationMarkdownAssets,
@@ -13,13 +21,16 @@ import {
 } from '@/lib/presentationMarkdown'
 import { importPresentationPptx } from '@/lib/presentationPptxImport'
 
-export const POWERPOINT_PROTOCOL_VERSION = 3 as const
+export const POWERPOINT_PROTOCOL_VERSION = 5 as const
 
 export type PowerPointMethod =
   | 'view_ppt'
   | 'inspect_ppt_assets'
   | 'get_ppt_page'
-  | 'update_ppt_page'
+  | 'update_ppt_design'
+  | 'edit_ppt_page'
+  | 'insert_ppt_element'
+  | 'remove_ppt_element'
   | 'insert_ppt_page'
   | 'remove_ppt_page'
   | 'move_ppt_page'
@@ -36,6 +47,7 @@ export interface PowerPointRuntimeContext {
 }
 
 export interface PowerPointDispatchResult {
+  agentChange?: Omit<PresentationAgentChange, 'changeId'>
   result: unknown
   workspace?: PresentationWorkspace
   target?: string
@@ -43,7 +55,7 @@ export interface PowerPointDispatchResult {
 }
 
 export class PowerPointProtocolError extends Error {
-  constructor(message: string, readonly code: 'deck_changed' | 'page_changed') {
+  constructor(message: string, readonly code: 'deck_changed' | 'document_changed' | 'page_changed') {
     super(message)
     this.name = 'PowerPointProtocolError'
   }
@@ -90,16 +102,100 @@ export async function executePowerPointRequest(
     }
   }
 
-  if (request.method === 'update_ppt_page') {
+  if (request.method === 'update_ppt_design') {
+    assertDocumentRevision(document, requiredString(params.expected_document_revision, 'expected_document_revision'))
+    const designed = applyPresentationDesign(document, designPatch(params.design, document))
+    const nextDocument = { ...designed, version: document.version + 1 }
+    const selectedSlide = requireSlide(nextDocument, nextDocument.selectedSlideId)
+    return {
+      agentChange: {
+        elementIds: selectedSlide.elements.map((element) => element.id),
+        kind: 'design',
+        slideId: selectedSlide.id,
+      },
+      result: deckOverview(nextDocument, context.fileName),
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
+  }
+
+  if (request.method === 'edit_ppt_page') {
     const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
     assertPageRevision(slide, requiredString(params.expected_revision, 'expected_revision'))
-    const compiled = compilePage(requiredString(params.markdown, 'markdown'), document, assetsValue(params.assets))
+    const ref = requiredString(params.ref, 'ref')
+    const elementIndex = slide.elements.findIndex((element) => element.id === ref)
+    if (elementIndex < 0) throw new Error(`Unknown PowerPoint element ref: ${ref}`)
+    const compiled = compileElement(
+      requiredString(params.replacement, 'replacement'), document, slide, assetsValue(params.assets), ref,
+    )
     if ('invalid' in compiled) return { result: compiled.invalid }
-    const replacement = { ...compiled.slide, id: slide.id }
-    const slides = document.slides.map((item) => item.id === slide.id ? replacement : item)
-    const nextDocument = { ...document, slides, version: document.version + 1 }
+    const elements = [...slide.elements]
+    elements[elementIndex] = compiled.element
+    const replacement = { ...slide, elements }
+    const nextDocument = replaceSlide(document, replacement)
     return {
-      result: { status: 'ready', diagnostics: diagnostics(compiled.diagnostics), ...pageView(nextDocument, replacement) },
+      agentChange: {
+        elementIds: [ref],
+        kind: 'content',
+        slideId: replacement.id,
+      },
+      result: {
+        status: 'ready',
+        diagnostics: diagnostics(compiled.diagnostics),
+        document_revision: documentRevision(nextDocument),
+        element_ref: ref,
+        ...pageView(nextDocument, replacement),
+      },
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
+  }
+
+  if (request.method === 'insert_ppt_element') {
+    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
+    assertPageRevision(slide, requiredString(params.expected_revision, 'expected_revision'))
+    const compiled = compileElement(
+      requiredString(params.element, 'element'), document, slide, assetsValue(params.assets),
+    )
+    if ('invalid' in compiled) return { result: compiled.invalid }
+    const replacement = { ...slide, elements: [...slide.elements, compiled.element] }
+    const nextDocument = replaceSlide(document, replacement)
+    return {
+      agentChange: {
+        elementIds: [compiled.element.id],
+        kind: 'content',
+        slideId: replacement.id,
+      },
+      result: {
+        status: 'ready',
+        diagnostics: diagnostics(compiled.diagnostics),
+        document_revision: documentRevision(nextDocument),
+        element_ref: compiled.element.id,
+        ...pageView(nextDocument, replacement),
+      },
+      workspace: replaceDocument(current, nextDocument),
+      persist: true,
+    }
+  }
+
+  if (request.method === 'remove_ppt_element') {
+    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
+    assertPageRevision(slide, requiredString(params.expected_revision, 'expected_revision'))
+    const ref = requiredString(params.ref, 'ref')
+    if (!slide.elements.some((element) => element.id === ref)) {
+      throw new Error(`Unknown PowerPoint element ref: ${ref}`)
+    }
+    const replacement = { ...slide, elements: slide.elements.filter((element) => element.id !== ref) }
+    const nextDocument = replaceSlide(document, replacement)
+    return {
+      agentChange: { elementIds: [], kind: 'content', slideId: replacement.id },
+      result: {
+        status: 'ready',
+        diagnostics: [],
+        document_revision: documentRevision(nextDocument),
+        element_ref: ref,
+        ...pageView(nextDocument, replacement),
+      },
       workspace: replaceDocument(current, nextDocument),
       persist: true,
     }
@@ -117,6 +213,11 @@ export async function executePowerPointRequest(
     slides.splice(insertionIndex, 0, compiled.slide)
     const nextDocument = { ...document, selectedSlideId: compiled.slide.id, slides, version: document.version + 1 }
     return {
+      agentChange: {
+        elementIds: compiled.slide.elements.map((element) => element.id),
+        kind: 'content',
+        slideId: compiled.slide.id,
+      },
       result: {
         status: 'ready',
         diagnostics: diagnostics(compiled.diagnostics),
@@ -186,6 +287,37 @@ function compilePage(markdown: string, document: PresentationDocument, assets: P
   }
 }
 
+function compileElement(
+  markdown: string,
+  document: PresentationDocument,
+  slide: PresentationSlide,
+  assets: PresentationMarkdownAssets,
+  elementId?: string,
+):
+  | { element: PresentationSlide['elements'][number]; diagnostics: string[] }
+  | { invalid: { status: 'invalid'; diagnostics: Array<Record<string, string>> } } {
+  try {
+    return compilePresentationElementMarkdown(markdown, {
+      assets,
+      document,
+      elementId,
+      existingDocument: document,
+      slide,
+    })
+  } catch (error) {
+    return {
+      invalid: {
+        status: 'invalid',
+        diagnostics: [{
+          code: 'element_compile_error',
+          message: error instanceof Error ? error.message : String(error),
+          severity: 'error',
+        }],
+      },
+    }
+  }
+}
+
 function deckOverview(document: PresentationDocument, fileName: string): Record<string, unknown> {
   const selectedIndex = Math.max(0, document.slides.findIndex((slide) => slide.id === document.selectedSlideId))
   return {
@@ -204,6 +336,7 @@ function deckOverview(document: PresentationDocument, fileName: string): Record<
       current_position: selectedIndex + 1,
     },
     deck_revision: deckRevision(document),
+    document_revision: documentRevision(document),
     pages: document.slides.map((slide, index) => pageSummary(slide, index)),
   }
 }
@@ -231,6 +364,7 @@ function pageView(document: PresentationDocument, slide: PresentationSlide): Rec
       ...pageSummary(slide, index),
       markdown: decompilePresentationSlideMarkdown(slide),
       asset_paths: assets.map((asset) => asset.path),
+      refs: slide.elements.map((element) => element.id),
     },
     assets,
   }
@@ -271,6 +405,10 @@ function deckRevision(document: PresentationDocument): string {
   return fingerprint(JSON.stringify(document.slides.map((slide) => slide.id)))
 }
 
+function documentRevision(document: PresentationDocument): string {
+  return fingerprint(`${document.id}:${document.version}`)
+}
+
 function fingerprint(value: string): string {
   let hash = 0x811c9dc5
   for (let index = 0; index < value.length; index += 1) {
@@ -296,6 +434,81 @@ function assertDeckRevision(document: PresentationDocument, expected: string): v
   )
 }
 
+function assertDocumentRevision(document: PresentationDocument, expected: string): void {
+  if (documentRevision(document) === expected) return
+  throw new PowerPointProtocolError(
+    'The PowerPoint changed after its design was read. Call view_ppt again before changing global design.',
+    'document_changed',
+  )
+}
+
+function designPatch(value: unknown, document: PresentationDocument): PresentationDesignPatch {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('design must be a mapping')
+  const raw = value as Record<string, unknown>
+  const patch: PresentationDesignPatch = {}
+  const themeIds = new Set<PresentationThemePresetId>(['lavender', 'light', 'midnight', 'paper'])
+  const pageSizes = new Set(['standard', 'wide'] as const)
+  const transitionEffects = new Set(['none', 'fade', 'push', 'wipe', 'reveal', 'cover', 'zoom', 'flip', 'cube'] as const)
+  const transitionDirections = new Set(['left', 'right', 'up', 'down', 'in', 'out'] as const)
+
+  if (raw.theme !== undefined) patch.theme = enumValue(raw.theme, themeIds, 'design.theme')
+  if (raw.background !== undefined) patch.background = normalizePresentationDesignColor(requiredString(raw.background, 'design.background'))
+  if (raw.accent_colors !== undefined) {
+    if (!Array.isArray(raw.accent_colors) || raw.accent_colors.length === 0) {
+      throw new TypeError('design.accent_colors must be a non-empty string array')
+    }
+    patch.accentColors = raw.accent_colors.map((color) => (
+      normalizePresentationDesignColor(requiredString(color, 'design.accent_colors[]'))
+    ))
+  }
+  if (raw.title_font_family !== undefined) patch.titleFontFamily = requiredString(raw.title_font_family, 'design.title_font_family')
+  if (raw.body_font_family !== undefined) patch.bodyFontFamily = requiredString(raw.body_font_family, 'design.body_font_family')
+  if (raw.page_size !== undefined) patch.pageSize = enumValue(raw.page_size, pageSizes, 'design.page_size')
+  if (raw.title !== undefined) {
+    if (typeof raw.title !== 'string') throw new TypeError('design.title must be a string')
+    patch.title = raw.title.trim()
+  }
+  if (raw.footer !== undefined) {
+    if (!raw.footer || typeof raw.footer !== 'object' || Array.isArray(raw.footer)) {
+      throw new TypeError('design.footer must be a mapping')
+    }
+    const footerRaw = raw.footer as Record<string, unknown>
+    patch.footer = {
+      ...(footerRaw.text === undefined ? {} : { text: stringValue(footerRaw.text, 'design.footer.text') }),
+      ...(footerRaw.show_date === undefined ? {} : { showDate: booleanValue(footerRaw.show_date, 'design.footer.show_date') }),
+      ...(footerRaw.show_slide_number === undefined
+        ? {}
+        : { showSlideNumber: booleanValue(footerRaw.show_slide_number, 'design.footer.show_slide_number') }),
+    }
+  }
+  if (raw.transition !== undefined) {
+    if (!raw.transition || typeof raw.transition !== 'object' || Array.isArray(raw.transition)) {
+      throw new TypeError('design.transition must be a mapping')
+    }
+    const transitionRaw = raw.transition as Record<string, unknown>
+    const fallback = document.slides.find((slide) => slide.id === document.selectedSlideId)?.transition
+      ?? { effect: 'none' as const, durationMs: 500 }
+    patch.transition = {
+      effect: transitionRaw.effect === undefined
+        ? fallback.effect
+        : enumValue(transitionRaw.effect, transitionEffects, 'design.transition.effect'),
+      durationMs: transitionRaw.duration_ms === undefined
+        ? fallback.durationMs
+        : nonNegativeNumber(transitionRaw.duration_ms, 'design.transition.duration_ms'),
+    }
+    const direction = transitionRaw.direction === undefined
+      ? fallback.direction
+      : enumValue(transitionRaw.direction, transitionDirections, 'design.transition.direction')
+    if (direction) patch.transition.direction = direction
+    const throughBlack = transitionRaw.through_black === undefined
+      ? fallback.throughBlack
+      : booleanValue(transitionRaw.through_black, 'design.transition.through_black')
+    if (throughBlack !== undefined) patch.transition.throughBlack = throughBlack
+  }
+  if (Object.keys(patch).length === 0) throw new Error('update_ppt_design requires at least one design change')
+  return patch
+}
+
 function diagnostics(items: string[]): Array<Record<string, string>> {
   return items.map((message) => ({ code: 'markdown_notice', message, severity: 'warning' }))
 }
@@ -315,6 +528,15 @@ function replaceDocument(workspace: PresentationWorkspace, document: Presentatio
   return {
     activeDocumentId: document.id,
     documents: workspace.documents.map((item) => item.id === document.id ? document : item),
+  }
+}
+
+function replaceSlide(document: PresentationDocument, slide: PresentationSlide): PresentationDocument {
+  return {
+    ...document,
+    selectedSlideId: slide.id,
+    slides: document.slides.map((item) => item.id === slide.id ? slide : item),
+    version: document.version + 1,
   }
 }
 
@@ -339,4 +561,28 @@ function optionalString(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
   if (typeof value !== 'string') throw new TypeError(`${name} must be a string`)
   return value.trim() || undefined
+}
+
+function stringValue(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new TypeError(`${name} must be a string`)
+  return value.trim()
+}
+
+function booleanValue(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean') throw new TypeError(`${name} must be a boolean`)
+  return value
+}
+
+function nonNegativeNumber(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new TypeError(`${name} must be a non-negative number`)
+  }
+  return value
+}
+
+function enumValue<T extends string>(value: unknown, allowed: ReadonlySet<T>, name: string): T {
+  if (typeof value !== 'string' || !allowed.has(value as T)) {
+    throw new Error(`${name} must be one of: ${[...allowed].join(', ')}`)
+  }
+  return value as T
 }

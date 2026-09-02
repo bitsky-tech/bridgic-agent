@@ -497,14 +497,17 @@ declare global {
     __localResourceToken__?: string
     /** Stable renderer-domain API invoked by the SessionPowerPoint CDP client. */
     __bridgicPowerPoint?: {
-      protocolVersion: 3
+      protocolVersion: 5
       sessionId: string
       dispatch(request: {
         method:
           | 'view_ppt'
           | 'inspect_ppt_assets'
           | 'get_ppt_page'
-          | 'update_ppt_page'
+          | 'update_ppt_design'
+          | 'edit_ppt_page'
+          | 'insert_ppt_element'
+          | 'remove_ppt_element'
           | 'insert_ppt_page'
           | 'remove_ppt_page'
           | 'move_ppt_page'

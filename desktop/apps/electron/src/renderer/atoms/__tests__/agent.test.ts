@@ -861,7 +861,10 @@ describe('reducer: tool calls', () => {
   it('classifies visible PowerPoint actions and reveals their Session surface', () => {
     const visibleActions = [
       'view_ppt',
-      'update_ppt_page',
+      'update_ppt_design',
+      'edit_ppt_page',
+      'insert_ppt_element',
+      'remove_ppt_element',
       'insert_ppt_page',
       'remove_ppt_page',
       'move_ppt_page',

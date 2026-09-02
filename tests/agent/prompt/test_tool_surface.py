@@ -211,7 +211,10 @@ async def test_powerpoint_uses_core_tools_and_bridgic_skill(prompt_store: None) 
     assert POWERPOINT_TOOL_NAMES == {
         "view_ppt",
         "get_ppt_page",
-        "update_ppt_page",
+        "update_ppt_design",
+        "edit_ppt_page",
+        "insert_ppt_element",
+        "remove_ppt_element",
         "insert_ppt_page",
         "remove_ppt_page",
         "move_ppt_page",
@@ -224,12 +227,23 @@ async def test_powerpoint_uses_core_tools_and_bridgic_skill(prompt_store: None) 
     body = (Path(bridgic.skill_dir) / "SKILL.md").read_text(encoding="utf-8")
     for marker in (
         "Call `view_ppt` before research or extended planning",
-        "separate `insert_ppt_page` calls",
+        "Standard production method",
+        "Use `update_ppt_design` for document-wide theme",
+        "Insert compact page skeletons serially",
+        "Call `edit_ppt_page` concurrently",
         "Never send an entire deck in one tool argument",
         "private version token",
         "no separate export step",
     ):
         assert marker in body
+    for reference in (
+        "workflow.md",
+        "tool-reference.md",
+        "design-system.md",
+        "page-authoring.md",
+        "quality-check.md",
+    ):
+        assert (Path(bridgic.skill_dir) / "references" / reference).is_file()
 
 
 async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -143,11 +143,12 @@ function startPowerPointTool(
   store: ReturnType<typeof createStore>,
   sessionId: string,
   toolUseId: string,
-  toolName = 'update_ppt_page',
+  toolName = 'edit_ppt_page',
 ): void {
   startBrowserTool(store, sessionId, toolUseId, toolName, {
     page_id: 'page-1',
-    markdown: '# Updated page',
+    ref: 'title',
+    replacement: '<PptText>Updated page</PptText>',
   })
 }
 

@@ -388,6 +388,7 @@ export interface PresentationSlide {
 }
 
 export interface PresentationMaster {
+  accentColors: string[]
   background: string
   bodyFontFamily: string
   footer: PresentationFooter
@@ -395,6 +396,7 @@ export interface PresentationMaster {
 }
 
 export const DEFAULT_PRESENTATION_MASTER: PresentationMaster = {
+  accentColors: ['#41516A', '#3478F6', '#35A3E8', '#30B26F', '#DB2B32', '#FF922B', '#FFBE0B', '#7C2AE8'],
   background: '#FFFFFF',
   bodyFontFamily: 'Aptos',
   footer: { text: '', showDate: false, showSlideNumber: false },
@@ -415,6 +417,16 @@ export interface PresentationWorkspace {
   activeDocumentId: string
   documents: PresentationDocument[]
 }
+
+export interface PresentationAgentChange {
+  changeId: number
+  elementIds: string[]
+  kind: 'content' | 'design'
+  slideId: string
+}
+
+/** One renderer-local visual transition requested by an Agent domain command. */
+export const presentationAgentChangeAtom = atom<PresentationAgentChange | null>(null)
 
 type SessionStateUpdate<T> = T | ((current: T) => T)
 
@@ -484,7 +496,11 @@ export function createBlankPresentationDocument(title: string, slideName = 'Slid
   const slide = createBlankPresentationSlide(slideName)
   return {
     id: createPresentationId('presentation'),
-    master: { ...DEFAULT_PRESENTATION_MASTER, footer: { ...DEFAULT_PRESENTATION_MASTER.footer } },
+    master: {
+      ...DEFAULT_PRESENTATION_MASTER,
+      accentColors: [...DEFAULT_PRESENTATION_MASTER.accentColors],
+      footer: { ...DEFAULT_PRESENTATION_MASTER.footer },
+    },
     title,
     version: 1,
     pageSize: { ...PRESENTATION_PAGE_SIZES.wide },

@@ -22,11 +22,12 @@ from .runtime._environment import bundled_node_runtime
 
 logger = logging.getLogger(__name__)
 
-POWERPOINT_PROTOCOL_VERSION = 3
+POWERPOINT_PROTOCOL_VERSION = 5
 
 _CONTROLLER_TIMEOUT_SECONDS = 3.0
 _ATTACH_TIMEOUT_SECONDS = 15.0
 _BRIDGE_TIMEOUT_MS = 10_000
+_MAX_PAGE_MARKDOWN_BYTES = 64 * 1024
 
 
 class PowerPointUnavailableError(RuntimeError):
@@ -131,30 +132,57 @@ class PowerPointDiagnostic:
 
 @dataclass(frozen=True)
 class PowerPointPage:
-    """One logical PPT page as the exact Markdown exposed to the Agent."""
+    """One current page entry in the live PPT overview."""
 
     page_id: str
     index: int
     revision: str
-    markdown: str
     title: Optional[str] = None
     layout: Optional[str] = None
     summary: Optional[str] = None
     has_content: bool = False
-    asset_paths: tuple[str, ...] = ()
 
     @classmethod
-    def from_payload(cls, payload: Any, default_markdown: str = "", default_asset_paths: tuple[str, ...] = ()) -> "PowerPointPage":
+    def from_payload(cls, payload: Any) -> "PowerPointPage":
         if not isinstance(payload, dict):
             raise RuntimeError("PowerPoint renderer returned an invalid page")
         index = payload.get("index")
         if not isinstance(index, int) or isinstance(index, bool) or index < 0:
             raise RuntimeError("PowerPoint renderer returned an invalid page index")
         revision = _required_string(payload.get("revision"), "page revision")
-        markdown = payload.get("markdown", default_markdown)
+        markdown = payload.get("markdown", "")
+        has_content = payload.get("has_content", isinstance(markdown, str) and bool(markdown.strip()))
+        if not isinstance(has_content, bool):
+            raise RuntimeError("PowerPoint renderer returned invalid page content metadata")
+        return cls(
+            page_id=_required_string(payload.get("page_id"), "page id"),
+            index=index,
+            revision=revision,
+            title=_optional_string(payload.get("title"), "page title"),
+            layout=_optional_string(payload.get("layout"), "page layout"),
+            summary=_optional_string(payload.get("summary"), "page summary"),
+            has_content=has_content,
+        )
+
+
+@dataclass(frozen=True)
+class PowerPointPageSnapshot:
+    """The exact Agent-read Markdown and revision used as an edit lease."""
+
+    page_id: str
+    base_revision: str
+    markdown: str
+    asset_paths: tuple[str, ...] = ()
+    refs: tuple[str, ...] = ()
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "PowerPointPageSnapshot":
+        if not isinstance(payload, dict):
+            raise RuntimeError("PowerPoint renderer returned an invalid page snapshot")
+        markdown = payload.get("markdown")
         if not isinstance(markdown, str):
             raise RuntimeError("PowerPoint renderer returned invalid page Markdown")
-        raw_asset_paths = payload.get("asset_paths", default_asset_paths)
+        raw_asset_paths = payload.get("asset_paths", ())
         if not isinstance(raw_asset_paths, (list, tuple)):
             raise RuntimeError("PowerPoint renderer returned invalid page assets")
         asset_paths: list[str] = []
@@ -162,27 +190,30 @@ class PowerPointPage:
             path = _required_string(raw_path, "page asset path")
             if path not in asset_paths:
                 asset_paths.append(path)
-        has_content = payload.get("has_content", bool(markdown.strip()))
-        if not isinstance(has_content, bool):
-            raise RuntimeError("PowerPoint renderer returned invalid page content metadata")
+        raw_refs = payload.get("refs", ())
+        if not isinstance(raw_refs, (list, tuple)):
+            raise RuntimeError("PowerPoint renderer returned invalid page refs")
+        refs: list[str] = []
+        for raw_ref in raw_refs:
+            ref = _required_string(raw_ref, "PowerPoint element ref")
+            if ref in refs:
+                raise RuntimeError("PowerPoint renderer returned duplicate page refs")
+            refs.append(ref)
         return cls(
             page_id=_required_string(payload.get("page_id"), "page id"),
-            index=index,
-            revision=revision,
+            base_revision=_required_string(payload.get("revision"), "page revision"),
             markdown=markdown,
-            title=_optional_string(payload.get("title"), "page title"),
-            layout=_optional_string(payload.get("layout"), "page layout"),
-            summary=_optional_string(payload.get("summary"), "page summary"),
-            has_content=has_content,
             asset_paths=tuple(asset_paths),
+            refs=tuple(refs),
         )
 
 
 @dataclass(frozen=True)
 class PowerPointPageView:
-    """The live Markdown projection of one page and only its referenced assets."""
+    """One current page entry paired with its Agent-read source snapshot."""
 
     page: PowerPointPage
+    snapshot: PowerPointPageSnapshot
     assets: tuple[PowerPointAsset, ...]
 
 
@@ -193,6 +224,7 @@ class PowerPointWriteResult:
     status: str
     page: Optional[PowerPointPage] = None
     diagnostics: tuple[PowerPointDiagnostic, ...] = ()
+    element_ref: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -390,9 +422,11 @@ class SessionPowerPoint:
         self._meta: dict[str, Any] = {}
         self._target: Optional[Path] = None
         self._workspace_root = workspace_root
-        self._read_revisions: dict[str, str] = {}
+        self._page_snapshots: dict[str, PowerPointPageSnapshot] = {}
         self._deck_revision: Optional[str] = None
+        self._document_revision: Optional[str] = None
         self._state_lock = asyncio.Lock()
+        self._page_write_locks: dict[str, asyncio.Lock] = {}
         self._connection_lock = asyncio.Lock()
         self._client: Optional[_SessionPowerPointClient] = None
         self._owner_generation: Optional[int] = None
@@ -413,8 +447,11 @@ class SessionPowerPoint:
         raise KeyError(f"Unknown PowerPoint page: {normalized}")
 
     def page_assets(self, page_id: str) -> tuple[PowerPointAsset, ...]:
-        page = self.page(page_id)
-        return tuple(self.assets[path] for path in page.asset_paths if path in self.assets)
+        normalized = self.page(page_id).page_id
+        snapshot = self._page_snapshots.get(normalized)
+        if snapshot is None:
+            return ()
+        return tuple(self.assets[path] for path in snapshot.asset_paths if path in self.assets)
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -463,28 +500,105 @@ class SessionPowerPoint:
         result = await self._invoke({"method": "get_ppt_page", "params": {"page_id": normalized}})
         return await self._merge_page_result(result, expected_page_id=normalized, remember_read=True)
 
-    async def update_page(self, page_id: str, markdown: str) -> PowerPointWriteResult:
+    async def update_design(self, design: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(design, dict) or not design:
+            raise ValueError("PowerPoint design changes are required")
+        expected_revision = self._document_revision
+        if expected_revision is None:
+            raise ValueError("Call view_ppt before updating the PowerPoint design")
+        params = {"design": design, "expected_document_revision": expected_revision}
+        try:
+            result = await self._invoke({"method": "update_ppt_design", "params": params})
+        except PowerPointOperationError as exc:
+            if exc.code == "document_changed":
+                self._document_revision = None
+            raise
+        await self._apply_overview(result)
+        return self.describe()
+
+    async def edit_page(self, page_id: str, ref: str, replacement: str) -> PowerPointWriteResult:
+        normalized = str(page_id or "").strip()
+        normalized_ref = str(ref or "").strip()
+        if not normalized or not normalized_ref:
+            raise ValueError("page_id and ref are required to edit a PowerPoint page")
+        if not isinstance(replacement, str) or not replacement.strip():
+            raise ValueError("replacement must be a non-empty PowerPoint element fragment")
+        if len(replacement.encode("utf-8")) > _MAX_PAGE_MARKDOWN_BYTES:
+            raise ValueError("PowerPoint element replacement exceeds the per-element limit")
+        page_lock = await self._write_lock(normalized)
+        async with page_lock:
+            snapshot = await self._snapshot_for_write(normalized, "editing")
+            if normalized_ref not in snapshot.refs:
+                raise ValueError(f"Unknown PowerPoint element ref in the last page read: {normalized_ref}")
+            params = {
+                "page_id": normalized,
+                "ref": normalized_ref,
+                "replacement": replacement,
+                "expected_revision": snapshot.base_revision,
+                "assets": await self._resolve_markdown_assets(replacement),
+            }
+            result = await self._invoke_page_write("edit_ppt_page", params, snapshot)
+            return await self._apply_write_result(result, expected_page_id=normalized)
+
+    async def insert_element(self, page_id: str, element: str) -> PowerPointWriteResult:
         normalized = str(page_id or "").strip()
         if not normalized:
-            raise ValueError("page_id is required to update a PowerPoint page")
-        if not isinstance(markdown, str) or not markdown.strip():
-            raise ValueError("markdown is required to update a PowerPoint page")
-        expected_revision = self._read_revisions.get(normalized)
-        if expected_revision is None:
-            raise ValueError(f"Call get_ppt_page('{normalized}') before updating this page")
-        params = {
-            "page_id": normalized,
-            "markdown": markdown,
-            "expected_revision": expected_revision,
-            "assets": await self._resolve_markdown_assets(markdown),
-        }
+            raise ValueError("page_id is required to insert a PowerPoint element")
+        if not isinstance(element, str) or not element.strip():
+            raise ValueError("element must be a non-empty PowerPoint element fragment")
+        if len(element.encode("utf-8")) > _MAX_PAGE_MARKDOWN_BYTES:
+            raise ValueError("PowerPoint element exceeds the per-element limit")
+        page_lock = await self._write_lock(normalized)
+        async with page_lock:
+            snapshot = await self._snapshot_for_write(normalized, "inserting an element into")
+            params = {
+                "page_id": normalized,
+                "element": element,
+                "expected_revision": snapshot.base_revision,
+                "assets": await self._resolve_markdown_assets(element),
+            }
+            result = await self._invoke_page_write("insert_ppt_element", params, snapshot)
+            return await self._apply_write_result(result, expected_page_id=normalized)
+
+    async def remove_element(self, page_id: str, ref: str) -> PowerPointWriteResult:
+        normalized = str(page_id or "").strip()
+        normalized_ref = str(ref or "").strip()
+        if not normalized or not normalized_ref:
+            raise ValueError("page_id and ref are required to remove a PowerPoint element")
+        page_lock = await self._write_lock(normalized)
+        async with page_lock:
+            snapshot = await self._snapshot_for_write(normalized, "removing an element from")
+            if normalized_ref not in snapshot.refs:
+                raise ValueError(f"Unknown PowerPoint element ref in the last page read: {normalized_ref}")
+            params = {
+                "page_id": normalized,
+                "ref": normalized_ref,
+                "expected_revision": snapshot.base_revision,
+            }
+            result = await self._invoke_page_write("remove_ppt_element", params, snapshot)
+            return await self._apply_write_result(result, expected_page_id=normalized)
+
+    async def _write_lock(self, page_id: str) -> asyncio.Lock:
+        async with self._state_lock:
+            return self._page_write_locks.setdefault(page_id, asyncio.Lock())
+
+    async def _snapshot_for_write(self, page_id: str, operation: str) -> PowerPointPageSnapshot:
+        async with self._state_lock:
+            snapshot = self._page_snapshots.get(page_id)
+        if snapshot is None:
+            raise ValueError(f"Call get_ppt_page('{page_id}') before {operation} this page")
+        return snapshot
+
+    async def _invoke_page_write(self, method: str, params: dict[str, Any], snapshot: PowerPointPageSnapshot) -> Any:
         try:
-            result = await self._invoke({"method": "update_ppt_page", "params": params})
+            return await self._invoke({"method": method, "params": params})
         except PowerPointOperationError as exc:
             if exc.code == "page_changed":
-                self._read_revisions.pop(normalized, None)
+                async with self._state_lock:
+                    current = self._page_snapshots.get(snapshot.page_id)
+                    if current is not None and current.base_revision == snapshot.base_revision:
+                        self._page_snapshots.pop(snapshot.page_id, None)
             raise
-        return await self._apply_write_result(result, expected_page_id=normalized)
 
     async def insert_page(self, markdown: str, after_page_id: Optional[str] = None) -> PowerPointWriteResult:
         if not isinstance(markdown, str) or not markdown.strip():
@@ -503,23 +617,22 @@ class SessionPowerPoint:
         normalized = str(page_id or "").strip()
         if not normalized:
             raise ValueError("page_id is required to remove a PowerPoint page")
-        expected_revision = self._read_revisions.get(normalized)
-        if expected_revision is None:
-            raise ValueError(f"Call get_ppt_page('{normalized}') before removing this page")
-        params = {"page_id": normalized, "expected_revision": expected_revision}
-        if self._deck_revision is not None:
-            params["expected_deck_revision"] = self._deck_revision
-        try:
-            result = await self._invoke({"method": "remove_ppt_page", "params": params})
-        except PowerPointOperationError as exc:
-            if exc.code == "page_changed":
-                self._read_revisions.pop(normalized, None)
-            if exc.code == "deck_changed":
-                self._deck_revision = None
-            raise
-        self._read_revisions.pop(normalized, None)
-        await self._apply_overview(result)
-        return self.describe()
+        page_lock = await self._write_lock(normalized)
+        async with page_lock:
+            snapshot = await self._snapshot_for_write(normalized, "removing")
+            params = {"page_id": normalized, "expected_revision": snapshot.base_revision}
+            if self._deck_revision is not None:
+                params["expected_deck_revision"] = self._deck_revision
+            try:
+                result = await self._invoke_page_write("remove_ppt_page", params, snapshot)
+            except PowerPointOperationError as exc:
+                if exc.code == "deck_changed":
+                    self._deck_revision = None
+                raise
+            async with self._state_lock:
+                self._page_snapshots.pop(normalized, None)
+            await self._apply_overview(result)
+            return self.describe()
 
     async def move_page(self, page_id: str, target_page_id: str, position: str) -> dict[str, Any]:
         normalized = str(page_id or "").strip()
@@ -597,6 +710,7 @@ class SessionPowerPoint:
         if not isinstance(raw_pages, list):
             raise RuntimeError("PowerPoint renderer returned an invalid PPT page overview")
         deck_revision = _required_string(payload.get("deck_revision"), "deck revision")
+        document_revision = _required_string(payload.get("document_revision"), "document revision")
         identity = PowerPointIdentity(
             session_id=self.session_id,
             name=_optional_string(raw_identity.get("name"), "PPT name"),
@@ -604,42 +718,36 @@ class SessionPowerPoint:
             path=str(self._target) if self._target is not None else None,
         )
         async with self._state_lock:
-            previous = {page.page_id: page for page in self.ppt}
             pages: list[PowerPointPage] = []
             for item in raw_pages:
                 if not isinstance(item, dict):
                     raise RuntimeError("PowerPoint renderer returned an invalid page overview")
-                page_id = _required_string(item.get("page_id"), "page id")
-                old_page = previous.get(page_id)
-                revision = item.get("revision")
-                unchanged = old_page is not None and isinstance(revision, str) and old_page.revision == revision
-                pages.append(PowerPointPage.from_payload(
-                    item,
-                    default_markdown=old_page.markdown if unchanged else "",
-                    default_asset_paths=old_page.asset_paths if unchanged else (),
-                ))
+                pages.append(PowerPointPage.from_payload(item))
             parsed_pages = tuple(pages)
             self._validate_pages(parsed_pages)
-            referenced_paths = {path for page in parsed_pages for path in page.asset_paths}
+            current_pages = {page.page_id: page for page in parsed_pages}
+            snapshots = {} if reset_reads else {
+                page_id: snapshot
+                for page_id, snapshot in self._page_snapshots.items()
+                if page_id in current_pages and current_pages[page_id].revision == snapshot.base_revision
+            }
+            referenced_paths = {path for snapshot in snapshots.values() for path in snapshot.asset_paths}
             self.identity = identity
             self._meta = dict(raw_meta)
             self._deck_revision = deck_revision
+            self._document_revision = document_revision
             self.assets = {path: asset for path, asset in self.assets.items() if path in referenced_paths}
+            self._page_snapshots = snapshots
             self.ppt = tuple(sorted(parsed_pages, key=lambda page: page.index))
-            if reset_reads:
-                self._read_revisions.clear()
-            else:
-                existing_ids = {page.page_id for page in parsed_pages}
-                self._read_revisions = {
-                    page_id: revision
-                    for page_id, revision in self._read_revisions.items()
-                    if page_id in existing_ids
-                }
 
     async def _merge_page_result(self, payload: Any, expected_page_id: Optional[str], remember_read: bool = True) -> PowerPointPageView:
         if not isinstance(payload, dict):
             raise RuntimeError("PowerPoint renderer returned an invalid page result")
-        page = PowerPointPage.from_payload(payload.get("page"))
+        raw_page = payload.get("page")
+        page = PowerPointPage.from_payload(raw_page)
+        snapshot = PowerPointPageSnapshot.from_payload(raw_page)
+        if snapshot.page_id != page.page_id or snapshot.base_revision != page.revision:
+            raise RuntimeError("PowerPoint renderer returned a mismatched page snapshot")
         if expected_page_id is not None and page.page_id != expected_page_id:
             raise RuntimeError("PowerPoint renderer returned the wrong page")
         raw_assets = payload.get("assets")
@@ -674,7 +782,7 @@ class SessionPowerPoint:
 
             await asyncio.to_thread(write_asset)
         page_assets = self._parse_assets(raw_assets)
-        missing_assets = set(page.asset_paths).difference(page_assets)
+        missing_assets = set(snapshot.asset_paths).difference(page_assets)
         if missing_assets:
             raise RuntimeError("PowerPoint renderer omitted a resource used by the page")
         async with self._state_lock:
@@ -682,13 +790,19 @@ class SessionPowerPoint:
             pages.append(page)
             if len({item.index for item in pages}) != len(pages):
                 raise RuntimeError("PowerPoint renderer returned a duplicate page index")
-            combined_assets = {**self.assets, **page_assets}
-            referenced_paths = {path for item in pages for path in item.asset_paths}
-            self.assets = {path: asset for path, asset in combined_assets.items() if path in referenced_paths}
-            self.ppt = tuple(sorted(pages, key=lambda item: item.index))
+            snapshots = dict(self._page_snapshots)
             if remember_read:
-                self._read_revisions[page.page_id] = page.revision
-        return PowerPointPageView(page=page, assets=tuple(page_assets[path] for path in page.asset_paths))
+                snapshots[page.page_id] = snapshot
+            combined_assets = {**self.assets, **page_assets}
+            referenced_paths = {path for item in snapshots.values() for path in item.asset_paths}
+            self.assets = {path: asset for path, asset in combined_assets.items() if path in referenced_paths}
+            self._page_snapshots = snapshots
+            self.ppt = tuple(sorted(pages, key=lambda item: item.index))
+        return PowerPointPageView(
+            page=page,
+            snapshot=snapshot,
+            assets=tuple(page_assets[path] for path in snapshot.asset_paths),
+        )
 
     async def _apply_write_result(self, payload: Any, expected_page_id: Optional[str]) -> PowerPointWriteResult:
         if not isinstance(payload, dict):
@@ -706,8 +820,17 @@ class SessionPowerPoint:
             raise RuntimeError("PowerPoint renderer returned an unknown page write status")
         if "identity" in payload or "pages" in payload:
             await self._apply_overview(payload)
+        elif "document_revision" in payload:
+            async with self._state_lock:
+                self._document_revision = _required_string(payload.get("document_revision"), "document revision")
         page_view = await self._merge_page_result(payload, expected_page_id)
-        return PowerPointWriteResult(status=status, page=page_view.page, diagnostics=diagnostics)
+        element_ref = _optional_string(payload.get("element_ref"), "PowerPoint element ref")
+        return PowerPointWriteResult(
+            status=status,
+            page=page_view.page,
+            diagnostics=diagnostics,
+            element_ref=element_ref,
+        )
 
     @staticmethod
     def _parse_assets(payload: Any) -> dict[str, PowerPointAsset]:
@@ -748,8 +871,10 @@ class SessionPowerPoint:
             self.ppt = ()
             self._meta = {}
             self._target = None
-            self._read_revisions.clear()
+            self._page_snapshots.clear()
+            self._page_write_locks.clear()
             self._deck_revision = None
+            self._document_revision = None
 
 
 class PowerPointHost:
@@ -941,6 +1066,7 @@ __all__ = [
     "PowerPointIdentity",
     "PowerPointOperationError",
     "PowerPointPage",
+    "PowerPointPageSnapshot",
     "PowerPointPageView",
     "PowerPointUnavailableError",
     "PowerPointWriteResult",

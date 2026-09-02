@@ -982,6 +982,11 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
 /** Import common editable PowerPoint content from an OOXML .pptx archive. */
 export async function importPresentationPptx(bytes: ArrayBuffer | Uint8Array, fileName = 'Imported presentation.pptx'): Promise<PresentationDocument> {
   const archive = await JSZip.loadAsync(bytes)
+  const themeColors = await themeColorsFromArchive(archive)
+  const accentColors = ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].flatMap((name) => {
+    const color = themeColors.get(name)
+    return color ? [`#${color}`] : []
+  })
   const presentationFile = archive.file('ppt/presentation.xml')
   if (!presentationFile) throw new Error('Not a PowerPoint presentation')
   const presentation = parseXml(await presentationFile.async('text'))
@@ -1006,7 +1011,11 @@ export async function importPresentationPptx(bytes: ArrayBuffer | Uint8Array, fi
   const slides = await Promise.all(slidePaths.map((path, index) => importSlide(archive, path, pageSize, slideSizeEmu, index)))
   return {
     id: createPresentationId('presentation'),
-    master: { ...DEFAULT_PRESENTATION_MASTER, footer: { ...DEFAULT_PRESENTATION_MASTER.footer } },
+    master: {
+      ...DEFAULT_PRESENTATION_MASTER,
+      accentColors: accentColors.length > 0 ? accentColors : [...DEFAULT_PRESENTATION_MASTER.accentColors],
+      footer: { ...DEFAULT_PRESENTATION_MASTER.footer },
+    },
     pageSize,
     selectedSlideId: slides[0]!.id,
     slides,

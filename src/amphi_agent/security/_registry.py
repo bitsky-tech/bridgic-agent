@@ -473,7 +473,8 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
     (r"get_ppt_page|goto_ppt_page", Capability.MANAGE),
     (
-        r"view_ppt|update_ppt_page|insert_ppt_page|remove_ppt_page|move_ppt_page",
+        r"view_ppt|update_ppt_design|edit_ppt_page|insert_ppt_element|remove_ppt_element"
+        r"|insert_ppt_page|remove_ppt_page|move_ppt_page",
         Capability.MANAGE_WRITE,
     ),
     (r"mcp__.+", Capability.MCP),

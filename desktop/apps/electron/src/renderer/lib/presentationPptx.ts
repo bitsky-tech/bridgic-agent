@@ -275,24 +275,6 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     const slidesWithAnimations = document.slides.map((slide) => (
       Array.isArray(slide.elements) && (slide.elements as PresentationElement[]).some(hasPresentationAnimation)
     ))
-    const hasQuickTimeVideo = document.slides.some((slide) => (
-      Array.isArray(slide.elements) && (slide.elements as unknown[]).some((element) => {
-        if (!isRecord(element) || element.type !== 'video' || !isRecord(element.source)) return false
-        const mimeType = typeof element.source.mimeType === 'string' ? element.source.mimeType.trim().toLowerCase() : ''
-        const fileName = typeof element.source.fileName === 'string' ? element.source.fileName.trim() : ''
-        const dataUrl = typeof element.source.dataUrl === 'string' ? element.source.dataUrl : ''
-        return mimeType === 'video/quicktime' || /\.mov$/i.test(fileName) || /^data:video\/quicktime[;,]/i.test(dataUrl)
-      })
-    ))
-    const hasCharts = document.slides.some((slide) => (
-      Array.isArray(slide.elements) && (slide.elements as PresentationElement[]).some(isPresentationChartElement)
-    ))
-    if (transitions.every((transition) => transition.effect === 'none')
-      && !slidesWithAudio.some(Boolean)
-      && !slidesWithAnimations.some(Boolean)
-      && !hasQuickTimeVideo
-      && !hasCharts) return bytes
-
     const p14Namespace = 'http://schemas.microsoft.com/office/powerpoint/2010/main'
     const markupCompatibilityNamespace = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 
@@ -708,6 +690,21 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     }
 
     const archive = await JSZip.loadAsync(bytes)
+    const themePath = Object.keys(archive.files).find((path) => /^ppt\/theme\/theme\d+\.xml$/i.test(path))
+    const themeFile = themePath ? archive.file(themePath) : null
+    if (themeFile) {
+      let themeXml = await themeFile.async('text')
+      document.master.accentColors.slice(0, 6).forEach((color, index) => {
+        const name = `accent${index + 1}`
+        const value = presentationColor(color, '')
+        if (!value) return
+        themeXml = themeXml.replace(
+          new RegExp(`(<a:${name}>)[\\s\\S]*?(</a:${name}>)`),
+          `$1<a:srgbClr val="${value}"/>$2`,
+        )
+      })
+      archive.file(themePath!, themeXml)
+    }
     await correctMediaContentTypes(archive)
     await correctChartAxisReferences(archive)
     await correctChartRelationshipTargets(archive)

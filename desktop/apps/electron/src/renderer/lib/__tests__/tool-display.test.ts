@@ -183,10 +183,15 @@ describe('toolLabel — 已登记工具族(spec 驱动)', () => {
       subject: 'review.pptx',
       subjectFull: 'decks/review.pptx',
     })
-    expect(toolLabel('generic', 'update_ppt_page', { page_id: 'page-2' })).toEqual({
-      verb: '更新 PPT 页',
+    expect(toolLabel('generic', 'edit_ppt_page', { page_id: 'page-2', ref: 'title' })).toEqual({
+      verb: '编辑 PPT 页',
       subject: 'page-2',
       subjectMono: true,
+    })
+    expect(toolMeta('generic', 'edit_ppt_page', { page_id: 'page-2', ref: 'title' }, '').detail).toBe('title')
+    expect(toolLabel('generic', 'update_ppt_design', { theme: 'midnight' })).toEqual({
+      verb: '更新 PPT 设计',
+      subject: 'midnight',
     })
     expect(toolMeta('generic', 'move_ppt_page', {
       page_id: 'page-2',

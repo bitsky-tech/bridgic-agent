@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
 import {
   currentPresentationWorkspaceAtom,
+  presentationAgentChangeAtom,
   powerPointSessionIdOverrideAtom,
   type PresentationWorkspace,
 } from './atoms/presentation'
@@ -36,6 +37,7 @@ store.set(powerPointSessionIdOverrideAtom, sessionId)
 
 let activeTarget: string | null = null
 let activeFileName = 'Untitled.pptx'
+let agentChangeId = 0
 let persistenceQueue = Promise.resolve()
 let lastPersistenceKey: string | null = null
 
@@ -63,33 +65,48 @@ async function persistWorkspace(workspace: PresentationWorkspace) {
   }
 }
 
+async function dispatchPowerPointRequest(request: PowerPointRequest) {
+  try {
+    const dispatched = await executePowerPointRequest(
+      store.get(currentPresentationWorkspaceAtom),
+      request,
+      { currentTarget: activeTarget, fileName: activeFileName },
+    )
+    if (dispatched.target) {
+      activeTarget = dispatched.target
+      activeFileName = dispatched.target.split(/[\\/]/).at(-1) || activeFileName
+    }
+    if (dispatched.workspace && dispatched.target && !dispatched.persist) {
+      lastPersistenceKey = persistenceKey(dispatched.workspace)
+    }
+    if (dispatched.agentChange) {
+      store.set(presentationAgentChangeAtom, {
+        ...dispatched.agentChange,
+        changeId: ++agentChangeId,
+      })
+    }
+    if (dispatched.workspace) store.set(currentPresentationWorkspaceAtom, dispatched.workspace)
+    if (dispatched.persist) await persistWorkspace(dispatched.workspace ?? store.get(currentPresentationWorkspaceAtom))
+    return { ok: true as const, value: dispatched.result }
+  } catch (error) {
+    return {
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+      ...(error instanceof PowerPointProtocolError ? { code: error.code } : {}),
+    }
+  }
+}
+
+let dispatchQueue: Promise<void> = Promise.resolve()
 window.__bridgicPowerPoint = {
   protocolVersion: POWERPOINT_PROTOCOL_VERSION,
   sessionId,
-  async dispatch(request: PowerPointRequest) {
-    try {
-      const dispatched = await executePowerPointRequest(
-        store.get(currentPresentationWorkspaceAtom),
-        request,
-        { currentTarget: activeTarget, fileName: activeFileName },
-      )
-      if (dispatched.target) {
-        activeTarget = dispatched.target
-        activeFileName = dispatched.target.split(/[\\/]/).at(-1) || activeFileName
-      }
-      if (dispatched.workspace && dispatched.target && !dispatched.persist) {
-        lastPersistenceKey = persistenceKey(dispatched.workspace)
-      }
-      if (dispatched.workspace) store.set(currentPresentationWorkspaceAtom, dispatched.workspace)
-      if (dispatched.persist) await persistWorkspace(dispatched.workspace ?? store.get(currentPresentationWorkspaceAtom))
-      return { ok: true, value: dispatched.result }
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        ...(error instanceof PowerPointProtocolError ? { code: error.code } : {}),
-      }
-    }
+  dispatch(request: PowerPointRequest) {
+    // Parallel Agent calls may prepare independently, but native model commits
+    // and persistence stay ordered so one write cannot publish a stale snapshot.
+    const result = dispatchQueue.then(() => dispatchPowerPointRequest(request))
+    dispatchQueue = result.then(() => undefined, () => undefined)
+    return result
   },
 }
 
