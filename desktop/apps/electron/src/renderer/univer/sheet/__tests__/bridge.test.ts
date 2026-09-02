@@ -13,17 +13,68 @@ interface FakeSheetOptions {
 
 const BORDER_STYLES = { none: 0, thin: 1, medium: 8, thick: 13 }
 
+function validationBuilder(calls: string[], parts: string[] = []) {
+  const self = {
+    build: () => ({ rule: parts.join(' ') }),
+    requireCheckbox: () => validationBuilder(calls, [...parts, 'checkbox']),
+    requireNumberBetween: (start: number, end: number) =>
+      validationBuilder(calls, [...parts, `between ${start} ${end}`]),
+    requireValueInList: (values: string[]) =>
+      validationBuilder(calls, [...parts, `list ${values.join(',')}`]),
+  }
+  return self
+}
+
+function highlightBuilder(parts: string[]) {
+  const next = (part: string) => highlightBuilder([...parts, part])
+  return {
+    build: () => ({ rule: parts.join(' ') }),
+    setBackground: (color?: string) => next(`bg ${color}`),
+    setBold: (isBold: boolean) => next(`bold ${isBold}`),
+    setFontColor: (color?: string) => next(`fg ${color}`),
+    setRanges: (ranges: unknown[]) => next(`ranges ${JSON.stringify(ranges)}`),
+  }
+}
+
+function conditionBuilder() {
+  const next = (part: string) => highlightBuilder([part])
+  return {
+    setDuplicateValues: () => next('duplicates'),
+    whenNumberGreaterThan: (value: number) => next(`gt ${value}`),
+    whenNumberLessThan: (value: number) => next(`lt ${value}`),
+    whenNumberBetween: (start: number, end: number) => next(`between ${start} ${end}`),
+    whenTextContains: (text: string) => next(`contains ${text}`),
+  }
+}
+
+function textFinder(calls: string[]) {
+  return {
+    findAll: () => [{}, {}],
+    matchCaseAsync: async (matchCase: boolean) => {
+      calls.push(`matchCase ${matchCase}`)
+      return {}
+    },
+    replaceAllWithAsync: async (replaceText: string) => {
+      calls.push(`replaceAll ${replaceText}`)
+      return 2
+    },
+  }
+}
+
 function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
   const calls: string[] = []
   const worksheets: FakeWorksheet[] = []
 
   interface FakeWorksheet {
+    addConditionalFormattingRule(rule: unknown): void
     cancelFreeze(): void
     deleteColumns(position: number, howMany: number): void
     deleteRows(position: number, howMany: number): void
     getDataRange(): ReturnType<FakeWorksheet['getRange']>
+    getFilter(): { remove(): boolean } | null
     getMaxColumns(): number
     getMaxRows(): number
+    newConditionalFormattingRule(): ReturnType<typeof conditionBuilder>
     getRange(a1: string): {
       breakApart(): void
       clear(): void
@@ -44,6 +95,12 @@ function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
       setValues(values: { v: CellValue }[][]): void
       setVerticalAlignment(alignment: string): void
       setWrap(wrap: boolean): void
+      addCommentAsync(content: unknown): Promise<boolean>
+      createFilter(): { remove(): boolean } | null
+      getRange(): unknown
+      setDataValidation(rule: unknown): void
+      setHyperLink(url: string, label?: string): Promise<boolean>
+      sort(column: { ascending: boolean; column: number }): void
     }
     getSelection(): {
       getActiveRange(): ReturnType<FakeWorksheet['getRange']> | null
@@ -64,6 +121,7 @@ function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
     let values: unknown[][] = options.values ?? [[null]]
     let name = options.name
     let selectionA1: string | null = null
+    let filter: { remove(): boolean } | null = null
     const range = (a1: string) => ({
       breakApart: () => calls.push(`break ${name}!${a1}`),
       clear: () => calls.push(`clear ${name}!${a1}`),
@@ -88,6 +146,30 @@ function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
       },
       setVerticalAlignment: (alignment: string) => calls.push(`vAlign ${a1} ${alignment}`),
       setWrap: (wrap: boolean) => calls.push(`wrap ${a1} ${wrap}`),
+      addCommentAsync: async (content: unknown) => {
+        calls.push(`comment ${a1} ${JSON.stringify(content)}`)
+        return true
+      },
+      createFilter: () => {
+        calls.push(`createFilter ${a1}`)
+        filter = {
+          remove: () => {
+            calls.push('removeFilter')
+            filter = null
+            return true
+          },
+        }
+        return filter
+      },
+      getRange: () => ({ a1 }),
+      setDataValidation: (rule: unknown) =>
+        calls.push(`validation ${a1} ${JSON.stringify(rule)}`),
+      setHyperLink: async (url: string, label?: string) => {
+        calls.push(`link ${a1} ${url} ${label ?? '-'}`)
+        return true
+      },
+      sort: (column: { ascending: boolean; column: number }) =>
+        calls.push(`sort ${a1} ${column.column} ${column.ascending}`),
     })
     return {
       cancelFreeze: () => calls.push(`cancelFreeze ${name}`),
@@ -116,6 +198,10 @@ function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
       },
       setRowHeights: (start, count, height) =>
         calls.push(`rowHeights ${start} ${count} ${height}`),
+      addConditionalFormattingRule: (rule: unknown) =>
+        calls.push(`cf ${JSON.stringify(rule)}`),
+      getFilter: () => filter,
+      newConditionalFormattingRule: () => conditionBuilder(),
       // Exposed only to the tests, to stand in for a person selecting cells.
       select: (a1: string | null) => {
         selectionA1 = a1
@@ -145,10 +231,20 @@ function fakeFacade(sheets: FakeSheetOptions[] = [{ name: 'Sheet1' }]) {
     setActiveSheet: (sheetId: string) => calls.push(`activate ${sheetId}`),
     undo: () => calls.push('undo'),
   }
+  const workbookLevel = {
+    createTextFinderAsync: async (text: string) => {
+      calls.push(`find ${text}`)
+      return textFinder(calls)
+    },
+    newDataValidation: () => validationBuilder(calls),
+    newTheadComment: () => ({
+      setContent: (content: unknown) => ({ build: () => ({ content }) }),
+    }),
+  }
   return {
     calls,
-    facade: { getActiveWorkbook: () => workbook },
-    facadeWithoutWorkbook: { getActiveWorkbook: () => null },
+    facade: { ...workbookLevel, getActiveWorkbook: () => workbook },
+    facadeWithoutWorkbook: { ...workbookLevel, getActiveWorkbook: () => null },
     worksheets: worksheets as (FakeWorksheet & { select(a1: string | null): void })[],
   }
 }
@@ -457,5 +553,108 @@ describe('SheetBridge — sheet management', () => {
     expect(() => bridge.removeSheet('Sheet1')).toThrow(/at least one sheet/)
     expect(() => bridge.addSheet('  ')).toThrow(/sheet name is required/)
     expect(() => bridge.renameSheet('Nope', 'X')).toThrow(/no sheet named/)
+  })
+})
+
+describe('SheetBridge — the feature presets', () => {
+  test('sort forwards the column and direction', () => {
+    const { calls, facade } = fakeFacade()
+    new SheetBridge(facade, BORDER_STYLES).sortRange('A2:D50', 1, false)
+    expect(calls).toEqual(['sort A2:D50 1 false'])
+  })
+
+  test('sort rejects a column that is not an index', () => {
+    const { facade } = fakeFacade()
+    expect(() => new SheetBridge(facade, BORDER_STYLES).sortRange('A1', -1))
+      .toThrow(/zero-based column index/)
+  })
+
+  test('a filter is added once and removed once', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.createFilter('A1:D10')
+    expect(() => bridge.createFilter('A1:D10')).toThrow(/already has a filter/)
+    bridge.removeFilter()
+    expect(() => bridge.removeFilter()).toThrow(/has no filter/)
+    expect(calls).toEqual(['createFilter A1:D10', 'removeFilter'])
+  })
+
+  test('find counts without replacing, and replace reports both numbers', async () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(await bridge.findReplace('draft', null)).toEqual({ matches: 2, replaced: 0 })
+    expect(calls).toEqual(['find draft'])
+    expect(await bridge.findReplace('draft', 'final', true))
+      .toEqual({ matches: 2, replaced: 2 })
+    expect(calls).toEqual(['find draft', 'find draft', 'matchCase true', 'replaceAll final'])
+  })
+
+  test('a replace is refused while a person is editing, a count is not', async () => {
+    const { facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.setHumanEditing(true)
+    await expect(bridge.findReplace('a', 'b')).rejects.toThrow(/person is editing/)
+    expect(await bridge.findReplace('a', null)).toEqual({ matches: 2, replaced: 0 })
+  })
+
+  test('a hyperlink must be http or https', async () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    await expect(bridge.setHyperlink('B4', 'javascript:alert(1)')).rejects.toThrow(/http/)
+    await bridge.setHyperlink('B4', 'https://univer.ai', 'Univer')
+    expect(calls).toEqual(['link B4 https://univer.ai Univer'])
+  })
+
+  test('a comment carries its text to the cell', async () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    await expect(bridge.addComment('A1', '  ')).rejects.toThrow(/comment text is required/)
+    await bridge.addComment('A1', 'Check this figure')
+    expect(calls[0]).toContain('Check this figure')
+    expect(bridge.recentChanges()[0]?.a1).toBe('comment on A1')
+  })
+
+  test('data validation builds the rule the caller asked for', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.setDataValidation('C2:C100', { type: 'list', values: ['yes', 'no'] })
+    bridge.setDataValidation('D2:D100', { max: 100, min: 1, type: 'numberBetween' })
+    bridge.setDataValidation('E2:E100', { type: 'checkbox' })
+    expect(calls).toEqual([
+      'validation C2:C100 {"rule":"list yes,no"}',
+      'validation D2:D100 {"rule":"between 1 100"}',
+      'validation E2:E100 {"rule":"checkbox"}',
+    ])
+  })
+
+  test('data validation refuses a rule that is missing its inputs', () => {
+    const { facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(() => bridge.setDataValidation('A1', { type: 'list' })).toThrow(/needs values/)
+    expect(() => bridge.setDataValidation('A1', { type: 'numberBetween' })).toThrow(/min and max/)
+    expect(() => bridge.setDataValidation('A1', { type: 'nope' as never })).toThrow(/unknown/)
+  })
+
+  test('a highlight rule carries its condition, its styling and its range', () => {
+    const { calls, facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    bridge.addConditionalFormat('B2:B100', {
+      background: '#f4cccc',
+      bold: true,
+      value: 100,
+      when: 'greaterThan',
+    })
+    expect(calls).toEqual([
+      'cf {"rule":"gt 100 bg #f4cccc bold true ranges [{\\"a1\\":\\"B2:B100\\"}]"}',
+    ])
+  })
+
+  test('a highlight rule refuses a condition without its number', () => {
+    const { facade } = fakeFacade()
+    const bridge = new SheetBridge(facade, BORDER_STYLES)
+    expect(() => bridge.addConditionalFormat('A1', { when: 'greaterThan' }))
+      .toThrow(/needs a number/)
+    expect(() => bridge.addConditionalFormat('A1', { when: 'textContains' }))
+      .toThrow(/needs text/)
   })
 })

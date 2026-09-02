@@ -7,6 +7,13 @@ import pytest
 from src.amphi_agent._browser import EmbeddedBrowserUnavailableError
 from src.amphi_agent.tools._sheet import (
     load_sheet_tools,
+    sheet_comment,
+    sheet_filter,
+    sheet_find_replace,
+    sheet_highlight,
+    sheet_link,
+    sheet_sort,
+    sheet_validate,
     sheet_border,
     sheet_changes,
     sheet_data_range,
@@ -381,3 +388,105 @@ async def test_load_sheet_tools_gates_the_advanced_surface(tool_harness: ToolHar
     assert tool_harness.ota_context.sheet_tool_loaded is True
     assert "sheet_format" in reply
     assert "sheet_freeze" in reply
+
+
+async def test_sheet_data_tools(tool_harness: ToolHarness) -> None:
+    """Final data operations:
+
+    {"sort": ["A2:D50", 1, false], "filter": "A1:D50", "find": 3, "replaced": 3}
+
+    Checks:
+    1. Sorting forwards the range, the column and the direction.
+    2. Filtering adds on a range and removes without one.
+    3. A find with no replacement reports only the match count.
+    4. A find with a replacement reports both numbers.
+    """
+    browser = _RecordingSheetBrowser({
+        "sortRange": {"a1": "A2:D50", "columns": 0, "rows": 0},
+        "createFilter": "Sheet1: filter A1:D50",
+        "removeFilter": "Sheet1: remove filter",
+        "findReplace": {"matches": 3, "replaced": 3},
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: the sort carries its column and direction.
+    await sheet_sort("A2:D50", 1, ascending=False)
+    assert browser.bridge_calls[0] == ("sortRange", ["A2:D50", 1, False, None])
+
+    # Check 2: adding needs a range, removing does not.
+    await sheet_filter("add", "A1:D50")
+    assert browser.bridge_calls[1] == ("createFilter", ["A1:D50", None])
+    assert "Removed" in await sheet_filter("remove")
+    with pytest.raises(ValueError, match="a1 is required"):
+        await sheet_filter("add")
+
+    # Checks 3 and 4: counting and replacing read differently.
+    assert "3 cell(s) contain 'draft'" in await sheet_find_replace("draft")
+    assert "3 of 3" in await sheet_find_replace("draft", "final")
+
+
+async def test_sheet_annotation_tools(tool_harness: ToolHarness) -> None:
+    """Final annotations:
+
+    {"link": ["B4", "https://univer.ai"], "comment": "Check this figure"}
+
+    Checks:
+    1. A hyperlink forwards its cell, URL and label.
+    2. A comment forwards its text, and refuses to be empty.
+    """
+    browser = _RecordingSheetBrowser({
+        "setHyperlink": {"a1": "B4", "columns": 1, "rows": 1},
+        "addComment": {"a1": "B4", "columns": 1, "rows": 1},
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: the label travels with the link.
+    await sheet_link("B4", "https://univer.ai", "Univer")
+    assert browser.bridge_calls[0] == ("setHyperlink", ["B4", "https://univer.ai", "Univer", None])
+
+    # Check 2: the comment text travels, and blank text is refused locally.
+    await sheet_comment("B4", "Check this figure")
+    assert browser.bridge_calls[1] == ("addComment", ["B4", "Check this figure", None])
+    with pytest.raises(ValueError, match="text is required"):
+        await sheet_comment("B4", "   ")
+
+
+async def test_sheet_rule_tools(tool_harness: ToolHarness) -> None:
+    """Final rules:
+
+    {"validation": {"type": "list"}, "highlight": {"when": "greaterThan"}}
+
+    Checks:
+    1. A validation rule is assembled from only the arguments its type needs.
+    2. A validation rule missing its inputs is refused before the page sees it.
+    3. A highlight rule carries its condition and its styling together.
+    4. A highlight rule with no styling at all is refused.
+    """
+    browser = _RecordingSheetBrowser({
+        "setDataValidation": {"a1": "C2:C100", "columns": 0, "rows": 0},
+        "addConditionalFormat": "Sheet1: conditional format B2:B100",
+    })
+    tool_harness.context.browser = browser  # type: ignore[assignment]
+
+    # Check 1: only the fields the rule type uses are sent.
+    await sheet_validate("C2:C100", "list", values=["yes", "no"])
+    assert browser.bridge_calls[0] == (
+        "setDataValidation", ["C2:C100", {"type": "list", "values": ["yes", "no"]}, None],
+    )
+
+    # Check 2: a rule without its inputs never reaches the page.
+    with pytest.raises(ValueError, match="values is required"):
+        await sheet_validate("C2:C100", "list")
+    with pytest.raises(ValueError, match="minimum and maximum"):
+        await sheet_validate("C2:C100", "numberBetween")
+
+    # Check 3: condition and styling arrive as one rule.
+    await sheet_highlight("B2:B100", "greaterThan", value=100, background="#f4cccc", bold=True)
+    assert browser.bridge_calls[1] == (
+        "addConditionalFormat",
+        ["B2:B100", {"when": "greaterThan", "value": 100, "background": "#f4cccc", "bold": True}, None],
+    )
+
+    # Check 4: a rule that would not show anything is refused.
+    with pytest.raises(ValueError, match="at least one of background"):
+        await sheet_highlight("B2:B100", "duplicates")

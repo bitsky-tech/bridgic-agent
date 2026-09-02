@@ -506,7 +506,11 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
         # disk only changes when sheet_save is called.
         r"|sheet_write|sheet_formula|sheet_clear|sheet_format|sheet_border|sheet_merge"
         r"|sheet_insert_lines|sheet_delete_lines|sheet_resize_lines|sheet_freeze"
-        r"|sheet_new_tab|sheet_rename_tab|sheet_delete_tab"
+        r"|sheet_new_tab|sheet_rename_tab|sheet_delete_tab|sheet_sort|sheet_filter"
+        r"|sheet_link|sheet_comment|sheet_validate|sheet_highlight"
+        # find/replace can rewrite the whole workbook, so it is a write even
+        # though the same tool also just counts matches.
+        r"|sheet_find_replace"
         r"|doc_append|doc_insert|doc_replace",
         Capability.MANAGE_WRITE,
     ),

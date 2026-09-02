@@ -87,6 +87,24 @@ export interface SelectionSummary {
   ranges: string[]
 }
 
+export interface DataValidationSpec {
+  max?: number
+  min?: number
+  type: 'list' | 'numberBetween' | 'checkbox'
+  values?: string[]
+}
+
+export interface ConditionalFormatSpec {
+  background?: string
+  bold?: boolean
+  fontColor?: string
+  max?: number
+  min?: number
+  text?: string
+  value?: number
+  when: 'greaterThan' | 'lessThan' | 'between' | 'textContains' | 'duplicates'
+}
+
 /** Border style names mapped to Univer's numeric enum, supplied by the page. */
 export type BorderStyles = Readonly<Record<string, number>>
 
@@ -120,6 +138,53 @@ interface FacadeRange {
   setValues(values: { v: CellValue }[][]): unknown
   setVerticalAlignment(alignment: VerticalAlign): unknown
   setWrap(wrap: boolean): unknown
+
+  // Contributed by the feature presets. Each is present only because its
+  // preset is registered in `main.ts`; none of them is a Pro package.
+  addCommentAsync(content: unknown): Promise<boolean>
+  createFilter(): FacadeFilter | null
+  getRange(): unknown
+  setDataValidation(rule: unknown): unknown
+  setHyperLink(url: string, label?: string): Promise<boolean>
+  sort(column: { ascending: boolean; column: number }): unknown
+}
+
+interface FacadeFilter {
+  remove(): boolean
+}
+
+interface FacadeValidationBuilder {
+  build(): unknown
+  requireCheckbox(): FacadeValidationBuilder
+  requireNumberBetween(start: number, end: number): FacadeValidationBuilder
+  requireValueInList(values: string[]): FacadeValidationBuilder
+}
+
+/**
+ * Univer's conditional-format builder is two-staged: the entry builder only
+ * chooses the condition, and choosing one hands back the builder that can
+ * carry the styling and the ranges.
+ */
+interface FacadeConditionStart {
+  setDuplicateValues(): FacadeConditionHighlight
+  whenNumberBetween(start: number, end: number): FacadeConditionHighlight
+  whenNumberGreaterThan(value: number): FacadeConditionHighlight
+  whenNumberLessThan(value: number): FacadeConditionHighlight
+  whenTextContains(text: string): FacadeConditionHighlight
+}
+
+interface FacadeConditionHighlight {
+  build(): unknown
+  setBackground(color?: string): FacadeConditionHighlight
+  setBold(isBold: boolean): FacadeConditionHighlight
+  setFontColor(color?: string): FacadeConditionHighlight
+  setRanges(ranges: unknown[]): FacadeConditionHighlight
+}
+
+interface FacadeTextFinder {
+  findAll(): unknown[]
+  matchCaseAsync(matchCase: boolean): Promise<unknown>
+  replaceAllWithAsync(replaceText: string): Promise<number>
 }
 
 interface FacadeSelection {
@@ -138,8 +203,11 @@ interface FacadeWorksheet {
   getSelection(): FacadeSelection | null
   getSheetId(): string
   getSheetName(): string
+  addConditionalFormattingRule(rule: unknown): unknown
+  getFilter(): FacadeFilter | null
   insertColumns(index: number, count?: number): unknown
   insertRows(index: number, count?: number): unknown
+  newConditionalFormattingRule(): FacadeConditionStart
   setColumnWidths(start: number, count: number, width: number): unknown
   setFrozenColumns(columns: number): unknown
   setFrozenRows(rows: number): unknown
@@ -161,7 +229,10 @@ interface FacadeWorkbook {
 }
 
 export interface FacadeApi {
+  createTextFinderAsync(text: string): Promise<FacadeTextFinder | null>
   getActiveWorkbook(): FacadeWorkbook | null
+  newDataValidation(): FacadeValidationBuilder
+  newTheadComment(): { setContent(content: unknown): { build(): unknown } }
 }
 
 const CHANGE_LOG_LIMIT = 200
@@ -438,6 +509,148 @@ export class SheetBridge {
     return { id: sheet.getSheetId(), name: sheet.getSheetName() }
   }
 
+  sortRange(a1: string, column: number, ascending = true, sheetName?: string): WriteResult {
+    if (!Number.isInteger(column) || column < 0) {
+      throw new SheetBridgeError('column must be a zero-based column index')
+    }
+    return this.mutate(a1, sheetName, (range) => {
+      range.sort({ ascending, column })
+      return { a1, columns: 0, rows: 0 }
+    })
+  }
+
+  /** Put a filter on a range, so the person can narrow it by hand afterwards. */
+  createFilter(a1: string, sheetName?: string): string {
+    const sheet = this.sheet(sheetName)
+    this.guard()
+    if (sheet.getFilter()) throw new SheetBridgeError('this sheet already has a filter')
+    if (!this.range(a1, sheetName).createFilter()) {
+      throw new SheetBridgeError(`could not put a filter on ${a1}`)
+    }
+    return this.recordSheetChange(sheet, `filter ${a1}`)
+  }
+
+  removeFilter(sheetName?: string): string {
+    const sheet = this.sheet(sheetName)
+    this.guard()
+    const filter = sheet.getFilter()
+    if (!filter) throw new SheetBridgeError('this sheet has no filter')
+    filter.remove()
+    return this.recordSheetChange(sheet, 'remove filter')
+  }
+
+  async findReplace(
+    find: string,
+    replace: string | null,
+    matchCase = false,
+  ): Promise<{ matches: number; replaced: number }> {
+    if (!find) throw new SheetBridgeError('find text is required')
+    if (replace !== null) this.guard()
+    const finder = await this.facade.createTextFinderAsync(find)
+    if (!finder) return { matches: 0, replaced: 0 }
+    if (matchCase) await finder.matchCaseAsync(true)
+    const matches = finder.findAll().length
+    if (replace === null) return { matches, replaced: 0 }
+    const replaced = await finder.replaceAllWithAsync(replace)
+    this.record('agent', `replace "${find}" with "${replace}"`)
+    return { matches, replaced }
+  }
+
+  async setHyperlink(
+    a1: string,
+    url: string,
+    label?: string,
+    sheetName?: string,
+  ): Promise<WriteResult> {
+    if (!/^https?:\/\//.test(url)) {
+      throw new SheetBridgeError('url must start with http:// or https://')
+    }
+    this.guard()
+    const range = this.range(a1, sheetName)
+    this.writing = true
+    try {
+      await range.setHyperLink(url, label)
+      this.record('agent', a1)
+      return { a1, columns: 1, rows: 1 }
+    } finally {
+      this.writing = false
+    }
+  }
+
+  /**
+   * Leave a comment on a cell.
+   *
+   * This is the workbook's own channel back to the person: an explanation of a
+   * number lands beside the number, where they will actually see it, instead of
+   * scrolling back through the conversation.
+   */
+  async addComment(a1: string, text: string, sheetName?: string): Promise<WriteResult> {
+    if (!text.trim()) throw new SheetBridgeError('comment text is required')
+    this.guard()
+    const range = this.range(a1, sheetName)
+    const comment = this.facade.newTheadComment()
+      .setContent({ dataStream: `${text}\r\n` })
+      .build()
+    this.writing = true
+    try {
+      await range.addCommentAsync(comment)
+      this.record('agent', `comment on ${a1}`)
+      return { a1, columns: 1, rows: 1 }
+    } finally {
+      this.writing = false
+    }
+  }
+
+  /** Constrain what a person may type into a range. */
+  setDataValidation(a1: string, rule: DataValidationSpec, sheetName?: string): WriteResult {
+    return this.mutate(a1, sheetName, (range) => {
+      let builder = this.facade.newDataValidation()
+      if (rule.type === 'list') {
+        if (!rule.values?.length) throw new SheetBridgeError('a list rule needs values')
+        builder = builder.requireValueInList(rule.values)
+      } else if (rule.type === 'numberBetween') {
+        if (rule.min === undefined || rule.max === undefined) {
+          throw new SheetBridgeError('a numberBetween rule needs min and max')
+        }
+        builder = builder.requireNumberBetween(rule.min, rule.max)
+      } else if (rule.type === 'checkbox') {
+        builder = builder.requireCheckbox()
+      } else {
+        throw new SheetBridgeError(`unknown data validation type "${rule.type}"`)
+      }
+      range.setDataValidation(builder.build())
+      return { a1, columns: 0, rows: 0 }
+    })
+  }
+
+  /** Colour cells by what they contain, so a report stays readable as it changes. */
+  addConditionalFormat(
+    a1: string,
+    rule: ConditionalFormatSpec,
+    sheetName?: string,
+  ): string {
+    const sheet = this.sheet(sheetName)
+    this.guard()
+    const range = this.range(a1, sheetName)
+    const start = sheet.newConditionalFormattingRule()
+    let builder: FacadeConditionHighlight
+    if (rule.when === 'greaterThan') builder = start.whenNumberGreaterThan(this.number(rule.value))
+    else if (rule.when === 'lessThan') builder = start.whenNumberLessThan(this.number(rule.value))
+    else if (rule.when === 'between') {
+      builder = start.whenNumberBetween(this.number(rule.min), this.number(rule.max))
+    } else if (rule.when === 'textContains') {
+      if (!rule.text) throw new SheetBridgeError('a textContains rule needs text')
+      builder = start.whenTextContains(rule.text)
+    } else if (rule.when === 'duplicates') builder = start.setDuplicateValues()
+    else throw new SheetBridgeError(`unknown condition "${rule.when}"`)
+
+    if (rule.background !== undefined) builder = builder.setBackground(rule.background)
+    if (rule.fontColor !== undefined) builder = builder.setFontColor(rule.fontColor)
+    if (rule.bold !== undefined) builder = builder.setBold(rule.bold)
+    sheet.addConditionalFormattingRule(builder.setRanges([range.getRange()]).build())
+    return this.recordSheetChange(sheet, `conditional format ${a1}`)
+  }
+
   recentChanges(limit = DEFAULT_RECENT_CHANGES): SheetChange[] {
     const size = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_RECENT_CHANGES
     return this.changes.slice(-size)
@@ -475,6 +688,13 @@ export class SheetBridge {
   /** Refuse any write while a person owns an open cell editor. */
   private guard(): void {
     if (this.humanEditing) throw new SheetBridgeError(HUMAN_EDITING_MESSAGE)
+  }
+
+  private number(value: number | undefined): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new SheetBridgeError('this condition needs a number')
+    }
+    return value
   }
 
   private requireCount(count: number): void {

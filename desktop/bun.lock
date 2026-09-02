@@ -7,7 +7,15 @@
       "dependencies": {
         "@radix-ui/react-dropdown-menu": "^2.1.16",
         "@univerjs/preset-docs-core": "0.25.1",
+        "@univerjs/preset-sheets-conditional-formatting": "0.25.1",
         "@univerjs/preset-sheets-core": "0.25.1",
+        "@univerjs/preset-sheets-data-validation": "0.25.1",
+        "@univerjs/preset-sheets-filter": "0.25.1",
+        "@univerjs/preset-sheets-find-replace": "0.25.1",
+        "@univerjs/preset-sheets-hyper-link": "0.25.1",
+        "@univerjs/preset-sheets-note": "0.25.1",
+        "@univerjs/preset-sheets-sort": "0.25.1",
+        "@univerjs/preset-sheets-thread-comment": "0.25.1",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "i18next": "^25.0.0",
@@ -670,6 +678,8 @@
 
     "@univerjs/core": ["@univerjs/core@0.25.1", "", { "dependencies": { "@univerjs/protocol": "0.25.1", "@univerjs/themes": "0.25.1", "@wendellhu/redi": "1.1.1", "async-lock": "^1.4.1", "fast-diff": "1.3.0", "kdbush": "^4.0.2", "lodash-es": "^4.18.1", "nanoid": "5.1.11", "numfmt": "3.2.6", "ot-json1": "^1.0.2", "rbush": "^4.0.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-0FQjuL1HdPtl8NsU5muT8HNtuA4yMEvbBLgewyqUVQmT5oks89a3jdqxi5/dvHYDRvW7wssVjZitfbL79el3Jg=="],
 
+    "@univerjs/data-validation": ["@univerjs/data-validation@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-MLSOXYpQWNgwFnVXcdh5YbVjDFRYs9WZy1YwvN3aUDVYgy6dDoU2N52IE+IbDhTi33TZI0JdVLu5000bmv+bcQ=="],
+
     "@univerjs/design": ["@univerjs/design@0.25.1", "", { "dependencies": { "@radix-ui/react-dialog": "^1.1.15", "@radix-ui/react-direction": "^1.1.1", "@radix-ui/react-dropdown-menu": "^2.1.16", "@radix-ui/react-hover-card": "^1.1.15", "@radix-ui/react-popover": "^1.1.15", "@radix-ui/react-separator": "^1.1.8", "@radix-ui/react-slot": "^1.2.4", "@univerjs/icons": "1.4.0", "class-variance-authority": "^0.7.1", "clsx": "^2.1.1", "react-transition-group": "^4.4.5", "sonner": "^2.0.7", "tailwind-merge": "2.6.0" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc" } }, "sha512-tqKzxh/HhUiHsZZzkFUHGBTEsRfOsSNgIGAjY6PTvbucpLJTYzijrQxEZfgOMC/tEQykUFJUo/WDRTXZEHMPXg=="],
 
     "@univerjs/docs": ["@univerjs/docs@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-render": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-U85iZNLBxRCaiU3++N8rCBgUMTpFGsm1G0U6UcsZxAy0XGhRjD+vhtvgQNis25sNjksmy/25kXtYqWMrk/XWbw=="],
@@ -682,13 +692,31 @@
 
     "@univerjs/engine-render": ["@univerjs/engine-render@0.25.1", "", { "dependencies": { "@floating-ui/dom": "^1.7.4", "@floating-ui/utils": "^0.2.10", "@univerjs/core": "0.25.1", "cjk-regex": "^3.4.0", "franc-min": "^6.2.0", "opentype.js": "^2.0.0" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-CDbIjOQTbEwwVe8+l6NEQGxegsbRjVXWJ6Qrm91Z1gzwKzrl9P1mOaDsXGYgbp5ujTJBxOVePPuU2QuS/9iMeA=="],
 
+    "@univerjs/find-replace": ["@univerjs/find-replace@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-Xa+pkCqogQ0AHcIzUGpmqbb6driQJ0i4nqT6XPS/RYh/u0encY9/an7z3ly9b5Z24PChyPGTfrvrbFAnmON3WA=="],
+
     "@univerjs/icons": ["@univerjs/icons@1.4.0", "", { "peerDependencies": { "react": "*", "react-dom": "*" } }, "sha512-ohBfPk+EyLuSc+1Rvz06jiMDgEydwc6lLUOQyUjS/W3zBKYLhbXaEP4qq7/YQH8OhzkTsRQGvsTgYSg1roRXgg=="],
 
     "@univerjs/network": ["@univerjs/network@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-5sqyI9qKyn/fb+IMIoW6nQPJHlpJr1/WscCyDG4PmMtpMm/ipN/CZu31FIyMyM1jLOeJX1uMeldflviEq4iorA=="],
 
     "@univerjs/preset-docs-core": ["@univerjs/preset-docs-core@0.25.1", "", { "dependencies": { "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/network": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-V98oGWbMa2NjvHZEMFyHvVu0DXp8h4i/soJilAdK+mV+Ja0i2Eofj/Wsmoj9LT++nC1pXfGfNzpezy04uR/EVw=="],
 
+    "@univerjs/preset-sheets-conditional-formatting": ["@univerjs/preset-sheets-conditional-formatting@0.25.1", "", { "dependencies": { "@univerjs/sheets-conditional-formatting": "0.25.1", "@univerjs/sheets-conditional-formatting-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-MsbzZEw6Z6L7UHpNxF1B1ua/aM0we1u9GRBf7ExZlPAzZbEicd5DM2n0yvO/5a7SmzFuFQZshX1JY5xSNLJvhw=="],
+
     "@univerjs/preset-sheets-core": ["@univerjs/preset-sheets-core@0.25.1", "", { "dependencies": { "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/network": "0.25.1", "@univerjs/rpc": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-formula": "0.25.1", "@univerjs/sheets-formula-ui": "0.25.1", "@univerjs/sheets-numfmt": "0.25.1", "@univerjs/sheets-numfmt-ui": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-hCxvFUcWBZLEUf1SUOmqHvf3MN/17LW7AQYLcWIJIGQP2laa0XIrW1kXrTfmh8G0BTwDes286FIPf5y70SC0YA=="],
+
+    "@univerjs/preset-sheets-data-validation": ["@univerjs/preset-sheets-data-validation@0.25.1", "", { "dependencies": { "@univerjs/data-validation": "0.25.1", "@univerjs/sheets-data-validation": "0.25.1", "@univerjs/sheets-data-validation-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-9K3XOzmfjxJ39iR9GQCH9FGrLdMqc0FOFv1BLfMyWwwh2N3sWaz+Ae1sKjpKPLDuOn8uYH6QRRAxif8UK1V49A=="],
+
+    "@univerjs/preset-sheets-filter": ["@univerjs/preset-sheets-filter@0.25.1", "", { "dependencies": { "@univerjs/sheets-filter": "0.25.1", "@univerjs/sheets-filter-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-ox6OAUFetC9Al1XY7eb4JNPvNwto7ZWZBXiD5nNGzeK6R8LKrN31Yhu69RgCTpuymVlv7rNROtDKeXxroJzUbg=="],
+
+    "@univerjs/preset-sheets-find-replace": ["@univerjs/preset-sheets-find-replace@0.25.1", "", { "dependencies": { "@univerjs/find-replace": "0.25.1", "@univerjs/sheets-find-replace": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-eao9xoiPsnn3qfk9pRVEip7Yte36RgBWpdZ72xj0WtX7r0pKOsCWHLpluQwO2tR8YR6BBTB009qarxDMTeQw3g=="],
+
+    "@univerjs/preset-sheets-hyper-link": ["@univerjs/preset-sheets-hyper-link@0.25.1", "", { "dependencies": { "@univerjs/sheets-hyper-link": "0.25.1", "@univerjs/sheets-hyper-link-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-nKROwzxzYadnetwlGVAGtpuMP8Cn2qdiJiWQjXjPI217TUtojYKXIRdOhK909/BFAR/l7oalX4x+fKLWSdU5ag=="],
+
+    "@univerjs/preset-sheets-note": ["@univerjs/preset-sheets-note@0.25.1", "", { "dependencies": { "@univerjs/sheets-note": "0.25.1", "@univerjs/sheets-note-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-Lo0lhMfHHzSPJaAxUQ5F9TANtXwL7xIjoNdVPLDMz5dumPCPHKH3j7fewI4pOrSVqvcVyWvmDxwUQqMDYSk8SQ=="],
+
+    "@univerjs/preset-sheets-sort": ["@univerjs/preset-sheets-sort@0.25.1", "", { "dependencies": { "@univerjs/sheets-sort": "0.25.1", "@univerjs/sheets-sort-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-xebD11RrtJ+JY6Tn3pYoQf28jMuLAlOEAoDYqB8Rh4mzKLimBcB/emmXNg+KfNbbXFelFRvjr8uaLL5P41R5WQ=="],
+
+    "@univerjs/preset-sheets-thread-comment": ["@univerjs/preset-sheets-thread-comment@0.25.1", "", { "dependencies": { "@univerjs/sheets-thread-comment": "0.25.1", "@univerjs/sheets-thread-comment-ui": "0.25.1", "@univerjs/thread-comment": "0.25.1", "@univerjs/thread-comment-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-/zlzXHNWVQkp9fr+d6kSeGEwtb5nnGhKbCmF0y+JSHpws6MPWBVjBD1MbzsGvT99P7OhLXtdFrbrQUMBsFduOg=="],
 
     "@univerjs/protocol": ["@univerjs/protocol@0.25.1", "", { "dependencies": { "@grpc/grpc-js": "^1.14.3" } }, "sha512-RHkNl/Gm8T5VyrXGj3dnJ4CGgB12/oqP7BVUZ4DcfxezFh1vq/nIHD0fIqL8DZslZV6CGK/sxcNeGn3E/S3Xnw=="],
 
@@ -696,19 +724,53 @@
 
     "@univerjs/sheets": ["@univerjs/sheets@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/protocol": "0.25.1", "@univerjs/rpc": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-VcHtHgCOStJZO4XLstvV6oWHxBwhGCpArKJaEe22EmKNY1lfsibOrvwIjEW/Xpm9Ago9ybTvmuIvByrCd60pew=="],
 
+    "@univerjs/sheets-conditional-formatting": ["@univerjs/sheets-conditional-formatting@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-+3q3WS6+m3qNDyyv4LuppxqNQdOFT99fQHpkrc2WIi1pSgO/HnCXm348KP1RhpYoVwcHOV8eoFDTqK9Q1DrdOg=="],
+
+    "@univerjs/sheets-conditional-formatting-ui": ["@univerjs/sheets-conditional-formatting-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-conditional-formatting": "0.25.1", "@univerjs/sheets-formula": "0.25.1", "@univerjs/sheets-formula-ui": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-/DZRAhClo1T9v3S8h6W7shSemckIeLvYYwygl3vlWe1opcUFraUt2A8iS/SToQeIgIstVEGGq3EZh5yeDJDvAQ=="],
+
+    "@univerjs/sheets-data-validation": ["@univerjs/sheets-data-validation@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/data-validation": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/protocol": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-formula": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-I2NkLoiRJs9+zyijsa+wLnFviJNurqxJ77wAnh+ZZe6OLWmh1ErCsmu20sljvaPZgIKBqeXYi/sRYv9f4xY+2w=="],
+
+    "@univerjs/sheets-data-validation-ui": ["@univerjs/sheets-data-validation-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/data-validation": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-data-validation": "0.25.1", "@univerjs/sheets-formula-ui": "0.25.1", "@univerjs/sheets-numfmt": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-jg40+G3S0gwtQILvfzB0bFnigLNHxUEcnuAGHwgdS+GRHxGb+GbtY2qy5Fob7tGCMlgIiL4vZBZ5LCRVq2ciLg=="],
+
+    "@univerjs/sheets-filter": ["@univerjs/sheets-filter@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/rpc": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-pQl8KcHhR6Qj+VQQogKeaGbJ1yes39lfmTrCd5JUgXMXJwE2nrZsCBDXM4B3I4shMbE0vLvJVkHXxLV0ApVQvA=="],
+
+    "@univerjs/sheets-filter-ui": ["@univerjs/sheets-filter-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/rpc": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-filter": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-VROeSot8Fu/wUqeUuGaCgNHLllzOqrmnyeZO8oARlUZNaNSwZl1LfOxu35xR63HS1HuC7amaFspCdo5u4D1nsg=="],
+
+    "@univerjs/sheets-find-replace": ["@univerjs/sheets-find-replace@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/find-replace": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-ui": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-AdpmCl1Y7hqSMgTvCI9NOCjcAS+mutPCkmVyxoNHNtdguob6hbP0FQxcOkHd2feSLptcK/EvRZu3BfquMqAGmw=="],
+
     "@univerjs/sheets-formula": ["@univerjs/sheets-formula@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/rpc": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-5zDcLfzAhO0H1gwYeCY0JYgZIxcKAhA02jS0wXRpOa+dVWs2/zcKy4CjDCbINIsA/aLrICAd9O8Q3VbU/G3rEg=="],
 
     "@univerjs/sheets-formula-ui": ["@univerjs/sheets-formula-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-formula": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-iMDZZutB5mcwBGn1kL2QfsQoiOJKJhyLtzp3oRv0bEhbScGDPyoADuAoOCQjDnnUKTp3cTAvc0ACn3Gj3vOvRQ=="],
 
+    "@univerjs/sheets-hyper-link": ["@univerjs/sheets-hyper-link@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-hr9YkCeGZzy1ZStbRoyt3zS0HUa2PxzfeasaTQyAf0o82Patq2jyKVSplp/iOOMUTgtYRZHv+NntQ2/dm/c9vA=="],
+
+    "@univerjs/sheets-hyper-link-ui": ["@univerjs/sheets-hyper-link-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-data-validation": "0.25.1", "@univerjs/sheets-formula-ui": "0.25.1", "@univerjs/sheets-hyper-link": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-grb7WsYlbzKOzZeEXKYv1IkrdwXcykpfWYKix6MNdAsg9EIIm2N85JAxdmz/gUO4Skh5YW8sfUiQx/1IKe/W7A=="],
+
+    "@univerjs/sheets-note": ["@univerjs/sheets-note@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-mGKYGJwI3HB4ySRlOyqFwZTzYP7IYdedt/rF6OIQCwHSiEqliokRVqSh5zcHw46HhbBc36BqnBLImXGr/ib9pQ=="],
+
+    "@univerjs/sheets-note-ui": ["@univerjs/sheets-note-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-note": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-TSYVH9WEv+5p9lwwXXWKXJuG2G2Vb9ZcB/ptLUKR48XE3AB4aNUr+Nw01E57aYp0/Q64a5pmYZwlhTWalZQi7Q=="],
+
     "@univerjs/sheets-numfmt": ["@univerjs/sheets-numfmt@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-yLuOfgFa8t+uDnBvCs+PjCjYBq6iJ+tIUEj7ana5YCnxUdKmDed4M8woSffgDRaMXcV8sY9SOexA2iwMLo9ioQ=="],
 
     "@univerjs/sheets-numfmt-ui": ["@univerjs/sheets-numfmt-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-numfmt": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-L8MzmnjYiWq/M/X+lv69ryOqiS0WTazv4CYTv10hO5mqmHsGVDx59ECkLhd3L8gN4CM9Wet7eU1Qf27H5i8RhA=="],
+
+    "@univerjs/sheets-sort": ["@univerjs/sheets-sort@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/sheets": "0.25.1" } }, "sha512-xVKhNrdT5q7v3HIwx0Jp9gKkZWIEq/wQAIMPZkRZdtkGSMJ3wSvCXrWiiEalP2YOccfzxKzT58IiuqUpSgu82Q=="],
+
+    "@univerjs/sheets-sort-ui": ["@univerjs/sheets-sort-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-sort": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-KJPaD5Y+WqrlZncJYDggVhBG9T0DwpT00LNESZYdv55lbKUbH2Lc/ilUQ7xpVkkUml4UZtr/s/JB22m5++Gj6g=="],
+
+    "@univerjs/sheets-thread-comment": ["@univerjs/sheets-thread-comment@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/thread-comment": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-Kw3V/hAXJwx0TpJ/JewwPgwcSZhXEbhjz4ocREY2KzxPzIqzgNOGz5ZgyY1F0HwvQgr5ZpPXMFVAQpUenKcidg=="],
+
+    "@univerjs/sheets-thread-comment-ui": ["@univerjs/sheets-thread-comment-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-thread-comment": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/thread-comment": "0.25.1", "@univerjs/thread-comment-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-jjyGo7QRY/rLjlvV8wrJyUzH+FjAuO2SJojoRlR8U1zfyQGF7LDhCIkhmf5366hPUqvkzfz2Hkk+CAEp5zeg5g=="],
 
     "@univerjs/sheets-ui": ["@univerjs/sheets-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/protocol": "0.25.1", "@univerjs/sheets": "0.25.1", "@univerjs/telemetry": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-iCzUfuVc78iRYXCs4kzJKb7wdFQ05irvxxvMeeu5OfOMRef1z1Hr8fvChXfOfjDv6HzQ4nfTO7iGNzD59eE78g=="],
 
     "@univerjs/telemetry": ["@univerjs/telemetry@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1" } }, "sha512-eAGiFs2OUAIBrC0g3gASRAvr7++KkmnPS49yAoa95gd6TW8R8o0YASOXyrahysMhDriBXmFGN7hHNLXRo9UlGw=="],
 
     "@univerjs/themes": ["@univerjs/themes@0.25.1", "", {}, "sha512-21iH3Z3Ai9pRV+l2weuHJu2V8XB3T5Hr8VEPlOyctFbqOJMTNRC5peYJdn7Ra5kMdO+Wa7uWsZf6qurHouswmg=="],
+
+    "@univerjs/thread-comment": ["@univerjs/thread-comment@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-TL7Pj5oCA0rD+EjmRIjoTG7tHgRVIBewTL27Ow79JkbJDUAMqaxGAyZc1BpuIM/Fvjp6+hcPO+9FribwRgj+6A=="],
+
+    "@univerjs/thread-comment-ui": ["@univerjs/thread-comment-ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/thread-comment": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-cCTPxMLjSzdLRXmdfFv4LtjBZFDG5VeCnqm6o9+XYPIVbZ7UAYRKGPOzv1204lDJu1XJgYgTnMJr4Ms2Yh2bUg=="],
 
     "@univerjs/ui": ["@univerjs/ui@0.25.1", "", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@wendellhu/redi": "1.1.1", "localforage": "^1.10.0" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-DapFtWHIcidxE+vfueIL/sDQeVnf5MRY4MzrK1ag+VHuN6/bU4jwFXDEmyGi1otL03cYg8PFJja2lkV73cbYJA=="],
 

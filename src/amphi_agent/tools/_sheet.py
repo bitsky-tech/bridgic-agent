@@ -39,6 +39,20 @@ SHEET_BASIC_TOOL_NAMES = frozenset({
 # than merely correct. Loaded on demand so an ordinary turn is not paying for a
 # dozen tool descriptions it will never call.
 SHEET_ADVANCED_TOOL_NAMES = frozenset({
+    "sheet_sort",
+    "sheet_filter",
+    "sheet_find_replace",
+    "sheet_link",
+    "sheet_comment",
+    "sheet_validate",
+    "sheet_highlight",
+    "sheet_sort",
+    "sheet_filter",
+    "sheet_find_replace",
+    "sheet_link",
+    "sheet_comment",
+    "sheet_validate",
+    "sheet_highlight",
     "sheet_format",
     "sheet_border",
     "sheet_merge",
@@ -271,6 +285,11 @@ async def load_sheet_tools() -> str:
         "- sheet_merge: merge or split cells\n"
         "- sheet_insert_lines / sheet_delete_lines / sheet_resize_lines: rows and columns\n"
         "- sheet_freeze: keep header rows and columns in view\n"
+        "- sheet_sort / sheet_filter: order and narrow the data\n"
+        "- sheet_find_replace: count or replace text across the workbook\n"
+        "- sheet_validate: constrain what a person may type into a range\n"
+        "- sheet_highlight: colour cells by what they contain\n"
+        "- sheet_link / sheet_comment: hyperlinks, and notes back to the person\n"
         "- sheet_new_tab / sheet_rename_tab / sheet_delete_tab / sheet_switch_tab: sheets\n"
         "\nContinue with the next reasoning step to call them."
     )
@@ -514,6 +533,219 @@ async def sheet_switch_tab(name: str) -> str:
     return f"Switched to sheet {result.get('name')}."
 
 
+async def sheet_sort(
+    a1: str,
+    column: int,
+    ascending: bool = True,
+    sheet: Optional[str] = None,
+) -> str:
+    """Sort a range by one of its columns.
+
+    Args:
+        a1: The range to sort, such as ``A2:D50``. Leave the header row out.
+        column: Zero-based column index to sort by, counted from the sheet's
+            first column.
+        ascending: Sort smallest-first when true.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("sortRange", [_require_a1(a1), column, ascending, sheet])
+    direction = "ascending" if ascending else "descending"
+    return f"Sorted {a1} by column {column}, {direction}."
+
+
+async def sheet_filter(
+    action: Literal["add", "remove"] = "add",
+    a1: Optional[str] = None,
+    sheet: Optional[str] = None,
+) -> str:
+    """Put a filter on a range, or take the sheet's filter off.
+
+    The agent sets the filter up; the person then narrows it by hand with the
+    controls that appear in the header row.
+
+    Args:
+        action: ``add`` to filter a range, ``remove`` to clear the sheet's filter.
+        a1: The range to filter, required when adding.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    if action == "remove":
+        await _call("removeFilter", [sheet])
+        return "Removed the filter."
+    if not a1:
+        raise ValueError("a1 is required to add a filter")
+    await _call("createFilter", [_require_a1(a1), sheet])
+    return f"Filtered {a1}."
+
+
+async def sheet_find_replace(
+    find: str,
+    replace: Optional[str] = None,
+    match_case: bool = False,
+) -> str:
+    """Count matches for some text in the workbook, or replace every one.
+
+    Leave ``replace`` out to only count — worth doing first, since replacing is
+    a single undo step across the whole workbook.
+
+    Args:
+        find: The text to look for.
+        replace: The replacement text; omit to only count matches.
+        match_case: Whether the search is case sensitive.
+
+    Returns:
+        How many cells matched and, when replacing, how many changed.
+    """
+    if not (find or "").strip():
+        raise ValueError("find is required")
+    result = await _call_dict("findReplace", [find, replace, match_case])
+    matches = result.get("matches")
+    if replace is None:
+        return f"{matches} cell(s) contain {find!r}."
+    return f"Replaced {find!r} with {replace!r} in {result.get('replaced')} of {matches} cell(s)."
+
+
+async def sheet_link(
+    a1: str,
+    url: str,
+    label: Optional[str] = None,
+    sheet: Optional[str] = None,
+) -> str:
+    """Turn one cell into a hyperlink.
+
+    Args:
+        a1: The single cell to link, such as ``B4``.
+        url: An http or https URL.
+        label: The text shown in the cell; the URL is used when omitted.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    await _call("setHyperlink", [_require_a1(a1), url, label, sheet])
+    return f"Linked {a1} to {url}."
+
+
+async def sheet_comment(a1: str, text: str, sheet: Optional[str] = None) -> str:
+    """Leave a comment on a cell, where the person will see it.
+
+    Use this to explain a number beside the number — an assumption behind a
+    formula, a value that needs checking — instead of only saying it in chat,
+    which the person has to scroll back through.
+
+    Args:
+        a1: The cell to comment on.
+        text: The comment text.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    if not (text or "").strip():
+        raise ValueError("text is required")
+    await _call("addComment", [_require_a1(a1), text, sheet])
+    return f"Commented on {a1}."
+
+
+async def sheet_validate(
+    a1: str,
+    rule: Literal["list", "numberBetween", "checkbox"],
+    values: Optional[List[str]] = None,
+    minimum: Optional[float] = None,
+    maximum: Optional[float] = None,
+    sheet: Optional[str] = None,
+) -> str:
+    """Constrain what a person may type into a range.
+
+    Use this to make a sheet fill-in-able rather than free-form: a column of
+    choices, a number range, or a checkbox.
+
+    Args:
+        a1: The range to constrain, such as ``C2:C100``.
+        rule: ``list`` for a dropdown, ``numberBetween`` for a range, or
+            ``checkbox``.
+        values: The allowed choices, required for ``list``.
+        minimum: Lowest allowed number, required for ``numberBetween``.
+        maximum: Highest allowed number, required for ``numberBetween``.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    spec: dict = {"type": rule}
+    if rule == "list":
+        if not values:
+            raise ValueError("values is required for a list rule")
+        spec["values"] = values
+    elif rule == "numberBetween":
+        if minimum is None or maximum is None:
+            raise ValueError("minimum and maximum are required for a numberBetween rule")
+        spec["min"] = minimum
+        spec["max"] = maximum
+    await _call("setDataValidation", [_require_a1(a1), spec, sheet])
+    return f"Constrained {a1} to {rule}."
+
+
+async def sheet_highlight(
+    a1: str,
+    when: Literal["greaterThan", "lessThan", "between", "textContains", "duplicates"],
+    value: Optional[float] = None,
+    minimum: Optional[float] = None,
+    maximum: Optional[float] = None,
+    text: Optional[str] = None,
+    background: Optional[str] = None,
+    font_color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    sheet: Optional[str] = None,
+) -> str:
+    """Colour cells by what they contain, so a report stays readable as it changes.
+
+    Unlike ``sheet_format``, this follows the values: a cell that later crosses
+    the threshold picks up the styling on its own.
+
+    Args:
+        a1: The range the rule covers.
+        when: The condition to highlight on.
+        value: The threshold for ``greaterThan`` and ``lessThan``.
+        minimum: Lower bound for ``between``.
+        maximum: Upper bound for ``between``.
+        text: The substring for ``textContains``.
+        background: Background color as CSS hex.
+        font_color: Text color as CSS hex.
+        bold: Whether matching cells are bold.
+        sheet: Sheet name; the active sheet is used when omitted.
+
+    Returns:
+        A short confirmation.
+    """
+    spec: dict = {"when": when}
+    if when in ("greaterThan", "lessThan"):
+        if value is None:
+            raise ValueError(f"value is required for a {when} rule")
+        spec["value"] = value
+    elif when == "between":
+        if minimum is None or maximum is None:
+            raise ValueError("minimum and maximum are required for a between rule")
+        spec["min"] = minimum
+        spec["max"] = maximum
+    elif when == "textContains":
+        if not text:
+            raise ValueError("text is required for a textContains rule")
+        spec["text"] = text
+    for key, item in (("background", background), ("fontColor", font_color), ("bold", bold)):
+        if item is not None:
+            spec[key] = item
+    if not any(key in spec for key in ("background", "fontColor", "bold")):
+        raise ValueError("give at least one of background, font_color or bold")
+    await _call("addConditionalFormat", [_require_a1(a1), spec, sheet])
+    return f"Highlighting {a1} when {when}."
+
+
 async def sheet_save(file_path: str) -> str:
     """Save the open workbook to a JSON file in the Session workspace.
 
@@ -552,6 +784,13 @@ sheet_tool_specs = [
         sheet_selection,
         sheet_save,
         load_sheet_tools,
+        sheet_sort,
+        sheet_filter,
+        sheet_find_replace,
+        sheet_link,
+        sheet_comment,
+        sheet_validate,
+        sheet_highlight,
         sheet_format,
         sheet_border,
         sheet_merge,
