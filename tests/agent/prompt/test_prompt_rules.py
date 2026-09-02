@@ -366,6 +366,8 @@ def test_build_structures() -> None:
     assert "exactly two level-two sections meaning Execution environment and Task flow" in explore
     assert "`CODE:`, `AGENT:`, or `HUMAN:`" in explore
     assert "load `how-to` with `view_skill`" in explore
+    assert "acceptance criteria" not in explore
+    assert "acceptance check" not in explore
     assert "Before calling `switch`, check that the stage is actually complete" in explore
 
     # Check 3: Generate preserves the reusable package and execution/validation boundary.
