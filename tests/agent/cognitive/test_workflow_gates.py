@@ -4,7 +4,7 @@ import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, MainThink, WorkflowRunLibrary
-from src.amphi_agent._cognitive import ValidateThink, WorkflowThink
+from src.amphi_agent.cognitive import ValidateThink, WorkflowThink
 from src.amphi_agent._workflows import WorkflowLibrary
 from src.amphi_store import UserInput
 from tests._support.sandbox import IsolatedPaths

@@ -17,11 +17,11 @@ from src.amphi_agent import (
     WorkflowRunLibrary,
 )
 from src.amphi_agent._browser import SessionBrowserState, SessionBrowserTab
-from src.amphi_agent._cognitive import (
+from src.amphi_agent._cognitive import SubAgentThink
+from src.amphi_agent.cognitive import (
     ClarifyThink,
     ExploreThink,
     GenerateThink,
-    SubAgentThink,
     ValidateThink,
     VerifyThink,
     WorkflowThink,

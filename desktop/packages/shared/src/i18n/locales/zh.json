@@ -1177,6 +1177,35 @@
       "single": "系统无法完全确认这步的影响范围,请你把个关"
     }
   },
+  "presentationMode": {
+    "open": "PPT 制作进度",
+    "progress": "第 {{current}} / {{total}} 阶段",
+    "stageAria": "PPT 制作阶段",
+    "stages": {
+      "ppt_brief": {
+        "description": "明确受众、用途、核心信息、限制条件与成功标准。",
+        "title": "理解主题需求"
+      },
+      "ppt_compose": {
+        "description": "按页面骨架、精炼文案、辅助视觉的顺序制作可见且可编辑的 PPT。",
+        "title": "制作 PPT"
+      },
+      "ppt_plan": {
+        "description": "检索必要资料，确定视觉方向，并把章节拆成逐页大纲。",
+        "title": "规划内容与视觉"
+      },
+      "ppt_review": {
+        "description": "检查叙事、事实、引用、层级、可读性和视觉一致性并修正问题。",
+        "title": "审阅与交付"
+      }
+    },
+    "status": {
+      "needsInput": "需要输入",
+      "paused": "已暂停",
+      "running": "进行中"
+    },
+    "title": "PPT 制作"
+  },
   "providers": {
     "glm": "GLM（智谱）"
   },
@@ -2429,14 +2458,14 @@
       "loadBrowserTools": "加载浏览器工具",
       "loadWorkspaceTools": "加载工作区工具",
       "manageSkills": "管理技能",
+      "pptEditPage": "编辑 PPT 页",
       "pptGetPage": "读取 PPT 页",
       "pptGotoPage": "跳转 PPT 页",
+      "pptInsertElement": "插入 PPT 元素",
       "pptInsertPage": "插入 PPT 页",
       "pptMovePage": "移动 PPT 页",
-      "pptRemovePage": "删除 PPT 页",
-      "pptEditPage": "编辑 PPT 页",
-      "pptInsertElement": "插入 PPT 元素",
       "pptRemoveElement": "删除 PPT 元素",
+      "pptRemovePage": "删除 PPT 页",
       "pptUpdateDesign": "更新 PPT 设计",
       "pptView": "打开 PPT",
       "read": "读取",

@@ -3,12 +3,13 @@ from types import SimpleNamespace
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role
 
+import src.amphi_agent._cognitive as legacy_cognitive
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session
-from src.amphi_agent._cognitive import (
+from src.amphi_agent._cognitive import SubAgentThink
+from src.amphi_agent.cognitive import (
     ClarifyThink,
     ExploreThink,
     GenerateThink,
-    SubAgentThink,
     ValidateThink,
     VerifyThink,
     WorkflowThink,
@@ -19,6 +20,14 @@ from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserIn
 USER_ID = "local"
 SESSION_ID = "session-mode"
 PROMPT_TIME = "2026-08-19 12:00 (UTC+08:00)"
+
+
+def test_mode_workers_are_modular_with_legacy_import_compatibility() -> None:
+    """Build and Workflow workers live in cognitive modules without breaking old imports."""
+    assert ClarifyThink.__module__ == "src.amphi_agent.cognitive.build"
+    assert WorkflowThink.__module__ == "src.amphi_agent.cognitive.workflow"
+    assert legacy_cognitive.ClarifyThink is ClarifyThink
+    assert legacy_cognitive.WorkflowThink is WorkflowThink
 
 
 def _context(*, child: bool = False) -> AmphiContext:

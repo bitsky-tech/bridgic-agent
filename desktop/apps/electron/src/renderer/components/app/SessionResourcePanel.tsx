@@ -600,6 +600,12 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const powerPointLabel = powerPointActivityKind === 'agent'
     ? t('session.resourcePanel.presentationActiveShort')
     : t('session.resourcePanel.presentation')
+  let modeAriaLabel = t('workflowRunDetails.runDetails')
+  if (modeSurface === SessionModeSurfaceKind.Task) {
+    modeAriaLabel = t('focusMode.viewTaskSpec')
+  } else if (modeSurface === SessionModeSurfaceKind.Presentation) {
+    modeAriaLabel = t('presentationMode.open')
+  }
 
   return (
     <div
@@ -621,9 +627,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
         isAgentActive={selectedModeSurface !== null}
         isContentOpen={contentOpen}
         isModeAvailable={modeSurface !== null}
-        modeAriaLabel={modeSurface === SessionModeSurfaceKind.Task
-          ? t('focusMode.viewTaskSpec')
-          : t('workflowRunDetails.runDetails')}
+        modeAriaLabel={modeAriaLabel}
         onOpenMode={selectMode}
         railAriaLabel={t('session.resourcePanel.surfaceRailAria')}
         railRef={railRef}

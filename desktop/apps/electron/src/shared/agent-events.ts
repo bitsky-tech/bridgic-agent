@@ -89,7 +89,7 @@ export interface PermissionItem {
 
 /**
  * The turn's thinking position — the daemon's two-layer think loop laid bare.
- * `mode` is the loop: Build pipeline, saved Workflow run, or normal chat.
+ * `mode` is the loop: Build pipeline, presentation pipeline, saved Workflow run, or normal chat.
  * `stage` is the Build unit, Workflow Run unit, or Main unit; it is null on a clean
  * close frame. The Build focus rail remains active only for `mode === 'build'`.
  *
@@ -98,7 +98,7 @@ export interface PermissionItem {
  * display policy maps the units it knows.
  */
 export interface ThinkPosition {
-  mode: 'build' | 'normal' | 'run_workflow'
+  mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
   stage: string | null
   /** Present while Build is editing an existing saved Workflow. */
   workflowId?: string | null

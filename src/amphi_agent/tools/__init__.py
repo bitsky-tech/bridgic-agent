@@ -58,6 +58,7 @@ from ._image import generate_image, generate_image_tool
 from ._request_human import (
     request_accept_rule_tool,
     request_build_tool,
+    request_presentation_tool,
     request_run_workflow_tool,
     request_human_choice_tool,
     request_human_task_confirm_tool,
@@ -175,6 +176,7 @@ __all__ = [
     "request_accept_rule_tool",
     "request_human_choice_tool",
     "request_build_tool",
+    "request_presentation_tool",
     "request_run_workflow_tool",
     "request_human_task_confirm_tool",
     "request_human_workflow_confirm_tool",

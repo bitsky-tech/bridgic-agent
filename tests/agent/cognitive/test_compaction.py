@@ -15,7 +15,7 @@ from src.amphi_agent import (
     MainThink,
     Session,
 )
-from src.amphi_agent._cognitive import ClarifyThink, ExploreThink
+from src.amphi_agent.cognitive import ClarifyThink, ExploreThink
 from src.amphi_agent._state import BuildStageState
 from src.amphi_agent.prompts.compaction import (
     render_session_compaction_prompt,

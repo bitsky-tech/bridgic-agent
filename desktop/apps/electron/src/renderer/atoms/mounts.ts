@@ -275,7 +275,9 @@ export const pickAndMountAtom = atom(
     if (added.length === 0) return null
     const position = get(agent.thinkingModeFamily(sid))
     set(notifySessionFilesAtom, {
-      agentModeHasPriority: position?.mode === 'build' || position?.mode === 'run_workflow',
+      agentModeHasPriority: position?.mode === 'build'
+        || position?.mode === 'presentation'
+        || position?.mode === 'run_workflow',
       sessionId: sid,
     })
     return sid
@@ -397,7 +399,9 @@ export const pasteToSessionFilesAtom = atom(
     // 3. Notify the Files dock + enqueue an @-mention per mount.
     const position = get(agent.thinkingModeFamily(sid))
     set(notifySessionFilesAtom, {
-      agentModeHasPriority: position?.mode === 'build' || position?.mode === 'run_workflow',
+      agentModeHasPriority: position?.mode === 'build'
+        || position?.mode === 'presentation'
+        || position?.mode === 'run_workflow',
       sessionId: sid,
     })
     for (const m of added) {

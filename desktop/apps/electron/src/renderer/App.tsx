@@ -31,6 +31,7 @@ import { useFsWatchBridge } from './hooks/useFsWatchBridge'
 import { useWsConnection } from './hooks/useWsConnection'
 import { useSpecCommentPersistence } from './hooks/useSpecCommentPersistence'
 import { useAutoOpenTaskReview } from './hooks/useAutoOpenTaskReview'
+import { useAutoOpenPresentationMode } from './hooks/useAutoOpenPresentationMode'
 import { useAutoOpenWorkflowRunDetails } from './hooks/useAutoOpenWorkflowRunDetails'
 import { useCollapseNewSessionWorkbench } from './hooks/useCollapseNewSessionWorkbench'
 import { useRememberRightPanelState } from './hooks/useRememberRightPanelState'
@@ -80,6 +81,7 @@ export default function App() {
   useWsConnection()
   useSpecCommentPersistence()
   useAutoOpenTaskReview()
+  useAutoOpenPresentationMode()
   useAutoOpenWorkflowRunDetails()
   // Must run before the new-Session collapse effect: first snapshot the
   // destination Session's inherited state, then apply its rail-only default.

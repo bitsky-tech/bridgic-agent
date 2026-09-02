@@ -1431,6 +1431,7 @@ export const applyAgentEventAtom = atom(
           const position = get(thinkingModeFamily(sessionId))
           set(notifySessionWorkbenchActivityAtom, {
             agentModeHasPriority: position?.mode === 'build'
+              || position?.mode === 'presentation'
               || position?.mode === 'run_workflow',
             sessionId,
             surface: SessionWorkbenchSurface.Browser,
@@ -1439,6 +1440,7 @@ export const applyAgentEventAtom = atom(
           const position = get(thinkingModeFamily(sessionId))
           set(notifySessionWorkbenchActivityAtom, {
             agentModeHasPriority: position?.mode === 'build'
+              || position?.mode === 'presentation'
               || position?.mode === 'run_workflow',
             sessionId,
             surface: SessionWorkbenchSurface.Presentation,

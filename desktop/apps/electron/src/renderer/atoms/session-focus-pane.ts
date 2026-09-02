@@ -4,6 +4,7 @@ import { atomFamily } from 'jotai-family'
 import { activeSessionIdAtom } from './sessions'
 
 export const SessionFocusPaneKind = {
+  Presentation: 'presentation',
   TaskSpec: 'task_spec',
   WorkflowRun: 'workflow_run',
 } as const
@@ -11,6 +12,7 @@ export type SessionFocusPaneKind =
   (typeof SessionFocusPaneKind)[keyof typeof SessionFocusPaneKind]
 
 export type SessionFocusPaneSelection =
+  | { kind: typeof SessionFocusPaneKind.Presentation }
   | { kind: typeof SessionFocusPaneKind.TaskSpec }
   | { kind: typeof SessionFocusPaneKind.WorkflowRun; generation: string }
 
@@ -61,22 +63,35 @@ export const syncSessionFocusPaneModeAtom = atom(
     set,
     payload: {
       sessionId: string
-      previousMode: 'build' | 'normal' | 'run_workflow' | null
-      nextMode: 'build' | 'normal' | 'run_workflow'
+      previousMode: 'build' | 'normal' | 'presentation' | 'run_workflow' | null
+      nextMode: 'build' | 'normal' | 'presentation' | 'run_workflow'
       runGeneration?: string
     },
   ) => {
-    if (payload.nextMode === 'build' || payload.nextMode === 'run_workflow') {
+    if (
+      payload.nextMode === 'build'
+      || payload.nextMode === 'presentation'
+      || payload.nextMode === 'run_workflow'
+    ) {
       set(exitCollapseRequestFamily(payload.sessionId), false)
       return
     }
 
-    if (payload.previousMode !== 'build' && payload.previousMode !== 'run_workflow') return
+    if (
+      payload.previousMode !== 'build'
+      && payload.previousMode !== 'presentation'
+      && payload.previousMode !== 'run_workflow'
+    ) return
     const selection = get(selectionFamily(payload.sessionId))
-    const agentOwnsPane = payload.previousMode === 'build'
-      ? selection?.kind === SessionFocusPaneKind.TaskSpec
-      : selection?.kind === SessionFocusPaneKind.WorkflowRun
+    let agentOwnsPane = false
+    if (payload.previousMode === 'build') {
+      agentOwnsPane = selection?.kind === SessionFocusPaneKind.TaskSpec
+    } else if (payload.previousMode === 'presentation') {
+      agentOwnsPane = selection?.kind === SessionFocusPaneKind.Presentation
+    } else {
+      agentOwnsPane = selection?.kind === SessionFocusPaneKind.WorkflowRun
         && selection.generation === payload.runGeneration
+    }
     set(selectionFamily(payload.sessionId), null)
     set(exitCollapseRequestFamily(payload.sessionId), agentOwnsPane)
   },

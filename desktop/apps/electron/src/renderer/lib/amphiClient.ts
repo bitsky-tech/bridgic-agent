@@ -788,7 +788,7 @@ const sessionMessagesSchema = z
     // Absent/null on fresh sessions and older daemons; stage is nullable.
     thinking_mode: z
       .object({
-        mode: z.enum(['build', 'normal', 'run_workflow']),
+        mode: z.enum(['build', 'normal', 'presentation', 'run_workflow']),
         stage: z.string().nullable().optional(),
         workflow_id: z.string().nullable().optional(),
       })

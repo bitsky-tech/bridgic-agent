@@ -15,6 +15,7 @@ import {
 } from './session-focus-pane'
 
 export const SessionModeSurfaceKind = {
+  Presentation: 'presentation',
   Task: 'task',
   WorkflowRun: 'workflow_run',
 } as const
@@ -27,6 +28,7 @@ export const sessionModeSurfaceAtom = atom((get): SessionModeSurfaceKind | null 
   if (taskAvailable) return SessionModeSurfaceKind.Task
 
   const position = get(currentThinkingModeAtom)
+  if (position?.mode === 'presentation') return SessionModeSurfaceKind.Presentation
   const run = get(currentWorkflowRunAtom)
   if (position?.mode === 'run_workflow' && run) return SessionModeSurfaceKind.WorkflowRun
   return null
@@ -36,6 +38,10 @@ export const sessionModeSurfaceAtom = atom((get): SessionModeSurfaceKind | null 
 export const selectedSessionModeSurfaceAtom = atom((get): SessionModeSurfaceKind | null => {
   const surface = get(sessionModeSurfaceAtom)
   const selection = get(currentSessionFocusPaneAtom)
+  if (
+    surface === SessionModeSurfaceKind.Presentation
+    && selection?.kind === SessionFocusPaneKind.Presentation
+  ) return surface
   if (
     surface === SessionModeSurfaceKind.Task
     && selection?.kind === SessionFocusPaneKind.TaskSpec
@@ -51,6 +57,10 @@ export const selectedSessionModeSurfaceAtom = atom((get): SessionModeSurfaceKind
 /** Bring the active Session's temporary Agent-mode surface to the foreground. */
 export const openSessionModeSurfaceAtom = atom(null, (get, set) => {
   const surface = get(sessionModeSurfaceAtom)
+  if (surface === SessionModeSurfaceKind.Presentation) {
+    set(setSessionFocusPaneAtom, { kind: SessionFocusPaneKind.Presentation })
+    return
+  }
   if (surface === SessionModeSurfaceKind.Task) {
     set(setSessionFocusPaneAtom, { kind: SessionFocusPaneKind.TaskSpec })
     return

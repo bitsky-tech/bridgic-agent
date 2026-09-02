@@ -10,6 +10,7 @@ import {
   WorkbenchSurface,
 } from './SessionSurfaceChrome'
 import { SpecPreviewPane } from './SpecPreviewPane'
+import { PresentationModePane } from './PresentationModePane'
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel'
 import { WorkflowResultsPanel } from './WorkflowResultsPanel'
 import { WorkflowRunDetailsPane } from './WorkflowRunDetailsPane'
@@ -37,6 +38,13 @@ export function SessionSurfaceContent({
   onNativeHidden,
   selectedModeSurface,
 }: SessionSurfaceContentProps) {
+  let modeContent = <WorkflowRunDetailsPane />
+  if (selectedModeSurface === SessionModeSurfaceKind.Task) {
+    modeContent = <SpecPreviewPane />
+  } else if (selectedModeSurface === SessionModeSurfaceKind.Presentation) {
+    modeContent = <PresentationModePane />
+  }
+
   return (
     <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
       <WorkbenchSurface
@@ -99,9 +107,7 @@ export function SessionSurfaceContent({
           shouldAwaitNativeHide={isNativeHandoffPending}
           nativeHideAcknowledgement={nativeHideAcknowledgement}
         >
-          {selectedModeSurface === SessionModeSurfaceKind.Task
-            ? <SpecPreviewPane />
-            : <WorkflowRunDetailsPane />}
+          {modeContent}
         </ModeSurfaceGate>
       ) : null}
     </div>

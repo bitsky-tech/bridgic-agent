@@ -10,10 +10,16 @@ from bridgic.core.model.types import Message
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session, SkillLibrary
 from src.amphi_agent._cognitive import (
+    SubAgentThink,
+)
+from src.amphi_agent.cognitive import (
     ClarifyThink,
     ExploreThink,
     GenerateThink,
-    SubAgentThink,
+    PresentationBriefThink,
+    PresentationComposeThink,
+    PresentationPlanThink,
+    PresentationReviewThink,
     ValidateThink,
     VerifyThink,
     WorkflowRunThink,
@@ -155,14 +161,16 @@ def test_mode_tools() -> None:
       "main": ["delegation", "no switch"],
       "child": ["no delegation", "no root controls"],
       "build": ["switch", "stage completion control"],
-      "workflow": ["switch", "report_workflow_step", "no build controls"]
+      "presentation": ["switch", "PowerPoint tools", "no mode-entry controls"],
+      "workflow": ["switch", "report_workflow_step", "no mode-entry controls"]
     }
 
     Checks:
     1. Main and Child expose their distinct root and delegated capabilities.
     2. Build stages expose only the control actions owned by each stage.
-    3. Workflow stages expose reporting and exit controls without Build controls.
-    4. Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
+    3. Presentation stages expose deck tools without mode-entry controls.
+    4. Workflow stages expose reporting and exit controls without mode-entry controls.
+    5. Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     """
     context = _context()
     ota_context = AmphiOTAContext(user_input="Inspect mode tools")
@@ -176,11 +184,16 @@ def test_mode_tools() -> None:
     explore = names(ExploreThink())
     generate = names(GenerateThink())
     verify = names(VerifyThink())
+    ppt_brief = names(PresentationBriefThink())
+    ppt_plan = names(PresentationPlanThink())
+    ppt_compose = names(PresentationComposeThink())
+    ppt_review = names(PresentationReviewThink())
     execute = names(WorkflowThink())
     validate = names(ValidateThink())
 
     # Check 1: Main and Child expose their distinct root and delegated capabilities.
     assert {"run_subagent", "start_subagent"} <= main
+    assert "request_presentation" in main
     assert "switch" not in main
     assert {"run_subagent", "start_subagent", "request_build"}.isdisjoint(child)
     assert "request_human_choice" in child
@@ -193,16 +206,23 @@ def test_mode_tools() -> None:
     assert "request_human_task_confirm" not in explore | generate | verify
     assert "request_human_workflow_confirm" not in clarify | explore | generate
 
-    # Check 3: Workflow stages expose reporting and exit controls without Build controls.
+    # Check 3: Presentation stages expose deck work without re-entering another mode.
+    presentation_surfaces = (ppt_brief, ppt_plan, ppt_compose, ppt_review)
+    for surface in presentation_surfaces:
+        assert "switch" in surface
+        assert POWERPOINT_TOOL_NAMES <= surface
+        assert {"request_build", "request_presentation", "request_run_workflow"}.isdisjoint(surface)
+
+    # Check 4: Workflow stages expose reporting and exit controls without mode-entry controls.
     for surface in (execute, validate):
         assert {"switch", "report_workflow_step"} <= surface
-        assert {"request_build", "edit_workflow", "help"}.isdisjoint(surface)
+        assert {"request_build", "request_presentation", "edit_workflow", "help"}.isdisjoint(surface)
 
-    # Check 4: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
+    # Check 5: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     common = {"request_human_choice", "load_browser_tools", "view_skill"}
-    for surface in (main, child, clarify, explore, generate, verify, execute, validate):
+    for surface in (main, child, clarify, explore, generate, verify, *presentation_surfaces, execute, validate):
         assert common <= surface
-    for surface in (main, clarify, explore, generate, verify, execute, validate):
+    for surface in (main, clarify, explore, generate, verify, *presentation_surfaces, execute, validate):
         assert POWERPOINT_TOOL_NAMES <= surface
     assert child.isdisjoint(POWERPOINT_TOOL_NAMES)
 

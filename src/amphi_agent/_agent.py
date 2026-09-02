@@ -27,15 +27,21 @@ from bridgic.core.automa.args import ArgsMappingRule, InOrder
 from bridgic.core.model.types import Message, Role, ToolCall
 
 from ._cognitive import (
+    MainThink,
+    SubAgentThink,
+    render_input,
+)
+from .cognitive import (
     ClarifyThink,
     ExploreThink,
     GenerateThink,
-    MainThink,
-    SubAgentThink,
+    PresentationBriefThink,
+    PresentationComposeThink,
+    PresentationPlanThink,
+    PresentationReviewThink,
     ValidateThink,
     VerifyThink,
     WorkflowThink,
-    render_input,
 )
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
@@ -55,6 +61,7 @@ from ._state import (
     AwaitingSubAgent,
     ContextCompactionState,
     NormalStageState,
+    PresentationStageState,
     RoundPermission,
     CallVerdict,
     SubAgentCall,
@@ -70,6 +77,7 @@ from .security._classify import label_text
 from .security._engine import model_facing_reason
 from .tools._request_human import (
     RequestBuild,
+    RequestPresentation,
     RequestRunWorkflow,
     RequestAcceptRule,
     RequestHumanChoice,
@@ -170,6 +178,12 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     generate = think_unit(GenerateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
     verify = think_unit(VerifyThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
+    # Presentation pipeline — brief, plan, compose, and review the live deck.
+    ppt_brief = think_unit(PresentationBriefThink(), max_attempts=DEFAULT_MAX_ROUNDS)
+    ppt_plan = think_unit(PresentationPlanThink(), max_attempts=DEFAULT_MAX_ROUNDS)
+    ppt_compose = think_unit(PresentationComposeThink(), max_attempts=DEFAULT_MAX_ROUNDS)
+    ppt_review = think_unit(PresentationReviewThink(), max_attempts=DEFAULT_MAX_ROUNDS)
+
     # Saved Workflow runtime — one cognitive unit for each persisted stage.
     execute = think_unit(WorkflowThink(), max_attempts=DEFAULT_MAX_ROUNDS)
     validate = think_unit(ValidateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
@@ -183,6 +197,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "help",
             "edit_workflow",
             "request_build",
+            "request_presentation",
             "request_run_workflow",
             "request_accept_rule",
             "request_human_choice",
@@ -196,6 +211,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "switch",
             "edit_workflow",
             "request_build",
+            "request_presentation",
             "request_run_workflow",
             "request_accept_rule",
             "request_human_choice",
@@ -206,6 +222,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         self.thinking_modes = {
             "build": ("clarify", "explore", "generate", "verify"),
+            "presentation": ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"),
             "run_workflow": ("execute", "validate"),
         }
 
@@ -307,6 +324,14 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     self._publish_stage(ota_context, next_status)
                 else:
                     self._stamp_build_continue(ota_context)
+                continue
+            elif isinstance(next_status, PresentationStageState):
+                if next_status != current_status:
+                    current_status = next_status
+                    current_stage = self._current_think_unit_name(ota_context, context)
+                    self._publish_stage(ota_context, next_status)
+                else:
+                    self._stamp_presentation_continue(ota_context)
                 continue
             elif isinstance(next_status, WorkflowStageState):
                 if next_status != current_status:
@@ -605,6 +630,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         request_human_choice: end the turn awaiting the user.
         request_accept_rule: park Clarify for the one-time acceptance-rule review.
         request_build: enter Build or ask how to resolve Build intent.
+        request_presentation: enter the dedicated presentation pipeline.
         request_run_workflow: start or resolve one Session-owned Run.
         edit_workflow: restore one saved Workflow into Build for modification.
         report_workflow_step: persist one section result and advance or stop.
@@ -660,6 +686,18 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         self._close_build_bindings(context)
                     elif isinstance(current_status, WorkflowStageState):
                         self._close_run_workflow_bindings(context)
+
+            # Request Presentation
+            elif step.tool_name == "request_presentation":
+                result = step.tool_result
+                if isinstance(result, RequestPresentation):
+                    ota_context.transition_think(PresentationStageState())
+                    step.tool_result = {
+                        "mode": "presentation",
+                        "stage": "ppt_brief",
+                        "goal": result.goal,
+                        "message": "The presentation request entered the dedicated pipeline.",
+                    }
 
             # Request Build
             elif step.tool_name == "request_build":
@@ -1084,10 +1122,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             input_tokens   int
             output_tokens  int
 
-        An existing Build state always re-enters the same cognitive loop. A
-        structured Build or Workflow slash block is rendered as explicit Main
-        intent; only ``request_build`` or ``request_run_workflow`` may enter the
-        corresponding cognitive mode.
+        An existing special-mode state always re-enters the same cognitive loop.
+        A structured Build or Workflow slash block is rendered as explicit Main
+        intent; only the dedicated request control for Build, presentation, or
+        Workflow Run may enter its corresponding cognitive mode.
         """
         ########################
         # Initialize the agent turn context
@@ -1164,7 +1202,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 ):
                     self._resume_think_stage(ota_context, think)
 
-            if isinstance(ota_context.think_status, (BuildStageState, WorkflowStageState)):
+            if isinstance(ota_context.think_status, (BuildStageState, PresentationStageState, WorkflowStageState)):
                 if isinstance(ota_context.think_status, BuildStageState):
                     await self._sync_build_space(ota_context, context)
                 elif isinstance(ota_context.think_status, WorkflowStageState):
@@ -1447,6 +1485,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     def _resume_think_stage(ota_context: AmphiOTAContext, think: Dict[str, Any]) -> None:
         if think.get("mode") == "build":
             ota_context.transition_think(BuildStageState.model_validate(think))
+        elif think.get("mode") == "presentation":
+            ota_context.transition_think(PresentationStageState.model_validate(think))
         elif think.get("mode") == "run_workflow":
             ota_context.transition_think(WorkflowStageState.model_validate(think))
 
@@ -2495,6 +2535,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             raise RuntimeError(f"Cannot switch from `{current_status.mode}` to `{target_mode}`.")
         if isinstance(current_status, BuildStageState):
             return current_status.model_copy(update={"stage": str(target_stage)})
+        if isinstance(current_status, PresentationStageState):
+            return current_status.model_copy(update={"stage": str(target_stage)})
         if isinstance(current_status, WorkflowStageState):
             step_index = current_status.step_index if target_stage == current_status.stage else 0
             return current_status.model_copy(update={
@@ -3387,6 +3429,21 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 for call, verdict in zip(calls, resolved)
             ]
 
+        # Entering presentation mode changes the next ThinkUnit. Keep that state
+        # transition atomic, matching the existing Build and Workflow entry rule.
+        presentation_controls = {"request_presentation"}
+        if len(calls) > 1 and any(getattr(call, "tool", None) in presentation_controls for call in calls):
+            reason = "Presentation control rejected: presentation entry must run alone."
+            resolved = [
+                verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+                if verdict.verdict == Permission.ALLOW.value and getattr(call, "tool", None) in presentation_controls
+                else verdict
+                for call, verdict in zip(calls, resolved)
+            ]
+
         workflow_controls = {
             "request_run_workflow",
             "report_workflow_step",
@@ -3665,6 +3722,21 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "then call report_workflow_step with its result. Do not use "
             "switch(mode=\"normal\") as a completion shortcut; it is only for an explicit "
             "user request to stop or leave the Run. Ask the user when required."
+        )
+        record = records[-1]
+        existing = getattr(record, "observation_result", None)
+        record.observation_result = f"{existing}\n{note}" if existing else note
+
+    @staticmethod
+    def _stamp_presentation_continue(ota_context: AmphiOTAContext) -> None:
+        """Remind a presentation stage to finish through a real cognitive handoff."""
+        records = getattr(ota_context, "ota_record", None) or []
+        if not records:
+            return
+        note = (
+            "[presentation] The current stage is still active. Continue the stage's work, "
+            "then invoke the switch tool for the next presentation stage. Return to normal "
+            "only after ppt_review finishes or the user explicitly asks to leave."
         )
         record = records[-1]
         existing = getattr(record, "observation_result", None)

@@ -185,7 +185,7 @@ const permissionRequestDataSchema = z.object({
 // Two-layer think position: `mode` (loop) is required; `stage` (unit) is nullable
 // because normal chat is presented as {mode:'normal', stage:null} on the wire.
 const stageDataSchema = z.object({
-  mode: z.enum(['build', 'normal', 'run_workflow']),
+  mode: z.enum(['build', 'normal', 'presentation', 'run_workflow']),
   stage: z.string().nullable().optional(),
   workflow_id: z.string().nullable().optional(),
 })

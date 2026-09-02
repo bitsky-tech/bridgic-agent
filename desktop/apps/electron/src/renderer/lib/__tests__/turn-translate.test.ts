@@ -573,6 +573,17 @@ describe('stage frames', () => {
     expect(warnings).toEqual([])
   })
 
+  it('carries the presentation pipeline stage', () => {
+    const { events } = translateTurnEvent(
+      { event: 'stage', data: { mode: 'presentation', stage: 'ppt_plan' } },
+      'message-presentation',
+      initialTranslatorState,
+    )
+
+    const stage = events.find((event) => event.type === 'stage')
+    expect(stage).toEqual({ type: 'stage', position: { mode: 'presentation', stage: 'ppt_plan' } })
+  })
+
   it('carries the normal presentation frame (mode:normal, stage:null) through', () => {
     const { events, warnings } = run([{ event: 'stage', data: { mode: 'normal', stage: null } }])
     const stage = events[1]

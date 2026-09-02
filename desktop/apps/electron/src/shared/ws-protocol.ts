@@ -357,7 +357,7 @@ export type TurnEvent =
   | {
       event: typeof TURN_EVENT.Stage
       data: {
-        mode: 'build' | 'normal' | 'run_workflow'
+        mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
         stage: string | null
         workflow_id?: string | null
       }

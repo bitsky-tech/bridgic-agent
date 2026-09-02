@@ -10,12 +10,14 @@ from ...amphi_service.i18n import backend_i18n
 
 __all__ = [
     "request_build_tool",
+    "request_presentation_tool",
     "request_run_workflow_tool",
     "request_accept_rule_tool",
     "request_human_choice_tool",
     "request_human_task_confirm_tool",
     "request_human_workflow_confirm_tool",
     "RequestBuild",
+    "RequestPresentation",
     "RequestRunWorkflow",
     "RequestAcceptRule",
     "RequestHumanChoice",
@@ -70,6 +72,42 @@ async def request_build(goal: str, mode: Literal["ask", "start"] = "ask", reason
     if not goal:
         raise RequestHumanRejection("request_build rejected: `goal` must be non-empty.")
     return RequestBuild(goal=goal, mode=mode, reason=reason.strip() or None)
+
+
+class RequestPresentation:
+    """A semantic request to enter the dedicated presentation pipeline."""
+
+    def __init__(self, goal: str):
+        self.goal = goal
+
+
+async def request_presentation(goal: str) -> RequestPresentation:
+    """Enter the dedicated presentation pipeline for an explicit deck request.
+
+    Use this from Main when the user asks to create or substantially rebuild a
+    PowerPoint presentation. Ordinary one-off questions about slides remain in
+    Main. The pipeline begins by clarifying the communication goal before it
+    plans, composes, and reviews the deck.
+
+    Parameters
+    ----------
+    goal : str
+        Concise description of the presentation to create or rebuild.
+
+    Returns
+    -------
+    RequestPresentation
+        Structured presentation entry request handled by the Agent.
+
+    Raises
+    ------
+    RequestHumanRejection
+        If ``goal`` is empty.
+    """
+    goal = goal.strip()
+    if not goal:
+        raise RequestHumanRejection("request_presentation rejected: `goal` must be non-empty.")
+    return RequestPresentation(goal)
 
 
 class RequestRunWorkflow:
@@ -546,6 +584,7 @@ async def request_human_workflow_confirm(prompt: str) -> RequestHumanWorkflowCon
 
 
 request_build_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_build)
+request_presentation_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_presentation)
 request_run_workflow_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_run_workflow)
 request_accept_rule_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_accept_rule)
 request_human_choice_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_human_choice)

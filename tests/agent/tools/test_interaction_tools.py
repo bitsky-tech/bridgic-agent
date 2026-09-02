@@ -7,6 +7,7 @@ from src.amphi_agent.tools._request_human import (
     RequestHumanRejection,
     request_accept_rule,
     request_build,
+    request_presentation,
     request_human_choice,
     request_human_task_confirm,
     request_human_workflow_confirm,
@@ -71,6 +72,15 @@ async def test_workflow_request() -> None:
         await request_run_workflow("workflow-1", action="ask")
     with pytest.raises(RequestHumanRejection, match="exceeds 300"):
         await request_run_workflow("workflow-1", reason="x" * 301)
+
+
+async def test_presentation_request() -> None:
+    """Presentation entry keeps a concise goal and rejects empty requests."""
+    request = await request_presentation("  Create a product launch deck  ")
+
+    assert request.goal == "Create a product launch deck"
+    with pytest.raises(RequestHumanRejection, match="goal.*non-empty"):
+        await request_presentation("  ")
 
 
 async def test_choice_card() -> None:

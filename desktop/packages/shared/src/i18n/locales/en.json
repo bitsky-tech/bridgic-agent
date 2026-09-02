@@ -1177,6 +1177,35 @@
       "single": "The system cannot fully determine the blast radius of this step — please check it"
     }
   },
+  "presentationMode": {
+    "open": "PPT creation progress",
+    "progress": "Stage {{current}} of {{total}}",
+    "stageAria": "PPT creation stages",
+    "stages": {
+      "ppt_brief": {
+        "description": "Clarify the audience, purpose, core message, constraints, and success criteria.",
+        "title": "Understand the brief"
+      },
+      "ppt_compose": {
+        "description": "Create the live deck in order: slide shells, concise copy, then supporting visuals.",
+        "title": "Compose the deck"
+      },
+      "ppt_plan": {
+        "description": "Research evidence, choose the visual direction, and map chapters into individual slides.",
+        "title": "Plan the story"
+      },
+      "ppt_review": {
+        "description": "Inspect narrative, facts, citations, hierarchy, readability, and visual consistency.",
+        "title": "Review and deliver"
+      }
+    },
+    "status": {
+      "needsInput": "Needs input",
+      "paused": "Paused",
+      "running": "Running"
+    },
+    "title": "PPT creation"
+  },
   "providers": {
     "glm": "GLM (Zhipu)"
   },
@@ -2429,14 +2458,14 @@
       "loadBrowserTools": "Load browser tools",
       "loadWorkspaceTools": "Load workspace tools",
       "manageSkills": "Manage Skills",
+      "pptEditPage": "Edit PPT page",
       "pptGetPage": "Read PPT page",
       "pptGotoPage": "Go to PPT page",
+      "pptInsertElement": "Insert PPT element",
       "pptInsertPage": "Insert PPT page",
       "pptMovePage": "Move PPT page",
-      "pptRemovePage": "Remove PPT page",
-      "pptEditPage": "Edit PPT page",
-      "pptInsertElement": "Insert PPT element",
       "pptRemoveElement": "Remove PPT element",
+      "pptRemovePage": "Remove PPT page",
       "pptUpdateDesign": "Update PPT design",
       "pptView": "Open PPT",
       "read": "Read",

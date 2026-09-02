@@ -1,5 +1,5 @@
 from src.amphi_agent import AmphiContext
-from src.amphi_agent._cognitive import ClarifyThink, ExploreThink, GenerateThink, VerifyThink
+from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, GenerateThink, VerifyThink
 from src.amphi_agent._workflows import WorkflowLibrary
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive._harness import (

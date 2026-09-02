@@ -49,7 +49,48 @@ function enterRun(
   })
 }
 
+function enterPresentation(store: ReturnType<typeof createStore>, sessionId: string): void {
+  store.set(applyAgentEventAtom, {
+    sessionId,
+    event: { type: 'stage', position: { mode: 'presentation', stage: 'ppt_brief' } },
+  })
+}
+
 describe('Session mode surface exit ownership', () => {
+  it('selects the dedicated Agent surface throughout presentation mode', () => {
+    const store = createStore()
+    const sessionId = 'session-presentation-owned'
+    store.set(activeSessionIdAtom, sessionId)
+    enterPresentation(store, sessionId)
+
+    expect(store.get(sessionModeSurfaceAtom)).toBe(SessionModeSurfaceKind.Presentation)
+    store.set(openSessionModeSurfaceAtom)
+    expect(store.get(selectedSessionModeSurfaceAtom)).toBe(SessionModeSurfaceKind.Presentation)
+
+    store.set(applyAgentEventAtom, {
+      sessionId,
+      event: { type: 'stage', position: { mode: 'presentation', stage: 'ppt_compose' } },
+    })
+    expect(store.get(selectedSessionModeSurfaceAtom)).toBe(SessionModeSurfaceKind.Presentation)
+  })
+
+  it('closes and requests collapse when presentation mode exits from its Agent pane', () => {
+    const store = createStore()
+    const sessionId = 'session-presentation-exit'
+    store.set(activeSessionIdAtom, sessionId)
+    enterPresentation(store, sessionId)
+    store.set(openSessionModeSurfaceAtom)
+
+    store.set(applyAgentEventAtom, {
+      sessionId,
+      event: { type: 'stage', position: { mode: 'normal', stage: null } },
+    })
+
+    expect(store.get(sessionModeSurfaceAtom)).toBeNull()
+    expect(store.get(selectedSessionModeSurfaceAtom)).toBeNull()
+    expect(store.get(currentSessionModeExitCollapseRequestAtom)).toBe(true)
+  })
+
   it('closes and requests collapse when Build exits while its Agent pane is foreground', () => {
     const store = createStore()
     const sessionId = 'session-build-owned'

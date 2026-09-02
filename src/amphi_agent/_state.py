@@ -4,7 +4,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
 __all__ = [
-    "InStage", "NormalStageState", "BuildStageState", "WorkflowStageState",
+    "InStage", "NormalStageState", "BuildStageState", "PresentationStageState", "WorkflowStageState",
     "InteractionState", "AwaitingFeedback", "AwaitingPermission", "AwaitingTaskConfirm",
     "AwaitingAcceptRule", "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
     "AwaitingBuildConflict", "AwaitingWorkflowRunChoice",
@@ -39,6 +39,13 @@ class BuildStageState(BaseModel):
         return payload
 
 
+class PresentationStageState(BaseModel):
+    """The current cognitive stage inside the Session's presentation pipeline."""
+
+    mode: Literal["presentation"] = "presentation"
+    stage: Literal["ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"] = "ppt_brief"
+
+
 class WorkflowStageState(BaseModel):
     """The current cognitive stage and section inside one saved Workflow run."""
 
@@ -50,7 +57,7 @@ class WorkflowStageState(BaseModel):
 
 
 InStage = Annotated[
-    Union[NormalStageState, BuildStageState, WorkflowStageState],
+    Union[NormalStageState, BuildStageState, PresentationStageState, WorkflowStageState],
     Field(discriminator="mode"),
 ]
 
