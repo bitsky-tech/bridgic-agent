@@ -157,7 +157,7 @@ def test_build_tool_contracts() -> None:
     }
 
     Checks:
-    1. Clarify defines the business content and one-time boundary of acceptance review.
+    1. Clarify defines the task and final deliverables without an acceptance review.
     2. The acceptance Tool schema requires that content as one JSON-list string.
     3. Verify defines the workflow naming payload and ends on that confirmation call.
     4. The workflow-confirm Tool schema requires the same JSON object through one string field.
@@ -168,10 +168,10 @@ def test_build_tool_contracts() -> None:
     acceptance_schema = request_accept_rule_tool.to_tool().parameters
     workflow_schema = request_human_workflow_confirm_tool.to_tool().parameters
 
-    # Check 1: Clarify defines the business content and one-time boundary of acceptance review.
-    assert "one or two concise rules" in clarify
-    assert "direct final outcome the user cares about" in clarify
-    assert "Call `request_accept_rule` only once" in clarify
+    # Check 1: Clarify defines the task and final deliverables without an acceptance review.
+    assert "Final deliverables" in clarify
+    assert "call `request_human_task_confirm`" in clarify
+    assert "request_accept_rule" not in clarify
 
     # Check 2: The acceptance Tool schema requires that content as one JSON-list string.
     assert acceptance_schema["required"] == ["rules"]
@@ -336,7 +336,7 @@ def test_build_structures() -> None:
     """Final Build Persona structures:
 
     {
-      "clarify": "task definition and acceptance review",
+      "clarify": "task definition and final deliverables",
       "explore": "grounded CODE/AGENT/HUMAN implementation plan",
       "generate": "WORKFLOW.md, VALIDATE.md, and scripts package",
       "verify": "real-environment evidence and Overall Build verdict"
@@ -358,8 +358,8 @@ def test_build_structures() -> None:
     # Check 1: Clarify preserves the required task definition and confirmation structure.
     assert "one title and four level-two sections meaning Task, Workflow, Expected output" in clarify
     assert "Final deliverables" in clarify
-    assert "Acceptance criteria" in clarify
-    assert "call `request_accept_rule`" in clarify
+    assert "Acceptance criteria" not in clarify
+    assert "request_accept_rule" not in clarify
     assert "call `request_human_task_confirm`" in clarify
 
     # Check 2: Explore preserves its environment, task-flow, Skill-discovery, and handoff structure.
