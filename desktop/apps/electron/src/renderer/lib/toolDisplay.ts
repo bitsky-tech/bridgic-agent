@@ -39,6 +39,7 @@ export type ToolKind =
 /** Tool name → kind. Exact match for built-in tools; everything else falls to generic. */
 const REGISTRY: Record<string, ToolKind> = {
   read_file: 'read',
+  read_image: 'read',
   write_file: 'write',
   edit_file: 'edit',
   bash: 'bash',

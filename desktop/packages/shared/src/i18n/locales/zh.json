@@ -1502,6 +1502,7 @@
       "details": "图片生成详情",
       "prompt": "提示词",
       "promptUnavailable": "未提供提示词",
+      "reference": "参考图",
       "reveal": "在文件中显示",
       "status": {
         "completed": "已完成",

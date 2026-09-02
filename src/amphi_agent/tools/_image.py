@@ -10,12 +10,23 @@ from typing import Any, Iterable, Optional
 import httpx
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
+from bridgic.core.model.types import Message, Role
 from google import genai
 from google.genai import types
 
 from ...amphi_service.protocol.llms import (
     PROVIDER_CATALOG_BY_ID,
+    catalog_model,
     supports_image_generation,
+)
+from ...amphi_service.protocol.llms._image_inputs import (
+    IMAGE_INPUTS_EXTRA,
+    ImageInputUnsupportedError,
+    ImageInputValidationError,
+    image_data_url,
+    inspect_image_input,
+    read_image_input,
+    validate_image_inputs,
 )
 from ...amphi_store import ProviderCredential, ProviderRepository
 
@@ -24,6 +35,19 @@ _IMAGE_TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 _MAX_IMAGE_BYTES = 32 * 1024 * 1024
 _MAX_ENCODED_IMAGE_LENGTH = ((_MAX_IMAGE_BYTES + 2) // 3) * 4 + 16
 _SUPPORTED_PROTOCOLS = frozenset({"openai", "google"})
+_MAX_IMAGE_ANALYSIS_PROMPT_LENGTH = 32_000
+_DEFAULT_IMAGE_ANALYSIS_PROMPT = (
+    "Describe the visible image accurately. Cover the subject, composition, perspective, "
+    "lighting, color palette, materials, style, and any readable text. Separate direct "
+    "observations from uncertainty, and include the concrete visual details another image "
+    "model would need to create a similar result."
+)
+_IMAGE_ANALYSIS_SYSTEM_PROMPT = (
+    "You are a visual inspection component. Analyze only what is visible in the supplied "
+    "image and answer the user's inspection request. Do not claim hidden identity, intent, "
+    "provenance, or exact attributes that cannot be established from pixels. Return concise "
+    "plain text that a parent agent can use for later reasoning or image generation."
+)
 
 
 @dataclass(frozen=True)
@@ -37,15 +61,30 @@ def _ordered_credentials(credentials: Iterable[ProviderCredential]) -> list[Prov
     return [row for row in rows if row.is_active] + [row for row in rows if not row.is_active]
 
 
-def _is_supported_target(credential: ProviderCredential, model: str) -> bool:
+def _supports_reference_generation(provider_id: str, model_id: str) -> bool:
+    model = catalog_model(provider_id, model_id)
+    return bool(
+        model is not None
+        and "text" in model["input_modalities"]
+        and "image" in model["input_modalities"]
+        and "image" in model["output_modalities"]
+    )
+
+
+def _is_supported_target(credential: ProviderCredential, model: str, require_reference: bool = False) -> bool:
     protocol_supported = (
         credential.provider_id == "openrouter"
         or credential.protocol in _SUPPORTED_PROTOCOLS
     )
-    return protocol_supported and supports_image_generation(credential.provider_id, model)
+    model_supported = (
+        _supports_reference_generation(credential.provider_id, model)
+        if require_reference
+        else supports_image_generation(credential.provider_id, model)
+    )
+    return protocol_supported and model_supported
 
 
-def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, model: str) -> _ImageTarget:
+def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, model: str, require_reference: bool = False) -> _ImageTarget:
     rows = _ordered_credentials(credentials)
     requested_provider = provider_id.strip()
     requested_model = model.strip()
@@ -66,13 +105,18 @@ def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, 
             )
         candidates = [requested_model] if requested_model else credential.enabled_models
         selected = next(
-            (candidate for candidate in candidates if _is_supported_target(credential, candidate)),
+            (
+                candidate
+                for candidate in candidates
+                if _is_supported_target(credential, candidate, require_reference)
+            ),
             None,
         )
         if selected is None:
             detail = f"model {requested_model!r}" if requested_model else "its enabled models"
+            capability = "image-to-image" if require_reference else "text-to-image"
             raise ValueError(
-                f"provider {requested_provider!r} does not expose {detail} as text-to-image capable"
+                f"provider {requested_provider!r} does not expose {detail} as {capability} capable"
             )
         return _ImageTarget(credential, selected)
 
@@ -83,15 +127,25 @@ def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, 
             continue
         candidates = [requested_model] if requested_model else credential.enabled_models
         selected = next(
-            (candidate for candidate in candidates if _is_supported_target(credential, candidate)),
+            (
+                candidate
+                for candidate in candidates
+                if _is_supported_target(credential, candidate, require_reference)
+            ),
             None,
         )
         if selected is not None:
             return _ImageTarget(credential, selected)
 
     if requested_model:
+        capability = "image-to-image" if require_reference else "text-to-image"
         raise ValueError(
-            f"no enabled provider has text-to-image model {requested_model!r} with an API key"
+            f"no enabled provider has {capability} model {requested_model!r} with an API key"
+        )
+    if require_reference:
+        raise ValueError(
+            "no enabled image-to-image model with an API key is configured; enable an "
+            "image model that supports both image input and image output first"
         )
     raise ValueError(
         "no enabled text-to-image model with an API key is configured; "
@@ -162,24 +216,43 @@ def _response_error(response: httpx.Response) -> str:
     return f"image provider returned HTTP {response.status_code}{suffix}"
 
 
-async def _request_http_image(target: _ImageTarget, prompt: str) -> tuple[bytes, Optional[str]]:
+async def _request_http_image(target: _ImageTarget, prompt: str, reference: Optional[dict] = None) -> tuple[bytes, Optional[str]]:
     credential = target.credential
     base_url = _normalized_base_url(credential)
-    endpoint = (
-        f"{base_url}/images"
-        if credential.provider_id == "openrouter"
-        else f"{base_url}/images/generations"
-    )
-    headers = {
-        "Authorization": f"Bearer {credential.api_key}",
-        "Content-Type": "application/json",
-    }
+    is_openrouter = credential.provider_id == "openrouter"
+    endpoint = f"{base_url}/images" if is_openrouter else f"{base_url}/images/generations"
+    headers = {"Authorization": f"Bearer {credential.api_key}"}
+    request: dict[str, Any]
+    if reference is not None and is_openrouter:
+        headers["Content-Type"] = "application/json"
+        request = {
+            "json": {
+                "model": target.model,
+                "prompt": prompt,
+                "input_references": [{
+                    "type": "image_url",
+                    "image_url": {"url": image_data_url(reference)},
+                }],
+            }
+        }
+    elif reference is not None:
+        image, media_type = read_image_input(reference)
+        endpoint = f"{base_url}/images/edits"
+        request = {
+            "data": {"model": target.model, "prompt": prompt},
+            "files": {
+                "image": (
+                    str(reference.get("name") or "reference-image"),
+                    image,
+                    media_type,
+                ),
+            },
+        }
+    else:
+        headers["Content-Type"] = "application/json"
+        request = {"json": {"model": target.model, "prompt": prompt}}
     async with httpx.AsyncClient(timeout=_IMAGE_TIMEOUT) as client:
-        response = await client.post(
-            endpoint,
-            headers=headers,
-            json={"model": target.model, "prompt": prompt},
-        )
+        response = await client.post(endpoint, headers=headers, **request)
     if response.status_code >= 400:
         raise RuntimeError(_response_error(response))
     content_length = response.headers.get("content-length")
@@ -200,7 +273,7 @@ async def _request_http_image(target: _ImageTarget, prompt: str) -> tuple[bytes,
     return _decode_base64_image(item.get("b64_json")), item.get("media_type")
 
 
-async def _request_google_image(target: _ImageTarget, prompt: str) -> tuple[bytes, Optional[str]]:
+async def _request_google_image(target: _ImageTarget, prompt: str, reference: Optional[dict] = None) -> tuple[bytes, Optional[str]]:
     credential = target.credential
     configured_base = (credential.base_url or "").strip() or None
     default_base = (_default_base_url(credential.provider_id) or "").rstrip("/")
@@ -209,10 +282,14 @@ async def _request_google_image(target: _ImageTarget, prompt: str) -> tuple[byte
     http_options = types.HttpOptions(base_url=configured_base) if configured_base else None
     client = genai.Client(api_key=credential.api_key, http_options=http_options)
     async_client = client.aio
+    contents: Any = prompt
+    if reference is not None:
+        image, media_type = read_image_input(reference)
+        contents = [prompt, types.Part.from_bytes(data=image, mime_type=media_type)]
     try:
         response = await async_client.models.generate_content(
             model=target.model,
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
         )
     finally:
@@ -231,21 +308,118 @@ async def _request_google_image(target: _ImageTarget, prompt: str) -> tuple[byte
     raise RuntimeError("Google returned no image data")
 
 
-async def _request_image(target: _ImageTarget, prompt: str) -> tuple[bytes, Optional[str]]:
+async def _request_image(target: _ImageTarget, prompt: str, reference: Optional[dict] = None) -> tuple[bytes, Optional[str]]:
     if target.credential.protocol == "google":
-        return await _request_google_image(target, prompt)
-    return await _request_http_image(target, prompt)
+        return await _request_google_image(target, prompt, reference)
+    return await _request_http_image(target, prompt, reference)
 
 
-async def generate_image(prompt: str, provider_id: str = "", model: str = "") -> str:
-    """Generate one image and display its file.
+def _inspect_session_image(file_path: str, work_dir: Any, argument_name: str = "file_path") -> dict:
+    cleaned_path = file_path.strip()
+    if not cleaned_path:
+        raise ValueError(f"{argument_name} is required")
+    candidate = Path(cleaned_path)
+    resolved_path = (
+        candidate.resolve()
+        if candidate.is_absolute()
+        else (Path(work_dir).resolve() / candidate).resolve()
+    )
+    image = inspect_image_input(str(resolved_path), resolved_path.name)
+    if image is None:
+        raise ImageInputValidationError(f"File is not a supported image: {resolved_path}")
+    return validate_image_inputs([image])[0]
 
-    Use this tool when the user asks to create or render a new image from a text
-    description. A current Codex subscription model is allowed to use its hosted
-    Responses image-generation tool. Otherwise the tool automatically prefers
-    the active configured provider, then the first enabled text-to-image model.
-    Pass ``provider_id`` or ``model`` only when the user explicitly requests a
-    configured provider or model.
+
+async def read_image(file_path: str, prompt: str = "") -> str:
+    """Inspect one local image with the current vision-capable model.
+
+    Use this tool when visual details in a local or generated image must be
+    understood, compared, checked, or converted into a generation-ready
+    description. Relative paths resolve from the current Session workspace;
+    absolute paths returned by ``generate_image`` can be passed directly.
+
+    The image is sent to the current model as native image input. The tool
+    returns the model's textual visual analysis, not the image pixels. For later
+    generation, use this analysis to refine the prompt and also pass the same
+    path through ``generate_image.reference_image_path`` so the image model
+    receives the source pixels directly.
+
+    Args:
+        file_path: Workspace-relative or absolute path to a PNG, JPEG, GIF, or
+            WebP image no larger than the supported image-input limit.
+        prompt: Optional question or inspection focus. Leave empty for a broad,
+            generation-ready visual description.
+
+    Returns:
+        Textual analysis of the supplied image, including its resolved path.
+    """
+    cleaned_prompt = prompt.strip() or _DEFAULT_IMAGE_ANALYSIS_PROMPT
+    if len(cleaned_prompt) > _MAX_IMAGE_ANALYSIS_PROMPT_LENGTH:
+        raise ValueError("prompt must be at most 32000 characters")
+
+    agent = current_agent.get(None)
+    context = getattr(agent, "ctx", None) if agent is not None else None
+    workspace = getattr(context, "workspace", None) if context is not None else None
+    work_dir = getattr(workspace, "work_dir", None) if workspace is not None else None
+    llm = getattr(agent, "_llm", None) if agent is not None else None
+    if work_dir is None or llm is None:
+        raise RuntimeError("read_image requires an active Session workspace and LLM")
+
+    llm_provider = getattr(context, "llm_provider", None)
+    support = (
+        llm_provider.supports_image_input()
+        if llm_provider is not None
+        else None
+    )
+    if support is False:
+        raise ImageInputUnsupportedError(str(getattr(llm_provider, "model_id", "") or ""))
+
+    image = _inspect_session_image(file_path, work_dir)
+    resolved_path = str(image["path"])
+
+    response = await llm.achat([
+        Message.from_text(_IMAGE_ANALYSIS_SYSTEM_PROMPT, role=Role.SYSTEM),
+        Message.from_text(
+            cleaned_prompt,
+            role=Role.USER,
+            extras={IMAGE_INPUTS_EXTRA: [image]},
+        ),
+    ])
+
+    def response_text() -> str:
+        if isinstance(response, str):
+            return response.strip()
+        message = getattr(response, "message", None)
+        blocks = getattr(message, "blocks", None) or []
+        return "".join(
+            str(block.text)
+            for block in blocks
+            if getattr(block, "block_type", None) == "text"
+            and getattr(block, "text", None)
+        ).strip()
+
+    analysis = response_text()
+    if not analysis:
+        raise RuntimeError("the vision model returned no image analysis")
+    return f"Image analysis for {resolved_path}:\n{analysis}"
+
+
+async def generate_image(prompt: str, provider_id: str = "", model: str = "", reference_image_path: str = "") -> str:
+    """Generate or edit one image and display its file.
+
+    Use this tool when the user asks to create a new image from text or create
+    one that directly references an existing local image. Pass
+    ``reference_image_path`` when preserving or transforming the source image's
+    subject, composition, pose, style, or other visual traits matters; the source
+    pixels are then sent to an image-to-image capable model. Do not replace this
+    direct reference with a ``read_image`` text summary unless the source file is
+    unavailable.
+
+    A current Codex subscription model is allowed to use its hosted Responses
+    image-generation or image-editing tool. Otherwise the tool automatically
+    prefers the active configured provider, then the first enabled model with
+    the required output and input modalities. Pass ``provider_id`` or ``model``
+    only when the user explicitly requests a configured provider or model.
 
     The generated raster image is saved under the current Session workspace.
     The returned absolute path occupies its own line so the desktop client can
@@ -257,6 +431,8 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
             ``google``, or ``openrouter``. Leave empty for automatic selection.
         model: Optional exact enabled image model id. Leave empty for automatic
             selection.
+        reference_image_path: Optional workspace-relative or absolute path to a
+            reference image. Leave empty for text-only generation.
 
     Returns:
         A short generation summary followed by the generated image's absolute
@@ -276,6 +452,11 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
     work_dir = getattr(workspace, "work_dir", None) if workspace is not None else None
     if not user_id or work_dir is None:
         raise RuntimeError("generate_image requires an active Session workspace")
+    reference = (
+        _inspect_session_image(reference_image_path, work_dir, "reference_image_path")
+        if reference_image_path.strip()
+        else None
+    )
 
     requested_provider = provider_id.strip()
     requested_model = model.strip()
@@ -288,6 +469,10 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
         and callable(getattr(current_llm, "agenerate_image", None))
         and requested_provider in {"", "openai-codex"}
         and requested_model in {"", current_model}
+        and (
+            reference is None
+            or context.llm_provider.supports_image_input() is not False
+        )
     )
 
     image: bytes
@@ -295,7 +480,7 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
     codex_error: Optional[Exception] = None
     if use_codex:
         try:
-            encoded = await current_llm.agenerate_image(cleaned_prompt)
+            encoded = await current_llm.agenerate_image(cleaned_prompt, reference)
             image = _decode_base64_image(encoded)
             source = f"openai-codex/{current_model}"
         except Exception as exc:
@@ -308,7 +493,7 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
     if not use_codex or codex_error is not None:
         credentials = await ProviderRepository().list_for_user(user_id)
         try:
-            target = _select_target(credentials, provider_id, model)
+            target = _select_target(credentials, provider_id, model, require_reference=reference is not None)
         except ValueError as exc:
             if codex_error is not None:
                 raise RuntimeError(
@@ -317,7 +502,7 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
                 ) from None
             raise
         try:
-            image, _mime_type = await _request_image(target, cleaned_prompt)
+            image, _mime_type = await _request_image(target, cleaned_prompt, reference)
             source = f"{target.credential.provider_id}/{target.model}"
         except Exception as exc:
             message = str(exc)
@@ -335,12 +520,18 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "") ->
     output_path = output_dir / f"generated-{uuid.uuid4().hex}.{extension}"
     output_path.write_bytes(image)
     resolved_path = output_path.resolve()
+    reference_summary = (
+        f" using reference image {reference['path']}"
+        if reference is not None
+        else ""
+    )
     return (
-        f"Generated one image with {source}.\n"
+        f"Generated one image with {source}{reference_summary}.\n"
         f"{resolved_path}"
     )
 
 
+read_image_tool: FunctionToolSpec = FunctionToolSpec.from_raw(read_image)
 generate_image_tool: FunctionToolSpec = FunctionToolSpec.from_raw(generate_image)
 
-__all__ = ["generate_image", "generate_image_tool"]
+__all__ = ["generate_image", "generate_image_tool", "read_image", "read_image_tool"]

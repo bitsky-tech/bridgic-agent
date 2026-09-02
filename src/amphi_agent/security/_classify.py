@@ -155,8 +155,8 @@ def _classify_tool(
             boundary = _path_boundary(real, ws, mounts, writable, gated)
             sensitive = _is_sensitive(real)
     else:
-        browser_path_arg = reg.BROWSER_LOCAL_FILE_ARGUMENTS.get(tool)
-        raw = str(args.get(browser_path_arg) or "") if browser_path_arg else ""
+        local_path_arg = reg.LOCAL_FILE_ARGUMENTS.get(tool)
+        raw = str(args.get(local_path_arg) or "") if local_path_arg else ""
         if raw:
             real = resolve_real_path(raw, ws)
             boundary = _path_boundary(real, ws, mounts, writable, gated)

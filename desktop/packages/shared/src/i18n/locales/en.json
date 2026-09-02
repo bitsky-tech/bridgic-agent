@@ -1502,6 +1502,7 @@
       "details": "Image generation details",
       "prompt": "Prompt",
       "promptUnavailable": "No prompt provided",
+      "reference": "Reference image",
       "reveal": "Reveal in files",
       "status": {
         "completed": "Completed",

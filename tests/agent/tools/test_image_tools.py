@@ -1,16 +1,24 @@
 import base64
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 from bridgic.amphibious import StepToolCall, ToolArgument
+from bridgic.core.model.types import Message, Response, Role
 
+from src.amphi_agent._llm_provider import LlmProvider
 from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_agent.security import ExecutionMode, PermissionEngine
 from src.amphi_agent.tools import _image as image_module
-from src.amphi_agent.tools._image import generate_image
+from src.amphi_agent.tools._image import generate_image, read_image
 from src.amphi_service.protocol.llms import supports_image_generation
+from src.amphi_service.protocol.llms._image_inputs import (
+    IMAGE_INPUTS_EXTRA,
+    ImageInputUnsupportedError,
+    inspect_image_input,
+)
 from src.amphi_store import ProviderCredential, ProviderRepository
 from tests.agent.tools._harness import ToolHarness
 
@@ -33,15 +41,86 @@ async def _configure_provider(provider_id: str, model: str, protocol: str = "ope
 def test_image_capability_and_tool_registration() -> None:
     assert supports_image_generation("openai", "gpt-image-2") is True
     assert supports_image_generation("openai", "gpt-5.5") is False
-    assert [tool.tool_name for tool in TOOL_LIBRARY.select(["generate_image"])] == [
-        "generate_image"
+    assert [
+        tool.tool_name
+        for tool in TOOL_LIBRARY.select(["generate_image", "read_image"])
+    ] == [
+        "read_image",
+        "generate_image",
     ]
+
+
+async def test_read_image_uses_read_permission(tool_harness: ToolHarness) -> None:
+    call = StepToolCall(
+        tool="read_image",
+        tool_arguments=[ToolArgument(name="file_path", value="reference.png")],
+    )
+    engine = PermissionEngine(
+        str(tool_harness.workspace.work_dir),
+        mode=ExecutionMode.REQUEST,
+    )
+
+    verdict = (await engine.evaluate([call]))[0]
+
+    assert verdict.capability == "read"
+    assert verdict.verdict == "allow"
+
+
+async def test_read_image_sends_native_image_input_and_returns_text(tool_harness: ToolHarness) -> None:
+    image_path = tool_harness.workspace.work_dir / "reference.png"
+    image_path.write_bytes(_PNG)
+    calls: list[list[Message]] = []
+
+    class RecordingLlm:
+        async def achat(self, messages: list[Message], **_: Any) -> Response:
+            calls.append(messages)
+            return Response(
+                message=Message.from_text(
+                    "A red panda in a centered watercolor composition.",
+                    role=Role.AI,
+                )
+            )
+
+    tool_harness.agent._llm = RecordingLlm()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="gpt-5.6-sol",
+        provider_id="openai-codex",
+    )
+
+    result = await read_image("reference.png", "Describe the composition for reuse")
+
+    assert len(calls) == 1
+    assert [message.role for message in calls[0]] == [Role.SYSTEM, Role.USER]
+    assert calls[0][1].content == "Describe the composition for reuse"
+    descriptor = calls[0][1].extras[IMAGE_INPUTS_EXTRA][0]
+    assert descriptor["path"] == str(image_path.resolve())
+    assert descriptor["media_type"] == "image/png"
+    assert result == (
+        f"Image analysis for {image_path.resolve()}:\n"
+        "A red panda in a centered watercolor composition."
+    )
+
+
+async def test_read_image_rejects_known_text_only_model(tool_harness: ToolHarness) -> None:
+    image_path = tool_harness.workspace.work_dir / "reference.png"
+    image_path.write_bytes(_PNG)
+    tool_harness.agent._llm = SimpleNamespace()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="deepseek-v4-pro",
+        provider_id="deepseek",
+    )
+
+    with pytest.raises(ImageInputUnsupportedError, match="deepseek-v4-pro"):
+        await read_image(str(image_path))
 
 
 async def test_generate_image_uses_network_permission(tool_harness: ToolHarness) -> None:
     call = StepToolCall(
         tool="generate_image",
-        tool_arguments=[ToolArgument(name="prompt", value="a lighthouse")],
+        tool_arguments=[
+            ToolArgument(name="prompt", value="a lighthouse"),
+            ToolArgument(name="reference_image_path", value="reference.png"),
+        ],
     )
     engine = PermissionEngine(
         str(tool_harness.workspace.work_dir),
@@ -51,6 +130,7 @@ async def test_generate_image_uses_network_permission(tool_harness: ToolHarness)
     verdict = (await engine.evaluate([call]))[0]
 
     assert verdict.capability == "network"
+    assert verdict.boundary == "in_workspace"
     assert verdict.verdict == "ask"
 
 
@@ -60,7 +140,8 @@ async def test_generate_image_prefers_active_provider_and_returns_preview_path(t
     await ProviderRepository().set_active("local", "openai")
     captured: dict[str, str] = {}
 
-    async def request_image(target: image_module._ImageTarget, prompt: str) -> tuple[bytes, str]:
+    async def request_image(target: image_module._ImageTarget, prompt: str, reference: dict | None = None) -> tuple[bytes, str]:
+        assert reference is None
         captured.update(
             provider_id=target.credential.provider_id,
             model=target.model,
@@ -91,7 +172,8 @@ async def test_generate_image_prefers_current_codex_hosted_tool(tool_harness: To
         protocol = "openai-codex"
         configuration = SimpleNamespace(model="gpt-5.6-sol")
 
-        async def agenerate_image(self, prompt: str) -> str:
+        async def agenerate_image(self, prompt: str, reference: dict | None = None) -> str:
+            assert reference is None
             captured.append(prompt)
             return base64.b64encode(_PNG).decode("ascii")
 
@@ -105,11 +187,42 @@ async def test_generate_image_prefers_current_codex_hosted_tool(tool_harness: To
     assert result.startswith("Generated one image with openai-codex/gpt-5.6-sol.\n")
 
 
+async def test_generate_image_passes_reference_pixels_to_codex(tool_harness: ToolHarness) -> None:
+    image_path = tool_harness.workspace.work_dir / "character.png"
+    image_path.write_bytes(_PNG)
+    captured: dict[str, Any] = {}
+
+    class CodexLlm:
+        protocol = "openai-codex"
+        configuration = SimpleNamespace(model="gpt-5.6-sol")
+
+        async def agenerate_image(self, prompt: str, reference: dict | None = None) -> str:
+            captured.update(prompt=prompt, reference=reference)
+            return base64.b64encode(_PNG).decode("ascii")
+
+    tool_harness.agent._llm = CodexLlm()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="gpt-5.6-sol",
+        provider_id="openai-codex",
+    )
+
+    result = await generate_image(
+        "Keep the character and change the background to a forest",
+        reference_image_path="character.png",
+    )
+
+    assert captured["prompt"] == "Keep the character and change the background to a forest"
+    assert captured["reference"]["path"] == str(image_path.resolve())
+    assert f"using reference image {image_path.resolve()}" in result
+    assert Path(result.splitlines()[-1]).read_bytes() == _PNG
+
+
 async def test_generate_image_honors_explicit_provider_and_model(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     await _configure_provider("google", "gemini-2.5-flash-image", "google")
     selected: list[tuple[str, str]] = []
 
-    async def request_image(target: image_module._ImageTarget, _prompt: str) -> tuple[bytes, str]:
+    async def request_image(target: image_module._ImageTarget, _prompt: str, reference: dict | None = None) -> tuple[bytes, str]:
+        assert reference is None
         selected.append((target.credential.provider_id, target.model))
         return _PNG, "image/png"
 
@@ -202,6 +315,113 @@ async def test_http_image_provider_routes(monkeypatch: pytest.MonkeyPatch, provi
     assert mime_type == "image/png"
 
 
+async def test_openai_reference_image_uses_multipart_edit_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    image_path = tmp_path / "reference.png"
+    image_path.write_bytes(_PNG)
+    reference = inspect_image_input(str(image_path))
+    assert reference is not None
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+
+        async def __aenter__(self) -> "Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **kwargs: object) -> httpx.Response:
+            captured["url"] = url
+            captured["request"] = kwargs
+            return httpx.Response(
+                200,
+                json={"data": [{"b64_json": base64.b64encode(_PNG).decode("ascii")}]},
+            )
+
+    monkeypatch.setattr(image_module.httpx, "AsyncClient", Client)
+    credential = ProviderCredential(
+        user_id="local",
+        provider_id="openai",
+        auth_mode="api_key",
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+        protocol="openai",
+        enabled_models=["gpt-image-2"],
+    )
+
+    image, _ = await image_module._request_http_image(
+        image_module._ImageTarget(credential, "gpt-image-2"),
+        "turn the scene into watercolor",
+        reference,
+    )
+
+    assert captured["url"] == "https://api.openai.com/v1/images/edits"
+    request = captured["request"]
+    assert isinstance(request, dict)
+    assert request["headers"] == {"Authorization": "Bearer secret"}
+    assert request["data"] == {
+        "model": "gpt-image-2",
+        "prompt": "turn the scene into watercolor",
+    }
+    assert request["files"]["image"] == ("reference.png", _PNG, "image/png")
+    assert image == _PNG
+
+
+async def test_openrouter_reference_image_uses_input_references(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    image_path = tmp_path / "reference.png"
+    image_path.write_bytes(_PNG)
+    reference = inspect_image_input(str(image_path))
+    assert reference is not None
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+
+        async def __aenter__(self) -> "Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **kwargs: object) -> httpx.Response:
+            captured["url"] = url
+            captured["request"] = kwargs
+            return httpx.Response(
+                200,
+                json={"data": [{"b64_json": base64.b64encode(_PNG).decode("ascii")}]},
+            )
+
+    monkeypatch.setattr(image_module.httpx, "AsyncClient", Client)
+    credential = ProviderCredential(
+        user_id="local",
+        provider_id="openrouter",
+        auth_mode="api_key",
+        api_key="secret",
+        base_url="https://openrouter.ai/api/v1",
+        protocol="openai",
+        enabled_models=["google/gemini-3.1-flash-image"],
+    )
+
+    await image_module._request_http_image(
+        image_module._ImageTarget(credential, "google/gemini-3.1-flash-image"),
+        "keep the subject",
+        reference,
+    )
+
+    assert captured["url"] == "https://openrouter.ai/api/v1/images"
+    request = captured["request"]
+    assert isinstance(request, dict)
+    assert request["headers"] == {
+        "Authorization": "Bearer secret",
+        "Content-Type": "application/json",
+    }
+    reference_url = request["json"]["input_references"][0]["image_url"]["url"]
+    assert reference_url == f"data:image/png;base64,{base64.b64encode(_PNG).decode('ascii')}"
+
+
 async def test_google_image_provider_reads_inline_data(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -259,3 +479,64 @@ async def test_google_image_provider_reads_inline_data(monkeypatch: pytest.Monke
     assert captured["closed"] is True
     assert image == _PNG
     assert mime_type == "image/png"
+
+
+async def test_google_reference_image_is_sent_with_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    image_path = tmp_path / "reference.png"
+    image_path.write_bytes(_PNG)
+    reference = inspect_image_input(str(image_path))
+    assert reference is not None
+
+    class Models:
+        async def generate_content(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(
+                                    inline_data=SimpleNamespace(
+                                        data=_PNG,
+                                        mime_type="image/png",
+                                    )
+                                )
+                            ]
+                        )
+                    )
+                ]
+            )
+
+    class AsyncClient:
+        models = Models()
+
+        async def aclose(self) -> None:
+            return None
+
+    class Client:
+        def __init__(self, **_kwargs: object) -> None:
+            self.aio = AsyncClient()
+
+    monkeypatch.setattr(image_module.genai, "Client", Client)
+    credential = ProviderCredential(
+        user_id="local",
+        provider_id="google",
+        auth_mode="api_key",
+        api_key="google-secret",
+        base_url=None,
+        protocol="google",
+        enabled_models=["gemini-2.5-flash-image"],
+    )
+
+    await image_module._request_google_image(
+        image_module._ImageTarget(credential, "gemini-2.5-flash-image"),
+        "change only the background",
+        reference,
+    )
+
+    contents = captured["contents"]
+    assert isinstance(contents, list)
+    assert contents[0] == "change only the background"
+    assert contents[1].inline_data.data == _PNG
+    assert contents[1].inline_data.mime_type == "image/png"

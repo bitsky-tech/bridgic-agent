@@ -63,7 +63,12 @@ describe('ImageGenerationCard', () => {
         <ToolCallRow call={{
           toolUseId: 'image-success',
           name: 'generate_image',
-          input: { prompt: '水墨山水', provider_id: 'openai', model: 'gpt-image-1' },
+          input: {
+            prompt: '水墨山水',
+            provider_id: 'openai',
+            model: 'gpt-image-1',
+            reference_image_path: '/tmp/reference/source.png',
+          },
           result: {
             output: `Generated one image with openai/gpt-image-1.\n${path}`,
             isError: false,
@@ -83,6 +88,8 @@ describe('ImageGenerationCard', () => {
     const details = host.querySelector<HTMLButtonElement>('button[aria-label="图片生成详情"]')
     await act(async () => details?.click())
     expect(host.textContent).toContain('generated-test.png')
+    expect(host.textContent).toContain('参考图')
+    expect(host.textContent).toContain('source.png')
     expect(host.querySelector('img')).toBeNull()
 
     const reveal = Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.includes('在文件中显示'))

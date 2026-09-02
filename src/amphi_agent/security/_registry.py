@@ -229,10 +229,10 @@ NETWORK_RISK_TOOLS: List[str] = [
     ),
 ]
 
-# Browser tools remain network-capability operations, but these arguments also
-# read or write local files. Resolve their boundary like ordinary file tools so
-# out-of-workspace and sensitive paths cannot bypass the structural backstop.
-BROWSER_LOCAL_FILE_ARGUMENTS: Dict[str, str] = {
+# Network-capability tools can also read or write local files. Resolve these
+# arguments like ordinary file tools so out-of-workspace and sensitive paths
+# cannot bypass the structural backstop.
+LOCAL_FILE_ARGUMENTS: Dict[str, str] = {
     "browser_screenshot": "filename",
     "browser_upload_file": "file_path",
     "browser_save_pdf": "filename",
@@ -240,6 +240,7 @@ BROWSER_LOCAL_FILE_ARGUMENTS: Dict[str, str] = {
     "browser_restore_storage_state": "filename",
     "browser_stop_tracing": "filename",
     "browser_stop_video": "filename",
+    "generate_image": "reference_image_path",
 }
 
 # ── Read-only shell commands (capability READ) ──
@@ -465,7 +466,7 @@ APP_BUILTIN_ROOTS: FrozenSet[str] = _app_builtin_roots()
 # Adding, removing or changing a tool's capability = editing this table. Tools
 # that match nothing fall through to EXECUTE (the grey area).
 TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
-    (r"read_file", Capability.READ),
+    (r"read_file|read_image", Capability.READ),
     (r"glob|grep", Capability.READ),
     (r"write_file|edit_file", Capability.EDIT),
     (r"workspace_restore|workspace_restore_file", Capability.EDIT),   # rollback = modifying files

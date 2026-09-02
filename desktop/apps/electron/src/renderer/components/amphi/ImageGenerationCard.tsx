@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle2, ChevronRight, FolderOpen, ImageIcon, LoaderC
 import { useTranslation } from 'react-i18next'
 import type { AgentMessageToolCall } from '@/atoms/agent'
 import { cn } from '@/lib/cn'
+import { basename } from '@/lib/toolDisplay'
 import { parseLocalResourceReference, type LocalResourceReference } from '@/components/markdown/localResource'
 import { Collapse } from './Collapse'
 
@@ -62,6 +63,7 @@ export function ImageGenerationCard({ call }: ImageGenerationCardProps) {
   const prompt = inputString(call.input, 'prompt')
   const provider = inputString(call.input, 'provider_id')
   const model = inputString(call.input, 'model')
+  const referenceImagePath = inputString(call.input, 'reference_image_path')
   const output = String(call.result?.output ?? '')
   const reference = state === 'success' ? generatedImageReference(output) : null
   const duration = running ? elapsedMs : call.result?.durationMs ?? 0
@@ -147,6 +149,17 @@ export function ImageGenerationCard({ call }: ImageGenerationCardProps) {
                 <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary">
                   {prompt}
                 </p>
+              </div>
+            ) : null}
+
+            {referenceImagePath ? (
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span className="shrink-0 text-text-tertiary">
+                  {t('session.imageGeneration.reference')}
+                </span>
+                <span className="truncate font-mono text-text-secondary" title={referenceImagePath}>
+                  {basename(referenceImagePath)}
+                </span>
               </div>
             ) : null}
 
