@@ -346,7 +346,7 @@ def test_build_structures() -> None:
     1. Clarify preserves the required task definition and confirmation structure.
     2. Explore preserves its environment, task-flow, Skill-discovery, and handoff structure.
     3. Generate preserves the reusable package and execution/validation boundary.
-    4. Verify preserves real-environment testing, read-only validation, verdict, evidence,
+    4. Verify preserves real-environment execution testing, verdict, evidence,
        and confirmation requirements.
     """
     personas = _personas()
@@ -359,6 +359,7 @@ def test_build_structures() -> None:
     assert "one title and four level-two sections meaning Task, Workflow, Expected output" in clarify
     assert "Final deliverables" in clarify
     assert "Acceptance criteria" not in clarify
+    assert "`VALIDATE.md`" not in clarify
     assert "request_accept_rule" not in clarify
     assert "call `request_human_task_confirm`" in clarify
 
@@ -378,8 +379,13 @@ def test_build_structures() -> None:
     assert "acceptance criteria" not in generate
     assert "Before calling `switch`, check that Generate is actually complete" in generate
 
-    # Check 4: Verify preserves read-only validation, verdict, evidence, and confirmation requirements.
+    # Check 4: Verify preserves execution testing, verdict, evidence, and confirmation requirements.
     assert "`verify.md`" in verify
+    assert "two level-two sections" in verify
+    assert "Test scope and Workflow checks" in verify
+    assert "`VALIDATE.md`" not in verify
+    assert "acceptance criteria" not in verify
+    assert "Runtime-validation implementation checks" not in verify
     assert "read-only" in verify
     assert "Overall Build verdict" in verify
     assert "smallest decisive real evidence" in verify
