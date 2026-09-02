@@ -12,7 +12,9 @@
         "@univerjs/preset-sheets-data-validation": "^0.25.1",
         "@univerjs/preset-sheets-drawing": "^0.25.1",
         "@univerjs/preset-sheets-filter": "^0.25.1",
+        "@univerjs/preset-sheets-hyper-link": "^0.25.1",
         "@univerjs/preset-sheets-sort": "^0.25.1",
+        "@univerjs/sheets": "^0.25.1",
         "@univerjs/themes": "^0.25.1",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -716,6 +718,8 @@
 
     "@univerjs/preset-sheets-filter": ["@univerjs/preset-sheets-filter@0.25.1", "https://registry.npmmirror.com/@univerjs/preset-sheets-filter/-/preset-sheets-filter-0.25.1.tgz", { "dependencies": { "@univerjs/sheets-filter": "0.25.1", "@univerjs/sheets-filter-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-ox6OAUFetC9Al1XY7eb4JNPvNwto7ZWZBXiD5nNGzeK6R8LKrN31Yhu69RgCTpuymVlv7rNROtDKeXxroJzUbg=="],
 
+    "@univerjs/preset-sheets-hyper-link": ["@univerjs/preset-sheets-hyper-link@0.25.1", "https://registry.npmmirror.com/@univerjs/preset-sheets-hyper-link/-/preset-sheets-hyper-link-0.25.1.tgz", { "dependencies": { "@univerjs/sheets-hyper-link": "0.25.1", "@univerjs/sheets-hyper-link-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-nKROwzxzYadnetwlGVAGtpuMP8Cn2qdiJiWQjXjPI217TUtojYKXIRdOhK909/BFAR/l7oalX4x+fKLWSdU5ag=="],
+
     "@univerjs/preset-sheets-sort": ["@univerjs/preset-sheets-sort@0.25.1", "https://registry.npmmirror.com/@univerjs/preset-sheets-sort/-/preset-sheets-sort-0.25.1.tgz", { "dependencies": { "@univerjs/sheets-sort": "0.25.1", "@univerjs/sheets-sort-ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "react-dom": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-xebD11RrtJ+JY6Tn3pYoQf28jMuLAlOEAoDYqB8Rh4mzKLimBcB/emmXNg+KfNbbXFelFRvjr8uaLL5P41R5WQ=="],
 
     "@univerjs/protocol": ["@univerjs/protocol@0.25.1", "https://registry.npmmirror.com/@univerjs/protocol/-/protocol-0.25.1.tgz", { "dependencies": { "@grpc/grpc-js": "^1.14.3" } }, "sha512-RHkNl/Gm8T5VyrXGj3dnJ4CGgB12/oqP7BVUZ4DcfxezFh1vq/nIHD0fIqL8DZslZV6CGK/sxcNeGn3E/S3Xnw=="],
@@ -743,6 +747,10 @@
     "@univerjs/sheets-formula": ["@univerjs/sheets-formula@0.25.1", "https://registry.npmmirror.com/@univerjs/sheets-formula/-/sheets-formula-0.25.1.tgz", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/rpc": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-5zDcLfzAhO0H1gwYeCY0JYgZIxcKAhA02jS0wXRpOa+dVWs2/zcKy4CjDCbINIsA/aLrICAd9O8Q3VbU/G3rEg=="],
 
     "@univerjs/sheets-formula-ui": ["@univerjs/sheets-formula-ui@0.25.1", "https://registry.npmmirror.com/@univerjs/sheets-formula-ui/-/sheets-formula-ui-0.25.1.tgz", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-formula": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-iMDZZutB5mcwBGn1kL2QfsQoiOJKJhyLtzp3oRv0bEhbScGDPyoADuAoOCQjDnnUKTp3cTAvc0ACn3Gj3vOvRQ=="],
+
+    "@univerjs/sheets-hyper-link": ["@univerjs/sheets-hyper-link@0.25.1", "https://registry.npmmirror.com/@univerjs/sheets-hyper-link/-/sheets-hyper-link-0.25.1.tgz", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-hr9YkCeGZzy1ZStbRoyt3zS0HUa2PxzfeasaTQyAf0o82Patq2jyKVSplp/iOOMUTgtYRZHv+NntQ2/dm/c9vA=="],
+
+    "@univerjs/sheets-hyper-link-ui": ["@univerjs/sheets-hyper-link-ui@0.25.1", "https://registry.npmmirror.com/@univerjs/sheets-hyper-link-ui/-/sheets-hyper-link-ui-0.25.1.tgz", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/design": "0.25.1", "@univerjs/docs": "0.25.1", "@univerjs/docs-ui": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/engine-render": "0.25.1", "@univerjs/icons": "1.4.0", "@univerjs/sheets": "0.25.1", "@univerjs/sheets-data-validation": "0.25.1", "@univerjs/sheets-formula-ui": "0.25.1", "@univerjs/sheets-hyper-link": "0.25.1", "@univerjs/sheets-ui": "0.25.1", "@univerjs/ui": "0.25.1" }, "peerDependencies": { "react": "^16.9.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc", "rxjs": ">=7.0.0" } }, "sha512-grb7WsYlbzKOzZeEXKYv1IkrdwXcykpfWYKix6MNdAsg9EIIm2N85JAxdmz/gUO4Skh5YW8sfUiQx/1IKe/W7A=="],
 
     "@univerjs/sheets-numfmt": ["@univerjs/sheets-numfmt@0.25.1", "https://registry.npmmirror.com/@univerjs/sheets-numfmt/-/sheets-numfmt-0.25.1.tgz", { "dependencies": { "@univerjs/core": "0.25.1", "@univerjs/engine-formula": "0.25.1", "@univerjs/sheets": "0.25.1" }, "peerDependencies": { "rxjs": ">=7.0.0" } }, "sha512-yLuOfgFa8t+uDnBvCs+PjCjYBq6iJ+tIUEj7ana5YCnxUdKmDed4M8woSffgDRaMXcV8sY9SOexA2iwMLo9ioQ=="],
 

@@ -36,6 +36,7 @@ class FakeWebContents extends EventEmitter {
   private destroyed = false
   private loading = false
   private loadCount = 0
+  windowOpenHandler: ((details: { url: string }) => { action: string }) | null = null
 
   constructor(readonly id: number, private readonly targetId: string) {
     super()
@@ -61,7 +62,9 @@ class FakeWebContents extends EventEmitter {
 
   setBackgroundThrottling(): void {}
 
-  setWindowOpenHandler(): void {}
+  setWindowOpenHandler(handler: (details: { url: string }) => { action: string }): void {
+    this.windowOpenHandler = handler
+  }
 
   send(channel: string, value: unknown): void {
     this.sent.push({ channel, value })
@@ -103,7 +106,7 @@ function fakeHost() {
   }
 }
 
-function setup(confirmDiscardDirty?: (count: number) => Promise<boolean>) {
+function setup(confirmDiscardDirty?: (count: number) => Promise<boolean>, openExternal?: (url: string) => void) {
   const views: FakeView[] = []
   const host = fakeHost()
   const manager = new ExcelHost(
@@ -118,6 +121,7 @@ function setup(confirmDiscardDirty?: (count: number) => Promise<boolean>) {
     '/dist/renderer/excel.html',
     () => undefined,
     confirmDiscardDirty,
+    openExternal,
   )
   manager.attachHost(host.window)
   return { host, manager, views }
@@ -228,5 +232,16 @@ describe('ExcelHost Session target ownership', () => {
 
     expect(await manager.confirmClose()).toBe(false)
     expect(confirmations).toEqual([1])
+  })
+
+  it('hands workbook hyperlinks to the trusted external URL boundary', async () => {
+    const opened: string[] = []
+    const { manager, views } = setup(undefined, (url) => opened.push(url))
+    await manager.ensureSession('session-a', {
+      sessionId: 'session-a', locale: 'en-US', theme: 'light',
+    })
+
+    expect(views[0]?.webContents.windowOpenHandler?.({ url: 'https://example.com/report' })).toEqual({ action: 'deny' })
+    expect(opened).toEqual(['https://example.com/report'])
   })
 })

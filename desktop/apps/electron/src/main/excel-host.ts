@@ -60,6 +60,7 @@ export class ExcelHost {
     private readonly rendererHtml: string,
     private readonly onStateChanged: (snapshot: ExcelHostSnapshot) => void = () => undefined,
     private readonly confirmDiscardDirty: (count: number) => Promise<boolean> = async () => false,
+    private readonly openExternal: (url: string) => void = () => undefined,
   ) {}
 
   snapshot(): ExcelHostSnapshot {
@@ -238,9 +239,14 @@ export class ExcelHost {
     contents.setBackgroundThrottling(false)
     contents.session.setPermissionCheckHandler(() => false)
     contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    contents.setWindowOpenHandler(({ url }) => {
+      this.openExternal(url)
+      return { action: 'deny' }
+    })
     contents.on('will-navigate', (event, url) => {
-      if (!this.navigationAllowed(url)) event.preventDefault()
+      if (this.navigationAllowed(url)) return
+      event.preventDefault()
+      if (/^(?:https?:|mailto:)/i.test(url)) this.openExternal(url)
     })
     contents.on('did-finish-load', () => {
       contents.send(IPC.events.excelHostConfigChanged, record.config)

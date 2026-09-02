@@ -21,6 +21,7 @@ describe('Excel sheet chrome', () => {
       'conditional-formatting',
       'data-validation',
       'drawing',
+      'hyperlink',
     ])
   })
 })

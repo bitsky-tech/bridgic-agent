@@ -12,6 +12,7 @@ export const EXCEL_OPEN_SOURCE_FEATURES = [
   'conditional-formatting',
   'data-validation',
   'drawing',
+  'hyperlink',
 ] as const
 
 export type ExcelOpenSourceFeature = typeof EXCEL_OPEN_SOURCE_FEATURES[number]

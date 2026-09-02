@@ -13,6 +13,7 @@ import {
   BooleanNumber,
   BorderStyleTypes,
   CellValueType,
+  CustomRangeType,
   DrawingTypeEnum,
   HorizontalAlign,
   LocaleType,
@@ -24,6 +25,11 @@ import {
   type IStyleData,
   type IWorkbookData,
 } from '@univerjs/core'
+import {
+  EXCEL_LIVE_ANALYSIS_CUSTOM_KEY,
+  readLiveAnalysis,
+  type ExcelLiveAnalysisState,
+} from '../excel/excelLiveAnalysis'
 
 const DEFAULT_ROWS = 1_000
 const DEFAULT_COLUMNS = 26
@@ -32,11 +38,112 @@ const DATA_VALIDATION_RESOURCE = 'SHEET_DATA_VALIDATION_PLUGIN'
 const CONDITIONAL_FORMATTING_RESOURCE = 'SHEET_CONDITIONAL_FORMATTING_PLUGIN'
 const DRAWING_RESOURCE = 'SHEET_DRAWING_PLUGIN'
 const COMPATIBILITY_CUSTOM_KEY = 'bridgicXlsxUnsupportedFeatures'
+export const EXCEL_SHOW_ZEROS_CUSTOM_KEY = 'bridgicExcelShowZeros'
+const BRIDGIC_METADATA_MARKER = 'Bridgic Excel internal metadata v1'
+const BRIDGIC_METADATA_SHEET = '__BRIDGIC_INTERNAL__'
+const BRIDGIC_METADATA_CHUNK_SIZE = 30_000
 
 type ResourceMap = Record<string, unknown>
 // Univer's plugin resource boundary is JSON but the installed packages do not export a shared schema.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ResourceRule = Record<string, any>
+
+interface BridgicWorkbookMetadata {
+  drawingIds: Record<string, Array<{ column: number; id: string; row: number }>>
+  liveAnalysis?: ExcelLiveAnalysisState
+  sheetIds: Record<string, string>
+  version: 1
+}
+
+interface NativeSheetView {
+  path: string
+  showZeros: boolean
+}
+
+/** Excel stores zero visibility on each worksheet view. Univer has no native field for it. */
+export function excelSheetShowsZeros(custom: unknown): boolean {
+  return !custom
+    || typeof custom !== 'object'
+    || Array.isArray(custom)
+    || (custom as Record<string, unknown>)[EXCEL_SHOW_ZEROS_CUSTOM_KEY] !== false
+}
+
+function xmlAttribute(attributes: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&')
+  const value = new RegExp(`(?:^|\\s)${escaped}="([^"]*)"`).exec(attributes)?.[1]
+  if (value === undefined) return undefined
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+function archivePath(target: string): string {
+  const parts = (target.startsWith('/') ? target.slice(1) : `xl/${target}`).replace(/\\/g, '/').split('/')
+  const normalized: string[] = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') normalized.pop()
+    else normalized.push(part)
+  }
+  return normalized.join('/')
+}
+
+async function readNativeSheetViews(zip: JSZip): Promise<Map<string, NativeSheetView>> {
+  const workbookXml = await zip.file('xl/workbook.xml')?.async('text')
+  const relationshipsXml = await zip.file('xl/_rels/workbook.xml.rels')?.async('text')
+  if (!workbookXml || !relationshipsXml) return new Map()
+
+  const targets = new Map<string, string>()
+  for (const match of relationshipsXml.matchAll(/<Relationship\b([^>]*)\/?\s*>/g)) {
+    const id = xmlAttribute(match[1]!, 'Id')
+    const target = xmlAttribute(match[1]!, 'Target')
+    if (id && target) targets.set(id, archivePath(target))
+  }
+
+  const views = new Map<string, NativeSheetView>()
+  for (const match of workbookXml.matchAll(/<(?:\w+:)?sheet\b([^>]*)\/?\s*>/g)) {
+    const name = xmlAttribute(match[1]!, 'name')
+    const relationshipId = xmlAttribute(match[1]!, 'r:id')
+    const path = relationshipId ? targets.get(relationshipId) : undefined
+    if (!name || !path) continue
+    const worksheetXml = await zip.file(path)?.async('text')
+    if (!worksheetXml) continue
+    const attributes = /<(?:\w+:)?sheetView\b([^>]*)\/?\s*>/.exec(worksheetXml)?.[1] ?? ''
+    views.set(name, {
+      path,
+      showZeros: xmlAttribute(attributes, 'showZeros') !== '0',
+    })
+  }
+  return views
+}
+
+async function writeHiddenZeroViews(bytes: Uint8Array, snapshot: IWorkbookData): Promise<Uint8Array> {
+  const hiddenZeroSheetNames = snapshot.sheetOrder.flatMap((sheetId) => {
+    const sheet = snapshot.sheets[sheetId]
+    return sheet && typeof sheet.name === 'string' && !excelSheetShowsZeros(sheet.custom) ? [sheet.name] : []
+  })
+  if (hiddenZeroSheetNames.length === 0) return bytes
+
+  const zip = await JSZip.loadAsync(bytes)
+  const nativeViews = await readNativeSheetViews(zip)
+  for (const sheetName of hiddenZeroSheetNames) {
+    const nativeView = nativeViews.get(sheetName)
+    if (!nativeView) continue
+    const worksheetXml = await zip.file(nativeView.path)?.async('text')
+    if (!worksheetXml) continue
+    const updated = worksheetXml.replace(/<(?:\w+:)?sheetView\b[^>]*\/?\s*>/, (tag) => {
+      if (/\sshowZeros="[^"]*"/.test(tag)) return tag.replace(/\bshowZeros="[^"]*"/, 'showZeros="0"')
+      return tag.replace(/\/?\s*>$/, (end) => ` showZeros="0"${end}`)
+    })
+    zip.file(nativeView.path, updated)
+  }
+  return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}
 
 /** An .xlsx object that the open-source conversion path cannot reproduce safely. */
 export class UnsupportedWorkbookFeatureError extends Error {
@@ -152,6 +259,7 @@ function cellValue(cell: Cell): ICellData | null {
   const raw = cell.value
   let value: string | number | boolean | null = null
   let formula: string | undefined
+  let document: ICellData['p']
   if (raw instanceof Date) {
     value = raw.getTime() / 86_400_000 + 25_569
   } else if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
@@ -169,18 +277,35 @@ function cellValue(cell: Cell): ICellData | null {
   } else if (raw && typeof raw === 'object' && 'richText' in raw) {
     value = raw.richText.map((run) => run.text).join('')
   } else if (raw && typeof raw === 'object' && 'hyperlink' in raw) {
-    value = raw.text || raw.hyperlink
+    const hyperlink = String(raw.hyperlink ?? '')
+    const text = String(raw.text || hyperlink)
+    if (hyperlink) {
+      document = {
+        id: crypto.randomUUID(),
+        documentStyle: {},
+        body: {
+          dataStream: `${text}\r\n`,
+          customRanges: [{
+            startIndex: 0,
+            endIndex: Math.max(0, text.length - 1),
+            rangeId: crypto.randomUUID(),
+            rangeType: CustomRangeType.HYPERLINK,
+            properties: { url: hyperlink },
+          }],
+        },
+      }
+    } else value = text
   } else if (raw !== null) {
     value = cell.text
   }
 
   const style = excelStyle(cell)
-  if (value === null && !formula && !style) return null
+  if (value === null && !formula && !document && !style) return null
   let type: CellValueType | undefined
   if (typeof value === 'number') type = CellValueType.NUMBER
   else if (typeof value === 'boolean') type = CellValueType.BOOLEAN
   else if (typeof value === 'string') type = CellValueType.STRING
-  return { v: value, t: type, f: formula, s: style }
+  return { v: value, t: type, f: formula, p: document, s: style }
 }
 
 function columnIndex(label: string): number {
@@ -426,7 +551,6 @@ async function unsupportedFeatures(bytes: Uint8Array, workbook: Workbook): Promi
     worksheet.eachRow({ includeEmpty: false }, (row) => {
       row.eachCell({ includeEmpty: false }, (cell) => {
         const value = cell.value
-        if (value && typeof value === 'object' && 'hyperlink' in value) features.add('hyperlinks')
         if (value && typeof value === 'object' && 'richText' in value) features.add('rich text')
       })
     })
@@ -448,17 +572,25 @@ async function unsupportedFeatures(bytes: Uint8Array, workbook: Workbook): Promi
 
 /** Convert the broadly-supported ExcelJS subset into a Univer workbook snapshot. */
 export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise<IWorkbookData> {
+  const nativeViews = await readNativeSheetViews(await JSZip.loadAsync(bytes))
   const workbook = new Workbook()
   const input = bytes.slice().buffer as ArrayBuffer
   await workbook.xlsx.load(input)
+  const bridgicMetadata = readBridgicMetadata(workbook)
   const snapshot = workbookSnapshot(locale, workbook.title || 'Workbook')
   const filterResources: ResourceMap = {}
   const dataValidationResources: ResourceMap = {}
   const conditionalFormattingResources: ResourceMap = {}
   const drawingResources: ResourceMap = {}
 
+  const usedSheetIds = new Set<string>()
+  const usedDrawingIds = new Set<string>()
   workbook.eachSheet((worksheet) => {
-    const sheetId = crypto.randomUUID()
+    const storedSheetId = bridgicMetadata?.sheetIds[worksheet.name]
+    const sheetId = typeof storedSheetId === 'string' && storedSheetId && !usedSheetIds.has(storedSheetId)
+      ? storedSheetId
+      : crypto.randomUUID()
+    usedSheetIds.add(sheetId)
     const cellData: NonNullable<IWorkbookData['sheets'][string]['cellData']> = {}
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       row.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
@@ -490,6 +622,7 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
       }
     }
     const views = worksheet.views ?? []
+    const nativeView = nativeViews.get(worksheet.name)
     const frozen = views.find((view) => view.state === 'frozen') as
       | { xSplit?: number; ySplit?: number }
       | undefined
@@ -510,9 +643,13 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
         startRow: frozen?.ySplit ?? 0,
         startColumn: frozen?.xSplit ?? 0,
       },
+      zoomRatio: Math.min(4, Math.max(0.1, (views[0]?.zoomScale ?? 100) / 100)),
       showGridlines: views[0]?.showGridLines === false
         ? BooleanNumber.FALSE
         : BooleanNumber.TRUE,
+      custom: nativeView?.showZeros === false
+        ? { [EXCEL_SHOW_ZEROS_CUSTOM_KEY]: false }
+        : undefined,
     }
 
     const filterRange = autoFilterRange(worksheet.autoFilter)
@@ -554,17 +691,29 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
     if (conditionalRules.length > 0) conditionalFormattingResources[sheetId] = conditionalRules
 
     const sheetDrawings: ResourceMap = {}
+    let imageIndex = 0
     for (const image of worksheet.getImages()) {
       const source = workbook.getImage(Number(image.imageId))
       const extension = source.extension === 'jpeg' || source.extension === 'gif' ? source.extension : 'png'
       const base64 = source.base64
         ?? (source.buffer ? bytesToBase64(new Uint8Array(source.buffer)) : null)
       if (!base64) continue
-      const drawingId = crypto.randomUUID()
       const range = image.range as unknown as {
         tl: { col: number; row: number }
         br: { col: number; row: number }
       }
+      const storedDrawings = bridgicMetadata?.drawingIds[worksheet.name] ?? []
+      const anchored = storedDrawings.find((candidate) => candidate
+        && Math.floor(candidate.column) === Math.floor(range.tl.col)
+        && Math.floor(candidate.row) === Math.floor(range.tl.row)
+        && !usedDrawingIds.has(candidate.id))
+      const fallback = storedDrawings[imageIndex]
+      imageIndex += 1
+      const storedDrawingId = anchored?.id ?? fallback?.id
+      const drawingId = typeof storedDrawingId === 'string' && storedDrawingId && !usedDrawingIds.has(storedDrawingId)
+        ? storedDrawingId
+        : crypto.randomUUID()
+      usedDrawingIds.add(drawingId)
       const sheetTransform = {
         from: anchorPosition(range.tl),
         to: anchorPosition(range.br),
@@ -587,6 +736,12 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
   setResource(snapshot, DATA_VALIDATION_RESOURCE, dataValidationResources)
   setResource(snapshot, CONDITIONAL_FORMATTING_RESOURCE, conditionalFormattingResources)
   setResource(snapshot, DRAWING_RESOURCE, drawingResources)
+  if (bridgicMetadata?.liveAnalysis !== undefined) {
+    snapshot.custom = {
+      ...snapshot.custom,
+      [EXCEL_LIVE_ANALYSIS_CUSTOM_KEY]: bridgicMetadata.liveAnalysis,
+    }
+  }
   const incompatible = await unsupportedFeatures(bytes, workbook)
   if (incompatible.length > 0) {
     snapshot.custom = { ...snapshot.custom, [COMPATIBILITY_CUSTOM_KEY]: incompatible }
@@ -812,6 +967,18 @@ function imageSource(value: string): { base64: string; extension: 'jpeg' | 'png'
   }
 }
 
+function hyperlinkFromCell(data: ICellData): { hyperlink: string; text: string } | null {
+  const body = data.p?.body
+  const range = body?.customRanges?.find((candidate) => candidate.rangeType === CustomRangeType.HYPERLINK)
+  const hyperlink = range?.properties?.url
+  if (!range || typeof hyperlink !== 'string' || hyperlink.length === 0) return null
+  const stream = body?.dataStream ?? ''
+  const start = Math.max(0, range.startIndex ?? 0)
+  const end = Math.max(start, range.endIndex ?? start)
+  const text = stream.slice(start, end + 1).replace(/[\r\n]/g, '') || hyperlink
+  return { hyperlink, text }
+}
+
 function fractionalAnchor(value: ResourceRule | undefined): { col: number; row: number } {
   return {
     col: Math.max(0, Number(value?.column ?? 0) + Number(value?.columnOffset ?? 0) / 64),
@@ -838,20 +1005,32 @@ export async function exportXlsx(
   const conditionalFormatting = resourceMap(snapshot, CONDITIONAL_FORMATTING_RESOURCE)
   const drawings = resourceMap(snapshot, DRAWING_RESOURCE)
   const conversionFailures = new Set<string>()
+  const storedLiveAnalysis = snapshot.custom?.[EXCEL_LIVE_ANALYSIS_CUSTOM_KEY]
+  const bridgicMetadata: BridgicWorkbookMetadata = {
+    version: 1,
+    sheetIds: {},
+    drawingIds: {},
+    liveAnalysis: storedLiveAnalysis === undefined ? undefined : readLiveAnalysis(snapshot.custom),
+  }
 
   for (const sheetId of snapshot.sheetOrder) {
     const source = snapshot.sheets[sheetId]
     if (!source) continue
     const worksheet = workbook.addWorksheet(source.name || 'Sheet')
+    bridgicMetadata.sheetIds[worksheet.name] = sheetId
     worksheet.state = source.hidden === BooleanNumber.TRUE ? 'hidden' : 'visible'
+    const showGridLines = source.showGridlines !== BooleanNumber.FALSE
+    const zoomScale = Math.round(Math.min(4, Math.max(0.1, source.zoomRatio ?? 1)) * 100)
+    const viewOptions = { showGridLines, zoomScale, zoomScaleNormal: 100 }
     if ((source.freeze?.xSplit ?? 0) > 0 || (source.freeze?.ySplit ?? 0) > 0) {
       worksheet.views = [{
+        ...viewOptions,
         state: 'frozen',
         xSplit: source.freeze?.xSplit ?? 0,
         ySplit: source.freeze?.ySplit ?? 0,
       }]
-    } else if (source.showGridlines === BooleanNumber.FALSE) {
-      worksheet.views = [{ state: 'normal', showGridLines: false }]
+    } else {
+      worksheet.views = [{ state: 'normal', ...viewOptions }]
     }
 
     for (const [rowKey, cells] of Object.entries(source.cellData ?? {})) {
@@ -859,7 +1038,10 @@ export async function exportXlsx(
       for (const [columnKey, data] of Object.entries(cells as Record<string, ICellData>)) {
         const columnIndex = Number(columnKey)
         const cell = worksheet.getCell(rowIndex + 1, columnIndex + 1)
-        if (data.f) {
+        const hyperlink = hyperlinkFromCell(data)
+        if (hyperlink) {
+          cell.value = hyperlink
+        } else if (data.f) {
           cell.value = { formula: data.f.replace(/^=/, ''), result: data.v ?? undefined }
         } else if (data.v !== null && data.v !== undefined) {
           cell.value = data.v
@@ -923,6 +1105,7 @@ export async function exportXlsx(
 
     const sheetDrawings = drawings[sheetId]
     if (sheetDrawings && typeof sheetDrawings === 'object' && !Array.isArray(sheetDrawings)) {
+      const drawingIds: Array<{ column: number; id: string; row: number }> = []
       for (const value of Object.values(sheetDrawings as ResourceMap)) {
         const drawing = value as ResourceRule
         if (drawing.drawingType !== DrawingTypeEnum.DRAWING_IMAGE) {
@@ -936,20 +1119,87 @@ export async function exportXlsx(
           continue
         }
         const imageId = workbook.addImage(image)
+        const from = transform.from as ResourceRule
+        if (typeof drawing.drawingId === 'string' && drawing.drawingId.length > 0) {
+          drawingIds.push({
+            id: drawing.drawingId,
+            column: Number(from.column ?? 0),
+            row: Number(from.row ?? 0),
+          })
+        }
         worksheet.addImage(imageId, {
           tl: fractionalAnchor(transform.from as ResourceRule),
           br: fractionalAnchor(transform.to as ResourceRule),
           editAs: 'oneCell',
         } as never)
       }
+      bridgicMetadata.drawingIds[worksheet.name] = drawingIds
     }
   }
   if (conversionFailures.size > 0 && !options.allowLossy) {
     throw new UnsupportedWorkbookFeatureError([...conversionFailures].sort())
   }
   if (workbook.worksheets.length === 0) workbook.addWorksheet('Sheet1')
+  if (bridgicMetadata.liveAnalysis !== undefined) writeBridgicMetadata(workbook, bridgicMetadata)
   const buffer = await workbook.xlsx.writeBuffer()
-  return new Uint8Array(buffer)
+  return writeHiddenZeroViews(new Uint8Array(buffer), snapshot)
+}
+
+function readBridgicMetadata(workbook: Workbook): BridgicWorkbookMetadata | null {
+  const internalSheetName = /^__BRIDGIC_INTERNAL__(?:_\d+)?$/
+  for (const worksheet of workbook.worksheets) {
+    if (worksheet.state !== 'veryHidden'
+      || !internalSheetName.test(worksheet.name)
+      || worksheet.getCell('A1').value !== BRIDGIC_METADATA_MARKER) continue
+    try {
+      let serialized = ''
+      for (let row = 2; row <= worksheet.rowCount; row += 1) {
+        const chunk = worksheet.getCell(row, 1).value
+        if (typeof chunk !== 'string') break
+        serialized += chunk
+      }
+      const parsed: unknown = JSON.parse(serialized)
+      if (!isBridgicWorkbookMetadata(parsed)) continue
+      workbook.removeWorksheet(worksheet.id)
+      return parsed
+    } catch {
+      // An invalid reserved-looking sheet may still contain user data. Preserve it.
+    }
+  }
+  return null
+}
+
+function isBridgicWorkbookMetadata(value: unknown): value is BridgicWorkbookMetadata {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Partial<BridgicWorkbookMetadata>
+  if (candidate.version !== 1
+    || !Object.prototype.hasOwnProperty.call(candidate, 'liveAnalysis')
+    || !candidate.liveAnalysis || typeof candidate.liveAnalysis !== 'object' || Array.isArray(candidate.liveAnalysis)
+    || candidate.liveAnalysis.version !== 1 || !Array.isArray(candidate.liveAnalysis.bindings)
+    || !candidate.sheetIds || typeof candidate.sheetIds !== 'object' || Array.isArray(candidate.sheetIds)
+    || !candidate.drawingIds || typeof candidate.drawingIds !== 'object' || Array.isArray(candidate.drawingIds)) return false
+  if (!Object.values(candidate.sheetIds).every((sheetId) => typeof sheetId === 'string' && sheetId.length > 0)) return false
+  return Object.values(candidate.drawingIds).every((drawings) => Array.isArray(drawings) && drawings.every((drawing) => drawing
+    && typeof drawing === 'object'
+    && typeof drawing.id === 'string' && drawing.id.length > 0
+    && typeof drawing.column === 'number' && Number.isFinite(drawing.column) && drawing.column >= 0
+    && typeof drawing.row === 'number' && Number.isFinite(drawing.row) && drawing.row >= 0))
+}
+
+function writeBridgicMetadata(workbook: Workbook, metadata: BridgicWorkbookMetadata) {
+  let name = BRIDGIC_METADATA_SHEET
+  let ordinal = 2
+  while (workbook.getWorksheet(name)) {
+    name = `${BRIDGIC_METADATA_SHEET}_${ordinal}`
+    ordinal += 1
+  }
+  const worksheet = workbook.addWorksheet(name)
+  worksheet.state = 'veryHidden'
+  worksheet.getCell('A1').value = BRIDGIC_METADATA_MARKER
+  const serialized = JSON.stringify(metadata)
+  for (let offset = 0, row = 2; offset < serialized.length; offset += BRIDGIC_METADATA_CHUNK_SIZE, row += 1) {
+    worksheet.getCell(row, 1).value = serialized.slice(offset, offset + BRIDGIC_METADATA_CHUNK_SIZE)
+  }
 }
 
 /** Create a fresh workbook with the locale used by the visible Univer UI. */

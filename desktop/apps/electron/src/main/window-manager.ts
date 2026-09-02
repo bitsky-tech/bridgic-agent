@@ -156,6 +156,7 @@ export class WindowManager {
           : await dialog.showMessageBox(options)
         return result.response === 1
       },
+      (url) => this.openExternal(url, 'excel'),
     )
   }
 
