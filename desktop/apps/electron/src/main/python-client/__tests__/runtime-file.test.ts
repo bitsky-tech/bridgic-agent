@@ -247,19 +247,10 @@ describe('tokenRotated', () => {
   if (candidate.token === null) throw new Error('test fixture must carry a token')
   const current = { ...candidate, token: candidate.token }
 
-  it('is false when runtime.json still carries the same token', () => {
+  it('detects only a concrete replacement token', () => {
     expect(tokenRotated(current, mkRuntime({ token: 'tok_abc' }))).toBe(false)
-  })
-
-  it('is true when runtime.json carries a NEW token (daemon restarted)', () => {
     expect(tokenRotated(current, mkRuntime({ token: 'tok_NEW_after_restart' }))).toBe(true)
-  })
-
-  it('is false when runtime is null (file missing / mid-rewrite — not a rotation)', () => {
     expect(tokenRotated(current, null)).toBe(false)
-  })
-
-  it('is false when runtime token is null (degenerate — keep the good token)', () => {
     expect(tokenRotated(current, mkRuntime({ token: null }))).toBe(false)
   })
 })

@@ -1,8 +1,9 @@
 /**
- * Tests for lib/mermaidCode.ts — 渲染前的 mermaid 源码规范化。
+ * Tests for lib/mermaidCode.ts — Mermaid source normalization before rendering.
  *
- * 复现 bug:timeline 图里 LLM 写的自闭合 `<br/>` 不被 `wrap2` 识别(它只认 `<br>`),
- * 导致字面 `<br/>` + 文本不换行溢出。规范成 `<br>` 后 timeline 能正确换行。
+ * Regression: `wrap2` recognizes `<br>` but not the self-closing `<br/>` often emitted by
+ * models in timelines, leaving literal markup and overflowing text. Normalizing to `<br>`
+ * restores line wrapping.
  */
 import { describe, it, expect } from 'bun:test'
 import { normalizeBreakTags } from '../mermaidCode'

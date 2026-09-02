@@ -13,6 +13,10 @@ from src.amphi_agent._error import (
 )
 from src.amphi_service.i18n import backend_i18n, use_locale
 from src.amphi_service.protocol.llms._codex_credentials import CodexAuthError
+from src.amphi_service.protocol.llms._image_inputs import (
+    ImageInputUnsupportedError,
+    ImageInputValidationError,
+)
 from src.amphi_service.protocol.llms._streaming import ModelNotFoundError
 
 
@@ -155,10 +159,38 @@ def test_public_messages_follow_the_active_locale() -> None:
     assert public.message == "The service is busy right now. Please try again later."
 
 
+def test_image_input_errors_explain_whether_to_switch_models_or_edit_the_input() -> None:
+    with use_locale("zh"):
+        unsupported = PublicAgentError.from_exception(
+            ImageInputUnsupportedError("deepseek-v4-pro")
+        )
+        invalid = PublicAgentError.from_exception(
+            ImageInputValidationError("private/path/image.png is invalid")
+        )
+
+    assert unsupported.code == "image_input_unsupported"
+    assert unsupported.action == "switch_model"
+    assert "deepseek-v4-pro" in unsupported.message
+    assert "支持图片/视觉输入的模型" in unsupported.message
+    assert invalid.code == "image_input_invalid"
+    assert invalid.action == "edit_input"
+    assert "private/path" not in invalid.message
+
+
+def test_provider_image_unsupported_message_is_classified_without_a_catalog_preflight() -> None:
+    public = PublicAgentError.from_exception(
+        ProviderError("This model does not support image input", status_code=400)
+    )
+
+    assert public.code == "image_input_unsupported"
+    assert public.action == "switch_model"
+
+
 def test_all_localized_agent_errors_avoid_internal_jargon() -> None:
     message_ids = (
         "agent.error.context_too_large",
         "agent.error.empty_answer",
+        "agent.error.image_input_invalid",
         "agent.error.model_not_found",
         "agent.error.quota_exhausted",
         "agent.error.rate_limited",

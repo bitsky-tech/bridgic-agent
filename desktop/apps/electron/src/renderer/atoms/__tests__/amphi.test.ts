@@ -1,11 +1,11 @@
 /**
- * Tests for atoms/amphi.ts — nav 持久化(activeNavAtom 派生自
- * `settings.ui.lastNav`,selectNavAtom 经 updateSettingsAtom 落盘)与
- * `toNavKey` 的边界回退。
+ * Tests for atoms/amphi.ts — navigation persistence (activeNavAtom derives from
+ * `settings.ui.lastNav`, while selectNavAtom persists through updateSettingsAtom)
+ * and boundary fallbacks in `toNavKey`.
  *
- * amphi.ts 现在传递依赖 settings.ts,后者在【模块顶层】读
- * `window.__initialSettings__` —— 静态 import 会被提升到 stub 之前执行,
- * 所以照 settings.test.ts 的做法:先装 window stub,再动态 import。
+ * amphi.ts now transitively depends on settings.ts, which reads
+ * `window.__initialSettings__` at module scope. Static imports run before the stub, so
+ * follow settings.test.ts: install the window stub first, then import dynamically.
  */
 import { describe, it, expect, mock } from 'bun:test'
 import { createStore } from 'jotai'
@@ -34,7 +34,7 @@ describe('toNavKey', () => {
   })
 
   it('falls back to Home on an unknown / stale stored value', () => {
-    // 磁盘上的旧值(改名前的 key)或手改坏的配置不能让中央区渲染空白。
+    // Legacy keys or malformed edited configuration must not leave the center pane blank.
     expect(toNavKey('retired-nav')).toBe(NavKey.Home)
     expect(toNavKey('')).toBe(NavKey.Home)
   })
@@ -62,7 +62,7 @@ describe('selectNavAtom', () => {
     settingsApi.set.mockImplementation(async () => {})
     await store.set(selectNavAtom, NavKey.Assets)
     expect(store.get(activeNavAtom)).toBe(NavKey.Assets)
-    // 落盘才是"下次打开还在这一栏"的实际保障 —— 只改 atom 不算。
+    // Persistence, not merely updating the atom, guarantees the same tab after restart.
     const persisted = settingsApi.set.mock.calls.at(-1)?.[0]
     expect(persisted?.ui.lastNav).toBe(NavKey.Assets)
   })

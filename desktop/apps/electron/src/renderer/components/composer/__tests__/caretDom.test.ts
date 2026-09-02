@@ -1,13 +1,13 @@
 /**
- * caretDom + segments 的 DOM 侧测试 —— 光标落位 / 偏移读取 / DOM 反解析。
+ * DOM-side caretDom and segment tests: caret placement, offset reading, and DOM parsing.
  *
- * 这里是 composer 里最难也最容易静默出错的一段:`placeCaretAtOffset`(偏移 → 光标)
- * 与 `caretOffsetInEditor`(光标 → 偏移)必须用**同一套字符记账**,两者互为逆函数。
- * 口径一旦漂移不会抛错,只表现为「@ 菜单在错的位置弹出 / 文字插到奇怪的地方」——
- * 所以主力用例是**往返测试**:place(n) 之后 read() 必须还等于 n。
+ * This is the most subtle part of the composer. `placeCaretAtOffset` and
+ * `caretOffsetInEditor` must use **identical character accounting** as inverse functions.
+ * Drift causes misplaced mention menus or inserted text rather than exceptions, so the primary
+ * cases are **round trips** requiring read() to equal n after place(n).
  *
- * DOM 环境:happy-dom **按文件局部注册**,不走全局 preload —— test-setup.ts 记录了
- * 若干 atom 测试会自行 stub `globalThis.window` 且不清理,全局挂 DOM 会与之打架。
+ * Register happy-dom **locally for this file** instead of through global preload. Some atom tests
+ * stub `globalThis.window` without cleanup, so a global DOM would conflict with them.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -19,14 +19,14 @@ afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
-// happy-dom 注册后再 import —— 模块顶层若触碰 DOM,提前 import 会拿到未注册的全局。
+// Import after registering happy-dom so module-scope DOM access sees initialized globals.
 const { pickAdjacentField, placeCaretAtEnd, placeCaretAtOffset, placeCaretInElement } =
   await import('../caretDom')
 const { caretOffsetInEditor, parseSegmentsFromDOM, segmentsToHtml, segmentsToText, tokenDomLength } =
   await import('../segments')
 const { SlashRowKind } = await import('../menus/slashRows')
 
-/** 造一个 contenteditable 宿主并塞入 html;返回该元素(已挂进 document)。 */
+/** Create a contenteditable host with HTML, attach it to document, and return it. */
 function editor(html: string): HTMLElement {
   const el = document.createElement('div')
   el.setAttribute('contenteditable', 'true')
@@ -36,7 +36,7 @@ function editor(html: string): HTMLElement {
 }
 
 describe('pickAdjacentField(Tab / Shift+Tab 在 field 槽间跳)', () => {
-  /** 造含两个 field 槽(描述 + 名称)的编辑器,返回 [editor, [desc, name]]。 */
+  /** Create an editor with description and name fields, returning [editor, [desc, name]]. */
   function twoFields(): [HTMLElement, HTMLElement[]] {
     const el = editor(
       segmentsToHtml([
@@ -113,19 +113,19 @@ describe('placeCaretAtEnd', () => {
   it('末尾是 token chip 时也落在其后', () => {
     const el = editor(segmentsToHtml([{ type: 'slash', id: 'build', label: '构建' }]))
     placeCaretAtEnd(el)
-    // '/build' = 6 字符
+    // '/build' is six characters.
     expect(caretOffsetInEditor(el)).toBe(6)
   })
 })
 
 /**
- * 契约:chip 是 contenteditable=false,光标**停不进去**,所以只有「文本位置 + chip 边界」
- * 是合法落点,那些必须精确往返;落在 chip 内部的偏移会吸附到 chip 尾边(见
- * placeCaretAtOffset 的 setStartAfter 分支)。两条都测 —— 吸附行为本身也是契约,
- * 变了会让 @ 菜单在错的位置弹出。
+ * Contract: chips use contenteditable=false, so the caret **cannot enter them**. Valid positions
+ * are text offsets and chip boundaries, which must round-trip exactly. Offsets inside a chip snap
+ * to its trailing edge through placeCaretAtOffset's setStartAfter branch. Snapping is also part of
+ * the contract because changing it misplaces the mention menu.
  */
 describe('placeCaretAtOffset ↔ caretOffsetInEditor(核心不变式)', () => {
-  /** 逐个断言:place(n) 之后 read() 恰好回到 n。 */
+  /** Assert each offset round-trips exactly from place(n) to read(). */
   function expectExactRoundTrip(el: HTMLElement, offsets: number[]): void {
     for (const n of offsets) {
       placeCaretAtOffset(el, n)
@@ -146,7 +146,7 @@ describe('placeCaretAtOffset ↔ caretOffsetInEditor(核心不变式)', () => {
     ]
     const el = editor(segmentsToHtml(segs))
     expect(segmentsToText(segs)).toBe('前 /build 后') // 2 + 6 + 2 = 10
-    // 0-2 = 前置文本 + chip 头边;8 = chip 尾边;9-10 = 后置文本。
+    // 0-2 cover leading text and the chip start; 8 is the chip end; 9-10 are trailing text.
     expectExactRoundTrip(el, [0, 1, 2, 8, 9, 10])
   })
 
@@ -179,9 +179,9 @@ describe('placeCaretAtOffset ↔ caretOffsetInEditor(核心不变式)', () => {
   })
 
   it('chip 位于最开头:offset 0 落在 chip 之前(↑ 调历史的实际路径)', () => {
-    // 历史里最常见的形态就是 `/build …` / `/help` —— 用 ↑ 翻回来时光标要落
-    // 首位,走的正是 placeCaretAtOffset 的 `remaining <= 0 → setStartBefore`
-    // 分支。此前所有 chip 用例前面都垫了文本,这条路径没被测过。
+    // History commonly contains `/build …` or `/help`; recalling it with Up should place the
+    // caret first through `remaining <= 0 -> setStartBefore`. Earlier chip cases all had leading
+    // text and did not cover this branch.
     const segs = [
       { type: 'slash' as const, id: 'build', label: '构建' },
       { type: 'text' as const, value: ' 做个爬虫' },
@@ -209,8 +209,8 @@ describe('placeCaretAtOffset ↔ caretOffsetInEditor(核心不变式)', () => {
   })
 
   it('widget host 按 data-token-flat 记账,而非其渲染内容', () => {
-    // widget 的 HTML 宿主在字符串里是空的(运行时由 portal 填充),flat 才是逻辑长度 ——
-    // 记账若改用 textContent,portal 一挂上光标就会全线错位。
+    // A widget host is empty in serialized HTML and populated by a portal at runtime; flat is its
+    // logical length. Using textContent would shift every caret position after the portal mounts.
     const flat = '每天 9:00'
     const segs = [
       { type: 'text' as const, value: 'X' },
@@ -221,7 +221,7 @@ describe('placeCaretAtOffset ↔ caretOffsetInEditor(核心不变式)', () => {
     const host = el.querySelector('[data-token-type="widget"]') as HTMLElement
     expect(tokenDomLength(host)).toBe(flat.length)
 
-    const tail = 1 + flat.length // chip 尾边
+    const tail = 1 + flat.length // Trailing chip edge.
     expectExactRoundTrip(el, [0, 1, tail, tail + 1])
   })
 
@@ -267,7 +267,7 @@ describe('parseSegmentsFromDOM(此前零覆盖)', () => {
       { type: 'text' as const, value: '' },
     ]
     const el = editor(segmentsToHtml(segs))
-    // 模拟 portal 往宿主里塞了控件 DOM —— 解析必须无视它。
+    // Simulate a portal inserting control DOM into the host; parsing must ignore it.
     const host = el.querySelector('[data-token-type="widget"]') as HTMLElement
     host.innerHTML = '<input value="不该被解析" /><span>噪音</span>'
     const parsed = parseSegmentsFromDOM(el)
@@ -284,9 +284,9 @@ describe('parseSegmentsFromDOM(此前零覆盖)', () => {
   })
 
   it('空 field 原样存活 —— 否则空槽(如「命名为」后的名称)会在下次 DOM 重写时凭空消失', () => {
-    // 名称槽是空 field。用户在别处(描述)插 @mention 会触发 model→DOM 全量重写;
-    // 若解析把空 field 拍平成「无」,该 field 就从 model 里掉了,重写后名称块消失。
-    // 空 field 必须保留 boundary;非空 field 才拍平(见上一条,@ 支持所需)。
+    // The name slot is an empty field. Inserting a mention elsewhere triggers a full model-to-DOM
+    // rewrite; if parsing flattens the empty field to nothing, it disappears from the model and UI.
+    // Empty fields must preserve boundaries, while non-empty fields flatten as required for mentions.
     const segs = [
       { type: 'text' as const, value: '，命名为 ' },
       { type: 'field' as const, id: 'sched-name', placeholder: '任务名称', value: '' },

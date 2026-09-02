@@ -1,19 +1,20 @@
 /**
- * merge-mac-manifests —— 把每个架构各自的 latest-mac.yml 合成一份多架构 feed。
+ * merge-mac-manifests combines each architecture's latest-mac.yml into one multi-architecture feed.
  *
- * 这里验的是「合错了会让某个架构永远更新不了」的那几种形状:
- *  - 两个架构都在 files 里(Intel 平权的核心断言);
- *  - 版本不一致时必须失败,而不是挑一个;
- *  - 结果里必须有 arm64,否则主流平台反而没得更新;
- *  - 遗留的 path/sha512 指向 arm64(老客户端只认这两个字段)。
+ * These tests cover malformed merges that would permanently prevent one architecture
+ * from updating:
+ *  - both architectures must be present in files (the key Intel parity assertion);
+ *  - mismatched versions must fail instead of choosing one;
+ *  - arm64 must be present because it is the primary platform;
+ *  - legacy path/sha512 fields must point to arm64 because older clients read only them.
  *
- * 客户端侧的选择逻辑不在这里测——那是 electron-updater 的实现
- * (MacUpdater.js 按 url 是否含 `arm64` 分流),本测试只保证喂给它的清单形状对。
+ * Client-side selection is an electron-updater concern (MacUpdater.js branches on
+ * whether the URL contains `arm64`). This test only guarantees a valid input manifest.
  */
 import { describe, expect, it } from 'bun:test'
 import { isArm64Entry, mergeMacManifests, type MacManifest } from '../merge-mac-manifests'
 
-/** 取自真机产出的 0.1.9 清单,只是把 sha512 截短。 */
+/** Based on a real 0.1.9 manifest, with sha512 values shortened. */
 const ARM64: MacManifest = {
   version: '0.1.9',
   files: [{ url: 'Bridgic-Agent-0.1.9-arm64.zip', sha512: 'AAAAarm64==', size: 232493718 }],
@@ -32,7 +33,7 @@ const X64: MacManifest = {
 
 describe('isArm64Entry', () => {
   it('mirrors the client-side substring test', () => {
-    // MacUpdater 就是这么判的:看 url 里有没有 `arm64`。
+    // MacUpdater uses this exact check: whether the URL contains `arm64`.
     expect(isArm64Entry(ARM64.files[0]!)).toBe(true)
     expect(isArm64Entry(X64.files[0]!)).toBe(false)
   })
@@ -44,7 +45,7 @@ describe('mergeMacManifests', () => {
 
     expect(merged.files).toHaveLength(2)
     expect(merged.files.filter(isArm64Entry)).toHaveLength(1)
-    // Intel 端靠「滤掉 arm64 之后还剩东西」才能更新——这条为空就是静默失败。
+    // Intel can update only when something remains after arm64 entries are filtered out.
     expect(merged.files.filter((f) => !isArm64Entry(f))).toHaveLength(1)
   })
 
@@ -55,15 +56,15 @@ describe('mergeMacManifests', () => {
   })
 
   it('points legacy path/sha512 at arm64 even when x64 comes first', () => {
-    // 老客户端不认 files,只读这两个字段(Provider.js::getFileList 的兜底)。
+    // Older clients ignore files and read only these fallback fields in Provider.js::getFileList.
     const merged = mergeMacManifests([X64, ARM64])
     expect(merged.path).toBe('Bridgic-Agent-0.1.9-arm64.zip')
     expect(merged.sha512).toBe('AAAAarm64==')
   })
 
   it('refuses to merge builds of different versions', () => {
-    // 版本不一致意味着两个 job build 的不是同一个 commit;挑一个会让一半用户
-    // 拿到 manifest 与后端对不上的包,那正是会卡死在版本门禁页的组合。
+    // Mismatched versions mean the two jobs did not build the same commit. Choosing one
+    // gives half the users a package whose manifest disagrees with the backend and traps them at the version gate.
     expect(() => mergeMacManifests([ARM64, { ...X64, version: '0.2.0' }])).toThrow(/version mismatch/)
   })
 

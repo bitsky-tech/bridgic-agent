@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/cn'
 import { Icons } from './Icons'
 import type { AgentMessageToolCall } from '@/atoms/agent'
+import { ImageGenerationCard } from './ImageGenerationCard'
 
 export interface MessageToolCallProps {
   call: AgentMessageToolCall
@@ -25,7 +26,7 @@ function stringify(value: unknown): string {
   }
 }
 
-export function MessageToolCall({ call }: MessageToolCallProps) {
+function GenericMessageToolCall({ call }: MessageToolCallProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const { name, input, result } = call
@@ -67,6 +68,11 @@ export function MessageToolCall({ call }: MessageToolCallProps) {
       )}
     </div>
   )
+}
+
+export function MessageToolCall({ call }: MessageToolCallProps) {
+  if (call.name === 'generate_image') return <ImageGenerationCard call={call} />
+  return <GenericMessageToolCall call={call} />
 }
 
 function ToolSection({ label, body, error }: { label: string; body: string; error?: boolean }) {

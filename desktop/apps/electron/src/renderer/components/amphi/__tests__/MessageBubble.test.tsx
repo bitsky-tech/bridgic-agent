@@ -386,6 +386,15 @@ describe('Pipeline', () => {
     expect(toolActivity?.textContent).not.toContain('正在读取')
     expect(toolActivity?.textContent).not.toContain('notes.md')
 
+    await renderStreaming({
+      messageId: 'message', content: '',
+      toolCalls: [{ toolUseId: 'image-1', name: 'generate_image', input: { prompt: '水墨山水' } }],
+      blocks: [{ type: 'tool', toolUseId: 'image-1', name: 'generate_image', input: { prompt: '水墨山水' } }],
+      startedAt,
+    })
+    expect(host.querySelector('[aria-label="正在生成图片"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label="正在调用工具"]')).toBeNull()
+
     await act(async () => root.unmount())
     host.remove()
   })

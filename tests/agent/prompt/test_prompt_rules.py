@@ -86,6 +86,7 @@ def test_core_rules() -> None:
     for persona in personas.values():
         assert persona.count("# Context") == 1
         assert persona.count(guidance) == 1
+        assert "after `generate_image` succeeds" in persona
         assert persona.index("# Context") < persona.index(guidance)
 
     # Check 5: Every rendered Persona resolves its internal tool and delegation placeholders.

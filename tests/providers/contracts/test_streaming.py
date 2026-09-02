@@ -417,3 +417,44 @@ async def test_codex_stream_turn_refreshes_401_and_reduces_sse() -> None:
     assert result.usage == {"input_tokens": 3, "output_tokens": 2}
     assert result.capture == {"reasoning_items": [{"type": "reasoning", "id": "reason-1", "encrypted_content": "opaque"}]}
     assert events == [("reasoning", {"text": "plan"}), ("token", {"text": "done"})]
+
+
+async def test_codex_generate_image_uses_hosted_responses_tool() -> None:
+    encoded = "aW1hZ2UtYnl0ZXM="
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["model"] == "gpt-5.6-sol"
+        assert body["tools"] == [{"type": "image_generation", "action": "generate"}]
+        assert body["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "draw a bridge"}],
+            }
+        ]
+        events = [
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "image_generation_call", "result": encoded},
+            },
+            {"type": "response.completed", "response": {"output": []}},
+        ]
+        payload = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(200, text=payload, headers={"content-type": "text/event-stream"})
+
+    transport = httpx.MockTransport(handler)
+    llm = CodexResponsesLlm(
+        access_token="access-token",
+        account_id="account-id",
+        configuration=CodexConfiguration(model="gpt-5.6-sol"),
+        transport=transport,
+        async_transport=transport,
+    )
+    try:
+        result = await llm.agenerate_image("draw a bridge")
+    finally:
+        llm.client.close()
+        await llm.async_client.aclose()
+
+    assert result == encoded

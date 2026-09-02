@@ -1,5 +1,5 @@
 /**
- * Tests for lib/scheduleTemplate.ts — 豆包式模板段构造(描述/名称 field + 频率 widget)。
+ * Tests for lib/scheduleTemplate.ts — Doubao-style template segments (description/name fields and frequency widget).
  */
 import { describe, it, expect } from 'bun:test'
 import { buildScheduleTemplateSegments, ScheduleTemplateMode } from '../scheduleTemplate'
@@ -70,8 +70,8 @@ describe('buildScheduleTemplateSegments', () => {
 })
 
 describe('从工作流发起时的标点', () => {
-  // runWorkflow 的意图文本后面紧跟 nameLead(「，命名为: 」)。两边各自带一个逗号
-  // 就会拼出「运行工作流「X」，，命名为: 」—— 用户点调度按钮第一眼就看到双逗号。
+  // The runWorkflow intent is immediately followed by nameLead (", named: "). If both sides
+  // include a comma, the composed text contains a visible double comma as soon as scheduling opens.
   const flatten = async (lng: string) => {
     await i18n.changeLanguage(lng)
     const { segments } = buildScheduleTemplateSegments({
@@ -103,9 +103,9 @@ describe('从工作流发起时的标点', () => {
 })
 
 describe('频率 widget 的 flat 值', () => {
-  // flat 是**上 wire 的那份**(segmentsToBlocks 原样发出),而 widget 自己渲染时走 t()。
-  // 写死中文会造成「屏幕英文、发出去中文」:英文用户看到 Daily at 09:00,daemon 收到
-  // 「每天 09:00」。且只在用户不碰频率控件时暴露 —— 一旦改动,onChange 会用 t() 重写 flat。
+  // flat is the value sent **on the wire** unchanged by segmentsToBlocks, while the widget
+  // renders through t(). Hard-coded Chinese would show English on screen but send Chinese to
+  // the daemon. This appears only before the user edits frequency, because onChange rewrites flat through t().
   it('跟随界面语言,而不是写死中文', async () => {
     await i18n.changeLanguage('en')
     try {

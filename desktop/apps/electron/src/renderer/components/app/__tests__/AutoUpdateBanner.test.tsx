@@ -1,13 +1,12 @@
 /**
- * AutoUpdateBanner —— 更新事件到界面状态的映射，以及「安装只能由用户触发」这条约束。
+ * AutoUpdateBanner maps update events to UI state and allows installation only after user action.
  *
- * `nextView` 是纯函数，单独测；组件部分验的是 review 里最容易被放过的几件事：
- *  - 只有「已下载」会打断用户，后台的下载进度与失败一律静默；
- *  - 挂载后**不主动**调 `update.installNow`（自动安装会在退出时硬杀 daemon）；
- *  - 点击才调用，且只调一次；
- *  - **Agent 在跑时点击不会直接安装**，而是先要二次确认；
- *  - 被拒绝（如 daemon 停不掉）时留在界面上解释，而不是静默消失 ——
- *    静默消失会让用户以为更新装上了。
+ * Test pure `nextView` separately. Component coverage focuses on review-prone behavior:
+ *  - only Downloaded interrupts users; background progress and failures remain silent;
+ *  - mounting does **not** call `update.installNow`, because automatic installation can force-kill the daemon on exit;
+ *  - a click calls it exactly once;
+ *  - clicking while an agent runs requests confirmation before installing;
+ *  - a refusal, such as failure to stop the daemon, remains visible instead of implying success.
  */
 import { afterAll, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -105,12 +104,12 @@ describe('nextView', () => {
   })
 
   it('stays silent while downloading', () => {
-    // 用户没要求下载，进度条只是噪音；卡片只在真的需要一个决定时才出现。
+    // The user did not request the download, so progress is noise; show the card only when a decision is needed.
     expect(nextView(null, { type: 'progress', percent: 42.7, bytesPerSecond: 1 })).toBeNull()
   })
 
   it('stays silent on a background failure', () => {
-    // 后台检查/下载失败不是用户能处理的事，弹出来只会造成无从下手的打扰。
+    // Users cannot act on background check or download failures, so surfacing them only creates unactionable noise.
     expect(nextView(null, { type: 'error', message: 'boom' })).toBeNull()
   })
 
@@ -146,7 +145,7 @@ describe('AutoUpdateBanner', () => {
     await emit({ type: 'downloaded', info: { version: '2.1.0' } })
 
     expect(host.querySelector('[data-testid="auto-update-install"]')).not.toBeNull()
-    // 关键约束：安装会先停 daemon 再退出安装；自动触发等于替用户做了决定。
+    // Installation stops the daemon before exiting, so automatic triggering would make the decision for the user.
     expect(installNow).not.toHaveBeenCalled()
 
     await cleanup()
@@ -173,8 +172,8 @@ describe('AutoUpdateBanner', () => {
       host.querySelector<HTMLElement>('[data-testid="auto-update-install"]')?.click()
     })
 
-    // 点了「重启更新」也不能直接装 —— 停 daemon 只给 8 秒优雅期，之后强杀，
-    // 正在跑的任务会被腰斩。
+    // Restart to Update must not install immediately. Daemon shutdown has only an eight-second grace
+    // period before force kill, which would interrupt running work.
     expect(installNow).not.toHaveBeenCalled()
     expect(host.querySelector('[data-testid="auto-update-when-idle"]')).not.toBeNull()
 
@@ -209,7 +208,7 @@ describe('AutoUpdateBanner', () => {
       host.querySelector<HTMLElement>('[data-testid="auto-update-when-idle"]')?.click()
     })
 
-    // 挂起态：卡片还在解释会发生什么，但一个字节都还没装。
+    // Pending state: the card still explains what will happen, but installation has not started.
     expect(installNow).not.toHaveBeenCalled()
     expect(host.textContent).not.toBe('')
 
@@ -225,7 +224,7 @@ describe('AutoUpdateBanner', () => {
       host.querySelector<HTMLElement>('[data-testid="auto-update-install"]')?.click()
     })
 
-    // 被拒绝后不能什么都不显示 —— 那会被读成「装好了」。
+    // A refusal cannot disappear silently because users would read that as successful installation.
     expect(host.textContent).not.toBe('')
     expect(host.querySelector('[data-testid="auto-update-install"]')).toBeNull()
 
@@ -233,8 +232,8 @@ describe('AutoUpdateBanner', () => {
   })
 
   it('stays retryable after a refusal', async () => {
-    // 拒绝是可恢复的（去设置里停掉网关再来）。早先的实现只在 catch 分支复位
-    // installing，于是拒绝一次之后按钮永久变成空操作 —— 而界面看不出区别。
+    // Refusal is recoverable by stopping the gateway in Settings. The old implementation reset
+    // installing only in catch, making the button a permanent no-op after one refusal with no visual clue.
     installNow.mockImplementation(async () => ({ ok: false, reason: 'daemon-busy' }))
     const { host, emit, cleanup } = await mountBanner()
     await emit({ type: 'downloaded', info: { version: '2.1.0' } })
@@ -258,7 +257,7 @@ describe('AutoUpdateBanner', () => {
 
     await act(async () => {
       const button = host.querySelector<HTMLElement>('[data-testid="auto-update-install"]')
-      // 同一批次里的两次点击读到的是同一个 stale state，只有 ref 守卫拦得住。
+      // Two same-batch clicks read the same stale state; only a ref guard can block the duplicate.
       button?.click()
       button?.click()
     })

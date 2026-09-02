@@ -3,7 +3,7 @@
  *
  * Pure-logic only (no DOM). Covers the importable sources (GitHub URL forms +
  * skills.sh pages), the display-only clawhub, and the null / unknown edges that
- * gate the wizard's 「已识别为 X」hint, 导入 button, and Review source badge.
+ * gate the wizard's "Recognized as X" hint, Import button, and Review source badge.
  */
 import { describe, it, expect } from 'bun:test'
 

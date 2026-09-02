@@ -6,6 +6,7 @@ from bridgic.llms.openai import OpenAIConfiguration
 from google.genai import types
 
 from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+from src.amphi_service.protocol.llms._image_inputs import IMAGE_INPUTS_EXTRA, inspect_image_input
 from src.amphi_service.protocol.llms._openai_params import sanitize_openai_params, unsupported_param_of
 from src.amphi_service.protocol.llms._streaming import convert_tools
 from src.amphi_service.protocol.llms.anthropic_llm import AnthropicConfiguration, AnthropicLlm
@@ -62,6 +63,95 @@ async def test_openai_wire_omits_the_volatile_cache_marker() -> None:
     assert wire[-1]["content"].startswith("<runtime_state>")
     assert VOLATILE_TAIL_EXTRA not in wire[-1]
     assert messages[-1].extras == {VOLATILE_TAIL_EXTRA: True}
+
+
+async def test_image_inputs_use_each_provider_native_wire_shape(tmp_path) -> None:
+    """One local image becomes native multimodal content without leaking its path metadata."""
+    image_path = tmp_path / "pixel.png"
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"test-image-payload"
+    image_path.write_bytes(image_bytes)
+    image = inspect_image_input(str(image_path), "pixel.png")
+    assert image is not None
+    message = Message.from_text(
+        "What is shown?",
+        role=Role.USER,
+        extras={IMAGE_INPUTS_EXTRA: [image]},
+    )
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+
+    openai = OpenAICompatLlm(
+        api_key="test-key",
+        api_base="https://relay.example.test/v1",
+        configuration=OpenAIConfiguration(model="gpt-4o"),
+    )
+    anthropic = AnthropicLlm(
+        api_key="test-key",
+        configuration=AnthropicConfiguration(model="claude-test"),
+    )
+    google = GoogleLlm(
+        api_key="test-key",
+        configuration=GoogleConfiguration(model="gemini-test"),
+    )
+    codex = CodexResponsesLlm(
+        access_token="access-token",
+        account_id="account-id",
+        configuration=CodexConfiguration(model="gpt-codex"),
+    )
+    try:
+        openai_wire = openai._build_parameters(messages=[message])["messages"][0]
+        assert openai_wire["content"] == [
+            {"type": "text", "text": "What is shown?"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{encoded}",
+                    "detail": "auto",
+                },
+            },
+        ]
+        assert IMAGE_INPUTS_EXTRA not in openai_wire
+
+        _, anthropic_wire = anthropic._extract_system_and_messages([message])
+        assert anthropic_wire[0]["content"] == [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": encoded,
+                },
+            },
+            {"type": "text", "text": "What is shown?"},
+        ]
+
+        _, google_wire = google._messages_to_contents([message])
+        assert google_wire[0]["parts"] == [
+            {"inline_data": {"mime_type": "image/png", "data": image_bytes}},
+            {"text": "What is shown?"},
+        ]
+        types.Content.model_validate(google_wire[0])
+
+        codex_wire = codex._build_parameters([message])["input"][0]
+        assert codex_wire == {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is shown?"},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{encoded}",
+                },
+            ],
+        }
+    finally:
+        openai.client.close()
+        await openai.async_client.close()
+        anthropic.client.close()
+        await anthropic.async_client.close()
+        google.client.close()
+        await google.async_client.aclose()
+        codex.client.close()
+        await codex.async_client.aclose()
 
 
 async def test_anthropic_wire_contract_preserves_tools_and_role_order() -> None:

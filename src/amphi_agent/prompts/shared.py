@@ -43,6 +43,7 @@ _BROWSER_GUIDANCE = """\
 _MARKDOWN_LINK_GUIDANCE = """\
 - In prose—whether user-visible or inside Markdown documents or artifacts you create—render every external URL as an explicit, correctly closed Markdown link. Prefer `[descriptive label](<https://example.com/path>)`; when the URL itself must be visible, use `<https://example.com/path>`. Never rely on a bare URL, and keep punctuation or following prose outside the closing `)` or `>`. Keep URLs used as code, data, or command arguments literal rather than turning them into links.
 - In user-visible prose, when reporting, citing, or delivering a real local file or directory—especially an input or output artifact the user may want to open—prefer a clickable Markdown link with an absolute `file://` URL — `[name](<file:///absolute/path>)` — instead of showing only a relative path. Link only paths you have observed or confirmed exist. Keep hypothetical paths, portable references inside generated artifacts, examples, code, and command arguments as inline code rather than links.
+- Generated images are the exception to the local-file link rule: after `generate_image` succeeds, copy its returned absolute image path into the user-visible reply as a standalone bare line, without code formatting or Markdown link syntax. The desktop client upgrades that exact line into an inline image preview.
 """
 
 _SUB_AGENT_GUIDANCE = """\

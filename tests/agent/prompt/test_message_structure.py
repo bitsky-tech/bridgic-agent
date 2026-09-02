@@ -2,14 +2,16 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role, ToolCallBlock, ToolResultBlock
 
-from src.amphi_agent import AmphiContext, AmphiOTAContext, MainThink, Session
+from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink, Session
 from src.amphi_agent._cognitive import render_input
 from src.amphi_agent._prompt import TURN_FAILED_MESSAGE
 from src.amphi_agent._workspace import Workspace
 from src.amphi_service.i18n import backend_i18n, use_locale
+from src.amphi_service.protocol.llms._image_inputs import IMAGE_INPUTS_EXTRA, ImageInputUnsupportedError
 from src.amphi_store import SessionMountRecord, SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
 
@@ -46,13 +48,17 @@ def _turn(
     )
 
 
-def _context(turns: list[SessionTurnRecord], workspace: Workspace | None = None) -> AmphiContext:
+def _context(turns: list[SessionTurnRecord], workspace: Workspace | None = None, llm_provider: LlmProvider | None = None) -> AmphiContext:
     record = SessionRecord(
         id=SESSION_ID,
         user_id=USER_ID,
         workspace_root="/sessions/session-a",
     )
-    return AmphiContext(session=Session(record, turns), workspace=workspace)
+    return AmphiContext(
+        session=Session(record, turns),
+        workspace=workspace,
+        llm_provider=llm_provider or LlmProvider(),
+    )
 
 
 async def test_message_order() -> None:
@@ -295,6 +301,117 @@ async def test_historical_structured_input(test_sandbox: IsolatedPaths) -> None:
     assert "removed-mount" not in messages[1].content
     assert "<current_time>" not in messages[1].content
     assert messages[2].content == "Historical structured answer"
+
+
+async def test_image_mentions_become_multimodal_current_and_historical_messages(test_sandbox: IsolatedPaths) -> None:
+    """Owned image mentions retain readable path text and add lightweight image metadata."""
+    image_path = test_sandbox.root / "screenshot.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"image-payload")
+    mount = SessionMountRecord(
+        id="mount-image",
+        session_id=SESSION_ID,
+        user_id=USER_ID,
+        name="screenshot.png",
+        abs_path=str(image_path),
+        kind="file",
+    )
+    workspace = Workspace(SESSION_ID, test_sandbox.sessions / SESSION_ID, mounts=[mount])
+    image_blocks = [{
+        "type": "mention",
+        "id": "mount-image",
+        "label": "screenshot.png",
+        "group": "文件/文件夹",
+    }]
+    history = _turn(
+        "turn-image",
+        0,
+        "@screenshot.png",
+        [{"think_result": {"step_content": "Past image answer", "tool_calls": []}}],
+        blocks=image_blocks,
+    )
+    provider = LlmProvider(model_id="gpt-5.6-sol", provider_id="openai-codex")
+    current = UserInput(text="@screenshot.png", blocks=image_blocks)
+
+    messages = await MainThink().assemble_messages(
+        AmphiOTAContext(user_input=current, prompt_time=PROMPT_TIME),
+        _context([history], workspace, provider),
+    )
+
+    historical_image = messages[1].extras[IMAGE_INPUTS_EXTRA][0]
+    current_image = messages[3].extras[IMAGE_INPUTS_EXTRA][0]
+    assert historical_image == current_image == {
+        "path": str(image_path),
+        "media_type": "image/png",
+        "size_bytes": image_path.stat().st_size,
+        "name": "screenshot.png",
+    }
+    assert f"screenshot.png({image_path})" in messages[1].content
+    assert f"screenshot.png({image_path})" in messages[3].content
+    assert "data" not in current_image
+
+
+async def test_known_text_only_model_rejects_current_image_with_actionable_error(test_sandbox: IsolatedPaths) -> None:
+    """Known text-only models fail before a provider request instead of dropping the image."""
+    image_path = test_sandbox.root / "diagram.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"image-payload")
+    mount = SessionMountRecord(
+        id="mount-image",
+        session_id=SESSION_ID,
+        user_id=USER_ID,
+        name="diagram.png",
+        abs_path=str(image_path),
+        kind="file",
+    )
+    workspace = Workspace(SESSION_ID, test_sandbox.sessions / SESSION_ID, mounts=[mount])
+    user_input = UserInput(text="@diagram.png", blocks=[{
+        "type": "mention",
+        "id": "mount-image",
+        "label": "diagram.png",
+        "group": "文件/文件夹",
+    }])
+    provider = LlmProvider(model_id="deepseek-v4-pro", provider_id="deepseek")
+
+    with pytest.raises(ImageInputUnsupportedError, match="deepseek-v4-pro"):
+        await MainThink().assemble_messages(
+            AmphiOTAContext(user_input=user_input, prompt_time=PROMPT_TIME),
+            _context([], workspace, provider),
+        )
+
+
+async def test_unavailable_historical_image_does_not_block_a_new_text_turn(test_sandbox: IsolatedPaths) -> None:
+    """Deleted old attachments degrade to their path text instead of poisoning the Session."""
+    missing_path = test_sandbox.root / "removed.png"
+    mount = SessionMountRecord(
+        id="mount-removed-image",
+        session_id=SESSION_ID,
+        user_id=USER_ID,
+        name="removed.png",
+        abs_path=str(missing_path),
+        kind="file",
+    )
+    workspace = Workspace(SESSION_ID, test_sandbox.sessions / SESSION_ID, mounts=[mount])
+    history = _turn(
+        "turn-removed-image",
+        0,
+        "@removed.png",
+        [{"think_result": {"step_content": "Past answer", "tool_calls": []}}],
+        blocks=[{
+            "type": "mention",
+            "id": "mount-removed-image",
+            "label": "removed.png",
+            "group": "文件/文件夹",
+        }],
+    )
+    provider = LlmProvider(model_id="gpt-5.6-sol", provider_id="openai-codex")
+
+    messages = await MainThink().assemble_messages(
+        AmphiOTAContext(user_input="Continue with text", prompt_time=PROMPT_TIME),
+        _context([history], workspace, provider),
+    )
+
+    assert IMAGE_INPUTS_EXTRA not in messages[1].extras
+    assert f"removed.png({missing_path})" == messages[1].content
+    assert messages[3].content.startswith("Continue with text")
 
 
 def test_intent_language_falls_back_to_the_client_locale() -> None:

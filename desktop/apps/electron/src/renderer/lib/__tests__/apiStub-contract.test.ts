@@ -1,13 +1,13 @@
 /**
- * `apiStub` 必须实现 `ElectronAPI` 的**全部** IPC 方法。
+ * `apiStub` must implement **every** IPC method in `ElectronAPI`.
  *
- * 为什么值得单测:新增 IPC 要同时改 4 个点位(channels → types → preload →
- * apiStub),而 apiStub 是唯一**不会**被 typecheck 抓住漏改的那个 —— 它是
- * `Partial`-ish 的手写对象,少一个方法在编译期无声无息,直到 Playwright(没有
- * preload,只能用 stub)在运行时炸 `undefined is not a function`。
+ * Why this deserves a test: adding IPC requires four coordinated edits (channels -> types ->
+ * preload -> apiStub), and apiStub is the only omission typecheck cannot catch. It is a
+ * hand-written, Partial-like object, so a missing method stays silent until Playwright, which
+ * has no preload and must use the stub, fails at runtime with `undefined is not a function`.
  *
- * 断言的是"stub 覆盖了 preload 暴露的同一组 key",而不是硬编码一份方法名清单
- * —— 后者每加一个方法就要手工同步,和它想防的漏改是同一类问题。
+ * Assert that the stub covers the same keys exposed by preload instead of hard-coding a method
+ * list. A hard-coded list would require manual synchronization and recreate the same omission risk.
  */
 import { describe, it, expect } from 'bun:test'
 
@@ -30,8 +30,8 @@ describe('apiStub IPC contract', () => {
   })
 
   it('stubs every backend channel declared in IPC', async () => {
-    // installApiStub 把 stub 装到 window.api 上(非 Electron 上下文的兜底),
-    // 所以要先造一个空 window 再装。动态 import:模块级读 window。
+    // installApiStub installs the fallback on window.api outside Electron, so create an empty
+    // window first. Use a dynamic import because the module reads window at module scope.
     const fakeWindow: { api?: { backend: Record<string, unknown> } } = {}
     ;(globalThis as { window?: unknown }).window = fakeWindow
     const { installApiStub } = await import('../apiStub')

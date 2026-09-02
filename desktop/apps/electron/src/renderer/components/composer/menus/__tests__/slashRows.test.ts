@@ -1,13 +1,13 @@
 /**
- * buildSlashRows 的行派生测试 —— 分组顺序 · 过滤 · 每组封顶 · 溢出计数落位。
+ * buildSlashRows derivation tests: group order, filtering, per-group caps, and overflow placement.
  *
- * 覆盖重点是「每组封顶 + overflow 盖末行」:SlashMenu 把"还有 N 个"渲染在 overflow
- * 所在行的下方,盖错行 = 提示跑到组顶部,是静默的 UI 回归(编译器看不见)。
+ * The key contract is per-group capping with overflow attached to the last row. SlashMenu renders
+ * "N more" below that row; attaching it elsewhere silently moves the hint to the group top.
  */
 import { describe, expect, it } from 'bun:test'
 import { buildSlashRows, SlashGroup, SlashRowKind, type SlashRowSources } from '../slashRows'
 
-/** 造 n 个技能;name 为 `skill-1..n`,skill_id 唯一。 */
+/** Create n skills named `skill-1..n` with unique skill_id values. */
 function makeSkills(n: number, prefix = 'skill'): SlashRowSources['skills'] {
   return Array.from({ length: n }, (_, i) => ({
     skill_id: i + 1,
@@ -29,7 +29,7 @@ describe('buildSlashRows — 分组与顺序', () => {
         schedules: [{ id: 'sc-1', name: '调度甲', desc: 's' }],
       }),
     )
-    // 同组连续 = 去重后的 group 序列长度等于组数(SlashMenu 靠相邻 group 变化派生标题)。
+    // Contiguous groups mean the deduplicated group sequence equals the group count; SlashMenu derives headings from transitions.
     const groupRuns = rows.map((r) => r.group).filter((g, i, a) => g !== a[i - 1])
     expect(groupRuns).toEqual([
       SlashGroup.Command,
@@ -84,7 +84,7 @@ describe('buildSlashRows — 每组封顶与溢出', () => {
     const last = skillRows[skillRows.length - 1]!
     expect(last.kind !== SlashRowKind.Command && last.overflow).toBe(15)
 
-    // 首行(以及其余非末行)不得带 overflow —— 提示只在组末尾渲染一次。
+    // The first and other non-final rows carry no overflow; render the hint once at the group end.
     const nonLast = skillRows.slice(0, -1)
     expect(nonLast.every((r) => r.kind !== SlashRowKind.Command && r.overflow === undefined)).toBe(true)
   })
@@ -136,7 +136,7 @@ describe('buildSlashRows — 每组封顶与溢出', () => {
 
 describe('buildSlashRows — 过滤', () => {
   it('filter 先收窄再封顶 —— 过滤后不足 10 条则无 overflow', () => {
-    // 25 个 skill-N 里只有 skill-7 命中,过滤后 1 条 → 不该报"还有 24 个"。
+    // If only skill-7 matches among 25 skills, filtering leaves one and must not report 24 more.
     const rows = buildSlashRows(sources({ skills: makeSkills(25), filter: 'skill-7' }))
     const skillRows = rows.filter((r) => r.group === SlashGroup.Skill)
     expect(skillRows).toHaveLength(1)

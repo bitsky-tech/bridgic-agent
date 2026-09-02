@@ -1,6 +1,6 @@
 /**
  * Tests for lib/qaSegments.ts — the pure split/derive logic behind the QA
- * 执行过程界面. Mirrors the bun:test style of turn-translate.test.ts (§4.12).
+ * Process-view behavior. Mirrors the bun:test style of turn-translate.test.ts (§4.12).
  */
 import { describe, it, expect } from 'bun:test'
 import type { MessageBlock } from '@/atoms/agent'
@@ -88,8 +88,9 @@ describe('splitProcessAndAnswer', () => {
   })
 
   it('authoritative empty finalAnswer forces all-process even if trailing is text', () => {
-    // 末尾是 text,启发式会当答案;但后端权威说本轮无最终答案(如 ask 收尾)
-    // → 全归过程,不在容器外重复显示中间正文。
+    // The heuristic treats trailing text as an answer, but the backend says this turn has
+    // no final answer (for example, a closing ask), so keep everything in the process view
+    // and do not duplicate intermediate text outside the container.
     const blocks = [thinking('想'), text('我先问你一个问题')]
     expect(splitProcessAndAnswer(blocks, '')).toEqual({ process: blocks, answer: [] })
     expect(splitProcessAndAnswer(blocks, '   ')).toEqual({ process: blocks, answer: [] })

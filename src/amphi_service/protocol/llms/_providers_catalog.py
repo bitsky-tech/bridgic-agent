@@ -78,10 +78,14 @@ def catalog_model(provider_id: str, model_id: str) -> Optional[dict]:
     modalities = modalities if isinstance(modalities, dict) else {}
     input_modalities = modalities.get("input")
     input_modalities = input_modalities if isinstance(input_modalities, list) else []
+    output_modalities = modalities.get("output")
+    output_modalities = output_modalities if isinstance(output_modalities, list) else []
     name = raw.get("name")
     return {
         "id": model_id,
         "name": name if isinstance(name, str) and name else model_id,
+        "input_modalities": list(input_modalities),
+        "output_modalities": list(output_modalities),
         "vision": "image" in input_modalities,
         "tool_call": raw.get("tool_call") is True,
         "reasoning": raw.get("reasoning") is True,
@@ -90,6 +94,17 @@ def catalog_model(provider_id: str, model_id: str) -> Optional[dict]:
         "source_provider_id": _source_provider_id(provider_id),
         "source_model_id": source_model_id,
     }
+
+
+def supports_image_generation(provider_id: str, model_id: str) -> bool:
+    """Return whether the catalog marks a model as text-to-image capable."""
+    model = catalog_model(provider_id, model_id)
+    if model is None:
+        return False
+    return (
+        "text" in model["input_modalities"]
+        and "image" in model["output_modalities"]
+    )
 
 
 def catalog_model_limits(provider_id: str, model_id: str) -> Optional[dict]:
@@ -188,5 +203,6 @@ __all__ = [
     "catalog_model",
     "catalog_model_limits",
     "resolve_model_limits",
+    "supports_image_generation",
     "visible_catalog",
 ]

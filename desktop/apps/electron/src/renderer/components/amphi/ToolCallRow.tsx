@@ -18,6 +18,7 @@ import { ToolExpand } from './ToolViews'
 import { classifyTool, toolLabel, toolMeta, type ToolKind, type ToolLabel } from '@/lib/toolDisplay'
 import { isBrowserAgentActionToolName, type AgentMessageToolCall } from '@/atoms/agent'
 import { SubagentGroup } from './SubagentGroup'
+import { ImageGenerationCard } from './ImageGenerationCard'
 
 export interface ToolCallRowProps {
   call: AgentMessageToolCall
@@ -74,7 +75,7 @@ function hasLongSubject(kind: ToolKind): boolean {
   return kind === 'bash' || kind === 'grep' || kind === 'glob' || kind === 'web_search' || kind === 'generic'
 }
 
-export function ToolCallRow({ call }: ToolCallRowProps) {
+function GenericToolCallRow({ call }: ToolCallRowProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   // lazy-mount: the expanded content is mounted (and kept) only after the first expansion — this both animates the
@@ -162,4 +163,9 @@ export function ToolCallRow({ call }: ToolCallRowProps) {
       </Collapse>
     </div>
   )
+}
+
+export function ToolCallRow({ call }: ToolCallRowProps) {
+  if (call.name === 'generate_image') return <ImageGenerationCard call={call} />
+  return <GenericToolCallRow call={call} />
 }

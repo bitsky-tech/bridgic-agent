@@ -1,5 +1,5 @@
 /**
- * Tests for `fetchProviderModelsAtom` (atoms/models.ts) — the 「从供应商获取」
+ * Tests for `fetchProviderModelsAtom` (atoms/models.ts) — the "Fetch from provider"
  * data path, against a mocked daemon.
  *
  * Mirrors the skills.test harness: a fresh `createStore`, a seeded
@@ -79,7 +79,7 @@ describe('fetchProviderModelsAtom', () => {
 
   it('posts to /me/providers/fetch-models WITHOUT a model field', async () => {
     // The endpoint's `extra='forbid'` schema 422s on a stray `model`, and
-    // needing no model is what breaks the 测试连接 chicken-and-egg.
+    // Requiring no model breaks the Test Connection chicken-and-egg problem.
     const store = createStore()
     const spy = mock(async () => jsonResponse({ ok: true, models: [{ id: 'a', name: 'a' }] }))
     withDaemon(store, spy as never)
@@ -130,8 +130,8 @@ describe('fetchProviderModelsAtom', () => {
 
 describe('fetchProviderModelsAtom — 订阅(Codex)渠道', () => {
   it('posts protocol=openai-codex with an empty api_key', async () => {
-    // 订阅渠道没有 key 可填。后端见到这个 protocol 就直接回静态目录,
-    // 所以空 api_key 必须能原样送达 —— 前端不得因为"key 为空"就拦下。
+    // Subscription channels have no key to enter. The backend returns a static catalog for
+    // this protocol, so an empty api_key must pass through unchanged instead of being blocked.
     const store = createStore()
     const spy = mock(async () =>
       jsonResponse({ ok: true, models: [{ id: 'gpt-5.5', name: 'GPT-5.5' }] }),

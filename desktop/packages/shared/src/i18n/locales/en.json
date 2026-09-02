@@ -1522,6 +1522,19 @@
       "saved": "Saved"
     },
     "defaultTitle": "New conversation",
+    "imageGeneration": {
+      "details": "Image generation details",
+      "prompt": "Prompt",
+      "promptUnavailable": "No prompt provided",
+      "reveal": "Reveal in files",
+      "status": {
+        "completed": "Completed",
+        "failed": "Failed",
+        "running": "Generating"
+      },
+      "title": "Image generation",
+      "working": "Composing your image…"
+    },
     "interaction": {
       "card": {
         "acceptRuleDeferredTitle": "Completion criteria will be aligned later",
@@ -1587,6 +1600,7 @@
         "callingTool": "Calling a tool",
         "compactingContext": "Compacting context",
         "generating": "Generating response",
+        "generatingImage": "Generating image",
         "runningWorkflow": "Running workflow",
         "thinking": "Thinking",
         "usingBrowser": "Using Browser",

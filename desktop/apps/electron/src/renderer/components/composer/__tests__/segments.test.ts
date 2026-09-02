@@ -299,8 +299,8 @@ describe('getReachableCaretEnd — 历史 ↓ 翻页的"光标已到尾部"判�
   })
 
   it('以 chip 结尾（无后续文本锚点）时停在最后一段非空 text 的末尾', () => {
-    // 真实场景:消息以 @image.png 收尾且分隔空格被删——contenteditable=false
-    // 的 span 后没有文本节点,浏览器放不下光标,展平总长永远达不到。
+    // Real case: a message ends with @image.png after the separator space is deleted. With no
+    // text node after the contenteditable=false span, the browser cannot place a caret at the full flat length.
     const segments: Segment[] = [{ type: 'text', value: '看这个 ' }, mention]
     expect(getReachableCaretEnd(segments)).toBe('看这个 '.length)
   })

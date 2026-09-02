@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException, Response, status
@@ -569,9 +570,7 @@ def _models_endpoint(protocol: str, base_url: Optional[str]) -> str:
     return f"{base}/models"
 
 
-def _models_request(
-    protocol: str, api_key: str, base_url: Optional[str]
-) -> tuple[str, Dict[str, str], Dict[str, str]]:
+def _models_request(protocol: str, api_key: str, base_url: Optional[str]) -> tuple[str, Dict[str, str], Dict[str, str]]:
     """Build ``(url, headers, params)`` for the provider's list-models call."""
     url = _models_endpoint(protocol, base_url)
     if protocol == "anthropic":
@@ -585,6 +584,11 @@ def _models_request(
     if protocol == "google":
         # Gemini takes the key as a query param, not a header.
         return url, {}, {"key": api_key}
+    if (urlsplit(url).hostname or "").lower() == "openrouter.ai":
+        # OpenRouter's general models endpoint defaults to text-output models.
+        # Request every modality so image-generation models are available in
+        # the same settings picker as chat models.
+        return url, {"authorization": f"Bearer {api_key}"}, {"output_modalities": "all"}
     return url, {"authorization": f"Bearer {api_key}"}, {}
 
 

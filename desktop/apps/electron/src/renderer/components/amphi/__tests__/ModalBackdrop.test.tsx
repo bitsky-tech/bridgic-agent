@@ -1,17 +1,16 @@
 /**
- * ModalBackdrop 的五条不变式 —— 全都是「看起来没问题、坏了也很难一眼看出」的那种。
+ * Five ModalBackdrop invariants whose failures are visually subtle and easy to miss.
  *
- * 背景:遮罩逻辑此前散在 Modal / SettingsModal / RunLogDrawer 三处各写一遍,修
- * Windows caption 遮挡时漏掉了 SettingsModal(它用 `absolute` 而非 `fixed`,搜索
- * 都没命中),用户实测才发现。收敛成一个组件后,这里把不变式钉死,免得下次又靠
- * 肉眼发现。
+ * Background: backdrop logic was duplicated across Modal, SettingsModal, and RunLogDrawer.
+ * A Windows caption fix missed SettingsModal because it used `absolute` rather than `fixed`,
+ * and users discovered it in practice. After consolidation, these tests lock down behavior.
  *
- * 特别是「点击遮罩空白处关闭」:它依赖背景层的 `pointer-events-none` —— 少了这个
- * 类,点击目标会变成背景层本身,`e.target === e.currentTarget` 判定失效,弹窗就
- * 关不掉了。纯视觉检查看不出这种差别(遮罩长得一模一样)。
+ * Closing from an empty backdrop click depends on `pointer-events-none` on the visual layer.
+ * Without it, the visual layer becomes the target, `e.target === e.currentTarget` fails, and
+ * the modal cannot close even though the backdrop looks identical.
  *
- * 第五条(按下与松开必须都落在遮罩上)同理:改回只听 click 的话,日常点击行为一切
- * 正常,只有"从面板里往外拖再松手"才会露馅 —— 而这恰恰是抽屉拖宽度的标准手势。
+ * Likewise, requiring both press and release on the backdrop matters only when dragging from
+ * the panel outward, which is the standard gesture for resizing a drawer. Click-only logic hides the bug.
  */
 import { afterAll, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -28,7 +27,7 @@ const { getDefaultStore } = await import('jotai')
 const { browserSurfaceBlockedAtom } = await import('@/atoms/browser')
 const { ModalBackdrop } = await import('../ModalBackdrop')
 
-/** 挂载到一个**独立**容器,好证明遮罩确实 portal 到了 body 而不是留在原地。 */
+/** Mount in an **independent** container to prove the backdrop portals to body. */
 async function mount(ui: React.ReactElement): Promise<{ host: HTMLDivElement; cleanup: () => Promise<void> }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -51,7 +50,7 @@ const backdropOf = (): HTMLElement => {
 
 const cardOf = (): HTMLElement => document.querySelector('[data-testid="card"]') as HTMLElement
 
-/** 走完一次真实的鼠标手势:按下 → 松开(可以落在不同元素上,模拟拖拽)。 */
+/** Perform a real mouse gesture from press to release, optionally across different elements. */
 async function press(from: HTMLElement, to: HTMLElement = from, button = 0): Promise<void> {
   await act(async () => {
     from.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button }))
@@ -64,8 +63,8 @@ describe('ModalBackdrop', () => {
     const { host, cleanup } = await mount(
       <ModalBackdrop data-testid="bd"><span data-testid="card">x</span></ModalBackdrop>,
     )
-    // 留在原地的话,从 composer 之类的定位祖先里打开就会"看起来没有蒙层"
-    // —— 这正是 SettingsModal 改造前的老毛病。
+    // If left in place, opening under a positioned ancestor such as the composer can make the
+    // backdrop appear absent, the original SettingsModal failure.
     expect(host.querySelector('[data-testid="bd"]')).toBeNull()
     expect(backdropOf().parentElement).toBe(document.body)
     await cleanup()
@@ -102,9 +101,9 @@ describe('ModalBackdrop', () => {
         <span data-testid="card">x</span>
       </ModalBackdrop>,
     )
-    // 抽屉左沿拖宽度、或在弹窗里选中文字拖过头,都是这个手势。原生 `click` 会派发到
-    // 按下/松开两个目标的最近公共祖先 = 遮罩容器本身,只看 click 的话正好误判成
-    // "点了空白处" → 拖个宽度就把抽屉关了。
+    // Resizing from a drawer edge or dragging a text selection beyond a modal uses this gesture.
+    // Native click targets the nearest common ancestor of press and release, the backdrop container,
+    // so click-only logic misclassifies the drag as an empty-backdrop click and closes the drawer.
     await press(cardOf(), backdropOf())
     expect(closed).toBe(0)
     await cleanup()
@@ -129,8 +128,8 @@ describe('ModalBackdrop', () => {
         <span data-testid="card">x</span>
       </ModalBackdrop>,
     )
-    // 只听 click 时右键天然不触发(非主键走 auxclick);换成 mousedown/mouseup 后就必须
-    // 自己滤 —— 否则在暗区右键(想粘贴却点偏)会直接关掉弹层。
+    // Click-only logic naturally ignores the context button via auxclick. With mousedown/mouseup,
+    // filter it explicitly or a misplaced context click on the backdrop closes the modal.
     await press(backdropOf(), backdropOf(), 2)
     await press(backdropOf(), backdropOf(), 1)
     expect(closed).toBe(0)
@@ -146,8 +145,8 @@ describe('ModalBackdrop', () => {
         <span data-testid="card">x</span>
       </ModalBackdrop>,
     )
-    // 上一次手势起点在遮罩上但没落成关闭;若不复位标记,下一次从内容里松开到遮罩
-    // 就会被上一次的起点"续命"。
+    // If a gesture started on the backdrop without closing, reset the marker so the next release
+    // from content onto the backdrop cannot inherit the previous start.
     await press(backdropOf(), cardOf())
     await press(cardOf(), backdropOf())
     expect(closed).toBe(0)
@@ -161,11 +160,10 @@ describe('ModalBackdrop', () => {
     const dim = backdropOf().querySelector('div')
     expect(dim).not.toBeNull()
     const cls = dim!.className
-    // pointer-events-none:没有它,上面那条"点内容不关闭"会反过来失效
-    // (点击目标变成本层,与 currentTarget 不等 → 反而永远关不掉)。
+    // pointer-events-none keeps the visual layer from becoming the target and breaking empty-click detection.
     expect(cls).toContain('pointer-events-none')
-    // -z-10:落到内容之下。用负 z 而不是给内容加 relative —— 那会改变内容内部
-    // absolute 子元素的定位基准。
+    // -z-10 places it below content. A negative z avoids adding relative to content, which would
+    // change the containing block for absolute descendants.
     expect(cls).toContain('-z-10')
     await cleanup()
   })
@@ -174,11 +172,11 @@ describe('ModalBackdrop', () => {
     const { cleanup } = await mount(
       <ModalBackdrop data-testid="bd"><span>x</span></ModalBackdrop>,
     )
-    // caption 三按钮由系统合成在 WebContents 之上,z-index 盖不住。让位必须做在
-    // **容器**上:只压暗色层的话,贴顶的内容(抽屉 `h-full`)照样把自己的按钮送到
-    // 系统三按钮底下 —— RunLogDrawer 就这么漏了一轮。非 win32 该变量恒为 0。
+    // The system composites caption buttons above WebContents, beyond z-index. Reserve space on
+    // the **container**, not only the dim layer, or full-height content can still place controls
+    // underneath the caption buttons. The variable is always zero outside win32.
     expect(backdropOf().className).toContain('top-[var(--titlebar-win-inset-top)]')
-    // 容器已让位,暗色层铺满容器即可;它若还带自己的 top 偏移就是让位做了两遍。
+    // Once the container reserves space, the dim layer should fill it without a second top offset.
     expect(backdropOf().querySelector('div')!.className).toContain('inset-0')
     await cleanup()
   })

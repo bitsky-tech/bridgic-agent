@@ -12,6 +12,13 @@
  *  - Grouping uses the named `group/filelink`: a paragraph may contain several file links, and an anonymous group would make
  *    hovering any one of them light up the icons of every link.
  *  - Opening still goes through `requestFileOpenAtom` (confirmation dialog + remembering + failure toast); no separate path is started here.
+ *  - The anchor carries `break-all`, and it is load-bearing, not cosmetic. The wrapper is an
+ *    `inline-flex` container, so the anchor is a flex item whose `min-width: auto` resolves to its
+ *    min-content width. An ancestor's `overflow-wrap: break-word` does not reduce that intrinsic
+ *    size (only `word-break: break-all` / `overflow-wrap: anywhere` do), so without this a long
+ *    path cannot shrink and pushes a horizontal scrollbar onto the whole message list. Markdown
+ *    bodies happen to be covered by `MarkdownMessage`'s own `[&_a]:break-all`; every other caller
+ *    depends on this one.
  */
 import { useSetAtom } from 'jotai'
 import type { ReactNode } from 'react'
@@ -54,10 +61,11 @@ export function FileLink({ target, children }: FileLinkProps) {
   }
 
   return (
-    <span className="group/filelink inline-flex items-baseline gap-1">
+    <span className="group/filelink inline-flex max-w-full items-baseline gap-1">
       <Tooltip content={target.path}>
         <a
           href={target.path}
+          className="break-all"
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()

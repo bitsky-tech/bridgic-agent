@@ -17,6 +17,7 @@ from ._providers_catalog import (
     catalog_model,
     catalog_model_limits,
     resolve_model_limits,
+    supports_image_generation,
     visible_catalog,
 )
 
@@ -28,5 +29,6 @@ __all__ = [
     "catalog_model",
     "catalog_model_limits",
     "resolve_model_limits",
+    "supports_image_generation",
     "visible_catalog",
 ]

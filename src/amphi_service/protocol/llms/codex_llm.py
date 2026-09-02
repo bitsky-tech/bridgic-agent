@@ -35,6 +35,7 @@ from ...i18n import backend_i18n
 from pydantic import BaseModel, Field
 
 from ._codex_credentials import CodexAuthError, CodexCreds
+from ._image_inputs import image_data_url, image_inputs_of
 from ._streaming import (
     StreamResult,
     convert_tools,
@@ -408,6 +409,19 @@ class CodexResponsesLlm(BaseLlm):
                 # a 400 "message ... without its required 'reasoning' item".
                 for ri in (msg.extras or {}).get("reasoning_items") or []:
                     items.append(ri)
+            images = image_inputs_of(msg)
+            if msg.role == Role.USER and images:
+                content = [
+                    {"type": "input_text", "text": block.text}
+                    for block in msg.blocks
+                    if isinstance(block, TextBlock) and block.text
+                ]
+                content.extend({
+                    "type": "input_image",
+                    "image_url": image_data_url(image),
+                } for image in images)
+                items.append({"type": "message", "role": "user", "content": content})
+                continue
             for block in msg.blocks:
                 item = _block_to_input_item(block, msg.role)
                 if item is not None:
@@ -474,6 +488,56 @@ class CodexResponsesLlm(BaseLlm):
 
     async def astream(self, messages: List[Message], **kwargs: Any) -> str:  # noqa: D401
         return await self.achat(messages, **kwargs)
+
+    async def agenerate_image(self, prompt: str) -> str:
+        """Generate one image through the Responses hosted image tool.
+
+        The Codex subscription endpoint is stream-only, so consume the full SSE
+        response and return the final base64 payload from its
+        ``image_generation_call`` output item.
+        """
+        body = self._build_parameters(
+            [Message.from_text(prompt, role=Role.USER)],
+            tools=[{"type": "image_generation", "action": "generate"}],
+        )
+
+        async def consume(response: httpx.Response) -> str:
+            image_result = ""
+            failure = ""
+
+            def capture_item(item: Any) -> None:
+                nonlocal image_result
+                if not isinstance(item, dict) or item.get("type") != "image_generation_call":
+                    return
+                result = item.get("result")
+                if isinstance(result, str) and result:
+                    image_result = result
+
+            async for line in response.aiter_lines():
+                event = parse_sse_event(line)
+                if event is None:
+                    continue
+                etype = event.get("type")
+                if etype == "response.output_item.done":
+                    capture_item(event.get("item"))
+                elif etype == "response.completed":
+                    output = (event.get("response") or {}).get("output")
+                    if isinstance(output, list):
+                        for item in output:
+                            capture_item(item)
+                elif etype in {"response.failed", "error"}:
+                    error = event.get("error") or (event.get("response") or {}).get("error")
+                    if isinstance(error, dict):
+                        failure = str(error.get("message") or error.get("code") or "")
+                    elif error:
+                        failure = str(error)
+
+            if not image_result:
+                suffix = f": {failure[:500]}" if failure else ""
+                raise RuntimeError(f"Codex returned no generated image{suffix}")
+            return image_result
+
+        return await self._astream_responses(body, consume)
 
     # ------------------------------------------------------------------
     # Agent streaming turn — full SSE loop with tool calls + usage

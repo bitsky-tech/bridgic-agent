@@ -52,7 +52,7 @@ describe('FileLink', () => {
   })
 
   it('copies the absolute path, not the visible link text', async () => {
-    // 用户是要把文件发给别人 —— 复制出来的必须是磁盘路径,不是"报告"这两个字。
+    // Users copy a file to share it, so the copied value must be its disk path rather than the label "Report".
     writeText.mockClear()
     const host = await renderLink()
     const button = host.querySelector<HTMLButtonElement>(
@@ -65,8 +65,8 @@ describe('FileLink', () => {
   })
 
   it('keeps both actions mounted so hover never shifts the surrounding text', async () => {
-    // §LS1:链接内联在段落里,条件渲染会让每次 hover 推着整段文字抖一下。
-    // 图标必须常驻占位,只切 opacity。
+    // §LS1: links are inline with paragraph text, so conditional rendering shifts the whole line on hover.
+    // Keep the icon's space mounted and change only opacity.
     const host = await renderLink()
     const buttons = host.querySelectorAll('button')
     expect(buttons).toHaveLength(2)
@@ -77,7 +77,7 @@ describe('FileLink', () => {
   })
 
   it('scopes the hover group so sibling links do not light each other up', async () => {
-    // 匿名 group 会让同一段落里 hover 任意一个链接,其余链接的图标一起亮。
+    // An unnamed group would reveal every link icon in a paragraph when any one link is hovered.
     const host = await renderLink()
     expect(host.querySelector('.group\\/filelink')).not.toBeNull()
   })
