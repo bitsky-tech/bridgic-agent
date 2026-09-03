@@ -32,7 +32,6 @@ const deletedWorkflowRun: WorkflowRunDetail = {
   source_session_id: 'session-source',
   workflow_input: { text: '/已删除源工作流 生成报告', blocks: [] },
   status: 'completed',
-  validation_status: 'passed',
   created_at: '2026-07-21T15:27:00Z',
   finished_at: '2026-07-21T15:28:00Z',
   run_dir: '/runs/wf-deleted/wfr-deleted-source',
@@ -203,7 +202,6 @@ describe('WorkflowRunDetailModal', () => {
       workflow_id: 'wf-live',
       workflow_name: '可用工作流',
       status: 'failed' as const,
-      validation_status: 'failed' as const,
       files: [],
     }
     const fetchMock = mock(async (input: RequestInfo | URL) => {

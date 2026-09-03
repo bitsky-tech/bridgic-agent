@@ -36,6 +36,15 @@ class AgentException(RuntimeError):
     """Base class for recognized failures produced by the Agent runtime."""
 
 
+class ImageProviderResponseError(AgentException):
+    """Image-provider response failure with metadata for safe classification."""
+
+    def __init__(self, message: str, status_code: int, code: str = "") -> None:
+        self.status_code = status_code
+        self.code = code
+        super().__init__(message)
+
+
 class AgentEmptyAnswerError(AgentException):
     """Raised when recovery attempts still produce no user-visible answer."""
 
@@ -327,5 +336,6 @@ __all__ = [
     "AgentErrorAction",
     "AgentException",
     "ContextWindowExceededError",
+    "ImageProviderResponseError",
     "PublicAgentError",
 ]

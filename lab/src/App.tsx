@@ -613,7 +613,7 @@ function TurnRail({
 function cognitiveModeLabel(mode: CognitiveModeDescriptor, t: (key: TranslationKey, params?: Record<string, string | number>) => string): string {
   if (mode.mode === 'build') return t('thinking.buildMode', { stage: mode.stage })
   if (mode.mode === 'run_workflow') {
-    return t(mode.stage === 'validate' ? 'thinking.workflowValidate' : 'thinking.workflowExecute')
+    return t('thinking.workflowExecute')
   }
   return t(mode.stage === 'child' ? 'thinking.childAgent' : 'thinking.generalAgent')
 }

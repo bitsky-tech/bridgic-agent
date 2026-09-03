@@ -155,8 +155,8 @@ def _classify_tool(
             boundary = _path_boundary(real, ws, mounts, writable, gated)
             sensitive = _is_sensitive(real)
     else:
-        browser_path_arg = reg.BROWSER_LOCAL_FILE_ARGUMENTS.get(tool)
-        raw = str(args.get(browser_path_arg) or "") if browser_path_arg else ""
+        local_path_arg = reg.LOCAL_FILE_ARGUMENTS.get(tool)
+        raw = str(args.get(local_path_arg) or "") if local_path_arg else ""
         if raw:
             real = resolve_real_path(raw, ws)
             boundary = _path_boundary(real, ws, mounts, writable, gated)
@@ -165,7 +165,7 @@ def _classify_tool(
         capability=cap,
         boundary=boundary,
         sensitive=sensitive,
-        touches_risk_surface=_tool_risk_surface(tool, cap),
+        touches_risk_surface=_tool_risk_surface(tool, cap, args),
         label=_label(cap, boundary, sensitive, False),
     )
 
@@ -199,7 +199,7 @@ def _is_readonly_mcp(tool: str) -> bool:
     return not (set(_tool_name_segments(tool)) & reg.MCP_WRITE_VERBS)
 
 
-def _tool_risk_surface(tool: str, cap: Capability) -> bool:
+def _tool_risk_surface(tool: str, cap: Capability, args: Dict[str, str]) -> bool:
     """Whether a network / MCP tool touches the risk surface (the auto iron rule:
     everything else passes by default).
 
@@ -219,7 +219,9 @@ def _tool_risk_surface(tool: str, cap: Capability) -> bool:
     if cap is Capability.MCP:
         return not _is_readonly_mcp(tool)
     if cap is Capability.NETWORK:
-        return _matches_full(_NETWORK_RISK_RE, tool)
+        upload_arg = reg.NETWORK_UPLOAD_FILE_ARGUMENTS.get(tool)
+        uploads_local_file = bool(str(args.get(upload_arg) or "").strip()) if upload_arg else False
+        return _matches_full(_NETWORK_RISK_RE, tool) or uploads_local_file
     # Unregistered tools fall through to EXECUTE (no entry in ``TOOL_CAPABILITY`` maps to EXECUTE,
     # so EXECUTE ⟺ unregistered here) — unknown means review. Otherwise adding a tool and
     # forgetting to register it would silently grant it a full pass under auto, a hole that only

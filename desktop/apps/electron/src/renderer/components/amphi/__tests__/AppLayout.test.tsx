@@ -132,7 +132,6 @@ describe('AppLayout focused right pane', () => {
       phase: 'execute',
       stepIndex: 0,
       executionSteps: ['执行'],
-      validationSteps: [],
     })
     const host = document.createElement('div')
     document.body.appendChild(host)

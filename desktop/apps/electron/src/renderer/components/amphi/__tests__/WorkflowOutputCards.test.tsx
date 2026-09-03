@@ -339,7 +339,6 @@ describe('Workflow output cards', () => {
       source_session_id: 'session-existing',
       workflow_input: { text: '/生成报告', blocks: [] },
       status: 'completed' as const,
-      validation_status: 'passed' as const,
       created_at: '2026-08-03T06:00:00Z',
       finished_at: '2026-08-03T06:01:00Z',
     }
@@ -375,7 +374,6 @@ describe('Workflow output cards', () => {
               ...run,
               id: 'wfr-report-failed',
               status: 'failed',
-              validation_status: 'failed',
             }}
             onPreview={() => { previewCount += 1 }}
           />
@@ -405,7 +403,6 @@ describe('Workflow output cards', () => {
       workflowId: 'wf-report',
       workflowName: '生成报告',
       status: 'completed',
-      validationStatus: 'passed',
       createdAt: '2026-08-03T06:00:00Z',
       resultFileCount: 1,
     }
@@ -423,7 +420,7 @@ describe('Workflow output cards', () => {
     expect(receipt?.className).toContain('max-w-3xl')
     expect(receipt?.className).toContain('py-3')
     expect(host.textContent).toContain('工作流执行完成')
-    expect(host.textContent).toContain('所有执行和验证步骤均已完成')
+    expect(host.textContent).toContain('所有执行步骤均已完成')
     expect(host.textContent).toContain('本次运行已结束，无需继续处理')
     expect(host.textContent).toContain('生成报告')
     expect(host.textContent).toContain('1 个结果文件')
@@ -451,7 +448,7 @@ describe('Workflow output cards', () => {
     await act(async () => root.unmount())
   })
 
-  it('keeps execution-only, empty, legacy, and failed terminal receipts accurate', async () => {
+  it('keeps completed, empty, legacy, and failed terminal receipts accurate', async () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-existing')
     const completed: Extract<MessageBlock, { type: 'workflow_result' }> = {
@@ -460,7 +457,6 @@ describe('Workflow output cards', () => {
       workflowId: 'wf-report',
       workflowName: '生成报告',
       status: 'completed',
-      validationStatus: 'not_required',
       createdAt: '2026-08-03T06:00:00Z',
       resultFileCount: 0,
     }
@@ -493,7 +489,7 @@ describe('Workflow output cards', () => {
       root.render(
         <Provider store={store}>
           <WorkflowResultCard
-            block={{ ...completed, status: 'failed', validationStatus: 'failed' }}
+            block={{ ...completed, status: 'failed' }}
           />
         </Provider>,
       )

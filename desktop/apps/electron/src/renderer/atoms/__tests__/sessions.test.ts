@@ -125,15 +125,42 @@ describe('materializeSessionAtom', () => {
 })
 
 describe('removeSessionAtom', () => {
-  it('cleans up meta / drafts / draftIds / activeId', () => {
+  it('cleans up an active daemon session and lands on an interactive draft', () => {
     const store = makeStore()
-    const id = store.set(newSessionAtom)
+    const draftId = store.set(newSessionAtom)
+    const id = 'session-to-delete'
+    store.set(replaceDraftWithDaemonIdAtom, { draftId, daemonId: id })
     store.set(setSessionDraftAtom, { id, segments: [{ type: 'text', value: 'draft' }] })
+
     store.set(removeSessionAtom, id)
-    expect(store.get(sessionsMetaAtom)).toHaveLength(0)
+
+    expect(store.get(sessionsMetaAtom).map((session) => session.id)).toEqual([draftId])
     expect(store.get(sessionDraftsAtom)[id]).toBeUndefined()
     expect(store.get(draftSessionIdsAtom).has(id)).toBe(false)
-    expect(store.get(activeSessionIdAtom)).toBeNull()
+    expect(store.get(draftSessionIdsAtom).has(draftId)).toBe(true)
+    expect(store.get(activeSessionIdAtom)).toBe(draftId)
+  })
+
+  it('keeps the current selection when deleting another session', () => {
+    const store = makeStore()
+    const firstDraftId = store.set(newSessionAtom)
+    store.set(replaceDraftWithDaemonIdAtom, {
+      draftId: firstDraftId,
+      daemonId: 'selected-session',
+    })
+    const secondDraftId = store.set(newSessionAtom)
+    store.set(replaceDraftWithDaemonIdAtom, {
+      draftId: secondDraftId,
+      daemonId: 'other-session',
+    })
+    store.set(selectSessionAtom, 'selected-session')
+
+    store.set(removeSessionAtom, 'other-session')
+
+    expect(store.get(activeSessionIdAtom)).toBe('selected-session')
+    expect(store.get(sessionsMetaAtom).map((session) => session.id)).toEqual([
+      'selected-session',
+    ])
   })
 })
 
@@ -307,6 +334,30 @@ describe('hydrateSessionsFromDaemonAtom', () => {
     await store.set(hydrateSessionsFromDaemonAtom)
     const ids = store.get(sessionsMetaAtom).map((m) => m.id)
     expect(ids).toEqual(['srv-1'])
+  })
+
+  it('protects persisted titles from replayed generation while untitled rows remain eligible', async () => {
+    const store = makeStore()
+    withDaemon(store, [
+      { id: 'renamed', title: '用户保存的标题', tokens: 0, status: 'running' },
+      { id: 'untitled', title: null, tokens: 0, status: 'running' },
+    ])
+    await store.set(hydrateSessionsFromDaemonAtom)
+
+    store.set(updateSessionTitleAtom, {
+      id: 'renamed',
+      title: '迟到的自动标题',
+      source: 'generated',
+    })
+    store.set(updateSessionTitleAtom, {
+      id: 'untitled',
+      title: '正常生成的标题',
+      source: 'generated',
+    })
+
+    const metas = store.get(sessionsMetaAtom)
+    expect(metas.find((session) => session.id === 'renamed')?.title).toBe('用户保存的标题')
+    expect(metas.find((session) => session.id === 'untitled')?.title).toBe('正常生成的标题')
   })
 
   it('re-hydrate preserves local draft rows (gateway-restart resync)', async () => {

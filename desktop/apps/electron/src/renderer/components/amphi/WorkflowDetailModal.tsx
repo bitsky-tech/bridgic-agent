@@ -234,7 +234,6 @@ export function WorkflowDetailView({ detail, loadError }: { detail: WorkflowDeta
         && !content.includes('\0')
     }
     const entry = files.find((file) => normalizePath(file.path).toLowerCase() === 'workflow.md')
-    const validation = files.find((file) => normalizePath(file.path).toLowerCase() === 'validate.md')
 
     const stripFrontmatter = (content: string): string => {
       const lines = content.split(/\r?\n/)
@@ -267,16 +266,6 @@ export function WorkflowDetailView({ detail, loadError }: { detail: WorkflowDeta
         icon: BookOpenText,
       })
     }
-    if (validation?.content.trim()) {
-      result.sourceDocuments.push({
-        id: 'source:validate',
-        label: t('workflow.detail.source.validation'),
-        path: 'VALIDATE.md',
-        content: stripFrontmatter(validation.content),
-        kind: 'markdown',
-        icon: FileCheck2,
-      })
-    }
     addBuildDocument('task', t('workflow.detail.build.task'), 'task.md', detail.fields.task?.value, ClipboardList)
     addBuildDocument('explore', t('workflow.detail.build.explore'), 'explore.md', detail.fields.explore?.value, Compass)
     addBuildDocument('verify', t('workflow.detail.build.verify'), 'verify.md', detail.fields.verify?.value, FileCheck2)
@@ -302,7 +291,7 @@ export function WorkflowDetailView({ detail, loadError }: { detail: WorkflowDeta
     }
     for (const file of files) {
       const path = normalizePath(file.path)
-      if (path.toLowerCase() === 'workflow.md' || path.toLowerCase() === 'validate.md') continue
+      if (path.toLowerCase() === 'workflow.md') continue
       if (!isPreviewableProgram(path, file.content)) continue
       const filename = path.split('/').at(-1) || path
       const extension = filename.includes('.') ? filename.split('.').at(-1)?.toLowerCase() ?? '' : ''

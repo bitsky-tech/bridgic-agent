@@ -10,11 +10,11 @@ For ordinary one-off work, describe the desired outcome directly. Include the re
 
 # Reusable Workflows
 
-Workflows turn a successful way of doing something into a reusable, reviewable process. They can combine ordered instructions, deterministic scripts, Agent judgment, tool use, validation, and human decisions instead of behaving like a fixed macro.
+Workflows turn a successful way of doing something into a reusable, reviewable process. They can combine ordered instructions, deterministic scripts, Agent judgment, tool use, and human decisions instead of behaving like a fixed macro.
 
-- Build a Workflow with `/build`: Choose `/build` from the `/` menu for a repeatable task, especially when the steps, deliverables, or definition of done should be made explicit. The Build process clarifies the task and completion rules, explores real tools and Skills, generates the Workflow, verifies it, and asks for confirmation before saving it.
-  - Example: Choose `/build`, then enter: `Given a folder of customer interviews, group recurring themes, cite the source files, and produce a Markdown report. Consider it complete when every theme has traceable evidence.`
-- Run a saved Workflow: Choose it from the `/` menu and add the inputs or requirements for this Run. A Run uses a stable snapshot of the Workflow, can continue after interruption, and performs its declared validation before publishing the result when validation is configured.
+- Build a Workflow with `/build`: Choose `/build` from the `/` menu for a repeatable task, especially when its steps or deliverables should be made explicit. The Build process clarifies the task, explores real tools and Skills, generates the Workflow, verifies it, and asks for confirmation before saving it.
+  - Example: Choose `/build`, then enter: `Given a folder of customer interviews, group recurring themes, cite the source files, and produce a Markdown report with traceable evidence.`
+- Run a saved Workflow: Choose it from the `/` menu and add the inputs or requirements for this Run. A Run uses a stable snapshot of the Workflow, can continue after interruption, executes its sections in order, and publishes a durable result when execution reaches a terminal outcome.
   - Example: Choose `Customer interview analysis` from the `/` menu, then add: `Analyze @Interviews/ and write the final report in Chinese.`
 - Modify a saved Workflow: Reference its definition with `@` and describe the change in natural language. The Agent reopens the Build process in edit mode and preserves unaffected requirements and files. After review and verification, you can either overwrite the original Workflow or save the edited version as a new Workflow.
   - Example: `@Customer interview analysis Add a duplicate-check step before clustering themes, and keep everything else unchanged.`
@@ -78,7 +78,7 @@ In short, `/` selects an action or capability; `@` identifies the concrete mater
 # Good requests to try
 
 - `Review @src/ for reliability risks, fix the high-confidence issues, and run the relevant tests.`
-- Choose `/build`, then enter: `Turn @raw-data/ into a validated weekly report with source citations.`
+- Choose `/build`, then enter: `Turn @raw-data/ into a weekly report with source citations.`
 - `Modify @Weekly report so it also exports CSV, without changing the existing Markdown output.`
 - `Use multiple Agents to research the alternatives independently, then recommend one with evidence.`
 - Choose `/schedule`, then use a goal such as `Every weekday morning, review the latest project status and produce a short risk digest.`

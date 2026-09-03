@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -35,7 +35,7 @@ from ...i18n import backend_i18n
 from pydantic import BaseModel, Field
 
 from ._codex_credentials import CodexAuthError, CodexCreds
-from ._image_inputs import image_data_url, image_inputs_of
+from ._image_inputs import IMAGE_INPUTS_EXTRA, image_data_url, image_inputs_of
 from ._streaming import (
     StreamResult,
     convert_tools,
@@ -489,16 +489,20 @@ class CodexResponsesLlm(BaseLlm):
     async def astream(self, messages: List[Message], **kwargs: Any) -> str:  # noqa: D401
         return await self.achat(messages, **kwargs)
 
-    async def agenerate_image(self, prompt: str) -> str:
-        """Generate one image through the Responses hosted image tool.
+    async def agenerate_image(self, prompt: str, reference: Optional[Mapping[str, Any]] = None) -> str:
+        """Generate or edit one image through the Responses hosted image tool.
 
         The Codex subscription endpoint is stream-only, so consume the full SSE
         response and return the final base64 payload from its
         ``image_generation_call`` output item.
         """
+        extras = {IMAGE_INPUTS_EXTRA: [dict(reference)]} if reference is not None else {}
         body = self._build_parameters(
-            [Message.from_text(prompt, role=Role.USER)],
-            tools=[{"type": "image_generation", "action": "generate"}],
+            [Message.from_text(prompt, role=Role.USER, extras=extras)],
+            tools=[{
+                "type": "image_generation",
+                "action": "edit" if reference is not None else "generate",
+            }],
         )
 
         async def consume(response: httpx.Response) -> str:

@@ -4,7 +4,7 @@
  *
  * Isolate atom state with Jotai createStore(); IPC is replaced by a window.api mock.
  */
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, setSystemTime } from 'bun:test'
 import { createStore } from 'jotai'
 import {
   applyAgentEventAtom,
@@ -57,6 +57,7 @@ import {
   activeSessionIdAtom,
   materializeSessionAtom,
   newSessionAtom,
+  renameSessionAtom,
   sessionCompletionSeqByIdAtom,
   replaceDraftWithDaemonIdAtom,
   sessionDraftsAtom,
@@ -335,7 +336,6 @@ describe('reducer: message lifecycle', () => {
       phase: 'execute',
       stepIndex: 1,
       executionSteps: ['收集数据', '生成报告'],
-      validationSteps: ['检查报告'],
     })
     store.set(applyAgentEventAtom, {
       sessionId: id,
@@ -351,7 +351,6 @@ describe('reducer: message lifecycle', () => {
       stepCount: 2,
       title: '收集数据',
       executionSteps: ['收集数据', '生成报告'],
-      validationSteps: ['检查报告'],
     }
     store.set(applyAgentEventAtom, {
       sessionId: id,
@@ -377,7 +376,6 @@ describe('reducer: message lifecycle', () => {
       phase: 'execute',
       stepIndex: 0,
       executionSteps: ['收集数据', '生成报告'],
-      validationSteps: ['检查报告'],
     })
 
     store.set(applyAgentEventAtom, {
@@ -401,7 +399,6 @@ describe('reducer: message lifecycle', () => {
       workflowId: 'wf-report',
       workflowName: '生成报告',
       status: 'completed' as const,
-      validationStatus: 'passed' as const,
       createdAt: '2026-08-03T06:00:00Z',
       resultFileCount: 1,
     }
@@ -1190,24 +1187,34 @@ describe('reducer: done / error / cancelled', () => {
     const store = makeStore()
     const id = setupSession(store)
     store.set(activeSessionIdAtom, id)
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
-    })
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'text_delta', messageId: 'm1', text: 'partial' },
-    })
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'message_stop', messageId: 'm1' },
-    })
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'done', reason: 'cancelled', messageId: 'm1' },
-    })
-    const msgs = store.get(currentMessagesAtom)
-    expect(msgs[msgs.length - 1]!.stopped).toBe(true)
+    const startedAt = Date.parse('2026-09-03T10:00:00+08:00')
+    const completedAt = startedAt + 4_321
+    setSystemTime(new Date(startedAt))
+    try {
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'text_delta', messageId: 'm1', text: 'partial' },
+      })
+      setSystemTime(new Date(completedAt))
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_stop', messageId: 'm1' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'done', reason: 'cancelled', messageId: 'm1' },
+      })
+      const message = store.get(currentMessagesAtom).at(-1)
+      expect(message?.stopped).toBe(true)
+      expect(message?.completedAt).toBe(completedAt)
+      expect(message?.durationMs).toBe(4_321)
+    } finally {
+      setSystemTime()
+    }
   })
 
   it('done(cancelled) creates a stopped placeholder before the first content block', () => {
@@ -1227,6 +1234,40 @@ describe('reducer: done / error / cancelled', () => {
       stopped: true,
       blocks: [],
     })
+  })
+
+  it('cancelled message_stop timestamps a turn stopped before its first content block', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    const startedAt = Date.parse('2026-09-03T11:00:00+08:00')
+    const completedAt = startedAt + 2_500
+    setSystemTime(new Date(startedAt))
+    try {
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_start', messageId: 'm-empty', role: 'assistant' },
+      })
+      setSystemTime(new Date(completedAt))
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_stop', messageId: 'm-empty', reason: 'cancelled' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'done', reason: 'cancelled', messageId: 'm-empty' },
+      })
+
+      const message = store.get(currentMessagesAtom).at(-1)
+      expect(message).toMatchObject({
+        id: 'm-empty',
+        stopped: true,
+        completedAt,
+        durationMs: 2_500,
+      })
+    } finally {
+      setSystemTime()
+    }
   })
 
   it('error finalizes partial as errored message', () => {
@@ -1467,79 +1508,6 @@ describe('appendUserMessageAtom', () => {
       { type: 'text', text: '我先确认范围。' },
       { type: 'confirmation', question: '需要统计几层?', response: '只统计第一层' },
       { type: 'text', text: '继续探索中。' },
-    ])
-  })
-
-  it('resumes acceptance review with an explicit unanswered-message result', () => {
-    const store = makeStore()
-    const id = setupSession(store)
-    store.set(materializeSessionAtom, id)
-    store.set(activeSessionIdAtom, id)
-    store.set(backendSnapshotAtom, {
-      state: BackendState.Ready,
-      endpoint: {
-        baseUrl: 'http://127.0.0.1:7421',
-        token: 'test-token',
-        version: null,
-        startedAt: null,
-        wsPath: null,
-      },
-      lastError: null,
-    } as never)
-    store.set(messageFamily(id), [
-      {
-        id: 'original-user',
-        role: AgentRole.User,
-        text: '构建工作流',
-        toolCalls: [],
-        done: true,
-        createdAt: 1,
-      },
-      {
-        id: 'parked-assistant',
-        role: AgentRole.Assistant,
-        text: '请确认验收规则。',
-        toolCalls: [],
-        blocks: [{ type: 'text', text: '请确认验收规则。' }],
-        done: true,
-        finalAnswer: null,
-        createdAt: 2,
-      },
-    ])
-    store.set(setHumanRequestAtom, {
-      sessionId: id,
-      kind: 'accept_rule',
-      requestId: 'accept-1',
-      rules: ['结果文件存在。'],
-      questions: [{
-        question: '结果文件存在。',
-        options: [{ label: '接受' }, { label: '不接受' }],
-      }],
-    })
-
-    store.set(appendUserMessageAtom, {
-      sessionId: id,
-      text: '这条标准需要调整',
-    })
-
-    const userMessages = store
-      .get(messageFamily(id))
-      .filter((message) => message.role === AgentRole.User)
-    expect(userMessages.map((message) => message.text)).toEqual(['构建工作流'])
-    expect(store.get(pendingBySessionAtom).has(id)).toBe(false)
-
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'message_start', messageId: 'resumed-assistant', role: 'assistant' },
-    })
-    expect(store.get(streamingFamily(id))?.blocks).toEqual([
-      { type: 'text', text: '请确认验收规则。' },
-      {
-        type: 'confirmation',
-        kind: 'accept_rule_message',
-        question: '完成标准稍后再对齐',
-        response: '这条标准需要调整',
-      },
     ])
   })
 
@@ -2239,6 +2207,30 @@ describe('reducer: title (session naming)', () => {
     // done(end_turn) must then NOT overwrite it with the truncated opener.
     store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'done', reason: 'end_turn' } })
     expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('模型标题')
+  })
+
+  it('a late backend title replaces the truncated-opener fallback', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(messageFamily(id), [
+      { id: 'u1', role: AgentRole.User, text: '帮我做一个很长的需求', toolCalls: [], done: true, createdAt: 1 },
+    ])
+    store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'done', reason: 'end_turn' } })
+    expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('帮我做一个很长的需求')
+
+    store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'title', title: '模型标题' } })
+
+    expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('模型标题')
+  })
+
+  it('a late backend title does not overwrite a manual rename', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(renameSessionAtom, { id, title: '用户指定标题' })
+
+    store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'title', title: '模型标题' } })
+
+    expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('用户指定标题')
   })
 })
 

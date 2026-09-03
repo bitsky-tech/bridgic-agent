@@ -26,10 +26,13 @@ export type AgentTurnStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
+export type SessionTitleSource = 'default' | 'fallback' | 'generated' | 'manual' | 'persisted'
 
 export interface SessionMeta {
   id: string
   title: string
+  /** Renderer-only precedence marker: manual and hydrated titles beat late generation. */
+  titleSource?: SessionTitleSource
   /** 0-4 index of the 5-stage Pipeline; undefined = idle / not in build flow. */
   stage?: number
   /** Human-readable stage label (e.g. "Exploring — analyzing data sources..."). */
@@ -121,9 +124,7 @@ export type MessageBlock =
       prompt?: string
       question: string
       response: string
-      kind?: 'answer' | 'accept_rule' | 'accept_rule_message' | 'confirmation_message'
-      rules?: Array<{ id: string; text: string }>
-      acceptanceMode?: 'criteria' | 'execution_only'
+      kind?: 'answer' | 'confirmation_message'
     }
   /** `path` = path relative to the mount, same meaning as on the inbound ChatBlock.
    *  When the composer recalls history with ↑, it relies on this to restore @ chips
@@ -141,14 +142,13 @@ export type MessageBlock =
       workflowId: string
       generation: string
       workflowName: string
-      phase: 'execute' | 'validate'
+      phase: 'execute'
       stepIndex: number
       stepCount: number
       title: string
       status: 'running' | 'success' | 'failure'
       summary?: string | null
       executionSteps?: string[]
-      validationSteps?: string[]
     }
   | {
       type: 'workflow_result'
@@ -156,7 +156,6 @@ export type MessageBlock =
       workflowId: string
       workflowName: string
       status: 'completed' | 'failed'
-      validationStatus: 'passed' | 'failed' | 'not_required'
       createdAt: string
       /** Absent on cards persisted by older daemon versions. */
       resultFileCount?: number

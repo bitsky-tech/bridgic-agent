@@ -316,7 +316,7 @@ function WorkflowResultRow({
 }
 
 function effectiveResultStatus(run: WorkflowRunSummary): 'completed' | 'failed' | 'other' {
-  if (run.status === 'failed' || run.validation_status === 'failed') return 'failed'
+  if (run.status === 'failed') return 'failed'
   if (run.status === 'completed') return 'completed'
   return 'other'
 }

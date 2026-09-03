@@ -603,22 +603,22 @@ describe("rebuildPrompt", () => {
     });
   });
 
-  test("keeps Session history while isolating marked Workflow Validate from Execute", () => {
+  test("keeps Session and Turn history throughout Workflow execution", () => {
     const previous = turn("turn-previous", 0, "Past Workflow request", []);
     const current = turn("turn-workflow", 1, "Run it", [
       { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Older Execute history" } },
       { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Final Execute handoff" } },
-      { think_scope: { mode: "run_workflow", stage: "validate", session_history: "all_stages" }, think_result: { step_content: "Validate history" } },
-      { think_scope: { mode: "run_workflow", stage: "validate", session_history: "all_stages" } },
-    ], { agentState: { think: { mode: "run_workflow", stage: "validate" } } });
+      { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" }, think_result: { step_content: "Current Execute history" } },
+      { think_scope: { mode: "run_workflow", stage: "execute", session_history: "all_stages" } },
+    ], { agentState: { think: { mode: "run_workflow", stage: "execute" } } });
 
     const result = rebuildPrompt(request([previous, current], current.id, 3));
     const contents = result.messages.map((message) => message.content ?? "");
 
     expect(contents).toContain("Past Workflow request");
-    expect(contents).toContain("Validate history");
-    expect(contents).not.toContain("Final Execute handoff");
-    expect(contents).not.toContain("Older Execute history");
+    expect(contents).toContain("Current Execute history");
+    expect(contents).toContain("Final Execute handoff");
+    expect(contents).toContain("Older Execute history");
     expect(result.components.find((item) => item.id === "session-history")?.metadata).toMatchObject({
       omittedByStage: false,
       historyModel: "all_stages",
@@ -646,22 +646,22 @@ describe("rebuildPrompt", () => {
     });
   });
 
-  test("uses persisted Workflow scope and drops Execute history in Validate", () => {
+  test("uses persisted Workflow scope throughout execution", () => {
     const previous = turn("turn-previous", 0, "previous-conversation", []);
     const current = turn("turn-workflow", 1, "Run it", [
-      { think_scope: { mode: "run_workflow", stage: "execute" }, think_result: { step_content: "Execute history" } },
-      { think_scope: { mode: "run_workflow", stage: "validate" }, think_result: { step_content: "Validate history" } },
-      { think_scope: { mode: "run_workflow", stage: "validate" } },
-    ], { agentState: { think: { mode: "run_workflow", stage: "validate" } } });
+      { think_scope: { mode: "run_workflow", stage: "execute" }, think_result: { step_content: "First Execute history" } },
+      { think_scope: { mode: "run_workflow", stage: "execute" }, think_result: { step_content: "Second Execute history" } },
+      { think_scope: { mode: "run_workflow", stage: "execute" } },
+    ], { agentState: { think: { mode: "run_workflow", stage: "execute" } } });
 
     const result = rebuildPrompt(request([previous, current], current.id, 2));
     const contents = result.messages.map((message) => message.content ?? "");
 
-    expect(result.stage).toBe("workflow_validate");
-    expect(contents).toContain("Validate history");
-    expect(contents).not.toContain("Execute history");
-    expect(contents).not.toContain("previous-conversation");
-    expect(result.fidelity.limitations.some((item) => item.includes("Workflow stage is inferred"))).toBe(false);
+    expect(result.stage).toBe("workflow_execute");
+    expect(contents).toContain("First Execute history");
+    expect(contents).toContain("Second Execute history");
+    expect(contents).toContain("previous-conversation");
+    expect(result.fidelity.limitations.some((item) => item.includes("Workflow mode is inferred"))).toBe(false);
   });
 
   test("does not let a null Build marker hide the persisted Workflow mode", () => {
@@ -670,17 +670,17 @@ describe("rebuildPrompt", () => {
       { build_stage: null, think_result: { step_content: "Legacy Execute history" } },
       { build_stage: null },
     ], {
-      agentState: { think: { mode: "run_workflow", stage: "validate" } },
+      agentState: { think: { mode: "run_workflow", stage: "execute" } },
     });
 
     const result = rebuildPrompt(request([previous, current], current.id, 1));
     const contents = result.messages.map((message) => message.content ?? "");
 
-    expect(result.stage).toBe("workflow_validate");
+    expect(result.stage).toBe("workflow_execute");
     expect(contents).toContain("Legacy Session history");
     expect(contents).toContain("Legacy Execute history");
     expect(result.components.find((item) => item.id === "current-turn")?.metadata?.historyModel).toBe("legacy_full_turn");
-    expect(result.fidelity.limitations.some((item) => item.includes("Workflow stage is inferred"))).toBe(true);
+    expect(result.fidelity.limitations.some((item) => item.includes("Workflow mode is inferred"))).toBe(true);
   });
 
   test("derives advanced-tool visibility from loader actions before the target round", () => {

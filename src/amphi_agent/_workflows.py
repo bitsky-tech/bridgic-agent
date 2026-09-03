@@ -75,7 +75,6 @@ class WorkflowPackage:
         instruction: str
 
     ENTRY_NAME: ClassVar[str] = "WORKFLOW.md"
-    VALIDATION_NAME: ClassVar[str] = "VALIDATE.md"
     ROOT_ENTRY_NAMES: ClassVar[tuple[str, ...]] = (
         "task.md",
         "explore.md",
@@ -108,10 +107,6 @@ class WorkflowPackage:
     @property
     def entry_path(self) -> Path:
         return self.source_root / self.ENTRY_NAME
-
-    @property
-    def validation_path(self) -> Path:
-        return self.source_root / self.VALIDATION_NAME
 
     @property
     def scripts_dir(self) -> Path:
@@ -214,20 +209,10 @@ class WorkflowPackage:
         body = "\n".join(content.splitlines()[closing + 1 :])
         return tuple(self._parse_steps(body, "execution step"))
 
-    @property
-    def validation_steps(self) -> Tuple["WorkflowPackage.Step", ...]:
-        """Return validation sections or an empty tuple in execution-only mode."""
-        content = self._read_document(self.validation_path)
-        if self._is_no_validation_document(content):
-            return ()
-        return tuple(self._parse_steps(content, "validation check"))
-
     def steps(self, stage: str) -> Tuple["WorkflowPackage.Step", ...]:
         """Return the ordered sections for one Workflow cognitive stage."""
         if stage == "execute":
             return self.execution_steps
-        if stage == "validate":
-            return self.validation_steps
         raise ValueError(f"Unsupported Workflow stage: {stage!r}")
 
     def read_document(self, name: str) -> Optional[str]:
@@ -277,18 +262,6 @@ class WorkflowPackage:
         if truncated:
             lines.append("  ... (more entries omitted)")
         return lines
-
-    @classmethod
-    def _is_no_validation_document(cls, content: str) -> bool:
-        return content.strip() == "---\nvalidation: none\n---"
-
-    @property
-    def validation_disabled(self) -> bool:
-        """Return whether this package explicitly skips result validation."""
-        try:
-            return self._is_no_validation_document(self._read_document(self.validation_path))
-        except ValueError:
-            return False
 
     def _read_document(self, path: Path) -> str:
         if path.is_symlink() or not path.is_file():
@@ -340,10 +313,7 @@ class WorkflowPackage:
             if self.source_root.is_symlink():
                 return "workflow/ must be a real directory, not a symbolic link."
             if not self.source_root.is_dir():
-                return (
-                    "workflow/ is missing; create it with the required WORKFLOW.md and "
-                    "VALIDATE.md documents."
-                )
+                return "workflow/ is missing; create it with the required WORKFLOW.md document."
             for root, dirs, files in os.walk(
                 self.source_root,
                 topdown=True,
@@ -439,36 +409,7 @@ class WorkflowPackage:
         except ValueError as exc:
             return f"workflow/{self.ENTRY_NAME} {exc}."
 
-        validation_body, reason = read_required_document(self.VALIDATION_NAME)
-        if reason:
-            return reason
-        assert validation_body is not None
-        validation_disabled = self._is_no_validation_document(validation_body)
-        if not validation_disabled:
-            lines = validation_body.splitlines()
-            if (
-                lines
-                and lines[0].strip() == "---"
-                and any(
-                    line.strip().startswith("validation:")
-                    for line in lines[1:]
-                    if line.strip() != "---"
-                )
-            ):
-                return (
-                    "workflow/VALIDATE.md uses a validation mode declaration, but "
-                    "execution-only mode requires exactly `---`, `validation: none`, "
-                    "`---` on three lines with no body."
-                )
-            try:
-                self._parse_steps(validation_body, "validation check")
-            except ValueError as exc:
-                return f"workflow/{self.VALIDATION_NAME} {exc}."
-
-        documents = (
-            (self.ENTRY_NAME, workflow_body, closing + 2),
-            (self.VALIDATION_NAME, validation_body, 1),
-        )
+        documents = [(self.ENTRY_NAME, workflow_body, closing + 2)]
         references: set[str] = set()
         reference_sources: dict[str, str] = {}
         scripts_dir = self.scripts_dir
@@ -528,7 +469,7 @@ class WorkflowPackage:
         if orphaned:
             return (
                 f"workflow/{orphaned[0]} exists but is not referenced by any "
-                "step in WORKFLOW.md or VALIDATE.md."
+                "step in WORKFLOW.md."
             )
         return None
 

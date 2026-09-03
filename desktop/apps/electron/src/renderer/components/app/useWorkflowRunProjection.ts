@@ -14,11 +14,10 @@ export interface WorkflowRunProjection {
   workflowId: string | undefined
   generation: string | undefined
   workflowName: string
-  phase: 'execute' | 'validate'
+  phase: 'execute'
   stepIndex: number
   stageComplete: boolean
   executionSteps: string[]
-  validationSteps: string[]
   currentTitle: string
   toolCalls: number
   workflowBlocks: WorkflowStepBlock[]
@@ -57,12 +56,11 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
         count + (message.blocks ?? []).filter((block) => block.type === 'tool').length,
       0,
     )
-    const phase = run?.phase ?? latest?.phase ?? 'execute'
+    const phase = 'execute' as const
     const stepIndex = run?.stepIndex ?? latest?.stepIndex ?? 0
     const executionSteps = [...(run?.executionSteps ?? latest?.executionSteps ?? [])]
-    const validationSteps = [...(run?.validationSteps ?? latest?.validationSteps ?? [])]
 
-    if (phase === 'execute' && executionSteps.length === 0) {
+    if (executionSteps.length === 0) {
       const count = latest?.stepCount ?? stepIndex + 1
       for (let index = 0; index < count; index += 1) {
         const known = workflowBlocks.find(
@@ -73,36 +71,18 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
         )
       }
     }
-    if (phase === 'validate' && validationSteps.length === 0) {
-      const count = latest?.stepCount ?? stepIndex + 1
-      for (let index = 0; index < count; index += 1) {
-        const known = workflowBlocks.find(
-          (block) => block.phase === 'validate' && block.stepIndex === index,
-        )
-        validationSteps.push(
-          known?.title || t('workflowRunDetails.fallbackValidationStep', { index: index + 1 }),
-        )
-      }
-    }
-
-    const phaseSteps = phase === 'execute' ? executionSteps : validationSteps
-    const stageComplete = phaseSteps.length > 0 && stepIndex >= phaseSteps.length
+    const stageComplete = executionSteps.length > 0 && stepIndex >= executionSteps.length
     const currentStepIndex = stageComplete
-      ? Math.max(0, phaseSteps.length - 1)
+      ? Math.max(0, executionSteps.length - 1)
       : stepIndex
     const currentBlock = [...workflowBlocks].reverse().find(
       (block) => block.phase === phase && block.stepIndex === currentStepIndex,
     )
-    let currentTitle =
-      currentBlock?.title ?? phaseSteps[currentStepIndex] ?? t('workflowRunDetails.initializing')
+    let currentTitle = currentBlock?.title
+      ?? executionSteps[currentStepIndex]
+      ?? t('workflowRunDetails.initializing')
     if (stageComplete) {
-      if (phase === 'validate') {
-        currentTitle = t('workflowRunDetails.validationCompleteAwaitingEnd')
-      } else if (validationSteps.length > 0) {
-        currentTitle = t('workflowRunDetails.executionCompleteAwaitingValidation')
-      } else {
-        currentTitle = t('workflowRunDetails.executionCompleteAwaitingEnd')
-      }
+      currentTitle = t('workflowRunDetails.executionCompleteAwaitingEnd')
     }
 
     return {
@@ -113,7 +93,6 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
       stepIndex,
       stageComplete,
       executionSteps,
-      validationSteps,
       currentTitle,
       toolCalls,
       workflowBlocks,

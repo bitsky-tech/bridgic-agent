@@ -43,10 +43,6 @@ const detail: WorkflowDetail = {
           path: 'WORKFLOW.md',
           content: '---\nname: test\ndescription: hidden metadata\n---\n\n# 使用说明\n\n## 准备\n\n准备输入。\n\n### 参数\n\n读取参数。\n\n## 完成\n\n返回结果。',
         },
-        {
-          path: 'VALIDATE.md',
-          content: '# 验证说明\n\n## 检查结果\n\n确认输出完整。',
-        },
         { path: 'scripts/run.py', language: 'python', content: 'print("ok")\n' },
         { path: 'scripts/__pycache__/run.cpython-313.pyc', content: 'compiled cache' },
       ],
@@ -64,9 +60,8 @@ describe('WorkflowDetailView', () => {
       root.render(<WorkflowDetailView detail={detail} loadError="" />)
     })
 
-    expect(host.textContent).toContain('执行源文件 · 3')
+    expect(host.textContent).toContain('执行源文件 · 2')
     expect(host.textContent).toContain('任务流程')
-    expect(host.textContent).toContain('验证方法')
     expect(host.textContent).toContain('脚本文件')
     expect(host.textContent).toContain('构建文档 · 3')
     expect(host.textContent).toContain('任务定义')

@@ -3,7 +3,6 @@ from collections import deque
 from typing import Any, AsyncIterator, ClassVar, Deque, Dict, Optional, Set, Type
 
 from ..protocol import (
-    AcceptRuleRequestEvent,
     BuildConfirmRequestEvent,
     ContextCompactionEvent,
     ContextUsageEvent,
@@ -57,7 +56,6 @@ class SessionEventBroker:
             TitleEvent.name: TitleEvent,
             HumanRequestEvent.name: HumanRequestEvent,
             PermissionRequestEvent.name: PermissionRequestEvent,
-            AcceptRuleRequestEvent.name: AcceptRuleRequestEvent,
             BuildConfirmRequestEvent.name: BuildConfirmRequestEvent,
             TaskConfirmRequestEvent.name: TaskConfirmRequestEvent,
             WorkflowConfirmRequestEvent.name: WorkflowConfirmRequestEvent,

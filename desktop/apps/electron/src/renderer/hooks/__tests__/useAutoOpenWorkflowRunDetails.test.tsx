@@ -40,7 +40,6 @@ function runState(sessionId: string, generation: string, stepIndex = 0) {
     phase: 'execute' as const,
     stepIndex,
     executionSteps: ['执行第一步', '执行第二步'],
-    validationSteps: [],
   }
 }
 

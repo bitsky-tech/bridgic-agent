@@ -140,7 +140,6 @@ export interface WorkflowRunSummary {
     blocks: Array<Record<string, unknown>>
   }
   status: 'running' | 'waiting' | 'paused' | 'completed' | 'failed' | 'cancelled'
-  validation_status: 'pending' | 'passed' | 'failed' | 'not_required'
   created_at: string
   finished_at?: string | null
 }
@@ -672,7 +671,6 @@ const workflowRunSummarySchema = z
       blocks: z.array(z.record(z.string(), z.unknown())).default([]),
     }),
     status: z.enum(['running', 'waiting', 'paused', 'completed', 'failed', 'cancelled']),
-    validation_status: z.enum(['pending', 'passed', 'failed', 'not_required']),
     summary: z.string().nullable().optional(),
     created_at: z.string(),
     finished_at: z.string().nullable().optional(),
@@ -800,10 +798,9 @@ const sessionMessagesSchema = z
         generation: z.string(),
         workflow_name: z.string(),
         source_session_id: z.string(),
-        phase: z.enum(['execute', 'validate']),
+        phase: z.literal('execute'),
         step_index: z.number().int().nonnegative(),
         execution_steps: z.array(z.string()).default([]),
-        validation_steps: z.array(z.string()).default([]),
       })
       .nullable()
       .optional(),
@@ -1387,10 +1384,9 @@ export class AmphiClient {
         generation: string
         workflow_name: string
         source_session_id: string
-        phase: 'execute' | 'validate'
+        phase: 'execute'
         step_index: number
         execution_steps: string[]
-        validation_steps: string[]
       } | null
       children: {
         session_id: string
@@ -1455,7 +1451,6 @@ export class AmphiClient {
             phase: res.workflow_run.phase,
             stepIndex: res.workflow_run.step_index,
             executionSteps: res.workflow_run.execution_steps,
-            validationSteps: res.workflow_run.validation_steps,
           }
         : null,
       children: (res.children ?? []).map((c) => ({

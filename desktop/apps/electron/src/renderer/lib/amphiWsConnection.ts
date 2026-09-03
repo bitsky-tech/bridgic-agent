@@ -25,7 +25,6 @@
  */
 import type {
   AgentEvent,
-  AcceptRuleFrame,
   BackendEndpoint,
   BuildConfirmFrame,
   TurnEvent,
@@ -207,16 +206,6 @@ export class AmphiWsConnection {
     this.send({ type: CLIENT_FRAME.Chat, session_id: sessionId, input, blocks })
   }
 
-  /** Resume Clarify with the user's per-rule decisions and optional supplement. */
-  acceptRule(sessionId: string, payload: Omit<AcceptRuleFrame, 'type' | 'session_id'>): void {
-    if (!this.openTurn(sessionId)) return
-    this.send({
-      type: CLIENT_FRAME.AcceptRule,
-      session_id: sessionId,
-      ...payload,
-    })
-  }
-
   /** Resume Main after the user decides whether to enter Workflow Build. */
   buildConfirm(sessionId: string, payload: Omit<BuildConfirmFrame, 'type' | 'session_id'>): void {
     if (!this.openTurn(sessionId)) return
@@ -296,7 +285,11 @@ export class AmphiWsConnection {
     const t = this.turns.get(sessionId)
     if (!t || t.cancelled) return
     if (t.translator.started) {
-      this.dispatch(sessionId, { type: 'message_stop', messageId: t.messageId })
+      this.dispatch(sessionId, {
+        type: 'message_stop',
+        messageId: t.messageId,
+        reason: 'cancelled',
+      })
     }
     this.dispatch(sessionId, { type: 'done', reason: 'cancelled', messageId: t.messageId })
     this.turns.set(sessionId, { ...t, cancelled: true })

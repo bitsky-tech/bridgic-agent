@@ -11,6 +11,7 @@ from bridgic.llms.openai import OpenAIConfiguration, OpenAILlm
 from google.genai import types
 
 from src.amphi_service.protocol.llms._codex_credentials import CodexCreds
+from src.amphi_service.protocol.llms._image_inputs import inspect_image_input
 from src.amphi_service.protocol.llms._streaming import ModelNotFoundError, StreamResult, stream_with_transport_retry
 from src.amphi_service.protocol.llms.anthropic_llm import AnthropicConfiguration, AnthropicLlm
 from src.amphi_service.protocol.llms.codex_llm import CodexConfiguration, CodexResponsesLlm
@@ -453,6 +454,50 @@ async def test_codex_generate_image_uses_hosted_responses_tool() -> None:
     )
     try:
         result = await llm.agenerate_image("draw a bridge")
+    finally:
+        llm.client.close()
+        await llm.async_client.aclose()
+
+    assert result == encoded
+
+
+async def test_codex_reference_image_uses_hosted_edit_tool(tmp_path) -> None:
+    encoded = "aW1hZ2UtYnl0ZXM="
+    image_bytes = b"\x89PNG\r\n\x1a\nreference"
+    image_path = tmp_path / "reference.png"
+    image_path.write_bytes(image_bytes)
+    reference = inspect_image_input(str(image_path))
+    assert reference is not None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["tools"] == [{"type": "image_generation", "action": "edit"}]
+        content = body["input"][0]["content"]
+        assert content[0] == {"type": "input_text", "text": "change the background"}
+        assert content[1] == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,iVBORw0KGgpyZWZlcmVuY2U=",
+        }
+        events = [
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "image_generation_call", "result": encoded},
+            },
+            {"type": "response.completed", "response": {"output": []}},
+        ]
+        payload = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(200, text=payload, headers={"content-type": "text/event-stream"})
+
+    transport = httpx.MockTransport(handler)
+    llm = CodexResponsesLlm(
+        access_token="access-token",
+        account_id="account-id",
+        configuration=CodexConfiguration(model="gpt-5.6-sol"),
+        transport=transport,
+        async_transport=transport,
+    )
+    try:
+        result = await llm.agenerate_image("change the background", reference)
     finally:
         llm.client.close()
         await llm.async_client.aclose()

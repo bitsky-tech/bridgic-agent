@@ -27,7 +27,6 @@ function seedRun(store: ReturnType<typeof createStore>, sessionId: string, gener
     phase: 'execute',
     stepIndex: 0,
     executionSteps: ['执行一步'],
-    validationSteps: [],
   })
 }
 

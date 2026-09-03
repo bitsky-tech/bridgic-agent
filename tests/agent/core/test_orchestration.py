@@ -15,7 +15,6 @@ from src.amphi_agent import (
     WorkflowRunLibrary,
 )
 from src.amphi_agent._state import (
-    AwaitingAcceptRule,
     AwaitingBuildConflict,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
@@ -26,7 +25,6 @@ from src.amphi_agent._state import (
 )
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.tools._request_human import (
-    RequestAcceptRule,
     RequestBuild,
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
@@ -42,7 +40,6 @@ from src.amphi_store import (
     UserInput,
     UserRepository,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from tests._support.sandbox import IsolatedPaths
 
@@ -115,10 +112,6 @@ def _write_package(root: Path) -> None:
     (source / "WORKFLOW.md").write_text(
         "---\nname: report-workflow\ndescription: Create a checked report\n---\n"
         "# Create report\n\nWrite the requested report to result/report.txt.\n",
-        encoding="utf-8",
-    )
-    (source / "VALIDATE.md").write_text(
-        "# Check report\n\nConfirm result/report.txt contains the requested report.\n",
         encoding="utf-8",
     )
 
@@ -284,46 +277,13 @@ async def test_build_reviews(orchestration: _Harness) -> None:
     """Final reviewed Build contract:
 
     {
-      "acceptance": {"rules": [{"id": "AC-001", "source": "agent_proposed_user_accepted"}]},
       "task": {"status": "confirmed", "next_stage": "explore"}
     }
 
     Checks:
-    1. An accepted outcome rule is folded into the held tool result with its durable review receipt.
-    2. Confirming the current task.md advances both cognition and durable Build state to Explore.
+    1. Confirming the current task.md advances both cognition and durable Build state to Explore.
     """
     await _prepare_build(orchestration, "clarify")
-    acceptance = _ota(
-        "Create a reusable report workflow",
-        _step(
-            "request_accept_rule",
-            RequestAcceptRule(["A checked report is delivered."], "accept-1"),
-        ),
-        BuildStageState(stage="clarify"),
-    )
-    await _apply(orchestration, acceptance)
-    assert isinstance(acceptance.interaction_status, AwaitingAcceptRule)
-    pending_acceptance = _pending(acceptance, "turn-acceptance")
-    orchestration.context.session = Session(orchestration.record, [pending_acceptance])
-    accepted = AmphiOTAContext(user_input={
-        "type": "accept_rule",
-        "request_id": "accept-1",
-        "mode": "criteria",
-        "decisions": ["accept"],
-    })
-    await orchestration.agent.init_state(accepted, orchestration.context)
-
-    # Check 1: The confirmed rule has a stable system id and durable review receipt.
-    acceptance_result = _payload(accepted, "request_accept_rule")
-    assert acceptance_result["status"] == "confirmed"
-    assert acceptance_result["rules"] == [{
-        "id": "AC-001",
-        "text": "A checked report is delivered.",
-        "source": "agent_proposed_user_accepted",
-    }]
-    assert orchestration.workspace.build is not None
-    assert orchestration.workspace.build.acceptance_contract == {"request_id": "accept-1"}
-
     task = _ota(
         "Create a reusable report workflow",
         _step("request_human_task_confirm", RequestHumanTaskConfirm("task-1")),
@@ -340,7 +300,7 @@ async def test_build_reviews(orchestration: _Harness) -> None:
     })
     await orchestration.agent.init_state(confirmed, orchestration.context)
 
-    # Check 2: Task approval resumes the held Turn at Explore in memory and on disk.
+    # Check 1: Task approval resumes the held Turn at Explore in memory and on disk.
     assert _payload(confirmed, "request_human_task_confirm")["status"] == "confirmed"
     assert confirmed.think_status == BuildStageState(stage="explore")
     checkpoint = orchestration.workspace.build_checkpoint()
@@ -716,15 +676,13 @@ async def test_run_completion(orchestration: _Harness) -> None:
     """Final completed Workflow Run:
 
     {
-      "execute_success": {"next": "validate/0"},
-      "validate_success": {"run": "completed", "validation": "passed"},
+      "execute_success": {"run": "completed"},
       "private_run": "deleted",
       "published_result": "result/report.txt"
     }
 
     Checks:
-    1. A successful execution report advances the durable cursor into Validate.
-    2. A successful validation publishes the result, returns to Main, and removes .run.
+    1. A successful final execution report publishes the result, returns to Main, and removes .run.
     """
     saved = await _save_workflow(orchestration, "run-completion")
     started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
@@ -742,72 +700,49 @@ async def test_run_completion(orchestration: _Harness) -> None:
     )
     await _apply(orchestration, execute)
 
-    # Check 1: Execution success moves both the cognitive and durable cursors to Validate.
-    assert isinstance(execute.think_status, WorkflowStageState)
-    assert (execute.think_status.stage, execute.think_status.step_index) == ("validate", 0)
-    checkpoint = orchestration.workspace.run_workflow_checkpoint()
-    assert checkpoint is not None
-    assert (checkpoint.stage, checkpoint.step_index) == ("validate", 0)
-    assert _payload(execute, "report_workflow_step")["status"] == "success"
-
-    validate = _ota(
-        "Create today's report",
-        _step(
-            "report_workflow_step",
-            WorkflowStepReport("success", "Report checks passed", ["result/report.txt"]),
-        ),
-        execute.think_status,
-    )
-    await _apply(orchestration, validate)
-
-    # Check 2: Validation publishes immutable output, exits Workflow mode, and deletes .run.
-    payload = _payload(validate, "report_workflow_step")
+    # Check 1: Execution publishes immutable output, exits Workflow mode, and deletes .run.
+    payload = _payload(execute, "report_workflow_step")
     published = orchestration.workflow_runs.get(payload["run_id"])
     assert payload["run_status"] == WorkflowRunStatus.COMPLETED.value
-    assert payload["validation_status"] == WorkflowValidationStatus.PASSED.value
     assert published is not None
     assert published.read_file("result/report.txt") == "Today's checked report\n"
-    assert validate.think_status == NormalStageState()
+    assert execute.think_status == NormalStageState()
     assert not orchestration.workspace.has_run_workflow
     assert orchestration.workspace.run_workflow is None
     assert orchestration.workflow_runs.run_workflow is None
     assert orchestration.workflows.package is None
-    assert validate.ota_record[-1].workflow_result["run_id"] == published.run_id
+    assert execute.ota_record[-1].workflow_result["run_id"] == published.run_id
 
 
-async def test_execution_only(orchestration: _Harness) -> None:
-    """Final multi-section execution-only Run:
+async def test_multi_section_execution(orchestration: _Harness) -> None:
+    """Final multi-section Workflow Run:
 
     {
       "section_1": {"cursor": "execute/1", "run": "active"},
-      "section_2": {"run": "completed", "validation": "not_required"},
+      "section_2": {"run": "completed"},
       "private_run": "deleted",
       "published_result": "result/report.txt"
     }
 
     Checks:
     1. Completing the first of two execution sections advances only to the second section.
-    2. The final execution section publishes directly with NOT_REQUIRED validation and cleans .run.
+    2. The final execution section publishes the result and cleans .run.
     """
-    source = orchestration.paths.root / "execution-only-source"
+    source = orchestration.paths.root / "multi-section-source"
     _write_package(source)
     (source / "workflow" / "WORKFLOW.md").write_text(
-        "---\nname: execution-only-report\ndescription: Create a report without validation\n---\n"
+        "---\nname: multi-section-report\ndescription: Create a report in two steps\n---\n"
         "# Gather report source\n\nCollect the source material in background/work.\n\n"
         "# Write final report\n\nWrite the requested report to result/report.txt.\n",
-        encoding="utf-8",
-    )
-    (source / "workflow" / "VALIDATE.md").write_text(
-        "---\nvalidation: none\n---\n",
         encoding="utf-8",
     )
     saved = await orchestration.workflows.materialize_workflow(
         source,
         workflow_id=None,
         source_session_id=SESSION_ID,
-        source_turn_id="execution-only-source",
-        name="Execution-only Report",
-        description="Create a report without validation",
+        source_turn_id="multi-section-source",
+        name="Multi-section Report",
+        description="Create a report in two steps",
     )
     started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
     assert isinstance(started.think_status, WorkflowStageState)
@@ -833,7 +768,7 @@ async def test_execution_only(orchestration: _Harness) -> None:
     checkpoint = orchestration.workspace.run_workflow_checkpoint()
     assert checkpoint is not None
     assert (checkpoint.stage, checkpoint.step_index) == ("execute", 1)
-    (active.result_dir / "report.txt").write_text("Execution-only report\n", encoding="utf-8")
+    (active.result_dir / "report.txt").write_text("Multi-section report\n", encoding="utf-8")
 
     second = _ota(
         "Create today's report",
@@ -845,15 +780,13 @@ async def test_execution_only(orchestration: _Harness) -> None:
     )
     await _apply(orchestration, second)
 
-    # Check 2: The execution boundary publishes without inventing a validation phase.
+    # Check 2: The final execution boundary publishes the terminal result.
     second_payload = _payload(second, "report_workflow_step")
     published = orchestration.workflow_runs.get(second_payload["run_id"])
     assert second_payload["step_number"] == 2
     assert second_payload["run_status"] == WorkflowRunStatus.COMPLETED.value
-    assert second_payload["validation_status"] == WorkflowValidationStatus.NOT_REQUIRED.value
     assert published is not None
-    assert published.validation_status is WorkflowValidationStatus.NOT_REQUIRED
-    assert published.read_file("result/report.txt") == "Execution-only report\n"
+    assert published.read_file("result/report.txt") == "Multi-section report\n"
     assert second.think_status == NormalStageState()
     assert not orchestration.workspace.has_run_workflow
     assert orchestration.workspace.run_workflow is None
@@ -866,7 +799,7 @@ async def test_run_failure(orchestration: _Harness) -> None:
 
     {
       "step": {"status": "failure", "summary": "Source data is unavailable"},
-      "run": {"status": "failed", "validation": "failed"},
+      "run": {"status": "failed"},
       "private_run": "deleted",
       "failure_report": "published"
     }
@@ -896,7 +829,6 @@ async def test_run_failure(orchestration: _Harness) -> None:
     payload = _payload(failed, "report_workflow_step")
     published = orchestration.workflow_runs.get(payload["run_id"])
     assert payload["run_status"] == WorkflowRunStatus.FAILED.value
-    assert payload["validation_status"] == WorkflowValidationStatus.FAILED.value
     assert published is not None
     assert "Source data is unavailable" in published.read_file("result/failure.md")
 

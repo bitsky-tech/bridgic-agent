@@ -102,7 +102,6 @@ describe('FocusModeHeader', () => {
       phase: 'execute',
       stepIndex: 1,
       executionSteps: ['确认凭证', '创建表格'],
-      validationSteps: ['检查字段'],
     })
 
     await act(async () => {

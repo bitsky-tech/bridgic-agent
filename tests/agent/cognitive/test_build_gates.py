@@ -26,7 +26,7 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     }
 
     Checks:
-    1. Clarify requires a structurally valid task and the one-time review before confirmation.
+    1. Clarify requires a structurally valid task before confirmation.
     2. Explore hands off only after a valid implementation plan exists.
     3. Generate hands off only after the Workflow package is executable and validatable.
     4. Verify requests final confirmation only after a valid report ends in PASS.
@@ -46,7 +46,7 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     def write(name: str, body: str) -> None:
         (build.root / name).write_text(body, encoding="utf-8")
 
-    # Check 1: Clarify requires a valid task and the one-time acceptance review before confirmation.
+    # Check 1: Clarify requires a valid task before confirmation.
     assert "write task.md" in (await clarify.legality_check(confirm_task, None, context) or "")
     write(
         "task.md",
@@ -71,20 +71,15 @@ Input -->
 ## Goal
 Create the requested report.
 
+## Task
+Read the supplied source material and create a report.
+
+## Workflow
+Collect the inputs, prepare the report, and deliver it.
+
 ## Final deliverables
 A report containing the requested summary.
-
-## Acceptance criteria
-The report exists and contains the summary.
 """,
-    )
-    assert await clarify.legality_check(tool_call("request_accept_rule"), None, context) is None
-    assert "acceptance outline first" in (
-        await clarify.legality_check(confirm_task, None, context) or ""
-    )
-    build.start_acceptance_review("review-cognitive")
-    assert "already has its one-time" in (
-        await clarify.legality_check(tool_call("request_accept_rule"), None, context) or ""
     )
     assert await clarify.legality_check(confirm_task, None, context) is None
     assert "reviewed by the user" in (
@@ -128,7 +123,7 @@ Read the input, create the report, and validate its contents.
         "verify.md",
         """# Verification
 
-The isolated checks completed, but one acceptance check failed.
+The isolated checks completed, but one Workflow check failed.
 
 ## Overall verdict
 FAIL

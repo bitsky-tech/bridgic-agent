@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from bridgic.llms.openai import OpenAIConfiguration
 
@@ -41,26 +41,42 @@ def _require_api_key(user: User) -> None:
         )
 
 
-def _build_codex(user: User, model: str) -> Any:
-    # Codex (ChatGPT subscription) = OAuth-only; the credentials live in
-    # ~/.codex/auth.json, not on the User row. Resolve (+ refresh) them before the
-    # api_key gate, because a Codex user legitimately has no api_key.
+def build_codex_llm(model: str, user_id: str = "", temperature: float = 0.0, api_base: Optional[str] = None) -> CodexResponsesLlm:
+    """Build a Codex client from the authorized local ChatGPT credentials.
+
+    ``generate_image`` also uses this constructor when ChatGPT Auth is an
+    enabled fallback but the current conversation runs on another provider.
+    Keeping credential resolution here preserves the same refresh and request
+    behavior as the primary Codex chat path.
+    """
     creds = resolve_codex_credentials()
     if creds is None:
         raise ValueError(backend_i18n.text(
             "llm.codex_credentials_missing",
-            user_id=user.id,
+            user_id=user_id,
         ))
     return CodexResponsesLlm(
         access_token=creds.access_token,
         account_id=creds.account_id,
         configuration=CodexConfiguration(
-            model=model, temperature=user.default_temperature,
+            model=model, temperature=temperature,
         ),
-        api_base=user.base_url or None,
+        api_base=api_base or None,
         # Re-resolve (and auto-refresh) creds per request so this cached client
         # never sends an expired access token; also drives the 401 force-refresh.
         credential_provider=resolve_codex_credentials,
+    )
+
+
+def _build_codex(user: User, model: str) -> Any:
+    # Codex (ChatGPT subscription) = OAuth-only; the credentials live in
+    # ~/.codex/auth.json, not on the User row. Resolve (+ refresh) them before the
+    # api_key gate, because a Codex user legitimately has no api_key.
+    return build_codex_llm(
+        model,
+        user_id=user.id,
+        temperature=user.default_temperature,
+        api_base=user.base_url,
     )
 
 
@@ -133,4 +149,4 @@ def build_llm(user: User, model: str) -> Any:
     return builder(user, model)
 
 
-__all__ = ["build_llm"]
+__all__ = ["build_codex_llm", "build_llm"]

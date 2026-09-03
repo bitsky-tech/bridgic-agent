@@ -116,7 +116,7 @@ class Repository(Generic[T]):
                 sync_conn.execute(text(ddl))
 
         cls._migrate_session_turn_usage(sync_conn)
-        cls._migrate_legacy_workflow_runs(sync_conn)
+        cls._migrate_workflow_runs(sync_conn)
         # Repair rows written before the api_key→Codex switch cleared the stale
         # base_url: Codex channels never legitimately carry one, and a leftover
         # https://api.openai.com/v1 routes /codex/responses to a 404. Idempotent.
@@ -194,10 +194,14 @@ class Repository(Generic[T]):
                 )
 
     @staticmethod
-    def _migrate_legacy_workflow_runs(sync_conn: Any) -> None:
-        """Normalize rows persisted by the former database-backed Run lifecycle."""
+    def _migrate_workflow_runs(sync_conn: Any) -> None:
+        """Remove obsolete Workflow Run lifecycle and validation state."""
         from sqlalchemy import text
 
+        rows = sync_conn.exec_driver_sql("PRAGMA table_info(workflow_runs)").all()
+        columns = {row[1] for row in rows}
+        if not columns:
+            return
         legacy_statuses = "'RUNNING', 'WAITING', 'PAUSED', 'CANCELLED'"
         sync_conn.execute(text(
             "DELETE FROM session_workflow_runs WHERE run_id IN "
@@ -206,14 +210,11 @@ class Repository(Generic[T]):
         sync_conn.execute(text(
             f"DELETE FROM workflow_runs WHERE status IN ({legacy_statuses})"
         ))
-        sync_conn.execute(text(
-            "UPDATE workflow_runs SET validation_status = 'FAILED' "
-            "WHERE status = 'FAILED' AND validation_status = 'PENDING'"
-        ))
-        sync_conn.execute(text(
-            "UPDATE workflow_runs SET validation_status = 'NOT_REQUIRED' "
-            "WHERE status = 'COMPLETED' AND validation_status = 'PENDING'"
-        ))
+        if "validation_status" in columns:
+            sync_conn.exec_driver_sql("DROP INDEX IF EXISTS ix_workflow_runs_validation_status")
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE workflow_runs DROP COLUMN validation_status"
+            )
 
     @classmethod
     async def close(cls) -> None:

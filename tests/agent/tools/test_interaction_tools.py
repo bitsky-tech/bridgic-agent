@@ -5,7 +5,6 @@ import pytest
 from src.amphi_agent.tools._help import help as product_help
 from src.amphi_agent.tools._request_human import (
     RequestHumanRejection,
-    request_accept_rule,
     request_build,
     request_human_choice,
     request_human_task_confirm,
@@ -172,36 +171,27 @@ async def test_confirmation_cards() -> None:
     """Final confirmation requests:
 
     {
-      "acceptance_rules": ["A report is delivered.", "Sources are cited."],
       "task_confirm": "assigned",
       "workflow_confirm": {"default_name": "Weekly review", "summary": "Verified"}
     }
 
     Checks:
-    1. Acceptance rules lose caller-supplied AC labels and receive a request identity.
-    2. Task confirmation receives its own stable correlation identity.
-    3. Workflow confirmation parses and trims the final naming payload.
-    4. Duplicate rules and missing Workflow names are rejected.
+    1. Task confirmation receives its own stable correlation identity.
+    2. Workflow confirmation parses and trims the final naming payload.
+    3. A missing Workflow name is rejected.
     """
-    # Check 1: Acceptance rules lose caller-supplied AC labels and receive a request identity.
-    rules = await request_accept_rule('["AC-1: A report is delivered.", "AC2) Sources are cited."]')
-    assert rules.rules == ["A report is delivered.", "Sources are cited."]
-    assert rules.request_id.startswith("accept_rule_")
-
-    # Check 2: Task confirmation receives its own stable correlation identity.
+    # Check 1: Task confirmation receives its own stable correlation identity.
     task = await request_human_task_confirm()
     assert task.request_id.startswith("task_confirm_")
 
-    # Check 3: Workflow confirmation parses and trims the final naming payload.
+    # Check 2: Workflow confirmation parses and trims the final naming payload.
     workflow = await request_human_workflow_confirm(
         '{"default_name": " Weekly review ", "summary": " Verified "}',
     )
     assert (workflow.default_name, workflow.summary) == ("Weekly review", "Verified")
     assert workflow.request_id.startswith("workflow_confirm_")
 
-    # Check 4: Duplicate rules and missing Workflow names are rejected.
-    with pytest.raises(RequestHumanRejection, match="duplicate rules"):
-        await request_accept_rule('["Same result", "Same result"]')
+    # Check 3: A missing Workflow name is rejected.
     with pytest.raises(RequestHumanRejection, match="default_name"):
         await request_human_workflow_confirm("{}")
 

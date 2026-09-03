@@ -26,6 +26,7 @@ import { i18n } from './i18n'
 /** The tool's display kind. `hidden` = internal control flow (not rendered); `generic` = unknown/MCP fallback. */
 export type ToolKind =
   | 'read'
+  | 'image_read'
   | 'write'
   | 'edit'
   | 'bash'
@@ -39,6 +40,7 @@ export type ToolKind =
 /** Tool name → kind. Exact match for built-in tools; everything else falls to generic. */
 const REGISTRY: Record<string, ToolKind> = {
   read_file: 'read',
+  read_image: 'image_read',
   write_file: 'write',
   edit_file: 'edit',
   bash: 'bash',
@@ -300,6 +302,10 @@ export function toolLabel(kind: ToolKind, name: string, input: unknown): ToolLab
     case 'read': {
       const p = file()
       return { verb: i18n.t('tool.verb.read'), subject: basename(p), subjectFull: p }
+    }
+    case 'image_read': {
+      const p = file()
+      return { verb: i18n.t('tool.verb.analyzeImage'), subject: basename(p), subjectFull: p }
     }
     case 'write': {
       const p = file()

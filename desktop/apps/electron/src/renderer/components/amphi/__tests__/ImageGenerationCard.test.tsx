@@ -63,7 +63,12 @@ describe('ImageGenerationCard', () => {
         <ToolCallRow call={{
           toolUseId: 'image-success',
           name: 'generate_image',
-          input: { prompt: '水墨山水', provider_id: 'openai', model: 'gpt-image-1' },
+          input: {
+            prompt: '水墨山水',
+            provider_id: 'openai',
+            model: 'gpt-image-1',
+            reference_image_path: '/tmp/reference/source.png',
+          },
           result: {
             output: `Generated one image with openai/gpt-image-1.\n${path}`,
             isError: false,
@@ -83,6 +88,8 @@ describe('ImageGenerationCard', () => {
     const details = host.querySelector<HTMLButtonElement>('button[aria-label="图片生成详情"]')
     await act(async () => details?.click())
     expect(host.textContent).toContain('generated-test.png')
+    expect(host.textContent).toContain('参考图')
+    expect(host.textContent).toContain('source.png')
     expect(host.querySelector('img')).toBeNull()
 
     const reveal = Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.includes('在文件中显示'))
@@ -121,6 +128,65 @@ describe('ImageGenerationCard', () => {
     const details = host.querySelector<HTMLButtonElement>('button[aria-label="图片生成详情"]')
     await act(async () => details?.click())
     expect(host.textContent).toContain('Provider overloaded; please try again later')
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+})
+
+describe('read_image presentation', () => {
+  it('shows progress in the row and cannot expand before the tool returns', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <ToolCallRow call={{
+          toolUseId: 'image-analysis-running',
+          name: 'read_image',
+          input: { file_path: '/tmp/reference.png' },
+        }} />,
+      )
+    })
+
+    const running = host.querySelector<HTMLButtonElement>('[data-image-analysis-state="running"]')
+    expect(running).not.toBeNull()
+    expect(running?.disabled).toBe(true)
+    expect(running?.hasAttribute('aria-expanded')).toBe(false)
+    expect(running?.textContent).toContain('正在理解图片')
+    expect(running?.querySelectorAll('.agent-activity-wave > span')).toHaveLength(3)
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('renders visual analysis as wrapped Markdown instead of numbered source code', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <ToolCallRow call={{
+          toolUseId: 'image-analysis',
+          name: 'read_image',
+          input: { file_path: '/tmp/reference.png' },
+          result: {
+            output: 'Image analysis for /tmp/reference.png:\n**Composition:** centered subject',
+            isError: false,
+            durationMs: 1_200,
+          },
+        }} />,
+      )
+    })
+
+    expect(host.textContent).toContain('理解图片')
+    expect(host.textContent).not.toContain('全文')
+
+    await act(async () => host.querySelector<HTMLButtonElement>('button')?.click())
+    expect(host.querySelector('strong')?.textContent).toBe('Composition:')
+    expect(host.querySelector('pre')).toBeNull()
 
     await act(async () => root.unmount())
     host.remove()

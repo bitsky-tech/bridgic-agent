@@ -34,7 +34,6 @@ json.dump({
     "generate": module.GENERATE_PERSONA,
     "verify": module.VERIFY_PERSONA,
     "workflowExecute": module.WORKFLOW_PERSONA,
-    "workflowValidate": module.WORKFLOW_VALIDATE_PERSONA,
     "subAgentGuidance": module._SUB_AGENT_GUIDANCE,
     "turnFailedMessage": module.TURN_FAILED_MESSAGE,
 }, sys.stdout, ensure_ascii=False)

@@ -4,7 +4,7 @@ import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, MainThink, WorkflowRunLibrary
-from src.amphi_agent._cognitive import ValidateThink, WorkflowThink
+from src.amphi_agent._cognitive import WorkflowThink
 from src.amphi_agent._workflows import WorkflowLibrary
 from src.amphi_store import UserInput
 from tests._support.sandbox import IsolatedPaths
@@ -141,7 +141,6 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
       "execute_section": {"report": "allowed", "stage_jump": "blocked"},
       "run_request": {"second_start": "blocked", "matching_resume": "allowed"},
       "completion_boundary": {"report": "blocked"},
-      "validate_section": {"report": "allowed"},
       "cursor_mismatch": "all_workflow_controls_blocked"
     }
 
@@ -149,8 +148,7 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
     1. Execute accepts a section report and only allows an explicit exit to normal mode.
     2. The active stage rejects another start while allowing a resume of the same Workflow.
     3. A completion boundary cannot be reported as another source section.
-    4. Validate accepts its own current section after the durable cursor advances.
-    5. A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
+    4. A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
     """
     source_root = test_sandbox.root / "run-source"
     source_root.mkdir()
@@ -224,7 +222,7 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
     assert await execute.legality_check(report, execute_ota, context) is None
     assert "advance automatically" in (
         await execute.legality_check(
-            tool_call("switch", mode="run_workflow", stage="validate"),
+            tool_call("switch", mode="run_workflow", stage="execute"),
             execute_ota,
             context,
         ) or ""
@@ -263,21 +261,7 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
         await execute.legality_check(report, ota("execute", 1), context) or ""
     )
 
-    run_space.checkpoint_cursor(
-        expected_workflow_id=WORKFLOW_ID,
-        expected_generation=GENERATION,
-        expected_stage="execute",
-        expected_step_index=1,
-        stage="validate",
-        step_index=0,
-    )
-
-    # Check 4: Validate accepts its own current section after the durable cursor advances.
-    validate = ValidateThink()
-    validate_ota = ota("validate", 0)
-    assert await validate.legality_check(report, validate_ota, context) is None
-
-    # Check 5: A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
+    # Check 4: A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
     assert "does not match" in (
-        await validate.legality_check(report, ota("validate", 0, "stale-generation"), context) or ""
+        await execute.legality_check(report, ota("execute", 1, "stale-generation"), context) or ""
     )

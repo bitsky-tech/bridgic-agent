@@ -11,7 +11,7 @@ from src.amphi_agent.tools._workflow import (
     remove_workflow,
     report_workflow_step,
 )
-from src.amphi_store import UserInput, WorkflowRunStatus, WorkflowValidationStatus
+from src.amphi_store import UserInput, WorkflowRunStatus
 from tests.agent.tools._harness import ToolHarness
 
 
@@ -44,11 +44,6 @@ async def test_workflow_definition(tool_harness: ToolHarness) -> None:
             "# 1. Prepare report\n\nCreate the requested report.\n",
             encoding="utf-8",
         )
-        (workflow / "VALIDATE.md").write_text(
-            "# 1. Review report\n\nConfirm the requested result exists.\n",
-            encoding="utf-8",
-        )
-
     source = tool_harness.paths.root / "workflow-source"
     write_workflow_source(source)
     package = await tool_harness.context.workflows.import_workflow(
@@ -80,7 +75,6 @@ async def test_workflow_definition(tool_harness: ToolHarness) -> None:
         source_session_id="session-tools",
         workflow_input=UserInput(text="Prepare today"),
         status=WorkflowRunStatus.COMPLETED,
-        validation_status=WorkflowValidationStatus.PASSED,
     )
 
     # Check 3: Removing a Workflow definition retains its already published Run result.
@@ -123,8 +117,12 @@ async def test_step_report() -> None:
     assert success.evidence == ["result/report.md", "pytest passed"]
 
     # Check 2: Failure remains an explicit terminal status rather than being rewritten.
-    failure = await report_workflow_step("failure", "Validation failed")
-    assert (failure.status, failure.summary, failure.evidence) == ("failure", "Validation failed", [])
+    failure = await report_workflow_step("failure", "Source data is unavailable")
+    assert (failure.status, failure.summary, failure.evidence) == (
+        "failure",
+        "Source data is unavailable",
+        [],
+    )
 
     # Check 3: A blank summary is rejected because it cannot explain the section outcome.
     with pytest.raises(WorkflowToolRejection, match="summary.*non-empty"):
@@ -136,7 +134,6 @@ async def test_workflow_results(tool_harness: ToolHarness) -> None:
 
     {
       "status": "completed",
-      "validation": "passed",
       "files": ["result/report.md", "background/work/notes.txt"],
       "report": "Published report"
     }
@@ -160,7 +157,6 @@ async def test_workflow_results(tool_harness: ToolHarness) -> None:
         source_session_id="session-tools",
         workflow_input=UserInput(text="Prepare today"),
         status=WorkflowRunStatus.COMPLETED,
-        validation_status=WorkflowValidationStatus.PASSED,
     )
 
     # Check 1: A terminal Run published by the real library appears in the tool's JSON result list.
@@ -172,7 +168,6 @@ async def test_workflow_results(tool_harness: ToolHarness) -> None:
     # Check 2: Reading without a path returns stable Run metadata and original structured input.
     detail = json.loads(await read_workflow_run(run.run_id))
     assert detail["status"] == "completed"
-    assert detail["validation"] == "passed"
     assert detail["workflow_input"]["text"] == "Prepare today"
 
     # Check 3: Reading an advertised path returns its exact UTF-8 content.

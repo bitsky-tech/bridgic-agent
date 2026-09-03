@@ -22,10 +22,6 @@ description: Build a deterministic report
 # Produce the report
 Write the requested report.
 """
-    validation = """---
-validation: none
----
-"""
     output = io.BytesIO()
     with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
@@ -33,7 +29,6 @@ validation: none
         archive.writestr("explore.md", "No external context is required.")
         archive.writestr("verify.md", "Confirm the report is complete.")
         archive.writestr("workflow/WORKFLOW.md", workflow)
-        archive.writestr("workflow/VALIDATE.md", validation)
     return output.getvalue()
 
 
@@ -64,7 +59,7 @@ async def test_import(service_client: httpx.AsyncClient) -> None:
           "desc": "Build a deterministic report",
           "domain": "reporting",
           "documents": ["task.md", "explore.md", "verify.md"],
-          "program": ["VALIDATE.md", "WORKFLOW.md"]
+          "program": ["WORKFLOW.md"]
         }
       ],
       "export": {
@@ -123,7 +118,7 @@ async def test_import(service_client: httpx.AsyncClient) -> None:
         "editable": False,
     }
     program = detail["fields"]["program"]
-    assert [file["path"] for file in program["files"]] == ["VALIDATE.md", "WORKFLOW.md"]
+    assert [file["path"] for file in program["files"]] == ["WORKFLOW.md"]
     assert all(file["language"] == "markdown" for file in program["files"])
     assert program["readme"] is None
 
@@ -140,7 +135,6 @@ async def test_import(service_client: httpx.AsyncClient) -> None:
             "task.md",
             "explore.md",
             "verify.md",
-            "workflow/VALIDATE.md",
             "workflow/WORKFLOW.md",
         }
         exported_manifest = json.loads(archive.read("manifest.json"))

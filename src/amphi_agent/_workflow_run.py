@@ -14,7 +14,6 @@ from ..amphi_store import (
     WorkflowRun as WorkflowRunRecord,
     WorkflowRunRepository,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from ._workflows import WorkflowPackage
 
@@ -122,7 +121,7 @@ class RunWorkflow:
                 raise
 
         self._validate_open()
-        if stage not in {"execute", "validate"}:
+        if stage != "execute":
             raise ValueError(f"Unsupported Workflow stage: {stage!r}")
         if status not in {"success", "failure"}:
             raise ValueError(f"Unsupported Workflow step status: {status!r}")
@@ -152,9 +151,7 @@ class RunWorkflow:
             lines.extend(["- Evidence:", *(f"  - {item}" for item in normalized_evidence)])
         lines.append(f"<!-- {identity}:end -->")
         report_block = "\n".join(lines)
-        report_path = self.background_dir / (
-            "execution.md" if stage == "execute" else "validation.md"
-        )
+        report_path = self.background_dir / "execution.md"
         failure_path = self.result_dir / "failure.md"
         failure_body = (
             "# Workflow run failure\n\n"
@@ -230,7 +227,6 @@ class WorkflowRun:
     source_session_id: str
     root: Path
     status: WorkflowRunStatus
-    validation_status: WorkflowValidationStatus
     created_at: datetime
     workflow_input: UserInput
     finished_at: Optional[datetime] = None
@@ -253,7 +249,6 @@ class WorkflowRun:
             source_session_id=row.source_session_id,
             root=Path(row.run_dir),
             status=row.status,
-            validation_status=row.validation_status,
             created_at=row.created_at,
             workflow_input=UserInput.from_runtime(row.workflow_input),
             finished_at=row.finished_at,
@@ -612,21 +607,10 @@ class WorkflowRunLibrary:
         source_session_id: str,
         workflow_input: object,
         status: WorkflowRunStatus,
-        validation_status: WorkflowValidationStatus,
     ) -> WorkflowRun:
         """Atomically publish and idempotently persist one terminal Run result."""
         if not status.is_published:
             raise ValueError("Workflow Run publication accepts terminal results only")
-        if status is WorkflowRunStatus.COMPLETED and validation_status not in {
-            WorkflowValidationStatus.PASSED,
-            WorkflowValidationStatus.NOT_REQUIRED,
-        }:
-            raise ValueError("Completed Workflow results require a final validation outcome")
-        if (
-            status is WorkflowRunStatus.FAILED
-            and validation_status is WorkflowValidationStatus.PASSED
-        ):
-            raise ValueError("Failed Workflow results cannot have passed validation")
         source = Path(os.path.abspath(Path(source_root).expanduser()))
         if source.is_symlink() or not source.is_dir():
             raise FileNotFoundError(f"Workflow Run publication source is unavailable: {source}")
@@ -677,7 +661,6 @@ class WorkflowRunLibrary:
             result_dir=str(destination),
             workflow_input=UserInput.from_runtime(workflow_input),
             status=status,
-            validation_status=validation_status,
         )
         run = WorkflowRun.from_record(row)
         if (
@@ -699,7 +682,6 @@ class WorkflowRunLibrary:
         source_session_id: str,
         workflow_input: object,
         status: WorkflowRunStatus,
-        validation_status: WorkflowValidationStatus,
     ) -> WorkflowRun:
         """Publish the active Run without exposing its implementation to callers."""
         run = self.require_run_workflow()
@@ -711,7 +693,6 @@ class WorkflowRunLibrary:
             source_session_id=source_session_id,
             workflow_input=workflow_input,
             status=status,
-            validation_status=validation_status,
         )
 
     def read_file(self, run_id: str, relative_path: str) -> str:

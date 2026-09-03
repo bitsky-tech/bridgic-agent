@@ -9,7 +9,6 @@ from src.amphi_agent._cognitive import (
     ExploreThink,
     GenerateThink,
     SubAgentThink,
-    ValidateThink,
     VerifyThink,
     WorkflowThink,
 )
@@ -60,10 +59,6 @@ async def test_message_scopes() -> None:
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
 
-    class ContextFreeValidateThink(ValidateThink):
-        async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
-            return []
-
     async def assemble(worker: MainThink, state: dict[str, object], child: bool) -> tuple[list[Role], list[str]]:
         ota_context = AmphiOTAContext(
             user_input="Current build request",
@@ -94,7 +89,6 @@ async def test_message_scopes() -> None:
         (GenerateThink(), {"mode": "build", "stage": "generate"}, False),
         (VerifyThink(), {"mode": "build", "stage": "verify"}, False),
         (ContextFreeWorkflowThink(), {**workflow_state, "stage": "execute"}, False),
-        (ContextFreeValidateThink(), {**workflow_state, "stage": "validate"}, False),
     )
 
     for worker, state, child in cases:
@@ -116,12 +110,8 @@ async def test_message_scopes() -> None:
 
 
 async def test_workflow_stage_message_scope() -> None:
-    """Automatic Workflow stages keep only their own trace."""
+    """Workflow execution keeps its own trace."""
     class ContextFreeWorkflowThink(WorkflowThink):
-        async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
-            return []
-
-    class ContextFreeValidateThink(ValidateThink):
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
 
@@ -135,24 +125,6 @@ async def test_workflow_stage_message_scope() -> None:
         "workflow_id": "workflow-a",
         "generation": "generation-a",
     }
-    validate_ota = AmphiOTAContext(
-        user_input="Run the workflow",
-        prompt_time=PROMPT_TIME,
-        state={"think": {**workflow_state, "stage": "validate", "step_index": 0}},
-        ota_record=[
-            record("execute", "Older execution history"),
-            record("execute", "Final execution handoff"),
-            record("validate", "Validation progress"),
-        ],
-    )
-    validate_messages = await ContextFreeValidateThink().assemble_messages(validate_ota, _context())
-    validate_contents = [message.content for message in validate_messages]
-    assert "Older execution history" not in validate_contents
-    assert "Final execution handoff" not in validate_contents
-    assert "Past request" in validate_contents
-    assert "Past answer" in validate_contents
-    assert "Validation progress" in validate_contents
-
     execute_ota = AmphiOTAContext(
         user_input="Run the workflow",
         prompt_time=PROMPT_TIME,
@@ -263,7 +235,12 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
         state={"think": {"mode": "build", "stage": "generate"}},
         ota_record=[],
     )
-    switch_reason = "The generated script mishandles empty input; fix that case and rerun validation."
+    switch_reason = (
+        "Verification found that workflow.py mishandles empty input. The user confirmed "
+        "that empty input must produce an empty result instead of failing; update the "
+        "input-normalization branch in workflow.py first, then return it for another "
+        "real-environment verification. No other verified path needs regeneration."
+    )
     first_generation_handoff = switch_record(
         "generate",
         "verify",
@@ -283,6 +260,9 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     assert "Verification intermediate work" not in generate_contents
     assert "Verification history" in generate_contents
     assert any("mishandles empty input" in content for content in generate_contents)
+    assert any("user confirmed" in content for content in generate_contents)
+    assert any("input-normalization branch" in content for content in generate_contents)
+    assert any("No other verified path" in content for content in generate_contents)
     assert "Generate retry progress" in generate_contents
     switch_call = next(
         block

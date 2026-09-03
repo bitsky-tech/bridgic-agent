@@ -51,14 +51,6 @@ Write the requested summary to result/report.md.
 """,
         encoding="utf-8",
     )
-    (workflow / "VALIDATE.md").write_text(
-        """# Validate the report
-Confirm result/report.md contains the requested summary.
-""",
-        encoding="utf-8",
-    )
-
-
 __all__ = [
     "GENERATION",
     "SESSION_ID",

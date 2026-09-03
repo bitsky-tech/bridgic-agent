@@ -11,7 +11,6 @@ from src.amphi_store import (
     WorkflowRun,
     WorkflowRunRepository,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 
 
@@ -40,7 +39,6 @@ async def _publish_run(
     input_text: str,
     *,
     status: WorkflowRunStatus = WorkflowRunStatus.COMPLETED,
-    validation_status: WorkflowValidationStatus = WorkflowValidationStatus.NOT_REQUIRED,
     blocks: list[dict] | None = None,
 ) -> WorkflowRun:
     """Publish one terminal Run through the public repository API."""
@@ -53,9 +51,36 @@ async def _publish_run(
         result_dir=f"/results/{run_id}",
         workflow_input=UserInput(text=input_text, blocks=blocks or []),
         status=status,
-        validation_status=validation_status,
     )
     return run
+
+
+async def test_legacy_validation_column_is_removed(initialized_store: None) -> None:
+    """The obsolete validation column and its index are removed idempotently."""
+    engine = WorkflowRunRepository._engine
+    assert engine is not None
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql(
+            "ALTER TABLE workflow_runs ADD COLUMN validation_status VARCHAR "
+            "NOT NULL DEFAULT 'NOT_REQUIRED'"
+        )
+        await connection.exec_driver_sql(
+            "CREATE INDEX ix_workflow_runs_validation_status "
+            "ON workflow_runs (validation_status)"
+        )
+
+    await WorkflowRunRepository.init_schema()
+    await WorkflowRunRepository.init_schema()
+
+    async with engine.begin() as connection:
+        columns = (
+            await connection.exec_driver_sql("PRAGMA table_info(workflow_runs)")
+        ).all()
+        indexes = (
+            await connection.exec_driver_sql("PRAGMA index_list(workflow_runs)")
+        ).all()
+    assert "validation_status" not in {row[1] for row in columns}
+    assert "ix_workflow_runs_validation_status" not in {row[1] for row in indexes}
 
 
 async def test_publish_retry(initialized_store: None) -> None:
@@ -73,7 +98,6 @@ async def test_publish_retry(initialized_store: None) -> None:
             "blocks": [{"type": "mention", "id": "source-data"}]
           },
           "status": "completed",
-          "validation_status": "not_required",
           "created_at": "<terminal timestamp>",
           "finished_at": "<same terminal timestamp>"
         }
@@ -109,7 +133,6 @@ async def test_publish_retry(initialized_store: None) -> None:
             blocks=[{"type": "mention", "id": "source-data"}],
         ),
         "status": WorkflowRunStatus.COMPLETED,
-        "validation_status": WorkflowValidationStatus.NOT_REQUIRED,
     }
 
     # Check 2: Concurrent identical publications create one terminal row and confirm one retry.
@@ -130,7 +153,6 @@ async def test_publish_retry(initialized_store: None) -> None:
     assert loaded.source_session_id == "source-session"
     assert loaded.workflow_input == arguments["workflow_input"]
     assert loaded.status is WorkflowRunStatus.COMPLETED
-    assert loaded.validation_status is WorkflowValidationStatus.NOT_REQUIRED
     assert loaded.created_at == loaded.finished_at
     assert [run.id for run in source_runs] == [run_id]
 
@@ -154,7 +176,6 @@ async def test_outcome_rules(initialized_store: None) -> None:
         {
           "id": "failed-run",
           "status": "failed",
-          "validation_status": "failed",
           "finished_at": "<terminal timestamp>"
         }
       ]
@@ -162,9 +183,7 @@ async def test_outcome_rules(initialized_store: None) -> None:
 
     Checks:
     1. Every storable Workflow Run status is both terminal and published.
-    2. A completed result cannot record failed validation.
-    3. A failed result cannot record passed validation.
-    4. A failed result with failed validation is persisted normally.
+    2. A failed terminal result is persisted normally.
     """
     await _create_sessions("source-session")
     repository = WorkflowRunRepository()
@@ -173,34 +192,7 @@ async def test_outcome_rules(initialized_store: None) -> None:
     assert all(status.is_terminal for status in WorkflowRunStatus)
     assert all(status.is_published for status in WorkflowRunStatus)
 
-    # Check 2: A completed result cannot record failed validation.
-    with pytest.raises(ValueError, match="Completed Workflow results"):
-        await _publish_run(
-            repository,
-            "invalid-completed",
-            "workflow-report",
-            "Generate report",
-            "source-session",
-            "Generate report",
-            validation_status=WorkflowValidationStatus.FAILED,
-        )
-    assert await repository.get(USER_ID, "invalid-completed") is None
-
-    # Check 3: A failed result cannot record passed validation.
-    with pytest.raises(ValueError, match="Failed Workflow results"):
-        await _publish_run(
-            repository,
-            "invalid-failed",
-            "workflow-report",
-            "Generate report",
-            "source-session",
-            "Generate report",
-            status=WorkflowRunStatus.FAILED,
-            validation_status=WorkflowValidationStatus.PASSED,
-        )
-    assert await repository.get(USER_ID, "invalid-failed") is None
-
-    # Check 4: A failed result with failed validation is persisted normally.
+    # Check 2: A failed terminal result is persisted normally.
     failed = await _publish_run(
         repository,
         "failed-run",
@@ -209,10 +201,8 @@ async def test_outcome_rules(initialized_store: None) -> None:
         "source-session",
         "Generate report",
         status=WorkflowRunStatus.FAILED,
-        validation_status=WorkflowValidationStatus.FAILED,
     )
     assert failed.status is WorkflowRunStatus.FAILED
-    assert failed.validation_status is WorkflowValidationStatus.FAILED
     assert failed.finished_at is not None
 
 
@@ -251,7 +241,6 @@ async def test_lists(initialized_store: None) -> None:
         "source-a",
         "Beta input",
         status=WorkflowRunStatus.FAILED,
-        validation_status=WorkflowValidationStatus.FAILED,
     )
     alpha_new = await _publish_run(
         repository,
@@ -260,7 +249,6 @@ async def test_lists(initialized_store: None) -> None:
         "Alpha report",
         "source-b",
         "Second alpha input",
-        validation_status=WorkflowValidationStatus.PASSED,
     )
 
     # Check 1: The user list returns both successful and failed results from newest to oldest.

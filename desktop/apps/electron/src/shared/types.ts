@@ -9,6 +9,7 @@ import type {
   AppSettings,
   GuiSettings,
   SessionMeta,
+  SessionTitleSource,
   SubAgentMode,
 } from '@app/shared/types'
 import { AgentRole } from '@app/shared/types'
@@ -115,6 +116,7 @@ export type {
   ClientInfoResponse,
   GetClientsResult,
   SessionMeta,
+  SessionTitleSource,
   SubAgentMode,
 }
 export { AgentRole }
@@ -140,7 +142,6 @@ export type {
   SetLocaleFrame,
   SubscribeFrame,
   ChatFrame,
-  AcceptRuleFrame,
   BuildConfirmFrame,
   TaskConfirmFrame,
   WorkflowConfirmFrame,

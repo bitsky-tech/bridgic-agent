@@ -20,8 +20,11 @@ async def switch(mode: str = "", stage: str = "", reason: str = "") -> Any:
         Target stage in a model-controlled mode; omit for Workflow Runs and
         when only changing mode.
     reason : str
-        Brief handoff or exit reason kept in the turn trace and shown to the
-        next Think.
+        For a Build stage handoff, provide a compact, self-contained summary
+        of the stage outcome, decisive findings and user decisions, relevant
+        artifacts, unresolved risks, and what the target stage should do next.
+        For an exit to Main, provide a brief exit reason. The reason is kept in
+        the turn trace and shown to the next Think.
 
     Returns
     -------

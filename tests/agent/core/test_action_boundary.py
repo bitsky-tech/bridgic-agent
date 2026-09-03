@@ -11,9 +11,9 @@ from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
 from src.amphi_agent._error import AgentEmptyAnswerError
-from src.amphi_agent._state import CallVerdict, RoundPermission
+from src.amphi_agent._state import BuildStageState, CallVerdict, RoundPermission
 from src.amphi_agent.security import Permission
-from src.amphi_agent.tools import request_human_choice_tool, run_subagent_tool
+from src.amphi_agent.tools import request_human_choice_tool, run_subagent_tool, switch_tool
 from src.amphi_store import SessionRecord
 from tests._support.sandbox import IsolatedPaths
 
@@ -280,13 +280,13 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
     """Final empty-answer handling:
 
     {
-      "empty_answer": "up to three continuations with recovery instructions",
+      "empty_answer": "up to three neutral continuation instructions",
       "next_visible_answer": "Delivered answer",
       "fourth_empty": "AgentEmptyAnswerError"
     }
 
     Checks:
-    1. Three empty Main responses each dispatch another Main round with stronger guidance.
+    1. Three empty Main responses each dispatch another Main round without assuming completion.
     2. A visible third continuation becomes the Turn result.
     3. A fourth consecutive empty response fails with the typed Agent exception.
     """
@@ -303,12 +303,14 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
         ))
         continuation = await loop.asend("")
 
-        # Check 1: Every permitted empty answer gets a clear, action-bounded recovery round.
+        # Check 1: Every permitted empty answer gets a neutral recovery round.
         assert continuation.name == "main"
         guidance = ota_context.ota_record[-1].observation_result
-        assert "clear summary of the task outcome" in guidance
-        assert "where the result can be found" in guidance
-        assert "There is no need to call more tools" in guidance
+        assert "ended without a user-visible response" in guidance
+        assert "If work remains, continue it and call tools as needed" in guidance
+        assert "If the task is complete" in guidance
+        assert "Do not assume completion" in guidance
+        assert "There is no need to call more tools" not in guidance
 
     ota_context.ota_record.append(OTARecord(
         think_result=ThinkResult(step_content="Delivered answer", tool_calls=[]),
@@ -335,3 +337,32 @@ async def test_empty_answer(test_sandbox: IsolatedPaths) -> None:
     # Check 3: The fourth empty answer fails explicitly with its recognized Agent exception.
     with pytest.raises(AgentEmptyAnswerError, match="after 3 recovery attempts"):
         await failing_loop.asend("")
+
+
+async def test_build_switch_requires_handoff_reason(test_sandbox: IsolatedPaths) -> None:
+    """A Build stage cannot discard its only direct cross-stage handoff."""
+    call = _call("call-switch", "switch", stage="generate", reason=" ")
+    ota_context = _ota([call], [switch_tool])
+    ota_context.transition_think(BuildStageState(stage="verify"))
+    context = _context(test_sandbox.sessions / SESSION_ID)
+
+    admitted = await _invoke(AmphiAgent().before_action(ota_context, context))
+
+    assert admitted.tool_calls == []
+    verdict = ota_context.ota_record[-1].permission.verdicts[0]
+    assert verdict.verdict == Permission.DENY.value
+    assert "requires a non-empty, self-contained reason" in (verdict.reason or "")
+
+
+async def test_build_exit_does_not_require_stage_handoff_reason(test_sandbox: IsolatedPaths) -> None:
+    """Leaving Build remains distinct from handing context to another Build stage."""
+    call = _call("call-switch", "switch", mode="normal")
+    ota_context = _ota([call], [switch_tool])
+    ota_context.transition_think(BuildStageState(stage="verify"))
+    context = _context(test_sandbox.sessions / SESSION_ID)
+
+    admitted = await _invoke(AmphiAgent().before_action(ota_context, context))
+
+    assert [admitted_call.tool for admitted_call in admitted.tool_calls] == ["switch"]
+    verdict = ota_context.ota_record[-1].permission.verdicts[0]
+    assert verdict.verdict == Permission.ALLOW.value

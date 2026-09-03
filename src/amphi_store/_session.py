@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
+from sqlalchemy import update
 from sqlmodel import Field, SQLModel, func, select
 
 from ._base import Repository
@@ -450,6 +451,30 @@ class SessionRepository(Repository[SessionRecord]):
             row.updated_at = _utcnow()
             await s.commit()
             return True
+
+    async def rename_if_title(self, session_id: str, user_id: str, expected_title: Optional[str], title: str) -> bool:
+        """Set ``title`` only while the owned Session still has ``expected_title``.
+
+        The conditional update is atomic so a generated title cannot overwrite a
+        user rename that commits while the model request is in flight.
+        """
+        title_matches = (
+            SessionRecord.title.is_(None)
+            if expected_title is None
+            else SessionRecord.title == expected_title
+        )
+        async with self._session() as session:
+            result = await session.execute(
+                update(SessionRecord)
+                .where(
+                    SessionRecord.id == session_id,
+                    SessionRecord.user_id == user_id,
+                    title_matches,
+                )
+                .values(title=title, updated_at=_utcnow())
+            )
+            await session.commit()
+            return bool(result.rowcount)
 
     async def mark_read(self, session_id: str, user_id: str) -> bool:
         """Clear a session's unread mark: flip ``completed`` → ``finish``;

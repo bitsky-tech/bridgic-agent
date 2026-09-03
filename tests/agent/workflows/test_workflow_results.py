@@ -9,7 +9,6 @@ from src.amphi_store import (
     SessionRepository,
     UserInput,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from tests._support.sandbox import IsolatedPaths
 
@@ -66,7 +65,6 @@ async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None
         "source_session_id": "session-source",
         "workflow_input": UserInput(text="Create the report"),
         "status": WorkflowRunStatus.COMPLETED,
-        "validation_status": WorkflowValidationStatus.PASSED,
     }
 
     # Check 1: An identical publication retry converges on one durable result identity.
@@ -112,7 +110,6 @@ async def test_result_contract(test_sandbox: IsolatedPaths, workflow_store: None
         source_session_id="session-source",
         workflow_input=UserInput(text="Create the report"),
         status=WorkflowRunStatus.FAILED,
-        validation_status=WorkflowValidationStatus.FAILED,
     )
 
     # Check 4: Composition accepts complete results and rejects unavailable outcomes.
@@ -182,7 +179,6 @@ def test_result_links(test_sandbox: IsolatedPaths) -> None:
         source_session_id="session-source",
         root=root,
         status=WorkflowRunStatus.COMPLETED,
-        validation_status=WorkflowValidationStatus.PASSED,
         created_at=datetime.now(timezone.utc),
         workflow_input=UserInput(text="Create linked result"),
     )

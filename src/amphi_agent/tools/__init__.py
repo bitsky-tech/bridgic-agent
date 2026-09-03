@@ -11,6 +11,8 @@
   Baidu and returns links with snippets.
 * ``web_fetch_tool`` — fetches public web content, converts HTML to markdown,
   and applies a prompt with the running agent's LLM.
+* ``read_image_tool`` — sends a local image to an available vision-capable model
+  and returns a textual visual analysis for later reasoning or generation.
 * ``generate_image_tool`` — routes a text prompt to an enabled image-output
   model and saves the generated image in the Session workspace for preview.
 * workspace versioning (``workspace_status`` / ``workspace_diff`` /
@@ -53,9 +55,8 @@ from ._filesystem import (
     write_file_tool,
 )
 from ._help import help, help_tool
-from ._image import generate_image, generate_image_tool
+from ._image import generate_image, generate_image_tool, read_image, read_image_tool
 from ._request_human import (
-    request_accept_rule_tool,
     request_build_tool,
     request_run_workflow_tool,
     request_human_choice_tool,
@@ -132,6 +133,8 @@ __all__ = [
     "help_tool",
     "generate_image",
     "generate_image_tool",
+    "read_image",
+    "read_image_tool",
     "web_search_tool",
     "web_fetch_tool",
     "edit_workflow",
@@ -169,7 +172,6 @@ __all__ = [
     "WORKSPACE_BASIC_TOOL_NAMES",
     "WORKSPACE_ADVANCED_TOOL_NAMES",
     "WORKSPACE_TOOL_NAMES",
-    "request_accept_rule_tool",
     "request_human_choice_tool",
     "request_build_tool",
     "request_run_workflow_tool",

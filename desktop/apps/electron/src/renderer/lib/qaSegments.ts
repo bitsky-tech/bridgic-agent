@@ -123,7 +123,7 @@ export function countConfirmations(blocks: MessageBlock[]): number {
   ).length
 }
 
-/** Workflow execution and validation sections represented in this process. */
+/** Workflow execution sections represented in this process. */
 export function countWorkflowSteps(blocks: MessageBlock[]): number {
   return blocks.filter((block) => block.type === 'workflow_step').length
 }

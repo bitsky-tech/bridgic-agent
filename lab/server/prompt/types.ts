@@ -10,8 +10,7 @@ export type PromptStage =
   | "explore"
   | "generate"
   | "verify"
-  | "workflow_execute"
-  | "workflow_validate";
+  | "workflow_execute";
 
 export interface NativeToolCall {
   id: string;
@@ -97,17 +96,15 @@ export interface PromptWorkspaceSnapshot {
     root?: string | null;
     operation?: "create" | "edit" | string;
     workflowId?: string | null;
-    acceptanceReviewPresented?: boolean;
     tree?: string[];
   } | null;
   workflowRun?: {
     workflowId?: string | null;
     workflowName?: string | null;
     runId?: string | null;
-    stage?: "execute" | "validate" | string;
+    stage?: "execute";
     stepIndex?: number;
     executionSteps?: PromptWorkflowStep[];
-    validationSteps?: PromptWorkflowStep[];
     currentInstruction?: string | null;
     sourceRoot?: string | null;
     packageRoot?: string | null;
@@ -151,7 +148,6 @@ export interface PromptWorkflowResultSnapshot {
   runId: string;
   workflowName: string;
   status: string;
-  validationStatus?: string | null;
   resultDir?: string | null;
   backgroundWorkDir?: string | null;
   input?: string | null;
@@ -191,7 +187,6 @@ export interface PromptPersonaSnapshot {
   generate?: string;
   verify?: string;
   workflowExecute?: string;
-  workflowValidate?: string;
   version?: string;
 }
 

@@ -20,7 +20,6 @@ export const DEFAULT_PERSONAS: Required<Omit<PromptPersonaSnapshot, "version">> 
   generate: PERSONA_SOURCE_SNAPSHOT.generate,
   verify: PERSONA_SOURCE_SNAPSHOT.verify,
   workflowExecute: PERSONA_SOURCE_SNAPSHOT.workflowExecute,
-  workflowValidate: PERSONA_SOURCE_SNAPSHOT.workflowValidate,
   version: PERSONA_SOURCE_VERSION,
 };
 
@@ -56,9 +55,7 @@ export function renderPersona(
 ): RenderedPersona {
   const key: Exclude<keyof PromptPersonaSnapshot, "version"> = stage === "workflow_execute"
     ? "workflowExecute"
-    : stage === "workflow_validate"
-      ? "workflowValidate"
-      : stage;
+    : stage;
   const injected = snapshot?.[key];
   const template = injected ?? DEFAULT_PERSONAS[key];
   const renderedNames = formatToolNames(toolNames);

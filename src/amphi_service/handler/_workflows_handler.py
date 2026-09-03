@@ -340,7 +340,6 @@ class WorkflowRunPresenter:
             "source_session_id": run.source_session_id,
             "workflow_input": run.workflow_input.model_dump(),
             "status": run.status.value,
-            "validation_status": run.validation_status.value,
             "created_at": cls._utc_isoformat(run.created_at),
             "finished_at": cls._utc_isoformat(run.finished_at) if run.finished_at is not None else None,
         }

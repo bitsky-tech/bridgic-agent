@@ -366,7 +366,6 @@ describe('AmphiClient workflow endpoints', () => {
       source_session_id: 'session_1',
       workflow_input: { text: '/目录文件统计工作流 本周', blocks: [] },
       status: 'completed',
-      validation_status: 'passed',
       created_at: '2026-07-19T08:00:00Z',
       finished_at: '2026-07-19T08:01:00Z',
     }])
@@ -376,7 +375,6 @@ describe('AmphiClient workflow endpoints', () => {
 
     expect(captured[0]?.url).toBe('http://x/workflow-runs?workflow_id=wf_1&q=%E6%8A%A5%E5%91%8A&limit=20&offset=40')
     expect(runs[0]?.id).toBe('wfr_1')
-    expect(runs[0]?.validation_status).toBe('passed')
   })
 
   it('lists Workflow results associated with one Session', async () => {
@@ -421,7 +419,6 @@ describe('AmphiClient workflow endpoints', () => {
         ],
       },
       status: 'completed',
-      validation_status: 'passed',
       created_at: '2026-07-19T09:00:00Z',
       finished_at: '2026-07-19T09:01:00Z',
       run_dir: '/results/wf_1/wfr_2',
@@ -560,32 +557,30 @@ describe('AmphiClient session transcript', () => {
     installFetchStub({
       messages: [],
       pending_request: null,
-      thinking_mode: { mode: 'run_workflow', stage: 'validate' },
+      thinking_mode: { mode: 'run_workflow', stage: 'execute' },
       workflow_run: {
         workflow_id: 'wf-report',
         generation: 'gen-report',
         workflow_name: '生成报告',
         source_session_id: 'session_1',
-        phase: 'validate',
+        phase: 'execute',
         step_index: 0,
         execution_steps: ['收集数据', '生成报告'],
-        validation_steps: ['检查报告'],
       },
     })
     const client = new AmphiClient({ baseUrl: 'http://x', token: 'tok' })
 
     const transcript = await client.getSessionMessages('session_1')
 
-    expect(transcript.thinkingMode).toEqual({ mode: 'run_workflow', stage: 'validate' })
+    expect(transcript.thinkingMode).toEqual({ mode: 'run_workflow', stage: 'execute' })
     expect(transcript.workflowRun).toEqual({
       workflowId: 'wf-report',
       generation: 'gen-report',
       workflowName: '生成报告',
       sourceSessionId: 'session_1',
-      phase: 'validate',
+      phase: 'execute',
       stepIndex: 0,
       executionSteps: ['收集数据', '生成报告'],
-      validationSteps: ['检查报告'],
     })
   })
 

@@ -34,7 +34,6 @@ import {
 } from '@/atoms/build'
 import {
   CompletedInteractionCard,
-  humanizeAcceptanceRuleText,
   type CompletedInteractionBlock,
 } from './CompletedInteractionCard'
 import { TimelineStageSection } from './TimelineStageSection'
@@ -302,27 +301,11 @@ function CompletedInteractionRow({ block, sessionId }: { block: CompletedInterac
 
   if (block.type === 'confirmation') {
     detail = [block.question, block.response].filter(Boolean).join(' · ')
-    if (block.kind === 'accept_rule_message') {
-      label = t('session.interaction.label.acceptRuleDeferred')
-      detail = block.response
-      icon = Icons.chat(13)
-      tone = 'bg-status-warning-bg text-status-warning'
-    } else if (block.kind === 'confirmation_message') {
+    if (block.kind === 'confirmation_message') {
       label = t('session.interaction.label.replied', { question: block.question })
       detail = block.response
       icon = Icons.chat(13)
       tone = 'bg-status-warning-bg text-status-warning'
-    } else if (block.kind === 'accept_rule') {
-      label = block.acceptanceMode === 'execution_only'
-        ? t('session.interaction.label.noAcceptanceRule')
-        : t('session.interaction.label.acceptanceAligned', { n: block.rules?.length ?? 0 })
-      detail = block.rules
-        ?.map((rule, index) => t('session.interaction.ruleItem', {
-          index: index + 1,
-          text: humanizeAcceptanceRuleText(rule.text),
-        }))
-        .join(' · ') ?? humanizeAcceptanceRuleText(block.response)
-      icon = Icons.workflowResult(13)
     }
   } else if (block.type === 'build_confirm') {
     detail = block.goal
