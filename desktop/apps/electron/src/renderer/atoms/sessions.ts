@@ -25,7 +25,7 @@
  * activeSessionIdAtom was moved over from atoms/amphi.ts (amphi.ts only keeps nav + modal state).
  */
 import { atom, type Getter, type Setter } from 'jotai'
-import type { SessionMeta } from '@shared/types'
+import type { SessionMeta, SessionTitleSource } from '@shared/types'
 import { backendStateAtom, buildAmphiClient } from './backend'
 import { BackendState } from '../../main/python-client/types'
 import { rlog } from '@/lib/logger'
@@ -304,6 +304,7 @@ export const newSessionAtom = atom(null, (get, set): string => {
     const meta: SessionMeta = {
       id: DRAFT_SESSION_ID,
       title: i18n.t('session.defaultTitle'),
+      titleSource: 'default',
       createdAt: now,
       updatedAt: now,
     }
@@ -471,17 +472,28 @@ export const replaceDraftWithDaemonIdAtom = atom(
  *  (the daemon is the source of truth). `bump` defaults to true (keeping done's
  *  auto-rename behavior); the daemon-pushed title event passes `bump:false` — a
  *  title change isn't "activity" and must not push the session to the top of the
- *  list (aligned with renameSessionAtom's deliberate no-bump). */
+ *  list (aligned with renameSessionAtom's deliberate no-bump). Generated events
+ *  cannot replace a manual or daemon-hydrated title, which may be newer than a
+ *  replayed event from the active turn. */
 export const updateSessionTitleAtom = atom(
   null,
-  (get, set, payload: { id: string; title: string; bump?: boolean }) => {
+  (get, set, payload: { id: string; title: string; bump?: boolean; source?: SessionTitleSource }) => {
     const bump = payload.bump !== false
     set(
       _sessionsMeta,
       get(_sessionsMeta).map((s) =>
-        s.id === payload.id
-          ? { ...s, title: payload.title, updatedAt: bump ? Date.now() : s.updatedAt }
-          : s,
+        s.id !== payload.id
+          || (
+            payload.source === 'generated'
+            && (s.titleSource === 'manual' || s.titleSource === 'persisted')
+          )
+          ? s
+          : {
+              ...s,
+              title: payload.title,
+              titleSource: payload.source ?? s.titleSource,
+              updatedAt: bump ? Date.now() : s.updatedAt,
+            },
       ),
     )
   },
@@ -570,14 +582,17 @@ export const renameSessionAtom = atom(
   (get, set, payload: { id: string; title: string }) => {
     const { id } = payload
     const title = payload.title.trim()
-    const prev = get(_sessionsMeta).find((s) => s.id === id)?.title
+    const previous = get(_sessionsMeta).find((s) => s.id === id)
+    const prev = previous?.title
     if (!title || prev === title) return
     // Deliberately NOT bumping updatedAt: sidebar sorts by updatedAt desc, and
     // a manual rename must not jump the session to the top of the list (unlike
     // a new message, which legitimately does). Only the title changes.
     set(
       _sessionsMeta,
-      get(_sessionsMeta).map((s) => (s.id === id ? { ...s, title } : s)),
+      get(_sessionsMeta).map((s) =>
+        s.id === id ? { ...s, title, titleSource: 'manual' } : s,
+      ),
     )
     if (get(_draftIds).has(id)) return
     const client = buildAmphiClient(get)
@@ -585,7 +600,15 @@ export const renameSessionAtom = atom(
       rlog.warn('[sessions] daemon renameSession failed; reverting title', { id, err })
       set(
         _sessionsMeta,
-        get(_sessionsMeta).map((s) => (s.id === id ? { ...s, title: prev ?? i18n.t('session.defaultTitle') } : s)),
+        get(_sessionsMeta).map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                title: prev ?? i18n.t('session.defaultTitle'),
+                titleSource: previous?.titleSource,
+              }
+            : s,
+        ),
       )
     })
   },
@@ -619,9 +642,13 @@ export const hydrateSessionsFromDaemonAtom = atom(
     const prevById = new Map(get(_sessionsMeta).map((m) => [m.id, m]))
     const metas: SessionMeta[] = summaries.map((s) => {
       const prev = prevById.get(s.id)
+      const title = s.title || i18n.t('session.defaultTitle')
+      let titleSource: SessionTitleSource = s.title ? 'persisted' : 'default'
+      if (prev?.title === title && prev.titleSource) titleSource = prev.titleSource
       return {
         id: s.id,
-        title: s.title || i18n.t('session.defaultTitle'),
+        title,
+        titleSource,
         // The session's working directory: used to write .work/.build/task.md directly (editing the requirements spec).
         workspaceRoot: s.workspace_root,
         parentSessionId: s.parent_session_id ?? undefined,

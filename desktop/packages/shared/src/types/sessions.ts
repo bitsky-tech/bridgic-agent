@@ -26,10 +26,13 @@ export type AgentTurnStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
+export type SessionTitleSource = 'default' | 'fallback' | 'generated' | 'manual' | 'persisted'
 
 export interface SessionMeta {
   id: string
   title: string
+  /** Renderer-only precedence marker: manual and hydrated titles beat late generation. */
+  titleSource?: SessionTitleSource
   /** 0-4 index of the 5-stage Pipeline; undefined = idle / not in build flow. */
   stage?: number
   /** Human-readable stage label (e.g. "Exploring — analyzing data sources..."). */

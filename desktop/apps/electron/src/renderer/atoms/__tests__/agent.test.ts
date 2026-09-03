@@ -57,6 +57,7 @@ import {
   activeSessionIdAtom,
   materializeSessionAtom,
   newSessionAtom,
+  renameSessionAtom,
   sessionCompletionSeqByIdAtom,
   replaceDraftWithDaemonIdAtom,
   sessionDraftsAtom,
@@ -2162,6 +2163,30 @@ describe('reducer: title (session naming)', () => {
     // done(end_turn) must then NOT overwrite it with the truncated opener.
     store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'done', reason: 'end_turn' } })
     expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('模型标题')
+  })
+
+  it('a late backend title replaces the truncated-opener fallback', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(messageFamily(id), [
+      { id: 'u1', role: AgentRole.User, text: '帮我做一个很长的需求', toolCalls: [], done: true, createdAt: 1 },
+    ])
+    store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'done', reason: 'end_turn' } })
+    expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('帮我做一个很长的需求')
+
+    store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'title', title: '模型标题' } })
+
+    expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('模型标题')
+  })
+
+  it('a late backend title does not overwrite a manual rename', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(renameSessionAtom, { id, title: '用户指定标题' })
+
+    store.set(applyAgentEventAtom, { sessionId: id, event: { type: 'title', title: '模型标题' } })
+
+    expect(store.get(sessionsMetaAtom).find((s) => s.id === id)?.title).toBe('用户指定标题')
   })
 })
 

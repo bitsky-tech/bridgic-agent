@@ -1525,8 +1525,13 @@ class AgentInvocation:
             title = await task
             if not title or title == current_title:
                 return None
-            await self._sessions.rename(session_id, user_id, title)
-            return title
+            renamed = await self._sessions.rename_if_title(
+                session_id,
+                user_id,
+                current_title,
+                title,
+            )
+            return title if renamed else None
         except Exception:  # noqa: BLE001 - title generation is best effort
             return None
 

@@ -1767,7 +1767,7 @@ export const applyAgentEventAtom = atom(
         if (firstUser && session && isDefaultTitle(session.title)) {
           const title = firstUser.text.trim().slice(0, SESSION_TITLE_MAX_LEN) || defaultTitle
           if (!isDefaultTitle(title)) {
-            set(updateSessionTitleAtom, { id: sessionId, title })
+            set(updateSessionTitleAtom, { id: sessionId, title, source: 'fallback' })
           }
         }
         return
@@ -1956,7 +1956,12 @@ export const applyAgentEventAtom = atom(
         // meta live; it supersedes the done() truncated-opener fallback below,
         // which only fires while the title is still the default. bump:false
         // — a title change isn't activity, so it must not re-sort the session list.
-        set(updateSessionTitleAtom, { id: sessionId, title: event.title, bump: false })
+        set(updateSessionTitleAtom, {
+          id: sessionId,
+          title: event.title,
+          bump: false,
+          source: 'generated',
+        })
         return
       }
       case 'session_completed': {

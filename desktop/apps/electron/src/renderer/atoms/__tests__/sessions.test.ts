@@ -309,6 +309,30 @@ describe('hydrateSessionsFromDaemonAtom', () => {
     expect(ids).toEqual(['srv-1'])
   })
 
+  it('protects persisted titles from replayed generation while untitled rows remain eligible', async () => {
+    const store = makeStore()
+    withDaemon(store, [
+      { id: 'renamed', title: '用户保存的标题', tokens: 0, status: 'running' },
+      { id: 'untitled', title: null, tokens: 0, status: 'running' },
+    ])
+    await store.set(hydrateSessionsFromDaemonAtom)
+
+    store.set(updateSessionTitleAtom, {
+      id: 'renamed',
+      title: '迟到的自动标题',
+      source: 'generated',
+    })
+    store.set(updateSessionTitleAtom, {
+      id: 'untitled',
+      title: '正常生成的标题',
+      source: 'generated',
+    })
+
+    const metas = store.get(sessionsMetaAtom)
+    expect(metas.find((session) => session.id === 'renamed')?.title).toBe('用户保存的标题')
+    expect(metas.find((session) => session.id === 'untitled')?.title).toBe('正常生成的标题')
+  })
+
   it('re-hydrate preserves local draft rows (gateway-restart resync)', async () => {
     const store = makeStore()
     const draftId = store.set(newSessionAtom) // draft row in _sessionsMeta
