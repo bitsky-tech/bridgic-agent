@@ -125,15 +125,42 @@ describe('materializeSessionAtom', () => {
 })
 
 describe('removeSessionAtom', () => {
-  it('cleans up meta / drafts / draftIds / activeId', () => {
+  it('cleans up an active daemon session and lands on an interactive draft', () => {
     const store = makeStore()
-    const id = store.set(newSessionAtom)
+    const draftId = store.set(newSessionAtom)
+    const id = 'session-to-delete'
+    store.set(replaceDraftWithDaemonIdAtom, { draftId, daemonId: id })
     store.set(setSessionDraftAtom, { id, segments: [{ type: 'text', value: 'draft' }] })
+
     store.set(removeSessionAtom, id)
-    expect(store.get(sessionsMetaAtom)).toHaveLength(0)
+
+    expect(store.get(sessionsMetaAtom).map((session) => session.id)).toEqual([draftId])
     expect(store.get(sessionDraftsAtom)[id]).toBeUndefined()
     expect(store.get(draftSessionIdsAtom).has(id)).toBe(false)
-    expect(store.get(activeSessionIdAtom)).toBeNull()
+    expect(store.get(draftSessionIdsAtom).has(draftId)).toBe(true)
+    expect(store.get(activeSessionIdAtom)).toBe(draftId)
+  })
+
+  it('keeps the current selection when deleting another session', () => {
+    const store = makeStore()
+    const firstDraftId = store.set(newSessionAtom)
+    store.set(replaceDraftWithDaemonIdAtom, {
+      draftId: firstDraftId,
+      daemonId: 'selected-session',
+    })
+    const secondDraftId = store.set(newSessionAtom)
+    store.set(replaceDraftWithDaemonIdAtom, {
+      draftId: secondDraftId,
+      daemonId: 'other-session',
+    })
+    store.set(selectSessionAtom, 'selected-session')
+
+    store.set(removeSessionAtom, 'other-session')
+
+    expect(store.get(activeSessionIdAtom)).toBe('selected-session')
+    expect(store.get(sessionsMetaAtom).map((session) => session.id)).toEqual([
+      'selected-session',
+    ])
   })
 })
 

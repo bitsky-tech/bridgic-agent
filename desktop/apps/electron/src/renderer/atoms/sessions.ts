@@ -321,9 +321,12 @@ export const selectSessionAtom = atom(null, (_get, set, id: string) => {
   set(activeSessionIdAtom, id)
 })
 
-/** Action: delete a session's three pieces of state (meta / drafts / draftIds) + delete it from storage */
+/** Action: delete a session's three pieces of state (meta / drafts / draftIds) + delete it from storage.
+ *  Removing the active Session lands on the reusable new-Session draft so the
+ *  Landing composer always has a valid target instead of becoming disabled. */
 export const removeSessionAtom = atom(null, (get, set, id: string) => {
   const wasDraft = get(_draftIds).has(id)
+  const wasActive = get(activeSessionIdAtom) === id
   set(_sessionsMeta, get(_sessionsMeta).filter((s) => s.id !== id))
   const drafts = { ...get(_drafts) }
   delete drafts[id]
@@ -334,7 +337,7 @@ export const removeSessionAtom = atom(null, (get, set, id: string) => {
   const completionSeqById = { ...get(_sessionCompletionSeqById) }
   delete completionSeqById[id]
   set(_sessionCompletionSeqById, completionSeqById)
-  if (get(activeSessionIdAtom) === id) set(activeSessionIdAtom, null)
+  if (wasActive) set(newSessionAtom)
   // Daemon is the source of truth — DELETE the daemon session. Drafts never
   // reached the daemon (no POST /sessions yet), so skip.
   if (!wasDraft) {
