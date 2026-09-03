@@ -197,6 +197,30 @@ async def test_rename_and_delete(initialized_store: None) -> None:
     assert await repository.list_for_user(USER_ID) == []
 
 
+async def test_conditional_rename_preserves_a_newer_title(initialized_store: None) -> None:
+    """A generated title cannot replace a user title committed while it was pending."""
+    repository = SessionRepository()
+    await repository.save(
+        SessionRecord(
+            id="root-session",
+            user_id=USER_ID,
+            workspace_root="/workspace/root",
+        )
+    )
+
+    assert await repository.rename("root-session", USER_ID, "Manual title") is True
+    assert await repository.rename_if_title(
+        "root-session",
+        USER_ID,
+        None,
+        "Generated title",
+    ) is False
+
+    loaded = await repository.load("root-session", USER_ID)
+    assert loaded is not None
+    assert loaded.title == "Manual title"
+
+
 async def test_root_with_children(initialized_store: None) -> None:
     """Final database state:
 

@@ -130,7 +130,6 @@ function stageCompaction(
 ): TurnCompactionProjection | undefined {
   if (!projection) return undefined;
   if (stage === "workflow_execute") return projection.turn.run_workflow?.execute;
-  if (stage === "workflow_validate") return projection.turn.run_workflow?.validate;
   if (["clarify", "explore", "generate", "verify"].includes(stage)) {
     return projection.turn.build?.[stage];
   }
@@ -180,7 +179,7 @@ function inferStage(input: PromptRebuildInput, turn: PromptTurnSnapshot): Prompt
     return thinkScope.stage as PromptStage;
   }
   if (thinkScope?.mode === "run_workflow") {
-    return thinkScope.stage === "validate" ? "workflow_validate" : "workflow_execute";
+    return "workflow_execute";
   }
   if (thinkScope) {
     return input.session.parentSessionId ? "child" : "main";
@@ -200,7 +199,7 @@ function inferStage(input: PromptRebuildInput, turn: PromptTurnSnapshot): Prompt
   // Non-Build rounds persist `build_stage: null`, including Workflow runs. Prefer
   // the only persisted Workflow signal over that non-discriminating marker.
   if (mode === "run_workflow") {
-    return stateStage === "validate" ? "workflow_validate" : "workflow_execute";
+    return "workflow_execute";
   }
   if (hasBuildMarker && buildStage === null) {
     return input.session.parentSessionId ? "child" : "main";
@@ -220,7 +219,6 @@ function stageUsesSessionHistory(
   if (allStageSessionHistory) return true;
   if (["explore", "generate", "verify"].includes(stage)) return false;
   if (!usesStageScope) return true;
-  if (stage === "workflow_validate") return false;
   if (["clarify", "workflow_execute"].includes(stage)) return !hasStageBoundary;
   return true;
 }
@@ -252,18 +250,6 @@ function projectStageRounds(
   const allStageSessionHistory = targetScope.sessionHistory === "all_stages";
 
   if (targetScope.mode === "run_workflow") {
-    for (let index = priorRounds.length - 1; index >= 0; index -= 1) {
-      const scope = roundThinkScope(priorRounds[index] ?? {});
-      if (scope?.mode === targetScope.mode && scope.stage !== targetScope.stage) {
-        return {
-          rounds: priorRounds.slice(index + 1),
-          usesStageScope: true,
-          hasStageBoundary: true,
-          allStageSessionHistory,
-          switchRoundCount: 0,
-        };
-      }
-    }
     return {
       rounds: priorRounds,
       usesStageScope: true,
@@ -655,7 +641,6 @@ function renderBuildWorkspace(workspace?: PromptWorkspaceSnapshot): string {
     "<build_workspace>",
     `Operation: ${build.operation ?? (build.workflowId ? "edit" : "create")}`,
     build.workflowId ? `Workflow id: ${build.workflowId}` : "Baseline: New Workflow; no saved baseline is being edited.",
-    `Acceptance review: ${build.acceptanceReviewPresented ? "presented" : "not presented"}.`,
     `Absolute root: \`${build.root}\` (required as bash.cwd for Build shell calls).`,
     "Write every Build artifact under this root and never at the workspace root.",
     "Current contents:",
@@ -687,11 +672,10 @@ function renderArtifacts(stage: PromptStage, context?: PromptContextSnapshot): s
 function renderWorkflowRun(workspace?: PromptWorkspaceSnapshot): string {
   const run = workspace?.workflowRun;
   if (!run) return "<workflow_run>\nWorkflow Run metadata is unavailable.\n</workflow_run>";
-  const stage = run.stage ?? "execute";
-  const steps = stage === "validate" ? run.validationSteps ?? [] : run.executionSteps ?? [];
+  const steps = run.executionSteps ?? [];
   const currentIndex = run.stepIndex ?? 0;
-  const list = (items: typeof steps, validate: boolean) => items.map((step, index) =>
-    `- [${validate || index < currentIndex ? "x" : " "}] ${step.index}. ${step.title}`,
+  const list = (items: typeof steps) => items.map((step, index) =>
+    `- [${index < currentIndex ? "x" : " "}] ${step.index}. ${step.title}`,
   );
   const current = steps[currentIndex];
   return [
@@ -704,12 +688,10 @@ function renderWorkflowRun(workspace?: PromptWorkspaceSnapshot): string {
     `Session-owned run root: ${run.runRoot ?? "(unavailable)"}`,
     `Writable final result directory: ${run.resultDir ?? "(unavailable)"}`,
     `Writable background work directory: ${run.backgroundWorkDir ?? "(unavailable)"}`,
-    `Stage: ${stage}`,
+    "Stage: execute",
     current ? `Step: ${currentIndex + 1} of ${steps.length}` : `Step: completion boundary (${steps.length} of ${steps.length} steps complete)`,
     "Execution sections:",
-    ...list(run.executionSteps ?? [], stage === "validate"),
-    "Validation sections:",
-    ...list(run.validationSteps ?? [], stage === "validate"),
+    ...list(steps),
     current ? `Current section: ${current.index}. ${current.title}\nCurrent instruction:\n${run.currentInstruction ?? current.instruction ?? "(unavailable)"}` : "Stage completion boundary:\nThis persisted boundary will be advanced automatically by the runtime.",
     "</workflow_run>",
   ].join("\n");
@@ -749,7 +731,7 @@ function renderContext(
     workflowParts.push(`<workflows>\n${snapshot.workflows.map((workflow) => `- ${workflow.name} (id: ${workflow.id}, entry: ${json(workflow.entryPath ?? "(unavailable)")}): ${workflow.description ?? "(no description)"}`).join("\n")}\n</workflows>`);
   }
   if (snapshot?.workflowResults?.length) {
-    workflowParts.push(`<workflow_results>\n${snapshot.workflowResults.slice(0, 10).map((run) => `- ${run.workflowName} result (run_id: ${run.runId}, status: ${run.status}, validation: ${run.validationStatus ?? "unknown"}, result path: ${json(run.resultDir ?? "(unavailable)")}, intermediate work path: ${json(run.backgroundWorkDir ?? "(unavailable)")}, input: ${json(run.input ?? "")})`).join("\n")}\n</workflow_results>`);
+    workflowParts.push(`<workflow_results>\n${snapshot.workflowResults.slice(0, 10).map((run) => `- ${run.workflowName} result (run_id: ${run.runId}, status: ${run.status}, result path: ${json(run.resultDir ?? "(unavailable)")}, intermediate work path: ${json(run.backgroundWorkDir ?? "(unavailable)")}, input: ${json(run.input ?? "")})`).join("\n")}\n</workflow_results>`);
   }
   if (!snapshot?.workflows && (stage === "main" || stage === "child")) limitations.push("The historical Workflow catalogue is unavailable.");
   const workflowBlock = workflowParts.join("\n\n");
@@ -844,7 +826,7 @@ export function rebuildPrompt(input: PromptRebuildInput): PromptRebuildResult {
   const targetRound = target.otaRecords[input.targetRoundIndex] ?? {};
   const hasPersistedWorkflowScope = persistedThinkScope(targetRound)?.mode === "run_workflow";
   const stageLimitations = stage.startsWith("workflow_") && !hasPersistedWorkflowScope
-    ? ["Workflow stage is inferred from the Turn-level final agent_state because OTA records do not persist a per-round Workflow stage marker."]
+    ? ["Workflow mode is inferred from the Turn-level final agent_state because OTA records do not persist a per-round cognitive-mode marker."]
     : [];
   const priorRounds = target.otaRecords.slice(0, input.targetRoundIndex);
   const stageProjection = projectStageRounds(target, input.targetRoundIndex);

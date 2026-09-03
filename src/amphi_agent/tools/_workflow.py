@@ -78,7 +78,7 @@ async def remove_workflow(workflow_id: str) -> str:
 
 
 class WorkflowStepReport:
-    """The terminal result of one execution or validation section."""
+    """The terminal result of one Workflow execution section."""
 
     def __init__(self, status: Literal["success", "failure"], summary: str, evidence: List[str]) -> None:
         self.status = status
@@ -96,13 +96,12 @@ async def report_workflow_step(
     Parameters
     ----------
     status : {"success", "failure"}
-        Whether the current section completed as instructed. Validation reports
-        failure only after its bounded recovery attempts are exhausted or no
-        safe repair is plausible.
+        Whether the current execution section completed as instructed. Report
+        failure when the requested outcome cannot be completed safely or after
+        reasonable recovery attempts.
     summary : str
-        Concise account of what happened. A repaired validation includes the
-        cause, correction, attempt count, and passing evidence; a failed
-        validation includes its diagnosis and attempted repairs.
+        Concise account of what happened. On failure, include the concrete
+        blocker or diagnosis and any attempted recovery when useful.
     evidence : list[str], optional
         Relevant output paths, command results, or observations.
 
@@ -133,8 +132,8 @@ async def list_workflow_runs(workflow_id: str = "", query: str = "", limit: int 
     Returns
     -------
     str
-        JSON array containing stable run ids, status, validation, input, and
-        published final-result and intermediate-work files.
+        JSON array containing stable run ids, status, input, and published
+        final-result and intermediate-work files.
     """
     agent = current_agent.get(None)
     workflow_runs = getattr(getattr(agent, "ctx", None), "workflow_runs", None)
@@ -151,7 +150,6 @@ async def list_workflow_runs(workflow_id: str = "", query: str = "", limit: int 
             "workflow_id": run.workflow_id,
             "workflow_name": run.workflow_name,
             "status": run.status.value,
-            "validation": run.validation_status.value,
             "workflow_input": run.workflow_input.model_dump(),
             "created_at": run.created_at.isoformat(),
             "files": list(run.files),
@@ -188,7 +186,6 @@ async def read_workflow_run(run_id: str, path: str = "") -> str:
         "workflow_id": run.workflow_id,
         "workflow_name": run.workflow_name,
         "status": run.status.value,
-        "validation": run.validation_status.value,
         "workflow_input": run.workflow_input.model_dump(),
         "source_session_id": run.source_session_id,
         "result_root": str(run.result_dir),

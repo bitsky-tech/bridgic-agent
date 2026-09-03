@@ -45,7 +45,6 @@ describe('WorkflowRunDetailsPane', () => {
       phase: 'execute',
       stepIndex: 0,
       executionSteps: ['委派检查'],
-      validationSteps: [],
     })
     store.set(messageFamily('waiting-session'), [{
       id: 'waiting-parent',
@@ -105,7 +104,6 @@ describe('WorkflowRunDetailsPane', () => {
       phase: 'execute',
       stepIndex: 1,
       executionSteps: ['确认新闻范围', '筛选新闻', '生成总结'],
-      validationSteps: ['检查条数与来源'],
     })
     store.set(messageFamily('session-1'), [{
       id: 'previous-workflow-message',
@@ -202,11 +200,11 @@ describe('WorkflowRunDetailsPane', () => {
     expect(detailsScroll.className).toContain('overflow-x-hidden')
     expect(host.textContent).toContain('筛选新闻')
     const overview = host.querySelector<HTMLElement>('[data-testid="workflow-run-overview"]')!
-    expect(overview.textContent).toContain('1/4')
+    expect(overview.textContent).toContain('1/3')
     expect(overview.textContent).toContain('1执行完成')
     expect(overview.textContent).toContain('1工具调用')
     const progress = overview.querySelector<HTMLElement>('[role="progressbar"]')!
-    expect(progress.getAttribute('aria-valuenow')).toBe('25')
+    expect(progress.getAttribute('aria-valuenow')).toBe('33')
     expect(host.textContent).toContain('执行工作流')
     expect(host.textContent).toContain('确认新闻范围')
     expect(host.textContent).toContain('已确认最近三天的三条消息。')
@@ -220,26 +218,13 @@ describe('WorkflowRunDetailsPane', () => {
         .every((element) => element.className.includes('[overflow-wrap:anywhere]')),
     ).toBe(true)
     expect(host.textContent).not.toContain('旧运行结果不应混入当前状态。')
-    expect(host.textContent).toContain('验证结果')
-
-    const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    const executionTab = tabs.find((tab) => tab.textContent?.includes('执行工作流'))!
-    const validationTab = tabs.find((tab) => tab.textContent?.includes('验证结果'))!
-    expect(executionTab.textContent).toContain('当前第 2/3 步')
-    expect(validationTab.textContent).toContain('0/1 项 · 等待执行')
-    expect(executionTab.getAttribute('aria-selected')).toBe('true')
+    expect(host.textContent).not.toContain('验证结果')
+    expect(host.querySelector('#workflow-execute-details-tab')?.textContent)
+      .toContain('当前第 2/3 步')
     expect(
       Array.from(details.querySelectorAll<HTMLElement>('[data-step-state]'))
         .map((step) => step.dataset.stepState),
     ).toEqual(['done', 'active', 'pending'])
-
-    await act(async () => validationTab.click())
-
-    const panel = host.querySelector<HTMLElement>('[data-testid="workflow-run-steps"]')!
-    expect(validationTab.getAttribute('aria-selected')).toBe('true')
-    expect(panel.textContent).toContain('检查条数与来源')
-    expect(panel.textContent).not.toContain('确认新闻范围')
-    expect(panel.getAttribute('role')).toBe('tabpanel')
 
     await act(async () => store.set(closeWorkflowRunDetailsAtom))
     expect(host.querySelector('[data-testid="workflow-run-details-pane"]')).toBeNull()
@@ -263,7 +248,6 @@ describe('WorkflowRunDetailsPane', () => {
       phase: 'execute',
       stepIndex: 0,
       executionSteps: ['新运行第一步'],
-      validationSteps: [],
     })
     store.set(messageFamily('session-restart'), [{
       id: 'old-run',
@@ -320,7 +304,6 @@ describe('WorkflowRunDetailsPane', () => {
         phase: 'execute',
         stepIndex: 0,
         executionSteps: ['新运行第一步'],
-        validationSteps: [],
       })
       store.set(streamingFamily('session-restart'), {
         messageId: 'live-restart',
@@ -349,7 +332,7 @@ describe('WorkflowRunDetailsPane', () => {
     host.remove()
   })
 
-  it('renders execute and validate completion boundaries without an extra step', async () => {
+  it('renders the execution completion boundary without an extra step', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -377,7 +360,6 @@ describe('WorkflowRunDetailsPane', () => {
       phase: 'execute',
       stepIndex: 1,
       executionSteps: ['唯一执行步骤'],
-      validationSteps: ['唯一验证步骤'],
     })
     store.set(messageFamily(sessionId), [{
       id: 'boundary-run',
@@ -399,86 +381,44 @@ describe('WorkflowRunDetailsPane', () => {
     })
 
     await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-boundary'))
-    expect(host.textContent).toContain('执行阶段已完成，等待验证')
+    expect(host.textContent).toContain('执行阶段已完成，等待结束')
     expect(host.textContent).not.toContain('2/2')
     expect(host.textContent).not.toContain('正在初始化')
-
-    let tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    expect(tabs.find((tab) => tab.textContent?.includes('执行工作流'))?.textContent)
+    expect(host.querySelector('#workflow-execute-details-tab')?.textContent)
       .toContain('1/1 步完成')
-
-    await act(async () => {
-      store.set(workflowRunFamily(sessionId), {
-        workflowId: 'wf-boundary',
-        generation: 'gen-boundary',
-        workflowName: '边界工作流',
-        sourceSessionId: sessionId,
-        phase: 'validate',
-        stepIndex: 1,
-        executionSteps: ['唯一执行步骤'],
-        validationSteps: ['唯一验证步骤'],
-      })
-      store.set(messageFamily(sessionId), [{
-        id: 'boundary-run',
-        turnId: 'turn-boundary',
-        role: AgentRole.Assistant,
-        text: '',
-        toolCalls: [],
-        blocks: [completedExecute, {
-          type: 'workflow_step',
-          workflowId: 'wf-boundary',
-          generation: 'gen-boundary',
-          workflowName: '边界工作流',
-          phase: 'validate',
-          stepIndex: 0,
-          stepCount: 1,
-          title: '唯一验证步骤',
-          status: 'success',
-          summary: '验证完成',
-        }],
-        done: true,
-        createdAt: 1,
-      }])
-    })
-
-    expect(host.textContent).toContain('验证阶段已完成，等待结束')
-    tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    expect(tabs.find((tab) => tab.textContent?.includes('验证结果'))?.textContent)
-      .toContain('1/1 项完成')
 
     await act(async () => root.unmount())
     host.remove()
   })
 
-  it('does not fabricate validation UI for an execution-only Workflow', async () => {
+  it('renders completed execution details from the available run blocks', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     const store = createStore()
-    const sessionId = 'session-execution-only'
+    const sessionId = 'session-completed-run'
     store.set(activeSessionIdAtom, sessionId)
     store.set(thinkingModeFamily(sessionId), { mode: 'run_workflow', stage: 'execute' })
     store.set(workflowRunFamily(sessionId), {
-      workflowId: 'wf-execution-only',
-      generation: 'gen-execution-only',
-      workflowName: '仅执行工作流',
+      workflowId: 'wf-completed-run',
+      generation: 'gen-completed-run',
+      workflowName: '执行工作流',
       sourceSessionId: sessionId,
       phase: 'execute',
       stepIndex: 1,
       executionSteps: ['生成交付文件'],
-      validationSteps: [],
     })
     store.set(messageFamily(sessionId), [{
-      id: 'execution-only-run',
-      turnId: 'turn-execution-only',
+      id: 'completed-run-message',
+      turnId: 'turn-completed-run',
       role: AgentRole.Assistant,
       text: '',
       toolCalls: [],
       blocks: [{
         type: 'workflow_step',
-        workflowId: 'wf-execution-only',
-        generation: 'gen-execution-only',
-        workflowName: '仅执行工作流',
+        workflowId: 'wf-completed-run',
+        generation: 'gen-completed-run',
+        workflowName: '执行工作流',
         phase: 'execute',
         stepIndex: 0,
         stepCount: 1,
@@ -498,11 +438,10 @@ describe('WorkflowRunDetailsPane', () => {
       )
     })
 
-    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-execution-only'))
+    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-completed-run'))
 
-    const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    expect(tabs).toHaveLength(1)
-    expect(tabs[0]?.textContent).toContain('执行工作流')
+    expect(host.querySelector('#workflow-execute-details-tab')?.textContent)
+      .toContain('执行工作流')
     const details = host.querySelector<HTMLElement>('[data-testid="workflow-run-details-pane"]')!
     expect(details.textContent).not.toContain('验证结果')
     expect(details.textContent).not.toContain('验证完成')
@@ -514,132 +453,4 @@ describe('WorkflowRunDetailsPane', () => {
     host.remove()
   })
 
-  it('shows validation steps with the same current-position semantics and keeps both tabs available', async () => {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-    const store = createStore()
-    store.set(activeSessionIdAtom, 'session-validate')
-    store.set(thinkingModeFamily('session-validate'), { mode: 'run_workflow', stage: 'validate' })
-    store.set(workflowRunFamily('session-validate'), {
-      workflowId: 'wf-report',
-      generation: 'gen-validate',
-      workflowName: '目录报告',
-      sourceSessionId: 'session-validate',
-      phase: 'validate',
-      stepIndex: 1,
-      executionSteps: ['读取目录', '生成报告', '展示报告'],
-      validationSteps: ['检查文件结构', '检查报告内容', '检查异常说明'],
-    })
-    store.set(messageFamily('session-validate'), [{
-      id: 'completed-steps',
-      turnId: 'turn-validate',
-      role: AgentRole.Assistant,
-      text: '',
-      toolCalls: [],
-      blocks: [{
-        type: 'workflow_step',
-        workflowId: 'wf-report',
-        generation: 'gen-validate',
-        workflowName: '目录报告',
-        phase: 'execute',
-        stepIndex: 2,
-        stepCount: 3,
-        title: '展示报告',
-        status: 'success',
-        summary: '报告已经展示。',
-      }, {
-        type: 'workflow_step',
-        workflowId: 'wf-report',
-        generation: 'gen-validate',
-        workflowName: '目录报告',
-        phase: 'validate',
-        stepIndex: 0,
-        stepCount: 3,
-        title: '检查文件结构',
-        status: 'success',
-        summary: '结构检查通过。',
-      }],
-      done: true,
-      createdAt: 1,
-    }])
-    store.set(streamingFamily('session-validate'), {
-      messageId: 'streaming-validation',
-      content: '',
-      toolCalls: [],
-      blocks: [{
-        type: 'workflow_step',
-        workflowId: 'wf-report',
-        generation: 'gen-validate',
-        workflowName: '目录报告',
-        phase: 'validate',
-        stepIndex: 1,
-        stepCount: 3,
-        title: '检查报告内容',
-        status: 'running',
-      }],
-      startedAt: 2,
-    })
-
-    await act(async () => {
-      root.render(
-        <Provider store={store}>
-          <WorkflowRunDetailsSurface />
-        </Provider>,
-      )
-    })
-
-    await act(async () => store.set(openWorkflowRunDetailsAtom, 'gen-validate'))
-    expect(host.textContent).toContain('工作流')
-    expect(host.textContent).toContain('验证')
-    expect(host.textContent).toContain('2/3')
-
-    const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    const executionTab = tabs.find((tab) => tab.textContent?.includes('执行工作流'))!
-    const validationTab = tabs.find((tab) => tab.textContent?.includes('验证结果'))!
-    const panel = host.querySelector<HTMLElement>('[role="tabpanel"]')!
-    expect(executionTab.textContent).toContain('3/3 步完成')
-    expect(validationTab.textContent).toContain('当前第 2/3 项')
-    expect(validationTab.getAttribute('aria-selected')).toBe('true')
-    expect(panel.textContent).toContain('检查文件结构')
-    expect(panel.textContent).toContain('检查报告内容')
-
-    await act(async () => executionTab.click())
-
-    expect(executionTab.getAttribute('aria-selected')).toBe('true')
-    expect(panel.textContent).toContain('读取目录')
-    expect(panel.textContent).toContain('展示报告')
-    expect(panel.textContent).not.toContain('检查报告内容')
-
-    await act(async () => {
-      store.set(streamingFamily('session-validate'), {
-        messageId: 'streaming-validation',
-        content: '',
-        toolCalls: [],
-        blocks: [{
-          type: 'workflow_step',
-          workflowId: 'wf-report',
-          generation: 'gen-validate',
-          workflowName: '目录报告',
-          phase: 'validate',
-          stepIndex: 1,
-          stepCount: 3,
-          title: '检查报告内容',
-          status: 'failure',
-          summary: '报告缺少必要章节。',
-        }],
-        startedAt: 2,
-      })
-    })
-    await act(async () => validationTab.click())
-
-    const failedStep = host.querySelector<HTMLElement>('[data-step-state="failed"]')
-    expect(failedStep?.textContent).toContain('检查报告内容')
-    expect(failedStep?.textContent).toContain('报告缺少必要章节。')
-    expect(host.querySelector('[data-testid="workflow-run-overview"]')?.textContent)
-      .toContain('1验证完成')
-
-    await act(async () => root.unmount())
-    host.remove()
-  })
 })

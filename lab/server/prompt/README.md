@@ -92,8 +92,8 @@ from leaking backwards; the affected components are explicitly marked partial.
 
 ## Persona source snapshot
 
-All eight runtime personas are copied in full to `personas.generated.ts`:
-normal Main, Child, all four Build stages, and both Workflow Run stages. The
+All seven runtime personas are copied in full to `personas.generated.ts`:
+normal Main, Child, all four Build stages, and Workflow Run Execute. The
 generated module records the SHA-256 of the complete, automatically discovered
 modular prompt source graph (with normalized line endings) and the shared
 failed-Turn marker. `personas.test.ts` checks that source manifest and hash,

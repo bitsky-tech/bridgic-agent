@@ -47,10 +47,6 @@ const EXEMPT_FILES = new Set([
  * check — if the string is display copy, it belongs in the catalog instead.
  */
 const ALLOWED: Record<string, string> = {
-  // Matcher over user-authored text. Recognition keys only — the rendered labels the
-  // file RESOLVES to derive from the i18n catalogs, never from literals.
-  'desktop/apps/electron/src/renderer/atoms/human-request.ts': 'historical zh synonyms users free-type on the acceptance card; rendered labels derive from both catalogs',
-
   // A historical persisted provider default must be recognized after an upgrade.
   'desktop/apps/electron/src/renderer/atoms/models-presets.ts': 'legacy GLM display name stored by earlier app versions',
 

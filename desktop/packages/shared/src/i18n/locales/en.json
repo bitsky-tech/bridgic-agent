@@ -405,7 +405,7 @@
       "clarify": "Align requirements and finalize the specification",
       "explore": "Explore the target environment structure",
       "generate": "Write and organize workflow code",
-      "verify": "Validate outputs and acceptance criteria"
+      "verify": "Run the workflow and verify its behavior and outputs"
     },
     "stages": {
       "clarify": "Task creation",
@@ -451,31 +451,6 @@
     }
   },
   "humanRequest": {
-    "acceptance": {
-      "accept": "Keep",
-      "acceptDesc": "Use this to judge the run result.",
-      "criteriaConfirmed": "Completion criteria aligned",
-      "desc": "Keep or drop each one, or write your own under “Other”.",
-      "executionOnly": "No completion criteria",
-      "executionOnlyConfirmed": "No completion criteria selected",
-      "executionOnlyHint": "Run the workflow only",
-      "executionOnlySummary": "This workflow has no completion criteria, so it will run the steps without validating the result. Execution errors will still fail normally.",
-      "executionOnlyTitle": "The generated workflow has no completion criteria, so no result validation is needed at run time",
-      "finalOutcome": "Final outcome",
-      "multiDone": "All completion criteria handled",
-      "multiPending": "{{n}} completion criteria pending",
-      "next": "Next item",
-      "otherPlaceholder": "Enter an alternative completion criterion…",
-      "position": "Item {{current}} of {{total}}",
-      "reject": "Drop",
-      "rejectDesc": "Don't use this to judge the run result.",
-      "singleDone": "Completion criterion handled",
-      "singlePending": "Final result pending",
-      "standardN": "Criterion {{n}}",
-      "submit": "Confirm and continue",
-      "suggestionCount": "{{n}} suggestions",
-      "title": "What counts as done?"
-    },
     "answerRemaining": "Answer the remaining {{n}} →",
     "collapse": "Collapse",
     "expand": "Expand",
@@ -494,7 +469,6 @@
     "none": "None of these",
     "other": "Other",
     "otherPlaceholder": "Enter a custom answer…",
-    "processedCount": "Handled {{done}}/{{total}}",
     "promptAria": "Question background",
     "questionN": "Question {{n}}",
     "selectAll": "Select all",
@@ -1241,10 +1215,7 @@
       "clarify": "Align on requirements and lock down the specification",
       "explore": "Probe the structure of the target environment",
       "generate": "Write and organize the workflow code",
-      "verify": "Run validation of the output and acceptance"
-    },
-    "check": {
-      "nth": "Check {{n}}"
+      "verify": "Run the workflow and verify its behavior and outputs"
     },
     "childStatus": {
       "awaitingHuman": "Sub-agent: waiting for your answer",
@@ -1265,17 +1236,12 @@
     },
     "detailsButton": "Run details",
     "executeDoneWaitEnd": "Execution stage finished, waiting to end",
-    "executeDoneWaitValidate": "Execution stage finished, waiting for validation",
     "headerTitle": "Workflow run",
     "initializing": "Initializing",
     "phase": {
       "execute": {
         "desc": "Complete the task following the workflow steps",
         "label": "Execute"
-      },
-      "validate": {
-        "desc": "Check whether the run result matches expectations",
-        "label": "Validate"
       }
     },
     "progress": {
@@ -1298,15 +1264,11 @@
     },
     "summary": "{{steps}} steps done · {{calls}} calls",
     "tab": {
-      "execute": "Execute workflow",
-      "validate": "Validate result"
+      "execute": "Execute workflow"
     },
-    "tablistAria": "Workflow run stages",
     "unit": {
-      "check": "check",
       "step": "step"
-    },
-    "validateDoneWaitEnd": "Validation stage finished, waiting to end"
+    }
   },
   "schedule": {
     "action": {
@@ -1514,10 +1476,6 @@
     },
     "interaction": {
       "card": {
-        "acceptRuleDeferredTitle": "Completion criteria will be aligned later",
-        "acceptanceCount": "{{n}} criteria",
-        "acceptanceDesc": "The workflow result will be checked against these criteria",
-        "acceptanceTitle": "Aligned completion criteria",
         "answerLabel": "Your answer",
         "buildConfirmedBadge": "Build confirmed",
         "buildDesc": "Whether to turn this task into a reusable workflow",
@@ -1527,25 +1485,19 @@
         "feedbackLabel": "Your revision notes: ",
         "newMessageDesc": "You sent a new message. The agent will continue adjusting with this context.",
         "newMessageLabel": "Your new message",
-        "noAcceptanceDesc": "The workflow will only execute steps, with no result validation; execution errors will still fail clearly.",
-        "noAcceptanceTitle": "No completion criteria",
         "qaDesc": "Information confirmed with you for this task",
         "qaListLabel": "Confirmed questions and answers",
         "qaTitle": "Requirements confirmation",
         "questionLabel": "Agent asked you",
-        "ruleBadge": "Criterion {{n}}",
         "taskRevisedBadge": "Revision requested",
         "taskTitle": "Task specification confirmation",
         "workflowTitle": "Workflow save confirmation"
       },
       "hideRecord": "Hide record",
       "label": {
-        "acceptRuleDeferred": "Completion criteria will be aligned later; new message received",
-        "acceptanceAligned": "{{n}} workflow completion criteria aligned",
         "buildConfirmed": "Workflow build confirmed",
         "buildOnce": "Run once selected",
         "confirmed": "Confirmed with you",
-        "noAcceptanceRule": "No completion criteria selected",
         "permissionDone": "Tool permission confirmation complete",
         "replied": "Replied to {{question}}",
         "taskConfirmed": "Task specification confirmed",
@@ -1554,7 +1506,6 @@
         "workflowSaved": "Workflow saved"
       },
       "permissionDetail": "Allowed {{allowed}} · denied {{denied}}",
-      "ruleItem": "Criterion {{index}}: {{text}}",
       "showRecord": "View record"
     },
     "menu": {
@@ -1580,8 +1531,7 @@
         "generatingImage": "Generating image",
         "runningWorkflow": "Running workflow",
         "thinking": "Thinking",
-        "usingBrowser": "Using Browser",
-        "validatingWorkflow": "Validating workflow"
+        "usingBrowser": "Using Browser"
       },
       "defaultEmpty": "Start a conversation with AI in this session…",
       "duration": "Took {{duration}}",
@@ -2279,8 +2229,7 @@
       "scriptFiles": "Script files",
       "selectWorkflow": "Select a workflow",
       "source": {
-        "taskFlow": "Task flow",
-        "validation": "Validation method"
+        "taskFlow": "Task flow"
       },
       "sourceFilesLabel": "Execution source files · {{count}}",
       "tabs": {
@@ -2294,13 +2243,11 @@
       "citeResult": "Cite result",
       "description": {
         "completed": "All execution steps are complete. This run has ended and needs no further action.",
-        "completedVerified": "All execution and validation steps are complete. This run has ended and needs no further action.",
         "failed": "This run has ended. You can review the failure details if needed."
       },
       "resultFiles": "{{count}} result files",
       "status": {
         "completed": "Execution complete",
-        "completedVerified": "Execution and validation complete",
         "failed": "Execution failed"
       },
       "title": {
@@ -2382,17 +2329,14 @@
     },
     "detailsTitle": "Execution progress",
     "executionCompleteAwaitingEnd": "Execution complete, awaiting finish",
-    "executionCompleteAwaitingValidation": "Execution complete, awaiting validation",
     "executionCompleted": "Execution complete",
     "executionWorkflow": "Execute workflow",
     "fallbackExecutionStep": "Step {{index}}",
-    "fallbackValidationStep": "Check {{index}}",
     "initializing": "Initializing",
     "noSteps": "Phase steps have not loaded yet.",
     "overallProgress": "Overall progress",
     "phase": {
-      "execute": "Execute",
-      "validate": "Validate"
+      "execute": "Execute"
     },
     "phaseAria": "Workflow run phases",
     "progress": {
@@ -2409,11 +2353,7 @@
     "title": "Workflow run",
     "toolCalls": "Tool calls",
     "unit": {
-      "check": "checks",
       "step": "steps"
-    },
-    "validationCompleteAwaitingEnd": "Validation complete, awaiting finish",
-    "validationCompleted": "Validation complete",
-    "validationResults": "Validation results"
+    }
   }
 }

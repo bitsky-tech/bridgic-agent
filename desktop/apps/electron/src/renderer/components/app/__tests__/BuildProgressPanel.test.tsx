@@ -106,7 +106,6 @@ describe('BuildProgressPanel Workflow Run refresh', () => {
       source_session_id: 'session-a',
       workflow_input: { text: '运行 A', blocks: [] },
       status: 'completed',
-      validation_status: 'passed',
       created_at: '2026-07-31T08:00:00Z',
       finished_at: '2026-07-31T08:01:00Z',
     }

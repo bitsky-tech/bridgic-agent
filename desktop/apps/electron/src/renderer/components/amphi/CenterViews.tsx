@@ -586,7 +586,7 @@ function runStatus(t: TFunction, run: WorkflowRunSummary): { label: string; tone
   if (run.status === 'completed') {
     return { label: t('center.common.status.completed'), tone: 'bg-status-success-bg text-status-success' }
   }
-  if (run.status === 'failed' || run.validation_status === 'failed') {
+  if (run.status === 'failed') {
     return { label: t('center.common.status.failed'), tone: 'bg-status-error-bg text-status-error' }
   }
   if (run.status === 'paused') return { label: t('center.common.status.paused'), tone: 'bg-bg-hover text-text-tertiary' }

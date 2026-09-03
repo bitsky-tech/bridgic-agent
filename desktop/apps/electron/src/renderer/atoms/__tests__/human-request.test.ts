@@ -8,124 +8,13 @@
 import { describe, it, expect } from 'bun:test'
 import { createStore } from 'jotai'
 import {
-  acceptanceRuleQuestions,
   clearSessionHumanRequestAtom,
   composeChoiceAnswerItems,
   composeHumanAnswer,
-  confirmedAcceptanceRules,
   pendingBySessionAtom,
   nextUnansweredIndex,
-  resolveAcceptanceReviewSubmission,
   setHumanRequestAtom,
 } from '../human-request'
-
-describe('acceptanceRuleQuestions', () => {
-  it('asks one final-outcome question in user-facing language', () => {
-    const questions = acceptanceRuleQuestions(['报告存在并包含所需摘要'])
-
-    expect(questions.map((question) => question.header)).toEqual(['最终结果'])
-    expect(questions[0]?.options.map((option) => option.label)).toEqual(['采用', '不采用'])
-    expect(questions[0]?.options.map((option) => option.id)).toEqual(['accept', 'reject'])
-    expect(questions[0]?.allowOther).toBe(true)
-  })
-
-  it('keeps two independently recognizable outcomes as two review tabs', () => {
-    const questions = acceptanceRuleQuestions(['报告已交付', '分享链接已返回'])
-
-    expect(questions.map((question) => question.header)).toEqual(['标准 1', '标准 2'])
-    expect(questions.every((question) => question.options.length === 2)).toBe(true)
-  })
-
-  it('does not expose premature AC ids in the review card', () => {
-    const questions = acceptanceRuleQuestions(['AC-001: 报告存在', 'AC-002：报告包含摘要'])
-
-    expect(questions[0]?.question).toBe('报告存在')
-    expect(questions[1]?.question).toBe('报告包含摘要')
-  })
-
-  it('aligns accepted candidates with system AC ids', () => {
-    expect(confirmedAcceptanceRules(
-      ['报告存在', '报告包含摘要', '报告使用中文'],
-      ['accept', 'reject', 'accept'],
-    )).toEqual([
-      { id: 'AC-001', text: '报告存在' },
-      { id: 'AC-002', text: '报告使用中文' },
-    ])
-  })
-
-  it('uses per-rule feedback as a replacement acceptance standard', () => {
-    expect(confirmedAcceptanceRules(
-      ['报告存在', '报告包含摘要'],
-      ['accept', 'reject'],
-      ['', '摘要必须包含来源链接'],
-    )).toEqual([
-      { id: 'AC-001', text: '报告存在' },
-      { id: 'AC-002', text: '摘要必须包含来源链接' },
-    ])
-  })
-
-  it('keeps adopted or replacement rules and drops individually rejected rules', () => {
-    expect(resolveAcceptanceReviewSubmission(
-      ['报告存在', '报告包含摘要', '报告使用中文'],
-      [
-        { question: '报告存在', answer: '采用' },
-        { question: '报告包含摘要', answer: '不采用' },
-        { question: '报告使用中文', answer: '报告需要同时提供中英文版本' },
-      ],
-    )).toEqual({
-      mode: 'criteria',
-      decisions: ['accept', 'reject', 'reject'],
-      feedback: ['', '', '报告需要同时提供中英文版本'],
-      rules: [
-        { id: 'AC-001', text: '报告存在' },
-        { id: 'AC-002', text: '报告需要同时提供中英文版本' },
-      ],
-    })
-  })
-
-  it('uses the stable option id instead of a localized acceptance label', () => {
-    expect(resolveAcceptanceReviewSubmission(
-      ['A completed report exists'],
-      [{ question: 'A completed report exists', answer: 'Keep', optionId: 'accept' }],
-    )).toEqual({
-      mode: 'criteria',
-      decisions: ['accept'],
-      feedback: [''],
-      rules: [{ id: 'AC-001', text: 'A completed report exists' }],
-    })
-  })
-
-  it('recognizes free-typed English labels the same as the Chinese ones', () => {
-    expect(resolveAcceptanceReviewSubmission(
-      ['A completed report exists', 'The report has a summary'],
-      [
-        // Typed into the Other field — no optionId travels, only the text.
-        { question: 'A completed report exists', answer: 'Keep' },
-        { question: 'The report has a summary', answer: 'Drop' },
-      ],
-    )).toEqual({
-      mode: 'criteria',
-      decisions: ['accept', 'reject'],
-      feedback: ['', ''],
-      rules: [{ id: 'AC-001', text: 'A completed report exists' }],
-    })
-  })
-
-  it('turns an all-rejected review without replacements into execution-only mode', () => {
-    expect(resolveAcceptanceReviewSubmission(
-      ['报告存在', '报告包含摘要'],
-      [
-        { question: '报告存在', answer: '不采用' },
-        { question: '报告包含摘要', answer: '不采用' },
-      ],
-    )).toEqual({
-      mode: 'execution_only',
-      decisions: [],
-      feedback: [],
-      rules: [],
-    })
-  })
-})
 
 describe('composeHumanAnswer', () => {
   it('composes answered questions in order and drops only empty answers', () => {

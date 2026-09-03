@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from src.amphi_agent._workspace import Workspace
@@ -63,16 +65,15 @@ async def test_build_receipts(agent_workspace: Workspace) -> None:
     """Final Build receipts:
 
     {
-      "acceptance_review": {"request_id": "accept-1"},
       "edit_baseline": "# Saved task",
-      "task_confirmation": {"request_id": "task-2", "task_markdown": "# Final task"}
+      "task_confirmation": {"request_id": "task-2", "task_markdown": "# Final task"},
+      "legacy_acceptance_field": "discarded"
     }
 
     Checks:
-    1. Acceptance review identity is durable, idempotent, and cannot be rebound.
-    2. The saved edit baseline is write-once but accepts an identical retry.
-    3. Task confirmation rejects changed content for one request but accepts a later revision.
-    4. Every receipt and the latest task confirmation survive resume.
+    1. The saved edit baseline is write-once but accepts an identical retry.
+    2. Task confirmation rejects changed content for one request but accepts a later revision.
+    3. Receipts survive resume while a legacy acceptance field is discarded.
     """
     build = await agent_workspace.prepare_build_space(
         "create",
@@ -80,35 +81,32 @@ async def test_build_receipts(agent_workspace: Workspace) -> None:
         stage="clarify",
     )
 
-    # Check 1: One acceptance request owns the Build's one-time review receipt.
-    assert build.start_acceptance_review("accept-1") == "accept-1"
-    assert build.start_acceptance_review("accept-1") == "accept-1"
-    assert build.acceptance_review_presented
-    with pytest.raises(ValueError, match="already has an acceptance review"):
-        build.start_acceptance_review("accept-2")
-
-    # Check 2: The original saved task remains the only edit baseline.
+    # Check 1: The original saved task remains the only edit baseline.
     build.record_edit_task_baseline("# Saved task")
     build.record_edit_task_baseline("# Saved task")
     with pytest.raises(RuntimeError, match="already recorded"):
         build.record_edit_task_baseline("# Different saved task")
 
-    # Check 3: One request is immutable while a later review can replace the task snapshot.
+    # Check 2: One request is immutable while a later review can replace the task snapshot.
     build.record_task_confirmation("task-1", "# Revised task")
     build.record_task_confirmation("task-1", "# Revised task")
     with pytest.raises(RuntimeError, match="snapshot changed"):
         build.record_task_confirmation("task-1", "# Corrupted task")
     build.record_task_confirmation("task-2", "# Final task")
 
-    # Check 4: Every receipt and the latest task confirmation survive resume.
+    # Check 3: Active receipts survive resume while the removed field is ignored and cleaned up.
     agent_workspace.close_build_space()
+    state_path = build.root / ".state.json"
+    legacy_state = json.loads(state_path.read_text(encoding="utf-8"))
+    legacy_state["acceptance_contract"] = {"request_id": "accept-1"}
+    state_path.write_text(json.dumps(legacy_state), encoding="utf-8")
     resumed = await agent_workspace.prepare_build_space("resume")
-    assert resumed.acceptance_contract == {"request_id": "accept-1"}
     assert resumed.edit_task_baseline == "# Saved task"
     assert resumed.last_task_confirmation == {
         "request_id": "task-2",
         "task_markdown": "# Final task",
     }
+    assert "acceptance_contract" not in json.loads(state_path.read_text(encoding="utf-8"))
 
 
 async def test_invalid_build(agent_workspace: Workspace) -> None:

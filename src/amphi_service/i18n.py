@@ -511,22 +511,6 @@ class BackendI18n:
             "zh": "工作流运行方式",
             "en": "Workflow run options",
         },
-        "session.accept_rule.execution_only.response": {
-            "zh": "该工作流未设置完成标准，运行时只执行步骤，无需结果校验；执行报错仍会正常失败。",
-            "en": "This Workflow has no completion criteria. It will run the steps without validating the result; execution errors will still fail normally.",
-        },
-        "session.accept_rule.execution_only.question": {
-            "zh": "已选择不设置完成标准",
-            "en": "No completion criteria selected",
-        },
-        "session.accept_rule.later.question": {
-            "zh": "完成标准稍后再对齐",
-            "en": "Completion criteria will be aligned later",
-        },
-        "session.accept_rule.aligned.question": {
-            "zh": "完成标准已对齐",
-            "en": "Completion criteria aligned",
-        },
         "session.build_conflict.fallback_question": {
             "zh": "未完成构建处理",
             "en": "Unfinished build handling",

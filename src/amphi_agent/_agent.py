@@ -32,7 +32,6 @@ from ._cognitive import (
     GenerateThink,
     MainThink,
     SubAgentThink,
-    ValidateThink,
     VerifyThink,
     WorkflowThink,
     render_input,
@@ -45,7 +44,6 @@ from ._state import (
     AgentResult,
     AwaitingPermission,
     AwaitingFeedback,
-    AwaitingAcceptRule,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
@@ -71,7 +69,6 @@ from .security._engine import model_facing_reason
 from .tools._request_human import (
     RequestBuild,
     RequestRunWorkflow,
-    RequestAcceptRule,
     RequestHumanChoice,
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
@@ -84,7 +81,6 @@ from ..amphi_store import (
     TurnStatus,
     UserInput,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from ..amphi_service.i18n import activate_locale, backend_i18n, detect_locale
 from ..amphi_service.protocol._ws_messages import (
@@ -170,9 +166,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     generate = think_unit(GenerateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
     verify = think_unit(VerifyThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
-    # Saved Workflow runtime — one cognitive unit for each persisted stage.
+    # Saved Workflow runtime.
     execute = think_unit(WorkflowThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    validate = think_unit(ValidateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
     def __init__(self, max_rounds: int = DEFAULT_MAX_ROUNDS, verbose: bool = False) -> None:
         super().__init__(verbose=verbose)
@@ -184,7 +179,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "edit_workflow",
             "request_build",
             "request_run_workflow",
-            "request_accept_rule",
             "request_human_choice",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
@@ -197,7 +191,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "edit_workflow",
             "request_build",
             "request_run_workflow",
-            "request_accept_rule",
             "request_human_choice",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
@@ -206,7 +199,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         self.thinking_modes = {
             "build": ("clarify", "explore", "generate", "verify"),
-            "run_workflow": ("execute", "validate"),
+            "run_workflow": ("execute",),
         }
 
 
@@ -603,7 +596,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         switch: re-aim the think dimension (mode + stage).
         request_human_choice: end the turn awaiting the user.
-        request_accept_rule: park Clarify for the one-time acceptance-rule review.
         request_build: enter Build or ask how to resolve Build intent.
         request_run_workflow: start or resolve one Session-owned Run.
         edit_workflow: restore one saved Workflow into Build for modification.
@@ -777,21 +769,13 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         durable_summary if result.status == "failure" else result.summary
                     )
                     if result.status == "success":
-                        next_stage = current_status.stage
                         next_step_index = current_status.step_index + 1
-                        if (
-                            current_status.stage == "execute"
-                            and next_step_index == len(stage_steps)
-                            and source.validation_steps
-                        ):
-                            next_stage = "validate"
-                            next_step_index = 0
                         state.checkpoint_cursor(
                             expected_workflow_id=current_status.workflow_id,
                             expected_generation=current_status.generation,
                             expected_stage=current_status.stage,
                             expected_step_index=current_status.step_index,
-                            stage=next_stage,
+                            stage=current_status.stage,
                             step_index=next_step_index,
                         )
                     step.tool_result = {
@@ -827,7 +811,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                                 context,
                                 current_status,
                                 status=WorkflowRunStatus.FAILED,
-                                validation_status=WorkflowValidationStatus.FAILED,
                             )
                         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
                             step.success = False
@@ -844,7 +827,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             **step.tool_result,
                             "run_id": published.run_id,
                             "run_status": published.status.value,
-                            "validation_status": published.validation_status.value,
                             "created_at": published.created_at.isoformat(),
                             "published_result_dir": str(published.result_dir.resolve()),
                         }
@@ -864,20 +846,12 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             step_index=state.step_index,
                         )
                         ota_context.transition_think(next_status)
-                        if next_status.stage != current_status.stage:
-                            self._stamp_stage_handoff(
-                                ota_context,
-                                current_status,
-                                next_status,
-                                "All execution sections succeeded; validation starts automatically.",
-                            )
                         published = await self._settle_workflow_boundary(ota_context, context)
                         if published is not None:
                             step.tool_result = {
                                 **step.tool_result,
                                 "run_id": published.run_id,
                                 "run_status": published.status.value,
-                                "validation_status": published.validation_status.value,
                                 "created_at": published.created_at.isoformat(),
                                 "published_result_dir": str(published.result_dir.resolve()),
                             }
@@ -927,22 +901,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             "status": resolved_action,
                             "reason": result.reason,
                         }
-
-            # Acceptance-rule review
-            elif step.tool_name == "request_accept_rule":
-                result = step.tool_result
-                if isinstance(result, RequestAcceptRule):
-                    workspace = context.workspace
-                    build = workspace.build if workspace is not None else None
-                    if build is not None:
-                        build.start_acceptance_review(result.request_id)
-                    payload = {
-                        "request_id": result.request_id,
-                        "candidate_rules": result.rules,
-                        "status": "pending",
-                    }
-                    ota_context.transition_interaction(AwaitingAcceptRule(accept_rule=payload))
-                    step.tool_result = payload
 
             # Task_confirm
             elif step.tool_name == "request_human_task_confirm":
@@ -1142,8 +1100,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 raise RuntimeError("This Session has no pending Child Agent state to resume.")
             if input_type == "task_confirm":
                 raise RuntimeError("This Session has no pending task confirmation.")
-            if input_type == "accept_rule":
-                raise RuntimeError("This Session has no pending acceptance-rule review.")
             if input_type == "workflow_confirm":
                 raise RuntimeError("This Session has no pending workflow confirmation.")
             if input_type == "build_confirm":
@@ -1272,8 +1228,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     rounds,
                     original_user_input,
                 )
-            elif "accept_rule" in interaction:
-                self._resume_accept_rule(ota_context, context, latest_turn, original_user_input)
             elif "task_confirm" in interaction:
                 await self._resume_task_confirm(ota_context, context, latest_turn, original_user_input)
             elif "workflow_confirm" in interaction:
@@ -1282,166 +1236,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 self._resume_human_choice(ota_context, context, interaction, rounds, original_user_input)
 
         return
-
-    def _resume_accept_rule(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        pending_turn: SessionTurnRecord,
-        original_user_input: Any,
-    ) -> None:
-        """Resume Clarify from an acceptance-rule card response or chat reply."""
-        def field(name: str) -> Any:
-            if isinstance(ota_context.user_input, dict):
-                return ota_context.user_input.get(name)
-            return getattr(ota_context.user_input, name, None)
-
-        acceptance_rule_sources = frozenset({
-            "agent_proposed_user_accepted",
-            "user_supplement",
-        })
-
-        def _acceptance_review_result(
-            request_id: str,
-            rules: List[tuple[str, str]],
-            *,
-            mode: str,
-        ) -> Dict[str, object]:
-            """Normalize the structured card response for this Turn's tool result."""
-            if mode not in {"criteria", "execution_only"}:
-                raise ValueError(f"Unsupported acceptance mode: {mode!r}")
-            normalized: List[dict[str, str]] = []
-            seen: set[str] = set()
-            for text, source in rules:
-                value = str(text).strip()
-                if not value or value in seen:
-                    continue
-                if source not in acceptance_rule_sources:
-                    raise ValueError(f"Unsupported acceptance-rule source: {source!r}")
-                seen.add(value)
-                normalized.append({
-                    "id": f"AC-{len(normalized) + 1:03d}",
-                    "text": value,
-                    "source": source,
-                })
-            if mode == "criteria" and not normalized:
-                raise ValueError("criteria acceptance mode requires at least one rule")
-            if mode == "execution_only" and normalized:
-                raise ValueError("execution_only acceptance mode cannot contain rules")
-            return {
-                "request_id": request_id,
-                "mode": mode,
-                "rules": normalized,
-            }
-
-        pending = (pending_turn.agent_state.get("interaction") or {})["accept_rule"]
-        candidates = pending.get("candidate_rules") or []
-        workspace = context.workspace
-        build = workspace.build if workspace is not None else None
-        if build is not None:
-            build.start_acceptance_review(str(pending["request_id"]))
-        ota_context.ota_record = [
-            OTARecord.model_validate(record)
-            for record in pending_turn.ota_records
-        ]
-        review = None
-        for record in reversed(ota_context.ota_record):
-            steps = (record.action_result or {}).get("results") or []
-            review = next(
-                (step for step in steps if step.get("tool_name") == "request_accept_rule"),
-                None,
-            )
-            if review is not None:
-                break
-
-        if field("type") != "accept_rule":
-            user_message = render_input(ota_context.user_input).strip()
-            if review is not None:
-                review["tool_result"] = {
-                    "request_id": pending.get("request_id"),
-                    "candidate_rules": candidates,
-                    "status": "not_answered",
-                    "user_message": user_message,
-                    "message": (
-                        "The user did not accept or reject the proposed acceptance rules. "
-                        f"They sent a new message instead: {user_message}\n\n"
-                        "Treat the recorded acceptance review as the Build's reusable outline. "
-                        "Use this message to refine task.md and the eventual validation design "
-                        "without presenting another acceptance-review card."
-                    ),
-                }
-            ota_context.transition_interaction(None)
-            context.session = context.session.without_last()
-            ota_context.user_input = original_user_input
-            return
-
-        if field("request_id") != pending.get("request_id"):
-            raise RuntimeError("This acceptance-rule response does not match the pending request.")
-
-        mode = str(field("mode") or "criteria")
-        decisions = field("decisions") or []
-        feedback = field("feedback") or []
-        if mode not in {"criteria", "execution_only"}:
-            raise RuntimeError("Unsupported acceptance mode.")
-        if mode == "criteria" and len(decisions) != len(candidates):
-            raise RuntimeError("Acceptance-rule decisions do not match the proposed rules.")
-        if feedback and len(feedback) != len(candidates):
-            raise RuntimeError("Acceptance-rule feedback does not match the proposed rules.")
-        if mode == "execution_only" and decisions:
-            raise RuntimeError("Execution-only acceptance cannot include rule decisions.")
-        if mode == "execution_only" and feedback:
-            raise RuntimeError("Execution-only acceptance cannot include rule feedback.")
-
-        accepted = []
-        for index, (rule, decision) in enumerate(zip(candidates, decisions)):
-            if decision == "accept":
-                accepted.append((str(rule), "agent_proposed_user_accepted"))
-                continue
-            replacement = str(feedback[index] if index < len(feedback) else "").strip()
-            if replacement:
-                accepted.append((replacement, "user_supplement"))
-        supplement = str(field("supplement") or "").strip()
-        if mode == "execution_only" and supplement:
-            raise RuntimeError("Execution-only acceptance cannot include a supplement.")
-        if supplement:
-            accepted.append((supplement, "user_supplement"))
-
-        if build is None:
-            raise RuntimeError("Cannot complete acceptance review without an active Build.")
-        if mode == "criteria" and not accepted:
-            mode = "execution_only"
-        review_result = _acceptance_review_result(
-            str(pending["request_id"]),
-            accepted,
-            mode=mode,
-        )
-
-        if review is not None:
-            review["tool_result"] = {
-                **review_result,
-                "status": "confirmed",
-                "revised_count": sum(
-                    decision == "reject" and index < len(feedback) and bool(str(feedback[index]).strip())
-                    for index, decision in enumerate(decisions)
-                ),
-                "rejected_count": sum(
-                    decision == "reject" and not (
-                        index < len(feedback) and bool(str(feedback[index]).strip())
-                    )
-                    for index, decision in enumerate(decisions)
-                ),
-                "message": (
-                    "The user chose execution-only mode with no runtime result validation."
-                    if mode == "execution_only"
-                    else "The user confirmed the reviewed acceptance outline. "
-                    "Use these system-assigned rules when writing task.md; task.md is the "
-                    "Build's sole durable source of truth for later acceptance criteria."
-                ),
-            }
-
-        ota_context.transition_interaction(None)
-        context.session = context.session.without_last()
-        ota_context.user_input = original_user_input
 
     @staticmethod
     def _resume_think_stage(ota_context: AmphiOTAContext, think: Dict[str, Any]) -> None:
@@ -2010,9 +1804,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             message = (
                 "The user replied to the entire task confirmation card instead "
                 f"of choosing an action: {feedback}\n\n"
-                "Keep the one-time acceptance outline as the structure for the revised task "
-                "and validation design. Incorporate the feedback directly and request task "
-                "confirmation again without presenting another acceptance-review card."
+                "Incorporate the feedback directly into task.md and request task "
+                "confirmation again."
             )
         elif confirmed:
             message = (
@@ -2022,16 +1815,12 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         elif feedback:
             message = (
                 f"The user requested these task.md revisions:\n\n{feedback}\n\n"
-                "Keep the one-time acceptance outline as the structure for the revised task "
-                "and validation design. Incorporate the feedback directly and request task "
-                "confirmation again without presenting another acceptance-review card."
+                "Incorporate the feedback directly and request task confirmation again."
             )
         else:
             message = (
                 "The user requested revisions to task.md without specific feedback. "
-                "Ask what should change in the task definition before rewriting task.md. "
-                "Keep the one-time acceptance outline and do not present another "
-                "acceptance-review card."
+                "Ask what should change in the task definition before rewriting task.md."
             )
 
         ota_context.ota_record = [OTARecord.model_validate(record) for record in pending_turn.ota_records]
@@ -2546,7 +2335,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _stamp_stage_handoff(ota_context: AmphiOTAContext, source: Any, target: Any, reason: str) -> None:
-        """Expose a source Think's concise handoff reason to the newly active Think."""
+        """Expose a source Think's self-contained handoff to the newly active Think."""
         note = (
             f"[stage handoff] `{source.mode}/{source.stage}` → "
             f"`{target.mode}/{target.stage}`\n{str(reason).strip()}"
@@ -2755,15 +2544,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         except (RuntimeError, ValueError):
             return 0
         remaining = len(source.steps(status.stage)) - status.step_index
-        if status.stage == "execute":
-            remaining += (
-                1 + len(source.validation_steps) + 1
-                if source.validation_steps
-                else 1
-            )
-        else:
-            remaining += 1
-        return max(remaining, 1)
+        return max(remaining + 1, 1)
 
     def _publish_workflow_progress(
         self,
@@ -2800,10 +2581,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _workflow_sections(source: Any) -> Dict[str, List[str]]:
-        """Return the serialized execution and validation section titles."""
+        """Return the serialized execution section titles."""
         return {
             "execution_steps": [step.title for step in source.execution_steps],
-            "validation_steps": [step.title for step in source.validation_steps],
         }
 
     @classmethod
@@ -2813,7 +2593,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         expected: WorkflowStageState,
         *,
         status: WorkflowRunStatus,
-        validation_status: WorkflowValidationStatus,
     ) -> Any:
         """Validate an active terminal boundary and publish its immutable result."""
         workflow_runs = context.workflow_runs
@@ -2835,18 +2614,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             failure = run.result_dir / "failure.md"
             if failure.is_symlink() or not failure.is_file():
                 raise ValueError("Failed Run Workflow requires a durable failure report")
-        elif space.stage == "validate":
-            if (
-                not source.validation_steps
-                or space.step_index != len(source.validation_steps)
-                or validation_status is not WorkflowValidationStatus.PASSED
-            ):
-                raise ValueError("Run Workflow validation has not reached its completion boundary")
-        elif (
-            space.step_index != len(source.execution_steps)
-            or source.validation_steps
-            or validation_status is not WorkflowValidationStatus.NOT_REQUIRED
-        ):
+        elif space.step_index != len(source.execution_steps):
             raise ValueError("Run Workflow execution has not reached its completion boundary")
 
         return await workflow_runs.publish_run_workflow(
@@ -2859,7 +2627,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             source_session_id=context.session.id,
             workflow_input=space.workflow_input,
             status=status,
-            validation_status=validation_status,
         )
 
     async def _settle_workflow_boundary(
@@ -2877,8 +2644,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         Notes
         -----
         The durable ``.run/.state.json`` cursor is authoritative. This method
-        therefore also repairs older or interrupted Runs left at an execution
-        completion boundary before deterministic stage advancement existed.
+        therefore also settles Runs left at an execution completion boundary
+        when terminal publication is interrupted.
         """
         status = ota_context.think_status
         if not isinstance(status, WorkflowStageState):
@@ -2892,49 +2659,13 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 f"Workflow Run state points outside {status.stage} sections."
             )
 
-        workspace = context.workspace
-        state = workspace.run_workflow if workspace is not None else None
-        if state is None:
-            raise RuntimeError("Workflow Run space is not bound.")
-        if status.stage == "execute" and source.validation_steps:
-            state.checkpoint_cursor(
-                expected_workflow_id=status.workflow_id,
-                expected_generation=status.generation,
-                expected_stage=status.stage,
-                expected_step_index=status.step_index,
-                stage="validate",
-                step_index=0,
-            )
-            next_status = WorkflowStageState(
-                workflow_id=state.workflow_id,
-                generation=state.generation,
-                stage=state.stage,
-                step_index=state.step_index,
-            )
-            ota_context.transition_think(next_status)
-            self._stamp_stage_handoff(
-                ota_context,
-                status,
-                next_status,
-                "All execution sections succeeded; validation starts automatically.",
-            )
-            return None
-
-        validation_status = (
-            WorkflowValidationStatus.PASSED
-            if status.stage == "validate"
-            else WorkflowValidationStatus.NOT_REQUIRED
-        )
         published = await self._publish_workflow_run(
             context,
             status,
             status=WorkflowRunStatus.COMPLETED,
-            validation_status=validation_status,
         )
         terminal_summary = (
-            f"Workflow `{published.workflow_name}` completed all execution and validation sections successfully."
-            if validation_status is WorkflowValidationStatus.PASSED
-            else f"Workflow `{published.workflow_name}` completed all execution sections; result validation was not requested."
+            f"Workflow `{published.workflow_name}` completed all execution sections successfully."
         )
         await self._finish_workflow_run(
             ota_context,
@@ -2963,7 +2694,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "workflow_id": published.workflow_id,
             "workflow_name": published.workflow_name,
             "status": published.status.value,
-            "validation_status": published.validation_status.value,
             "created_at": published.created_at.isoformat(),
             "result_file_count": result_file_count,
             "summary": summary,
@@ -3017,7 +2747,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 workflow_id=published.workflow_id,
                 workflow_name=published.workflow_name,
                 status=published.status.value,
-                validation_status=published.validation_status.value,
                 created_at=published.created_at.isoformat(),
                 result_file_count=result_file_count,
                 summary=summary,
@@ -3324,6 +3053,21 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             reason = _agent_legality_check(call)
             if reason is None and callable(think_legality_check):
                 reason = await think_legality_check(call, ota_context, context)
+            if (
+                reason is None
+                and getattr(call, "tool", None) == "switch"
+                and isinstance(think_status, BuildStageState)
+            ):
+                arguments = self._tool_args(call)
+                if (
+                    arguments.get("mode") != "normal"
+                    and arguments.get("stage")
+                    and not str(arguments.get("reason") or "").strip()
+                ):
+                    reason = (
+                        "switch rejected: a Build stage handoff requires a non-empty, "
+                        "self-contained reason for the next stage."
+                    )
             resolved.append(
                 verdict.model_copy(update={
                     "verdict": Permission.DENY.value,
@@ -3348,27 +3092,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 if (
                     verdict.verdict == Permission.ALLOW.value
                     and getattr(call, "tool", None) == "request_human_task_confirm"
-                )
-                else verdict
-                for call, verdict in zip(calls, resolved)
-            ]
-
-        if (
-            len(calls) > 1
-            and any(getattr(call, "tool", None) == "request_accept_rule" for call in calls)
-        ):
-            reason = (
-                "acceptance review rejected: request_accept_rule must run alone "
-                "so the review can park the turn cleanly."
-            )
-            resolved = [
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if (
-                    verdict.verdict == Permission.ALLOW.value
-                    and getattr(call, "tool", None) == "request_accept_rule"
                 )
                 else verdict
                 for call, verdict in zip(calls, resolved)
@@ -3639,16 +3362,19 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _stamp_continue(ota_context: AmphiOTAContext) -> None:
-        """Ask Main to recover an empty response with a user-visible final answer."""
+        """Ask Main to recover an empty response without assuming the task is done."""
         records = getattr(ota_context, "ota_record", None) or []
         if not records:
             return
         note = (
-            "[system] Please give the user a clear summary of the task outcome, "
-            "including what was completed and where the result can be found. If "
-            "anything remains unfinished, explain why, describe the current progress, "
-            "and suggest the next step. There is no need to call more tools or repeat "
-            "work that has already been completed."
+            "[system] The previous round ended without a user-visible response. "
+            "Re-evaluate the current task from the available context and continue "
+            "appropriately. If work remains, continue it and call tools as needed. "
+            "If the task is complete, give the user a clear, concise outcome and say "
+            "where relevant results can be found. If progress is blocked or depends "
+            "on a user decision, explain the concrete blocker and use the appropriate "
+            "interaction. Do not assume completion solely because the previous round "
+            "was empty, and do not repeat work already confirmed complete."
         )
         last = records[-1]
         existing = getattr(last, "observation_result", None)

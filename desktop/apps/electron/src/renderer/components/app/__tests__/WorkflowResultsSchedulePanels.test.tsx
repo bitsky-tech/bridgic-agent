@@ -80,7 +80,6 @@ describe('WorkflowResultsPanel', () => {
       source_session_id: 'session-results',
       workflow_input: { text: '统计当前目录', blocks: [] },
       status: 'completed',
-      validation_status: 'passed',
       created_at: '2026-08-13T10:00:00Z',
       finished_at: '2026-08-13T10:01:00Z',
     }
@@ -91,7 +90,6 @@ describe('WorkflowResultsPanel', () => {
       source_session_id: 'another-session',
       workflow_input: { text: '执行高风险任务', blocks: [] },
       status: 'failed',
-      validation_status: 'failed',
       created_at: '2026-08-13T11:00:00Z',
       finished_at: '2026-08-13T11:00:30Z',
     }

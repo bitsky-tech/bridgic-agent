@@ -549,13 +549,13 @@ describe('sendCommentBatchAtom', () => {
       done: true,
       createdAt: 1,
     }])
-    store.set(addPendingCommentAtom, { quote: '内容', text: '补充验收条件' })
+    store.set(addPendingCommentAtom, { quote: '内容', text: '补充输出格式' })
 
     await store.set(sendCommentBatchAtom)
 
     const review = store.get(currentTaskConfirmAtom)
     expect(review?.status).toBe('revision_requested')
-    expect(review?.feedback).toContain('补充验收条件')
+    expect(review?.feedback).toContain('补充输出格式')
     expect(store.get(pendingCommentsAtom)).toHaveLength(0)
   })
 })

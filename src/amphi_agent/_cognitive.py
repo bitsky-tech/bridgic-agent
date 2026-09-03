@@ -42,7 +42,6 @@ from ._prompt import (
     TURN_FAILED_MESSAGE,
     VERIFY_PERSONA,
     WORKFLOW_PERSONA,
-    WORKFLOW_VALIDATE_PERSONA,
     render_main_persona,
     render_stage_persona,
     time_in_local_tz,
@@ -74,7 +73,6 @@ __all__ = [
     "SubAgentThink",
     "CHILD_TOOL_NAMES",
     "ToolSurface",
-    "ValidateThink",
     "VerifyThink",
     "WorkflowRunThink",
     "WorkflowThink",
@@ -312,7 +310,6 @@ class MainThink(CognitiveWorker):
         for spec in TOOL_LIBRARY.all()
         if spec.tool_name not in {
             "report_workflow_step",
-            "request_accept_rule",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
         }
@@ -1164,7 +1161,7 @@ class MainThink(CognitiveWorker):
             - Build work directory (active, writable): /…/.work/.build
             - Workflow final result directory (active, writable): /…/.work/.run/result
             - Workflow background work directory (active, writable): /…/.work/.run/background/work
-            - Retained Build: stage: generate, operation: create, acceptance: established
+            - Retained Build: stage: generate, operation: create
             - Retained Workflow Run: Example (workflow_id: wf_1, stage: execute,
               step_index: 1, owner: this Session)
             - Mounted directories / files: ["/Users/me/project"]
@@ -1217,18 +1214,12 @@ class MainThink(CognitiveWorker):
                 if build_checkpoint is not None:
                     workflow_id = build_checkpoint.workflow_id
                     operation = "edit" if workflow_id else "create"
-                    acceptance_review = (
-                        "presented"
-                        if build_checkpoint.acceptance_contract is not None
-                        else "not presented"
-                    )
                     details = [
                         f"stage: {build_checkpoint.stage}",
                         f"operation: {operation}",
                     ]
                     if workflow_id:
                         details.append(f"workflow_id: {workflow_id}")
-                    details.append(f"acceptance review: {acceptance_review}")
                     lines.append("- Retained Build: " + ", ".join(details))
 
             run_checkpoint = workspace.run_workflow_checkpoint()
@@ -1337,7 +1328,7 @@ class MainThink(CognitiveWorker):
         if runs:
             run_lines = [
                 f"- {run.workflow_name} result (run_id: {run.run_id}, "
-                f"status: {run.status.value}, validation: {run.validation_status.value}, "
+                f"status: {run.status.value}, "
                 f"result path: {json.dumps(str(run.result_dir), ensure_ascii=False)}, "
                 f"intermediate work path: "
                 f"{json.dumps(str(run.background_work_dir), ensure_ascii=False)}, "
@@ -2192,14 +2183,9 @@ class WorkflowRunThink(MainThink):
         run = workflow_runs.require_run_workflow(run_space.root)
         durable = run_space
         execution_lines = [
-            f"- [{'x' if state.stage == 'validate' or index < state.step_index else ' '}] "
+            f"- [{'x' if index < state.step_index else ' '}] "
             f"{step.index}. {step.title}"
             for index, step in enumerate(source.execution_steps)
-        ]
-        validation_lines = [
-            f"- [{'x' if state.stage == 'validate' and index < state.step_index else ' '}] "
-            f"{step.index}. {step.title}"
-            for index, step in enumerate(source.validation_steps)
         ]
         result_dir = str(run.result_dir)
         work_dir = str(run.background_work_dir)
@@ -2239,8 +2225,6 @@ class WorkflowRunThink(MainThink):
             + step_position
             + "Execution sections:\n"
             + "\n".join(execution_lines)
-            + "\nValidation sections:\n"
-            + "\n".join(validation_lines)
             + f"\n{current_block}"
             "</workflow_run>"
         )
@@ -2306,22 +2290,6 @@ class WorkflowThink(WorkflowRunThink):
     ) -> Optional[str]:
         """Ensure an execution report belongs to the active WORKFLOW.md section."""
         return await self.report_legality_reason(call, ota_context, context, "execute")
-
-
-class ValidateThink(WorkflowRunThink):
-    """Validate real Workflow outputs through the current VALIDATE.md section."""
-
-    persona: str = WORKFLOW_VALIDATE_PERSONA
-    workflow_stage: str = "validate"
-
-    async def legality_check(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Ensure a validation report belongs to the active VALIDATE.md section."""
-        return await self.report_legality_reason(call, ota_context, context, "validate")
 
 
 ################################################################################################################
@@ -2450,7 +2418,7 @@ class BuildThink(MainThink):
             operation_lines.extend([
                 "Baseline: Restored from the saved Workflow.",
                 "Preservation: Preserve every unaffected requirement, plan, source file, "
-                "validation check, and dependency.",
+                "and dependency.",
             ])
         else:
             operation_lines = [
@@ -2458,11 +2426,6 @@ class BuildThink(MainThink):
                 "Workflow id: (none; allocated after final confirmation)",
                 "Baseline: New Workflow; no saved baseline is being edited.",
             ]
-        operation_lines.append(
-            "Acceptance review: "
-            + ("presented" if build.acceptance_review_presented else "not presented")
-            + ". task.md is the sole durable source of truth for acceptance criteria."
-        )
         return (
             "<build_workspace>\n"
             + "\n".join(operation_lines)
@@ -2578,7 +2541,6 @@ class ClarifyThink(BuildThink):
 
     persona: str = CLARIFY_PERSONA
     allowed_tools = BuildThink.allowed_tools | {
-        "request_accept_rule",
         "request_human_task_confirm",
     }
 
@@ -2671,27 +2633,10 @@ class ClarifyThink(BuildThink):
             ``None`` when legal; otherwise an actionable rejection reason.
         """
         tool_name = getattr(call, "tool", None)
-        if tool_name == "request_accept_rule":
-            build = self.build_space(context)
-            if build is None:
-                return "acceptance review rejected: there is no active Build."
-            if build.acceptance_review_presented:
-                return (
-                    "acceptance review rejected: this Build already has its one-time "
-                    "acceptance outline; refine task.md and the validation design around "
-                    "that outline instead of presenting another review."
-                )
-            return None
         if tool_name == "request_human_task_confirm":
             reason = self.task_validation_reason(context)
             if reason:
                 return f"task confirmation rejected: {reason}"
-            build = self.build_space(context)
-            if build is None or not build.acceptance_review_presented:
-                return (
-                    "task confirmation rejected: call request_accept_rule and obtain "
-                    "the one-time acceptance outline first."
-                )
             return None
         if tool_name != "switch":
             return None
@@ -3128,19 +3073,13 @@ class VerifyThink(BuildThink):
             return None
 
         package = self.build_package(context)
-        execution_only = bool(package and package.validation_disabled)
         body = package.read_document("verify.md") if package is not None else None
         if not body:
             return (
                 "confirm rejected: write verify.md with the isolated test scope, what "
                 "actually ran, what was substituted or not run for safety, "
-                + (
-                    "and the execution-only verification verdict before "
-                    if execution_only
-                    else "and a result or explicit safety limitation for every runtime "
-                    "acceptance check in VALIDATE.md before "
-                )
-                + "calling request_human_workflow_confirm."
+                "and the overall verification verdict before calling "
+                "request_human_workflow_confirm."
             )
         document_reason = self.human_document_reason("verify.md", body)
         if document_reason:

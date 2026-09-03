@@ -91,7 +91,7 @@ async def test_run_lifecycle(agent_workspace: Workspace) -> None:
             **{
                 **cursor,
                 "expected_generation": "generation-stale",
-                "stage": "validate",
+                "stage": "execute",
                 "step_index": 0,
             }
         )

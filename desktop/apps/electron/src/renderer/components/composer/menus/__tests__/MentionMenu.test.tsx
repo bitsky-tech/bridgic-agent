@@ -25,7 +25,6 @@ const run: WorkflowRunSummary = {
   source_session_id: 'session_1',
   workflow_input: { text: '/目录统计 统计桌面 paper 文件夹', blocks: [] },
   status: 'completed',
-  validation_status: 'passed',
   created_at: '2026-07-20T10:11:12',
   finished_at: '2026-07-20T10:12:00',
 }

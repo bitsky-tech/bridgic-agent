@@ -16,10 +16,7 @@ from .prompts.shared import (
     _SUB_AGENT_GUIDANCE as _SUB_AGENT_GUIDANCE,
 )
 from .prompts.title import TITLE_PROMPT
-from .prompts.workflow import (
-    WORKFLOW_PERSONA,
-    WORKFLOW_VALIDATE_PERSONA,
-)
+from .prompts.workflow import WORKFLOW_PERSONA
 
 
 def time_in_local_tz() -> str:
@@ -48,7 +45,6 @@ __all__ = [
     "TURN_FAILED_MESSAGE",
     "VERIFY_PERSONA",
     "WORKFLOW_PERSONA",
-    "WORKFLOW_VALIDATE_PERSONA",
     "SUB_AGENT_PROMPT",
     "render_main_persona",
     "render_stage_persona",

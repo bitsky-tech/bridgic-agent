@@ -196,20 +196,10 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
   const answeredCount = questions.reduce((n, q, i) => n + (isAnswered(i, q) ? 1 : 0), 0)
   const remaining = questions.length - answeredCount
   const multi = questions.length > 1
-  const acceptanceReview = request.kind === 'accept_rule'
-  const acceptanceRuleCount = request.rules?.length ?? 0
-  const answeredRuleCount = acceptanceReview
-    ? questions.slice(0, acceptanceRuleCount).filter((q, index) => isAnswered(index, q)).length
-    : 0
-  const remainingRuleCount = acceptanceRuleCount - answeredRuleCount
 
   function submit(): void {
     if (!allAnswered) {
-      if (acceptanceReview && multi) {
-        setActiveIdx((current) => (current + 1) % questions.length)
-        return
-      }
-      // Other multi-question asks jump directly to their first unanswered item.
+      // Multi-question asks jump directly to their first unanswered item.
       const idx = questions.findIndex((q, i) => !isAnswered(i, q))
       if (idx >= 0) setActiveIdx(idx)
       return
@@ -228,14 +218,6 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
     void respond({
       sessionId: request.sessionId,
       answers,
-    })
-  }
-
-  function chooseExecutionOnly(): void {
-    void respond({
-      sessionId: request.sessionId,
-      answers: [],
-      acceptanceMode: 'execution_only',
     })
   }
 
@@ -275,18 +257,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
   }
 
   if (floating && collapsed) {
-    let summary = active?.question ?? t('humanRequest.waitingSummary')
-    if (acceptanceReview) {
-      if (acceptanceRuleCount === 1) {
-        summary = remainingRuleCount > 0
-          ? t('humanRequest.acceptance.singlePending')
-          : t('humanRequest.acceptance.singleDone')
-      } else {
-        summary = remainingRuleCount > 0
-          ? t('humanRequest.acceptance.multiPending', { n: remainingRuleCount })
-          : t('humanRequest.acceptance.multiDone')
-      }
-    }
+    const summary = active?.question ?? t('humanRequest.waitingSummary')
     return (
       <button
         type="button"
@@ -312,39 +283,9 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
       className={cn(
         'relative mb-2 rounded-md border border-border-default bg-bg-surface p-3 outline-none',
         floating && 'mb-0 flex max-h-[min(520px,calc(100dvh_-_200px))] flex-col overflow-hidden rounded-xl bg-bg-elevated shadow-xl animate-focus-enter',
-        acceptanceReview && 'border-brand-blue/40 bg-bg-elevated p-4',
       )}
     >
-      {acceptanceReview && (
-        <div className="mb-4 flex items-start gap-3">
-          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-blue text-white">
-            {Icons.workflowResult(19)}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="text-sm font-semibold text-text-primary">{t('humanRequest.acceptance.title')}</div>
-              {acceptanceRuleCount > 1 && (
-                <span className="rounded-full bg-bg-hover px-2 py-0.5 text-xs text-text-secondary">
-                  {t('humanRequest.acceptance.suggestionCount', { n: acceptanceRuleCount })}
-                </span>
-              )}
-            </div>
-            <div className="mt-1 text-xs leading-5 text-text-secondary">
-              {t('humanRequest.acceptance.desc')}
-            </div>
-          </div>
-          {floating && (
-            <button
-              type="button"
-              onClick={() => setCollapsed(true)}
-              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-            >
-              {t('humanRequest.collapse')} <span className="rotate-180">{Icons.chevronDown(12)}</span>
-            </button>
-          )}
-        </div>
-      )}
-      {floating && !acceptanceReview && (
+      {floating && (
         <div className="mb-3 flex items-center gap-2 border-b border-border-subtle pb-2.5">
           <span className="flex text-text-accent">{Icons.chat(14)}</span>
           <span className="text-xs font-semibold text-text-primary">{t('humanRequest.needAnswer')}</span>
@@ -377,12 +318,7 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
             </section>
           )}
           {questions.length > 1 && (
-            <div
-              className={cn(
-                'mb-2 flex flex-wrap gap-1',
-                acceptanceReview && 'border-t border-border-subtle pt-3',
-              )}
-            >
+            <div className="mb-2 flex flex-wrap gap-1">
               {questions.map((q, i) => (
                 <div
                   key={i}
@@ -396,11 +332,6 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
                   {isAnswered(i, q) && <span className="ml-1 text-text-accent">✓</span>}
                 </div>
               ))}
-            </div>
-          )}
-          {acceptanceReview && acceptanceRuleCount > 1 && (
-            <div className="text-xs font-medium text-text-accent">
-              {t('humanRequest.acceptance.position', { current: activeIdx + 1, total: acceptanceRuleCount })}
             </div>
           )}
           <MarkdownMessage
@@ -483,22 +414,12 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
               <div className="text-sm text-text-primary mb-1">
                 {t('humanRequest.other')}
               </div>
-              {acceptanceReview ? (
-                <textarea
-                  rows={2}
-                  value={others[activeIdx] ?? ''}
-                  onChange={(e) => typeOther(activeIdx, active, e.target.value)}
-                  placeholder={t('humanRequest.acceptance.otherPlaceholder')}
-                  className="w-full resize-none bg-transparent text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none"
-                />
-              ) : (
-                <input
-                  value={others[activeIdx] ?? ''}
-                  onChange={(e) => typeOther(activeIdx, active, e.target.value)}
-                  placeholder={t('humanRequest.otherPlaceholder')}
-                  className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-secondary outline-none"
-                />
-              )}
+              <input
+                value={others[activeIdx] ?? ''}
+                onChange={(e) => typeOther(activeIdx, active, e.target.value)}
+                placeholder={t('humanRequest.otherPlaceholder')}
+                className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-secondary outline-none"
+              />
             </div>
           )}
         </div>
@@ -536,31 +457,16 @@ export function HumanRequestChoice({ request, floating = false }: ChooseAskProps
           )}
           {multi && (
             <span className="text-xs text-text-tertiary tabular-nums select-none">
-              {acceptanceReview
-                ? t('humanRequest.processedCount', { done: answeredRuleCount, total: acceptanceRuleCount })
-                : t('humanRequest.viewedCount', { done: answeredCount, total: questions.length })}
+              {t('humanRequest.viewedCount', { done: answeredCount, total: questions.length })}
             </span>
-          )}
-          {acceptanceReview && (
-            <button
-              type="button"
-              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border-subtle bg-bg-hover px-2.5 text-xs text-text-secondary transition-colors hover:border-brand-blue/30 hover:text-text-primary"
-              onClick={chooseExecutionOnly}
-            >
-              <span className="flex shrink-0 text-text-tertiary">{Icons.play(10)}</span>
-              <span className="font-medium">{t('humanRequest.acceptance.executionOnly')}</span>
-              <span className="text-xs text-text-tertiary">{t('humanRequest.acceptance.executionOnlyHint')}</span>
-            </button>
           )}
         </div>
         <SubmitAction
           allAnswered={allAnswered}
           multi={multi}
           onSubmit={submit}
-          submitLabel={acceptanceReview ? t('humanRequest.acceptance.submit') : t('humanRequest.submit')}
-          remainingLabel={acceptanceReview
-            ? t('humanRequest.acceptance.next')
-            : t('humanRequest.answerRemaining', { n: remaining })}
+          submitLabel={t('humanRequest.submit')}
+          remainingLabel={t('humanRequest.answerRemaining', { n: remaining })}
         />
       </div>
     </div>
