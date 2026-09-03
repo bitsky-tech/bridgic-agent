@@ -1464,6 +1464,7 @@
       "details": "图片生成详情",
       "prompt": "提示词",
       "promptUnavailable": "未提供提示词",
+      "reference": "参考图",
       "reveal": "在文件中显示",
       "status": {
         "completed": "已完成",
@@ -1593,6 +1594,7 @@
     },
     "tool": {
       "error": "错误",
+      "imageReadRunning": "正在理解图片…",
       "noDiff": "（无可显示的改动）",
       "noOutput": "（无输出）",
       "overflow": {
@@ -2000,6 +2002,7 @@
       "full": "全文"
     },
     "verb": {
+      "analyzeImage": "理解图片",
       "bash": "执行",
       "browserBack": "后退",
       "browserCheck": "勾选",

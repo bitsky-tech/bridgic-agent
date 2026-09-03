@@ -2,7 +2,8 @@
  * Tests for lib/toolDisplay.ts — the tool-call display registry, Chinese labels,
  * inline meta, and the output parsers (with graceful fallback). bun:test, §4.12.
  */
-import { describe, it, expect } from 'bun:test'
+import { beforeEach, describe, it, expect } from 'bun:test'
+import { i18n } from '../i18n'
 import {
   basename,
   classifyTool,
@@ -32,9 +33,14 @@ const OVERFLOW = [
   'Inline limit: 16384 characters.',
 ].join('\n')
 
+beforeEach(async () => {
+  await i18n.changeLanguage('zh')
+})
+
 describe('classifyTool', () => {
   it('maps built-in tools to their kind', () => {
     expect(classifyTool('read_file')).toBe('read')
+    expect(classifyTool('read_image')).toBe('image_read')
     expect(classifyTool('write_file')).toBe('write')
     expect(classifyTool('edit_file')).toBe('edit')
     expect(classifyTool('bash')).toBe('bash')
@@ -55,6 +61,11 @@ describe('toolLabel', () => {
       verb: '读取',
       subject: 'main.ts',
       subjectFull: 'src/app/main.ts',
+    })
+    expect(toolLabel('image_read', 'read_image', { file_path: 'generated-images/ref.png' })).toEqual({
+      verb: '理解图片',
+      subject: 'ref.png',
+      subjectFull: 'generated-images/ref.png',
     })
     expect(toolLabel('write', 'write_file', { file_path: '/abs/a.py' }).verb).toBe('写入')
     expect(toolLabel('edit', 'edit_file', { file_path: 'a.py' }).verb).toBe('编辑')
@@ -110,6 +121,9 @@ describe('toolMeta', () => {
     expect(toolMeta('read', 'read_file', { offset: '0', limit: '260' }, '')).toEqual({ note: '前 260 行' })
     expect(toolMeta('read', 'read_file', {}, '')).toEqual({ note: '全文' })
     expect(toolMeta('edit', 'edit_file', {}, 'Edited a.py: replaced 2 occurrences.')).toEqual({ note: '替换 2 处' })
+  })
+  it('image analysis does not show a text-file range note', () => {
+    expect(toolMeta('image_read', 'read_image', {}, '')).toEqual({})
   })
   it('glob / web_search / grep counts', () => {
     expect(toolMeta('glob', 'glob', {}, 'a.ts\nb.ts')).toEqual({ note: '命中 2 个' })

@@ -564,8 +564,116 @@ class BackendI18n:
             "en": "The current model, {model_display}, does not support image input. Switch to a vision-capable model or remove the images and try again.",
         },
         "agent.error.image_input_invalid": {
-            "zh": "图片无法作为模型输入。请确认图片是 PNG、JPEG、GIF 或 WebP 格式，单张不超过 5 MB，并重新添加后再试。",
-            "en": "The image could not be sent to the model. Re-add a PNG, JPEG, GIF, or WebP image no larger than 5 MB and try again.",
+            "zh": "图片无法作为模型输入。请确认图片是 PNG、JPEG、GIF 或 WebP 格式，单张及单次发送总量不超过 32 MB，并重新添加后再试。",
+            "en": "The image could not be sent to the model. Re-add PNG, JPEG, GIF, or WebP images no larger than 32 MB individually or in total and try again.",
+        },
+        "agent.image_tool.error.file_required": {
+            "zh": "请提供要读取的图片路径后重试。",
+            "en": "Provide the path of the image to read, then try again.",
+        },
+        "agent.image_tool.error.image_invalid": {
+            "zh": "无法读取这张图片。请确认文件仍然存在，是有效的 PNG、JPEG、GIF 或 WebP 图片，并且不超过 32 MB。",
+            "en": "This image could not be read. Make sure the file still exists, is a valid PNG, JPEG, GIF, or WebP image, and is no larger than 32 MB.",
+        },
+        "agent.image_tool.error.vision_unsupported": {
+            "zh": "当前模型“{model_display}”无法理解图片。请切换到支持图片输入的模型后重试。",
+            "en": "The current model, {model_display}, cannot understand images. Switch to a model that supports image input and try again.",
+        },
+        "agent.image_tool.error.no_vision_model": {
+            "zh": "当前没有可用的图片理解模型。请完成 ChatGPT 授权，或在模型设置中启用一个支持图片输入的模型。",
+            "en": "No image-understanding model is available. Connect ChatGPT, or enable a model that supports image input in model settings.",
+        },
+        "agent.image_tool.error.read_prompt_too_long": {
+            "zh": "图片分析要求过长。请精简到 32000 个字符以内后重试。",
+            "en": "The image inspection request is too long. Shorten it to 32,000 characters or fewer and try again.",
+        },
+        "agent.image_tool.error.read_unavailable": {
+            "zh": "图片理解工具当前无法访问本次会话。请重新打开会话后重试。",
+            "en": "Image inspection cannot access this conversation right now. Reopen the conversation and try again.",
+        },
+        "agent.image_tool.error.read_failed": {
+            "zh": "图片理解没有完成。请稍后重试；如果仍然失败，请切换到其他支持图片输入的模型。",
+            "en": "Image inspection did not complete. Try again later, or switch to another model that supports image input if it keeps failing.",
+        },
+        "agent.image_tool.error.read_failed_reason": {
+            "zh": "图片理解没有完成。{reason}",
+            "en": "Image inspection did not complete. {reason}",
+        },
+        "agent.image_tool.error.generation_prompt_required": {
+            "zh": "请描述需要生成的图片后重试。",
+            "en": "Describe the image to generate, then try again.",
+        },
+        "agent.image_tool.error.generation_prompt_too_long": {
+            "zh": "图片生成要求过长。请精简到 32000 个字符以内后重试。",
+            "en": "The image generation request is too long. Shorten it to 32,000 characters or fewer and try again.",
+        },
+        "agent.image_tool.error.generation_unavailable": {
+            "zh": "图片生成工具当前无法访问本次会话。请重新打开会话后重试。",
+            "en": "Image generation cannot access this conversation right now. Reopen the conversation and try again.",
+        },
+        "agent.image_tool.capability.generation": {
+            "zh": "直接生成图片",
+            "en": "image generation",
+        },
+        "agent.image_tool.capability.reference": {
+            "zh": "参考图生成",
+            "en": "reference-image generation",
+        },
+        "agent.image_tool.error.provider_not_configured": {
+            "zh": "尚未配置图片服务“{provider_id}”。请在模型设置中完成配置，或留空图片服务字段以自动选择。",
+            "en": "The image service {provider_id} is not configured. Configure it in model settings, or leave the image service field empty for automatic selection.",
+        },
+        "agent.image_tool.error.provider_disabled": {
+            "zh": "图片服务“{provider_id}”当前未启用。请在模型设置中启用它，或留空图片服务字段以自动选择。",
+            "en": "The image service {provider_id} is disabled. Enable it in model settings, or leave the image service field empty for automatic selection.",
+        },
+        "agent.image_tool.error.provider_key_required": {
+            "zh": "图片服务“{provider_id}”尚未配置访问密钥。请在模型设置中完成配置后重试。",
+            "en": "The image service {provider_id} does not have an access key. Configure it in model settings and try again.",
+        },
+        "agent.image_tool.error.model_not_enabled": {
+            "zh": "图片模型“{model_id}”尚未在图片服务“{provider_id}”中启用。请在模型设置中启用它，或留空模型字段以自动选择。",
+            "en": "The image model {model_id} is not enabled for {provider_id}. Enable it in model settings, or leave the model field empty for automatic selection.",
+        },
+        "agent.image_tool.error.model_capability_missing": {
+            "zh": "图片服务“{provider_id}”中没有可用于{capability}的已启用模型。请启用兼容模型，或留空图片服务和模型字段以自动选择。",
+            "en": "The image service {provider_id} has no enabled model for {capability}. Enable a compatible model, or leave the image service and model fields empty for automatic selection.",
+        },
+        "agent.image_tool.error.requested_model_unavailable": {
+            "zh": "当前没有已启用且可用于{capability}的图片模型“{model_id}”。请在模型设置中启用它，或留空模型字段以自动选择。",
+            "en": "No enabled image model named {model_id} is available for {capability}. Enable it in model settings, or leave the model field empty for automatic selection.",
+        },
+        "agent.image_tool.error.no_generation_model": {
+            "zh": "当前没有可用的图片生成模型。请完成 ChatGPT 授权，或在模型设置中启用一个支持图片生成的模型。",
+            "en": "No image generation model is available. Connect ChatGPT, or enable a model that supports image generation in model settings.",
+        },
+        "agent.image_tool.error.no_reference_model": {
+            "zh": "当前没有可用的参考图生成模型。请完成 ChatGPT 授权，或在模型设置中启用一个同时支持图片输入和图片生成的模型。",
+            "en": "No reference-image generation model is available. Connect ChatGPT, or enable a model that supports both image input and image generation in model settings.",
+        },
+        "agent.image_tool.error.provider_url_missing": {
+            "zh": "图片服务“{provider_id}”的连接地址未配置。请在模型设置中补充后重试。",
+            "en": "The connection address for the image service {provider_id} is missing. Add it in model settings and try again.",
+        },
+        "agent.image_tool.error.generation_failed": {
+            "zh": "图片生成没有完成。请稍后重试；如果仍然失败，请切换或配置其他支持图片生成的模型。",
+            "en": "Image generation did not complete. Try again later, or switch to another model that supports image generation if it keeps failing.",
+        },
+        "agent.image_tool.error.generation_failed_reason": {
+            "zh": "图片生成没有完成。{reason}",
+            "en": "Image generation did not complete. {reason}",
+        },
+        "agent.image_tool.error.no_fallback": {
+            "zh": "图片生成没有完成，并且当前没有可用的备用图片生成模型。请稍后重试，或在模型设置中启用一个支持图片生成的模型。",
+            "en": "Image generation did not complete, and no backup image generation model is available. Try again later or enable one in model settings.",
+        },
+        "agent.image_tool.error.no_fallback_reason": {
+            "zh": "图片生成没有完成。{reason} 当前也没有可用的备用图片生成模型；请在模型设置中启用一个支持图片生成的模型。",
+            "en": "Image generation did not complete. {reason} No backup image generation model is available; enable one in model settings.",
+        },
+        "agent.image_tool.error.save_failed": {
+            "zh": "图片已经生成，但无法保存到本次会话。请确认会话目录可写后重试。",
+            "en": "The image was generated but could not be saved to this conversation. Make sure the conversation folder is writable and try again.",
         },
         "agent.error.model_not_found": {
             "zh": "当前选择的模型无法使用。请前往模型设置，选择其他模型后再试。",

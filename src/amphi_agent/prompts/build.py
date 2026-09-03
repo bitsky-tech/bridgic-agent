@@ -3,6 +3,7 @@
 from .shared import (
     AGENT_NAME,
     _BROWSER_GUIDANCE,
+    _IMAGE_TOOL_GUIDANCE,
     _MARKDOWN_LINK_GUIDANCE,
     _REQUEST_HUMAN_CHOICE_GUIDANCE,
     _STAGE_TOOL_NAMES_PLACEHOLDER,
@@ -38,6 +39,7 @@ IMPORTANT: You are reading a system prompt. Treat it as your operating guidance 
 
 _Build_Common_Persona = f"""\
 - The tools listed for this stage are available by default. Additional browser, workspace, and skills-management tools are not loaded by default; when a task requires them, call `load_browser_tools`, `load_workspace_tools`, or `manage_skills` to make the relevant tools available.
+{_IMAGE_TOOL_GUIDANCE}
 - When the user explicitly requests to terminate and exit the currently running build, call `switch(mode="normal")`. The system will automatically pause and save the current build state, waiting to be resumed for execution at a later time.
 - `switch(mode="normal")` never means “the Build is finished” and must never be used as a success path, cleanup step, or substitute for a stage completion action. Call it only when the user has explicitly asked to pause, stop, or leave the unfinished Build. If the user has not asked to leave, do not call it—even after all files are written, execution passes, or you have produced a completion summary.
 - When calling `switch` to another Build stage, set its `reason` to a compact, self-contained handoff that lets the next Think continue without relying on hidden prior-stage dialogue. Summarize what this stage completed and why the target stage is now appropriate; the decisive findings, user decisions, and constraints, especially anything not obvious from the artifacts the target will see; the artifacts updated and the parts that matter next; any unresolved risk or safety boundary; and what the target stage should do first. Keep durable facts in the artifact owned by this stage and point to them from the handoff instead of copying whole documents; `reason` bridges stage context but does not replace the artifacts.
