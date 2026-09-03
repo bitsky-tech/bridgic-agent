@@ -1,6 +1,5 @@
 import ast
 import json
-import re
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
@@ -12,14 +11,12 @@ __all__ = [
     "request_build_tool",
     "request_presentation_tool",
     "request_run_workflow_tool",
-    "request_accept_rule_tool",
     "request_human_choice_tool",
     "request_human_task_confirm_tool",
     "request_human_workflow_confirm_tool",
     "RequestBuild",
     "RequestPresentation",
     "RequestRunWorkflow",
-    "RequestAcceptRule",
     "RequestHumanChoice",
     "RequestHumanTaskConfirm",
     "RequestHumanWorkflowConfirm",
@@ -423,93 +420,6 @@ async def request_human_choice(questions: str, prompt: str) -> Any:
     return RequestHumanChoice(normalized_questions, normalized_prompt)
 
 
-class RequestAcceptRule:
-    """One or two final-outcome standards awaiting explicit user review."""
-
-    MIN_RULES = 1
-    MAX_RULES = 2
-    MAX_RULE_CHARS = 1_000
-    RULE_ID_PREFIX = re.compile(r"^\s*AC[-_ ]?\d+\s*[:：.)、-]\s*", re.IGNORECASE)
-
-    def __init__(self, rules: List[str], request_id: Optional[str] = None):
-        self.rules = rules
-        self.request_id = request_id or f"accept_rule_{uuid4().hex}"
-
-    @classmethod
-    def normalize_rules(cls, rules: Any) -> List[str]:
-        """Validate the candidate without assigning its system-owned identity."""
-        if isinstance(rules, str):
-            for parse in (json.loads, ast.literal_eval):
-                try:
-                    parsed = parse(rules)
-                except (json.JSONDecodeError, ValueError, SyntaxError):
-                    continue
-                if isinstance(parsed, dict):
-                    parsed = parsed.get("rules")
-                if isinstance(parsed, list):
-                    rules = parsed
-                    break
-        if not isinstance(rules, list) or not rules:
-            raise RequestHumanRejection(
-                "request_accept_rule rejected: `rules` must be a non-empty list."
-            )
-        if not cls.MIN_RULES <= len(rules) <= cls.MAX_RULES:
-            raise RequestHumanRejection(
-                "request_accept_rule rejected: one or two final-outcome standards are required."
-            )
-        normalized = []
-        for index, rule in enumerate(rules, start=1):
-            if not isinstance(rule, str) or not rule.strip():
-                raise RequestHumanRejection(
-                    f"request_accept_rule rejected: rule {index} must be non-empty text."
-                )
-            text = cls.RULE_ID_PREFIX.sub("", rule.strip()).strip()
-            if not text:
-                raise RequestHumanRejection(
-                    f"request_accept_rule rejected: rule {index} must contain text after its AC id."
-                )
-            if len(text) > cls.MAX_RULE_CHARS:
-                raise RequestHumanRejection(
-                    f"request_accept_rule rejected: rule {index} exceeds "
-                    f"{cls.MAX_RULE_CHARS} characters."
-                )
-            normalized.append(text)
-        if len(set(normalized)) != len(normalized):
-            raise RequestHumanRejection(
-                "request_accept_rule rejected: duplicate rules are not allowed."
-            )
-        return normalized
-
-
-async def request_accept_rule(rules: str) -> RequestAcceptRule:
-    """Invite the user to review one or two direct final-outcome standards.
-
-    Propose one concise statement of what the user should directly see when the
-    Workflow is complete. Add a second only for another independently
-    recognizable final result, never for an input, field, step, quality, or
-    runtime branch. Express both in task-domain language and keep optional-input
-    cases, environment or path availability, permissions, tools, implementation
-    details, and validation mechanics out of the card. The user adopts, rejects,
-    or replaces each statement. Rejecting every statement without a replacement
-    selects execution-only operation with no runtime result validation. This
-    ends the turn. The response supplies a reviewed outline for the next agent
-    turn; ``task.md`` remains the Build's sole durable source of truth for any
-    acceptance criteria recorded later.
-
-    Parameters
-    ----------
-    rules : str
-        JSON list containing one or two direct final-result statements, for
-        example ``["A report containing the requested analysis is delivered."]``.
-
-    Returns
-    -------
-    RequestAcceptRule
-        The validated candidates and a stable request identity.
-    """
-    return RequestAcceptRule(RequestAcceptRule.normalize_rules(rules))
-
-
 class RequestHumanTaskConfirm:
     """A request for the user to review the current ``task.md`` contract."""
 
@@ -557,8 +467,8 @@ class RequestHumanWorkflowConfirm:
 async def request_human_workflow_confirm(prompt: str) -> RequestHumanWorkflowConfirm:
     """Ask the user to name and confirm the verified workflow — this ENDS your turn.
 
-    Use this only at the end of the build verify stage after the workflow passed
-    validation. The UI surfaces a workflow naming card. The user's confirmation
+    Use this only at the end of the build verify stage after Build Verify has
+    completed. The UI surfaces a workflow naming card. The user's confirmation
     or cancellation arrives through the system resume path, so do NOT keep
     working after this call.
 
@@ -586,7 +496,6 @@ async def request_human_workflow_confirm(prompt: str) -> RequestHumanWorkflowCon
 request_build_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_build)
 request_presentation_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_presentation)
 request_run_workflow_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_run_workflow)
-request_accept_rule_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_accept_rule)
 request_human_choice_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_human_choice)
 request_human_task_confirm_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_human_task_confirm)
 request_human_workflow_confirm_tool: FunctionToolSpec = FunctionToolSpec.from_raw(request_human_workflow_confirm)

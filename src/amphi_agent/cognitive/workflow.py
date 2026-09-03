@@ -1,4 +1,4 @@
-"""Cognitive workers for executing and validating saved Workflows."""
+"""Cognitive workers for executing saved Workflows."""
 
 from typing import Any, List, Optional, Tuple
 
@@ -9,11 +9,10 @@ from .._cognitive import MainThink, render_input
 from .._context import AmphiContext, AmphiOTAContext, _view
 from .._state import WorkflowStageState
 from ..prompts.render import render_stage_persona
-from ..prompts.workflow import WORKFLOW_PERSONA, WORKFLOW_VALIDATE_PERSONA
+from ..prompts.workflow import WORKFLOW_PERSONA
 from ..tools import switch_tool
 
 __all__ = [
-    "ValidateThink",
     "WorkflowRunThink",
     "WorkflowThink",
 ]
@@ -209,14 +208,9 @@ class WorkflowRunThink(MainThink):
         run = workflow_runs.require_run_workflow(run_space.root)
         durable = run_space
         execution_lines = [
-            f"- [{'x' if state.stage == 'validate' or index < state.step_index else ' '}] "
+            f"- [{'x' if index < state.step_index else ' '}] "
             f"{step.index}. {step.title}"
             for index, step in enumerate(source.execution_steps)
-        ]
-        validation_lines = [
-            f"- [{'x' if state.stage == 'validate' and index < state.step_index else ' '}] "
-            f"{step.index}. {step.title}"
-            for index, step in enumerate(source.validation_steps)
         ]
         result_dir = str(run.result_dir)
         work_dir = str(run.background_work_dir)
@@ -256,8 +250,6 @@ class WorkflowRunThink(MainThink):
             + step_position
             + "Execution sections:\n"
             + "\n".join(execution_lines)
-            + "\nValidation sections:\n"
-            + "\n".join(validation_lines)
             + f"\n{current_block}"
             "</workflow_run>"
         )
@@ -323,19 +315,3 @@ class WorkflowThink(WorkflowRunThink):
     ) -> Optional[str]:
         """Ensure an execution report belongs to the active WORKFLOW.md section."""
         return await self.report_legality_reason(call, ota_context, context, "execute")
-
-
-class ValidateThink(WorkflowRunThink):
-    """Validate real Workflow outputs through the current VALIDATE.md section."""
-
-    persona: str = WORKFLOW_VALIDATE_PERSONA
-    workflow_stage: str = "validate"
-
-    async def legality_check(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Ensure a validation report belongs to the active VALIDATE.md section."""
-        return await self.report_legality_reason(call, ota_context, context, "validate")

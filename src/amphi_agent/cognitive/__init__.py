@@ -12,7 +12,7 @@ from .presentation import (
     PresentationReviewThink,
     PresentationThink,
 )
-from .workflow import ValidateThink, WorkflowRunThink, WorkflowThink
+from .workflow import WorkflowRunThink, WorkflowThink
 
 __all__ = [
     "BuildThink",
@@ -27,7 +27,6 @@ __all__ = [
     "PresentationPlanThink",
     "PresentationReviewThink",
     "PresentationThink",
-    "ValidateThink",
     "VerifyThink",
     "WorkflowRunThink",
     "WorkflowThink",

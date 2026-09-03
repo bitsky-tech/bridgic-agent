@@ -214,34 +214,6 @@ class WsPresentationOutlineConfirmMessage(BaseModel):
     session_id: str
     request_id: str
     chapters: List[WsPresentationChapterOutline] = Field(min_length=1, max_length=20)
-
-
-class WsAcceptRuleMessage(BaseModel):
-    """Resume Clarify with one decision and optional replacement per proposed rule."""
-
-    model_config = ConfigDict(extra="forbid", protected_namespaces=())
-
-    type: Literal["accept_rule"] = "accept_rule"
-    session_id: str
-    request_id: str
-    mode: Literal["criteria", "execution_only"] = "criteria"
-    decisions: List[Literal["accept", "reject"]] = Field(default_factory=list, max_length=12)
-    feedback: List[str] = Field(default_factory=list, max_length=12)
-    supplement: str = Field(default="", max_length=2_000)
-
-    @model_validator(mode="after")
-    def validate_mode(self) -> "WsAcceptRuleMessage":
-        if self.mode == "criteria" and not self.decisions:
-            raise ValueError("criteria mode requires one decision per proposed rule")
-        if self.feedback and len(self.feedback) != len(self.decisions):
-            raise ValueError("feedback must align with the proposed rule decisions")
-        if any(len(item) > 1_000 for item in self.feedback):
-            raise ValueError("rule feedback must not exceed 1000 characters")
-        if self.mode == "execution_only" and (self.decisions or self.feedback or self.supplement.strip()):
-            raise ValueError("execution_only mode cannot include decisions, feedback, or a supplement")
-        return self
-
-
 class WsChoiceAnswerItem(BaseModel):
     """One question's resolved answer. ``index`` is the question's position in the
     card's ``questions`` list. Exactly one of ``option_id`` (a clicked option's
@@ -321,7 +293,6 @@ WsClientMessage = Union[
     WsUnsubscribeMessage,
     WsChatMessage,
     WsBuildConfirmMessage,
-    WsAcceptRuleMessage,
     WsTaskConfirmMessage,
     WsPresentationOutlineConfirmMessage,
     WsWorkflowConfirmMessage,
@@ -337,7 +308,6 @@ _BY_TYPE: Dict[str, type] = {
     "unsubscribe": WsUnsubscribeMessage,
     "chat": WsChatMessage,
     "build_confirm": WsBuildConfirmMessage,
-    "accept_rule": WsAcceptRuleMessage,
     "task_confirm": WsTaskConfirmMessage,
     "presentation_outline_confirm": WsPresentationOutlineConfirmMessage,
     "workflow_confirm": WsWorkflowConfirmMessage,
@@ -401,7 +371,6 @@ __all__ = [
     "WsChatBlock",
     "WsChatMessage",
     "WsBuildConfirmMessage",
-    "WsAcceptRuleMessage",
     "WsPresentationChapterOutline",
     "WsPresentationOutlineConfirmMessage",
     "WsPresentationSlideOutline",

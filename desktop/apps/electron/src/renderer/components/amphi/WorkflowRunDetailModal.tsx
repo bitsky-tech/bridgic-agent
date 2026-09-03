@@ -627,7 +627,7 @@ export function WorkflowRunStatus({
 }) {
   const { t } = useTranslation()
   const completed = run.status === 'completed'
-  const failed = run.status === 'failed' || run.validation_status === 'failed'
+  const failed = run.status === 'failed'
   const inactive = run.status === 'paused' || run.status === 'cancelled'
   let label = t('workflow.runDetail.status.running')
   if (completed) label = t('workflow.runDetail.status.completed')

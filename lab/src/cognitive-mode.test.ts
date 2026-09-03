@@ -51,14 +51,11 @@ describe('resolveRoundCognitiveMode', () => {
     },
   )
 
-  test.each(['execute', 'validate'] as const)(
-    'uses the per-round think_scope marker for Workflow %s',
-    (stage) => {
-      expect(resolveRoundCognitiveMode(round({ think_scope: { mode: 'run_workflow', stage } }), {
-        agentState: { think: { mode: 'run_workflow', stage: 'validate' } },
-      })).toEqual({ id: `workflow-${stage}`, mode: 'run_workflow', stage })
-    },
-  )
+  test('uses the per-round think_scope marker for Workflow execution', () => {
+    expect(resolveRoundCognitiveMode(round({ think_scope: { mode: 'run_workflow', stage: 'execute' } }), {
+      agentState: { think: { mode: 'run_workflow', stage: 'execute' } },
+    })).toEqual({ id: 'workflow-execute', mode: 'run_workflow', stage: 'execute' })
+  })
 
   test('does not apply a later Turn-level mode to a scoped normal round', () => {
     expect(resolveRoundCognitiveMode(round({ think_scope: { mode: 'normal', stage: 'main' } }), {
@@ -84,19 +81,16 @@ describe('resolveRoundCognitiveMode', () => {
     })).toEqual({ id: 'build-generate', mode: 'build', stage: 'generate' })
   })
 
-  test.each(['execute', 'validate'] as const)(
-    'uses the Turn-level Workflow stage for an active %s round',
-    (stage) => {
-      expect(resolveRoundCognitiveMode(round({ build_stage: null }), {
-        agentState: { think: { mode: 'run_workflow', stage } },
-      })).toEqual({ id: `workflow-${stage}`, mode: 'run_workflow', stage })
-    },
-  )
+  test('uses the Turn-level Workflow mode for an active execution round', () => {
+    expect(resolveRoundCognitiveMode(round({ build_stage: null }), {
+      agentState: { think: { mode: 'run_workflow', stage: 'execute' } },
+    })).toEqual({ id: 'workflow-execute', mode: 'run_workflow', stage: 'execute' })
+  })
 
-  test('prefers the Workflow phase persisted by the round result', () => {
+  test('identifies Workflow execution from a persisted step report', () => {
     expect(resolveRoundCognitiveMode(
-      round({ build_stage: null }, 'report_workflow_step', { phase: 'execute' }),
-      { agentState: { think: { mode: 'run_workflow', stage: 'validate' } } },
+      round({ build_stage: null }, 'report_workflow_step', { status: 'success' }),
+      { agentState: { think: { mode: 'run_workflow', stage: 'execute' } } },
     )).toEqual({ id: 'workflow-execute', mode: 'run_workflow', stage: 'execute' })
   })
 })

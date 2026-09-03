@@ -49,7 +49,6 @@ import { backendEndpointAtom, buildAmphiClient } from './backend'
 import type { RunChild } from '@/lib/amphiClient'
 // Static import is acyclic: human-request.ts imports agent.ts only dynamically.
 import {
-  acceptanceRuleQuestions,
   clearSessionHumanRequestAtom,
   pendingBySessionAtom,
   setHumanRequestAtom,
@@ -172,7 +171,8 @@ const continuationFamily = atomFamily((_sessionId: string) =>
 const liveRevisionFamily = atomFamily((_sessionId: string) => atom(0))
 
 /** Per-session think position, driven by live `stage` frames and transcript hydration.
- * Presentation positions also carry their durable substep cursor and reports. */
+ * Build uses stage names, Workflow uses execute, and Presentation positions also carry
+ * their durable substep cursor and reports. */
 export const thinkingModeFamily = atomFamily((_sessionId: string) =>
   atom<ThinkPosition | null>(null),
 )
@@ -446,15 +446,6 @@ export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: st
             })
           }
         }
-      } else if (pendingRequest.kind === 'accept_rule' && pendingRequest.requestId) {
-        const rules = pendingRequest.rules ?? []
-        set(setHumanRequestAtom, {
-          sessionId,
-          kind: 'accept_rule',
-          requestId: pendingRequest.requestId,
-          rules,
-          questions: acceptanceRuleQuestions(rules),
-        })
       } else {
         set(setHumanRequestAtom, {
           sessionId,
@@ -1160,24 +1151,19 @@ export const appendUserMessageAtom = atom(
       ? null
       : frameworkInteraction
     if (pending) {
-      const acceptanceMessage = pending.kind === 'accept_rule'
-      const question = acceptanceMessage
-        ? i18n.t('session.interaction.card.acceptRuleDeferredTitle')
-        : pending.questions
-            .map((q) => q.question)
-            .filter(Boolean)
-            .join('\n\n')
+      const question = pending.questions
+        .map((q) => q.question)
+        .filter(Boolean)
+        .join('\n\n')
       set(prepareInteractionContinuationAtom, {
         sessionId,
         confirmation: {
           ...(pending.prompt ? { prompt: pending.prompt } : {}),
           question,
           response: text,
-          ...(acceptanceMessage ? { kind: 'accept_rule_message' as const } : {}),
         },
       })
-      // The daemon resumes the parked tail Turn. For acceptance review this
-      // records an explicit "not answered; new message received" tool result.
+      // The daemon resumes the parked tail Turn with the user's message.
       set(clearSessionHumanRequestAtom, sessionId)
       set(markSessionAnsweredAtom, sessionId)
     } else if (confirmation) {
@@ -1537,8 +1523,6 @@ export const applyAgentEventAtom = atom(
           stepIndex: event.stepIndex,
           executionSteps: event.executionSteps
             ?? (continuingWorkflow ? previousRun.executionSteps : []),
-          validationSteps: event.validationSteps
-            ?? (continuingWorkflow ? previousRun.validationSteps : []),
         })
         const cur = get(streamingFamily(sessionId))
         if (!cur) return
@@ -1560,7 +1544,6 @@ export const applyAgentEventAtom = atom(
             status: event.status,
             summary: event.summary ?? null,
             executionSteps: event.executionSteps ?? block.executionSteps,
-            validationSteps: event.validationSteps ?? block.validationSteps,
           }
         })
         set(streamingFamily(sessionId), {
@@ -1577,7 +1560,6 @@ export const applyAgentEventAtom = atom(
             status: event.status,
             summary: event.summary ?? null,
             ...(event.executionSteps ? { executionSteps: event.executionSteps } : {}),
-            ...(event.validationSteps ? { validationSteps: event.validationSteps } : {}),
           }],
         })
         return
@@ -1591,7 +1573,6 @@ export const applyAgentEventAtom = atom(
           workflowId: event.workflowId,
           workflowName: event.workflowName,
           status: event.status,
-          validationStatus: event.validationStatus,
           createdAt: event.createdAt,
           ...(event.resultFileCount === undefined
             ? {}
@@ -1755,11 +1736,20 @@ export const applyAgentEventAtom = atom(
         // The key commit: streamingState → messageFamily[sessionId], then clear streaming.
         const cur = get(streamingFamily(sessionId))
         if (!cur) return
+        // Normal final frames carry authoritative backend timing. A locally
+        // initiated Stop (and legacy cancelled frames) does not, so settle its
+        // visible completion metadata immediately from the live stream clock.
+        // Keeping this fallback in the reducer also preserves the correct live
+        // execution start after an interaction continuation.
+        const completedAt = event.completedAt ?? Date.now()
+        const durationMs = event.durationMs ?? Math.max(0, completedAt - cur.startedAt)
         // An empty turn is not committed: while request_human is pending (the tool frame
         // was intercepted and the model said nothing) the streaming state holds nothing at
         // all, and committing would only leave an empty assistant bubble — the daemon's
         // transcript hydration skips empty bubbles too, and live and reload must look identical.
-        if (isEmptyStreaming(cur)) {
+        // Cancellation is the exception: even before the first content block, it
+        // needs a stopped receipt carrying its completion time and elapsed time.
+        if (isEmptyStreaming(cur) && event.reason !== 'cancelled') {
           set(streamingFamily(sessionId), undefined)
           return
         }
@@ -1768,8 +1758,8 @@ export const applyAgentEventAtom = atom(
           set,
           sessionId,
           finalizeStreaming(cur, undefined, event.finalAnswer, {
-            durationMs: event.durationMs,
-            completedAt: event.completedAt,
+            durationMs,
+            completedAt,
           }),
         )
         return
@@ -1826,7 +1816,7 @@ export const applyAgentEventAtom = atom(
         if (firstUser && session && isDefaultTitle(session.title)) {
           const title = firstUser.text.trim().slice(0, SESSION_TITLE_MAX_LEN) || defaultTitle
           if (!isDefaultTitle(title)) {
-            set(updateSessionTitleAtom, { id: sessionId, title })
+            set(updateSessionTitleAtom, { id: sessionId, title, source: 'fallback' })
           }
         }
         return
@@ -1893,16 +1883,6 @@ export const applyAgentEventAtom = atom(
           ...(event.prompt ? { prompt: event.prompt } : {}),
           questions: event.questions,
           requestId: event.requestId,
-        })
-        return
-      }
-      case 'accept_rule_request': {
-        set(setHumanRequestAtom, {
-          sessionId,
-          kind: 'accept_rule',
-          requestId: event.requestId,
-          rules: event.rules,
-          questions: acceptanceRuleQuestions(event.rules),
         })
         return
       }
@@ -2025,7 +2005,12 @@ export const applyAgentEventAtom = atom(
         // meta live; it supersedes the done() truncated-opener fallback below,
         // which only fires while the title is still the default. bump:false
         // — a title change isn't activity, so it must not re-sort the session list.
-        set(updateSessionTitleAtom, { id: sessionId, title: event.title, bump: false })
+        set(updateSessionTitleAtom, {
+          id: sessionId,
+          title: event.title,
+          bump: false,
+          source: 'generated',
+        })
         return
       }
       case 'session_completed': {

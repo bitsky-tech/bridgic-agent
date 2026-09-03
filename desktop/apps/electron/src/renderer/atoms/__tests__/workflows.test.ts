@@ -42,7 +42,6 @@ describe('session resource projections', () => {
       source_session_id: 'root',
       workflow_input: { text: '筛选论文', blocks: [] },
       status: 'completed',
-      validation_status: 'passed',
       created_at: '2026-07-22T08:00:00Z',
       finished_at: '2026-07-22T08:01:00Z',
     }
@@ -129,7 +128,6 @@ describe('deleteWorkflowAtom', () => {
           source_session_id: 'session_1',
           workflow_input: { text: '筛选论文', blocks: [] },
           status: 'completed',
-          validation_status: 'passed',
           created_at: '2026-07-22T08:00:00Z',
           finished_at: '2026-07-22T08:01:00Z',
         }])
@@ -231,7 +229,6 @@ describe('renameWorkflowAtom', () => {
           source_session_id: 'session_1',
           workflow_input: { text: '筛选论文', blocks: [] },
           status: 'completed',
-          validation_status: 'passed',
           created_at: '2026-07-22T08:00:00Z',
           finished_at: '2026-07-22T08:01:00Z',
         }])
@@ -282,7 +279,6 @@ describe('deleteWorkflowRunAtom', () => {
       source_session_id: 'session_1',
       workflow_input: { text: '筛选论文', blocks: [] },
       status: 'completed' as const,
-      validation_status: 'passed' as const,
       created_at: '2026-07-22T08:00:00Z',
       finished_at: '2026-07-22T08:01:00Z',
     }
@@ -332,7 +328,6 @@ describe('run-index pagination', () => {
       source_session_id: sourceSessionId,
       workflow_input: { text: `第 ${index} 次`, blocks: [] },
       status: 'completed',
-      validation_status: 'passed',
       created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
       finished_at: null,
     }

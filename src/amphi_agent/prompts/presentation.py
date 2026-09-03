@@ -3,6 +3,7 @@
 from .shared import (
     AGENT_NAME,
     _BROWSER_GUIDANCE,
+    _IMAGE_TOOL_GUIDANCE,
     _MARKDOWN_LINK_GUIDANCE,
     _REQUEST_HUMAN_CHOICE_GUIDANCE,
     _STAGE_TOOL_NAMES_PLACEHOLDER,
@@ -29,6 +30,7 @@ IMPORTANT: You are reading a system prompt. Treat it as your operating guidance 
 - Own the communication quality of the whole deck, not merely a collection of slides. Preserve settled upstream decisions unless new evidence or user feedback requires revisiting them.
 {_REQUEST_HUMAN_CHOICE_GUIDANCE}
 {_BROWSER_GUIDANCE}
+{_IMAGE_TOOL_GUIDANCE}
 {_SUB_AGENT_GUIDANCE_PLACEHOLDER}
 """
 

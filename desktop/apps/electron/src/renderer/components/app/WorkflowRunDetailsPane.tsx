@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useRef } from 'react'
 import { useAtomValue } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import {
@@ -13,8 +13,6 @@ import { useAutoHideScrollbar } from '@/hooks/useAutoHideScrollbar'
 import { SESSION_STATUS_BAR_HEIGHT_PX } from './SessionStatusBar'
 import { useWorkflowRunProjection } from './useWorkflowRunProjection'
 
-type WorkflowPhase = 'execute' | 'validate'
-
 /** Full-height right-column view of the active Workflow Run. */
 export function WorkflowRunDetailsPane() {
   const { t } = useTranslation()
@@ -23,44 +21,19 @@ export function WorkflowRunDetailsPane() {
   const agentRunning = useAtomValue(currentAgentRunningAtom)
   const pendingPermission = useAtomValue(hasPendingPermissionAtom)
   const pendingHuman = useAtomValue(currentHumanRequestAtom) !== null
-  const [phaseSelection, setPhaseSelection] = useState<{
-    generation: string | undefined
-    activePhase: WorkflowPhase
-    activeStepIndex: number
-    selectedPhase: WorkflowPhase
-  } | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   useAutoHideScrollbar(scrollRef)
 
   if (!open) return null
 
-  const hasValidation = projection.validationSteps.length > 0 || projection.phase === 'validate'
-  const rememberedPhase = phaseSelection !== null
-    && phaseSelection.generation === projection.generation
-    && phaseSelection.activePhase === projection.phase
-    && phaseSelection.activeStepIndex === projection.stepIndex
-    ? phaseSelection.selectedPhase
-    : projection.phase
-  const selectedPhase = rememberedPhase === 'validate' && !hasValidation
-    ? 'execute'
-    : rememberedPhase
-  const executionDone = projection.phase === 'validate'
-    ? projection.executionSteps.length
-    : Math.min(projection.stepIndex, projection.executionSteps.length)
-  const validationDone = projection.phase === 'validate'
-    ? Math.min(projection.stepIndex, projection.validationSteps.length)
-    : 0
-  const completedSteps = executionDone + validationDone
-  const totalSteps = projection.executionSteps.length + projection.validationSteps.length
+  const executionDone = Math.min(projection.stepIndex, projection.executionSteps.length)
+  const completedSteps = executionDone
+  const totalSteps = projection.executionSteps.length
   const overallPercent = totalSteps === 0
     ? 0
     : Math.min(100, Math.round((completedSteps / totalSteps) * 100))
-  const selectedSteps = selectedPhase === 'execute'
-    ? projection.executionSteps
-    : projection.validationSteps
-  const selectedUnit = selectedPhase === 'execute'
-    ? t('workflowRunDetails.unit.step')
-    : t('workflowRunDetails.unit.check')
+  const selectedSteps = projection.executionSteps
+  const selectedUnit = t('workflowRunDetails.unit.step')
 
   let status = t('workflowRunDetails.status.stopped')
   let statusTone = 'bg-bg-hover text-text-secondary'
@@ -71,28 +44,6 @@ export function WorkflowRunDetailsPane() {
     status = t('workflowRunDetails.status.running')
     statusTone = 'bg-status-info-bg text-status-info'
   }
-
-  const phaseTabs = [
-    {
-      phase: 'execute' as const,
-      label: t('workflowRunDetails.executionWorkflow'),
-      steps: projection.executionSteps,
-      unit: t('workflowRunDetails.unit.step'),
-      complete: projection.phase === 'validate'
-        || (projection.phase === 'execute' && projection.stageComplete),
-      current: projection.phase === 'execute' && !projection.stageComplete,
-    },
-    ...(hasValidation
-      ? [{
-          phase: 'validate' as const,
-          label: t('workflowRunDetails.validationResults'),
-          steps: projection.validationSteps,
-          unit: t('workflowRunDetails.unit.check'),
-          complete: projection.phase === 'validate' && projection.stageComplete,
-          current: projection.phase === 'validate' && !projection.stageComplete,
-        }]
-      : []),
-  ]
 
   return (
     <div
@@ -128,9 +79,7 @@ export function WorkflowRunDetailsPane() {
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-xs font-medium text-text-tertiary">
-                    {projection.phase === 'execute'
-                      ? t('workflowRunDetails.phase.execute')
-                      : t('workflowRunDetails.phase.validate')}
+                    {t('workflowRunDetails.phase.execute')}
                   </div>
                   <div className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-text-primary">
                     {projection.currentTitle}
@@ -158,118 +107,59 @@ export function WorkflowRunDetailsPane() {
               </div>
             </div>
             <div className={cn(
-              'grid divide-x divide-border-subtle border-t border-border-subtle bg-bg-app/60',
-              hasValidation ? 'grid-cols-3' : 'grid-cols-2',
+              'grid grid-cols-2 divide-x divide-border-subtle border-t border-border-subtle bg-bg-app/60',
             )}>
               <RunMetric value={executionDone} label={t('workflowRunDetails.executionCompleted')} />
-              {hasValidation && (
-                <RunMetric value={validationDone} label={t('workflowRunDetails.validationCompleted')} />
-              )}
               <RunMetric value={projection.toolCalls} label={t('workflowRunDetails.toolCalls')} />
             </div>
           </section>
         </div>
 
         <div
-          role="tablist"
-          aria-label={t('workflowRunDetails.phaseAria')}
-          className={cn(
-            'mx-4 grid rounded-lg bg-bg-hover p-1',
-            hasValidation ? 'grid-cols-2' : 'grid-cols-1',
-          )}
+          id="workflow-execute-details-tab"
+          className="mx-4 flex min-w-0 items-center gap-2 rounded-lg bg-bg-hover px-3 py-2.5"
         >
-          {phaseTabs.map((tab, tabIndex) => {
-            let progress = t('workflowRunDetails.progress.awaiting', {
-              total: tab.steps.length,
-              unit: tab.unit,
-            })
-            if (tab.complete) {
-              progress = t('workflowRunDetails.progress.complete', {
-                total: tab.steps.length,
-                unit: tab.unit,
-              })
-            }
-            if (tab.current) {
-              progress = t('workflowRunDetails.progress.current', {
-                current: projection.stepIndex + 1,
-                total: Math.max(tab.steps.length, projection.stepIndex + 1),
-                unit: tab.unit,
-              })
-            }
-            const selected = selectedPhase === tab.phase
-            return (
-              <button
-                key={tab.phase}
-                id={`workflow-${tab.phase}-details-tab`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls="workflow-run-phase-panel"
-                tabIndex={selected ? 0 : -1}
-                onClick={() => setPhaseSelection({
-                  generation: projection.generation,
-                  activePhase: projection.phase,
-                  activeStepIndex: projection.stepIndex,
-                  selectedPhase: tab.phase,
-                })}
-                onKeyDown={(event) => {
-                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-                  event.preventDefault()
-                  if (phaseTabs.length < 2) return
-                  const offset = event.key === 'ArrowRight' ? 1 : -1
-                  const nextTab = phaseTabs[(tabIndex + offset + phaseTabs.length) % phaseTabs.length]
-                  if (!nextTab) return
-                  const nextPhase: WorkflowPhase = nextTab.phase
-                  setPhaseSelection({
-                    generation: projection.generation,
-                    activePhase: projection.phase,
-                    activeStepIndex: projection.stepIndex,
-                    selectedPhase: nextPhase,
+          <span className={cn(
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-2xs font-semibold',
+            projection.stageComplete
+              ? 'bg-status-success-bg text-status-success'
+              : 'border border-brand-blue bg-accent-blue-subtle text-text-accent',
+          )}>
+            {projection.stageComplete ? Icons.check(11) : 1}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-xs font-semibold text-text-primary">
+              {t('workflowRunDetails.executionWorkflow')}
+            </span>
+            <span className="block truncate text-2xs text-text-tertiary">
+              {projection.stageComplete
+                ? t('workflowRunDetails.progress.complete', {
+                    total: selectedSteps.length,
+                    unit: selectedUnit,
                   })
-                  document.getElementById(`workflow-${nextPhase}-details-tab`)?.focus()
-                }}
-                className={cn(
-                  'flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors',
-                  selected
-                    ? 'bg-bg-surface text-text-primary shadow-sm'
-                    : 'text-text-secondary hover:text-text-primary',
-                )}
-              >
-                <span className={cn(
-                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-2xs font-semibold',
-                  tab.complete && 'bg-status-success-bg text-status-success',
-                  tab.current && 'border border-brand-blue bg-accent-blue-subtle text-text-accent',
-                  !tab.complete && !tab.current && 'border border-border-default text-text-tertiary',
-                )}>
-                  {tab.complete ? Icons.check(11) : tabIndex + 1}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-semibold">{tab.label}</span>
-                  <span className="block truncate text-2xs text-text-tertiary">{progress}</span>
-                </span>
-              </button>
-            )
-          })}
+                : t('workflowRunDetails.progress.current', {
+                    current: projection.stepIndex + 1,
+                    total: Math.max(selectedSteps.length, projection.stepIndex + 1),
+                    unit: selectedUnit,
+                  })}
+            </span>
+          </span>
         </div>
 
         <div
           id="workflow-run-phase-panel"
-          role="tabpanel"
-          aria-labelledby={`workflow-${selectedPhase}-details-tab`}
+          aria-labelledby="workflow-execute-details-tab"
           data-testid="workflow-run-steps"
           className="min-w-0 px-4 py-4"
         >
           {selectedSteps.map((title, index) => {
             const block = [...projection.workflowBlocks].reverse().find(
-              (item) => item.phase === selectedPhase && item.stepIndex === index,
+              (item) => item.stepIndex === index,
             )
-            const phasePassed = selectedPhase === 'execute' && projection.phase === 'validate'
             const done = block?.status === 'success'
-              || phasePassed
-              || (selectedPhase === projection.phase && index < projection.stepIndex)
+              || index < projection.stepIndex
             const failed = block?.status === 'failure'
-            const active = selectedPhase === projection.phase
-              && index === projection.stepIndex
+            const active = index === projection.stepIndex
               && !projection.stageComplete
               && !done
               && !failed
@@ -286,7 +176,7 @@ export function WorkflowRunDetailsPane() {
             if (failed) state = 'failed'
             return (
               <div
-                key={`${selectedPhase}:${index}:${title}`}
+                key={`execute:${index}:${title}`}
                 data-step-state={state}
                 className="relative flex min-w-0 gap-3 pb-3 last:pb-0"
               >

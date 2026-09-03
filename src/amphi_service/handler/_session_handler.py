@@ -306,7 +306,6 @@ class SessionMessagesHandler(BaseHandler):
             if reason:
                 raise ValueError(reason)
             execution_steps = [step.title for step in source.execution_steps]
-            validation_steps = [step.title for step in source.validation_steps]
             if workspace.run_workflow_checkpoint() != checkpoint:
                 return None
         except (FileNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
@@ -319,7 +318,6 @@ class SessionMessagesHandler(BaseHandler):
             "phase": checkpoint.stage,
             "step_index": checkpoint.step_index,
             "execution_steps": execution_steps,
-            "validation_steps": validation_steps,
         }
 
 
@@ -767,8 +765,6 @@ def _turn_messages(
                     }
                     if "execution_steps" in result:
                         block["executionSteps"] = [str(title) for title in result.get("execution_steps") or []]
-                    if "validation_steps" in result:
-                        block["validationSteps"] = [str(title) for title in result.get("validation_steps") or []]
                     workflow_report_index = len(blocks)
                     workflow_report_terminal = bool(result.get("run_id"))
                     blocks.append(block)
@@ -824,52 +820,6 @@ def _turn_messages(
                     if payload.get("status") == "not_answered":
                         block["kind"] = "confirmation_message"
                     blocks.append(block)
-                continue
-            if step.get("tool_name") == "request_accept_rule":
-                result = step.get("tool_result")
-                payload = result if isinstance(result, dict) else {}
-                rules = payload.get("rules") or []
-                mode = payload.get("mode") or "criteria"
-                if payload.get("status") == "confirmed" and (
-                    rules or mode == "execution_only"
-                ):
-                    confirmed_rules = [
-                        {
-                            "id": str(rule.get("id") or ""),
-                            "text": str(rule.get("text") or ""),
-                        }
-                        for rule in rules
-                        if isinstance(rule, dict)
-                        and rule.get("id")
-                        and rule.get("text")
-                    ]
-                    response = (
-                        backend_i18n.text("session.accept_rule.execution_only.response")
-                        if mode == "execution_only"
-                        else "\n".join(
-                            f"{rule['id']}: {rule['text']}"
-                            for rule in confirmed_rules
-                        )
-                    )
-                    blocks.append({
-                        "type": "confirmation",
-                        "kind": "accept_rule",
-                        "question": (
-                            backend_i18n.text("session.accept_rule.execution_only.question")
-                            if mode == "execution_only"
-                            else backend_i18n.text("session.accept_rule.aligned.question")
-                        ),
-                        "response": response,
-                        "rules": confirmed_rules,
-                        "acceptanceMode": mode,
-                    })
-                elif payload.get("status") == "not_answered" and payload.get("user_message"):
-                    blocks.append({
-                        "type": "confirmation",
-                        "kind": "accept_rule_message",
-                        "question": backend_i18n.text("session.accept_rule.later.question"),
-                        "response": str(payload["user_message"]),
-                    })
                 continue
             if step.get("tool_name") == "request_build":
                 if step.get("success") is not False:
@@ -1002,7 +952,6 @@ def _turn_messages(
                     "workflowId": str(terminal.get("workflow_id") or ""),
                     "workflowName": str(terminal.get("workflow_name") or ""),
                     "status": str(terminal.get("status") or "failed"),
-                    "validationStatus": str(terminal.get("validation_status") or "failed"),
                     "createdAt": str(terminal.get("created_at") or ""),
                     "summary": terminal.get("summary"),
                 }
@@ -1199,21 +1148,6 @@ def _pending_request(turns: Sequence[SessionTurnRecord]) -> Optional[dict]:
                 "request_id": interaction.get("request_id"),
             }
             return pending
-        return None
-    accept_rule = interaction.get("accept_rule")
-    if isinstance(accept_rule, dict):
-        rules = [
-            str(rule)
-            for rule in accept_rule.get("candidate_rules") or []
-            if str(rule).strip()
-        ]
-        if rules:
-            return {
-                "kind": "accept_rule",
-                "rules": rules,
-                "questions": [],
-                "request_id": accept_rule.get("request_id"),
-            }
         return None
     # request_human_choice: carries questions directly.
     questions = interaction.get("questions")

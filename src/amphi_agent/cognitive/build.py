@@ -154,7 +154,7 @@ class BuildThink(MainThink):
             operation_lines.extend([
                 "Baseline: Restored from the saved Workflow.",
                 "Preservation: Preserve every unaffected requirement, plan, source file, "
-                "validation check, and dependency.",
+                "and dependency.",
             ])
         else:
             operation_lines = [
@@ -162,11 +162,6 @@ class BuildThink(MainThink):
                 "Workflow id: (none; allocated after final confirmation)",
                 "Baseline: New Workflow; no saved baseline is being edited.",
             ]
-        operation_lines.append(
-            "Acceptance review: "
-            + ("presented" if build.acceptance_review_presented else "not presented")
-            + ". task.md is the sole durable source of truth for acceptance criteria."
-        )
         return (
             "<build_workspace>\n"
             + "\n".join(operation_lines)
@@ -282,7 +277,6 @@ class ClarifyThink(BuildThink):
 
     persona: str = CLARIFY_PERSONA
     allowed_tools = BuildThink.allowed_tools | {
-        "request_accept_rule",
         "request_human_task_confirm",
     }
 
@@ -375,27 +369,10 @@ class ClarifyThink(BuildThink):
             ``None`` when legal; otherwise an actionable rejection reason.
         """
         tool_name = getattr(call, "tool", None)
-        if tool_name == "request_accept_rule":
-            build = self.build_space(context)
-            if build is None:
-                return "acceptance review rejected: there is no active Build."
-            if build.acceptance_review_presented:
-                return (
-                    "acceptance review rejected: this Build already has its one-time "
-                    "acceptance outline; refine task.md and the validation design around "
-                    "that outline instead of presenting another review."
-                )
-            return None
         if tool_name == "request_human_task_confirm":
             reason = self.task_validation_reason(context)
             if reason:
                 return f"task confirmation rejected: {reason}"
-            build = self.build_space(context)
-            if build is None or not build.acceptance_review_presented:
-                return (
-                    "task confirmation rejected: call request_accept_rule and obtain "
-                    "the one-time acceptance outline first."
-                )
             return None
         if tool_name != "switch":
             return None
@@ -832,19 +809,13 @@ class VerifyThink(BuildThink):
             return None
 
         package = self.build_package(context)
-        execution_only = bool(package and package.validation_disabled)
         body = package.read_document("verify.md") if package is not None else None
         if not body:
             return (
                 "confirm rejected: write verify.md with the isolated test scope, what "
                 "actually ran, what was substituted or not run for safety, "
-                + (
-                    "and the execution-only verification verdict before "
-                    if execution_only
-                    else "and a result or explicit safety limitation for every runtime "
-                    "acceptance check in VALIDATE.md before "
-                )
-                + "calling request_human_workflow_confirm."
+                "and the overall verification verdict before calling "
+                "request_human_workflow_confirm."
             )
         document_reason = self.human_document_reason("verify.md", body)
         if document_reason:

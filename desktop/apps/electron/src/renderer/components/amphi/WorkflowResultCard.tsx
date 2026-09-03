@@ -19,12 +19,9 @@ export function WorkflowResultCard({ block }: { block: WorkflowResultBlock }) {
   const title = completed
     ? t('workflow.result.title.completed')
     : t('workflow.result.title.failed')
-  let description = t('workflow.result.description.failed')
-  if (completed) {
-    description = block.validationStatus === 'passed'
-      ? t('workflow.result.description.completedVerified')
-      : t('workflow.result.description.completed')
-  }
+  const description = completed
+    ? t('workflow.result.description.completed')
+    : t('workflow.result.description.failed')
 
   return (
     <section

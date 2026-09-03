@@ -240,7 +240,6 @@ class WorkflowProgressEvent(TurnEvent):
     status: str
     summary: Optional[str] = None
     execution_steps: Optional[List[str]] = None
-    validation_steps: Optional[List[str]] = None
 
     def payload(self) -> Dict[str, Any]:
         return {
@@ -254,7 +253,6 @@ class WorkflowProgressEvent(TurnEvent):
             "status": self.status,
             "summary": self.summary,
             "execution_steps": self.execution_steps or [],
-            "validation_steps": self.validation_steps or [],
         }
 
 
@@ -268,7 +266,6 @@ class WorkflowResultEvent(TurnEvent):
     workflow_id: str
     workflow_name: str
     status: str
-    validation_status: str
     created_at: str
     result_file_count: int
     summary: Optional[str] = None
@@ -279,7 +276,6 @@ class WorkflowResultEvent(TurnEvent):
             "workflow_id": self.workflow_id,
             "workflow_name": self.workflow_name,
             "status": self.status,
-            "validation_status": self.validation_status,
             "created_at": self.created_at,
             "result_file_count": self.result_file_count,
             "summary": self.summary,
@@ -290,11 +286,10 @@ class WorkflowResultEvent(TurnEvent):
 class TitleEvent(TurnEvent):
     """A model-generated session title is ready.
 
-    Emitted on the session's stream during its first turn: a provisional title
-    summarised from the user's opening message (before the agent runs), and —
-    when that opener was too thin — a refined one after the first answer. The
-    GUI updates the session's sidebar entry live; the title is also persisted,
-    so a client that misses the frame still sees it on the next fetch.
+    Emitted on the session's stream as soon as the opening-message title is
+    ready, in parallel with the first Agent turn. The GUI updates the session's
+    sidebar entry live; the title is also persisted, so a client that misses the
+    frame still sees it on the next fetch.
     """
 
     name: ClassVar[str] = "title"
@@ -402,19 +397,6 @@ class TaskConfirmRequestEvent(TurnEvent):
             "workflow_id": self.workflow_id,
             "original_task_markdown": self.original_task_markdown,
         }
-
-
-@dataclass(frozen=True)
-class AcceptRuleRequestEvent(TurnEvent):
-    """Clarify asks the user to review proposed acceptance rules."""
-
-    name: ClassVar[str] = "accept_rule_request"
-
-    request_id: str
-    rules: List[str]
-
-    def payload(self) -> Dict[str, Any]:
-        return {"request_id": self.request_id, "rules": self.rules}
 
 
 @dataclass(frozen=True)
@@ -652,7 +634,6 @@ __all__ = [
     "PermissionRequestEvent",
     "BuildConfirmRequestEvent",
     "TaskConfirmRequestEvent",
-    "AcceptRuleRequestEvent",
     "WorkflowConfirmRequestEvent",
     "FinalEvent",
     "CancelledEvent",

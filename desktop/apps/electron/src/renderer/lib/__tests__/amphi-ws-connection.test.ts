@@ -366,45 +366,16 @@ describe('AmphiWsConnection', () => {
     ])
     expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
   })
-
-  it('acceptRule sends structured decisions without a chat message', () => {
-    const { conn, sock, events } = setup()
-    sock.sent.length = 0
-    conn.acceptRule('A', {
-      request_id: 'accept-1',
-      mode: 'criteria',
-      decisions: ['accept', 'reject'],
-      feedback: ['', '结果必须包含来源链接'],
-      supplement: '结果必须使用中文',
-    })
-    expect(sock.frames()).toEqual([
-      { type: 'subscribe', topics: ['session:A'] },
-      {
-        type: 'accept_rule',
-        session_id: 'A',
-        request_id: 'accept-1',
-        mode: 'criteria',
-        decisions: ['accept', 'reject'],
-        feedback: ['', '结果必须包含来源链接'],
-        supplement: '结果必须使用中文',
-      },
-    ])
-    expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
-  })
-
   it('recovers the sole active turn when an older daemon omits cmd_error session_id', () => {
     const { conn, sock, events } = setup()
-    conn.acceptRule('A', {
-      request_id: 'accept-1',
-      mode: 'criteria',
-      decisions: ['accept'],
-      feedback: [''],
-      supplement: '',
+    conn.taskConfirm('A', {
+      request_id: 'task-1',
+      action: 'confirm',
     })
 
     sock.recv({
       type: 'cmd_error',
-      for: 'accept_rule',
+      for: 'task_confirm',
       message: 'invalid interaction frame',
     })
 

@@ -2,8 +2,9 @@
  * The set of structured renderers for a tool call's "click to expand" view (tier B) + the ToolExpand dispatcher.
  *
  * One view per tool: read/write → code block with line numbers (read neutral, write with a green
- * left border); edit → unified diff; bash → fixed dark terminal; grep → grouped by file; glob → file
- * list; web_search → clickable result cards; web_fetch → Markdown; generic → arguments/result JSON.
+ * left border); image_read/web_fetch → Markdown; edit → unified diff; bash → fixed dark terminal;
+ * grep → grouped by file; glob → file list; web_search → clickable result cards; generic →
+ * arguments/result JSON.
  * Anything that fails to parse falls back to RawText. The backend's "result exceeded the inline cap,
  * it has been written to a file" sentinel takes precedence over the tool shape and always goes
  * through the OverflowNoticeView info card (tool-independent, to guarantee a consistent presentation).
@@ -273,6 +274,17 @@ function WebFetchView({ output }: { output: string }) {
   )
 }
 
+/** read_image: natural-language visual analysis, rendered as readable wrapped prose. */
+function ImageAnalysisView({ output }: { output: string }) {
+  return (
+    <MarkdownMessage
+      content={output}
+      density="compact"
+      className="max-h-[320px] overflow-auto rounded-md border border-border-subtle bg-bg-hover px-3.5 py-2.5 text-sm leading-[1.65] text-text-secondary"
+    />
+  )
+}
+
 /** Whether the argument object has any content (empty object / non-object → not worth its own section). */
 function hasInputFields(input: unknown): boolean {
   return !!input && typeof input === 'object' && Object.keys(input as object).length > 0
@@ -371,6 +383,7 @@ export function ToolExpand({ kind, call }: { kind: ToolKind; call: AgentMessageT
   const overflow = parseOverflowNotice(output)
   if (overflow) return <OverflowNoticeView notice={overflow} />
   if (kind === 'read') return <CodeLines rows={parseNumberedLines(output)} accent="neutral" />
+  if (kind === 'image_read') return <ImageAnalysisView output={output} />
   if (kind === 'write') {
     const content = writeContentOf(input)
     return content ? <CodeLines rows={numberLines(content)} accent="success" /> : <RawText text={output} />

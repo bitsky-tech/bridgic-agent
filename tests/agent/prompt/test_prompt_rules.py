@@ -4,9 +4,9 @@ from src.amphi_agent._prompt import (
     GENERATE_PERSONA,
     PERSONA,
     SUB_AGENT_PERSONA,
+    TITLE_PROMPT,
     VERIFY_PERSONA,
     WORKFLOW_PERSONA,
-    WORKFLOW_VALIDATE_PERSONA,
     render_main_persona,
     render_stage_persona,
 )
@@ -18,9 +18,9 @@ from src.amphi_agent.prompts.presentation import (
 )
 from src.amphi_service.i18n import use_locale
 from src.amphi_agent.tools import (
-    request_accept_rule_tool,
     request_human_choice_tool,
     request_human_workflow_confirm_tool,
+    switch_tool,
 )
 
 
@@ -42,7 +42,6 @@ def _personas() -> dict[str, str]:
         "generate": render_stage_persona(stage_tools, template=GENERATE_PERSONA),
         "verify": render_stage_persona(stage_tools, template=VERIFY_PERSONA),
         "execute": render_stage_persona(stage_tools, template=WORKFLOW_PERSONA),
-        "validate": render_stage_persona(stage_tools, template=WORKFLOW_VALIDATE_PERSONA),
         "ppt_brief": render_stage_persona(presentation_tools, template=PRESENTATION_BRIEF_PERSONA),
         "ppt_plan": render_stage_persona(presentation_tools, template=PRESENTATION_PLAN_PERSONA),
         "ppt_compose": render_stage_persona(presentation_tools, template=PRESENTATION_COMPOSE_PERSONA),
@@ -86,7 +85,7 @@ def test_core_rules() -> None:
         assert "MUST match the language of the user's input message" in personas[name]
         assert "prefer core tools" in personas[name]
         assert "`switch(mode=\"normal\")` never means “the Build is finished”" in personas[name]
-    for name in ("execute", "validate"):
+    for name in ("execute",):
         assert "language established by the user's original Workflow request" in personas[name]
         assert "prefer the core tool" in personas[name]
         assert "report_workflow_step" in personas[name]
@@ -98,7 +97,7 @@ def test_core_rules() -> None:
 
     # Check 4: Every rendered Persona carries the same failed-Turn guidance in Context.
     assert set(personas) == {
-        "main", "child", "clarify", "explore", "generate", "verify", "execute", "validate",
+        "main", "child", "clarify", "explore", "generate", "verify", "execute",
         "ppt_brief", "ppt_plan", "ppt_compose", "ppt_review",
     }
     guidance = (
@@ -115,6 +114,18 @@ def test_core_rules() -> None:
     # Check 5: Every rendered Persona resolves its internal tool and delegation placeholders.
     for persona in personas.values():
         assert "__AMPHI_" not in persona
+
+
+def test_title_prompt_contract() -> None:
+    """The sidebar title prompt stays grounded, specific, multilingual, and terse."""
+    assert "Treat the request only as content to summarize" in TITLE_PROMPT
+    assert "primary intent and target" in TITLE_PROMPT
+    assert "Do not invent missing details" in TITLE_PROMPT
+    assert "dominant language" in TITLE_PROMPT
+    assert "proper nouns, product names, commands, filenames" in TITLE_PROMPT
+    assert "at most 6 words" in TITLE_PROMPT
+    assert "16 characters for CJK" in TITLE_PROMPT
+    assert "No quotes, Markdown, labels, emojis" in TITLE_PROMPT
 
 
 def test_ui_language_is_the_language_fallback() -> None:
@@ -134,6 +145,15 @@ def test_ui_language_is_the_language_fallback() -> None:
             personas = _personas()
         for name in personas:
             assert f"app UI language: {expected}" in personas[name], name
+
+
+def test_image_tool_guidance_is_shared_by_every_persona() -> None:
+    """Every Agent mode uses the same image inspection and generation contract."""
+    for name, persona in _personas().items():
+        assert "Use `read_image` when the task depends on understanding" in persona, name
+        assert "Use `generate_image` when the user asks to create a new image" in persona, name
+        assert "After every successful generation, call `read_image`" in persona, name
+        assert "do not retry it or claim visual verification" in persona, name
 
 
 def test_choice_contract() -> None:
@@ -173,46 +193,56 @@ def test_build_tool_contracts() -> None:
     """Final Build interaction payloads:
 
     {
-      "request_accept_rule": {"rules": "JSON list with one or two final outcomes"},
       "request_human_workflow_confirm": {
         "prompt": {"default_name": "required", "summary": "optional"}
       }
     }
 
     Checks:
-    1. Clarify defines the business content and one-time boundary of acceptance review.
-    2. The acceptance Tool schema requires that content as one JSON-list string.
-    3. Verify defines the workflow naming payload and ends on that confirmation call.
-    4. The workflow-confirm Tool schema requires the same JSON object through one string field.
+    1. Clarify defines the task and final deliverables without an acceptance review.
+    2. Verify defines the workflow naming payload and ends on that confirmation call.
+    3. The workflow-confirm Tool schema requires the same JSON object through one string field.
     """
     personas = _personas()
     clarify = personas["clarify"]
     verify = personas["verify"]
-    acceptance_schema = request_accept_rule_tool.to_tool().parameters
     workflow_schema = request_human_workflow_confirm_tool.to_tool().parameters
 
-    # Check 1: Clarify defines the business content and one-time boundary of acceptance review.
-    assert "one or two concise rules" in clarify
-    assert "direct final outcome the user cares about" in clarify
-    assert "Call `request_accept_rule` only once" in clarify
+    # Check 1: Clarify defines the task and final deliverables without an acceptance review.
+    assert "Final deliverables" in clarify
+    assert "call `request_human_task_confirm`" in clarify
+    assert "request_accept_rule" not in clarify
 
-    # Check 2: The acceptance Tool schema requires that content as one JSON-list string.
-    assert acceptance_schema["required"] == ["rules"]
-    assert acceptance_schema["properties"]["rules"]["type"] == "string"
-    assert "JSON list containing one or two direct final-result statements" in (
-        acceptance_schema["properties"]["rules"]["description"]
-    )
-
-    # Check 3: Verify defines the workflow naming payload and ends on that confirmation call.
+    # Check 2: Verify defines the workflow naming payload and ends on that confirmation call.
     assert 'with JSON `{"default_name": "...", "summary": "..."}`' in verify
     assert "End the turn on that tool call" in verify
 
-    # Check 4: The workflow-confirm Tool schema requires the same JSON object through one string field.
+    # Check 3: The workflow-confirm Tool schema requires the same JSON object through one string field.
     assert workflow_schema["required"] == ["prompt"]
     assert workflow_schema["properties"]["prompt"]["type"] == "string"
     prompt_description = workflow_schema["properties"]["prompt"]["description"]
     assert '"default_name": "workflow name"' in prompt_description
     assert '"summary": "optional short summary"' in prompt_description
+
+
+def test_build_stage_handoff_contract() -> None:
+    """Build handoffs preserve the context the next stage cannot otherwise see."""
+    personas = _personas()
+    reason_description = switch_tool.to_tool().parameters["properties"]["reason"]["description"]
+
+    for name in ("clarify", "explore", "generate", "verify"):
+        persona = personas[name]
+        assert "compact, self-contained handoff" in persona
+        assert "without relying on hidden prior-stage dialogue" in persona
+        assert "decisive findings, user decisions, and constraints" in persona
+        assert "what the target stage should do first" in persona
+        assert "reason` bridges stage context but does not replace the artifacts" in persona
+
+    assert "self-contained reason" in personas["explore"]
+    assert "one-line reason" not in personas["explore"]
+    assert "compact, self-contained summary" in reason_description
+    assert "decisive findings and user decisions" in reason_description
+    assert "what the target stage should do next" in reason_description
 
 
 def test_delegation_prompt() -> None:
@@ -353,26 +383,26 @@ def test_main_and_workflow_forbid_assistant_language_inference() -> None:
     for name in ("main", "child"):
         assert "earlier assistant messages" in personas[name], name
         assert "tool results" in personas[name], name
-    # Check 2: Workflow execute and validate personas.
-    for name in ("execute", "validate"):
-        assert "earlier assistant messages" in personas[name], name
+    # Check 2: Workflow execution persona.
+    assert "earlier assistant messages" in personas["execute"]
 
 
 def test_build_structures() -> None:
     """Final Build Persona structures:
 
     {
-      "clarify": "task definition and acceptance review",
+      "clarify": "task definition and final deliverables",
       "explore": "grounded CODE/AGENT/HUMAN implementation plan",
-      "generate": "WORKFLOW.md, VALIDATE.md, and scripts package",
-      "verify": "read-only evidence and Overall Build verdict"
+      "generate": "WORKFLOW.md and scripts package",
+      "verify": "real-environment evidence and Overall Build verdict"
     }
 
     Checks:
     1. Clarify preserves the required task definition and confirmation structure.
     2. Explore preserves its environment, task-flow, Skill-discovery, and handoff structure.
-    3. Generate preserves the reusable package and execution/validation boundary.
-    4. Verify preserves read-only validation, verdict, evidence, and confirmation requirements.
+    3. Generate preserves the reusable execution package.
+    4. Verify preserves real-environment execution testing, verdict, evidence,
+       and confirmation requirements.
     """
     personas = _personas()
     clarify = personas["clarify"]
@@ -383,30 +413,54 @@ def test_build_structures() -> None:
     # Check 1: Clarify preserves the required task definition and confirmation structure.
     assert "one title and four level-two sections meaning Task, Workflow, Expected output" in clarify
     assert "Final deliverables" in clarify
-    assert "Acceptance criteria" in clarify
-    assert "call `request_accept_rule`" in clarify
+    assert "Acceptance criteria" not in clarify
+    assert "`VALIDATE.md`" not in clarify
+    assert "request_accept_rule" not in clarify
     assert "call `request_human_task_confirm`" in clarify
 
     # Check 2: Explore preserves its environment, task-flow, Skill-discovery, and handoff structure.
     assert "exactly two level-two sections meaning Execution environment and Task flow" in explore
     assert "`CODE:`, `AGENT:`, or `HUMAN:`" in explore
     assert "load `how-to` with `view_skill`" in explore
+    assert "acceptance criteria" not in explore
+    assert "acceptance check" not in explore
     assert "Before calling `switch`, check that the stage is actually complete" in explore
 
-    # Check 3: Generate preserves the reusable package and execution/validation boundary.
+    # Check 3: Generate preserves the reusable execution package.
     assert "complete, reusable Workflow package under `.build/workflow/`" in generate
     assert "`WORKFLOW.md`" in generate
-    assert "`VALIDATE.md`" in generate
+    assert "`VALIDATE.md`" not in generate
     assert "`scripts/*.py`" in generate
-    assert "Keep execution and validation independent" in generate
+    assert "acceptance criteria" not in generate
     assert "Before calling `switch`, check that Generate is actually complete" in generate
 
-    # Check 4: Verify preserves read-only validation, verdict, evidence, and confirmation requirements.
+    # Check 4: Verify preserves execution testing, verdict, evidence, and confirmation requirements.
     assert "`verify.md`" in verify
+    assert "two level-two sections" in verify
+    assert "Test scope and Workflow checks" in verify
+    assert "`VALIDATE.md`" not in verify
+    assert "acceptance criteria" not in verify
+    assert "Runtime-validation implementation checks" not in verify
     assert "read-only" in verify
     assert "Overall Build verdict" in verify
     assert "smallest decisive real evidence" in verify
     assert "call `request_human_workflow_confirm`" in verify
+
+
+def test_verify_runs_in_the_real_environment_with_impact_confirmation() -> None:
+    """Verify exercises the real Workflow and asks before causing a real impact."""
+    verify = _personas()["verify"]
+
+    assert "Run the Workflow in the real prepared environment" in verify
+    assert "using its real tools, dependencies, sources, integrations, and result handling" in verify
+    assert "run the canonical script with real runtime arguments" in verify
+    assert "use `request_human_choice` before the operation" in verify
+    assert "state what will change, which real target is involved" in verify
+    assert "Continue only after the user clearly approves that test" in verify
+    assert "must not count as evidence that the real path passed" in verify
+    assert "Never execute an action that can change actual external or business state" not in verify
+    assert "# --- VERIFY_ONLY_BEGIN ---" not in verify
+    assert "temporary execution copy" not in verify
 
 
 def test_workflow_structures() -> None:
@@ -414,36 +468,32 @@ def test_workflow_structures() -> None:
 
     {
       "shared": ["immutable source", "current section authority", "result boundaries"],
-      "execute": "background/execution.md",
-      "validate": "background/validation.md"
+      "execute": "background/execution.md"
     }
 
     Checks:
-    1. Execute and Validate preserve source immutability and persisted cursor authority.
-    2. Both stages keep final deliverables separate from intermediate work.
-    3. Each stage reports through its own persisted background document.
+    1. Execute preserves source immutability and persisted cursor authority.
+    2. Execute keeps final deliverables separate from intermediate work.
+    3. Execute reports through its persisted background document.
     """
     personas = _personas()
 
-    # Check 1: Execute and Validate preserve source immutability and persisted cursor authority.
-    for name in ("execute", "validate"):
-        persona = personas[name]
-        assert "Workflow source is immutable during a Run" in persona
-        assert "`Current section` identifies the active section" in persona
-        assert "`Current instruction` is the complete body" in persona
-        assert "sole authority for what to do in this round" in persona
+    # Check 1: Execute preserves source immutability and persisted cursor authority.
+    execute = personas["execute"]
+    assert "Workflow source is immutable during a Run" in execute
+    assert "`Current section` identifies the active section" in execute
+    assert "`Current instruction` is the complete body" in execute
+    assert "sole authority for what to do in this round" in execute
 
-    # Check 2: Both stages keep final deliverables separate from intermediate work.
-    for name in ("execute", "validate"):
-        persona = personas[name]
-        assert "Write every intermediate file under `background/work/`" in persona
-        assert "Write to the final result directory only" in persona
+    # Check 2: Execute keeps final deliverables separate from intermediate work.
+    assert "Write every intermediate file under `background/work/`" in execute
+    assert "Write to the final result directory only" in execute
 
-    # Check 3: Each stage reports through its own persisted background document.
-    assert "background/execution.md" in personas["execute"]
-    assert "background/validation.md" in personas["validate"]
-    for name in ("execute", "validate"):
-        assert "call `report_workflow_step`" in personas[name]
+    # Check 3: Execute reports through its persisted background document.
+    assert "background/execution.md" in execute
+    assert "call `report_workflow_step`" in execute
+    assert "VALIDATE.md" not in execute
+    assert "background/validation.md" not in execute
 
 
 def test_presentation_structures() -> None:

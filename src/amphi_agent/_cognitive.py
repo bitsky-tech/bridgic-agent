@@ -65,7 +65,6 @@ __all__ = [
     "SubAgentThink",
     "CHILD_TOOL_NAMES",
     "ToolSurface",
-    "ValidateThink",
     "VerifyThink",
     "WorkflowRunThink",
     "WorkflowThink",
@@ -98,6 +97,7 @@ CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
     "grep",
     "web_search",
     "web_fetch",
+    "read_image",
     "generate_image",
     "workspace_status",
     "workspace_diff",
@@ -303,7 +303,6 @@ class MainThink(CognitiveWorker):
         if spec.tool_name not in {
             "report_presentation_step",
             "report_workflow_step",
-            "request_accept_rule",
             "request_human_task_confirm",
             "request_human_workflow_confirm",
         }
@@ -1155,7 +1154,7 @@ class MainThink(CognitiveWorker):
             - Build work directory (active, writable): /…/.work/.build
             - Workflow final result directory (active, writable): /…/.work/.run/result
             - Workflow background work directory (active, writable): /…/.work/.run/background/work
-            - Retained Build: stage: generate, operation: create, acceptance: established
+            - Retained Build: stage: generate, operation: create
             - Retained Workflow Run: Example (workflow_id: wf_1, stage: execute,
               step_index: 1, owner: this Session)
             - Mounted directories / files: ["/Users/me/project"]
@@ -1208,18 +1207,12 @@ class MainThink(CognitiveWorker):
                 if build_checkpoint is not None:
                     workflow_id = build_checkpoint.workflow_id
                     operation = "edit" if workflow_id else "create"
-                    acceptance_review = (
-                        "presented"
-                        if build_checkpoint.acceptance_contract is not None
-                        else "not presented"
-                    )
                     details = [
                         f"stage: {build_checkpoint.stage}",
                         f"operation: {operation}",
                     ]
                     if workflow_id:
                         details.append(f"workflow_id: {workflow_id}")
-                    details.append(f"acceptance review: {acceptance_review}")
                     lines.append("- Retained Build: " + ", ".join(details))
 
             run_checkpoint = workspace.run_workflow_checkpoint()
@@ -1328,7 +1321,7 @@ class MainThink(CognitiveWorker):
         if runs:
             run_lines = [
                 f"- {run.workflow_name} result (run_id: {run.run_id}, "
-                f"status: {run.status.value}, validation: {run.validation_status.value}, "
+                f"status: {run.status.value}, "
                 f"result path: {json.dumps(str(run.result_dir), ensure_ascii=False)}, "
                 f"intermediate work path: "
                 f"{json.dumps(str(run.background_work_dir), ensure_ascii=False)}, "
@@ -2000,7 +1993,6 @@ _BUILD_THINK_EXPORTS = frozenset({
     "VerifyThink",
 })
 _WORKFLOW_THINK_EXPORTS = frozenset({
-    "ValidateThink",
     "WorkflowRunThink",
     "WorkflowThink",
 })

@@ -149,10 +149,9 @@ export interface WorkflowRunState {
   generation: string
   workflowName: string
   sourceSessionId: string
-  phase: 'execute' | 'validate'
+  phase: 'execute'
   stepIndex: number
   executionSteps: string[]
-  validationSteps: string[]
 }
 
 /** Persisted composition of the latest model call's input context. */
@@ -222,11 +221,6 @@ export type AgentEvent =
       requestId?: string
     }
   | {
-      type: 'accept_rule_request'
-      requestId: string
-      rules: string[]
-    }
-  | {
       type: 'build_confirm_request'
       requestId: string
       goal: string
@@ -254,14 +248,13 @@ export type AgentEvent =
       workflowId: string
       generation: string
       workflowName: string
-      phase: 'execute' | 'validate'
+      phase: 'execute'
       stepIndex: number
       stepCount: number
       title: string
       status: 'running' | 'success' | 'failure'
       summary?: string | null
       executionSteps?: string[]
-      validationSteps?: string[]
     }
   | {
       type: 'workflow_result'
@@ -269,7 +262,6 @@ export type AgentEvent =
       workflowId: string
       workflowName: string
       status: 'completed' | 'failed'
-      validationStatus: 'passed' | 'failed' | 'not_required'
       createdAt: string
       resultFileCount?: number
       summary?: string | null
@@ -303,8 +295,8 @@ export type AgentEvent =
   // {mode, stage} — `mode` = loop ('build'|'normal'), `stage` = unit within it.
   | { type: 'stage'; position: ThinkPosition }
   // A model-generated session title is ready (daemon `title` frame): the first
-  // turn streams a provisional title from the opener, then optionally a refined
-  // one. Updates the sidebar entry live; the daemon also persists it.
+  // turn generates it from the opener alongside Agent execution. Updates the
+  // sidebar entry live; the daemon also persists it.
   | { type: 'title'; title: string }
   // `finalAnswer` carries the authoritative final answer from the daemon's
   // `final` frame (an empty string = this turn has no visible answer, e.g. it
@@ -316,6 +308,7 @@ export type AgentEvent =
       finalAnswer?: string | null
       durationMs?: number
       completedAt?: number
+      reason?: 'cancelled'
     }
   | { type: 'task_spawn'; taskId: string; parentTaskId?: string; description: string }
   | { type: 'task_complete'; taskId: string; summary: string }

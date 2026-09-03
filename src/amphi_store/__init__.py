@@ -35,7 +35,6 @@ from ._workflow_run import (
     WorkflowRun,
     WorkflowRunRepository,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 
 __all__ = [
@@ -70,5 +69,4 @@ __all__ = [
     "SessionWorkflowRun",
     "WorkflowRunRepository",
     "WorkflowRunStatus",
-    "WorkflowValidationStatus",
 ]

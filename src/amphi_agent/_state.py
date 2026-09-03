@@ -9,7 +9,7 @@ __all__ = [
     "PresentationChapterOutline", "PresentationSlideOutline", "PresentationSource",
     "PresentationStepRecord", "WorkflowStageState",
     "InteractionState", "AwaitingFeedback", "AwaitingPermission", "AwaitingTaskConfirm",
-    "AwaitingAcceptRule", "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
+    "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
     "AwaitingBuildConflict", "AwaitingPresentationOutlineConfirm", "AwaitingWorkflowRunChoice",
     "SubAgentCall", "AwaitingSubAgent", "SubAgentResult", "SubAgentsCompleted", "AgentResult",
     "AgentState", "ContextCompactionState", "TurnCompactionState",
@@ -227,10 +227,10 @@ class PresentationStageState(BaseModel):
 
 
 class WorkflowStageState(BaseModel):
-    """The current cognitive stage and section inside one saved Workflow run."""
+    """The current execution section inside one saved Workflow run."""
 
     mode: Literal["run_workflow"] = "run_workflow"
-    stage: Literal["execute", "validate"] = "execute"
+    stage: Literal["execute"] = "execute"
     workflow_id: str = Field(min_length=1)
     generation: str = Field(min_length=1)
     step_index: int = Field(default=0, ge=0)
@@ -263,12 +263,6 @@ class AwaitingPermission(BaseModel):
 
 class AwaitingTaskConfirm(BaseModel):
     task_confirm: Dict[str, Any] = Field(default_factory=dict)
-
-
-class AwaitingAcceptRule(BaseModel):
-    """Acceptance-rule candidates waiting for the user's structured review."""
-
-    accept_rule: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AwaitingWorkflowConfirm(BaseModel):
@@ -448,7 +442,6 @@ class SubAgentsCompleted(BaseModel):
 InteractionState = Union[
     AwaitingFeedback,
     AwaitingPermission,
-    AwaitingAcceptRule,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
@@ -461,7 +454,6 @@ AgentResult: TypeAlias = Union[
     str,
     AwaitingFeedback,
     AwaitingPermission,
-    AwaitingAcceptRule,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,

@@ -8,7 +8,6 @@ from src.amphi_store import (
     UserInput,
     WorkflowRunRepository,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from tests._support.sandbox import IsolatedPaths
 
@@ -59,7 +58,6 @@ async def test_run_lifecycle(service_client: httpx.AsyncClient, test_sandbox: Is
         result_dir=str(run_root),
         workflow_input=UserInput(text="Prepare the report"),
         status=WorkflowRunStatus.COMPLETED,
-        validation_status=WorkflowValidationStatus.PASSED,
     )
 
     # Check 1: A published Run appears in global list and detail projections.
@@ -73,7 +71,6 @@ async def test_run_lifecycle(service_client: httpx.AsyncClient, test_sandbox: Is
     assert runs[0]["source_session_id"] == session_id
     assert runs[0]["workflow_input"]["text"] == "Prepare the report"
     assert runs[0]["status"] == "completed"
-    assert runs[0]["validation_status"] == "passed"
 
     response = await service_client.get(f"/workflow-runs/{run_id}")
     assert response.status_code == 200

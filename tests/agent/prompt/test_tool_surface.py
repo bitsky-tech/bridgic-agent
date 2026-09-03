@@ -21,7 +21,6 @@ from src.amphi_agent.cognitive import (
     PresentationComposeThink,
     PresentationPlanThink,
     PresentationReviewThink,
-    ValidateThink,
     VerifyThink,
     WorkflowRunThink,
     WorkflowThink,
@@ -233,7 +232,7 @@ def test_mode_tools() -> None:
     ppt_compose = names(PresentationComposeThink())
     ppt_review = names(PresentationReviewThink())
     execute = names(WorkflowThink())
-    validate = names(ValidateThink())
+    surfaces = (main, child, clarify, explore, generate, verify, execute)
 
     # Check 1: Main and Child expose their distinct root and delegated capabilities.
     assert {"run_subagent", "start_subagent"} <= main
@@ -245,9 +244,9 @@ def test_mode_tools() -> None:
 
     # Check 2: Build stages expose only the control actions owned by each stage.
     assert "switch" in clarify & explore & generate & verify
-    assert {"request_accept_rule", "request_human_task_confirm"} <= clarify
+    assert "request_human_task_confirm" in clarify
     assert "request_human_workflow_confirm" in verify
-    assert "request_accept_rule" not in explore | generate | verify
+    assert all("request_accept_rule" not in surface for surface in surfaces)
     assert "request_human_task_confirm" not in explore | generate | verify
     assert "request_human_workflow_confirm" not in clarify | explore | generate
 
@@ -262,17 +261,16 @@ def test_mode_tools() -> None:
     assert "report_presentation_step" not in ppt_brief
     assert all("report_presentation_step" in surface for surface in (ppt_plan, ppt_compose, ppt_review))
 
-    # Check 4: Workflow stages expose reporting and exit controls without mode-entry controls.
-    for surface in (execute, validate):
-        assert {"switch", "report_workflow_step"} <= surface
-        assert "report_presentation_step" not in surface
-        assert {"request_build", "request_presentation", "edit_workflow", "help"}.isdisjoint(surface)
+    # Check 4: Workflow execution exposes reporting and exit controls without mode-entry controls.
+    assert {"switch", "report_workflow_step"} <= execute
+    assert "report_presentation_step" not in execute
+    assert {"request_build", "request_presentation", "edit_workflow", "help"}.isdisjoint(execute)
 
     # Check 5: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     common = {"request_human_choice", "load_browser_tools", "view_skill"}
-    for surface in (main, child, clarify, explore, generate, verify, *presentation_surfaces, execute, validate):
+    for surface in (*surfaces, *presentation_surfaces):
         assert common <= surface
-    for surface in (main, child, clarify, explore, generate, verify, *presentation_surfaces, execute, validate):
+    for surface in (*surfaces, *presentation_surfaces):
         assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
 
 
@@ -308,6 +306,7 @@ async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
     1. Each public Agent Think descriptor sends the Persona owned by its declared mode.
     2. Each assembled Persona renders the ToolSurface selected for that round exactly.
     3. The LLM receives the complete schemas generated from those ToolSpecs.
+    4. The Workflow reporting schema describes only the current execution model.
     """
     def rendered_tool_names(system: str) -> tuple[str, ...]:
         if "The tools currently available in this cognitive loop are:" in system:
@@ -342,18 +341,6 @@ async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
             False,
             "# Current stage: Execute",
         ),
-        (
-            "validate",
-            {
-                "mode": "run_workflow",
-                "stage": "validate",
-                "workflow_id": "workflow-a",
-                "generation": "generation-a",
-                "step_index": 0,
-            },
-            False,
-            "# Current stage: Validate",
-        ),
     )
 
     for unit_name, state, child, identity in cases:
@@ -380,6 +367,13 @@ async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
 
         # Check 3: The LLM receives the complete schemas generated from those ToolSpecs.
         assert actual_schemas == expected_schemas
+
+        # Check 4: Removed Workflow validation guidance does not leak through tool documentation.
+        if unit_name == "execute":
+            report_schema = next(
+                schema for schema in actual_schemas if schema["name"] == "report_workflow_step"
+            )
+            assert "validation" not in json.dumps(report_schema).lower()
 
 
 async def test_explore_skill(prompt_store: None) -> None:

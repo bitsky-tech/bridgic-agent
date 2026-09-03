@@ -16,7 +16,7 @@
  *    Rename an event in ONE place here and every consumer updates with it.
  *  - The frame `data`/payload is still re-validated at the boundary by Zod in
  *    `turnTranslate.ts` (untrusted external data) — these types document the
- *    contract; they do NOT replace runtime validation.
+ *    contract; they do NOT replace runtime schema checks.
  *
  * Contract source: the backend models in `amphi_service.protocol._ws_messages`
  * and `amphi_service.protocol._events`. Both ends MUST stay aligned.
@@ -64,7 +64,6 @@ export const CLIENT_FRAME = {
   Subscribe: 'subscribe',
   Unsubscribe: 'unsubscribe',
   Chat: 'chat',
-  AcceptRule: 'accept_rule',
   BuildConfirm: 'build_confirm',
   TaskConfirm: 'task_confirm',
   WorkflowConfirm: 'workflow_confirm',
@@ -125,17 +124,6 @@ export interface BuildConfirmFrame {
   session_id: string
   request_id: string
   action: 'confirm' | 'cancel'
-}
-
-/** Resume Clarify with structured decisions for proposed acceptance rules. */
-export interface AcceptRuleFrame {
-  type: typeof CLIENT_FRAME.AcceptRule
-  session_id: string
-  request_id: string
-  mode: 'criteria' | 'execution_only'
-  decisions: ('accept' | 'reject')[]
-  feedback: string[]
-  supplement: string
 }
 
 /** Resume a parked task-contract review from the Clarify stage. */
@@ -231,7 +219,6 @@ export type ClientFrame =
   | SubscribeFrame
   | UnsubscribeFrame
   | ChatFrame
-  | AcceptRuleFrame
   | BuildConfirmFrame
   | TaskConfirmFrame
   | PresentationOutlineConfirmFrame
@@ -335,7 +322,6 @@ export const TURN_EVENT = {
   Cancelled: 'cancelled',
   Error: 'error',
   HumanRequest: 'human_request',
-  AcceptRuleRequest: 'accept_rule_request',
   BuildConfirmRequest: 'build_confirm_request',
   PermissionRequest: 'permission_request',
   TaskConfirmRequest: 'task_confirm_request',
@@ -435,10 +421,6 @@ export type TurnEvent =
       data: { prompt?: string; questions: AskUserQuestion[]; request_id?: string | null }
     }
   | {
-      event: typeof TURN_EVENT.AcceptRuleRequest
-      data: { request_id: string; rules: string[] }
-    }
-  | {
       event: typeof TURN_EVENT.BuildConfirmRequest
       data: { request_id: string; goal: string; reason?: string | null }
     }
@@ -473,14 +455,13 @@ export type TurnEvent =
         workflow_id: string
         generation: string
         workflow_name: string
-        phase: 'execute' | 'validate'
+        phase: 'execute'
         step_index: number
         step_count: number
         title: string
         status: 'running' | 'success' | 'failure'
         summary?: string | null
         execution_steps?: string[]
-        validation_steps?: string[]
       }
     }
   | {
@@ -490,7 +471,6 @@ export type TurnEvent =
         workflow_id: string
         workflow_name: string
         status: 'completed' | 'failed'
-        validation_status: 'passed' | 'failed' | 'not_required'
         created_at: string
         summary?: string | null
       }

@@ -24,7 +24,6 @@ in-memory caches, agent aggregates) belongs in :mod:`..store` or
 from __future__ import annotations
 
 from ._events import (
-    AcceptRuleRequestEvent,
     BuildConfirmRequestEvent,
     CancelledEvent,
     ContextCompactionEvent,
@@ -74,7 +73,6 @@ from ._schemas import (
     WorkflowProgram,
 )
 from ._ws_messages import (
-    WsAcceptRuleMessage,
     WsBuildConfirmMessage,
     WsChatMessage,
     WsChoiceAnswerItem,
@@ -110,7 +108,6 @@ __all__ = [
     "HumanRequestEvent",
     "PermissionRequestEvent",
     "TaskConfirmRequestEvent",
-    "AcceptRuleRequestEvent",
     "BuildConfirmRequestEvent",
     "WorkflowConfirmRequestEvent",
     "FinalEvent",
@@ -152,7 +149,6 @@ __all__ = [
     "WsSubscribeMessage",
     "WsUnsubscribeMessage",
     "WsChatMessage",
-    "WsAcceptRuleMessage",
     "WsBuildConfirmMessage",
     "WsTaskConfirmMessage",
     "WsWorkflowConfirmMessage",

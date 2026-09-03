@@ -22,7 +22,6 @@ from src.amphi_agent.cognitive import (
     ClarifyThink,
     ExploreThink,
     GenerateThink,
-    ValidateThink,
     VerifyThink,
     WorkflowThink,
 )
@@ -35,7 +34,6 @@ from src.amphi_store import (
     UserInput,
     WorkflowRunRepository,
     WorkflowRunStatus,
-    WorkflowValidationStatus,
 )
 from tests._support.sandbox import IsolatedPaths
 
@@ -59,12 +57,6 @@ description: Build a deterministic context report
 ---
 # Produce the report
 Write the requested report to result/report.txt.
-""",
-        encoding="utf-8",
-    )
-    (workflow / "VALIDATE.md").write_text(
-        """# Validate the report
-Confirm result/report.txt contains the requested summary.
 """,
         encoding="utf-8",
     )
@@ -217,7 +209,6 @@ async def test_optional_context(test_sandbox: IsolatedPaths, prompt_store: None,
         result_dir=str(run_root),
         workflow_input=UserInput(text="Create the published report"),
         status=WorkflowRunStatus.COMPLETED,
-        validation_status=WorkflowValidationStatus.PASSED,
     )
     workflow_runs = await WorkflowRunLibrary(USER_ID).load()
 
@@ -252,7 +243,8 @@ async def test_optional_context(test_sandbox: IsolatedPaths, prompt_store: None,
     # Check 1: A published Workflow Run appears in the global result catalogue.
     assert "<workflow_results>" in dynamic
     assert f"Published context report result (run_id: {run_id}" in dynamic
-    assert "status: completed, validation: passed" in dynamic
+    assert "status: completed" in dynamic
+    assert "validation:" not in dynamic
     result_path = json.dumps(str(run_root / "result"), ensure_ascii=False)
     assert f"result path: {result_path}" in dynamic
     assert 'input: "Create the published report"' in dynamic
@@ -393,14 +385,12 @@ async def test_workflow_contexts(test_sandbox: IsolatedPaths, prompt_store: None
 
     {
       "execute": {"stage": "execute", "current_section": "Produce the report"},
-      "validate": {"stage": "validate", "current_section": "Validate the report"},
       "shared": ["skills", "schedules", "memories", "run directories"]
     }
 
     Checks:
     1. Execute exposes the immutable current execution section and writable run paths.
-    2. Validate replaces the current section with the validation contract.
-    3. Both stages retain shared catalogues while omitting the ordinary Workflow list.
+    2. Execute retains shared catalogues while omitting the ordinary Workflow list.
     """
     source = _write_workflow_source(test_sandbox.root / "run-source")
     skills, schedules, workflows = await _catalogues(source)
@@ -467,40 +457,10 @@ async def test_workflow_contexts(test_sandbox: IsolatedPaths, prompt_store: None
     assert f"Writable final result directory: {run.result_dir}" in execute
     assert f"Writable background work directory: {run.background_work_dir}" in execute
 
-    run_space.checkpoint_cursor(
-        expected_workflow_id=saved.workflow_id,
-        expected_generation=generation,
-        expected_stage="execute",
-        expected_step_index=0,
-        stage="validate",
-        step_index=0,
-    )
-    validate_ota = AmphiOTAContext(
-        user_input="Create the context report",
-        prompt_time=PROMPT_TIME,
-        state={
-            "think": {
-                "mode": "run_workflow",
-                "stage": "validate",
-                "workflow_id": saved.workflow_id,
-                "generation": generation,
-                "step_index": 0,
-            }
-        },
-    )
-    validate_messages = await ValidateThink().assemble_messages(validate_ota, context)
-    validate = _dynamic_context(validate_messages[0].content)
-
-    # Check 2: Validate replaces the current section with the validation contract.
-    assert "Stage: validate" in validate
-    assert "Current section: 1. Validate the report" in validate
-    assert "Confirm result/report.txt contains the requested summary." in validate
-    assert "- [x] 1. Produce the report" in validate
-
-    # Check 3: Both stages retain shared catalogues while omitting the ordinary Workflow list.
-    for dynamic in (execute, validate):
-        assert "<skills>" in dynamic
-        assert "<schedules>" in dynamic
-        assert "Daily context check" in dynamic
-        assert "<memories>" in dynamic
-        assert "<workflows>" not in dynamic
+    # Check 2: Execute retains shared catalogues while omitting the ordinary Workflow list.
+    assert "<skills>" in execute
+    assert "<schedules>" in execute
+    assert "Daily context check" in execute
+    assert "<memories>" in execute
+    assert "<workflows>" not in execute
+    assert "Validation sections:" not in execute

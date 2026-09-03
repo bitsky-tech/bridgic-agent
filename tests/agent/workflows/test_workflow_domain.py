@@ -28,33 +28,27 @@ def _write_package(root: Path, marker: str) -> None:
         f"# Publish report\n\n{marker} publication.\n",
         encoding="utf-8",
     )
-    (workflow / "VALIDATE.md").write_text(
-        f"# Review result\n\n{marker} validation.\n",
-        encoding="utf-8",
-    )
 
 
 def test_package(test_sandbox: IsolatedPaths) -> None:
     """Final Workflow package contracts:
 
     {
-      "valid": {"execution_steps": 2, "validation_steps": 1},
-      "execution_only": {"validation_steps": 0},
+      "valid": {"execution_steps": 2},
       "missing_script": "rejected before use",
       "local_environment": "rejected before use"
     }
 
     Checks:
-    1. A complete package exposes ordered, non-empty execution and validation sections.
-    2. The explicit execution-only document removes validation without weakening the package.
-    3. Package validation rejects a referenced script that is absent from the source tree.
-    4. Package validation rejects a bundled dependency environment from the source tree.
+    1. A complete package needs only WORKFLOW.md and exposes ordered execution sections.
+    2. Package validation rejects a referenced script that is absent from the source tree.
+    3. Package validation rejects a bundled dependency environment from the source tree.
     """
     root = test_sandbox.root / "package-contract"
     _write_package(root, "Initial")
     package = WorkflowPackage(root)
 
-    # Check 1: A valid source has stable ordered sections and no rejection reason.
+    # Check 1: A valid source has stable ordered execution sections.
     assert package.validation_reason() is None
     assert [step.title for step in package.execution_steps] == [
         "Collect inputs",
@@ -64,15 +58,7 @@ def test_package(test_sandbox: IsolatedPaths) -> None:
         "Initial collection.",
         "Initial publication.",
     ]
-    assert [step.title for step in package.validation_steps] == ["Review result"]
-
-    # Check 2: The exact no-validation declaration produces an execution-only package.
-    package.validation_path.write_text("---\nvalidation: none\n---\n", encoding="utf-8")
-    assert package.validation_reason() is None
-    assert package.validation_disabled is True
-    assert package.validation_steps == ()
-
-    # Check 3: Package validation rejects a referenced script that is absent from the source tree.
+    # Check 2: Package validation rejects a referenced script that is absent from the source tree.
     package.entry_path.write_text(
         package.entry_path.read_text(encoding="utf-8")
         + "\nRun `scripts/generate.py` for the final output.\n",
@@ -83,7 +69,7 @@ def test_package(test_sandbox: IsolatedPaths) -> None:
     assert "scripts/generate.py" in reason
     assert "does not exist" in reason
 
-    # Check 4: A Workflow cannot capture a machine-local dependency environment.
+    # Check 3: A Workflow cannot capture a machine-local dependency environment.
     package.entry_path.write_text(
         package.entry_path.read_text(encoding="utf-8").replace(
             "\nRun `scripts/generate.py` for the final output.\n",
@@ -121,7 +107,6 @@ async def test_materialization(test_sandbox: IsolatedPaths, monkeypatch: pytest.
             package.root / "explore.md",
             package.root / "verify.md",
             package.entry_path,
-            package.validation_path,
         ]
         return {
             path.relative_to(package.root).as_posix(): path.read_text(encoding="utf-8")
@@ -136,7 +121,7 @@ async def test_materialization(test_sandbox: IsolatedPaths, monkeypatch: pytest.
     _write_package(second_source, "Version two")
     _write_package(third_source, "Version three")
     _write_package(invalid_source, "Broken")
-    (invalid_source / "workflow" / "VALIDATE.md").write_text("", encoding="utf-8")
+    (invalid_source / "workflow" / "WORKFLOW.md").write_text("", encoding="utf-8")
 
     sessions = SessionRepository()
     await sessions.save(SessionRecord(
@@ -164,6 +149,7 @@ async def test_materialization(test_sandbox: IsolatedPaths, monkeypatch: pytest.
     assert created.root != first_source
     assert created.is_available
     assert "Version one publication." in created.entry_path.read_text(encoding="utf-8")
+    assert {path.name for path in created.source_root.iterdir()} == {"WORKFLOW.md"}
     assert tuple(library.data()) == (created.workflow_id,)
 
     # Check 2: Replaying one confirmation resolves the existing durable identity.
@@ -195,7 +181,7 @@ async def test_materialization(test_sandbox: IsolatedPaths, monkeypatch: pytest.
     version_two_documents = documents(edited)
 
     # Check 4: Rejected source cannot replace the last valid package in Store, memory, or files.
-    with pytest.raises(ValueError, match="VALIDATE.md is empty"):
+    with pytest.raises(ValueError, match="WORKFLOW.md is empty"):
         await library.materialize_workflow(
             invalid_source,
             workflow_id=created.workflow_id,
@@ -309,11 +295,11 @@ def test_active_run(test_sandbox: IsolatedPaths) -> None:
         )
     assert report.read_text(encoding="utf-8") == first_report
 
-    # Check 4: A failed validation writes the terminal reason and blocks further progress.
+    # Check 4: A failed execution section writes the terminal reason and blocks further progress.
     failure = run.record_step(
-        stage="validate",
-        step_number=1,
-        step_title="Review result",
+        stage="execute",
+        step_number=2,
+        step_title="Publish report",
         status="failure",
         summary="Required output is missing",
         evidence=["result/report.md absent"],
@@ -322,18 +308,18 @@ def test_active_run(test_sandbox: IsolatedPaths) -> None:
     assert failure == "Required output is missing"
     assert "Required output is missing" in failure_path.read_text(encoding="utf-8")
     assert run.record_step(
-        stage="validate",
-        step_number=1,
-        step_title="Review result",
+        stage="execute",
+        step_number=2,
+        step_title="Publish report",
         status="failure",
         summary="Required output is missing",
         evidence=["result/report.md absent"],
     ) == "Required output is missing"
     with pytest.raises(RuntimeError, match="terminal failure report"):
         run.record_step(
-            stage="validate",
-            step_number=2,
-            step_title="Publish result",
+            stage="execute",
+            step_number=3,
+            step_title="Archive report",
             status="success",
             summary="This must not be stored",
         )

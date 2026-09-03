@@ -37,8 +37,8 @@ describe('Pipeline', () => {
       text: '',
       toolCalls: [],
       blocks: [
-        { type: 'thinking', text: '正在整理验收规则。' },
-        { type: 'text', text: '我已经根据任务整理了候选标准。' },
+        { type: 'thinking', text: '正在整理可选方案。' },
+        { type: 'text', text: '我已经根据任务整理了候选方案。' },
       ],
       done: true,
       finalAnswer: '',
@@ -46,12 +46,11 @@ describe('Pipeline', () => {
     }])
     store.set(setHumanRequestAtom, {
       sessionId: 'interaction-session',
-      kind: 'accept_rule',
-      requestId: 'accept-1',
-      rules: ['结果文件存在。'],
+      kind: 'choose',
+      requestId: 'choice-1',
       questions: [{
-        question: '结果文件存在。',
-        options: [{ label: '接受' }, { label: '不接受' }],
+        question: '选择执行范围。',
+        options: [{ label: '全部' }, { label: '部分' }],
       }],
     })
 
@@ -732,13 +731,13 @@ describe('Pipeline', () => {
         workflowId: 'wf-report',
         generation: 'generation-1',
         workflowName: '生成报告',
-        phase: 'validate',
+        phase: 'execute',
         stepIndex: 0,
         stepCount: 1,
         title: '核对唯一完整记录',
         status: 'running',
       },
-      { type: 'thinking', text: '正在规划验证方式。' },
+      { type: 'thinking', text: '正在规划执行方式。' },
       {
         type: 'tool',
         toolUseId: 'search-records',
@@ -773,18 +772,18 @@ describe('Pipeline', () => {
 
     const heading = host.querySelector<HTMLElement>('[data-testid="workflow-stage-header"]')!
     const content = host.querySelector<HTMLElement>('[data-testid="workflow-stage-content"]')!
-    expect(heading.textContent).toContain('验证 1/1')
+    expect(heading.textContent).toContain('执行 1/1')
     expect(heading.textContent).toContain('核对唯一完整记录')
-    expect(content.textContent).toContain('正在规划验证方式。')
+    expect(content.textContent).toContain('正在规划执行方式。')
     expect(content.textContent).toContain('record_id')
 
     await act(async () => heading.click())
     expect(heading.getAttribute('aria-expanded')).toBe('false')
-    expect(heading.textContent).toContain('验证 1/1')
+    expect(heading.textContent).toContain('执行 1/1')
 
     await renderBlocks([
       ...initialBlocks,
-      { type: 'confirmation', question: '是否继续验证？', response: '继续' },
+      { type: 'confirmation', question: '是否继续执行？', response: '继续' },
       { type: 'thinking', text: '收到答复后继续检查。' },
     ])
 
@@ -893,7 +892,7 @@ describe('Pipeline', () => {
       { type: 'build_stage', stage: 'generate' },
       { type: 'text', text: '生成工作流文件。' },
       { type: 'build_stage', stage: 'verify' },
-      { type: 'text', text: '执行验收检查。' },
+      { type: 'text', text: '在真实环境运行工作流。' },
     ]
     const renderBlocks = async (blocks: MessageBlock[]) => {
       await act(async () => {
@@ -933,7 +932,7 @@ describe('Pipeline', () => {
       expect.stringContaining('整理任务说明书。'),
       expect.stringContaining('检查目标环境。'),
       expect.stringContaining('生成工作流文件。'),
-      expect.stringContaining('执行验收检查。'),
+      expect.stringContaining('在真实环境运行工作流。'),
     ])
 
     const exploreHeading = headings[1]!

@@ -772,7 +772,6 @@ describe('SessionResourcePanel', () => {
       phase: 'execute',
       stepIndex: 0,
       executionSteps: ['读取目录', '生成报告'],
-      validationSteps: ['检查报告'],
     })
     const { host, root } = await mountPanel(store)
 
@@ -887,16 +886,15 @@ describe('SessionResourcePanel', () => {
     const sessionId = 'session-run-completed'
     store.set(activeSessionIdAtom, sessionId)
     store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
-    store.set(thinkingModeFamily(sessionId), { mode: 'run_workflow', stage: 'validate' })
+    store.set(thinkingModeFamily(sessionId), { mode: 'run_workflow', stage: 'execute' })
     store.set(workflowRunFamily(sessionId), {
       workflowId: 'wf-completed',
       generation: 'gen-completed',
       workflowName: '完成态测试',
       sourceSessionId: sessionId,
-      phase: 'validate',
+      phase: 'execute',
       stepIndex: 0,
       executionSteps: ['执行任务'],
-      validationSteps: ['检查结果'],
     })
     store.set(streamingFamily(sessionId), {
       messageId: 'stream-run-completed',
@@ -908,9 +906,8 @@ describe('SessionResourcePanel', () => {
         workflowId: 'wf-completed',
         workflowName: '完成态测试',
         status: 'completed',
-        validationStatus: 'passed',
         createdAt: '2026-08-13T08:00:00Z',
-        summary: '运行与验证完成',
+        summary: '运行完成',
       }],
       startedAt: Date.now(),
     })

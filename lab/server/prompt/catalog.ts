@@ -115,7 +115,6 @@ const TOOL_ORDER = [
   "list_skills",
   "set_skill_enabled",
   "uninstall_skill",
-  "request_accept_rule",
   "request_build",
   "request_run_workflow",
   "request_human_choice",
@@ -242,7 +241,7 @@ function groupFor(name: string): string {
   if (name.includes("subagent")) return "subagents";
   if (["read_file", "write_file", "edit_file", "glob", "grep"].includes(name)) return "filesystem";
   if (["web_search", "web_fetch"].includes(name)) return "web";
-  if (name.startsWith("request_human") || name === "request_accept_rule") return "interaction";
+  if (name.startsWith("request_human")) return "interaction";
   return "core";
 }
 
@@ -275,7 +274,6 @@ export const DEFAULT_TOOL_CATALOG: PromptToolSchemaSnapshot[] = [
 
 const MAIN_EXCLUDED = new Set([
   "report_workflow_step",
-  "request_accept_rule",
   "request_human_task_confirm",
   "request_human_workflow_confirm",
   "switch",
@@ -369,14 +367,14 @@ export function selectToolSurface(
     if (WORKSPACE_ADVANCED.has(name) && !workspaceLoaded) return false;
     if (SKILLS_ADVANCED.has(name) && !skillsLoaded) return false;
     if (stage === "child") return CHILD_ALLOWED.has(name);
-    if (stage === "workflow_execute" || stage === "workflow_validate") {
+    if (stage === "workflow_execute") {
       return !MAIN_EXCLUDED.has(name) && !["edit_workflow", "help", "request_build"].includes(name)
         || name === "report_workflow_step"
         || name === "switch";
     }
     if (["clarify", "explore", "generate", "verify"].includes(stage)) {
       if (name === "switch") return true;
-      if (name === "request_accept_rule" || name === "request_human_task_confirm") return stage === "clarify";
+      if (name === "request_human_task_confirm") return stage === "clarify";
       if (name === "request_human_workflow_confirm") return stage === "verify";
       return !BUILD_EXCLUDED.has(name);
     }

@@ -28,14 +28,6 @@ class WorkflowRunStatus(str, Enum):
         return True
 
 
-class WorkflowValidationStatus(str, Enum):
-    """Validation outcome recorded for one Workflow execution."""
-
-    PASSED = "passed"
-    FAILED = "failed"
-    NOT_REQUIRED = "not_required"
-
-
 class WorkflowRun(SQLModel, table=True):
     __tablename__ = "workflow_runs"
 
@@ -49,10 +41,6 @@ class WorkflowRun(SQLModel, table=True):
     )
     workflow_input: UserInput = Field(sa_column=Column(UserInputType, nullable=False))
     status: WorkflowRunStatus = Field(default=WorkflowRunStatus.COMPLETED, index=True)
-    validation_status: WorkflowValidationStatus = Field(
-        default=WorkflowValidationStatus.NOT_REQUIRED,
-        index=True,
-    )
     run_dir: str = Field(description="Canonical global result directory.")
     created_at: datetime = Field(default_factory=_utcnow, index=True)
     finished_at: Optional[datetime] = Field(default=None)
@@ -87,7 +75,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
         result_dir: str,
         workflow_input: UserInput,
         status: WorkflowRunStatus,
-        validation_status: WorkflowValidationStatus,
     ) -> Tuple[WorkflowRun, bool]:
         """Create one terminal result or confirm an identical prior creation.
 
@@ -109,9 +96,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
             Original structured request that started the Run.
         status : WorkflowRunStatus
             Published terminal status, either completed or failed.
-        validation_status : WorkflowValidationStatus
-            Final validation outcome.
-
         Returns
         -------
         Tuple[WorkflowRun, bool]
@@ -119,16 +103,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
         """
         if not status.is_published:
             raise ValueError("Workflow Run persistence accepts terminal results only")
-        if status is WorkflowRunStatus.COMPLETED and validation_status not in {
-            WorkflowValidationStatus.PASSED,
-            WorkflowValidationStatus.NOT_REQUIRED,
-        }:
-            raise ValueError("Completed Workflow results require a final validation outcome")
-        if (
-            status is WorkflowRunStatus.FAILED
-            and validation_status is WorkflowValidationStatus.PASSED
-        ):
-            raise ValueError("Failed Workflow results cannot have passed validation")
         stored_input = UserInput.from_runtime(workflow_input)
         finished_at = _utcnow()
         try:
@@ -141,7 +115,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
                     source_session_id=source_session_id,
                     workflow_input=stored_input,
                     status=status,
-                    validation_status=validation_status,
                     run_dir=result_dir,
                     created_at=finished_at,
                     finished_at=finished_at,
@@ -168,7 +141,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
                 result_dir=result_dir,
                 workflow_input=stored_input,
                 status=status,
-                validation_status=validation_status,
             ):
                 await self.associate_session(user_id, source_session_id, result_id)
                 return existing, False
@@ -184,7 +156,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
         result_dir: str,
         workflow_input: UserInput,
         status: WorkflowRunStatus,
-        validation_status: WorkflowValidationStatus,
     ) -> bool:
         return (
             run.finished_at is not None
@@ -195,7 +166,6 @@ class WorkflowRunRepository(Repository[WorkflowRun]):
             and UserInput.from_runtime(run.workflow_input).model_dump(mode="json")
             == workflow_input.model_dump(mode="json")
             and run.status is status
-            and run.validation_status is validation_status
         )
 
     async def get(self, user_id: str, run_id: str) -> Optional[WorkflowRun]:
@@ -462,6 +432,5 @@ __all__ = [
     "WorkflowRun",
     "WorkflowRunRepository",
     "WorkflowRunStatus",
-    "WorkflowValidationStatus",
     "SessionWorkflowRun",
 ]

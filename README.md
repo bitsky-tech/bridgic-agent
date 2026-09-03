@@ -126,7 +126,7 @@ context and tool surface are assembled for the current stage:
 - normal task execution uses the main Agent loop;
 - delegated work uses a child-agent loop;
 - Workflow authoring uses `clarify -> explore -> generate -> verify`;
-- Workflow execution uses `execute -> validate`.
+- Workflow execution uses `execute`.
 
 Independent tool calls from the same model response can run concurrently. A
 root Session can have up to ten concurrent child agents; child agents cannot
@@ -161,14 +161,13 @@ A Workflow separates repeatable execution knowledge from a single chat:
 Task
   -> Clarify
   -> Explore the real environment
-  -> Generate WORKFLOW.md, VALIDATE.md, and supporting files
+  -> Generate WORKFLOW.md and supporting files
   -> Verify
-  -> User acceptance
+  -> User save confirmation
   -> Saved Workflow
 
 Saved Workflow
   -> Execute a fixed source snapshot in a Session Workspace
-  -> Validate when requested
   -> Publish durable results
 ```
 

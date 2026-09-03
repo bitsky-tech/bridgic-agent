@@ -10,13 +10,6 @@ export type CompletedInteractionBlock = Extract<
   { type: 'confirmation' | 'permission' | 'build_confirm' | 'task_confirm' | 'workflow_confirm' }
 >
 
-/** Keep system-owned AC ids in data while presenting friendly copy in chat UI. */
-export function humanizeAcceptanceRuleText(text: string): string {
-  return text
-    .replace(/(^|\n)(?:\s*AC[-_ ]?\d+\s*[:：.)、-]\s*)+/gim, '$1')
-    .trim()
-}
-
 /** Read-only detail card for one completed human interaction. */
 export function CompletedInteractionCard({ block, sessionId }: { block: CompletedInteractionBlock; sessionId?: string }) {
   const { t } = useTranslation()
@@ -33,11 +26,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
   }
 
   if (block.type === 'confirmation') {
-    if (
-      block.kind === 'accept_rule_message' ||
-      block.kind === 'confirmation_message'
-    ) {
-      const acceptanceReply = block.kind === 'accept_rule_message'
+    if (block.kind === 'confirmation_message') {
       return (
         <div className="max-w-xl overflow-hidden rounded-lg border border-status-warning/30 bg-bg-elevated shadow-sm">
           <div className="flex items-center gap-2.5 border-b border-border-subtle px-3.5 py-3">
@@ -46,9 +35,7 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
             </span>
             <div>
               <div className="text-sm font-semibold text-text-primary">
-                {acceptanceReply
-                  ? t('session.interaction.card.acceptRuleDeferredTitle')
-                  : t('session.interaction.label.replied', { question: block.question })}
+                {t('session.interaction.label.replied', { question: block.question })}
               </div>
               <div className="text-xs text-text-tertiary">{t('session.interaction.card.newMessageDesc')}</div>
             </div>
@@ -57,66 +44,6 @@ export function CompletedInteractionCard({ block, sessionId }: { block: Complete
             <div className="mb-1 text-xs font-semibold text-text-tertiary">{t('session.interaction.card.newMessageLabel')}</div>
             <MarkdownMessage content={block.response} className="text-sm leading-6 text-text-primary" />
           </div>
-        </div>
-      )
-    }
-    if (block.kind === 'accept_rule') {
-      if (block.acceptanceMode === 'execution_only') {
-        return (
-          <div className="max-w-xl overflow-hidden rounded-lg border border-brand-blue/30 bg-bg-elevated shadow-sm">
-            <div className="flex items-center gap-2.5 px-3.5 py-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
-                {Icons.workflowResult(16)}
-              </span>
-              <div>
-                <div className="text-sm font-semibold text-text-primary">{t('session.interaction.card.noAcceptanceTitle')}</div>
-                <div className="text-xs text-text-tertiary">{t('session.interaction.card.noAcceptanceDesc')}</div>
-              </div>
-            </div>
-          </div>
-        )
-      }
-      const rules = block.rules?.length
-        ? block.rules
-        : block.response
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line, index) => {
-              const matched = line.match(/^(AC-\d{3})\s*[:：]\s*(.+)$/)
-              return matched
-                ? { id: matched[1]!, text: matched[2]! }
-                : { id: `AC-${String(index + 1).padStart(3, '0')}`, text: line }
-            })
-      return (
-        <div className="max-w-xl overflow-hidden rounded-lg border border-brand-blue/30 bg-bg-elevated shadow-sm">
-          <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-3.5 py-3">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent-blue-subtle text-text-accent">
-                {Icons.workflowResult(16)}
-              </span>
-              <div>
-                <div className="text-sm font-semibold text-text-primary">{t('session.interaction.card.acceptanceTitle')}</div>
-                <div className="text-xs text-text-tertiary">{t('session.interaction.card.acceptanceDesc')}</div>
-              </div>
-            </div>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-success-bg px-2 py-1 text-xs font-semibold text-status-success">
-              {Icons.check(11)} {t('session.interaction.card.acceptanceCount', { n: rules.length })}
-            </span>
-          </div>
-          <ol aria-label={t('session.interaction.card.acceptanceTitle')} className="max-h-[420px] divide-y divide-border-subtle overflow-y-auto">
-            {rules.map((rule, index) => (
-              <li key={rule.id} className="grid grid-cols-[64px_minmax(0,1fr)] gap-3 px-3.5 py-3.5">
-                <span className="mt-0.5 inline-flex h-6 items-center justify-center rounded-md bg-accent-blue-subtle px-2 text-xs font-semibold text-text-accent">
-                  {t('session.interaction.card.ruleBadge', { n: index + 1 })}
-                </span>
-                <MarkdownMessage
-                  content={humanizeAcceptanceRuleText(rule.text)}
-                  className="min-w-0 text-sm leading-6 text-text-primary"
-                />
-              </li>
-            ))}
-          </ol>
         </div>
       )
     }

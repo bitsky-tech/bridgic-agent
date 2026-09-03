@@ -24,7 +24,6 @@ const stages: PromptStage[] = [
   "generate",
   "verify",
   "workflow_execute",
-  "workflow_validate",
 ];
 
 interface PythonPromptSnapshot {
@@ -65,7 +64,6 @@ with use_locale(locale):
         "generate": module.render_stage_persona(tool_names, template=module.GENERATE_PERSONA).strip(),
         "verify": module.render_stage_persona(tool_names, template=module.VERIFY_PERSONA).strip(),
         "workflow_execute": module.render_stage_persona(tool_names, template=module.WORKFLOW_PERSONA).strip(),
-        "workflow_validate": module.render_stage_persona(tool_names, template=module.WORKFLOW_VALIDATE_PERSONA).strip(),
     }
 result = {
     "personas": personas,
@@ -94,7 +92,7 @@ describe("persona source snapshot", () => {
       { locale: "zh", uiLanguage: "Chinese" },
       { locale: "en", uiLanguage: "English" },
     ] as const satisfies readonly { locale: "zh" | "en"; uiLanguage: PromptUiLanguage }[]) {
-      test(`renders all eight personas byte-for-byte like Python for ${toolNames.join(", ")} (${locale})`, () => {
+      test(`renders all seven personas byte-for-byte like Python for ${toolNames.join(", ")} (${locale})`, () => {
         const expected = pythonPromptSnapshot(toolNames, locale);
         expect(String(TURN_FAILED_MESSAGE)).toBe(expected.turnFailedMessage);
         for (const stage of stages) {
@@ -116,6 +114,5 @@ describe("persona source snapshot", () => {
     expect(renderPersona("generate", tools).content).toContain("# Current stage: generate");
     expect(renderPersona("verify", tools).content).toContain("# Current stage: verify");
     expect(renderPersona("workflow_execute", tools).content).toContain("# Current stage: Execute");
-    expect(renderPersona("workflow_validate", tools).content).toContain("# Current stage: Validate");
   });
 });
