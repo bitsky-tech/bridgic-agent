@@ -113,6 +113,15 @@ def test_ui_language_is_the_language_fallback() -> None:
             assert f"app UI language: {expected}" in personas[name], name
 
 
+def test_image_tool_guidance_is_shared_by_every_persona() -> None:
+    """Every Agent mode uses the same image inspection and generation contract."""
+    for name, persona in _personas().items():
+        assert "Use `read_image` when the task depends on understanding" in persona, name
+        assert "Use `generate_image` when the user asks to create a new image" in persona, name
+        assert "After every successful generation, call `read_image`" in persona, name
+        assert "do not retry it or claim visual verification" in persona, name
+
+
 def test_choice_contract() -> None:
     """Final request_human_choice contract:
 

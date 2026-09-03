@@ -1502,6 +1502,7 @@
       "details": "Image generation details",
       "prompt": "Prompt",
       "promptUnavailable": "No prompt provided",
+      "reference": "Reference image",
       "reveal": "Reveal in files",
       "status": {
         "completed": "Completed",
@@ -1643,6 +1644,7 @@
     },
     "tool": {
       "error": "Error",
+      "imageReadRunning": "Analyzing image…",
       "noDiff": "(No changes to display)",
       "noOutput": "(No output)",
       "overflow": {
@@ -2050,6 +2052,7 @@
       "full": "Full text"
     },
     "verb": {
+      "analyzeImage": "Analyze image",
       "bash": "Run",
       "browserBack": "Back",
       "browserCheck": "Check",

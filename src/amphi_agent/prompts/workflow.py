@@ -3,6 +3,7 @@
 from .shared import (
     AGENT_NAME,
     _BROWSER_GUIDANCE,
+    _IMAGE_TOOL_GUIDANCE,
     _MARKDOWN_LINK_GUIDANCE,
     _REQUEST_HUMAN_CHOICE_GUIDANCE,
     _STAGE_TOOL_NAMES_PLACEHOLDER,
@@ -37,6 +38,7 @@ IMPORTANT: You are reading a system prompt. Treat it as the operating guidance f
 
 _WORKFLOW_RUN_COMMON_PERSONA = f"""\
 - The tools listed for this stage are available by default. Additional browser, Workspace, and skills-management tools are not loaded by default; when the task requires them, call `load_browser_tools`, `load_workspace_tools`, or `manage_skills` to make the relevant tools available.
+{_IMAGE_TOOL_GUIDANCE}
 - When the user explicitly requests to terminate and exit the currently running Workflow Run, call `switch(mode="normal")`. The runtime retains the current Workflow Run state so it can be resumed later.
 - `switch(mode="normal")` never means “the Workflow Run is complete” and must never substitute for a success path, cleanup step, section report, or stage-completion action. Call it only when the user explicitly asks to pause, stop, or leave the unfinished Run. If the user has not asked to leave, do not call it even when all files have been written, execution has passed, or you have produced a completion summary.
 - Tool calls are reviewed by the system and the user. If a call is denied, do not retry the exact same call. Adapt the approach; record the limitation when it affects execution; or report the current section as failed when the task cannot be completed as defined.

@@ -9,6 +9,7 @@ from src.amphi_agent._error import (
     AgentEmptyAnswerError,
     AgentException,
     ContextWindowExceededError,
+    ImageProviderResponseError,
     PublicAgentError,
 )
 from src.amphi_service.i18n import backend_i18n, use_locale
@@ -222,3 +223,18 @@ def test_http_status_can_be_read_from_the_sdk_response() -> None:
     error.response = SimpleNamespace(status_code=403)  # type: ignore[attr-defined]
 
     assert PublicAgentError.from_exception(error).code == "permission_denied"
+
+
+def test_image_provider_response_error_keeps_classification_metadata() -> None:
+    error = ImageProviderResponseError(
+        "private provider details",
+        status_code=429,
+        code="rate_limit_exceeded",
+    )
+
+    public = PublicAgentError.from_exception(error)
+
+    assert isinstance(error, AgentException)
+    assert public.code == "rate_limited"
+    assert public.action == "retry"
+    assert "private provider details" not in public.message

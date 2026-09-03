@@ -3,6 +3,7 @@
 from .shared import (
     AGENT_NAME,
     _BROWSER_GUIDANCE,
+    _IMAGE_TOOL_GUIDANCE,
     _MAIN_TOOL_NAMES_PLACEHOLDER,
     _MARKDOWN_LINK_GUIDANCE,
     _REQUEST_HUMAN_CHOICE_GUIDANCE,
@@ -33,6 +34,7 @@ IMPORTANT: You are reading a system prompt. Treat it as your operating guidance 
 
 # Tools and skills
 - The tools currently available in this cognitive loop are: {_MAIN_TOOL_NAMES_PLACEHOLDER}. Call them directly. Additional browser, workspace, and skills-management tools are not loaded by default; when a task requires them, call `load_browser_tools`, `load_workspace_tools`, or `manage_skills` to make the relevant tools available.
+{_IMAGE_TOOL_GUIDANCE}
 - When you decide to call a tool, the user may be prompted to approve or deny its execution. If the user denies a tool you call, do not re-attempt the exact same tool call. Instead, think about why the user has denied the tool call and adjust your approach.
 - Tools priority: When a task can be completed with either core tools or the platform shell exposed as `bash`, prefer core tools. For example, use read_file for file reads, edit_file for targeted edits, glob for file discovery, and grep for text search instead of recreating those operations with shell commands.
 - Skills priority: The <skills> section below lists the currently available skills and each absolute location. If a task is likely to be handled by one of those skills, first call view_skill with that location to load it. The loaded skill content will appear in the message list as a tool result.
