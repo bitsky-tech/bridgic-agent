@@ -4,7 +4,7 @@
  *
  * Isolate atom state with Jotai createStore(); IPC is replaced by a window.api mock.
  */
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, setSystemTime } from 'bun:test'
 import { createStore } from 'jotai'
 import {
   applyAgentEventAtom,
@@ -1187,24 +1187,34 @@ describe('reducer: done / error / cancelled', () => {
     const store = makeStore()
     const id = setupSession(store)
     store.set(activeSessionIdAtom, id)
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
-    })
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'text_delta', messageId: 'm1', text: 'partial' },
-    })
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'message_stop', messageId: 'm1' },
-    })
-    store.set(applyAgentEventAtom, {
-      sessionId: id,
-      event: { type: 'done', reason: 'cancelled', messageId: 'm1' },
-    })
-    const msgs = store.get(currentMessagesAtom)
-    expect(msgs[msgs.length - 1]!.stopped).toBe(true)
+    const startedAt = Date.parse('2026-09-03T10:00:00+08:00')
+    const completedAt = startedAt + 4_321
+    setSystemTime(new Date(startedAt))
+    try {
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_start', messageId: 'm1', role: 'assistant' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'text_delta', messageId: 'm1', text: 'partial' },
+      })
+      setSystemTime(new Date(completedAt))
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_stop', messageId: 'm1' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'done', reason: 'cancelled', messageId: 'm1' },
+      })
+      const message = store.get(currentMessagesAtom).at(-1)
+      expect(message?.stopped).toBe(true)
+      expect(message?.completedAt).toBe(completedAt)
+      expect(message?.durationMs).toBe(4_321)
+    } finally {
+      setSystemTime()
+    }
   })
 
   it('done(cancelled) creates a stopped placeholder before the first content block', () => {
@@ -1224,6 +1234,40 @@ describe('reducer: done / error / cancelled', () => {
       stopped: true,
       blocks: [],
     })
+  })
+
+  it('cancelled message_stop timestamps a turn stopped before its first content block', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    const startedAt = Date.parse('2026-09-03T11:00:00+08:00')
+    const completedAt = startedAt + 2_500
+    setSystemTime(new Date(startedAt))
+    try {
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_start', messageId: 'm-empty', role: 'assistant' },
+      })
+      setSystemTime(new Date(completedAt))
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_stop', messageId: 'm-empty', reason: 'cancelled' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'done', reason: 'cancelled', messageId: 'm-empty' },
+      })
+
+      const message = store.get(currentMessagesAtom).at(-1)
+      expect(message).toMatchObject({
+        id: 'm-empty',
+        stopped: true,
+        completedAt,
+        durationMs: 2_500,
+      })
+    } finally {
+      setSystemTime()
+    }
   })
 
   it('error finalizes partial as errored message', () => {

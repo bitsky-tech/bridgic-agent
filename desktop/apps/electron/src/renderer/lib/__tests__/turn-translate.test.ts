@@ -243,6 +243,9 @@ describe('translateTurnEvent', () => {
   it('maps cancelled to a stopped turn without an error', () => {
     const { events } = run([{ event: 'cancelled', data: {} }])
     expect(types(events)).toEqual(['message_start', 'message_stop', 'done'])
+    const stop = events[events.length - 2]
+    if (stop?.type !== 'message_stop') throw new Error('expected message_stop')
+    expect(stop.reason).toBe('cancelled')
     const done = events[events.length - 1]
     if (done?.type !== 'done') throw new Error('expected done')
     expect(done.reason).toBe('cancelled')

@@ -340,7 +340,7 @@ export function translateTurnEvent(
       }
     }
     case TURN_EVENT.Cancelled: {
-      events.push({ type: 'message_stop', messageId })
+      events.push({ type: 'message_stop', messageId, reason: 'cancelled' })
       events.push({ type: 'done', reason: 'cancelled', messageId })
       return { events, state: next }
     }

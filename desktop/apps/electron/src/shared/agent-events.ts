@@ -269,6 +269,7 @@ export type AgentEvent =
       finalAnswer?: string | null
       durationMs?: number
       completedAt?: number
+      reason?: 'cancelled'
     }
   | { type: 'task_spawn'; taskId: string; parentTaskId?: string; description: string }
   | { type: 'task_complete'; taskId: string; summary: string }
