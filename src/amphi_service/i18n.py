@@ -595,6 +595,10 @@ class BackendI18n:
             "zh": "当前模型“{model_display}”无法理解图片。请切换到支持图片输入的模型后重试。",
             "en": "The current model, {model_display}, cannot understand images. Switch to a model that supports image input and try again.",
         },
+        "agent.image_tool.error.no_vision_model": {
+            "zh": "当前没有可用的图片理解模型。请完成 ChatGPT 授权，或在模型设置中启用一个支持图片输入的模型。",
+            "en": "No image-understanding model is available. Connect ChatGPT, or enable a model that supports image input in model settings.",
+        },
         "agent.image_tool.error.read_prompt_too_long": {
             "zh": "图片分析要求过长。请精简到 32000 个字符以内后重试。",
             "en": "The image inspection request is too long. Shorten it to 32,000 characters or fewer and try again.",

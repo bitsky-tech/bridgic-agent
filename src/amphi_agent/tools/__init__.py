@@ -11,7 +11,7 @@
   Baidu and returns links with snippets.
 * ``web_fetch_tool`` — fetches public web content, converts HTML to markdown,
   and applies a prompt with the running agent's LLM.
-* ``read_image_tool`` — sends a local image to the current vision-capable model
+* ``read_image_tool`` — sends a local image to an available vision-capable model
   and returns a textual visual analysis for later reasoning or generation.
 * ``generate_image_tool`` — routes a text prompt to an enabled image-output
   model and saves the generated image in the Session workspace for preview.

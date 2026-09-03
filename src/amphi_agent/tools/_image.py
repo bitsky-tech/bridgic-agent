@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import inspect
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from .._error import ImageProviderResponseError, PublicAgentError
 from ...amphi_service.protocol.llms import (
     PROVIDER_CATALOG_BY_ID,
     build_codex_llm,
+    build_llm,
     catalog_model,
     supports_image_generation,
 )
@@ -34,7 +36,7 @@ from ...amphi_service.protocol.llms._image_inputs import (
 )
 from ...amphi_service.protocol.llms.codex_llm import DEFAULT_CODEX_MODEL
 from ...amphi_service.i18n import backend_i18n
-from ...amphi_store import ProviderCredential, ProviderRepository
+from ...amphi_store import ProviderCredential, ProviderRepository, User
 
 
 _IMAGE_TIMEOUT = httpx.Timeout(180.0, connect=10.0)
@@ -83,6 +85,21 @@ def _friendly_provider_failure(operation: str, exc: Exception) -> str:
         f"agent.image_tool.error.{suffix}_failed_reason",
         reason=public.message,
     )
+
+
+async def _close_temporary_llm(llm: Any) -> None:
+    client = getattr(llm, "client", None)
+    close = getattr(client, "close", None)
+    if callable(close):
+        with suppress(Exception):
+            close()
+    async_client = getattr(llm, "async_client", None)
+    async_close = getattr(async_client, "aclose", None) or getattr(async_client, "close", None)
+    if callable(async_close):
+        with suppress(Exception):
+            result = async_close()
+            if inspect.isawaitable(result):
+                await result
 
 
 def _ordered_credentials(credentials: Iterable[ProviderCredential]) -> list[ProviderCredential]:
@@ -385,18 +402,20 @@ def _inspect_session_image(file_path: str, work_dir: Any) -> dict:
 
 
 async def read_image(file_path: str, prompt: str = "") -> str:
-    """Inspect one local image with the current vision-capable model.
+    """Inspect one local image with an available vision-capable model.
 
     Use this tool when visual details in a local or generated image must be
     understood, compared, checked, or converted into a generation-ready
     description. Relative paths resolve from the current Session workspace;
     absolute paths returned by ``generate_image`` can be passed directly.
 
-    The image is sent to the current model as native image input. The tool
-    returns the model's textual visual analysis, not the image pixels. For later
-    generation, use this analysis to refine the prompt and also pass the same
-    path through ``generate_image.reference_image_path`` so the image model
-    receives the source pixels directly.
+    The tool prefers the current model when it supports image input. Otherwise
+    it automatically tries an enabled ChatGPT Auth model, then an enabled API
+    provider model with vision capability. It returns textual visual analysis,
+    not the image pixels. For later generation, use this analysis to refine the
+    prompt and also pass the same path through
+    ``generate_image.reference_image_path`` so the image model receives the
+    source pixels directly.
 
     Args:
         file_path: Workspace-relative or absolute path to a PNG, JPEG, GIF, or
@@ -415,45 +434,164 @@ async def read_image(file_path: str, prompt: str = "") -> str:
 
     agent = current_agent.get(None)
     context = getattr(agent, "ctx", None) if agent is not None else None
+    session = getattr(context, "session", None) if context is not None else None
     workspace = getattr(context, "workspace", None) if context is not None else None
+    user_id = getattr(session, "user_id", None) if session is not None else None
     work_dir = getattr(workspace, "work_dir", None) if workspace is not None else None
-    llm = getattr(agent, "_llm", None) if agent is not None else None
-    if work_dir is None or llm is None:
+    current_llm = getattr(agent, "_llm", None) if agent is not None else None
+    if not user_id or work_dir is None:
         raise RuntimeError(backend_i18n.text(
             "agent.image_tool.error.read_unavailable"
         ))
 
+    image = _inspect_session_image(file_path, work_dir)
+    resolved_path = str(image["path"])
     llm_provider = getattr(context, "llm_provider", None)
     support = (
         llm_provider.supports_image_input()
         if llm_provider is not None
         else None
     )
-    if support is False:
-        model_id = str(getattr(llm_provider, "model_id", "") or "")
-        model_display = model_id or backend_i18n.text("llm.selected_model")
-        raise ImageInputUnsupportedError(
-            model_id,
-            backend_i18n.text(
-                "agent.image_tool.error.vision_unsupported",
-                model_display=model_display,
-            ),
-        )
 
-    image = _inspect_session_image(file_path, work_dir)
-    resolved_path = str(image["path"])
-
-    try:
-        response = await llm.achat([
+    def inspection_messages() -> list[Message]:
+        return [
             Message.from_text(_IMAGE_ANALYSIS_SYSTEM_PROMPT, role=Role.SYSTEM),
             Message.from_text(
                 cleaned_prompt,
                 role=Role.USER,
                 extras={IMAGE_INPUTS_EXTRA: [image]},
             ),
-        ])
-    except Exception as exc:
-        raise RuntimeError(_friendly_provider_failure("read", exc)) from exc
+        ]
+
+    async def inspect_with(llm: Any) -> Any:
+        return await llm.achat(inspection_messages())
+
+    response: Any = None
+    response_received = False
+    current_failure: Optional[Exception] = None
+    if current_llm is not None and support is not False:
+        try:
+            response = await inspect_with(current_llm)
+            response_received = True
+        except Exception as exc:
+            if PublicAgentError.from_exception(exc).code != "image_input_unsupported":
+                raise RuntimeError(_friendly_provider_failure("read", exc)) from exc
+            current_failure = exc
+
+    if not response_received:
+        try:
+            credentials = await ProviderRepository().list_for_user(user_id)
+        except Exception as exc:
+            raise RuntimeError(_friendly_provider_failure("read", exc)) from exc
+
+        current_protocol = str(getattr(current_llm, "protocol", "") or "")
+        current_provider_id = (
+            "openai-codex"
+            if current_protocol == "openai-codex"
+            else str(getattr(llm_provider, "provider_id", "") or "")
+        )
+        current_model_id = str(getattr(llm_provider, "model_id", "") or "")
+
+        def normalized_provider_id(credential: ProviderCredential) -> str:
+            return (
+                "openai-codex"
+                if credential.protocol == "openai-codex"
+                else credential.provider_id
+            )
+
+        def supports_vision(credential: ProviderCredential, candidate: str) -> bool:
+            metadata = catalog_model(normalized_provider_id(credential), candidate)
+            return bool(
+                metadata is not None
+                and "image" in metadata["input_modalities"]
+                and "text" in metadata["output_modalities"]
+            )
+
+        def select_fallback() -> Optional[_ImageTarget]:
+            rows = _ordered_credentials(credentials)
+            codex_credential = next((
+                credential
+                for credential in rows
+                if credential.is_enabled
+                and credential.auth_mode == "oauth"
+                and credential.protocol == "openai-codex"
+            ), None)
+            if codex_credential is not None:
+                candidates = list(codex_credential.enabled_models)
+                if DEFAULT_CODEX_MODEL in candidates:
+                    candidates.remove(DEFAULT_CODEX_MODEL)
+                    candidates.insert(0, DEFAULT_CODEX_MODEL)
+                selected = next((
+                    candidate
+                    for candidate in candidates
+                    if supports_vision(codex_credential, candidate)
+                    and not (
+                        current_failure is not None
+                        and current_provider_id == "openai-codex"
+                        and current_model_id == candidate
+                    )
+                ), None)
+                if selected is not None:
+                    return _ImageTarget(codex_credential, selected)
+
+            for credential in rows:
+                if (
+                    not credential.is_enabled
+                    or not credential.api_key
+                    or credential.protocol not in {"anthropic", "google", "openai"}
+                ):
+                    continue
+                selected = next((
+                    candidate
+                    for candidate in credential.enabled_models
+                    if supports_vision(credential, candidate)
+                    and not (
+                        current_failure is not None
+                        and current_provider_id == normalized_provider_id(credential)
+                        and current_model_id == candidate
+                    )
+                ), None)
+                if selected is not None:
+                    return _ImageTarget(credential, selected)
+            return None
+
+        target = select_fallback()
+        if target is None:
+            model_id = current_model_id
+            raise ImageInputUnsupportedError(
+                model_id,
+                backend_i18n.text("agent.image_tool.error.no_vision_model"),
+            ) from current_failure
+
+        fallback_llm: Any = None
+        try:
+            if target.credential.protocol == "openai-codex":
+                fallback_llm = build_codex_llm(
+                    target.model,
+                    user_id=user_id,
+                    api_base=target.credential.base_url,
+                )
+            else:
+                fallback_llm = build_llm(
+                    User(
+                        id=user_id,
+                        api_key=target.credential.api_key,
+                        base_url=(
+                            target.credential.base_url
+                            or _default_base_url(target.credential.provider_id)
+                        ),
+                        current_model=target.model,
+                        protocol=target.credential.protocol,
+                    ),
+                    target.model,
+                )
+            response = await inspect_with(fallback_llm)
+            response_received = True
+        except Exception as exc:
+            raise RuntimeError(_friendly_provider_failure("read", exc)) from exc
+        finally:
+            if fallback_llm is not None:
+                await _close_temporary_llm(fallback_llm)
 
     def response_text() -> str:
         if isinstance(response, str):
@@ -577,18 +715,6 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
             return None
         return _ImageTarget(credential=credential, model=candidates[0])
 
-    async def close_temporary_llm(llm: Any) -> None:
-        client = getattr(llm, "client", None)
-        close = getattr(client, "close", None)
-        if callable(close):
-            with suppress(Exception):
-                close()
-        async_client = getattr(llm, "async_client", None)
-        aclose = getattr(async_client, "aclose", None)
-        if callable(aclose):
-            with suppress(Exception):
-                await aclose()
-
     requested_provider = provider_id.strip()
     requested_model = model.strip()
     current_llm = getattr(agent, "_llm", None)
@@ -655,7 +781,7 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
                     )) from exc
             finally:
                 if fallback_llm is not None:
-                    await close_temporary_llm(fallback_llm)
+                    await _close_temporary_llm(fallback_llm)
 
         if not generated:
             try:

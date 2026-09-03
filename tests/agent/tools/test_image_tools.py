@@ -118,6 +118,196 @@ async def test_read_image_sends_native_image_input_and_returns_text(tool_harness
     )
 
 
+async def test_read_image_prefers_codex_vision_fallback(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    image_path = tool_harness.workspace.work_dir / "reference.png"
+    image_path.write_bytes(_PNG)
+    await _configure_provider("google", "gemini-2.5-flash", "google")
+    await ProviderRepository().set_active("local", "google")
+    await _configure_codex_auth("gpt-5.5")
+    captured: dict[str, object] = {"sync_closed": False, "async_closed": False}
+
+    class SyncClient:
+        def close(self) -> None:
+            captured["sync_closed"] = True
+
+    class AsyncClient:
+        async def aclose(self) -> None:
+            captured["async_closed"] = True
+
+    class VisionLlm:
+        client = SyncClient()
+        async_client = AsyncClient()
+
+        async def achat(self, messages: list[Message], **_: Any) -> Response:
+            captured["messages"] = messages
+            return Response(
+                message=Message.from_text("A misty mountain landscape.", role=Role.AI)
+            )
+
+    def build_codex(model: str, user_id: str = "", temperature: float = 0.0, api_base: str | None = None) -> VisionLlm:
+        captured.update({
+            "model": model,
+            "user_id": user_id,
+            "temperature": temperature,
+            "api_base": api_base,
+        })
+        return VisionLlm()
+
+    def reject_api_fallback(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("API-key fallback should not run before ChatGPT Auth")
+
+    monkeypatch.setattr(image_module, "build_codex_llm", build_codex)
+    monkeypatch.setattr(image_module, "build_llm", reject_api_fallback)
+    tool_harness.agent._llm = SimpleNamespace()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="deepseek-v4-pro",
+        provider_id="deepseek",
+    )
+
+    result = await read_image("reference.png", "Describe the scene")
+
+    assert captured["model"] == "gpt-5.5"
+    assert captured["user_id"] == "local"
+    assert captured["sync_closed"] is True
+    assert captured["async_closed"] is True
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    assert messages[1].extras[IMAGE_INPUTS_EXTRA][0]["path"] == str(image_path.resolve())
+    assert result == f"Image analysis for {image_path.resolve()}:\nA misty mountain landscape."
+
+
+async def test_read_image_uses_api_vision_fallback_without_codex(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    image_path = tool_harness.workspace.work_dir / "reference.png"
+    image_path.write_bytes(_PNG)
+    await _configure_provider("google", "gemini-2.5-flash", "google")
+    captured: dict[str, object] = {"closed": False}
+
+    class AsyncClient:
+        async def aclose(self) -> None:
+            captured["closed"] = True
+
+    class VisionLlm:
+        client = SimpleNamespace(close=lambda: None)
+        async_client = AsyncClient()
+
+        async def achat(self, messages: list[Message], **_: Any) -> Response:
+            captured["messages"] = messages
+            return Response(
+                message=Message.from_text("A geometric poster.", role=Role.AI)
+            )
+
+    def build_provider(user: object, model: str) -> VisionLlm:
+        captured["user"] = user
+        captured["model"] = model
+        return VisionLlm()
+
+    monkeypatch.setattr(image_module, "build_llm", build_provider)
+    tool_harness.agent._llm = SimpleNamespace()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="deepseek-v4-pro",
+        provider_id="deepseek",
+    )
+
+    result = await read_image("reference.png")
+
+    fallback_user = captured["user"]
+    assert isinstance(fallback_user, image_module.User)
+    assert fallback_user.api_key == "google-secret"
+    assert fallback_user.protocol == "google"
+    assert captured["model"] == "gemini-2.5-flash"
+    assert captured["closed"] is True
+    assert result == f"Image analysis for {image_path.resolve()}:\nA geometric poster."
+
+
+async def test_read_image_skips_image_only_output_model(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    image_path = tool_harness.workspace.work_dir / "reference.png"
+    image_path.write_bytes(_PNG)
+    await ProviderRepository().upsert(
+        "local",
+        "openai",
+        auth_mode="api_key",
+        api_key="openai-secret",
+        base_url=None,
+        protocol="openai",
+        models=["gpt-image-2", "gpt-4.1"],
+    )
+    captured: dict[str, object] = {"async_closed": False}
+
+    class AsyncClient:
+        async def close(self) -> None:
+            captured["async_closed"] = True
+
+    class VisionLlm:
+        client = SimpleNamespace(close=lambda: None)
+        async_client = AsyncClient()
+
+        async def achat(self, _messages: list[Message], **_: Any) -> Response:
+            return Response(
+                message=Message.from_text("A textual image analysis.", role=Role.AI)
+            )
+
+    def build_provider(_user: object, model: str) -> VisionLlm:
+        captured["model"] = model
+        return VisionLlm()
+
+    monkeypatch.setattr(image_module, "build_llm", build_provider)
+    tool_harness.agent._llm = SimpleNamespace()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="deepseek-v4-pro",
+        provider_id="deepseek",
+    )
+
+    result = await read_image("reference.png")
+
+    assert captured["model"] == "gpt-4.1"
+    assert captured["async_closed"] is True
+    assert result == f"Image analysis for {image_path.resolve()}:\nA textual image analysis."
+
+
+async def test_read_image_does_not_retry_failed_current_codex_model(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    image_path = tool_harness.workspace.work_dir / "reference.png"
+    image_path.write_bytes(_PNG)
+    await _configure_codex_auth("gpt-5.5")
+    await _configure_provider("google", "gemini-2.5-flash", "google")
+    codex_builds: list[str] = []
+
+    class CurrentCodexLlm:
+        protocol = "openai-codex"
+
+        async def achat(self, _messages: list[Message], **_: Any) -> Response:
+            raise ImageInputUnsupportedError("gpt-5.5")
+
+    class AsyncClient:
+        async def aclose(self) -> None:
+            pass
+
+    class VisionLlm:
+        client = SimpleNamespace(close=lambda: None)
+        async_client = AsyncClient()
+
+        async def achat(self, _messages: list[Message], **_: Any) -> Response:
+            return Response(
+                message=Message.from_text("Fallback inspection.", role=Role.AI)
+            )
+
+    def build_codex(model: str, **_kwargs: object) -> VisionLlm:
+        codex_builds.append(model)
+        return VisionLlm()
+
+    monkeypatch.setattr(image_module, "build_codex_llm", build_codex)
+    monkeypatch.setattr(image_module, "build_llm", lambda *_args, **_kwargs: VisionLlm())
+    tool_harness.agent._llm = CurrentCodexLlm()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="gpt-5.5",
+        provider_id="openai",
+    )
+
+    result = await read_image("reference.png")
+
+    assert codex_builds == []
+    assert result == f"Image analysis for {image_path.resolve()}:\nFallback inspection."
+
+
 async def test_read_image_rejects_known_text_only_model(tool_harness: ToolHarness) -> None:
     image_path = tool_harness.workspace.work_dir / "reference.png"
     image_path.write_bytes(_PNG)
@@ -132,8 +322,8 @@ async def test_read_image_rejects_known_text_only_model(tool_harness: ToolHarnes
             await read_image(str(image_path))
 
     assert str(error.value) == (
-        "当前模型“deepseek-v4-pro”无法理解图片。"
-        "请切换到支持图片输入的模型后重试。"
+        "当前没有可用的图片理解模型。请完成 ChatGPT 授权，"
+        "或在模型设置中启用一个支持图片输入的模型。"
     )
 
 
