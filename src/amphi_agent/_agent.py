@@ -2335,7 +2335,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _stamp_stage_handoff(ota_context: AmphiOTAContext, source: Any, target: Any, reason: str) -> None:
-        """Expose a source Think's concise handoff reason to the newly active Think."""
+        """Expose a source Think's self-contained handoff to the newly active Think."""
         note = (
             f"[stage handoff] `{source.mode}/{source.stage}` → "
             f"`{target.mode}/{target.stage}`\n{str(reason).strip()}"
@@ -3053,6 +3053,21 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             reason = _agent_legality_check(call)
             if reason is None and callable(think_legality_check):
                 reason = await think_legality_check(call, ota_context, context)
+            if (
+                reason is None
+                and getattr(call, "tool", None) == "switch"
+                and isinstance(think_status, BuildStageState)
+            ):
+                arguments = self._tool_args(call)
+                if (
+                    arguments.get("mode") != "normal"
+                    and arguments.get("stage")
+                    and not str(arguments.get("reason") or "").strip()
+                ):
+                    reason = (
+                        "switch rejected: a Build stage handoff requires a non-empty, "
+                        "self-contained reason for the next stage."
+                    )
             resolved.append(
                 verdict.model_copy(update={
                     "verdict": Permission.DENY.value,
@@ -3347,16 +3362,19 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     @staticmethod
     def _stamp_continue(ota_context: AmphiOTAContext) -> None:
-        """Ask Main to recover an empty response with a user-visible final answer."""
+        """Ask Main to recover an empty response without assuming the task is done."""
         records = getattr(ota_context, "ota_record", None) or []
         if not records:
             return
         note = (
-            "[system] Please give the user a clear summary of the task outcome, "
-            "including what was completed and where the result can be found. If "
-            "anything remains unfinished, explain why, describe the current progress, "
-            "and suggest the next step. There is no need to call more tools or repeat "
-            "work that has already been completed."
+            "[system] The previous round ended without a user-visible response. "
+            "Re-evaluate the current task from the available context and continue "
+            "appropriately. If work remains, continue it and call tools as needed. "
+            "If the task is complete, give the user a clear, concise outcome and say "
+            "where relevant results can be found. If progress is blocked or depends "
+            "on a user decision, explain the concrete blocker and use the appropriate "
+            "interaction. Do not assume completion solely because the previous round "
+            "was empty, and do not repeat work already confirmed complete."
         )
         last = records[-1]
         existing = getattr(last, "observation_result", None)

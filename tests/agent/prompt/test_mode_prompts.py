@@ -235,7 +235,12 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
         state={"think": {"mode": "build", "stage": "generate"}},
         ota_record=[],
     )
-    switch_reason = "The generated script mishandles empty input; fix that case and rerun validation."
+    switch_reason = (
+        "Verification found that workflow.py mishandles empty input. The user confirmed "
+        "that empty input must produce an empty result instead of failing; update the "
+        "input-normalization branch in workflow.py first, then return it for another "
+        "real-environment verification. No other verified path needs regeneration."
+    )
     first_generation_handoff = switch_record(
         "generate",
         "verify",
@@ -255,6 +260,9 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     assert "Verification intermediate work" not in generate_contents
     assert "Verification history" in generate_contents
     assert any("mishandles empty input" in content for content in generate_contents)
+    assert any("user confirmed" in content for content in generate_contents)
+    assert any("input-normalization branch" in content for content in generate_contents)
+    assert any("No other verified path" in content for content in generate_contents)
     assert "Generate retry progress" in generate_contents
     switch_call = next(
         block

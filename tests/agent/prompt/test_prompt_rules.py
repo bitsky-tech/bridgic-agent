@@ -13,6 +13,7 @@ from src.amphi_service.i18n import use_locale
 from src.amphi_agent.tools import (
     request_human_choice_tool,
     request_human_workflow_confirm_tool,
+    switch_tool,
 )
 
 
@@ -177,6 +178,26 @@ def test_build_tool_contracts() -> None:
     prompt_description = workflow_schema["properties"]["prompt"]["description"]
     assert '"default_name": "workflow name"' in prompt_description
     assert '"summary": "optional short summary"' in prompt_description
+
+
+def test_build_stage_handoff_contract() -> None:
+    """Build handoffs preserve the context the next stage cannot otherwise see."""
+    personas = _personas()
+    reason_description = switch_tool.to_tool().parameters["properties"]["reason"]["description"]
+
+    for name in ("clarify", "explore", "generate", "verify"):
+        persona = personas[name]
+        assert "compact, self-contained handoff" in persona
+        assert "without relying on hidden prior-stage dialogue" in persona
+        assert "decisive findings, user decisions, and constraints" in persona
+        assert "what the target stage should do first" in persona
+        assert "reason` bridges stage context but does not replace the artifacts" in persona
+
+    assert "self-contained reason" in personas["explore"]
+    assert "one-line reason" not in personas["explore"]
+    assert "compact, self-contained summary" in reason_description
+    assert "decisive findings and user decisions" in reason_description
+    assert "what the target stage should do next" in reason_description
 
 
 def test_delegation_prompt() -> None:
