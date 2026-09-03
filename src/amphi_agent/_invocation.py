@@ -779,11 +779,30 @@ class AgentInvocation:
             )
             agent = AmphiAgent(max_rounds=max_rounds, verbose=False)
 
+            # Name a new root Session alongside its first Agent turn. Title generation
+            # only needs the opening user input, so waiting for ``agent.arun`` would
+            # leave the sidebar untitled for the whole (potentially long-running) turn.
+            if record.parent_session_id is None and not record.title:
+                title_task = asyncio.create_task(
+                    agent.generate_session_title(
+                        llm=llm,
+                        context=context,
+                        ota_context=ota_context,
+                    )
+                )
+                self._spawn_background(
+                    self._emit_title_when_ready(
+                        title_task,
+                        record.id,
+                        user.id,
+                        record.title,
+                        stream,
+                    )
+                )
+
             # Run the agent turn logic
             try:
                 agent_result = await agent.arun(llm=llm, context=context, ota_context=ota_context)
-                if record.parent_session_id is None:
-                    title_task = asyncio.create_task(agent.generate_session_title(llm=llm, context=context, ota_context=ota_context))
                 if isinstance(agent_result, AwaitingSubAgent):
                     prepared_children = await self._prepare_subagents(record, agent_result.calls, SubAgentMode.BLOCKING)
                 outcome = self._outcome(agent_result, ota_context)
@@ -879,11 +898,6 @@ class AgentInvocation:
             await self._checkpoint_workspace(workspace, user_input, outcome.answer)
         if prepared_children:
             await self._schedule_subagents(record, prepared_children)
-        
-        if title_task is not None:
-            self._spawn_background(
-                self._emit_title_when_ready(title_task, record.id, user.id, record.title)
-            )
         return InvocationRunResult(
             session_id=record.id,
             turn_id=turn.id,
@@ -1511,8 +1525,13 @@ class AgentInvocation:
             title = await task
             if not title or title == current_title:
                 return None
-            await self._sessions.rename(session_id, user_id, title)
-            return title
+            renamed = await self._sessions.rename_if_title(
+                session_id,
+                user_id,
+                current_title,
+                title,
+            )
+            return title if renamed else None
         except Exception:  # noqa: BLE001 - title generation is best effort
             return None
 
@@ -1522,14 +1541,18 @@ class AgentInvocation:
         session_id: str,
         user_id: str,
         current_title: Optional[str],
+        publisher: Any,
     ) -> None:
-        """Await + persist the generated title OFF the turn's critical path, then push
-        it to the Session topic as a ``title`` event so the sidebar updates. The
-        turn's publisher has finished by now, so this goes through the broker's
-        ``emit`` (topic subscribers persist across turns)."""
+        """Persist and push a generated title without blocking the Agent turn."""
         title = await self._finalize_title(task, session_id, user_id, current_title)
         if title is not None:
-            self._session_events.emit(session_id, "title", title=title)
+            # Keep the title in the active attempt's replay buffer when it lands
+            # mid-turn. If the Agent won the race and already closed that publisher,
+            # emit directly to the longer-lived Session topic instead.
+            if publisher.closed:
+                self._session_events.emit(session_id, "title", title=title)
+            else:
+                publisher.publish("title", title=title)
 
     def _spawn_background(self, coroutine: Any) -> None:
         task = asyncio.create_task(coroutine)

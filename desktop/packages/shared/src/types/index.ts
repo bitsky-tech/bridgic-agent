@@ -30,6 +30,7 @@ export type {
   AgentMessageSubagent,
   MessageBlock,
   SessionMeta,
+  SessionTitleSource,
   SubAgentMode,
   SessionsIndexFile,
 } from './sessions'

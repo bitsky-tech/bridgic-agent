@@ -285,7 +285,11 @@ export class AmphiWsConnection {
     const t = this.turns.get(sessionId)
     if (!t || t.cancelled) return
     if (t.translator.started) {
-      this.dispatch(sessionId, { type: 'message_stop', messageId: t.messageId })
+      this.dispatch(sessionId, {
+        type: 'message_stop',
+        messageId: t.messageId,
+        reason: 'cancelled',
+      })
     }
     this.dispatch(sessionId, { type: 'done', reason: 'cancelled', messageId: t.messageId })
     this.turns.set(sessionId, { ...t, cancelled: true })

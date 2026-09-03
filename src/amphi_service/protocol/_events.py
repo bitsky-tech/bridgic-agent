@@ -272,11 +272,10 @@ class WorkflowResultEvent(TurnEvent):
 class TitleEvent(TurnEvent):
     """A model-generated session title is ready.
 
-    Emitted on the session's stream during its first turn: a provisional title
-    summarised from the user's opening message (before the agent runs), and —
-    when that opener was too thin — a refined one after the first answer. The
-    GUI updates the session's sidebar entry live; the title is also persisted,
-    so a client that misses the frame still sees it on the next fetch.
+    Emitted on the session's stream as soon as the opening-message title is
+    ready, in parallel with the first Agent turn. The GUI updates the session's
+    sidebar entry live; the title is also persisted, so a client that misses the
+    frame still sees it on the next fetch.
     """
 
     name: ClassVar[str] = "title"

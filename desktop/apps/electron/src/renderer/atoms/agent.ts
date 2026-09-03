@@ -1696,11 +1696,20 @@ export const applyAgentEventAtom = atom(
         // The key commit: streamingState → messageFamily[sessionId], then clear streaming.
         const cur = get(streamingFamily(sessionId))
         if (!cur) return
+        // Normal final frames carry authoritative backend timing. A locally
+        // initiated Stop (and legacy cancelled frames) does not, so settle its
+        // visible completion metadata immediately from the live stream clock.
+        // Keeping this fallback in the reducer also preserves the correct live
+        // execution start after an interaction continuation.
+        const completedAt = event.completedAt ?? Date.now()
+        const durationMs = event.durationMs ?? Math.max(0, completedAt - cur.startedAt)
         // An empty turn is not committed: while request_human is pending (the tool frame
         // was intercepted and the model said nothing) the streaming state holds nothing at
         // all, and committing would only leave an empty assistant bubble — the daemon's
         // transcript hydration skips empty bubbles too, and live and reload must look identical.
-        if (isEmptyStreaming(cur)) {
+        // Cancellation is the exception: even before the first content block, it
+        // needs a stopped receipt carrying its completion time and elapsed time.
+        if (isEmptyStreaming(cur) && event.reason !== 'cancelled') {
           set(streamingFamily(sessionId), undefined)
           return
         }
@@ -1709,8 +1718,8 @@ export const applyAgentEventAtom = atom(
           set,
           sessionId,
           finalizeStreaming(cur, undefined, event.finalAnswer, {
-            durationMs: event.durationMs,
-            completedAt: event.completedAt,
+            durationMs,
+            completedAt,
           }),
         )
         return
@@ -1767,7 +1776,7 @@ export const applyAgentEventAtom = atom(
         if (firstUser && session && isDefaultTitle(session.title)) {
           const title = firstUser.text.trim().slice(0, SESSION_TITLE_MAX_LEN) || defaultTitle
           if (!isDefaultTitle(title)) {
-            set(updateSessionTitleAtom, { id: sessionId, title })
+            set(updateSessionTitleAtom, { id: sessionId, title, source: 'fallback' })
           }
         }
         return
@@ -1956,7 +1965,12 @@ export const applyAgentEventAtom = atom(
         // meta live; it supersedes the done() truncated-opener fallback below,
         // which only fires while the title is still the default. bump:false
         // — a title change isn't activity, so it must not re-sort the session list.
-        set(updateSessionTitleAtom, { id: sessionId, title: event.title, bump: false })
+        set(updateSessionTitleAtom, {
+          id: sessionId,
+          title: event.title,
+          bump: false,
+          source: 'generated',
+        })
         return
       }
       case 'session_completed': {

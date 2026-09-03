@@ -256,8 +256,8 @@ export type AgentEvent =
   // {mode, stage} — `mode` = loop ('build'|'normal'), `stage` = unit within it.
   | { type: 'stage'; position: ThinkPosition }
   // A model-generated session title is ready (daemon `title` frame): the first
-  // turn streams a provisional title from the opener, then optionally a refined
-  // one. Updates the sidebar entry live; the daemon also persists it.
+  // turn generates it from the opener alongside Agent execution. Updates the
+  // sidebar entry live; the daemon also persists it.
   | { type: 'title'; title: string }
   // `finalAnswer` carries the authoritative final answer from the daemon's
   // `final` frame (an empty string = this turn has no visible answer, e.g. it
@@ -269,6 +269,7 @@ export type AgentEvent =
       finalAnswer?: string | null
       durationMs?: number
       completedAt?: number
+      reason?: 'cancelled'
     }
   | { type: 'task_spawn'; taskId: string; parentTaskId?: string; description: string }
   | { type: 'task_complete'; taskId: string; summary: string }
