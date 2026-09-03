@@ -588,6 +588,25 @@ describe('stage frames', () => {
             summary: 'Selected a restrained editorial visual system.',
             evidence: ['visual direction'],
           }],
+          presentation_sources: [{
+            id: 'source-001',
+            kind: 'web',
+            title: 'Primary source',
+            locator: 'https://example.com/source',
+            usage: 'Supports the opening',
+          }],
+          presentation_outline: [{
+            id: 'chapter-001',
+            title: 'Opening',
+            slides: [{
+              id: 'slide-001',
+              title: 'Why this matters',
+              key_message: 'Set the stakes.',
+              source_ids: ['source-001'],
+            }],
+          }],
+          presentation_outline_confirmed: false,
+          presentation_outline_confirmation_id: 'presentation_outline_1',
         },
       },
       'message-presentation',
@@ -608,6 +627,25 @@ describe('stage frames', () => {
           summary: 'Selected a restrained editorial visual system.',
           evidence: ['visual direction'],
         }],
+        presentationSources: [{
+          id: 'source-001',
+          kind: 'web',
+          title: 'Primary source',
+          locator: 'https://example.com/source',
+          usage: 'Supports the opening',
+        }],
+        presentationOutline: [{
+          id: 'chapter-001',
+          title: 'Opening',
+          slides: [{
+            id: 'slide-001',
+            title: 'Why this matters',
+            keyMessage: 'Set the stakes.',
+            sourceIds: ['source-001'],
+          }],
+        }],
+        presentationOutlineConfirmed: false,
+        presentationOutlineConfirmationId: 'presentation_outline_1',
       },
     })
   })

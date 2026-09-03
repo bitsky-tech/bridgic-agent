@@ -799,6 +799,28 @@ const sessionMessagesSchema = z
           summary: z.string(),
           evidence: z.array(z.string()).default([]),
         })).default([]),
+        presentation_sources: z.array(z.object({
+          id: z.string(),
+          kind: z.enum(['web', 'file', 'conversation']),
+          title: z.string(),
+          locator: z.string().nullable().optional(),
+          excerpt: z.string().nullable().optional(),
+          usage: z.string().nullable().optional(),
+        })).default([]),
+        presentation_outline: z.array(z.object({
+          id: z.string(),
+          title: z.string(),
+          summary: z.string().nullable().optional(),
+          slides: z.array(z.object({
+            id: z.string(),
+            title: z.string(),
+            purpose: z.string().nullable().optional(),
+            key_message: z.string().nullable().optional(),
+            source_ids: z.array(z.string()).default([]),
+          })).default([]),
+        })).default([]),
+        presentation_outline_confirmed: z.boolean().default(false),
+        presentation_outline_confirmation_id: z.string().nullable().optional(),
       })
       .nullable()
       .optional(),
@@ -1397,6 +1419,28 @@ export class AmphiClient {
           summary: string
           evidence: string[]
         }>
+        presentation_sources?: Array<{
+          id: string
+          kind: 'web' | 'file' | 'conversation'
+          title: string
+          locator?: string | null
+          excerpt?: string | null
+          usage?: string | null
+        }>
+        presentation_outline?: Array<{
+          id: string
+          title: string
+          summary?: string | null
+          slides: Array<{
+            id: string
+            title: string
+            purpose?: string | null
+            key_message?: string | null
+            source_ids: string[]
+          }>
+        }>
+        presentation_outline_confirmed?: boolean
+        presentation_outline_confirmation_id?: string | null
       } | null
       workflow_run?: {
         workflow_id: string
@@ -1470,6 +1514,21 @@ export class AmphiClient {
                     summary: report.summary,
                     evidence: report.evidence,
                   })),
+                  presentationSources: res.thinking_mode.presentation_sources ?? [],
+                  presentationOutline: (res.thinking_mode.presentation_outline ?? []).map(chapter => ({
+                    id: chapter.id,
+                    title: chapter.title,
+                    summary: chapter.summary,
+                    slides: chapter.slides.map(slide => ({
+                      id: slide.id,
+                      title: slide.title,
+                      purpose: slide.purpose,
+                      keyMessage: slide.key_message,
+                      sourceIds: slide.source_ids,
+                    })),
+                  })),
+                  presentationOutlineConfirmed: res.thinking_mode.presentation_outline_confirmed ?? false,
+                  presentationOutlineConfirmationId: res.thinking_mode.presentation_outline_confirmation_id ?? null,
                 }
               : {}),
           }

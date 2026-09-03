@@ -469,6 +469,11 @@ def test_presentation_structures() -> None:
     assert "communication contract that Plan can" in brief
     assert "Inspect user-supplied or explicitly referenced material" in brief
     assert "# Brief artifact contract" in brief
-    assert "Choose the template strategy and visual system" in personas["ppt_plan"]
+    plan = personas["ppt_plan"]
+    assert "Plan proceeds from evidence to narrative" in plan
+    assert "data.sources" in plan
+    assert "data.chapters" in plan
+    assert "pause after this report" in plan
+    assert "Do not choose a template or visual style before the outline is confirmed" in plan
     assert "Call `view_ppt` before the first compose step" in personas["ppt_compose"]
     assert "Inspect the live deck rather than" in personas["ppt_review"]

@@ -104,6 +104,30 @@ export interface PresentationProgressReport {
   evidence: string[]
 }
 
+export interface PresentationSourceCard {
+  id: string
+  kind: 'web' | 'file' | 'conversation'
+  title: string
+  locator?: string | null
+  excerpt?: string | null
+  usage?: string | null
+}
+
+export interface PresentationSlideOutline {
+  id: string
+  title: string
+  purpose?: string | null
+  keyMessage?: string | null
+  sourceIds: string[]
+}
+
+export interface PresentationChapterOutline {
+  id: string
+  title: string
+  summary?: string | null
+  slides: PresentationSlideOutline[]
+}
+
 export interface ThinkPosition {
   mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
   stage: string | null
@@ -113,6 +137,10 @@ export interface ThinkPosition {
   presentationGoal?: string | null
   presentationStepIndex?: number
   presentationReports?: PresentationProgressReport[]
+  presentationSources?: PresentationSourceCard[]
+  presentationOutline?: PresentationChapterOutline[]
+  presentationOutlineConfirmed?: boolean
+  presentationOutlineConfirmationId?: string | null
 }
 
 /** Session-level projection of one active saved Workflow run. */

@@ -1,5 +1,6 @@
 """Dedicated cognitive pipeline for planning, composing, and reviewing presentations."""
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,10 +39,6 @@ PRESENTATION_STAGE_ORDER: Tuple[str, ...] = (
 PRESENTATION_STAGE_STEPS: Dict[str, Tuple[PresentationStep, ...]] = {
     "ppt_plan": (
         PresentationStep(
-            "design_visual_direction",
-            "Choose the template strategy and define palette, typography, imagery, and recurring layout roles.",
-        ),
-        PresentationStep(
             "collect_evidence",
             "Collect only the content, data, source links, and citations needed to support the deck.",
         ),
@@ -51,7 +48,11 @@ PRESENTATION_STAGE_STEPS: Dict[str, Tuple[PresentationStep, ...]] = {
         ),
         PresentationStep(
             "map_slides",
-            "Create the production blueprint: every slide's purpose, key message, content, and visual treatment.",
+            "Create the editable page blueprint: every slide's purpose, key message, content, and source links.",
+        ),
+        PresentationStep(
+            "design_visual_direction",
+            "Choose the template strategy and visual system from the actual content and page-role inventory.",
         ),
     ),
     "ppt_compose": (
@@ -121,6 +122,50 @@ class PresentationThink(MainThink):
         | {"report_presentation_step"}
     )
 
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Project the current Turn to the active presentation stage and its handoff."""
+        def switches_to_target(record: Any) -> bool:
+            steps = _view(_view(record, "action_result"), "results") or []
+            for step in steps:
+                if _view(step, "tool_name") != "switch" or _view(step, "success") is False:
+                    continue
+                arguments = _view(step, "tool_arguments") or {}
+                result = _view(step, "tool_result") or {}
+                if str(_view(result, "stage") or _view(arguments, "stage") or "") == stage:
+                    return True
+            return False
+
+        records = ota_context.ota_record
+        scopes = [self._record_think_scope(record) for record in records]
+        target_scope = (mode, stage)
+        mode_indexes = [
+            index for index, scope in enumerate(scopes)
+            if scope is not None and scope[0] == mode
+        ]
+        selected = set(range(len(records))) if not mode_indexes else set()
+        if mode_indexes and scopes[mode_indexes[0]] == target_scope:
+            selected.update(range(mode_indexes[0]))
+        transitions: List[int] = []
+        for index, (record, scope) in enumerate(zip(records, scopes)):
+            if scope == target_scope:
+                selected.add(index)
+            if switches_to_target(record):
+                selected.add(index)
+                transitions.append(index)
+                continue
+            next_scope = scopes[index + 1] if index + 1 < len(scopes) else target_scope
+            if next_scope == target_scope and scope != target_scope:
+                transitions.append(index)
+                if scope is None or scope[0] != mode:
+                    selected.add(index)
+        projected = [record for index, record in enumerate(records) if index in selected]
+        turn_context = (
+            ota_context
+            if len(projected) == len(records)
+            else ota_context.model_copy(update={"ota_record": projected})
+        )
+        return turn_context, transitions[-1] if transitions else None
+
     @staticmethod
     def state(ota_context: AmphiOTAContext) -> PresentationStageState:
         """Return the active presentation progress state."""
@@ -183,6 +228,18 @@ class PresentationThink(MainThink):
                 parts.append(f'<artifact stage="{stage}" path="{relative}">\n{body}\n</artifact>')
         return "<presentation_artifacts>\n" + "\n\n".join(parts) + "\n</presentation_artifacts>" if parts else ""
 
+    def plan_data_block(self, ota_context: AmphiOTAContext) -> str:
+        """Render runtime-owned Plan data with stable ids for downstream work."""
+        state = self.state(ota_context)
+        if not state.sources and not state.outline:
+            return ""
+        payload = {
+            "sources": [source.model_dump(mode="json") for source in state.sources],
+            "chapters": [chapter.model_dump(mode="json") for chapter in state.outline],
+            "outline_confirmed": state.outline_confirmed,
+        }
+        return "<presentation_plan_data>\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n</presentation_plan_data>"
+
     def artifact_validation_reason(self, context: AmphiContext, stage: str) -> Optional[str]:
         """Require the durable contract owned by a stage before its final report."""
         path = self.artifact_path(context, stage)
@@ -203,10 +260,11 @@ class PresentationThink(MainThink):
         """Render only context that can materially affect the current deck."""
         return [
             self.transcript_block(ota_context, context),
-            self.progress_block(ota_context),
-            self.artifacts_block(context),
             await self.skills_block(ota_context, context),
             await self.memory_block(ota_context, context),
+            self.artifacts_block(context),
+            self.plan_data_block(ota_context),
+            self.progress_block(ota_context),
             await self.workspace_block(ota_context, context),
         ]
 
@@ -234,7 +292,12 @@ class PresentationThink(MainThink):
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(ota_context, context)
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "presentation",
+            self.state(ota_context).stage,
+        )
+        messages += self.turn_messages_block(turn_context, context)
         return messages
 
     async def legality_check(self, call: StepToolCall, ota_context: Optional[AmphiOTAContext], context: AmphiContext) -> Optional[str]:
@@ -251,6 +314,18 @@ class PresentationThink(MainThink):
                 return "presentation step report rejected: this stage has no reportable production steps."
             if state.step_index >= len(steps):
                 return "presentation step report rejected: this stage has no unfinished step."
+            current = steps[state.step_index]
+            if state.stage == "ppt_plan" and current.step_id in {"collect_evidence", "shape_chapters", "map_slides"}:
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                try:
+                    state.apply_plan_step_data(current.step_id, arguments.get("data"))
+                except (TypeError, ValueError) as exc:
+                    return f"presentation step report rejected: {exc}"
+            if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and not state.outline_confirmed:
+                return "presentation step report rejected: the editable outline must be confirmed first."
             if state.step_index == len(steps) - 1:
                 reason = self.artifact_validation_reason(context, state.stage)
                 if reason:

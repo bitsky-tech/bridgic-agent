@@ -17,11 +17,13 @@ from src.amphi_agent import (
 from src.amphi_agent._state import (
     AwaitingAcceptRule,
     AwaitingBuildConflict,
+    AwaitingPresentationOutlineConfirm,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingWorkflowRunChoice,
     BuildStageState,
     NormalStageState,
+    PresentationStageState,
     WorkflowStageState,
 )
 from src.amphi_agent._workspace import Workspace
@@ -32,7 +34,9 @@ from src.amphi_agent.tools._request_human import (
     RequestHumanWorkflowConfirm,
     RequestRunWorkflow,
 )
+from src.amphi_agent.tools._presentation import PresentationStepReport
 from src.amphi_agent.tools._workflow import EditWorkflow, WorkflowStepReport
+from src.amphi_service.protocol import WsPresentationOutlineConfirmMessage
 from src.amphi_store import (
     Repository,
     SessionRecord,
@@ -203,6 +207,65 @@ async def _start_run(harness: _Harness, workflow_id: str, request: str) -> Amphi
     )
     await _apply(harness, ota_context)
     return ota_context
+
+
+async def test_presentation_outline_confirmation(orchestration: _Harness) -> None:
+    """An edited Plan outline resumes the parked Turn before visual design."""
+    state = PresentationStageState(stage="ppt_plan", step_index=2).apply_plan_step_data(
+        "collect_evidence",
+        {"sources": [{
+            "kind": "conversation",
+            "title": "Original request",
+            "excerpt": "Explain the subject to students.",
+        }]},
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("report_presentation_step", PresentationStepReport(
+            "Mapped the deck.",
+            ["source-001"],
+            {"chapters": [{
+                "title": "Original chapter",
+                "slides": [{
+                    "title": "Original slide",
+                    "source_ids": ["source-001"],
+                }],
+            }]},
+        )),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationOutlineConfirm)
+    request_id = plan.interaction_status.request_id
+
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-outline")],
+    )
+    confirmed = AmphiOTAContext(user_input=WsPresentationOutlineConfirmMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        chapters=[{
+            "id": "chapter-001",
+            "title": "Edited chapter",
+            "slides": [{
+                "id": "slide-001",
+                "title": "Edited slide",
+                "key_message": "Use the clearer user-owned framing.",
+                "source_ids": ["source-001"],
+            }],
+        }],
+    ))
+    await orchestration.agent.init_state(confirmed, orchestration.context)
+
+    resumed = confirmed.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.step_index == 3
+    assert resumed.outline_confirmed is True
+    assert resumed.outline_confirmation_id is None
+    assert resumed.outline[0].title == "Edited chapter"
+    assert resumed.outline[0].slides[0].title == "Edited slide"
+    assert confirmed.interaction_status is None
 
 
 async def test_build_entry(orchestration: _Harness) -> None:

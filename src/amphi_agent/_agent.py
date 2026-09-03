@@ -59,6 +59,7 @@ from ._state import (
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
+    AwaitingPresentationOutlineConfirm,
     AwaitingWorkflowRunChoice,
     BuildStageState,
     AwaitingSubAgent,
@@ -737,10 +738,22 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         if (item.stage, item.step_id) != (report.stage, report.step_id)
                     ]
                     reports.append(report)
-                    next_status = current_status.model_copy(update={
+                    next_status = current_status.apply_plan_step_data(
+                        current_step.step_id,
+                        result.data,
+                    ).model_copy(update={
                         "step_index": current_status.step_index + 1,
                         "reports": reports,
                     })
+                    if current_status.stage == "ppt_plan" and current_step.step_id == "map_slides":
+                        request_id = f"presentation_outline_{uuid4().hex}"
+                        next_status = next_status.model_copy(update={
+                            "outline_confirmed": False,
+                            "outline_confirmation_id": request_id,
+                        })
+                        ota_context.transition_interaction(AwaitingPresentationOutlineConfirm(
+                            request_id=request_id,
+                        ))
                     ota_context.transition_think(next_status)
                     step.tool_result = {
                         "mode": "presentation",
@@ -750,8 +763,16 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         "step_id": current_step.step_id,
                         "summary": result.summary,
                         "evidence": result.evidence,
+                        "data": result.data,
                         "next_step_index": next_status.step_index,
                     }
+                    if current_status.stage == "ppt_plan" and current_step.step_id == "map_slides":
+                        step.tool_result.update({
+                            "outline_confirmation_id": next_status.outline_confirmation_id,
+                            "status": "awaiting_outline_confirmation",
+                        })
+                        if ota_context.stream is not None:
+                            self._publish_stage(ota_context, next_status)
 
             # Request Build
             elif step.tool_name == "request_build":
@@ -1240,6 +1261,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 raise RuntimeError("This Session has no pending workflow confirmation.")
             if input_type == "build_confirm":
                 raise RuntimeError("This Session has no pending Build confirmation.")
+            if input_type == "presentation_outline_confirm":
+                raise RuntimeError("This Session has no pending presentation outline confirmation.")
 
             # Resume durable cognitive cursors after completion, cancellation, or infrastructure failure.
             if latest_turn is not None:
@@ -1370,6 +1393,13 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 await self._resume_task_confirm(ota_context, context, latest_turn, original_user_input)
             elif "workflow_confirm" in interaction:
                 await self._resume_workflow_confirm(ota_context, context, latest_turn, original_user_input)
+            elif interaction.get("presentation_outline_confirm") is True:
+                await self._resume_presentation_outline_confirm(
+                    ota_context,
+                    context,
+                    latest_turn,
+                    original_user_input,
+                )
             else:
                 self._resume_human_choice(ota_context, context, interaction, rounds, original_user_input)
 
@@ -2161,6 +2191,65 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         context.session = context.session.without_last()
         ota_context.user_input = original_user_input
 
+    async def _resume_presentation_outline_confirm(self, ota_context: AmphiOTAContext, context: AmphiContext, pending_turn: SessionTurnRecord, original_user_input: Any) -> None:
+        """Resume Plan with the user's edited and confirmed slide outline."""
+        def field(name: str) -> Any:
+            if isinstance(ota_context.user_input, dict):
+                return ota_context.user_input.get(name)
+            return getattr(ota_context.user_input, name, None)
+
+        pending = AwaitingPresentationOutlineConfirm.model_validate(
+            pending_turn.agent_state.get("interaction") or {},
+        )
+        input_type = field("type")
+        if input_type not in {None, "chat", "presentation_outline_confirm"}:
+            raise RuntimeError("This Session is waiting for a presentation outline confirmation.")
+        direct_reply = input_type != "presentation_outline_confirm"
+        if not direct_reply and field("request_id") != pending.request_id:
+            raise RuntimeError("This presentation outline confirmation does not match the pending request.")
+
+        state = ota_context.think_status
+        if not isinstance(state, PresentationStageState) or state.stage != "ppt_plan":
+            raise RuntimeError("Presentation outline confirmation requires the active Plan stage.")
+        feedback = render_input(ota_context.user_input).strip() if direct_reply else ""
+        if direct_reply:
+            reports = [
+                report for report in state.reports
+                if not (report.stage == "ppt_plan" and report.step_id == "map_slides")
+            ]
+            state = state.model_copy(update={
+                "step_index": 2,
+                "reports": reports,
+                "outline_confirmed": False,
+                "outline_confirmation_id": None,
+            })
+            message = (
+                "The user replied while reviewing the editable presentation outline. "
+                f"Revise the chapter and slide map around this feedback:\n\n{feedback}"
+            )
+        else:
+            chapters = field("chapters")
+            state = state.apply_plan_step_data("map_slides", {"chapters": chapters}).model_copy(update={
+                "outline_confirmed": True,
+                "outline_confirmation_id": None,
+            })
+            message = (
+                "The user confirmed the editable chapter and slide outline. Continue with "
+                "the visual direction step using this confirmed runtime outline as the source of truth."
+            )
+
+        ota_context.ota_record = [OTARecord.model_validate(record) for record in pending_turn.ota_records]
+        record = ota_context.ota_record[-1] if ota_context.ota_record else None
+        if record is None:
+            ota_context.ota_record.append(OTARecord(observation_result=message))
+        else:
+            existing = getattr(record, "observation_result", None)
+            record.observation_result = f"{existing}\n{message}" if existing else message
+        ota_context.transition_think(state)
+        ota_context.transition_interaction(None)
+        context.session = context.session.without_last()
+        ota_context.user_input = original_user_input
+
     async def _resume_workflow_confirm(
         self,
         ota_context: AmphiOTAContext,
@@ -2585,6 +2674,14 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 "presentation_reports": [
                     report.model_dump(mode="json") for report in status.reports
                 ],
+                "presentation_sources": [
+                    source.model_dump(mode="json") for source in status.sources
+                ],
+                "presentation_outline": [
+                    chapter.model_dump(mode="json") for chapter in status.outline
+                ],
+                "presentation_outline_confirmed": status.outline_confirmed,
+                "presentation_outline_confirmation_id": status.outline_confirmation_id,
             })
         ota_context.stream.publish("stage", **payload)
 
@@ -2605,10 +2702,17 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             if target_index <= current_index:
                 retained_stages = set(PRESENTATION_STAGE_ORDER[:target_index])
                 reports = [report for report in reports if report.stage in retained_stages]
+            reset_plan = target_index <= PRESENTATION_STAGE_ORDER.index("ppt_plan")
             return current_status.model_copy(update={
                 "stage": target,
                 "step_index": 0,
                 "reports": reports,
+                **({
+                    "sources": [],
+                    "outline": [],
+                    "outline_confirmed": False,
+                    "outline_confirmation_id": None,
+                } if reset_plan else {}),
             })
         if isinstance(current_status, WorkflowStageState):
             step_index = current_status.step_index if target_stage == current_status.stage else 0

@@ -89,10 +89,12 @@ async def test_presentation_step_report() -> None:
     report = await report_presentation_step(
         "  Selected an editorial visual system.  ",
         ["  visual direction  ", "", "https://example.com/reference"],
+        {"theme": "editorial"},
     )
 
     assert report.summary == "Selected an editorial visual system."
     assert report.evidence == ["visual direction", "https://example.com/reference"]
+    assert report.data == {"theme": "editorial"}
     legacy = await report_presentation_step(
         "Recorded the durable brief.",
         "['.presentation/brief.md']",  # type: ignore[arg-type]

@@ -1117,6 +1117,10 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
             "presentation_goal": think.get("goal"),
             "presentation_step_index": think.get("step_index") or 0,
             "presentation_reports": think.get("reports") or [],
+            "presentation_sources": think.get("sources") or [],
+            "presentation_outline": think.get("outline") or [],
+            "presentation_outline_confirmed": bool(think.get("outline_confirmed")),
+            "presentation_outline_confirmation_id": think.get("outline_confirmation_id"),
         })
     return position
 

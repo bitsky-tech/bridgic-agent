@@ -196,6 +196,28 @@ const stageDataSchema = z.object({
     summary: z.string(),
     evidence: z.array(z.string()).default([]),
   })).default([]),
+  presentation_sources: z.array(z.object({
+    id: z.string(),
+    kind: z.enum(['web', 'file', 'conversation']),
+    title: z.string(),
+    locator: z.string().nullable().optional(),
+    excerpt: z.string().nullable().optional(),
+    usage: z.string().nullable().optional(),
+  })).default([]),
+  presentation_outline: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    summary: z.string().nullable().optional(),
+    slides: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      purpose: z.string().nullable().optional(),
+      key_message: z.string().nullable().optional(),
+      source_ids: z.array(z.string()).default([]),
+    })).default([]),
+  })).default([]),
+  presentation_outline_confirmed: z.boolean().default(false),
+  presentation_outline_confirmation_id: z.string().nullable().optional(),
 })
 const titleDataSchema = z.object({ title: z.string() })
 
@@ -524,6 +546,21 @@ export function translateTurnEvent(
           summary: report.summary,
           evidence: report.evidence,
         }))
+        position.presentationSources = r.data.presentation_sources
+        position.presentationOutline = r.data.presentation_outline.map(chapter => ({
+          id: chapter.id,
+          title: chapter.title,
+          summary: chapter.summary,
+          slides: chapter.slides.map(slide => ({
+            id: slide.id,
+            title: slide.title,
+            purpose: slide.purpose,
+            keyMessage: slide.key_message,
+            sourceIds: slide.source_ids,
+          })),
+        }))
+        position.presentationOutlineConfirmed = r.data.presentation_outline_confirmed
+        position.presentationOutlineConfirmationId = r.data.presentation_outline_confirmation_id ?? null
       }
       events.push({
         type: 'stage',

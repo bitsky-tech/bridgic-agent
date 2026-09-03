@@ -604,6 +604,23 @@ describe('AmphiClient session transcript', () => {
           summary: 'Created twelve slide shells.',
           evidence: ['slides 1-12'],
         }],
+        presentation_sources: [{
+          id: 'source-001',
+          kind: 'file',
+          title: 'Strategy notes',
+          locator: 'notes.md',
+        }],
+        presentation_outline: [{
+          id: 'chapter-001',
+          title: 'Opening',
+          slides: [{
+            id: 'slide-001',
+            title: 'The strategy at a glance',
+            source_ids: ['source-001'],
+          }],
+        }],
+        presentation_outline_confirmed: true,
+        presentation_outline_confirmation_id: null,
       },
       workflow_run: null,
     })
@@ -622,6 +639,23 @@ describe('AmphiClient session transcript', () => {
         summary: 'Created twelve slide shells.',
         evidence: ['slides 1-12'],
       }],
+      presentationSources: [{
+        id: 'source-001',
+        kind: 'file',
+        title: 'Strategy notes',
+        locator: 'notes.md',
+      }],
+      presentationOutline: [{
+        id: 'chapter-001',
+        title: 'Opening',
+        slides: [{
+          id: 'slide-001',
+          title: 'The strategy at a glance',
+          sourceIds: ['source-001'],
+        }],
+      }],
+      presentationOutlineConfirmed: true,
+      presentationOutlineConfirmationId: null,
     })
   })
 

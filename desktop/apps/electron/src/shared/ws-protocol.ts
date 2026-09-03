@@ -69,6 +69,7 @@ export const CLIENT_FRAME = {
   TaskConfirm: 'task_confirm',
   WorkflowConfirm: 'workflow_confirm',
   PermissionAnswer: 'permission_answer',
+  PresentationOutlineConfirm: 'presentation_outline_confirm',
   ChoiceAnswer: 'choice_answer',
 } as const
 
@@ -146,6 +147,29 @@ export interface TaskConfirmFrame {
   feedback?: string | null
 }
 
+export interface PresentationOutlineSlideInput {
+  id?: string
+  title: string
+  purpose?: string | null
+  key_message?: string | null
+  source_ids: string[]
+}
+
+export interface PresentationOutlineChapterInput {
+  id?: string
+  title: string
+  summary?: string | null
+  slides: PresentationOutlineSlideInput[]
+}
+
+/** Confirm the complete editable outline without creating a chat message. */
+export interface PresentationOutlineConfirmFrame {
+  type: typeof CLIENT_FRAME.PresentationOutlineConfirm
+  session_id: string
+  request_id: string
+  chapters: PresentationOutlineChapterInput[]
+}
+
 /** Save or cancel a Workflow Build and resume its parked confirmation turn. */
 export interface WorkflowConfirmFrame {
   type: typeof CLIENT_FRAME.WorkflowConfirm
@@ -210,6 +234,7 @@ export type ClientFrame =
   | AcceptRuleFrame
   | BuildConfirmFrame
   | TaskConfirmFrame
+  | PresentationOutlineConfirmFrame
   | WorkflowConfirmFrame
   | PermissionAnswerFrame
   | ChoiceAnswerFrame
@@ -368,6 +393,28 @@ export type TurnEvent =
           summary: string
           evidence: string[]
         }>
+        presentation_sources?: Array<{
+          id: string
+          kind: 'web' | 'file' | 'conversation'
+          title: string
+          locator?: string | null
+          excerpt?: string | null
+          usage?: string | null
+        }>
+        presentation_outline?: Array<{
+          id: string
+          title: string
+          summary?: string | null
+          slides: Array<{
+            id: string
+            title: string
+            purpose?: string | null
+            key_message?: string | null
+            source_ids: string[]
+          }>
+        }>
+        presentation_outline_confirmed?: boolean
+        presentation_outline_confirmation_id?: string | null
       }
     }
   | { event: typeof TURN_EVENT.Title; data: { title: string } }

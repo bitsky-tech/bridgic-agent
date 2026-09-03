@@ -34,6 +34,7 @@ import type {
   HelloFrame,
   ChoiceAnswerFrame,
   PermissionAnswerFrame,
+  PresentationOutlineConfirmFrame,
   TaskConfirmFrame,
   WorkflowConfirmFrame,
 } from '@shared/types'
@@ -232,6 +233,19 @@ export class AmphiWsConnection {
     if (!this.openTurn(sessionId)) return
     this.send({
       type: CLIENT_FRAME.TaskConfirm,
+      session_id: sessionId,
+      ...payload,
+    })
+  }
+
+  /** Resume Plan with the complete outline edited in the presentation pane. */
+  presentationOutlineConfirm(
+    sessionId: string,
+    payload: Omit<PresentationOutlineConfirmFrame, 'type' | 'session_id'>,
+  ): void {
+    if (!this.openTurn(sessionId)) return
+    this.send({
+      type: CLIENT_FRAME.PresentationOutlineConfirm,
       session_id: sessionId,
       ...payload,
     })

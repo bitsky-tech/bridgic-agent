@@ -202,6 +202,10 @@ class StageEvent(TurnEvent):
     presentation_goal: Optional[str] = None
     presentation_step_index: Optional[int] = None
     presentation_reports: Optional[List[Dict[str, Any]]] = None
+    presentation_sources: Optional[List[Dict[str, Any]]] = None
+    presentation_outline: Optional[List[Dict[str, Any]]] = None
+    presentation_outline_confirmed: Optional[bool] = None
+    presentation_outline_confirmation_id: Optional[str] = None
 
     def payload(self) -> Dict[str, Any]:
         payload = {"mode": self.mode, "stage": self.stage}
@@ -212,6 +216,10 @@ class StageEvent(TurnEvent):
                 "presentation_goal": self.presentation_goal,
                 "presentation_step_index": self.presentation_step_index or 0,
                 "presentation_reports": self.presentation_reports or [],
+                "presentation_sources": self.presentation_sources or [],
+                "presentation_outline": self.presentation_outline or [],
+                "presentation_outline_confirmed": bool(self.presentation_outline_confirmed),
+                "presentation_outline_confirmation_id": self.presentation_outline_confirmation_id,
             })
         return payload
 

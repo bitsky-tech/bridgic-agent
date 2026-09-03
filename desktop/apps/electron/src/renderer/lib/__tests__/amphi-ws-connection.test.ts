@@ -330,6 +330,43 @@ describe('AmphiWsConnection', () => {
     expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
   })
 
+  it('presentationOutlineConfirm sends the edited outline without a chat message', () => {
+    const { conn, sock, events } = setup()
+    sock.sent.length = 0
+    conn.presentationOutlineConfirm('A', {
+      request_id: 'presentation-outline-1',
+      chapters: [{
+        id: 'chapter-001',
+        title: 'Opening',
+        slides: [{
+          id: 'slide-001',
+          title: 'Why this matters',
+          key_message: 'Set the stakes.',
+          source_ids: ['source-001'],
+        }],
+      }],
+    })
+    expect(sock.frames()).toEqual([
+      { type: 'subscribe', topics: ['session:A'] },
+      {
+        type: 'presentation_outline_confirm',
+        session_id: 'A',
+        request_id: 'presentation-outline-1',
+        chapters: [{
+          id: 'chapter-001',
+          title: 'Opening',
+          slides: [{
+            id: 'slide-001',
+            title: 'Why this matters',
+            key_message: 'Set the stakes.',
+            source_ids: ['source-001'],
+          }],
+        }],
+      },
+    ])
+    expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
+  })
+
   it('acceptRule sends structured decisions without a chat message', () => {
     const { conn, sock, events } = setup()
     sock.sent.length = 0

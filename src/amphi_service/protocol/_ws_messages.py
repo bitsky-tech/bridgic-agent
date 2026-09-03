@@ -182,6 +182,40 @@ class WsTaskConfirmMessage(BaseModel):
     feedback: Optional[str] = None
 
 
+class WsPresentationSlideOutline(BaseModel):
+    """One user-edited slide sent back from the Plan outline surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    purpose: Optional[str] = Field(default=None, max_length=1_000)
+    key_message: Optional[str] = Field(default=None, max_length=2_000)
+    source_ids: List[str] = Field(default_factory=list, max_length=30)
+
+
+class WsPresentationChapterOutline(BaseModel):
+    """One user-edited chapter sent back from the Plan outline surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    summary: Optional[str] = Field(default=None, max_length=2_000)
+    slides: List[WsPresentationSlideOutline] = Field(default_factory=list, max_length=80)
+
+
+class WsPresentationOutlineConfirmMessage(BaseModel):
+    """Resume Plan with the complete outline edited in the presentation pane."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    type: Literal["presentation_outline_confirm"] = "presentation_outline_confirm"
+    session_id: str
+    request_id: str
+    chapters: List[WsPresentationChapterOutline] = Field(min_length=1, max_length=20)
+
+
 class WsAcceptRuleMessage(BaseModel):
     """Resume Clarify with one decision and optional replacement per proposed rule."""
 
@@ -289,6 +323,7 @@ WsClientMessage = Union[
     WsBuildConfirmMessage,
     WsAcceptRuleMessage,
     WsTaskConfirmMessage,
+    WsPresentationOutlineConfirmMessage,
     WsWorkflowConfirmMessage,
     WsPermissionAnswer,
     WsChoiceAnswerMessage,
@@ -304,6 +339,7 @@ _BY_TYPE: Dict[str, type] = {
     "build_confirm": WsBuildConfirmMessage,
     "accept_rule": WsAcceptRuleMessage,
     "task_confirm": WsTaskConfirmMessage,
+    "presentation_outline_confirm": WsPresentationOutlineConfirmMessage,
     "workflow_confirm": WsWorkflowConfirmMessage,
     "permission_answer": WsPermissionAnswer,
     "choice_answer": WsChoiceAnswerMessage,
@@ -366,6 +402,9 @@ __all__ = [
     "WsChatMessage",
     "WsBuildConfirmMessage",
     "WsAcceptRuleMessage",
+    "WsPresentationChapterOutline",
+    "WsPresentationOutlineConfirmMessage",
+    "WsPresentationSlideOutline",
     "WsWorkflowConfirmMessage",
     "WsPermissionAnswerItem",
     "WsPermissionAnswer",

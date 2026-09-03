@@ -1,12 +1,15 @@
 /** Dedicated Agent-owned progress surface for the presentation-making pipeline. */
-import { useRef } from 'react'
-import { useAtomValue } from 'jotai'
+import type { PresentationChapterOutline, PresentationSourceCard } from '@shared/types'
+import { useRef, useState } from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import {
   currentAgentRunningAtom,
   currentMessagesAtom,
   currentThinkingModeAtom,
 } from '@/atoms/agent'
+import { respondPresentationOutlineAtom } from '@/atoms/presentation-plan'
+import { activeSessionIdAtom } from '@/atoms/sessions'
 import { currentHumanRequestAtom } from '@/atoms/human-request'
 import { Icons } from '@/components/amphi/Icons'
 import { useAutoHideScrollbar } from '@/hooks/useAutoHideScrollbar'
@@ -20,7 +23,7 @@ const PRESENTATION_STAGES = [
   },
   {
     id: 'ppt_plan',
-    steps: ['design_visual_direction', 'collect_evidence', 'shape_chapters', 'map_slides'],
+    steps: ['collect_evidence', 'shape_chapters', 'map_slides', 'design_visual_direction'],
   },
   {
     id: 'ppt_compose',
@@ -47,13 +50,318 @@ function normalizeEvidence(evidence: string[]): string[] {
   return quoted.length > 0 ? quoted : [joined]
 }
 
+function sourceIcon(source: PresentationSourceCard) {
+  if (source.kind === 'file') return Icons.file(13)
+  if (source.kind === 'conversation') return Icons.chat(13)
+  return Icons.link(13)
+}
+
+function PresentationSourcesPanel({ sources }: { sources: PresentationSourceCard[] }) {
+  const { t } = useTranslation()
+  if (sources.length === 0) return null
+  return (
+    <section className="mt-2 space-y-2" data-testid="presentation-sources">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-2xs font-semibold text-text-secondary">{t('presentationMode.sources.title')}</h4>
+        <span className="text-[10px] tabular-nums text-text-tertiary">
+          {t('presentationMode.sources.count', { count: sources.length })}
+        </span>
+      </div>
+      {sources.map(source => (
+        <article key={source.id} className="rounded-lg border border-border-subtle bg-bg-surface px-2.5 py-2" data-source-kind={source.kind}>
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 text-text-tertiary">{sourceIcon(source)}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <p className="line-clamp-2 text-2xs font-medium leading-4 text-text-primary">{source.title}</p>
+                <span className="shrink-0 rounded bg-bg-hover px-1.5 py-0.5 text-[9px] text-text-tertiary">
+                  {t(`presentationMode.sources.kinds.${source.kind}`)}
+                </span>
+              </div>
+              {source.excerpt && <p className="mt-1 line-clamp-3 text-[10px] leading-4 text-text-tertiary">{source.excerpt}</p>}
+              {source.usage && (
+                <p className="mt-1 text-[10px] leading-4 text-text-secondary">
+                  <span className="font-medium">{t('presentationMode.sources.usage')}</span>{source.usage}
+                </p>
+              )}
+              {source.locator && (
+                <p className="mt-1 truncate text-[10px] text-text-accent" title={source.locator}>{source.locator}</p>
+              )}
+            </div>
+          </div>
+        </article>
+      ))}
+    </section>
+  )
+}
+
+function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm }: {
+  chapters: PresentationChapterOutline[]
+  sources: PresentationSourceCard[]
+  editable: boolean
+  busy: boolean
+  onConfirm: (chapters: PresentationChapterOutline[]) => void
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState(chapters)
+  const [dragged, setDragged] = useState<
+    { kind: 'chapter'; id: string }
+    | { kind: 'slide'; chapterId: string; id: string }
+    | null
+  >(null)
+  const sourceById = new Map(sources.map(source => [source.id, source]))
+
+  if (chapters.length === 0) return null
+
+  const patchChapter = (chapterId: string, patch: Partial<PresentationChapterOutline>) => {
+    setDraft(current => current.map(chapter => chapter.id === chapterId ? { ...chapter, ...patch } : chapter))
+  }
+  const patchSlide = (
+    chapterId: string,
+    slideId: string,
+    patch: Partial<PresentationChapterOutline['slides'][number]>,
+  ) => {
+    setDraft(current => current.map(chapter => chapter.id === chapterId
+      ? { ...chapter, slides: chapter.slides.map(slide => slide.id === slideId ? { ...slide, ...patch } : slide) }
+      : chapter))
+  }
+  const removeChapter = (chapterId: string) => setDraft(current => current.filter(chapter => chapter.id !== chapterId))
+  const removeSlide = (chapterId: string, slideId: string) => {
+    setDraft(current => current.map(chapter => chapter.id === chapterId
+      ? { ...chapter, slides: chapter.slides.filter(slide => slide.id !== slideId) }
+      : chapter))
+  }
+  const addChapter = () => {
+    const suffix = `${Date.now()}-${draft.length}`
+    setDraft(current => [...current, {
+      id: `chapter-user-${suffix}`,
+      title: t('presentationMode.outline.newChapter'),
+      summary: '',
+      slides: [],
+    }])
+  }
+  const addSlide = (chapterId: string) => {
+    const suffix = `${Date.now()}-${draft.flatMap(chapter => chapter.slides).length}`
+    setDraft(current => current.map(chapter => chapter.id === chapterId
+      ? {
+          ...chapter,
+          slides: [...chapter.slides, {
+            id: `slide-user-${suffix}`,
+            title: t('presentationMode.outline.newSlide'),
+            purpose: '',
+            keyMessage: '',
+            sourceIds: [],
+          }],
+        }
+      : chapter))
+  }
+  const dropChapter = (targetId: string) => {
+    if (dragged?.kind !== 'chapter' || dragged.id === targetId) return
+    setDraft(current => {
+      const sourceIndex = current.findIndex(chapter => chapter.id === dragged.id)
+      const targetIndex = current.findIndex(chapter => chapter.id === targetId)
+      if (sourceIndex < 0 || targetIndex < 0) return current
+      const next = [...current]
+      const [moved] = next.splice(sourceIndex, 1)
+      if (!moved) return current
+      next.splice(targetIndex, 0, moved)
+      return next
+    })
+    setDragged(null)
+  }
+  const dropSlide = (targetChapterId: string, targetSlideId: string) => {
+    if (dragged?.kind !== 'slide' || dragged.id === targetSlideId) return
+    setDraft(current => {
+      let moved: PresentationChapterOutline['slides'][number] | undefined
+      const without = current.map(chapter => {
+        if (chapter.id !== dragged.chapterId) return chapter
+        moved = chapter.slides.find(slide => slide.id === dragged.id)
+        return { ...chapter, slides: chapter.slides.filter(slide => slide.id !== dragged.id) }
+      })
+      if (!moved) return current
+      return without.map(chapter => {
+        if (chapter.id !== targetChapterId) return chapter
+        const targetIndex = chapter.slides.findIndex(slide => slide.id === targetSlideId)
+        const slides = [...chapter.slides]
+        slides.splice(targetIndex < 0 ? slides.length : targetIndex, 0, moved!)
+        return { ...chapter, slides }
+      })
+    })
+    setDragged(null)
+  }
+  const dropIntoChapter = (chapterId: string) => {
+    if (dragged?.kind === 'chapter') dropChapter(chapterId)
+    else if (dragged?.kind === 'slide') dropSlide(chapterId, '')
+  }
+  const valid = draft.length > 0
+    && draft.every(chapter => chapter.title.trim() && chapter.slides.every(slide => slide.title.trim()))
+    && draft.some(chapter => chapter.slides.length > 0)
+  return (
+    <section className="mt-2 rounded-lg border border-border-subtle bg-bg-surface p-2.5" data-testid="presentation-outline">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h4 className="text-2xs font-semibold text-text-primary">{t('presentationMode.outline.title')}</h4>
+          <p className="mt-0.5 text-[10px] text-text-tertiary">
+            {editable ? t('presentationMode.outline.editHint') : t('presentationMode.outline.readOnlyHint')}
+          </p>
+        </div>
+        <span className="shrink-0 text-[10px] tabular-nums text-text-tertiary">
+          {t('presentationMode.outline.slideCount', { count: draft.reduce((sum, chapter) => sum + chapter.slides.length, 0) })}
+        </span>
+      </div>
+      <ol className="mt-2.5 space-y-2">
+        {draft.map((chapter, chapterIndex) => {
+          const slideOffset = draft
+            .slice(0, chapterIndex)
+            .reduce((total, item) => total + item.slides.length, 0)
+          let chapterSummary = null
+          if (editable) {
+            chapterSummary = (
+              <textarea
+                className="mt-1 min-h-10 w-full resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] leading-4 text-text-tertiary outline-none hover:border-border-default focus:border-accent-primary"
+                value={chapter.summary ?? ''}
+                onChange={event => patchChapter(chapter.id, { summary: event.target.value })}
+                aria-label={t('presentationMode.outline.chapterSummary')}
+              />
+            )
+          } else if (chapter.summary) {
+            chapterSummary = <p className="mt-1 text-[10px] leading-4 text-text-tertiary">{chapter.summary}</p>
+          }
+          return (
+            <li
+              key={chapter.id}
+              className="rounded-lg bg-bg-subtle p-2"
+              draggable={editable}
+              onDragStart={() => setDragged({ kind: 'chapter', id: chapter.id })}
+              onDragOver={event => editable && event.preventDefault()}
+              onDrop={() => dropIntoChapter(chapter.id)}
+              data-testid="presentation-outline-chapter"
+            >
+              <div className="flex items-start gap-2">
+                <span className={cn('mt-1 shrink-0 text-[10px] font-semibold text-text-accent', editable && 'cursor-move')}>{chapterIndex + 1}</span>
+                <div className="min-w-0 flex-1">
+                  {editable ? (
+                    <input
+                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-2xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-accent-primary"
+                      value={chapter.title}
+                      onChange={event => patchChapter(chapter.id, { title: event.target.value })}
+                      aria-label={t('presentationMode.outline.chapterTitle')}
+                    />
+                  ) : <p className="text-2xs font-semibold text-text-primary">{chapter.title}</p>}
+                  {chapterSummary}
+                </div>
+                {editable && (
+                  <button className="shrink-0 rounded p-1 text-text-tertiary hover:bg-bg-hover hover:text-status-error" onClick={() => removeChapter(chapter.id)} aria-label={t('presentationMode.outline.deleteChapter')}>
+                    {Icons.trash(11)}
+                  </button>
+                )}
+              </div>
+              <ol className="mt-2 space-y-1.5 border-l border-border-subtle pl-2.5">
+                {chapter.slides.map((slide, slideIndex) => {
+                  const number = slideOffset + slideIndex + 1
+                  return (
+                    <li
+                      key={slide.id}
+                      className="rounded-md bg-bg-surface px-2 py-1.5"
+                      draggable={editable}
+                      onDragStart={event => {
+                        event.stopPropagation()
+                        setDragged({ kind: 'slide', chapterId: chapter.id, id: slide.id })
+                      }}
+                      onDragOver={event => editable && event.preventDefault()}
+                      onDrop={event => {
+                        event.stopPropagation()
+                        dropSlide(chapter.id, slide.id)
+                      }}
+                      data-testid="presentation-outline-slide"
+                    >
+                      <div className="flex items-start gap-1.5">
+                        <span className={cn('mt-1 shrink-0 text-[9px] tabular-nums text-text-tertiary', editable && 'cursor-move')}>{number}</span>
+                        <div className="min-w-0 flex-1">
+                          {editable ? (
+                            <input
+                              className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] font-medium text-text-primary outline-none hover:border-border-default focus:border-accent-primary"
+                              value={slide.title}
+                              onChange={event => patchSlide(chapter.id, slide.id, { title: event.target.value })}
+                              aria-label={t('presentationMode.outline.slideTitle')}
+                            />
+                          ) : <p className="text-[10px] font-medium leading-4 text-text-primary">{slide.title}</p>}
+                          {(editable || slide.purpose) && (editable ? (
+                            <input
+                              className="mt-0.5 w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] leading-4 text-text-secondary outline-none hover:border-border-default focus:border-accent-primary"
+                              value={slide.purpose ?? ''}
+                              onChange={event => patchSlide(chapter.id, slide.id, { purpose: event.target.value })}
+                              placeholder={t('presentationMode.outline.purpose')}
+                              aria-label={t('presentationMode.outline.purpose')}
+                            />
+                          ) : <p className="mt-0.5 text-[10px] leading-4 text-text-secondary">{slide.purpose}</p>)}
+                          {(editable || slide.keyMessage) && (editable ? (
+                            <textarea
+                              className="mt-0.5 min-h-8 w-full resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] leading-4 text-text-tertiary outline-none hover:border-border-default focus:border-accent-primary"
+                              value={slide.keyMessage ?? ''}
+                              onChange={event => patchSlide(chapter.id, slide.id, { keyMessage: event.target.value })}
+                              placeholder={t('presentationMode.outline.keyMessage')}
+                              aria-label={t('presentationMode.outline.keyMessage')}
+                            />
+                          ) : <p className="mt-0.5 text-[10px] leading-4 text-text-tertiary">{slide.keyMessage}</p>)}
+                          {slide.sourceIds.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {slide.sourceIds.map(sourceId => (
+                                <span key={sourceId} className="max-w-full truncate rounded bg-bg-hover px-1 py-0.5 text-[9px] text-text-tertiary" title={sourceById.get(sourceId)?.title ?? sourceId}>
+                                  {sourceById.get(sourceId)?.title ?? sourceId}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {editable && (
+                          <button className="shrink-0 rounded p-1 text-text-tertiary hover:bg-bg-hover hover:text-status-error" onClick={() => removeSlide(chapter.id, slide.id)} aria-label={t('presentationMode.outline.deleteSlide')}>
+                            {Icons.trash(10)}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  )
+                })}
+              </ol>
+              {editable && (
+                <button className="mt-2 flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-text-accent hover:bg-bg-hover" onClick={() => addSlide(chapter.id)}>
+                  {Icons.plus(10)} {t('presentationMode.outline.addSlide')}
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ol>
+      {editable && (
+        <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-border-subtle pt-2.5">
+          <button className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-text-secondary hover:bg-bg-hover" onClick={addChapter}>
+            {Icons.plus(10)} {t('presentationMode.outline.addChapter')}
+          </button>
+          <button
+            className="rounded-lg bg-accent-primary px-3 py-1.5 text-[10px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={!valid || busy}
+            onClick={() => onConfirm(draft)}
+            data-testid="presentation-outline-confirm"
+          >
+            {busy ? t('presentationMode.outline.confirming') : t('presentationMode.outline.confirm')}
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 /** Show live production progress without introducing a separate top-level mode toolbar. */
 export function PresentationModePane() {
   const { t } = useTranslation()
+  const sessionId = useAtomValue(activeSessionIdAtom)
   const position = useAtomValue(currentThinkingModeAtom)
   const agentRunning = useAtomValue(currentAgentRunningAtom)
   const messages = useAtomValue(currentMessagesAtom)
-  const pendingHuman = useAtomValue(currentHumanRequestAtom) !== null
+  const respondOutline = useSetAtom(respondPresentationOutlineAtom)
+  const pendingChoice = useAtomValue(currentHumanRequestAtom) !== null
+  const [outlineSubmitting, setOutlineSubmitting] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   useAutoHideScrollbar(scrollRef)
 
@@ -78,11 +386,28 @@ export function PresentationModePane() {
         { ...report, evidence: normalizeEvidence(report.evidence) },
       ] as const),
   )
+  const sources = position?.mode === 'presentation' ? position.presentationSources ?? [] : []
+  const outline = position?.mode === 'presentation' ? position.presentationOutline ?? [] : []
+  const outlineRequestId = position?.mode === 'presentation'
+    ? position.presentationOutlineConfirmationId ?? null
+    : null
+  const outlineEditable = activeStageId === 'ppt_plan'
+    && Boolean(outlineRequestId)
+    && !position?.presentationOutlineConfirmed
+  const outlineBusy = outlineSubmitting || (outlineEditable && agentRunning)
+  const pendingHuman = pendingChoice || (outlineEditable && !agentRunning)
   const latestAssistant = messages.findLast(message => message.role === 'assistant')
   const failed = Boolean(latestAssistant?.error)
   const overallPercent = totalStepCount === 0
     ? 0
     : Math.round((completedStepCount / totalStepCount) * 100)
+
+  const confirmOutline = (chapters: PresentationChapterOutline[]) => {
+    if (!sessionId || !outlineRequestId || outlineBusy) return
+    setOutlineSubmitting(true)
+    void respondOutline({ sessionId, requestId: outlineRequestId, chapters })
+      .finally(() => setOutlineSubmitting(false))
+  }
 
   let status = t('presentationMode.status.paused')
   let statusTone = 'bg-bg-hover text-text-secondary'
@@ -231,6 +556,29 @@ export function PresentationModePane() {
                             </div>
                           )}
                         </div>
+                      )}
+                      {stepId === 'collect_evidence' && sources.length > 0 && (
+                        <PresentationSourcesPanel sources={sources} />
+                      )}
+                      {stepId === 'shape_chapters' && outline.length > 0 && !outline.some(chapter => chapter.slides.length > 0) && (
+                        <PresentationOutlinePanel
+                          key={`chapters-${outline.map(chapter => chapter.id).join('-')}`}
+                          chapters={outline}
+                          sources={sources}
+                          editable={false}
+                          busy={false}
+                          onConfirm={() => {}}
+                        />
+                      )}
+                      {stepId === 'map_slides' && outline.some(chapter => chapter.slides.length > 0) && (
+                        <PresentationOutlinePanel
+                          key={outlineRequestId ?? 'confirmed-outline'}
+                          chapters={outline}
+                          sources={sources}
+                          editable={outlineEditable}
+                          busy={outlineBusy}
+                          onConfirm={confirmOutline}
+                        />
                       )}
                     </li>
                   )

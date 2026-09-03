@@ -2,7 +2,12 @@ from pathlib import Path
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall, ToolArgument
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext
-from src.amphi_agent._state import NormalStageState, PresentationStageState, PresentationStepRecord
+from src.amphi_agent._state import (
+    AwaitingPresentationOutlineConfirm,
+    NormalStageState,
+    PresentationStageState,
+    PresentationStepRecord,
+)
 from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.cognitive import (
@@ -99,7 +104,7 @@ def test_presentation_continue_prompt_matches_the_current_cursor() -> None:
     plan = AmphiOTAContext(ota_record=[OTARecord()])
     plan.transition_think(PresentationStageState(stage="ppt_plan"))
     AmphiAgent._stamp_presentation_continue(plan)
-    assert "design_visual_direction" in (plan.ota_record[-1].observation_result or "")
+    assert "collect_evidence" in (plan.ota_record[-1].observation_result or "")
 
     ready = AmphiOTAContext(ota_record=[OTARecord()])
     ready.transition_think(PresentationStageState(
@@ -173,18 +178,25 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
     )
 
     reason = await worker.legality_check(switch, ota_context, context)
-    assert reason is not None and "design_visual_direction" in reason
-    assert "Current step id: design_visual_direction" in worker.progress_block(ota_context)
+    assert reason is not None and "collect_evidence" in reason
+    assert "Current step id: collect_evidence" in worker.progress_block(ota_context)
 
     agent = AmphiAgent()
     ota_context.ota_record.append(OTARecord(action_result=ActionResult(results=[
         ActionStepResult(
             tool_id="call-report-presentation",
             tool_name="report_presentation_step",
-            tool_arguments={"summary": "Established the visual direction."},
+            tool_arguments={"summary": "Collected the selected sources."},
             tool_result=PresentationStepReport(
-                "Established the visual direction.",
-                [".presentation/plan.md"],
+                "Collected the selected sources.",
+                ["https://example.com/reference"],
+                {"sources": [{
+                    "kind": "web",
+                    "title": "Primary reference",
+                    "locator": "https://example.com/reference",
+                    "excerpt": "Relevant evidence",
+                    "usage": "Supports the opening chapter",
+                }]},
             ),
         )
     ])))
@@ -196,11 +208,13 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
     assert state.step_index == 1
     assert state.reports == [PresentationStepRecord(
         stage="ppt_plan",
-        step_id="design_visual_direction",
-        summary="Established the visual direction.",
-        evidence=[".presentation/plan.md"],
+        step_id="collect_evidence",
+        summary="Collected the selected sources.",
+        evidence=["https://example.com/reference"],
     )]
-    assert "Current step id: collect_evidence" in worker.progress_block(ota_context)
+    assert state.sources[0].id == "source-001"
+    assert state.sources[0].kind == "web"
+    assert "Current step id: shape_chapters" in worker.progress_block(ota_context)
 
     completed = AmphiOTAContext()
     completed.transition_think(PresentationStageState(
@@ -242,6 +256,10 @@ def test_presentation_progress_event_contains_the_durable_cursor() -> None:
             "summary": "Created twelve slide shells.",
             "evidence": ["slides 1-12"],
         }],
+        "presentation_sources": [],
+        "presentation_outline": [],
+        "presentation_outline_confirmed": False,
+        "presentation_outline_confirmation_id": None,
     }
 
 
@@ -270,12 +288,12 @@ async def test_presentation_brief_artifact_is_required_for_the_stage_handoff(tmp
 
 
 def test_presentation_step_catalog_matches_the_intended_production_order() -> None:
-    """The observable Plan and Compose steps preserve the design-first build sequence."""
+    """Plan derives its visual direction from the confirmed content blueprint."""
     assert [step.step_id for step in PRESENTATION_STAGE_STEPS["ppt_plan"]] == [
-        "design_visual_direction",
         "collect_evidence",
         "shape_chapters",
         "map_slides",
+        "design_visual_direction",
     ]
     assert [step.step_id for step in PRESENTATION_STAGE_STEPS["ppt_compose"]] == [
         "build_slide_shells",
@@ -283,3 +301,49 @@ def test_presentation_step_catalog_matches_the_intended_production_order() -> No
         "create_visuals",
         "polish_deck",
     ]
+
+
+async def test_slide_map_report_parks_for_editable_outline_confirmation() -> None:
+    """The runtime owns outline ids and stops before visual design for review."""
+    agent = AmphiAgent()
+    state = PresentationStageState(stage="ppt_plan", step_index=2).apply_plan_step_data(
+        "collect_evidence",
+        {"sources": [{
+            "kind": "conversation",
+            "title": "User request",
+            "excerpt": "Focus on the life story.",
+        }]},
+    )
+    ota_context = AmphiOTAContext(ota_record=[OTARecord(action_result=ActionResult(results=[
+        ActionStepResult(
+            tool_id="call-map-slides",
+            tool_name="report_presentation_step",
+            tool_arguments={"summary": "Mapped the deck."},
+            tool_result=PresentationStepReport(
+                "Mapped the deck.",
+                ["source-001"],
+                {"chapters": [{
+                    "title": "Opening",
+                    "summary": "Establish the context.",
+                    "slides": [{
+                        "title": "Why this story matters",
+                        "key_message": "The subject remains relevant.",
+                        "source_ids": ["source-001"],
+                    }],
+                }]},
+            ),
+        ),
+    ]))])
+    ota_context.transition_think(state)
+
+    async for _ in agent.after_action(ota_context, AmphiContext()):
+        raise AssertionError("after_action must not yield a visible value")
+
+    next_state = ota_context.think_status
+    assert isinstance(next_state, PresentationStageState)
+    assert next_state.step_index == 3
+    assert next_state.outline[0].id == "chapter-001"
+    assert next_state.outline[0].slides[0].id == "slide-001"
+    assert next_state.outline_confirmation_id.startswith("presentation_outline_")
+    assert next_state.outline_confirmed is False
+    assert isinstance(ota_context.interaction_status, AwaitingPresentationOutlineConfirm)

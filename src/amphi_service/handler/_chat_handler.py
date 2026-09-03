@@ -14,6 +14,7 @@ from ..protocol import (
     WsHelloMessage,
     WsMessageError,
     WsPermissionAnswer,
+    WsPresentationOutlineConfirmMessage,
     WsSetLocaleMessage,
     WsSubscribeMessage,
     WsTaskConfirmMessage,
@@ -87,6 +88,7 @@ class ChatHandler(WsHandler):
             WsTaskConfirmMessage,
             WsWorkflowConfirmMessage,
             WsPermissionAnswer,
+            WsPresentationOutlineConfirmMessage,
             WsChoiceAnswerMessage,
         )):
             await self._on_message(msg)
@@ -134,7 +136,7 @@ class ChatHandler(WsHandler):
 
     async def _on_message(
         self,
-        msg: WsChatMessage | WsAcceptRuleMessage | WsBuildConfirmMessage | WsTaskConfirmMessage | WsWorkflowConfirmMessage | WsPermissionAnswer | WsChoiceAnswerMessage,
+        msg: WsChatMessage | WsAcceptRuleMessage | WsBuildConfirmMessage | WsTaskConfirmMessage | WsWorkflowConfirmMessage | WsPermissionAnswer | WsPresentationOutlineConfirmMessage | WsChoiceAnswerMessage,
     ) -> None:
         # Check user
         user = await self.require_user()

@@ -125,6 +125,79 @@ describe('PresentationModePane', () => {
     host.remove()
   })
 
+  it('renders selected source cards and an editable outline confirmation surface', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const sessionId = 'session-presentation-plan'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(thinkingModeFamily(sessionId), {
+      mode: 'presentation',
+      stage: 'ppt_plan',
+      presentationGoal: 'Explain Su Shi\'s life',
+      presentationStepIndex: 3,
+      presentationReports: [
+        { stage: 'ppt_plan', stepId: 'collect_evidence', summary: 'Collected sources.', evidence: [] },
+        { stage: 'ppt_plan', stepId: 'shape_chapters', summary: 'Shaped the story.', evidence: [] },
+        { stage: 'ppt_plan', stepId: 'map_slides', summary: 'Mapped the slides.', evidence: [] },
+      ],
+      presentationSources: [
+        {
+          id: 'source-001',
+          kind: 'web',
+          title: '苏轼年谱',
+          locator: 'https://example.com/sushi',
+          excerpt: '记录苏轼的重要生平节点。',
+          usage: '用于生平时间线',
+        },
+        {
+          id: 'source-002',
+          kind: 'conversation',
+          title: '用户的讲解要求',
+          excerpt: '面向中学生进行通俗讲解。',
+        },
+      ],
+      presentationOutline: [{
+        id: 'chapter-001',
+        title: '少年与入仕',
+        summary: '从眉山成长讲到科举成名。',
+        slides: [{
+          id: 'slide-001',
+          title: '从眉山走出的少年',
+          purpose: '以人物起点建立亲近感',
+          keyMessage: '家庭教育塑造了苏轼的底色。',
+          sourceIds: ['source-001'],
+        }],
+      }],
+      presentationOutlineConfirmed: false,
+      presentationOutlineConfirmationId: 'presentation-outline-1',
+    })
+
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <PresentationModePane />
+        </Provider>,
+      )
+    })
+
+    expect(host.querySelectorAll('[data-source-kind]')).toHaveLength(2)
+    expect(host.querySelector('[data-testid="presentation-sources"]')?.textContent).toContain('苏轼年谱')
+    expect(host.querySelectorAll('[data-testid="presentation-outline-chapter"]')).toHaveLength(1)
+    expect(host.querySelectorAll('[data-testid="presentation-outline-slide"]')).toHaveLength(1)
+    expect((host.querySelector('[aria-label="章节标题"]') as HTMLInputElement | null)?.value).toBe('少年与入仕')
+    expect((host.querySelector('[aria-label="内页标题"]') as HTMLInputElement | null)?.value).toBe('从眉山走出的少年')
+    expect((host.querySelector('[aria-label="这一页承担的作用"]') as HTMLInputElement | null)?.value).toBe('以人物起点建立亲近感')
+    expect(host.querySelector('[data-testid="presentation-outline-confirm"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="presentation-status"]')?.textContent).toBe(
+      i18n.t('presentationMode.status.needsInput'),
+    )
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   it('shows a failed status when the active presentation turn ends with an error', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)

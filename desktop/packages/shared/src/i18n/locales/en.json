@@ -1180,7 +1180,36 @@
   "presentationMode": {
     "completedDetails": "View completed steps",
     "open": "PPT creation progress",
+    "outline": {
+      "addChapter": "Add chapter",
+      "addSlide": "Add slide",
+      "chapterSummary": "Chapter summary",
+      "chapterTitle": "Chapter title",
+      "confirm": "Confirm outline and continue",
+      "confirming": "Confirming…",
+      "deleteChapter": "Delete chapter",
+      "deleteSlide": "Delete slide",
+      "editHint": "Edit or drag chapters and slides directly",
+      "keyMessage": "Core message for this slide",
+      "newChapter": "New chapter",
+      "newSlide": "New slide",
+      "purpose": "Purpose of this slide",
+      "readOnlyHint": "The outline develops as planning progresses",
+      "slideCount": "{{count}} slides",
+      "slideTitle": "Slide title",
+      "title": "Chapters and slide outline"
+    },
     "progress": "Stage {{current}} of {{total}}",
+    "sources": {
+      "count": "{{count}} items",
+      "kinds": {
+        "conversation": "Chat",
+        "file": "File",
+        "web": "Web"
+      },
+      "title": "Selected sources",
+      "usage": "Use: "
+    },
     "stageAria": "PPT creation stages",
     "stageReady": "Stage complete · preparing handoff",
     "stages": {
@@ -1193,7 +1222,7 @@
         "title": "Compose the deck"
       },
       "ppt_plan": {
-        "description": "Research evidence, choose the visual direction, and map chapters into individual slides.",
+        "description": "Research the evidence and map every slide before choosing a content-driven visual direction.",
         "title": "Plan the story"
       },
       "ppt_review": {

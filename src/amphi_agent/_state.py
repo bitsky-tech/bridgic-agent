@@ -6,10 +6,11 @@ from pydantic import BaseModel, Field, field_validator, model_serializer, model_
 
 __all__ = [
     "InStage", "NormalStageState", "BuildStageState", "PresentationStageState",
+    "PresentationChapterOutline", "PresentationSlideOutline", "PresentationSource",
     "PresentationStepRecord", "WorkflowStageState",
     "InteractionState", "AwaitingFeedback", "AwaitingPermission", "AwaitingTaskConfirm",
     "AwaitingAcceptRule", "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
-    "AwaitingBuildConflict", "AwaitingWorkflowRunChoice",
+    "AwaitingBuildConflict", "AwaitingPresentationOutlineConfirm", "AwaitingWorkflowRunChoice",
     "SubAgentCall", "AwaitingSubAgent", "SubAgentResult", "SubAgentsCompleted", "AgentResult",
     "AgentState", "ContextCompactionState", "TurnCompactionState",
     "CallVerdict", "RoundPermission",
@@ -89,6 +90,36 @@ class PresentationStepRecord(BaseModel):
         return cls.normalize_evidence(value)
 
 
+class PresentationSource(BaseModel):
+    """One selected source shown in the presentation research surface."""
+
+    id: str = Field(min_length=1)
+    kind: Literal["web", "file", "conversation"]
+    title: str = Field(min_length=1, max_length=300)
+    locator: Optional[str] = Field(default=None, max_length=2_000)
+    excerpt: Optional[str] = Field(default=None, max_length=2_000)
+    usage: Optional[str] = Field(default=None, max_length=1_000)
+
+
+class PresentationSlideOutline(BaseModel):
+    """One editable page inside the presentation outline."""
+
+    id: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    purpose: Optional[str] = Field(default=None, max_length=1_000)
+    key_message: Optional[str] = Field(default=None, max_length=2_000)
+    source_ids: List[str] = Field(default_factory=list, max_length=30)
+
+
+class PresentationChapterOutline(BaseModel):
+    """One editable chapter and its ordered presentation pages."""
+
+    id: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    summary: Optional[str] = Field(default=None, max_length=2_000)
+    slides: List[PresentationSlideOutline] = Field(default_factory=list, max_length=80)
+
+
 class PresentationStageState(BaseModel):
     """The current cognitive stage inside the Session's presentation pipeline."""
 
@@ -97,6 +128,102 @@ class PresentationStageState(BaseModel):
     step_index: int = Field(default=0, ge=0)
     goal: Optional[str] = Field(default=None, min_length=1)
     reports: List[PresentationStepRecord] = Field(default_factory=list)
+    sources: List[PresentationSource] = Field(default_factory=list, max_length=80)
+    outline: List[PresentationChapterOutline] = Field(default_factory=list, max_length=20)
+    outline_confirmed: bool = False
+    outline_confirmation_id: Optional[str] = Field(default=None, min_length=1)
+
+    def apply_plan_step_data(self, step_id: str, data: Any) -> "PresentationStageState":
+        """Validate one Plan result and assign runtime-owned stable identities."""
+        def required_text(item: Dict[str, Any], name: str, label: str) -> str:
+            value = str(item.get(name) or "").strip()
+            if not value:
+                raise ValueError(f"{label} requires non-empty `{name}`.")
+            return value
+
+        def optional_text(item: Dict[str, Any], name: str) -> Optional[str]:
+            value = str(item.get(name) or "").strip()
+            return value or None
+
+        def raw_items(name: str) -> List[Dict[str, Any]]:
+            if not isinstance(data, dict) or not isinstance(data.get(name), list) or not data[name]:
+                raise ValueError(f"Plan step `{step_id}` requires a non-empty `{name}` list in `data`.")
+            items: List[Dict[str, Any]] = []
+            for item in data[name]:
+                if isinstance(item, BaseModel):
+                    items.append(item.model_dump(mode="python"))
+                elif isinstance(item, dict):
+                    items.append(item)
+                else:
+                    raise ValueError(f"Plan step `{step_id}` requires every `{name}` item to be an object.")
+            return items
+
+        if step_id == "collect_evidence":
+            sources: List[PresentationSource] = []
+            for index, item in enumerate(raw_items("sources"), start=1):
+                kind = str(item.get("kind") or "").strip()
+                if kind not in {"web", "file", "conversation"}:
+                    raise ValueError(f"source {index} requires kind `web`, `file`, or `conversation`.")
+                locator = optional_text(item, "locator")
+                if kind in {"web", "file"} and locator is None:
+                    raise ValueError(f"source {index} of kind `{kind}` requires `locator`.")
+                sources.append(PresentationSource(
+                    id=f"source-{index:03d}",
+                    kind=kind,
+                    title=required_text(item, "title", f"source {index}"),
+                    locator=locator,
+                    excerpt=optional_text(item, "excerpt"),
+                    usage=optional_text(item, "usage"),
+                ))
+            return self.model_copy(update={"sources": sources})
+
+        if step_id not in {"shape_chapters", "map_slides"}:
+            return self
+
+        known_sources = {source.id for source in self.sources}
+        chapters: List[PresentationChapterOutline] = []
+        slide_number = 0
+        for chapter_index, item in enumerate(raw_items("chapters"), start=1):
+            slides: List[PresentationSlideOutline] = []
+            raw_slides = item.get("slides") or []
+            if step_id == "map_slides" and not isinstance(raw_slides, list):
+                raise ValueError(f"chapter {chapter_index} requires a `slides` list.")
+            for slide_index, raw_slide in enumerate(raw_slides, start=1):
+                if not isinstance(raw_slide, dict):
+                    raise ValueError(f"chapter {chapter_index} slide {slide_index} must be an object.")
+                slide_number += 1
+                raw_source_ids = raw_slide.get("source_ids") or []
+                if not isinstance(raw_source_ids, list):
+                    raise ValueError(
+                        f"chapter {chapter_index} slide {slide_index} requires `source_ids` to be a list."
+                    )
+                source_ids = list(dict.fromkeys(
+                    str(source_id).strip()
+                    for source_id in raw_source_ids
+                    if str(source_id).strip()
+                ))
+                unknown = [source_id for source_id in source_ids if source_id not in known_sources]
+                if unknown:
+                    raise ValueError(
+                        f"chapter {chapter_index} slide {slide_index} references unknown source ids: "
+                        + ", ".join(unknown)
+                    )
+                slides.append(PresentationSlideOutline(
+                    id=f"slide-{slide_number:03d}",
+                    title=required_text(raw_slide, "title", f"chapter {chapter_index} slide {slide_index}"),
+                    purpose=optional_text(raw_slide, "purpose"),
+                    key_message=optional_text(raw_slide, "key_message"),
+                    source_ids=source_ids,
+                ))
+            chapters.append(PresentationChapterOutline(
+                id=f"chapter-{chapter_index:03d}",
+                title=required_text(item, "title", f"chapter {chapter_index}"),
+                summary=optional_text(item, "summary"),
+                slides=slides,
+            ))
+        if step_id == "map_slides" and not any(chapter.slides for chapter in chapters):
+            raise ValueError("Plan step `map_slides` requires at least one slide.")
+        return self.model_copy(update={"outline": chapters, "outline_confirmed": False})
 
 
 class WorkflowStageState(BaseModel):
@@ -177,6 +304,13 @@ class AwaitingWorkflowRunChoice(BaseModel):
     requested_workflow_id: str = Field(min_length=1)
     reason: Optional[str] = None
     questions: List[dict] = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+
+
+class AwaitingPresentationOutlineConfirm(BaseModel):
+    """The Plan outline is editable and must be confirmed before visual design."""
+
+    presentation_outline_confirm: Literal[True] = True
     request_id: str = Field(min_length=1)
 
 
@@ -319,6 +453,7 @@ InteractionState = Union[
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
+    AwaitingPresentationOutlineConfirm,
     AwaitingWorkflowRunChoice,
 ]
 
@@ -331,6 +466,7 @@ AgentResult: TypeAlias = Union[
     AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
+    AwaitingPresentationOutlineConfirm,
     AwaitingWorkflowRunChoice,
     AwaitingSubAgent,
 ]

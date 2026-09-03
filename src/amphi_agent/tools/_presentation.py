@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
@@ -12,12 +12,13 @@ class PresentationToolRejection(ValueError):
 class PresentationStepReport:
     """The structured result of one presentation production step."""
 
-    def __init__(self, summary: str, evidence: List[str]) -> None:
+    def __init__(self, summary: str, evidence: List[str], data: Optional[Dict[str, Any]] = None) -> None:
         self.summary = summary
         self.evidence = evidence
+        self.data = dict(data or {})
 
 
-async def report_presentation_step(summary: str, evidence: Optional[List[str]] = None) -> PresentationStepReport:
+async def report_presentation_step(summary: str, evidence: Optional[List[str]] = None, data: Optional[Dict[str, Any]] = None) -> PresentationStepReport:
     """Complete the current presentation step and advance its progress.
 
     Parameters
@@ -28,6 +29,10 @@ async def report_presentation_step(summary: str, evidence: Optional[List[str]] =
     evidence : list[str], optional
         Relevant source URLs, artifact paths, slide ranges, or inspection notes
         that make the result traceable from the presentation progress panel.
+    data : dict, optional
+        Current-step structured result. Plan uses ``sources`` for collected
+        evidence and ``chapters`` for the editable chapter or slide outline.
+        Stable source, chapter, and slide ids are assigned by the runtime.
 
     Returns
     -------
@@ -40,7 +45,7 @@ async def report_presentation_step(summary: str, evidence: Optional[List[str]] =
             "report_presentation_step rejected: `summary` must be non-empty."
         )
     clean_evidence = PresentationStepRecord.normalize_evidence(evidence)
-    return PresentationStepReport(summary, clean_evidence)
+    return PresentationStepReport(summary, clean_evidence, dict(data or {}))
 
 
 report_presentation_step_tool = FunctionToolSpec.from_raw(report_presentation_step)

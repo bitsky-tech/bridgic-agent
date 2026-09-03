@@ -32,6 +32,7 @@ from ._state import (
     AwaitingAcceptRule,
     AwaitingFeedback,
     AwaitingPermission,
+    AwaitingPresentationOutlineConfirm,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingSubAgent,
@@ -237,6 +238,7 @@ class AgentInvocation:
         "build_confirm",
         "accept_rule",
         "permission_answer",
+        "presentation_outline_confirm",
         "task_confirm",
         "workflow_confirm",
         "choice_answer",
@@ -629,6 +631,9 @@ class AgentInvocation:
             expected_type = "workflow_confirm"
             pending = interaction.get("workflow_confirm")
             expected_id = pending.get("request_id") if isinstance(pending, dict) else None
+        elif interaction.get("presentation_outline_confirm") is True:
+            expected_type = "presentation_outline_confirm"
+            expected_id = interaction.get("request_id")
 
         if expected_type is not None:
             request_id = cls._input_field(user_input, "request_id")
@@ -1748,6 +1753,13 @@ class AgentInvocation:
             if ota_context.interaction_status != agent_result:
                 raise InvocationStateError(
                     "Agent Workflow Run choice does not match its interaction state"
+                )
+            disposition = InvocationDisposition.AWAITING_FEEDBACK
+            answer = ""
+        elif isinstance(agent_result, AwaitingPresentationOutlineConfirm):
+            if ota_context.interaction_status != agent_result:
+                raise InvocationStateError(
+                    "Agent presentation outline result does not match its interaction state"
                 )
             disposition = InvocationDisposition.AWAITING_FEEDBACK
             answer = ""
