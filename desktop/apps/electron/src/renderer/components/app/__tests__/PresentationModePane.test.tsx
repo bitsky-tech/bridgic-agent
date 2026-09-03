@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
 GlobalRegistrator.register()
@@ -14,6 +14,10 @@ const { messageFamily, streamingFamily, thinkingModeFamily } = await import('@/a
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { i18n } = await import('@/lib/i18n')
 const { PresentationModePane } = await import('../PresentationModePane')
+
+beforeEach(async () => {
+  await i18n.changeLanguage('zh')
+})
 
 describe('PresentationModePane', () => {
   it('shows the four-stage production skeleton and current stage', async () => {
@@ -75,6 +79,7 @@ describe('PresentationModePane', () => {
     expect(host.querySelector('[data-testid="presentation-step-spinner"]')?.getAttribute('aria-label')).toBe(
       i18n.t('presentationMode.status.running'),
     )
+    expect(host.querySelector('[data-testid="presentation-step-spinner"] svg')?.classList.contains('animate-spin')).toBe(true)
     expect(host.querySelector('[class*="animate-presentation-breathe"]')).toBeNull()
     expect(host.querySelector('[data-testid="presentation-report-map_slides"]')?.textContent).toContain('twelve slides')
     expect(host.querySelector('[data-testid="presentation-report-map_slides"]')?.textContent).toContain('.presentation/plan.md')
@@ -118,6 +123,7 @@ describe('PresentationModePane', () => {
 
     expect(host.querySelector('[data-stage="ppt_brief"] [data-step]')).toBeNull()
     expect(host.querySelectorAll('[data-testid="presentation-stage-spinner"]')).toHaveLength(1)
+    expect(host.querySelector('[data-testid="presentation-stage-spinner"] svg')?.classList.contains('animate-spin')).toBe(true)
     expect(host.querySelectorAll('[data-testid="presentation-step-spinner"]')).toHaveLength(0)
     expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('0')
 

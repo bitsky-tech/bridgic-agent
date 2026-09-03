@@ -100,10 +100,12 @@ class SkillLibrary:
         }
 
     async def sync_builtins(self) -> None:
-        """Idempotently register product-owned Skills for this user."""
-        for name in self.builtin_names():
+        """Idempotently reconcile product-owned Skills for this user."""
+        names = self.builtin_names()
+        for name in names:
             definition = self._builtin_definition(name)
             await self._repo.ensure_builtin(self._user_id, **definition)
+        await self._repo.remove_missing_builtins(self._user_id, set(names))
 
     async def load(self) -> "SkillLibrary":
         """Load the user's Skill catalogue from the store (best-effort), returning

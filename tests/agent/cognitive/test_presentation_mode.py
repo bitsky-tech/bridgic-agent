@@ -181,6 +181,21 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
     assert reason is not None and "collect_evidence" in reason
     assert "Current step id: collect_evidence" in worker.progress_block(ota_context)
 
+    report_call = StepToolCall(
+        tool="report_presentation_step",
+        tool_arguments=[
+            ToolArgument(name="summary", value="Collected the selected sources."),
+            ToolArgument(
+                name="data",
+                value=(
+                    '{"sources":[{"kind":"web","title":"Primary reference",'
+                    '"locator":"https://example.com/reference"}]}'
+                ),
+            ),
+        ],
+    )
+    assert await worker.legality_check(report_call, ota_context, context) is None
+
     agent = AmphiAgent()
     ota_context.ota_record.append(OTARecord(action_result=ActionResult(results=[
         ActionStepResult(
@@ -301,6 +316,10 @@ def test_presentation_step_catalog_matches_the_intended_production_order() -> No
         "create_visuals",
         "polish_deck",
     ]
+    collect = PRESENTATION_STAGE_STEPS["ppt_plan"][0]
+    assert "supplied files and conversation first" in collect.instruction
+    assert "one sufficient source is enough" in collect.instruction
+    assert "3–5 high-quality sources" in collect.instruction
 
 
 async def test_slide_map_report_parks_for_editable_outline_confirmation() -> None:

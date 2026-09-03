@@ -19,6 +19,7 @@ from ..prompts.presentation import (
 )
 from ..prompts.render import render_stage_persona
 from ..tools import switch_tool
+from ..tools._presentation import parse_presentation_step_data
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ PRESENTATION_STAGE_STEPS: Dict[str, Tuple[PresentationStep, ...]] = {
     "ppt_plan": (
         PresentationStep(
             "collect_evidence",
-            "Collect only the content, data, source links, and citations needed to support the deck.",
+            "Use supplied files and conversation first; one sufficient source is enough, otherwise collect only the 3–5 high-quality sources needed to support the deck.",
         ),
         PresentationStep(
             "shape_chapters",
@@ -321,7 +322,8 @@ class PresentationThink(MainThink):
                     for argument in getattr(call, "tool_arguments", None) or []
                 }
                 try:
-                    state.apply_plan_step_data(current.step_id, arguments.get("data"))
+                    data = parse_presentation_step_data(arguments.get("data"))
+                    state.apply_plan_step_data(current.step_id, data)
                 except (TypeError, ValueError) as exc:
                     return f"presentation step report rejected: {exc}"
             if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and not state.outline_confirmed:

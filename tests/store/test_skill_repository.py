@@ -209,6 +209,45 @@ async def test_builtin_refresh(initialized_store: None) -> None:
     assert refreshed.enabled is False
 
 
+async def test_remove_missing_builtins_preserves_user_skills(initialized_store: None) -> None:
+    repository = SkillRepository()
+    stale = await repository.ensure_builtin(
+        USER_ID,
+        name="retired-builtin",
+        description="No longer shipped",
+        skill_dir="/builtin/retired-builtin",
+        source="local",
+        source_uri="builtin://retired-builtin",
+    )
+    current = await repository.ensure_builtin(
+        USER_ID,
+        name="current-builtin",
+        description="Still shipped",
+        skill_dir="/builtin/current-builtin",
+        source="local",
+        source_uri="builtin://current-builtin",
+    )
+    imported = await repository.create(
+        USER_ID,
+        name="user-skill",
+        description="User imported",
+        skill_dir="/skills/user-skill",
+        group="imported",
+        source="github",
+        source_uri="https://github.com/example/user-skill",
+    )
+
+    removed = await repository.remove_missing_builtins(USER_ID, {"current-builtin"})
+
+    assert removed == ["retired-builtin"]
+    assert stale.id is not None
+    assert await repository.get(USER_ID, stale.id) is None
+    assert current.id is not None
+    assert await repository.get(USER_ID, current.id) is not None
+    assert imported.id is not None
+    assert await repository.get(USER_ID, imported.id) is not None
+
+
 async def test_delete(initialized_store: None) -> None:
     """Final database state:
 

@@ -74,6 +74,20 @@ class SkillRepository(Repository[Skill]):
             await s.refresh(row)
             return row
 
+    async def remove_missing_builtins(self, user_id: str, names: set[str]) -> List[str]:
+        """Remove product-owned Skills that are no longer shipped."""
+        async with self._session() as s:
+            rows = await self._list_owned(s, Skill, user_id)
+            obsolete = [
+                row for row in rows
+                if row.group == "builtin" and row.name not in names
+            ]
+            for row in obsolete:
+                await s.delete(row)
+            if obsolete:
+                await s.commit()
+            return [row.name for row in obsolete]
+
     async def create(
         self,
         user_id: str,

@@ -22,11 +22,7 @@ import type {
 import {
   ChevronLeft,
   ChevronRight,
-  Download,
-  FilePlus2,
-  FolderOpen,
   Grid2X2,
-  LoaderCircle,
   Maximize2,
   MessageSquareText,
   Minimize2,
@@ -40,8 +36,10 @@ import {
 import {
   PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
+  createInitialPresentationDocument,
   createPresentationId,
   currentPresentationDocumentAtom,
+  currentPresentationWorkspaceAtom,
   formatPresentationText,
   getPresentationPageSize,
   layoutPresentationVerticalText,
@@ -126,7 +124,6 @@ import {
   supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
-import { createPresentationPptx } from '@/lib/presentationPptx'
 import {
   getPresentationShapeDefinition,
   getPresentationShapeSize,
@@ -1580,6 +1577,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const { t } = useTranslation()
   const sessionId = useAtomValue(presentationSessionIdAtom)
   const agentChange = useAtomValue(presentationAgentChangeAtom)
+  const [workspace, setWorkspace] = useAtom(currentPresentationWorkspaceAtom)
   const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
   const pageSize = getPresentationPageSize(document)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
@@ -1601,8 +1599,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const [animationMarkersHidden, setAnimationMarkersHidden] = useState(false)
   const [filmstripCollapsed, setFilmstripCollapsed] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [exportedPaths, setExportedPaths] = useState<Record<string, string>>({})
-  const [exportedVersions, setExportedVersions] = useState<Record<string, number>>({})
   const [inspectorMode, setInspectorMode] = useState<'animation' | 'comments' | 'layers' | 'properties'>('properties')
   const [ribbonTab, setRibbonTab] = useState<PresentationRibbonTab>('home')
   const [slideshowOpen, setSlideshowOpen] = useState(false)
@@ -1611,7 +1607,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const [animationPreviewRun, setAnimationPreviewRun] = useState<AnimationPreviewRun | null>(null)
   const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
-  const [exportingDocumentId, setExportingDocumentId] = useState<string | null>(null)
   const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
   const [masterDialogOpen, setMasterDialogOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -1639,7 +1634,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const canvasSelectionFrameRef = useRef<number | null>(null)
   const pastRef = useRef<PresentationHistoryEntry[]>([])
   const futureRef = useRef<PresentationHistoryEntry[]>([])
-  const exportInFlightRef = useRef(false)
   const animationRunIdRef = useRef(0)
   const transitionRunIdRef = useRef(0)
   const consumedAgentChangeIdRef = useRef(0)
@@ -2468,10 +2462,33 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     setDocument(selected)
   }
 
-  const closePresentation = () => {
-    setExpanded(false)
-    if (onClose) onClose()
-    else setRightCollapsed(true)
+  const selectPresentationDocument = (documentId: string) => {
+    if (workspace.activeDocumentId === documentId) return
+    setWorkspace({ ...workspace, activeDocumentId: documentId })
+  }
+
+  const createPresentationDocument = () => {
+    const nextDocument = createInitialPresentationDocument()
+    setWorkspace({
+      activeDocumentId: nextDocument.id,
+      documents: [...workspace.documents, nextDocument],
+    })
+  }
+
+  const closePresentationDocument = (documentId: string) => {
+    if (workspace.documents.length <= 1) {
+      setExpanded(false)
+      if (onClose) onClose()
+      else setRightCollapsed(true)
+      return
+    }
+    const closingIndex = workspace.documents.findIndex((item) => item.id === documentId)
+    if (closingIndex < 0) return
+    const documents = workspace.documents.filter((item) => item.id !== documentId)
+    const activeDocumentId = workspace.activeDocumentId === documentId
+      ? documents[Math.min(closingIndex, documents.length - 1)]!.id
+      : workspace.activeDocumentId
+    setWorkspace({ activeDocumentId, documents })
   }
 
   const addSlide = () => {
@@ -3127,42 +3144,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     if (firstElement) selectPresentationElement(firstElement.id)
   }
 
-  const exportPresentation = async () => {
-    if (exportInFlightRef.current) return
-    const documentToExport = documentRef.current
-    exportInFlightRef.current = true
-    setExportingDocumentId(documentToExport.id)
-    try {
-      const safeTitle = (documentToExport.title || t('session.presentation.untitled'))
-        .replace(/[\\/:*?"<>|]/g, '-')
-      const result = await window.api.dialog.save({
-        title: t('session.presentation.export'),
-        defaultPath: `${safeTitle}.pptx`,
-        filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
-      })
-      if (result.canceled || !result.filePath) return
-      const bytes = await createPresentationPptx(documentToExport)
-      await window.api.fs.writePresentation(result.filePath, bytes)
-      setExportedPaths((paths) => ({ ...paths, [documentToExport.id]: result.filePath! }))
-      setExportedVersions((versions) => ({ ...versions, [documentToExport.id]: documentToExport.version }))
-      showToast(t('session.presentation.exported'))
-    } catch (error) {
-      rlog.error('[presentation.export] Failed to export PowerPoint', error)
-      showToast(t('session.presentation.exportFailed'))
-    } finally {
-      exportInFlightRef.current = false
-      setExportingDocumentId((current) => current === documentToExport.id ? null : current)
-    }
-  }
-
   const previewWidth = compact ? 78 : 126
-  const exportedPath = exportedPaths[document.id]
-  const hasUnexportedChanges = exportedVersions[document.id] !== document.version
   const sessionTarget = sessionId ? sessionId.slice(0, 8).toUpperCase() : '—'
-  const documentTitle = document.title.trim() || t('session.presentation.untitled')
-  const documentFileName = documentTitle.toLowerCase().endsWith('.pptx')
-    ? documentTitle
-    : `${documentTitle}.pptx`
+  const documentFileName = (item: PresentationDocument) => {
+    const title = item.title.trim() || t('session.presentation.untitled')
+    return title.toLowerCase().endsWith('.pptx') ? title : `${title}.pptx`
+  }
   const insertDialogElement = insertDialog?.elementId
     ? currentSlide?.elements.find((element) => element.id === insertDialog.elementId)
     : undefined
@@ -3278,65 +3265,58 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto"
           data-testid="presentation-document-tabs"
         >
-          <div className="group flex h-8 min-w-[132px] max-w-[240px] shrink-0 items-center rounded-lg border border-border-subtle bg-bg-surface px-1 text-text-primary shadow-sm">
-            <PresentationControlTooltip content={documentFileName} placement="bottom">
+          {workspace.documents.map((item) => {
+            const fileName = documentFileName(item)
+            const selected = item.id === workspace.activeDocumentId
+            return (
               <div
-                role="tab"
-                aria-selected="true"
-                className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
-                data-testid="presentation-document-tab"
+                key={item.id}
+                className={cn(
+                  'group flex h-8 min-w-[132px] max-w-[240px] shrink-0 items-center rounded-lg border px-1 text-text-primary',
+                  selected
+                    ? 'border-border-subtle bg-bg-surface shadow-sm'
+                    : 'border-transparent bg-transparent hover:bg-bg-hover',
+                )}
               >
-                <span className="shrink-0 text-[#D97706]"><PresentationMark /></span>
-                <span className="truncate">{documentFileName}</span>
-                {hasUnexportedChanges ? <span className="size-1.5 shrink-0 rounded-full bg-[#F59E0B]" aria-hidden="true" /> : null}
+                <PresentationControlTooltip content={fileName} placement="bottom">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => selectPresentationDocument(item.id)}
+                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
+                    data-testid="presentation-document-tab"
+                  >
+                    <span className="shrink-0 text-[#D97706]"><PresentationMark /></span>
+                    <span className="truncate">{fileName}</span>
+                  </button>
+                </PresentationControlTooltip>
+                <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: fileName })} placement="bottom">
+                  <button
+                    type="button"
+                    aria-label={t('session.presentation.closeDocument', { name: fileName })}
+                    onClick={() => closePresentationDocument(item.id)}
+                    className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
+                    data-testid="presentation-close-document"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </PresentationControlTooltip>
               </div>
-            </PresentationControlTooltip>
-            <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: documentFileName })} placement="bottom">
-              <button
-                type="button"
-                aria-label={t('session.presentation.closeDocument', { name: documentFileName })}
-                onClick={closePresentation}
-                className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
-                data-testid="presentation-close-document"
-              >
-                <X className="size-3" />
-              </button>
-            </PresentationControlTooltip>
-          </div>
+            )
+          })}
+          <PresentationControlTooltip content={t('session.presentation.newPresentation')} placement="bottom">
+            <button
+              type="button"
+              aria-label={t('session.presentation.newPresentation')}
+              onClick={createPresentationDocument}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+              data-testid="presentation-new-document"
+            >
+              <PlusIcon />
+            </button>
+          </PresentationControlTooltip>
         </div>
-        <DocumentActionButton
-          label={t('session.presentation.newSlide')}
-          onClick={addSlide}
-          testId="presentation-add-slide-header"
-        >
-          <FilePlus2 className="size-3.5" />
-        </DocumentActionButton>
-        <DocumentActionButton
-          disabled={Boolean(exportingDocumentId)}
-          label={t(exportingDocumentId ? 'session.presentation.exporting' : 'session.presentation.export')}
-          onClick={() => void exportPresentation()}
-          testId="presentation-export-pptx"
-        >
-          {exportingDocumentId ? <LoaderCircle className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-        </DocumentActionButton>
-        {exportedPath ? (
-          <DocumentActionButton
-            label={t('asset.common.revealInFileManager')}
-            onClick={() => void window.api.shell.showItemInFolder(exportedPath)}
-            testId="presentation-reveal-export"
-          >
-            <FolderOpen className="size-3.5" />
-          </DocumentActionButton>
-        ) : null}
-        <span
-          className={cn(
-            'max-w-[120px] shrink-0 truncate text-[10px]',
-            hasUnexportedChanges ? 'text-text-tertiary' : 'text-status-success',
-          )}
-          data-testid="presentation-document-status"
-        >
-          {t(hasUnexportedChanges ? 'session.presentation.unexportedChanges' : 'session.presentation.exported')}
-        </span>
       </div>
 
       <PresentationRibbon
@@ -3742,30 +3722,6 @@ function HeaderButton({ children, disabled, label, onClick, pressed, testId }: {
         )}
       >
         {children}
-      </button>
-    </PresentationControlTooltip>
-  )
-}
-
-function DocumentActionButton({ children, disabled, label, onClick, testId }: {
-  children: ReactNode
-  disabled?: boolean
-  label: string
-  onClick: () => void
-  testId?: string
-}) {
-  return (
-    <PresentationControlTooltip content={label} placement="bottom">
-      <button
-        type="button"
-        aria-label={label}
-        disabled={disabled}
-        onClick={onClick}
-        data-testid={testId}
-        className="flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border-subtle bg-bg-surface px-2.5 text-[11px] font-medium text-text-secondary shadow-sm hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {children}
-        <span>{label}</span>
       </button>
     </PresentationControlTooltip>
   )

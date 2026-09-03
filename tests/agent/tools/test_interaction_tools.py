@@ -89,12 +89,19 @@ async def test_presentation_step_report() -> None:
     report = await report_presentation_step(
         "  Selected an editorial visual system.  ",
         ["  visual direction  ", "", "https://example.com/reference"],
-        {"theme": "editorial"},
+        '{"theme": "editorial"}',
     )
 
     assert report.summary == "Selected an editorial visual system."
     assert report.evidence == ["visual direction", "https://example.com/reference"]
     assert report.data == {"theme": "editorial"}
+    transported = await report_presentation_step(
+        "Collected a primary source.",
+        data='{"sources": [{"kind": "web", "title": "Primary reference"}]}',
+    )
+    assert transported.data == {
+        "sources": [{"kind": "web", "title": "Primary reference"}],
+    }
     legacy = await report_presentation_step(
         "Recorded the durable brief.",
         "['.presentation/brief.md']",  # type: ignore[arg-type]
@@ -102,6 +109,8 @@ async def test_presentation_step_report() -> None:
     assert legacy.evidence == [".presentation/brief.md"]
     with pytest.raises(PresentationToolRejection, match="summary.*non-empty"):
         await report_presentation_step("  ")
+    with pytest.raises(PresentationToolRejection, match="data.*JSON object string"):
+        await report_presentation_step("Invalid data.", data="not-an-object")
 
 
 async def test_choice_card() -> None:

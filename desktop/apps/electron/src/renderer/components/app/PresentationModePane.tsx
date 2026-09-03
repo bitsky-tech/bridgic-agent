@@ -3,6 +3,7 @@ import type { PresentationChapterOutline, PresentationSourceCard } from '@shared
 import { useRef, useState } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
+import { LoaderCircle } from 'lucide-react'
 import {
   currentAgentRunningAtom,
   currentMessagesAtom,
@@ -515,12 +516,12 @@ export function PresentationModePane() {
                     >
                       {stepCurrent && agentRunning ? (
                         <span
-                          className="absolute -left-[19px] top-1 flex size-3 items-center justify-center rounded-full bg-bg-surface"
+                          className="absolute -left-[20px] top-0.5 flex size-4 items-center justify-center rounded-full bg-bg-surface text-accent-primary"
                           data-testid="presentation-step-spinner"
                           role="status"
                           aria-label={t('presentationMode.status.running')}
                         >
-                          <span className="size-3 animate-spin rounded-full border-2 border-accent-primary/25 border-t-accent-primary motion-reduce:animate-none" />
+                          <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.4} />
                         </span>
                       ) : (
                         <span className={cn(
@@ -613,7 +614,7 @@ export function PresentationModePane() {
                       role="status"
                       aria-label={t('presentationMode.status.running')}
                     >
-                      <span className="size-3 animate-spin rounded-full border-2 border-white/30 border-t-white motion-reduce:animate-none" />
+                      <LoaderCircle className="size-3.5 animate-spin" strokeWidth={2.4} />
                     </span>
                   ) : (
                     <span className="relative">{complete ? Icons.check(11) : stageIndex + 1}</span>

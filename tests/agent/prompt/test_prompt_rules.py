@@ -31,7 +31,6 @@ def _personas() -> dict[str, str]:
         "read_file",
         "request_human_choice",
         "run_subagent",
-        "view_ppt",
         "report_presentation_step",
         "switch",
     ]
@@ -456,7 +455,9 @@ def test_presentation_structures() -> None:
         persona = personas[name]
         assert "Session-owned live PowerPoint presentation" in persona
         assert "Tool availability does not broaden the current stage" in persona
-        assert "dedicated PowerPoint tools" in persona
+        assert "use only a deck-authoring capability explicitly listed" in persona
+        assert "`view_ppt`" not in persona
+        assert "Use the PowerPoint tools" not in persona
         assert "never use `bash` to inspect a Skill" in persona
         assert "right-side progress surface already shows" in persona
         assert "`switch(mode=\"normal\")` ends the active presentation pipeline state" in persona
@@ -471,9 +472,13 @@ def test_presentation_structures() -> None:
     assert "# Brief artifact contract" in brief
     plan = personas["ppt_plan"]
     assert "Plan proceeds from evidence to narrative" in plan
-    assert "data.sources" in plan
-    assert "data.chapters" in plan
+    assert "JSON-encoded object string" in plan
+    assert '{"sources": [...]}' in plan
+    assert '{"chapters": [...]}' in plan
+    assert "one source is enough" in plan
+    assert "normally 3–5 in total" in plan
+    assert "Do not search separately for every prospective slide" in plan
     assert "pause after this report" in plan
     assert "Do not choose a template or visual style before the outline is confirmed" in plan
-    assert "Call `view_ppt` before the first compose step" in personas["ppt_compose"]
-    assert "Inspect the live deck rather than" in personas["ppt_review"]
+    assert "If no deck-authoring capability is exposed" in personas["ppt_compose"]
+    assert "If no such capability is exposed" in personas["ppt_review"]

@@ -44,7 +44,6 @@ from ._browser import (
     BROWSER_TOOL_NAMES,
     browser_tool_specs,
 )
-from ._powerpoint import POWERPOINT_TOOL_NAMES, powerpoint_tool_specs
 from ._presentation import (
     PresentationStepReport,
     report_presentation_step,
@@ -157,8 +156,6 @@ __all__ = [
     "BROWSER_BASIC_TOOL_NAMES",
     "BROWSER_ADVANCED_TOOL_NAMES",
     "BROWSER_TOOL_NAMES",
-    "POWERPOINT_TOOL_NAMES",
-    "powerpoint_tool_specs",
     "PresentationStepReport",
     "report_presentation_step",
     "report_presentation_step_tool",
