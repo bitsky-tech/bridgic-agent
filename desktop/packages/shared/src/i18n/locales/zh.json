@@ -1644,6 +1644,7 @@
     },
     "tool": {
       "error": "错误",
+      "imageReadRunning": "正在理解图片…",
       "noDiff": "（无可显示的改动）",
       "noOutput": "（无输出）",
       "overflow": {

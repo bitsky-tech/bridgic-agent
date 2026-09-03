@@ -93,11 +93,14 @@ function GenericToolCallRow({ call }: ToolCallRowProps) {
   const meta = toolMeta(kind, name, input, output)
   const longSubject = hasLongSubject(kind)
   const isBrowserRunning = isBrowserAgentActionToolName(name) && result === undefined
+  const isImageReadRunning = kind === 'image_read' && result === undefined
 
   return (
     <div>
       <button
         type="button"
+        disabled={isImageReadRunning}
+        aria-expanded={isImageReadRunning ? undefined : open}
         onClick={() => {
           setOpen((v) => !v)
           setMounted(true)
@@ -106,8 +109,10 @@ function GenericToolCallRow({ call }: ToolCallRowProps) {
           'flex w-full items-center gap-[7px] rounded-md py-[3px] transition-colors',
           isError ? 'text-status-error' : 'text-text-tertiary hover:text-text-secondary',
           isBrowserRunning && 'bg-accent-blue-subtle text-text-accent',
+          isImageReadRunning && 'cursor-default hover:text-text-tertiary',
         )}
         data-browser-tool-state={isBrowserRunning ? 'running' : undefined}
+        data-image-analysis-state={isImageReadRunning ? 'running' : undefined}
       >
         <span className={cn(
           'flex shrink-0',
@@ -141,25 +146,33 @@ function GenericToolCallRow({ call }: ToolCallRowProps) {
         </span>
         {meta.note && <span className="shrink-0 text-xs text-text-tertiary">{meta.note}</span>}
         {!longSubject && <span className="flex-1" />}
-        {durationMs > 0 && (
+        {isImageReadRunning && (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-accent" role="status" aria-live="polite">
+            <span className="agent-activity-wave shrink-0" aria-hidden="true"><span /><span /><span /></span>
+            {t('session.tool.imageReadRunning')}
+          </span>
+        )}
+        {!isImageReadRunning && durationMs > 0 && (
           <span className="shrink-0 font-mono text-xs text-text-tertiary">
             {formatDuration(durationMs)}
           </span>
         )}
-        <span
-          className={cn(
-            'flex shrink-0 text-text-tertiary transition-transform duration-300 ease-out',
-            open && 'rotate-90',
-          )}
-        >
-          {Icons.chevronRight(11)}
-        </span>
+        {!isImageReadRunning ? (
+          <span
+            className={cn(
+              'flex shrink-0 text-text-tertiary transition-transform duration-300 ease-out',
+              open && 'rotate-90',
+            )}
+          >
+            {Icons.chevronRight(11)}
+          </span>
+        ) : null}
         {kind === 'write' && !open && <span className="shrink-0 text-xs text-text-accent">{t('session.tool.preview')}</span>}
       </button>
       {kind === 'bash' && call.subagents?.length ? (
         <SubagentGroup subagents={call.subagents} />
       ) : null}
-      <Collapse open={open}>
+      <Collapse open={open && !isImageReadRunning}>
         <div className="pt-2">{mounted ? <ToolExpand kind={kind} call={call} /> : null}</div>
       </Collapse>
     </div>

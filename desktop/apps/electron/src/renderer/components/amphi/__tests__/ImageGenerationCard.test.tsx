@@ -135,6 +135,32 @@ describe('ImageGenerationCard', () => {
 })
 
 describe('read_image presentation', () => {
+  it('shows progress in the row and cannot expand before the tool returns', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <ToolCallRow call={{
+          toolUseId: 'image-analysis-running',
+          name: 'read_image',
+          input: { file_path: '/tmp/reference.png' },
+        }} />,
+      )
+    })
+
+    const running = host.querySelector<HTMLButtonElement>('[data-image-analysis-state="running"]')
+    expect(running).not.toBeNull()
+    expect(running?.disabled).toBe(true)
+    expect(running?.hasAttribute('aria-expanded')).toBe(false)
+    expect(running?.textContent).toContain('正在理解图片')
+    expect(running?.querySelectorAll('.agent-activity-wave > span')).toHaveLength(3)
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   it('renders visual analysis as wrapped Markdown instead of numbered source code', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)

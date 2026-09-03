@@ -1644,6 +1644,7 @@
     },
     "tool": {
       "error": "Error",
+      "imageReadRunning": "Analyzing image…",
       "noDiff": "(No changes to display)",
       "noOutput": "(No output)",
       "overflow": {
