@@ -15,6 +15,7 @@ from bridgic.core.model.types import Message, Role
 from google import genai
 from google.genai import types
 
+from .._error import ImageProviderResponseError, PublicAgentError
 from ...amphi_service.protocol.llms import (
     PROVIDER_CATALOG_BY_ID,
     build_codex_llm,
@@ -32,6 +33,7 @@ from ...amphi_service.protocol.llms._image_inputs import (
     validate_image_inputs,
 )
 from ...amphi_service.protocol.llms.codex_llm import DEFAULT_CODEX_MODEL
+from ...amphi_service.i18n import backend_i18n
 from ...amphi_store import ProviderCredential, ProviderRepository
 
 
@@ -58,6 +60,29 @@ _IMAGE_ANALYSIS_SYSTEM_PROMPT = (
 class _ImageTarget:
     credential: ProviderCredential
     model: str
+
+
+def _capability_label(require_reference: bool) -> str:
+    suffix = "reference" if require_reference else "generation"
+    return backend_i18n.text(f"agent.image_tool.capability.{suffix}")
+
+
+def _friendly_provider_failure(operation: str, exc: Exception) -> str:
+    public = PublicAgentError.from_exception(exc)
+    if public.code == "image_input_invalid":
+        return backend_i18n.text("agent.image_tool.error.image_invalid")
+    if public.code == "image_input_unsupported":
+        return backend_i18n.text(
+            "agent.image_tool.error.vision_unsupported",
+            model_display=backend_i18n.text("llm.selected_model"),
+        )
+    suffix = "read" if operation == "read" else "generation"
+    if public.code == "internal_error":
+        return backend_i18n.text(f"agent.image_tool.error.{suffix}_failed")
+    return backend_i18n.text(
+        f"agent.image_tool.error.{suffix}_failed_reason",
+        reason=public.message,
+    )
 
 
 def _ordered_credentials(credentials: Iterable[ProviderCredential]) -> list[ProviderCredential]:
@@ -96,17 +121,26 @@ def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, 
     if requested_provider:
         credential = next((row for row in rows if row.provider_id == requested_provider), None)
         if credential is None:
-            raise ValueError(f"provider {requested_provider!r} is not configured")
+            raise ValueError(backend_i18n.text(
+                "agent.image_tool.error.provider_not_configured",
+                provider_id=requested_provider,
+            ))
         if not credential.is_enabled:
-            raise ValueError(f"provider {requested_provider!r} is disabled")
+            raise ValueError(backend_i18n.text(
+                "agent.image_tool.error.provider_disabled",
+                provider_id=requested_provider,
+            ))
         if not credential.api_key:
-            raise ValueError(
-                f"provider {requested_provider!r} needs an API key for image generation"
-            )
+            raise ValueError(backend_i18n.text(
+                "agent.image_tool.error.provider_key_required",
+                provider_id=requested_provider,
+            ))
         if requested_model and requested_model not in credential.enabled_models:
-            raise ValueError(
-                f"model {requested_model!r} is not enabled for provider {requested_provider!r}"
-            )
+            raise ValueError(backend_i18n.text(
+                "agent.image_tool.error.model_not_enabled",
+                model_id=requested_model,
+                provider_id=requested_provider,
+            ))
         candidates = [requested_model] if requested_model else credential.enabled_models
         selected = next(
             (
@@ -117,11 +151,17 @@ def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, 
             None,
         )
         if selected is None:
-            detail = f"model {requested_model!r}" if requested_model else "its enabled models"
-            capability = "image-to-image" if require_reference else "text-to-image"
-            raise ValueError(
-                f"provider {requested_provider!r} does not expose {detail} as {capability} capable"
-            )
+            if requested_model:
+                raise ValueError(backend_i18n.text(
+                    "agent.image_tool.error.requested_model_unavailable",
+                    capability=_capability_label(require_reference),
+                    model_id=requested_model,
+                ))
+            raise ValueError(backend_i18n.text(
+                "agent.image_tool.error.model_capability_missing",
+                capability=_capability_label(require_reference),
+                provider_id=requested_provider,
+            ))
         return _ImageTarget(credential, selected)
 
     for credential in rows:
@@ -142,19 +182,14 @@ def _select_target(credentials: Iterable[ProviderCredential], provider_id: str, 
             return _ImageTarget(credential, selected)
 
     if requested_model:
-        capability = "image-to-image" if require_reference else "text-to-image"
-        raise ValueError(
-            f"no enabled provider has {capability} model {requested_model!r} with an API key"
-        )
+        raise ValueError(backend_i18n.text(
+            "agent.image_tool.error.requested_model_unavailable",
+            capability=_capability_label(require_reference),
+            model_id=requested_model,
+        ))
     if require_reference:
-        raise ValueError(
-            "no enabled image-to-image model with an API key is configured; enable an "
-            "image model that supports both image input and image output first"
-        )
-    raise ValueError(
-        "no enabled text-to-image model with an API key is configured; "
-        "enable an image-output model under OpenAI, Google, or OpenRouter first"
-    )
+        raise ValueError(backend_i18n.text("agent.image_tool.error.no_reference_model"))
+    raise ValueError(backend_i18n.text("agent.image_tool.error.no_generation_model"))
 
 
 def _default_base_url(provider_id: str) -> Optional[str]:
@@ -168,7 +203,10 @@ def _default_base_url(provider_id: str) -> Optional[str]:
 def _normalized_base_url(credential: ProviderCredential) -> str:
     base_url = (credential.base_url or _default_base_url(credential.provider_id) or "").strip()
     if not base_url:
-        raise ValueError(f"provider {credential.provider_id!r} has no base URL")
+        raise ValueError(backend_i18n.text(
+            "agent.image_tool.error.provider_url_missing",
+            provider_id=credential.provider_id,
+        ))
     base_url = base_url.rstrip("/")
     for suffix in ("/chat/completions", "/responses", "/images/generations", "/images"):
         if base_url.endswith(suffix):
@@ -205,19 +243,25 @@ def _raster_extension(image: bytes) -> str:
     raise RuntimeError("the image provider returned an unsupported or invalid raster image")
 
 
-def _response_error(response: httpx.Response) -> str:
+def _response_error(response: httpx.Response) -> ImageProviderResponseError:
     message = ""
+    code = ""
     try:
         payload = response.json()
         error = payload.get("error") if isinstance(payload, dict) else None
         if isinstance(error, dict):
             message = str(error.get("message") or error.get("code") or "")
+            code = str(error.get("code") or error.get("type") or "")
         elif error:
             message = str(error)
     except ValueError:
         pass
     suffix = f": {message[:500]}" if message else ""
-    return f"image provider returned HTTP {response.status_code}{suffix}"
+    return ImageProviderResponseError(
+        f"image provider returned HTTP {response.status_code}{suffix}",
+        response.status_code,
+        code,
+    )
 
 
 async def _request_http_image(target: _ImageTarget, prompt: str, reference: Optional[dict] = None) -> tuple[bytes, Optional[str]]:
@@ -258,10 +302,7 @@ async def _request_http_image(target: _ImageTarget, prompt: str, reference: Opti
     async with httpx.AsyncClient(timeout=_IMAGE_TIMEOUT) as client:
         response = await client.post(endpoint, headers=headers, **request)
     if response.status_code >= 400:
-        raise RuntimeError(_response_error(response))
-    content_length = response.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > _MAX_ENCODED_IMAGE_LENGTH:
-        raise RuntimeError("the image provider response exceeds the 32 MB image limit")
+        raise _response_error(response)
     try:
         payload = response.json()
     except ValueError as exc:
@@ -318,24 +359,29 @@ async def _request_image(target: _ImageTarget, prompt: str, reference: Optional[
     return await _request_http_image(target, prompt, reference)
 
 
-def _inspect_session_image(file_path: str, work_dir: Any, argument_name: str = "file_path") -> dict:
+def _inspect_session_image(file_path: str, work_dir: Any) -> dict:
     cleaned_path = file_path.strip()
     if not cleaned_path:
-        raise ValueError(f"{argument_name} is required")
+        raise ValueError(backend_i18n.text("agent.image_tool.error.file_required"))
     candidate = Path(cleaned_path)
     resolved_path = (
         candidate.resolve()
         if candidate.is_absolute()
         else (Path(work_dir).resolve() / candidate).resolve()
     )
-    image = inspect_image_input(
-        str(resolved_path),
-        resolved_path.name,
-        max_bytes=_MAX_IMAGE_BYTES,
-    )
-    if image is None:
-        raise ImageInputValidationError(f"File is not a supported image: {resolved_path}")
-    return validate_image_inputs([image], max_total_bytes=_MAX_IMAGE_BYTES)[0]
+    try:
+        image = inspect_image_input(
+            str(resolved_path),
+            resolved_path.name,
+            max_bytes=_MAX_IMAGE_BYTES,
+        )
+        if image is None:
+            raise ImageInputValidationError(f"File is not a supported image: {resolved_path}")
+        return validate_image_inputs([image], max_total_bytes=_MAX_IMAGE_BYTES)[0]
+    except ImageInputValidationError as exc:
+        raise ImageInputValidationError(
+            backend_i18n.text("agent.image_tool.error.image_invalid")
+        ) from exc
 
 
 async def read_image(file_path: str, prompt: str = "") -> str:
@@ -363,7 +409,9 @@ async def read_image(file_path: str, prompt: str = "") -> str:
     """
     cleaned_prompt = prompt.strip() or _DEFAULT_IMAGE_ANALYSIS_PROMPT
     if len(cleaned_prompt) > _MAX_IMAGE_ANALYSIS_PROMPT_LENGTH:
-        raise ValueError("prompt must be at most 32000 characters")
+        raise ValueError(backend_i18n.text(
+            "agent.image_tool.error.read_prompt_too_long"
+        ))
 
     agent = current_agent.get(None)
     context = getattr(agent, "ctx", None) if agent is not None else None
@@ -371,7 +419,9 @@ async def read_image(file_path: str, prompt: str = "") -> str:
     work_dir = getattr(workspace, "work_dir", None) if workspace is not None else None
     llm = getattr(agent, "_llm", None) if agent is not None else None
     if work_dir is None or llm is None:
-        raise RuntimeError("read_image requires an active Session workspace and LLM")
+        raise RuntimeError(backend_i18n.text(
+            "agent.image_tool.error.read_unavailable"
+        ))
 
     llm_provider = getattr(context, "llm_provider", None)
     support = (
@@ -380,19 +430,30 @@ async def read_image(file_path: str, prompt: str = "") -> str:
         else None
     )
     if support is False:
-        raise ImageInputUnsupportedError(str(getattr(llm_provider, "model_id", "") or ""))
+        model_id = str(getattr(llm_provider, "model_id", "") or "")
+        model_display = model_id or backend_i18n.text("llm.selected_model")
+        raise ImageInputUnsupportedError(
+            model_id,
+            backend_i18n.text(
+                "agent.image_tool.error.vision_unsupported",
+                model_display=model_display,
+            ),
+        )
 
     image = _inspect_session_image(file_path, work_dir)
     resolved_path = str(image["path"])
 
-    response = await llm.achat([
-        Message.from_text(_IMAGE_ANALYSIS_SYSTEM_PROMPT, role=Role.SYSTEM),
-        Message.from_text(
-            cleaned_prompt,
-            role=Role.USER,
-            extras={IMAGE_INPUTS_EXTRA: [image]},
-        ),
-    ])
+    try:
+        response = await llm.achat([
+            Message.from_text(_IMAGE_ANALYSIS_SYSTEM_PROMPT, role=Role.SYSTEM),
+            Message.from_text(
+                cleaned_prompt,
+                role=Role.USER,
+                extras={IMAGE_INPUTS_EXTRA: [image]},
+            ),
+        ])
+    except Exception as exc:
+        raise RuntimeError(_friendly_provider_failure("read", exc)) from exc
 
     def response_text() -> str:
         if isinstance(response, str):
@@ -408,7 +469,7 @@ async def read_image(file_path: str, prompt: str = "") -> str:
 
     analysis = response_text()
     if not analysis:
-        raise RuntimeError("the vision model returned no image analysis")
+        raise RuntimeError(backend_i18n.text("agent.image_tool.error.read_failed"))
     return f"Image analysis for {resolved_path}:\n{analysis}"
 
 
@@ -450,9 +511,13 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
     """
     cleaned_prompt = prompt.strip()
     if not cleaned_prompt:
-        raise ValueError("prompt is required")
+        raise ValueError(backend_i18n.text(
+            "agent.image_tool.error.generation_prompt_required"
+        ))
     if len(cleaned_prompt) > 32_000:
-        raise ValueError("prompt must be at most 32000 characters")
+        raise ValueError(backend_i18n.text(
+            "agent.image_tool.error.generation_prompt_too_long"
+        ))
 
     agent = current_agent.get(None)
     context = getattr(agent, "ctx", None) if agent is not None else None
@@ -461,9 +526,11 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
     user_id = getattr(session, "user_id", None) if session is not None else None
     work_dir = getattr(workspace, "work_dir", None) if workspace is not None else None
     if not user_id or work_dir is None:
-        raise RuntimeError("generate_image requires an active Session workspace")
+        raise RuntimeError(backend_i18n.text(
+            "agent.image_tool.error.generation_unavailable"
+        ))
     reference = (
-        _inspect_session_image(reference_image_path, work_dir, "reference_image_path")
+        _inspect_session_image(reference_image_path, work_dir)
         if reference_image_path.strip()
         else None
     )
@@ -543,9 +610,7 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
     source = ""
     generated = False
     codex_error: Optional[Exception] = None
-    codex_model = ""
     if use_codex:
-        codex_model = current_model
         try:
             encoded = await current_llm.agenerate_image(cleaned_prompt, reference)
             image = _decode_base64_image(encoded)
@@ -554,19 +619,22 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
         except Exception as exc:
             codex_error = exc
             if requested_provider or requested_model:
-                raise RuntimeError(
-                    f"image generation with openai-codex/{current_model} failed: {exc}"
-                ) from None
+                raise RuntimeError(_friendly_provider_failure(
+                    "generation",
+                    exc,
+                )) from exc
 
     if not generated:
-        credentials = await ProviderRepository().list_for_user(user_id)
+        try:
+            credentials = await ProviderRepository().list_for_user(user_id)
+        except Exception as exc:
+            raise RuntimeError(_friendly_provider_failure("generation", exc)) from exc
         codex_target = (
             select_codex_fallback(credentials)
             if not use_codex
             else None
         )
         if codex_target is not None:
-            codex_model = codex_target.model
             fallback_llm: Any = None
             try:
                 fallback_llm = build_codex_llm(
@@ -581,9 +649,10 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
             except Exception as exc:
                 codex_error = exc
                 if requested_provider or requested_model:
-                    raise RuntimeError(
-                        f"image generation with openai-codex/{codex_target.model} failed: {exc}"
-                    ) from None
+                    raise RuntimeError(_friendly_provider_failure(
+                        "generation",
+                        exc,
+                    )) from exc
             finally:
                 if fallback_llm is not None:
                     await close_temporary_llm(fallback_llm)
@@ -591,31 +660,53 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
         if not generated:
             try:
                 target = _select_target(credentials, provider_id, model, require_reference=reference is not None)
-            except ValueError as exc:
+            except ValueError:
                 if codex_error is not None:
-                    raise RuntimeError(
-                        f"image generation with openai-codex/{codex_model} failed: {codex_error}; "
-                        f"no configured image-model fallback is available"
-                    ) from None
+                    public = PublicAgentError.from_exception(codex_error)
+                    if public.code == "internal_error":
+                        message = backend_i18n.text(
+                            "agent.image_tool.error.no_fallback"
+                        )
+                    else:
+                        message = backend_i18n.text(
+                            "agent.image_tool.error.no_fallback_reason",
+                            reason=public.message,
+                        )
+                    raise RuntimeError(message) from codex_error
                 raise
             source = f"{target.credential.provider_id}/{target.model}"
             try:
                 image, _mime_type = await _request_image(target, cleaned_prompt, reference)
             except Exception as exc:
-                message = str(exc)
-                if target.credential.api_key:
-                    message = message.replace(target.credential.api_key, "[redacted]")
-                raise RuntimeError(f"image generation with {source} failed: {message}") from None
+                raise RuntimeError(_friendly_provider_failure(
+                    "generation",
+                    exc,
+                )) from exc
 
-    extension = _raster_extension(image)
+    try:
+        extension = _raster_extension(image)
+    except Exception as exc:
+        raise RuntimeError(_friendly_provider_failure("generation", exc)) from exc
 
     workspace_root = Path(work_dir).resolve()
     output_dir = workspace_root / "generated-images"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(backend_i18n.text(
+            "agent.image_tool.error.save_failed"
+        )) from exc
     if not output_dir.resolve().is_relative_to(workspace_root):
-        raise RuntimeError("generated image directory escapes the Session workspace")
+        raise RuntimeError(backend_i18n.text(
+            "agent.image_tool.error.save_failed"
+        ))
     output_path = output_dir / f"generated-{uuid.uuid4().hex}.{extension}"
-    output_path.write_bytes(image)
+    try:
+        output_path.write_bytes(image)
+    except OSError as exc:
+        raise RuntimeError(backend_i18n.text(
+            "agent.image_tool.error.save_failed"
+        )) from exc
     resolved_path = output_path.resolve()
     reference_summary = (
         f" using reference image {reference['path']}"

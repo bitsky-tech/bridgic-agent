@@ -13,12 +13,14 @@ from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_agent.security import ExecutionMode, PermissionEngine
 from src.amphi_agent.tools import _image as image_module
 from src.amphi_agent.tools._image import generate_image, read_image
+from src.amphi_service.i18n import use_locale
 from src.amphi_service.protocol.llms import supports_image_generation
 from src.amphi_service.protocol.llms._image_inputs import (
     IMAGE_INPUTS_EXTRA,
     ImageInputUnsupportedError,
     ImageInputValidationError,
     MAX_IMAGE_INPUT_BYTES,
+    MAX_IMAGE_INPUT_TOTAL_BYTES,
     inspect_image_input,
     read_image_input,
 )
@@ -125,8 +127,51 @@ async def test_read_image_rejects_known_text_only_model(tool_harness: ToolHarnes
         provider_id="deepseek",
     )
 
-    with pytest.raises(ImageInputUnsupportedError, match="deepseek-v4-pro"):
-        await read_image(str(image_path))
+    with use_locale("zh"):
+        with pytest.raises(ImageInputUnsupportedError) as error:
+            await read_image(str(image_path))
+
+    assert str(error.value) == (
+        "当前模型“deepseek-v4-pro”无法理解图片。"
+        "请切换到支持图片输入的模型后重试。"
+    )
+
+
+async def test_read_image_replaces_private_path_details_with_friendly_message(tool_harness: ToolHarness) -> None:
+    tool_harness.agent._llm = SimpleNamespace()
+    tool_harness.context.llm_provider = LlmProvider(
+        model_id="gpt-5.6-sol",
+        provider_id="openai-codex",
+    )
+
+    with use_locale("zh"):
+        with pytest.raises(ImageInputValidationError) as error:
+            await read_image("private/missing-reference.png")
+
+    assert str(error.value) == (
+        "无法读取这张图片。请确认文件仍然存在，是有效的 PNG、JPEG、GIF 或 WebP 图片，"
+        "并且不超过 32 MB。"
+    )
+    assert "private/missing-reference.png" not in str(error.value)
+
+
+def test_provider_failures_keep_image_tool_specific_guidance() -> None:
+    with use_locale("zh"):
+        invalid = image_module._friendly_provider_failure(
+            "generation",
+            ImageInputValidationError("private/path/reference.png changed"),
+        )
+        unsupported = image_module._friendly_provider_failure(
+            "read",
+            ImageInputUnsupportedError("provider-model-id"),
+        )
+
+    assert "不超过 32 MB" in invalid
+    assert "private/path/reference.png" not in invalid
+    assert unsupported == (
+        "当前模型“所选模型”无法理解图片。请切换到支持图片输入的模型后重试。"
+    )
+    assert "移除图片" not in unsupported
 
 
 async def test_generate_image_uses_network_permission(tool_harness: ToolHarness) -> None:
@@ -287,7 +332,7 @@ async def test_generate_image_falls_back_to_api_key_model_after_configured_codex
     assert result.startswith("Generated one image with google/gemini-2.5-flash-image.\n")
 
 
-async def test_generate_image_reports_configured_codex_failure_before_missing_api_fallback(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_generate_image_localizes_codex_failure_without_exposing_details(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     await _configure_codex_auth("gpt-5.5")
 
     class FailingCodexLlm:
@@ -296,15 +341,15 @@ async def test_generate_image_reports_configured_codex_failure_before_missing_ap
 
     monkeypatch.setattr(image_module, "build_codex_llm", lambda *_args, **_kwargs: FailingCodexLlm())
 
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            r"image generation with openai-codex/gpt-5\.5 failed: "
-            r"Codex returned no generated image; "
-            r"no configured image-model fallback is available"
-        ),
-    ):
-        await generate_image("a lighthouse")
+    with use_locale("zh"):
+        with pytest.raises(RuntimeError) as error:
+            await generate_image("a lighthouse")
+
+    assert str(error.value) == (
+        "图片生成没有完成，并且当前没有可用的备用图片生成模型。"
+        "请稍后重试，或在模型设置中启用一个支持图片生成的模型。"
+    )
+    assert "Codex" not in str(error.value)
 
 
 async def test_generate_image_explicit_api_provider_bypasses_configured_codex_auth(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,11 +454,26 @@ async def test_generate_image_honors_explicit_provider_and_model(tool_harness: T
 async def test_generate_image_requires_a_configured_image_model(tool_harness: ToolHarness) -> None:
     await _configure_provider("openai", "gpt-5.5")
 
-    with pytest.raises(ValueError, match="no enabled text-to-image model"):
-        await generate_image("a lighthouse")
+    with use_locale("en"):
+        with pytest.raises(ValueError) as english_error:
+            await generate_image("a lighthouse")
+
+    assert str(english_error.value) == (
+        "No image generation model is available. Connect ChatGPT, or enable a model "
+        "that supports image generation in model settings."
+    )
+
+    with use_locale("zh"):
+        with pytest.raises(ValueError) as error:
+            await generate_image("a lighthouse")
+
+    assert str(error.value) == (
+        "当前没有可用的图片生成模型。请完成 ChatGPT 授权，"
+        "或在模型设置中启用一个支持图片生成的模型。"
+    )
 
 
-async def test_generate_image_preserves_provider_failure_details(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_generate_image_replaces_provider_failure_with_friendly_message(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     await _configure_provider("openai", "gpt-image-2")
 
     async def request_image(*_args: object, **_kwargs: object) -> tuple[bytes, str]:
@@ -421,20 +481,27 @@ async def test_generate_image_preserves_provider_failure_details(tool_harness: T
 
     monkeypatch.setattr(image_module, "_request_image", request_image)
 
-    with pytest.raises(
-        RuntimeError,
-        match=r"image generation with openai/gpt-image-2 failed: provider overloaded",
-    ):
-        await generate_image("a lighthouse")
+    with use_locale("zh"):
+        with pytest.raises(RuntimeError) as error:
+            await generate_image("a lighthouse")
+
+    assert str(error.value) == (
+        "图片生成没有完成。当前服务暂时不可用。请稍后再试，或换一个模型。"
+    )
+    assert "provider overloaded" not in str(error.value)
 
 
-def test_tool_images_can_reuse_files_up_to_generation_limit(tool_harness: ToolHarness) -> None:
-    image_path = tool_harness.workspace.work_dir / "large-generated.png"
-    image_bytes = _PNG + b"x" * MAX_IMAGE_INPUT_BYTES
+def test_image_inputs_and_generated_outputs_share_the_same_size_limit(tool_harness: ToolHarness) -> None:
+    assert MAX_IMAGE_INPUT_BYTES == MAX_IMAGE_INPUT_TOTAL_BYTES
+    assert MAX_IMAGE_INPUT_BYTES == image_module._MAX_IMAGE_BYTES
+
+    image_path = tool_harness.workspace.work_dir / "maximum-size-image.png"
+    image_bytes = _PNG + b"x" * (MAX_IMAGE_INPUT_BYTES - len(_PNG))
     image_path.write_bytes(image_bytes)
 
-    with pytest.raises(ImageInputValidationError, match="Image exceeds"):
-        inspect_image_input(str(image_path))
+    message_descriptor = inspect_image_input(str(image_path))
+    assert message_descriptor is not None
+    assert message_descriptor["size_bytes"] == MAX_IMAGE_INPUT_BYTES
 
     descriptor = image_module._inspect_session_image(
         str(image_path),
@@ -442,8 +509,16 @@ def test_tool_images_can_reuse_files_up_to_generation_limit(tool_harness: ToolHa
     )
 
     assert descriptor["size_bytes"] == len(image_bytes)
-    assert descriptor["max_bytes"] == image_module._MAX_IMAGE_BYTES
     assert read_image_input(descriptor) == (image_bytes, "image/png")
+
+    image_path.write_bytes(image_bytes + b"x")
+    with pytest.raises(ImageInputValidationError, match="Image exceeds"):
+        inspect_image_input(str(image_path))
+    with pytest.raises(ImageInputValidationError, match="no larger than 32 MB"):
+        image_module._inspect_session_image(
+            str(image_path),
+            tool_harness.workspace.work_dir,
+        )
 
 
 @pytest.mark.parametrize(
@@ -515,6 +590,44 @@ async def test_http_image_provider_routes(monkeypatch: pytest.MonkeyPatch, provi
     }
     assert image == _PNG
     assert mime_type == "image/png"
+
+
+async def test_http_image_provider_ignores_json_envelope_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Client:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, _url: str, **_kwargs: object) -> httpx.Response:
+            encoded_limit = ((MAX_IMAGE_INPUT_BYTES + 2) // 3) * 4
+            return httpx.Response(
+                200,
+                headers={"content-length": str(encoded_limit + 1024)},
+                json={"data": [{"b64_json": base64.b64encode(_PNG).decode("ascii")}]},
+            )
+
+    monkeypatch.setattr(image_module.httpx, "AsyncClient", Client)
+    credential = ProviderCredential(
+        user_id="local",
+        provider_id="openai",
+        auth_mode="api_key",
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+        protocol="openai",
+        enabled_models=["gpt-image-2"],
+    )
+
+    image, _ = await image_module._request_http_image(
+        image_module._ImageTarget(credential, "gpt-image-2"),
+        "draw a bridge",
+    )
+
+    assert image == _PNG
 
 
 async def test_openai_reference_image_uses_multipart_edit_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

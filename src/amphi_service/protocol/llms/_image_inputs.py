@@ -10,9 +10,9 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 IMAGE_INPUTS_EXTRA = "image_inputs"
 MAX_IMAGE_INPUTS = 10
-MAX_IMAGE_INPUT_BYTES = 5 * 1024 * 1024
-MAX_IMAGE_INPUT_TOTAL_BYTES = 20 * 1024 * 1024
-MAX_REUSABLE_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_IMAGE_INPUT_BYTES = 32 * 1024 * 1024
+MAX_IMAGE_INPUT_TOTAL_BYTES = MAX_IMAGE_INPUT_BYTES
+MAX_REUSABLE_IMAGE_BYTES = MAX_IMAGE_INPUT_BYTES
 
 _IMAGE_EXTENSIONS = frozenset({
     ".avif",
@@ -35,9 +35,11 @@ class ImageInputError(ValueError):
 class ImageInputUnsupportedError(ImageInputError):
     """The selected model is known not to accept image input."""
 
-    def __init__(self, model_id: str = "") -> None:
+    def __init__(self, model_id: str = "", message: str = "") -> None:
         self.model_id = model_id
-        super().__init__(f"Model {model_id or '(unknown)'} does not support image input")
+        super().__init__(
+            message or f"Model {model_id or '(unknown)'} does not support image input"
+        )
 
 
 class ImageInputValidationError(ImageInputError):
@@ -62,8 +64,8 @@ def inspect_image_input(path: str, name: str = "", *, max_bytes: int = MAX_IMAGE
     Magic bytes, rather than the filename or uploaded MIME value, decide whether
     a file becomes model-visible image content. Image-looking filenames fail
     explicitly when their bytes are unavailable or unsupported; ordinary files
-    remain ordinary file mentions. User-message callers keep the default 5 MB
-    bound; trusted image tools can opt into the reusable 32 MB ceiling.
+    remain ordinary file mentions. User messages and image tools share the same
+    32 MB per-image ceiling.
     """
     if max_bytes <= 0 or max_bytes > MAX_REUSABLE_IMAGE_BYTES:
         raise ValueError(
@@ -112,8 +114,7 @@ def inspect_image_input(path: str, name: str = "", *, max_bytes: int = MAX_IMAGE
 def validate_image_inputs(inputs: Iterable[Mapping[str, Any]], *, max_total_bytes: int = MAX_IMAGE_INPUT_TOTAL_BYTES) -> List[Dict[str, Any]]:
     """Bound one message's image count and total encoded source size.
 
-    Ordinary messages retain the default 20 MB aggregate limit. A trusted
-    single-image tool can opt into the reusable-image ceiling explicitly.
+    User messages and image tools share the same 32 MB aggregate ceiling.
     """
     if max_total_bytes <= 0 or max_total_bytes > MAX_REUSABLE_IMAGE_BYTES:
         raise ValueError(
