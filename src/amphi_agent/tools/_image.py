@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -16,6 +17,7 @@ from google.genai import types
 
 from ...amphi_service.protocol.llms import (
     PROVIDER_CATALOG_BY_ID,
+    build_codex_llm,
     catalog_model,
     supports_image_generation,
 )
@@ -29,6 +31,7 @@ from ...amphi_service.protocol.llms._image_inputs import (
     read_image_input,
     validate_image_inputs,
 )
+from ...amphi_service.protocol.llms.codex_llm import DEFAULT_CODEX_MODEL
 from ...amphi_store import ProviderCredential, ProviderRepository
 
 
@@ -421,10 +424,12 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
     unavailable.
 
     A current Codex subscription model is allowed to use its hosted Responses
-    image-generation or image-editing tool. Otherwise the tool automatically
-    prefers the active configured provider, then the first enabled model with
-    the required output and input modalities. Pass ``provider_id`` or ``model``
-    only when the user explicitly requests a configured provider or model.
+    image-generation or image-editing tool. When another provider is current,
+    an enabled ChatGPT Auth channel is used as the first automatic fallback.
+    Otherwise the tool prefers the active API-key provider, then the first
+    enabled model with the required output and input modalities. Pass
+    ``provider_id`` or ``model`` only when the user explicitly requests a
+    configured provider or model.
 
     The generated raster image is saved under the current Session workspace.
     The returned absolute path occupies its own line so the desktop client can
@@ -463,6 +468,60 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
         else None
     )
 
+    def select_codex_fallback(credentials: Iterable[ProviderCredential]) -> Optional[_ImageTarget]:
+        requested_provider = provider_id.strip()
+        requested_model = model.strip()
+        if requested_provider and requested_provider not in {"openai", "openai-codex"}:
+            return None
+
+        credential = next(
+            (
+                row
+                for row in _ordered_credentials(credentials)
+                if row.is_enabled
+                and row.auth_mode == "oauth"
+                and row.protocol == "openai-codex"
+            ),
+            None,
+        )
+        if credential is None:
+            return None
+
+        candidates = list(credential.enabled_models)
+        if requested_model:
+            if requested_model not in candidates:
+                return None
+            candidates = [requested_model]
+        elif DEFAULT_CODEX_MODEL in candidates:
+            candidates.remove(DEFAULT_CODEX_MODEL)
+            candidates.insert(0, DEFAULT_CODEX_MODEL)
+
+        if reference is not None:
+            def accepts_image_input(candidate: str) -> bool:
+                metadata = catalog_model("openai-codex", candidate)
+                return metadata is None or bool(metadata.get("vision"))
+
+            candidates = [
+                candidate
+                for candidate in candidates
+                if accepts_image_input(candidate)
+            ]
+        if not candidates:
+            return None
+        return _ImageTarget(credential=credential, model=candidates[0])
+
+    async def close_temporary_llm(llm: Any) -> None:
+        client = getattr(llm, "client", None)
+        close = getattr(client, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+        async_client = getattr(llm, "async_client", None)
+        aclose = getattr(async_client, "aclose", None)
+        if callable(aclose):
+            with suppress(Exception):
+                await aclose()
+
     requested_provider = provider_id.strip()
     requested_model = model.strip()
     current_llm = getattr(agent, "_llm", None)
@@ -480,14 +539,18 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
         )
     )
 
-    image: bytes
-    source: str
+    image = b""
+    source = ""
+    generated = False
     codex_error: Optional[Exception] = None
+    codex_model = ""
     if use_codex:
+        codex_model = current_model
         try:
             encoded = await current_llm.agenerate_image(cleaned_prompt, reference)
             image = _decode_base64_image(encoded)
             source = f"openai-codex/{current_model}"
+            generated = True
         except Exception as exc:
             codex_error = exc
             if requested_provider or requested_model:
@@ -495,25 +558,54 @@ async def generate_image(prompt: str, provider_id: str = "", model: str = "", re
                     f"image generation with openai-codex/{current_model} failed: {exc}"
                 ) from None
 
-    if not use_codex or codex_error is not None:
+    if not generated:
         credentials = await ProviderRepository().list_for_user(user_id)
-        try:
-            target = _select_target(credentials, provider_id, model, require_reference=reference is not None)
-        except ValueError as exc:
-            if codex_error is not None:
-                raise RuntimeError(
-                    f"image generation with openai-codex/{current_model} failed: {codex_error}; "
-                    f"no configured image-model fallback is available"
-                ) from None
-            raise
-        source = f"{target.credential.provider_id}/{target.model}"
-        try:
-            image, _mime_type = await _request_image(target, cleaned_prompt, reference)
-        except Exception as exc:
-            message = str(exc)
-            if target.credential.api_key:
-                message = message.replace(target.credential.api_key, "[redacted]")
-            raise RuntimeError(f"image generation with {source} failed: {message}") from None
+        codex_target = (
+            select_codex_fallback(credentials)
+            if not use_codex
+            else None
+        )
+        if codex_target is not None:
+            codex_model = codex_target.model
+            fallback_llm: Any = None
+            try:
+                fallback_llm = build_codex_llm(
+                    codex_target.model,
+                    user_id=user_id,
+                    api_base=codex_target.credential.base_url,
+                )
+                encoded = await fallback_llm.agenerate_image(cleaned_prompt, reference)
+                image = _decode_base64_image(encoded)
+                source = f"openai-codex/{codex_target.model}"
+                generated = True
+            except Exception as exc:
+                codex_error = exc
+                if requested_provider or requested_model:
+                    raise RuntimeError(
+                        f"image generation with openai-codex/{codex_target.model} failed: {exc}"
+                    ) from None
+            finally:
+                if fallback_llm is not None:
+                    await close_temporary_llm(fallback_llm)
+
+        if not generated:
+            try:
+                target = _select_target(credentials, provider_id, model, require_reference=reference is not None)
+            except ValueError as exc:
+                if codex_error is not None:
+                    raise RuntimeError(
+                        f"image generation with openai-codex/{codex_model} failed: {codex_error}; "
+                        f"no configured image-model fallback is available"
+                    ) from None
+                raise
+            source = f"{target.credential.provider_id}/{target.model}"
+            try:
+                image, _mime_type = await _request_image(target, cleaned_prompt, reference)
+            except Exception as exc:
+                message = str(exc)
+                if target.credential.api_key:
+                    message = message.replace(target.credential.api_key, "[redacted]")
+                raise RuntimeError(f"image generation with {source} failed: {message}") from None
 
     extension = _raster_extension(image)
 

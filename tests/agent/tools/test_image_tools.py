@@ -41,6 +41,18 @@ async def _configure_provider(provider_id: str, model: str, protocol: str = "ope
     )
 
 
+async def _configure_codex_auth(*models: str) -> None:
+    await ProviderRepository().upsert(
+        "local",
+        "openai",
+        auth_mode="oauth",
+        api_key=None,
+        base_url=None,
+        protocol="openai-codex",
+        models=list(models) or ["gpt-5.5"],
+    )
+
+
 def test_image_capability_and_tool_registration() -> None:
     assert supports_image_generation("openai", "gpt-image-2") is True
     assert supports_image_generation("openai", "gpt-5.5") is False
@@ -215,6 +227,133 @@ async def test_generate_image_prefers_current_codex_hosted_tool(tool_harness: To
     image_path = Path(result.splitlines()[-1])
     assert image_path.read_bytes() == _PNG
     assert result.startswith("Generated one image with openai-codex/gpt-5.6-sol.\n")
+
+
+async def test_generate_image_uses_configured_codex_auth_from_another_main_provider(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    await _configure_codex_auth("gpt-5.5", "gpt-5.4-mini")
+    await _configure_provider("deepseek", "deepseek-v4-pro")
+    await ProviderRepository().set_active("local", "deepseek")
+    tool_harness.agent._llm = SimpleNamespace(
+        protocol="openai",
+        configuration=SimpleNamespace(model="deepseek-v4-pro"),
+    )
+    captured: dict[str, object] = {}
+
+    class CodexLlm:
+        async def agenerate_image(self, prompt: str, reference: dict | None = None) -> str:
+            captured.update(prompt=prompt, reference=reference)
+            return base64.b64encode(_PNG).decode("ascii")
+
+    def build_codex_llm(model: str, user_id: str = "", temperature: float = 0.0, api_base: str | None = None) -> CodexLlm:
+        captured.update(model=model, user_id=user_id, temperature=temperature, api_base=api_base)
+        return CodexLlm()
+
+    monkeypatch.setattr(image_module, "build_codex_llm", build_codex_llm)
+
+    result = await generate_image("a city floating above the clouds")
+
+    assert captured == {
+        "model": "gpt-5.5",
+        "user_id": "local",
+        "temperature": 0.0,
+        "api_base": None,
+        "prompt": "a city floating above the clouds",
+        "reference": None,
+    }
+    assert result.startswith("Generated one image with openai-codex/gpt-5.5.\n")
+    assert Path(result.splitlines()[-1]).read_bytes() == _PNG
+
+
+async def test_generate_image_falls_back_to_api_key_model_after_configured_codex_failure(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    await _configure_codex_auth("gpt-5.5")
+    await _configure_provider("google", "gemini-2.5-flash-image", "google")
+    requested: list[tuple[str, str]] = []
+
+    class FailingCodexLlm:
+        async def agenerate_image(self, _prompt: str, _reference: dict | None = None) -> str:
+            raise RuntimeError("Codex image generation unavailable")
+
+    async def request_image(target: image_module._ImageTarget, _prompt: str, reference: dict | None = None) -> tuple[bytes, str]:
+        assert reference is None
+        requested.append((target.credential.provider_id, target.model))
+        return _PNG, "image/png"
+
+    monkeypatch.setattr(image_module, "build_codex_llm", lambda *_args, **_kwargs: FailingCodexLlm())
+    monkeypatch.setattr(image_module, "_request_image", request_image)
+
+    result = await generate_image("a lighthouse")
+
+    assert requested == [("google", "gemini-2.5-flash-image")]
+    assert result.startswith("Generated one image with google/gemini-2.5-flash-image.\n")
+
+
+async def test_generate_image_reports_configured_codex_failure_before_missing_api_fallback(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    await _configure_codex_auth("gpt-5.5")
+
+    class FailingCodexLlm:
+        async def agenerate_image(self, _prompt: str, _reference: dict | None = None) -> str:
+            raise RuntimeError("Codex returned no generated image")
+
+    monkeypatch.setattr(image_module, "build_codex_llm", lambda *_args, **_kwargs: FailingCodexLlm())
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"image generation with openai-codex/gpt-5\.5 failed: "
+            r"Codex returned no generated image; "
+            r"no configured image-model fallback is available"
+        ),
+    ):
+        await generate_image("a lighthouse")
+
+
+async def test_generate_image_explicit_api_provider_bypasses_configured_codex_auth(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    await _configure_codex_auth("gpt-5.5")
+    await _configure_provider("google", "gemini-2.5-flash-image", "google")
+    requested: list[tuple[str, str]] = []
+
+    def unexpected_codex(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Explicit Google selection must not use ChatGPT Auth")
+
+    async def request_image(target: image_module._ImageTarget, _prompt: str, reference: dict | None = None) -> tuple[bytes, str]:
+        assert reference is None
+        requested.append((target.credential.provider_id, target.model))
+        return _PNG, "image/png"
+
+    monkeypatch.setattr(image_module, "build_codex_llm", unexpected_codex)
+    monkeypatch.setattr(image_module, "_request_image", request_image)
+
+    await generate_image(
+        "a paper-cut forest",
+        provider_id="google",
+        model="gemini-2.5-flash-image",
+    )
+
+    assert requested == [("google", "gemini-2.5-flash-image")]
+
+
+async def test_generate_image_passes_reference_pixels_to_configured_codex_fallback(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    await _configure_codex_auth("gpt-5.5")
+    image_path = tool_harness.workspace.work_dir / "character.png"
+    image_path.write_bytes(_PNG)
+    captured: dict[str, object] = {}
+
+    class CodexLlm:
+        async def agenerate_image(self, prompt: str, reference: dict | None = None) -> str:
+            captured.update(prompt=prompt, reference=reference)
+            return base64.b64encode(_PNG).decode("ascii")
+
+    monkeypatch.setattr(image_module, "build_codex_llm", lambda *_args, **_kwargs: CodexLlm())
+
+    result = await generate_image(
+        "Keep the character and change the background to a forest",
+        reference_image_path="character.png",
+    )
+
+    assert captured["prompt"] == "Keep the character and change the background to a forest"
+    assert isinstance(captured["reference"], dict)
+    assert captured["reference"]["path"] == str(image_path.resolve())
+    assert f"using reference image {image_path.resolve()}" in result
 
 
 async def test_generate_image_passes_reference_pixels_to_codex(tool_harness: ToolHarness) -> None:
