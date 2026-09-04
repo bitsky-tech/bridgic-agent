@@ -41,19 +41,15 @@ PRESENTATION_STAGE_STEPS: Dict[str, Tuple[PresentationStep, ...]] = {
     "ppt_plan": (
         PresentationStep(
             "collect_evidence",
-            "Use supplied files and conversation first; one sufficient source is enough, otherwise collect only the 3–5 high-quality sources needed to support the deck.",
-        ),
-        PresentationStep(
-            "shape_chapters",
-            "Turn the communication goal into a coherent chapter sequence with a clear narrative arc.",
+            "Use supplied files and conversation first; one sufficient source is enough, otherwise collect only the 3–5 high-quality sources needed in one bounded non-browser research pass, without routine delegation.",
         ),
         PresentationStep(
             "map_slides",
-            "Create the editable page blueprint: every slide's purpose, key message, content, and source links.",
+            "Design the chapter narrative and its editable page blueprint together: every slide's purpose, key message, content, and source links.",
         ),
         PresentationStep(
             "design_visual_direction",
-            "Choose the template strategy and visual system from the actual content and page-role inventory.",
+            "After outline confirmation, call `ppt_rag` with `limit=8` by itself and wait for the user's template decision. Then define the visual system from the selected template or explicit skip decision, and record the selected template id, version, and materialization reference in the plan.",
         ),
     ),
     "ppt_compose": (
@@ -120,7 +116,7 @@ class PresentationThink(MainThink):
             "start_subagent",
             "update_schedule",
         }
-        | {"report_presentation_step"}
+        | {"report_presentation_step", "ppt_rag"}
     )
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
@@ -238,6 +234,12 @@ class PresentationThink(MainThink):
             "sources": [source.model_dump(mode="json") for source in state.sources],
             "chapters": [chapter.model_dump(mode="json") for chapter in state.outline],
             "outline_confirmed": state.outline_confirmed,
+            "template_selection_status": state.template_selection_status,
+            "selected_template": (
+                state.selected_template.agent_context()
+                if state.selected_template is not None
+                else None
+            ),
         }
         return "<presentation_plan_data>\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n</presentation_plan_data>"
 
@@ -276,7 +278,18 @@ class PresentationThink(MainThink):
 
     def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Any]:
         """Return presentation tools plus the cognitive handoff control."""
-        return [*super().select_tools(ota_context, context), switch_tool]
+        tools = super().select_tools(ota_context, context)
+        state = ota_context.think_status
+        expose_ppt_rag = (
+            isinstance(state, PresentationStageState)
+            and state.stage == "ppt_plan"
+            and state.step_index == 2
+            and state.outline_confirmed
+            and state.template_selection_status == "idle"
+        )
+        if not expose_ppt_rag:
+            tools = [tool for tool in tools if tool.tool_name != "ppt_rag"]
+        return [*tools, switch_tool]
 
     async def assemble_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
         """Assemble every presentation stage with its exact runtime tool surface."""
@@ -304,19 +317,31 @@ class PresentationThink(MainThink):
     async def legality_check(self, call: StepToolCall, ota_context: Optional[AmphiOTAContext], context: AmphiContext) -> Optional[str]:
         """Keep reports and stage handoffs aligned with the production cursor."""
         tool_name = getattr(call, "tool", None)
-        if tool_name not in {"report_presentation_step", "switch"}:
+        if tool_name not in {"ppt_rag", "report_presentation_step", "switch"}:
             return None
         if ota_context is None or not isinstance(ota_context.think_status, PresentationStageState):
             return "presentation control rejected: no presentation pipeline is active."
         state = ota_context.think_status
         steps = PRESENTATION_STAGE_STEPS.get(state.stage, ())
+        if tool_name == "ppt_rag":
+            if (
+                state.stage != "ppt_plan"
+                or state.step_index != 2
+                or not state.outline_confirmed
+                or state.template_selection_status != "idle"
+            ):
+                return "PPT template retrieval rejected: the confirmed visual-direction step is not active."
+            calls = getattr(ota_context.think_result, "tool_calls", None) or []
+            if len(calls) != 1:
+                return "PPT template retrieval rejected: `ppt_rag` must be the only tool call in this round."
+            return None
         if tool_name == "report_presentation_step":
             if not steps:
                 return "presentation step report rejected: this stage has no reportable production steps."
             if state.step_index >= len(steps):
                 return "presentation step report rejected: this stage has no unfinished step."
             current = steps[state.step_index]
-            if state.stage == "ppt_plan" and current.step_id in {"collect_evidence", "shape_chapters", "map_slides"}:
+            if state.stage == "ppt_plan" and current.step_id in {"collect_evidence", "map_slides"}:
                 arguments = {
                     _view(argument, "name"): _view(argument, "value")
                     for argument in getattr(call, "tool_arguments", None) or []
@@ -328,6 +353,8 @@ class PresentationThink(MainThink):
                     return f"presentation step report rejected: {exc}"
             if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and not state.outline_confirmed:
                 return "presentation step report rejected: the editable outline must be confirmed first."
+            if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and state.template_selection_status not in {"selected", "skipped"}:
+                return "presentation step report rejected: call `ppt_rag` by itself and wait for the user's template decision first."
             if state.step_index == len(steps) - 1:
                 reason = self.artifact_validation_reason(context, state.stage)
                 if reason:

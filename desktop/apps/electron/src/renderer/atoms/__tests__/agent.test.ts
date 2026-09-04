@@ -48,6 +48,10 @@ import {
   setPowerPointNeedsAttentionAtom,
 } from '../powerpoint-attention'
 import {
+  presentationPaneViewFamily,
+  presentationTemplateSelectionFamily,
+} from '../presentation'
+import {
   SessionWorkbenchSurface,
   sessionWorkbenchSurfaceAtom,
   setSessionWorkbenchSurfaceAtom,
@@ -579,6 +583,43 @@ describe('reducer: message lifecycle', () => {
     expect(startedAt).toBeLessThanOrEqual(after)
   })
 
+  it('continues accumulated execution time without counting the human wait', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    const startedAt = Date.parse('2026-09-04T10:00:00Z')
+    const parkedAt = startedAt + 12_000
+    setSystemTime(new Date(parkedAt + 30_000))
+    try {
+      store.set(activeSessionIdAtom, id)
+      store.set(messageFamily(id), [{
+        id: 'hydrated-review',
+        role: AgentRole.Assistant,
+        text: '请确认任务说明书。',
+        toolCalls: [],
+        blocks: [{
+          type: 'task_confirm',
+          requestId: 'task-review',
+          taskMarkdown: '# Task\n内容',
+          status: 'pending',
+        }],
+        done: true,
+        createdAt: 1,
+        completedAt: parkedAt,
+        durationMs: 12_000,
+      }])
+
+      store.set(prepareInteractionContinuationAtom, { sessionId: id })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_start', messageId: 'resumed-message', role: 'assistant' },
+      })
+
+      expect(store.get(currentStreamingAtom)?.startedAt).toBe(parkedAt + 30_000 - 12_000)
+    } finally {
+      setSystemTime()
+    }
+  })
+
   it('does not carry an assistant reply from an earlier Session Turn', () => {
     const store = makeStore()
     const id = setupSession(store)
@@ -674,6 +715,28 @@ describe('reducer: message lifecycle', () => {
           operation: 'edit',
           workflowId: 'wf-existing',
           originalTaskMarkdown: '## Task\n\nOld flow',
+          status: 'pending',
+        } satisfies MessageBlock,
+      },
+      {
+        event: {
+          type: 'presentation_outline_confirm_request' as const,
+          requestId: 'outline-1',
+        },
+        expected: {
+          type: 'presentation_outline_confirm',
+          requestId: 'outline-1',
+          status: 'pending',
+        } satisfies MessageBlock,
+      },
+      {
+        event: {
+          type: 'presentation_template_selection_request' as const,
+          requestId: 'template-selection-1',
+        },
+        expected: {
+          type: 'presentation_template_selection',
+          requestId: 'template-selection-1',
           status: 'pending',
         } satisfies MessageBlock,
       },
@@ -1605,6 +1668,14 @@ describe('appendUserMessageAtom', () => {
         },
         question: '工作流保存确认',
       },
+      {
+        block: {
+          type: 'presentation_outline_confirm',
+          requestId: 'outline-1',
+          status: 'pending',
+        },
+        question: 'PPT 大纲已生成',
+      },
     ]
 
     for (const { block, question } of cases) {
@@ -2213,6 +2284,48 @@ describe('reducer: stage (build focus mode)', () => {
       'build_stage',
       'build_stage',
     ])
+  })
+
+  it('releases transient presentation UI state when a template request finishes or the session is purged', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    const requestId = 'presentation-template-request'
+    const selection = presentationTemplateSelectionFamily(requestId)
+    const paneView = presentationPaneViewFamily(id)
+    store.set(selection, 'template-1')
+    store.set(paneView, 'templates')
+
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'stage',
+        position: {
+          mode: 'presentation',
+          stage: 'ppt_plan',
+          presentationTemplateSelectionId: requestId,
+          presentationTemplateSelectionStatus: 'pending',
+        },
+      },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'stage',
+        position: {
+          mode: 'presentation',
+          stage: 'ppt_plan',
+          presentationTemplateSelectionId: null,
+          presentationTemplateSelectionStatus: 'selected',
+        },
+      },
+    })
+
+    expect(presentationTemplateSelectionFamily(requestId)).not.toBe(selection)
+    expect(store.get(presentationTemplateSelectionFamily(requestId))).toBeNull()
+
+    store.set(purgeSessionAtom, id)
+    expect(presentationPaneViewFamily(id)).not.toBe(paneView)
+    expect(store.get(presentationPaneViewFamily(id))).toBe('progress')
   })
 })
 

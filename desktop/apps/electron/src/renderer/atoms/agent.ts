@@ -68,7 +68,10 @@ import {
 } from './browser-attention'
 import { purgeFilesAttentionAtom } from './files-attention'
 import { purgePowerPointAttentionAtom } from './powerpoint-attention'
-import { purgePresentationSessionAtom } from './presentation'
+import {
+  purgePresentationSessionAtom,
+  releasePresentationTemplateSelectionState,
+} from './presentation'
 import {
   notifySessionWorkbenchActivityAtom,
   purgeSessionWorkbenchStateAtom,
@@ -305,6 +308,25 @@ function inheritOptimisticIds(local: AgentMessage[], remote: AgentMessage[]): Ag
   })
 }
 
+function presentationTemplateSelectionRequestId(position: ThinkPosition | null | undefined): string | null {
+  return position?.mode === 'presentation'
+    ? position.presentationTemplateSelectionId ?? null
+    : null
+}
+
+function releaseReplacedPresentationTemplateSelection(
+  previous: ThinkPosition | null | undefined,
+  next: ThinkPosition | null | undefined,
+): void {
+  const previousRequestId = presentationTemplateSelectionRequestId(previous)
+  if (
+    previousRequestId
+    && previousRequestId !== presentationTemplateSelectionRequestId(next)
+  ) {
+    releasePresentationTemplateSelectionState(previousRequestId)
+  }
+}
+
 export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: string) => {
   const daemonHasOptimisticUsers = (local: AgentMessage[], remote: AgentMessage[]): boolean => {
     const remoteUsers = remote.filter((message) => message.role === AgentRole.User)
@@ -394,6 +416,10 @@ export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: st
       })
     }
     set(contextUsageFamily(sessionId), contextUsage)
+    releaseReplacedPresentationTemplateSelection(
+      get(thinkingModeFamily(sessionId)),
+      thinkingMode,
+    )
     set(thinkingModeFamily(sessionId), thinkingMode)
     set(workflowRunFamily(sessionId), workflowRun ?? undefined)
     set(childrenFamily(sessionId), children)
@@ -565,6 +591,9 @@ export const fetchOlderTranscriptAtom = atom(null, async (get, set, sessionId: s
  *  Called by sessions.ts removeSessionAtom via dynamic import — atomFamily
  *  caches an atom per id forever otherwise (memory leak across deletions). */
 export const purgeSessionAtom = atom(null, (get, set, id: string) => {
+  releasePresentationTemplateSelectionState(
+    presentationTemplateSelectionRequestId(get(thinkingModeFamily(id))),
+  )
   messageFamily.remove(id)
   streamingFamily.remove(id)
   contextUsageFamily.remove(id)
@@ -696,6 +725,8 @@ function discardModelAttemptDeltas(
 
 type WorkflowConfirmBlock = Extract<MessageBlock, { type: 'workflow_confirm' }>
 type TaskConfirmBlock = Extract<MessageBlock, { type: 'task_confirm' }>
+type PresentationOutlineConfirmBlock = Extract<MessageBlock, { type: 'presentation_outline_confirm' }>
+type PresentationTemplateSelectionBlock = Extract<MessageBlock, { type: 'presentation_template_selection' }>
 type BuildConfirmBlock = Extract<MessageBlock, { type: 'build_confirm' }>
 type ConfirmationBlock = Extract<MessageBlock, { type: 'confirmation' }>
 
@@ -740,16 +771,20 @@ export const prepareInteractionContinuationAtom = atom(
     const textBlocks = blocks.filter((block): block is Extract<MessageBlock, { type: 'text' }> => block.type === 'text')
     const thinkingBlocks = blocks.filter((block): block is Extract<MessageBlock, { type: 'thinking' }> => block.type === 'thinking')
     const toolBlocks = blocks.filter((block): block is Extract<MessageBlock, { type: 'tool' }> => block.type === 'tool')
+    const restoredStartedAt = typeof sourceMessage?.durationMs === 'number'
+      && Number.isFinite(sourceMessage.durationMs)
+      ? Date.now() - Math.max(0, sourceMessage.durationMs)
+      : undefined
     set(continuationFamily(sessionId), {
       sourceMessageId: streaming?.messageId ?? sourceMessage?.id,
       content: textBlocks.map((block) => block.text).join('\n\n'),
       thinking: thinkingBlocks.map((block) => block.text).join('\n\n') || undefined,
       toolCalls: toolBlocks.map(({ type: _type, ...call }) => call),
       blocks,
-      // REST transcript `createdAt` is a stable ordering sequence, not an epoch
-      // timestamp. A resumed interaction starts a new live execution segment,
-      // so only preserve an actually live stream's clock.
-      startedAt: streaming?.startedAt ?? Date.now(),
+      // REST transcript `createdAt` is only an ordering sequence. Offset the
+      // new live clock by the accumulated active duration so elapsed time
+      // continues without counting the time spent waiting for the user.
+      startedAt: streaming?.startedAt ?? restoredStartedAt ?? Date.now(),
     })
   },
 )
@@ -769,6 +804,70 @@ export const updateTaskConfirmBlockAtom = atom(
     const update = (blocks: MessageBlock[]): MessageBlock[] =>
       blocks.map((block) =>
         block.type === 'task_confirm' && block.requestId === requestId
+          ? { ...block, ...patch }
+          : block,
+      )
+    const streaming = get(streamingFamily(sessionId))
+    if (streaming) {
+      set(streamingFamily(sessionId), { ...streaming, blocks: update(streaming.blocks) })
+    }
+    set(
+      messageFamily(sessionId),
+      get(messageFamily(sessionId)).map((message) => ({
+        ...message,
+        blocks: message.blocks ? update(message.blocks) : message.blocks,
+      })),
+    )
+  },
+)
+
+export const updatePresentationOutlineConfirmBlockAtom = atom(
+  null,
+  (
+    get,
+    set,
+    payload: {
+      sessionId: string
+      requestId: string
+      patch: Partial<PresentationOutlineConfirmBlock>
+    },
+  ) => {
+    const { sessionId, requestId, patch } = payload
+    const update = (blocks: MessageBlock[]): MessageBlock[] =>
+      blocks.map((block) =>
+        block.type === 'presentation_outline_confirm' && block.requestId === requestId
+          ? { ...block, ...patch }
+          : block,
+      )
+    const streaming = get(streamingFamily(sessionId))
+    if (streaming) {
+      set(streamingFamily(sessionId), { ...streaming, blocks: update(streaming.blocks) })
+    }
+    set(
+      messageFamily(sessionId),
+      get(messageFamily(sessionId)).map((message) => ({
+        ...message,
+        blocks: message.blocks ? update(message.blocks) : message.blocks,
+      })),
+    )
+  },
+)
+
+export const updatePresentationTemplateSelectionBlockAtom = atom(
+  null,
+  (
+    get,
+    set,
+    payload: {
+      sessionId: string
+      requestId: string
+      patch: Partial<PresentationTemplateSelectionBlock>
+    },
+  ) => {
+    const { sessionId, requestId, patch } = payload
+    const update = (blocks: MessageBlock[]): MessageBlock[] =>
+      blocks.map((block) =>
+        block.type === 'presentation_template_selection' && block.requestId === requestId
           ? { ...block, ...patch }
           : block,
       )
@@ -990,7 +1089,7 @@ export const hasPendingBuildConfirmAtom = atom((get) => {
 
 export type PendingFrameworkInteraction = Extract<
   MessageBlock,
-  { type: 'permission' | 'build_confirm' | 'task_confirm' | 'workflow_confirm' }
+  { type: 'permission' | 'build_confirm' | 'task_confirm' | 'presentation_outline_confirm' | 'presentation_template_selection' | 'workflow_confirm' }
 >
 
 type DirectReplyConfirmation = Exclude<PendingFrameworkInteraction, { type: 'permission' }>
@@ -1015,6 +1114,8 @@ function pendingFrameworkInteractionForSession(
     if (
       block?.type === 'build_confirm' ||
       block?.type === 'task_confirm' ||
+      block?.type === 'presentation_outline_confirm' ||
+      block?.type === 'presentation_template_selection' ||
       block?.type === 'workflow_confirm'
     ) {
       return (block.status ?? 'pending') === 'pending' ? block : null
@@ -1170,6 +1271,8 @@ export const appendUserMessageAtom = atom(
       const questionByType: Record<DirectReplyConfirmation['type'], string> = {
         build_confirm: i18n.t('session.interaction.card.buildTitle'),
         task_confirm: i18n.t('session.interaction.card.taskTitle'),
+        presentation_outline_confirm: i18n.t('presentationMode.outline.confirmCardTitle'),
+        presentation_template_selection: i18n.t('presentationMode.templates.confirmCardTitle'),
         workflow_confirm: i18n.t('session.interaction.card.workflowTitle'),
       }
       const replacement: ConfirmationBlock = {
@@ -1945,6 +2048,38 @@ export const applyAgentEventAtom = atom(
         })
         return
       }
+      case 'presentation_outline_confirm_request': {
+        const cur = get(streamingFamily(sessionId))
+        if (!cur) return
+        set(streamingFamily(sessionId), {
+          ...cur,
+          blocks: [
+            ...cur.blocks,
+            {
+              type: 'presentation_outline_confirm',
+              requestId: event.requestId,
+              status: 'pending',
+            },
+          ],
+        })
+        return
+      }
+      case 'presentation_template_selection_request': {
+        const cur = get(streamingFamily(sessionId))
+        if (!cur) return
+        set(streamingFamily(sessionId), {
+          ...cur,
+          blocks: [
+            ...cur.blocks,
+            {
+              type: 'presentation_template_selection',
+              requestId: event.requestId,
+              status: 'pending',
+            },
+          ],
+        })
+        return
+      }
       case 'permission_request': {
         // Tool permission gate (WS path): attached to the current assistant message's
         // blocks, rendering the approval card inline (unlike human_request, which goes
@@ -1987,6 +2122,7 @@ export const applyAgentEventAtom = atom(
           position: event.position,
           entryTaskConfirmRequestId: latestTaskConfirmRequestId(get, sessionId),
         })
+        releaseReplacedPresentationTemplateSelection(previousPosition, event.position)
         set(thinkingModeFamily(sessionId), event.position)
         if (event.position.mode !== 'run_workflow') {
           set(workflowRunFamily(sessionId), undefined)

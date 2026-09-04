@@ -32,6 +32,7 @@ from ._state import (
     AwaitingFeedback,
     AwaitingPermission,
     AwaitingPresentationOutlineConfirm,
+    AwaitingPresentationTemplateSelection,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingSubAgent,
@@ -236,6 +237,7 @@ class AgentInvocation:
         "build_confirm",
         "permission_answer",
         "presentation_outline_confirm",
+        "presentation_template_selection",
         "task_confirm",
         "workflow_confirm",
         "choice_answer",
@@ -626,6 +628,9 @@ class AgentInvocation:
             expected_id = pending.get("request_id") if isinstance(pending, dict) else None
         elif interaction.get("presentation_outline_confirm") is True:
             expected_type = "presentation_outline_confirm"
+            expected_id = interaction.get("request_id")
+        elif interaction.get("presentation_template_selection") is True:
+            expected_type = "presentation_template_selection"
             expected_id = interaction.get("request_id")
 
         if expected_type is not None:
@@ -1640,6 +1645,16 @@ class AgentInvocation:
                 workflow_id=payload.get("workflow_id"),
                 original_task_markdown=payload.get("original_task_markdown"),
             )
+        elif isinstance(interaction, AwaitingPresentationOutlineConfirm):
+            publisher.publish(
+                "presentation_outline_confirm_request",
+                request_id=interaction.request_id,
+            )
+        elif isinstance(interaction, AwaitingPresentationTemplateSelection):
+            publisher.publish(
+                "presentation_template_selection_request",
+                request_id=interaction.request_id,
+            )
         elif isinstance(interaction, AwaitingWorkflowConfirm):
             payload = interaction.workflow_confirm or {}
             publisher.publish(
@@ -1762,6 +1777,13 @@ class AgentInvocation:
             if ota_context.interaction_status != agent_result:
                 raise InvocationStateError(
                     "Agent presentation outline result does not match its interaction state"
+                )
+            disposition = InvocationDisposition.AWAITING_FEEDBACK
+            answer = ""
+        elif isinstance(agent_result, AwaitingPresentationTemplateSelection):
+            if ota_context.interaction_status != agent_result:
+                raise InvocationStateError(
+                    "Agent presentation template result does not match its interaction state"
                 )
             disposition = InvocationDisposition.AWAITING_FEEDBACK
             answer = ""

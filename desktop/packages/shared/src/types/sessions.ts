@@ -73,6 +73,26 @@ export interface AgentMessageToolCall {
   subagents?: AgentMessageSubagent[]
 }
 
+export interface PresentationTemplateCandidate {
+  templateId: string
+  version: string
+  title: string
+  aspectRatio?: string | null
+  slideCount?: number | null
+  semanticTags: string[]
+  strengths: string[]
+  colors: string[]
+  fonts: string[]
+  previewPaths: string[]
+  roleCoverage?: number | null
+  agenticFit?: 'strong' | 'usable' | 'weak' | null
+  agenticReason?: string | null
+  agenticUseForRoles: string[]
+  agenticRisks: string[]
+  structuralEvidence?: Record<string, unknown>
+  materializeRef?: Record<string, unknown>
+}
+
 /**
  * Ordered blocks of one message's content. Assistant streaming events accumulate
  * into a `MessageBlock[]` in arrival order, so thinking / tool calls / text render
@@ -100,6 +120,20 @@ export type MessageBlock =
       workflowId?: string | null
       originalTaskMarkdown?: string | null
       status?: 'pending' | 'confirmed' | 'revision_requested'
+      feedback?: string | null
+    }
+  | {
+      type: 'presentation_outline_confirm'
+      requestId: string
+      status?: 'pending' | 'confirmed' | 'revision_requested'
+      feedback?: string | null
+    }
+  | {
+      type: 'presentation_template_selection'
+      requestId: string
+      candidates?: PresentationTemplateCandidate[]
+      selectedTemplateId?: string | null
+      status?: 'pending' | 'selected' | 'skipped' | 'refresh_requested' | 'revision_requested'
       feedback?: string | null
     }
   | {

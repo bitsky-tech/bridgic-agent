@@ -7,10 +7,10 @@ from pydantic import BaseModel, Field, field_validator, model_serializer, model_
 __all__ = [
     "InStage", "NormalStageState", "BuildStageState", "PresentationStageState",
     "PresentationChapterOutline", "PresentationSlideOutline", "PresentationSource",
-    "PresentationStepRecord", "WorkflowStageState",
+    "PresentationStepRecord", "PresentationTemplateCandidate", "WorkflowStageState",
     "InteractionState", "AwaitingFeedback", "AwaitingPermission", "AwaitingTaskConfirm",
     "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
-    "AwaitingBuildConflict", "AwaitingPresentationOutlineConfirm", "AwaitingWorkflowRunChoice",
+    "AwaitingBuildConflict", "AwaitingPresentationOutlineConfirm", "AwaitingPresentationTemplateSelection", "AwaitingWorkflowRunChoice",
     "SubAgentCall", "AwaitingSubAgent", "SubAgentResult", "SubAgentsCompleted", "AgentResult",
     "AgentState", "ContextCompactionState", "TurnCompactionState",
     "CallVerdict", "RoundPermission",
@@ -108,6 +108,7 @@ class PresentationSlideOutline(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     purpose: Optional[str] = Field(default=None, max_length=1_000)
     key_message: Optional[str] = Field(default=None, max_length=2_000)
+    content_outline: List[str] = Field(default_factory=list, max_length=8)
     source_ids: List[str] = Field(default_factory=list, max_length=30)
 
 
@@ -118,6 +119,62 @@ class PresentationChapterOutline(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     summary: Optional[str] = Field(default=None, max_length=2_000)
     slides: List[PresentationSlideOutline] = Field(default_factory=list, max_length=80)
+
+
+class PresentationTemplateCandidate(BaseModel):
+    """One verified template candidate retained while Plan waits for selection."""
+
+    template_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    aspect_ratio: Optional[str] = None
+    slide_count: Optional[int] = Field(default=None, ge=1)
+    semantic_tags: List[str] = Field(default_factory=list, max_length=40)
+    strengths: List[str] = Field(default_factory=list, max_length=40)
+    colors: List[str] = Field(default_factory=list, max_length=12)
+    fonts: List[str] = Field(default_factory=list, max_length=12)
+    preview_paths: List[str] = Field(default_factory=list, max_length=6)
+    role_coverage: Optional[float] = Field(default=None, ge=0, le=1)
+    agentic_fit: Optional[Literal["strong", "usable", "weak"]] = None
+    agentic_reason: Optional[str] = Field(default=None, max_length=1_000)
+    agentic_use_for_roles: List[str] = Field(default_factory=list, max_length=20)
+    agentic_risks: List[str] = Field(default_factory=list, max_length=20)
+    structural_evidence: Dict[str, Any] = Field(default_factory=dict)
+    materialize_ref: Dict[str, Any] = Field(default_factory=dict)
+
+    def agent_context(self) -> Dict[str, Any]:
+        """Project a selected template without renderer-only preview assets."""
+        structural_keys = (
+            "overview",
+            "visual_style",
+            "best_for",
+            "signature_elements",
+            "overview_source",
+            "density_level",
+            "role_counts",
+            "layout_summary",
+            "brand_scope",
+            "license_scope",
+        )
+        return {
+            "template_id": self.template_id,
+            "version": self.version,
+            "title": self.title,
+            "aspect_ratio": self.aspect_ratio,
+            "slide_count": self.slide_count,
+            "strengths": self.strengths,
+            "colors": self.colors,
+            "fonts": self.fonts,
+            "agentic_reason": self.agentic_reason,
+            "agentic_use_for_roles": self.agentic_use_for_roles,
+            "agentic_risks": self.agentic_risks,
+            "structural_evidence": {
+                key: self.structural_evidence.get(key)
+                for key in structural_keys
+                if key in self.structural_evidence
+            },
+            "materialize_ref": self.materialize_ref,
+        }
 
 
 class PresentationStageState(BaseModel):
@@ -132,6 +189,34 @@ class PresentationStageState(BaseModel):
     outline: List[PresentationChapterOutline] = Field(default_factory=list, max_length=20)
     outline_confirmed: bool = False
     outline_confirmation_id: Optional[str] = Field(default=None, min_length=1)
+    template_candidates: List[PresentationTemplateCandidate] = Field(default_factory=list, max_length=8)
+    template_selection_id: Optional[str] = Field(default=None, min_length=1)
+    template_selection_status: Literal["idle", "pending", "selected", "skipped"] = "idle"
+    template_selection_error: Optional[str] = Field(default=None, max_length=1_000)
+    selected_template: Optional[PresentationTemplateCandidate] = None
+    template_excluded_ids: List[str] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_plan_cursor(cls, value: Any) -> Any:
+        """Collapse the former chapter-only Plan step when hydrating saved sessions."""
+        if not isinstance(value, dict) or value.get("stage") != "ppt_plan":
+            return value
+        reports = value.get("reports")
+        if not isinstance(reports, list):
+            return value
+
+        def step_id(report: Any) -> Optional[str]:
+            if isinstance(report, dict):
+                return report.get("step_id")
+            return getattr(report, "step_id", None)
+
+        if not any(step_id(report) == "shape_chapters" for report in reports):
+            return value
+        migrated = dict(value)
+        migrated["reports"] = [report for report in reports if step_id(report) != "shape_chapters"]
+        migrated["step_index"] = max(1, int(value.get("step_index") or 0) - 1)
+        return migrated
 
     def apply_plan_step_data(self, step_id: str, data: Any) -> "PresentationStageState":
         """Validate one Plan result and assign runtime-owned stable identities."""
@@ -208,11 +293,26 @@ class PresentationStageState(BaseModel):
                         f"chapter {chapter_index} slide {slide_index} references unknown source ids: "
                         + ", ".join(unknown)
                     )
+                raw_content_outline = raw_slide.get("content_outline") or []
+                if not isinstance(raw_content_outline, list):
+                    raise ValueError(
+                        f"chapter {chapter_index} slide {slide_index} requires `content_outline` to be a list."
+                    )
+                content_outline = list(dict.fromkeys(
+                    str(item).strip()
+                    for item in raw_content_outline
+                    if str(item).strip()
+                ))
+                if step_id == "map_slides" and not content_outline:
+                    raise ValueError(
+                        f"chapter {chapter_index} slide {slide_index} requires a non-empty `content_outline`."
+                    )
                 slides.append(PresentationSlideOutline(
                     id=f"slide-{slide_number:03d}",
                     title=required_text(raw_slide, "title", f"chapter {chapter_index} slide {slide_index}"),
                     purpose=optional_text(raw_slide, "purpose"),
                     key_message=optional_text(raw_slide, "key_message"),
+                    content_outline=content_outline,
                     source_ids=source_ids,
                 ))
             chapters.append(PresentationChapterOutline(
@@ -223,7 +323,16 @@ class PresentationStageState(BaseModel):
             ))
         if step_id == "map_slides" and not any(chapter.slides for chapter in chapters):
             raise ValueError("Plan step `map_slides` requires at least one slide.")
-        return self.model_copy(update={"outline": chapters, "outline_confirmed": False})
+        return self.model_copy(update={
+            "outline": chapters,
+            "outline_confirmed": False,
+            "template_candidates": [],
+            "template_selection_id": None,
+            "template_selection_status": "idle",
+            "template_selection_error": None,
+            "selected_template": None,
+            "template_excluded_ids": [],
+        })
 
 
 class WorkflowStageState(BaseModel):
@@ -305,6 +414,13 @@ class AwaitingPresentationOutlineConfirm(BaseModel):
     """The Plan outline is editable and must be confirmed before visual design."""
 
     presentation_outline_confirm: Literal[True] = True
+    request_id: str = Field(min_length=1)
+
+
+class AwaitingPresentationTemplateSelection(BaseModel):
+    """The template shortlist is ready and waits for an explicit user decision."""
+
+    presentation_template_selection: Literal[True] = True
     request_id: str = Field(min_length=1)
 
 
@@ -447,6 +563,7 @@ InteractionState = Union[
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
     AwaitingPresentationOutlineConfirm,
+    AwaitingPresentationTemplateSelection,
     AwaitingWorkflowRunChoice,
 ]
 
@@ -459,6 +576,7 @@ AgentResult: TypeAlias = Union[
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
     AwaitingPresentationOutlineConfirm,
+    AwaitingPresentationTemplateSelection,
     AwaitingWorkflowRunChoice,
     AwaitingSubAgent,
 ]

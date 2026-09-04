@@ -1,4 +1,5 @@
 import { atom } from 'jotai'
+import { atomFamily } from 'jotai-family'
 import { i18n } from '@/lib/i18n'
 import { createDefaultPresentationTransition } from '@/lib/presentationTransitions'
 import { viewedSessionIdAtom } from './navigation'
@@ -8,6 +9,21 @@ export const PRESENTATION_HEIGHT = 720
 export const PRESENTATION_STANDARD_WIDTH = 960
 
 export type PresentationPageSizePreset = 'wide' | 'standard'
+
+export type PresentationPaneView = 'progress' | 'sources' | 'outline' | 'templates'
+
+export const presentationPaneViewFamily = atomFamily(
+  (_sessionId: string) => atom<PresentationPaneView>('progress'),
+)
+
+export const presentationTemplateSelectionFamily = atomFamily(
+  (_requestId: string) => atom<string | null>(null),
+)
+
+/** Release the transient selection shared by one template interaction and its gallery. */
+export function releasePresentationTemplateSelectionState(requestId: string | null | undefined): void {
+  if (requestId) presentationTemplateSelectionFamily.remove(requestId)
+}
 
 export interface PresentationPageSize {
   height: number
@@ -590,6 +606,7 @@ export const presentationExpandedAtom = atom(
 
 /** Drop presentation state when its owning Session is deleted. */
 export const purgePresentationSessionAtom = atom(null, (get, set, sessionId: string) => {
+  presentationPaneViewFamily.remove(sessionId)
   const workspaces = get(presentationWorkspacesBySessionAtom)
   if (workspaces.has(sessionId)) {
     const nextWorkspaces = new Map(workspaces)

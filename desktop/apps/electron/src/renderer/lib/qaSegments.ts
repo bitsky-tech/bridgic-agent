@@ -31,6 +31,12 @@ export function isPersistentWorkflowCard(block: MessageBlock): boolean {
   return block.type === 'workflow_result' || (
     block.type === 'workflow_confirm'
     && (block.status ?? 'pending') !== 'pending'
+  ) || (
+    block.type === 'presentation_outline_confirm'
+    && (block.status ?? 'pending') !== 'pending'
+  ) || (
+    block.type === 'presentation_template_selection'
+    && (block.status ?? 'pending') !== 'pending'
   )
 }
 
@@ -42,7 +48,7 @@ export function splitProcessAndAnswer(
 ): QaSegments {
   const confirmationIndex = blocks.findIndex(
     (block) =>
-      (block.type === 'build_confirm' || block.type === 'task_confirm' || block.type === 'workflow_confirm') &&
+      (block.type === 'build_confirm' || block.type === 'task_confirm' || block.type === 'presentation_outline_confirm' || block.type === 'presentation_template_selection' || block.type === 'workflow_confirm') &&
       (block.status ?? 'pending') === 'pending',
   )
   if (confirmationIndex >= 0) {
@@ -63,6 +69,8 @@ export function splitProcessAndAnswer(
       b.type === 'confirmation' ||
       b.type === 'build_confirm' ||
       b.type === 'task_confirm' ||
+      b.type === 'presentation_outline_confirm' ||
+      b.type === 'presentation_template_selection' ||
       b.type === 'workflow_confirm' ||
       b.type === 'build_stage' ||
       b.type === 'workflow_step' ||
@@ -104,6 +112,8 @@ export function countMessages(blocks: MessageBlock[]): number {
       b.type !== 'confirmation' &&
       b.type !== 'build_confirm' &&
       b.type !== 'task_confirm' &&
+      b.type !== 'presentation_outline_confirm' &&
+      b.type !== 'presentation_template_selection' &&
       b.type !== 'workflow_confirm' &&
       b.type !== 'build_stage' &&
       b.type !== 'workflow_step' &&
@@ -119,6 +129,8 @@ export function countConfirmations(blocks: MessageBlock[]): number {
       block.type === 'permission' ||
       block.type === 'build_confirm' ||
       block.type === 'task_confirm' ||
+      block.type === 'presentation_outline_confirm' ||
+      block.type === 'presentation_template_selection' ||
       block.type === 'workflow_confirm',
   ).length
 }

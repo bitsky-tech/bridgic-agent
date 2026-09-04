@@ -51,6 +51,7 @@ from ._presentation import (
     report_presentation_step,
     report_presentation_step_tool,
 )
+from ._ppt_rag import ppt_rag, ppt_rag_tool
 from ._filesystem import (
     FILE_SYSTEM_TOOL_NAMES,
     edit_file_tool,
@@ -162,6 +163,8 @@ __all__ = [
     "PresentationStepReport",
     "report_presentation_step",
     "report_presentation_step_tool",
+    "ppt_rag",
+    "ppt_rag_tool",
     "read_file_tool",
     "write_file_tool",
     "edit_file_tool",

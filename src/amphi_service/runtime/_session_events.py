@@ -10,6 +10,8 @@ from ..protocol import (
     LoopAbortEvent,
     ModelRetryEvent,
     PermissionRequestEvent,
+    PresentationOutlineConfirmRequestEvent,
+    PresentationTemplateSelectionRequestEvent,
     ReasoningEvent,
     StageEvent,
     TaskConfirmRequestEvent,
@@ -58,6 +60,8 @@ class SessionEventBroker:
             PermissionRequestEvent.name: PermissionRequestEvent,
             BuildConfirmRequestEvent.name: BuildConfirmRequestEvent,
             TaskConfirmRequestEvent.name: TaskConfirmRequestEvent,
+            PresentationOutlineConfirmRequestEvent.name: PresentationOutlineConfirmRequestEvent,
+            PresentationTemplateSelectionRequestEvent.name: PresentationTemplateSelectionRequestEvent,
             WorkflowConfirmRequestEvent.name: WorkflowConfirmRequestEvent,
         }
 

@@ -206,6 +206,11 @@ class StageEvent(TurnEvent):
     presentation_outline: Optional[List[Dict[str, Any]]] = None
     presentation_outline_confirmed: Optional[bool] = None
     presentation_outline_confirmation_id: Optional[str] = None
+    presentation_template_candidates: Optional[List[Dict[str, Any]]] = None
+    presentation_template_selection_id: Optional[str] = None
+    presentation_template_selection_status: Optional[str] = None
+    presentation_template_selection_error: Optional[str] = None
+    presentation_selected_template: Optional[Dict[str, Any]] = None
 
     def payload(self) -> Dict[str, Any]:
         payload = {"mode": self.mode, "stage": self.stage}
@@ -220,6 +225,11 @@ class StageEvent(TurnEvent):
                 "presentation_outline": self.presentation_outline or [],
                 "presentation_outline_confirmed": bool(self.presentation_outline_confirmed),
                 "presentation_outline_confirmation_id": self.presentation_outline_confirmation_id,
+                "presentation_template_candidates": self.presentation_template_candidates or [],
+                "presentation_template_selection_id": self.presentation_template_selection_id,
+                "presentation_template_selection_status": self.presentation_template_selection_status or "idle",
+                "presentation_template_selection_error": self.presentation_template_selection_error,
+                "presentation_selected_template": self.presentation_selected_template,
             })
         return payload
 
@@ -397,6 +407,30 @@ class TaskConfirmRequestEvent(TurnEvent):
             "workflow_id": self.workflow_id,
             "original_task_markdown": self.original_task_markdown,
         }
+
+
+@dataclass(frozen=True)
+class PresentationOutlineConfirmRequestEvent(TurnEvent):
+    """Presentation Plan asks the user to review its editable slide outline."""
+
+    name: ClassVar[str] = "presentation_outline_confirm_request"
+
+    request_id: str
+
+    def payload(self) -> Dict[str, Any]:
+        return {"request_id": self.request_id}
+
+
+@dataclass(frozen=True)
+class PresentationTemplateSelectionRequestEvent(TurnEvent):
+    """Presentation Plan asks the user to choose from verified templates."""
+
+    name: ClassVar[str] = "presentation_template_selection_request"
+
+    request_id: str
+
+    def payload(self) -> Dict[str, Any]:
+        return {"request_id": self.request_id}
 
 
 @dataclass(frozen=True)
@@ -634,6 +668,8 @@ __all__ = [
     "PermissionRequestEvent",
     "BuildConfirmRequestEvent",
     "TaskConfirmRequestEvent",
+    "PresentationOutlineConfirmRequestEvent",
+    "PresentationTemplateSelectionRequestEvent",
     "WorkflowConfirmRequestEvent",
     "FinalEvent",
     "CancelledEvent",

@@ -34,6 +34,7 @@ import type {
   ChoiceAnswerFrame,
   PermissionAnswerFrame,
   PresentationOutlineConfirmFrame,
+  PresentationTemplateSelectionFrame,
   TaskConfirmFrame,
   WorkflowConfirmFrame,
 } from '@shared/types'
@@ -235,6 +236,19 @@ export class AmphiWsConnection {
     if (!this.openTurn(sessionId)) return
     this.send({
       type: CLIENT_FRAME.PresentationOutlineConfirm,
+      session_id: sessionId,
+      ...payload,
+    })
+  }
+
+  /** Resume Plan after the user selects, skips, or refreshes templates. */
+  presentationTemplateSelection(
+    sessionId: string,
+    payload: Omit<PresentationTemplateSelectionFrame, 'type' | 'session_id'>,
+  ): void {
+    if (!this.openTurn(sessionId)) return
+    this.send({
+      type: CLIENT_FRAME.PresentationTemplateSelection,
       session_id: sessionId,
       ...payload,
     })

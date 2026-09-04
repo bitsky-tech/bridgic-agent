@@ -521,12 +521,15 @@ def test_presentation_structures() -> None:
     assert "Inspect user-supplied or explicitly referenced material" in brief
     assert "# Brief artifact contract" in brief
     plan = personas["ppt_plan"]
-    assert "Plan proceeds from evidence to narrative" in plan
+    assert "Plan proceeds from evidence to a combined narrative and editable page map" in plan
     assert "JSON-encoded object string" in plan
     assert '{"sources": [...]}' in plan
     assert '{"chapters": [...]}' in plan
     assert "one source is enough" in plan
     assert "normally 3–5 in total" in plan
+    assert "one bounded batch of non-browser search" in plan
+    assert "do not call `run_subagent`" in plan
+    assert "skip it instead of trying to bypass the failure in the browser" in plan
     assert "Do not search separately for every prospective slide" in plan
     assert "pause after this report" in plan
     assert "Do not choose a template or visual style before the outline is confirmed" in plan

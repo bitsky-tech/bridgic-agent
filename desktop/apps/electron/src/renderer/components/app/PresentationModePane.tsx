@@ -1,7 +1,11 @@
 /** Dedicated Agent-owned progress surface for the presentation-making pipeline. */
-import type { PresentationChapterOutline, PresentationSourceCard } from '@shared/types'
-import { useRef, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import type {
+  PresentationChapterOutline,
+  PresentationSourceCard,
+  PresentationTemplateCandidate,
+} from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { LoaderCircle } from 'lucide-react'
 import {
@@ -9,12 +13,22 @@ import {
   currentMessagesAtom,
   currentThinkingModeAtom,
 } from '@/atoms/agent'
-import { respondPresentationOutlineAtom } from '@/atoms/presentation-plan'
+import {
+  presentationPaneViewFamily,
+  presentationTemplateSelectionFamily,
+  respondPresentationOutlineAtom,
+  respondPresentationTemplateAtom,
+  type PresentationPaneView,
+} from '@/atoms/presentation-plan'
 import { activeSessionIdAtom } from '@/atoms/sessions'
 import { currentHumanRequestAtom } from '@/atoms/human-request'
 import { Icons } from '@/components/amphi/Icons'
 import { useAutoHideScrollbar } from '@/hooks/useAutoHideScrollbar'
 import { cn } from '@/lib/cn'
+import {
+  parseLocalResourceReference,
+  toLocalResourceDisplayUrl,
+} from '@/components/markdown/localResource'
 import { SESSION_STATUS_BAR_HEIGHT_PX } from './SessionStatusBar'
 
 const PRESENTATION_STAGES = [
@@ -24,7 +38,7 @@ const PRESENTATION_STAGES = [
   },
   {
     id: 'ppt_plan',
-    steps: ['collect_evidence', 'shape_chapters', 'map_slides', 'design_visual_direction'],
+    steps: ['collect_evidence', 'map_slides', 'design_visual_direction'],
   },
   {
     id: 'ppt_compose',
@@ -57,17 +71,37 @@ function sourceIcon(source: PresentationSourceCard) {
   return Icons.link(13)
 }
 
+function PresentationArtifactLink({ title, meta, testId, needsAttention = false, onOpen }: {
+  title: string
+  meta: string
+  testId: string
+  needsAttention?: boolean
+  onOpen: () => void
+}) {
+  return (
+    <button
+      className="mt-2 flex w-full items-center gap-2 rounded-lg border border-border-subtle bg-bg-surface px-2.5 py-2 text-left transition-colors hover:border-border-default hover:bg-bg-hover"
+      onClick={onOpen}
+      data-testid={testId}
+    >
+      <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-md', needsAttention ? 'bg-status-warning-bg text-status-warning' : 'bg-bg-subtle text-text-accent')}>
+        {needsAttention ? Icons.edit(12) : Icons.file(12)}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-2xs font-medium text-text-primary">{title}</span>
+        <span className="block truncate text-[10px] text-text-tertiary">{meta}</span>
+      </span>
+      <span className="shrink-0 text-text-tertiary">{Icons.chevronRight(12)}</span>
+    </button>
+  )
+}
+
 function PresentationSourcesPanel({ sources }: { sources: PresentationSourceCard[] }) {
   const { t } = useTranslation()
   if (sources.length === 0) return null
   return (
-    <section className="mt-2 space-y-2" data-testid="presentation-sources">
-      <div className="flex items-center justify-between gap-2">
-        <h4 className="text-2xs font-semibold text-text-secondary">{t('presentationMode.sources.title')}</h4>
-        <span className="text-[10px] tabular-nums text-text-tertiary">
-          {t('presentationMode.sources.count', { count: sources.length })}
-        </span>
-      </div>
+    <section className="space-y-2" data-testid="presentation-sources">
+      <p className="pb-1 text-2xs leading-5 text-text-tertiary">{t('presentationMode.sources.detailHint')}</p>
       {sources.map(source => (
         <article key={source.id} className="rounded-lg border border-border-subtle bg-bg-surface px-2.5 py-2" data-source-kind={source.kind}>
           <div className="flex items-start gap-2">
@@ -96,6 +130,242 @@ function PresentationSourcesPanel({ sources }: { sources: PresentationSourceCard
   )
 }
 
+function templatePreviewUrl(sourceValue: string): string | null {
+  const source = sourceValue.trim()
+  if (!source) return null
+  const local = parseLocalResourceReference(source)
+  if (local?.kind === 'image') return toLocalResourceDisplayUrl(local.fileUrl)
+  try {
+    const url = new URL(source)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
+function templateColor(value: string | undefined, fallback: string): string {
+  return value && /^#[\da-f]{3}(?:[\da-f]{3})?$/i.test(value.trim()) ? value.trim() : fallback
+}
+
+function PresentationTemplatePreview({ candidate, hovering }: {
+  candidate: PresentationTemplateCandidate
+  hovering: boolean
+}) {
+  const { t } = useTranslation()
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [failedUrls, setFailedUrls] = useState<string[]>([])
+  const previewUrls = candidate.previewPaths
+    .map(templatePreviewUrl)
+    .filter((value): value is string => value !== null)
+  const previewKey = previewUrls.join('\u0000')
+  const availableUrls = previewUrls.filter(url => !failedUrls.includes(url))
+  const previewUrl = availableUrls.length > 0 ? availableUrls[activeIndex % availableUrls.length] : null
+  const paper = templateColor(candidate.colors[0], '#f8f6f1')
+  const ink = templateColor(candidate.colors[1], '#273142')
+  const accent = templateColor(candidate.colors[2], '#7c6cf2')
+
+  useEffect(() => {
+    if (!hovering || availableUrls.length < 2) return
+    const timer = window.setInterval(() => {
+      setActiveIndex(current => (current + 1) % availableUrls.length)
+    }, 1_000)
+    return () => window.clearInterval(timer)
+  }, [availableUrls.length, hovering, previewKey])
+
+  if (previewUrl) {
+    return (
+      <div
+        className="relative size-full"
+        data-testid="presentation-template-preview"
+      >
+        <img
+          key={previewUrl}
+          src={previewUrl}
+          alt={t('presentationMode.templates.previewAlt', { title: candidate.title })}
+          className="size-full bg-black/5 object-contain"
+          loading="lazy"
+          onError={() => setFailedUrls(current => current.includes(previewUrl) ? current : [...current, previewUrl])}
+        />
+        {availableUrls.length > 1 && hovering && (
+          <span className="absolute bottom-2 right-2 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-white backdrop-blur-sm">
+            {(activeIndex % availableUrls.length) + 1}/{availableUrls.length}
+          </span>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div
+      className="relative size-full overflow-hidden"
+      style={{ backgroundColor: paper }}
+      aria-label={t('presentationMode.templates.noPreview')}
+    >
+      <span className="absolute left-[9%] top-[13%] h-[7%] w-[48%] rounded-sm opacity-90" style={{ backgroundColor: ink }} />
+      <span className="absolute left-[9%] top-[25%] h-[3%] w-[31%] rounded-sm opacity-30" style={{ backgroundColor: ink }} />
+      <span className="absolute bottom-[14%] left-[9%] h-[39%] w-[35%] rounded-md opacity-15" style={{ backgroundColor: ink }} />
+      <span className="absolute bottom-[14%] right-[9%] h-[52%] w-[39%] rounded-md opacity-80" style={{ backgroundColor: accent }} />
+      <span className="absolute bottom-[9%] left-[9%] text-[9px] font-medium opacity-45" style={{ color: ink }}>
+        {t('presentationMode.templates.structuralPreview')}
+      </span>
+    </div>
+  )
+}
+
+function PresentationTemplatesPanel({
+  candidates,
+  retrievalError,
+  selectedId,
+  interactive,
+  busy,
+  onSelect,
+  onAnswer,
+}: {
+  candidates: PresentationTemplateCandidate[]
+  retrievalError?: string | null
+  selectedId: string | null
+  interactive: boolean
+  busy: boolean
+  onSelect: (templateId: string) => void
+  onAnswer: (action: 'select' | 'skip' | 'refresh') => void
+}) {
+  const { t } = useTranslation()
+  const [hoveredTemplateId, setHoveredTemplateId] = useState<string | null>(null)
+  return (
+    <section className="pb-24" data-testid="presentation-templates-detail">
+      <div className="rounded-xl border border-border-subtle bg-bg-elevated px-3.5 py-3 shadow-sm">
+        <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+          <span className="flex size-7 items-center justify-center rounded-lg bg-accent-blue-subtle text-text-accent">
+            {Icons.presentation(14)}
+          </span>
+          {t('presentationMode.templates.galleryTitle')}
+          <span className="ml-auto rounded-full bg-bg-subtle px-2 py-1 text-2xs font-medium tabular-nums text-text-secondary">
+            {t('presentationMode.templates.count', { count: candidates.length })}
+          </span>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-text-tertiary">
+          {t('presentationMode.templates.galleryHint')}
+        </p>
+      </div>
+
+      {candidates.length === 0 ? (
+        <div className="mt-4 rounded-xl border border-dashed border-border-default px-4 py-10 text-center text-xs text-text-tertiary">
+          <p>{t('presentationMode.templates.empty')}</p>
+          {retrievalError && (
+            <p className="mx-auto mt-2 max-w-md text-[10px] leading-4 text-status-warning" data-testid="presentation-template-error">
+              {retrievalError}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-3" data-testid="presentation-template-grid">
+          {candidates.map((candidate, index) => {
+            const selected = candidate.templateId === selectedId
+            let badge = t('presentationMode.templates.candidate')
+            if (candidate.agenticFit === 'strong') badge = t('presentationMode.templates.strongFit')
+            if (index === 0) badge = t('presentationMode.templates.bestMatch')
+            return (
+              <button
+                key={candidate.templateId}
+                type="button"
+                onClick={() => {
+                  if (interactive) onSelect(candidate.templateId)
+                }}
+                onMouseEnter={() => setHoveredTemplateId(candidate.templateId)}
+                onMouseLeave={() => setHoveredTemplateId(null)}
+                className={cn(
+                  'group overflow-hidden rounded-xl border bg-bg-elevated text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-border-default hover:shadow-md',
+                  selected ? 'border-accent-primary ring-2 ring-accent-primary/20' : 'border-border-subtle',
+                )}
+                aria-pressed={selected}
+                aria-disabled={!interactive}
+                data-testid="presentation-template-card"
+                data-template-id={candidate.templateId}
+              >
+                <div className="relative aspect-video overflow-hidden border-b border-border-subtle bg-bg-subtle">
+                  <PresentationTemplatePreview
+                    key={`${candidate.templateId}:${candidate.version}:${hoveredTemplateId === candidate.templateId ? 'hover' : 'idle'}`}
+                    candidate={candidate}
+                    hovering={hoveredTemplateId === candidate.templateId}
+                  />
+                  <span className="absolute left-2 top-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[9px] font-semibold text-white backdrop-blur-sm">
+                    {badge}
+                  </span>
+                  {selected && (
+                    <span className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-accent-primary text-white shadow">
+                      {Icons.check(12)}
+                    </span>
+                  )}
+                </div>
+                <div className="px-2.5 py-2.5">
+                  <p className="truncate text-xs font-semibold text-text-primary" title={candidate.title}>{candidate.title}</p>
+                  <p className="mt-1 text-[10px] tabular-nums text-text-tertiary">
+                    {candidate.aspectRatio || t('presentationMode.templates.unknownRatio')}
+                    {typeof candidate.slideCount === 'number'
+                      ? ` · ${t('presentationMode.templates.slideCount', { count: candidate.slideCount })}`
+                      : ''}
+                    {typeof candidate.roleCoverage === 'number'
+                      ? ` · ${t('presentationMode.templates.coverage', { percent: Math.round(candidate.roleCoverage * 100) })}`
+                      : ''}
+                  </p>
+                  {candidate.agenticReason && (
+                    <p className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-text-secondary">
+                      {candidate.agenticReason}
+                    </p>
+                  )}
+                  {(candidate.strengths.length > 0 || candidate.semanticTags.length > 0) && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {[...candidate.strengths, ...candidate.semanticTags].slice(0, 3).map((tag, tagIndex) => (
+                        <span key={`${tag}-${tagIndex}`} className="max-w-full truncate rounded bg-bg-subtle px-1.5 py-0.5 text-[9px] text-text-tertiary">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {interactive && <div className="sticky bottom-0 -mx-4 mt-4 flex items-center gap-2 border-t border-border-subtle bg-bg-surface/95 px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onAnswer('refresh')}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-subtle px-2.5 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-50"
+          data-testid="presentation-template-refresh"
+        >
+          {Icons.refresh(13)} {t(candidates.length > 0
+            ? 'presentationMode.templates.refresh'
+            : 'presentationMode.templates.retry')}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onAnswer('skip')}
+          className="inline-flex h-8 items-center rounded-md px-2.5 text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-50"
+          data-testid="presentation-template-skip"
+        >
+          {t('presentationMode.templates.skip')}
+        </button>
+        <span className="flex-1" />
+        <button
+          type="button"
+          disabled={busy || !selectedId}
+          onClick={() => onAnswer('select')}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[image:var(--brand-gradient)] px-3 text-xs font-semibold text-text-on-brand disabled:opacity-50"
+          data-testid="presentation-template-confirm"
+        >
+          {Icons.check(13)} {busy
+            ? t('presentationMode.templates.confirming')
+            : t('presentationMode.templates.confirm')}
+        </button>
+      </div>}
+    </section>
+  )
+}
+
 function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm }: {
   chapters: PresentationChapterOutline[]
   sources: PresentationSourceCard[]
@@ -105,6 +375,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState(chapters)
+  const [expandedChapterIds, setExpandedChapterIds] = useState<Set<string>>(new Set())
   const [dragged, setDragged] = useState<
     { kind: 'chapter'; id: string }
     | { kind: 'slide'; chapterId: string; id: string }
@@ -127,6 +398,14 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
       : chapter))
   }
   const removeChapter = (chapterId: string) => setDraft(current => current.filter(chapter => chapter.id !== chapterId))
+  const toggleChapter = (chapterId: string) => {
+    setExpandedChapterIds(current => {
+      const next = new Set(current)
+      if (next.has(chapterId)) next.delete(chapterId)
+      else next.add(chapterId)
+      return next
+    })
+  }
   const removeSlide = (chapterId: string, slideId: string) => {
     setDraft(current => current.map(chapter => chapter.id === chapterId
       ? { ...chapter, slides: chapter.slides.filter(slide => slide.id !== slideId) }
@@ -151,6 +430,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
             title: t('presentationMode.outline.newSlide'),
             purpose: '',
             keyMessage: '',
+            contentOutline: [''],
             sourceIds: [],
           }],
         }
@@ -195,75 +475,97 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
     else if (dragged?.kind === 'slide') dropSlide(chapterId, '')
   }
   const valid = draft.length > 0
-    && draft.every(chapter => chapter.title.trim() && chapter.slides.every(slide => slide.title.trim()))
+    && draft.every(chapter => chapter.title.trim() && chapter.slides.every(slide => (
+      slide.title.trim() && slide.contentOutline.some(item => item.trim())
+    )))
     && draft.some(chapter => chapter.slides.length > 0)
   return (
-    <section className="mt-2 rounded-lg border border-border-subtle bg-bg-surface p-2.5" data-testid="presentation-outline">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h4 className="text-2xs font-semibold text-text-primary">{t('presentationMode.outline.title')}</h4>
-          <p className="mt-0.5 text-[10px] text-text-tertiary">
-            {editable ? t('presentationMode.outline.editHint') : t('presentationMode.outline.readOnlyHint')}
-          </p>
+    <section className="pb-2" data-testid="presentation-outline">
+      <div className="rounded-xl border border-border-subtle bg-bg-elevated px-3.5 py-3 shadow-sm">
+        <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+          <span className="flex size-7 items-center justify-center rounded-lg bg-accent-blue-subtle text-text-accent">
+            {Icons.file(14)}
+          </span>
+          {t('presentationMode.outline.slideBlueprint')}
+          <span className="ml-auto rounded-full bg-bg-subtle px-2 py-1 text-2xs font-medium tabular-nums text-text-secondary">
+            {t('presentationMode.outline.summary', {
+              chapters: draft.length,
+              slides: draft.reduce((total, chapter) => total + chapter.slides.length, 0),
+            })}
+          </span>
         </div>
-        <span className="shrink-0 text-[10px] tabular-nums text-text-tertiary">
-          {t('presentationMode.outline.slideCount', { count: draft.reduce((sum, chapter) => sum + chapter.slides.length, 0) })}
-        </span>
+        <p className="mt-2 text-xs leading-5 text-text-tertiary">
+          {editable ? t('presentationMode.outline.editHint') : t('presentationMode.outline.readOnlyHint')}
+        </p>
       </div>
-      <ol className="mt-2.5 space-y-2">
+      <ol className="mt-3 space-y-3">
         {draft.map((chapter, chapterIndex) => {
           const slideOffset = draft
             .slice(0, chapterIndex)
             .reduce((total, item) => total + item.slides.length, 0)
+          const expanded = expandedChapterIds.has(chapter.id)
           let chapterSummary = null
           if (editable) {
             chapterSummary = (
               <textarea
-                className="mt-1 min-h-10 w-full resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] leading-4 text-text-tertiary outline-none hover:border-border-default focus:border-accent-primary"
+                className="mt-1 min-h-12 w-full resize-y rounded-md border border-border-subtle bg-bg-input px-2 py-1.5 text-2xs leading-5 text-text-tertiary outline-none focus:border-accent-primary"
                 value={chapter.summary ?? ''}
                 onChange={event => patchChapter(chapter.id, { summary: event.target.value })}
                 aria-label={t('presentationMode.outline.chapterSummary')}
               />
             )
           } else if (chapter.summary) {
-            chapterSummary = <p className="mt-1 text-[10px] leading-4 text-text-tertiary">{chapter.summary}</p>
+            chapterSummary = <p className="mt-1 text-2xs leading-5 text-text-tertiary">{chapter.summary}</p>
           }
           return (
             <li
               key={chapter.id}
-              className="rounded-lg bg-bg-subtle p-2"
+              className="overflow-hidden rounded-xl border border-border-subtle bg-bg-elevated shadow-sm transition-colors hover:border-border-default"
               draggable={editable}
               onDragStart={() => setDragged({ kind: 'chapter', id: chapter.id })}
               onDragOver={event => editable && event.preventDefault()}
               onDrop={() => dropIntoChapter(chapter.id)}
               data-testid="presentation-outline-chapter"
             >
-              <div className="flex items-start gap-2">
-                <span className={cn('mt-1 shrink-0 text-[10px] font-semibold text-text-accent', editable && 'cursor-move')}>{chapterIndex + 1}</span>
+              <div className="flex items-start gap-2.5 px-3 py-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-blue-subtle text-xs font-semibold tabular-nums text-text-accent">
+                  {chapterIndex + 1}
+                </span>
+                <button
+                  className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+                  onClick={() => toggleChapter(chapter.id)}
+                  aria-expanded={expanded}
+                  aria-label={t(expanded ? 'presentationMode.outline.collapseChapter' : 'presentationMode.outline.expandChapter', { title: chapter.title })}
+                >
+                  {expanded ? Icons.chevronDown(13) : Icons.chevronRight(13)}
+                </button>
                 <div className="min-w-0 flex-1">
                   {editable ? (
                     <input
-                      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-2xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-accent-primary"
+                      className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
                       value={chapter.title}
                       onChange={event => patchChapter(chapter.id, { title: event.target.value })}
                       aria-label={t('presentationMode.outline.chapterTitle')}
                     />
-                  ) : <p className="text-2xs font-semibold text-text-primary">{chapter.title}</p>}
-                  {chapterSummary}
+                  ) : <p className="py-1 text-xs font-semibold text-text-primary">{chapter.title}</p>}
+                  {expanded && chapterSummary}
                 </div>
+                <span className="mt-0.5 shrink-0 rounded-full bg-bg-subtle px-2 py-1 text-2xs tabular-nums text-text-tertiary">
+                  {t('presentationMode.outline.slideCount', { count: chapter.slides.length })}
+                </span>
                 {editable && (
-                  <button className="shrink-0 rounded p-1 text-text-tertiary hover:bg-bg-hover hover:text-status-error" onClick={() => removeChapter(chapter.id)} aria-label={t('presentationMode.outline.deleteChapter')}>
-                    {Icons.trash(11)}
+                  <button className="mt-0.5 shrink-0 rounded-md p-1.5 text-text-tertiary hover:bg-bg-hover hover:text-status-error" onClick={() => removeChapter(chapter.id)} aria-label={t('presentationMode.outline.deleteChapter')}>
+                    {Icons.trash(12)}
                   </button>
                 )}
               </div>
-              <ol className="mt-2 space-y-1.5 border-l border-border-subtle pl-2.5">
+              {expanded && <ol className="space-y-2 border-t border-border-subtle bg-bg-subtle/40 px-3 py-3">
                 {chapter.slides.map((slide, slideIndex) => {
                   const number = slideOffset + slideIndex + 1
                   return (
                     <li
                       key={slide.id}
-                      className="rounded-md bg-bg-surface px-2 py-1.5"
+                      className="rounded-lg border border-border-subtle bg-bg-surface px-2.5 py-2.5 transition-colors hover:border-border-default"
                       draggable={editable}
                       onDragStart={event => {
                         event.stopPropagation()
@@ -276,39 +578,59 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                       }}
                       data-testid="presentation-outline-slide"
                     >
-                      <div className="flex items-start gap-1.5">
-                        <span className={cn('mt-1 shrink-0 text-[9px] tabular-nums text-text-tertiary', editable && 'cursor-move')}>{number}</span>
+                      <div className="flex items-start gap-2.5">
+                        <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-md bg-bg-subtle text-2xs font-semibold tabular-nums text-text-secondary', editable && 'cursor-move')}>{number}</span>
                         <div className="min-w-0 flex-1">
                           {editable ? (
                             <input
-                              className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] font-medium text-text-primary outline-none hover:border-border-default focus:border-accent-primary"
+                              className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
                               value={slide.title}
                               onChange={event => patchSlide(chapter.id, slide.id, { title: event.target.value })}
                               aria-label={t('presentationMode.outline.slideTitle')}
                             />
-                          ) : <p className="text-[10px] font-medium leading-4 text-text-primary">{slide.title}</p>}
+                          ) : <p className="text-xs font-semibold leading-5 text-text-primary">{slide.title}</p>}
                           {(editable || slide.purpose) && (editable ? (
                             <input
-                              className="mt-0.5 w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] leading-4 text-text-secondary outline-none hover:border-border-default focus:border-accent-primary"
+                              className="mt-1 w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-2xs leading-5 text-text-secondary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
                               value={slide.purpose ?? ''}
                               onChange={event => patchSlide(chapter.id, slide.id, { purpose: event.target.value })}
                               placeholder={t('presentationMode.outline.purpose')}
                               aria-label={t('presentationMode.outline.purpose')}
                             />
-                          ) : <p className="mt-0.5 text-[10px] leading-4 text-text-secondary">{slide.purpose}</p>)}
+                          ) : <p className="mt-1 text-2xs leading-5 text-text-secondary">{slide.purpose}</p>)}
                           {(editable || slide.keyMessage) && (editable ? (
                             <textarea
-                              className="mt-0.5 min-h-8 w-full resize-y rounded border border-transparent bg-transparent px-1 py-0.5 text-[10px] leading-4 text-text-tertiary outline-none hover:border-border-default focus:border-accent-primary"
+                              className="mt-1 min-h-9 w-full resize-y rounded-md border border-transparent bg-transparent px-1.5 py-1 text-2xs leading-5 text-text-tertiary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
                               value={slide.keyMessage ?? ''}
                               onChange={event => patchSlide(chapter.id, slide.id, { keyMessage: event.target.value })}
                               placeholder={t('presentationMode.outline.keyMessage')}
                               aria-label={t('presentationMode.outline.keyMessage')}
                             />
-                          ) : <p className="mt-0.5 text-[10px] leading-4 text-text-tertiary">{slide.keyMessage}</p>)}
+                          ) : <p className="mt-1 text-2xs leading-5 text-text-tertiary">{slide.keyMessage}</p>)}
+                          {editable ? (
+                            <textarea
+                              className="mt-2 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-2xs leading-5 text-text-secondary outline-none focus:border-accent-primary"
+                              value={slide.contentOutline.join('\n')}
+                              onChange={event => patchSlide(chapter.id, slide.id, {
+                                contentOutline: event.target.value.split('\n').slice(0, 8),
+                              })}
+                              placeholder={t('presentationMode.outline.contentOutline')}
+                              aria-label={t('presentationMode.outline.contentOutline')}
+                            />
+                          ) : slide.contentOutline.length > 0 && (
+                            <ul className="mt-2 space-y-1 text-2xs leading-5 text-text-tertiary">
+                              {slide.contentOutline.map((item, itemIndex) => item.trim() && (
+                                <li key={`${slide.id}-content-${itemIndex}`} className="flex gap-1.5">
+                                  <span className="text-text-accent">•</span>
+                                  <span>{item}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                           {slide.sourceIds.length > 0 && (
-                            <div className="mt-1 flex flex-wrap gap-1">
+                            <div className="mt-2 flex flex-wrap gap-1">
                               {slide.sourceIds.map(sourceId => (
-                                <span key={sourceId} className="max-w-full truncate rounded bg-bg-hover px-1 py-0.5 text-[9px] text-text-tertiary" title={sourceById.get(sourceId)?.title ?? sourceId}>
+                                <span key={sourceId} className="max-w-full truncate rounded-md bg-bg-hover px-1.5 py-0.5 text-[10px] text-text-tertiary" title={sourceById.get(sourceId)?.title ?? sourceId}>
                                   {sourceById.get(sourceId)?.title ?? sourceId}
                                 </span>
                               ))}
@@ -316,18 +638,18 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                           )}
                         </div>
                         {editable && (
-                          <button className="shrink-0 rounded p-1 text-text-tertiary hover:bg-bg-hover hover:text-status-error" onClick={() => removeSlide(chapter.id, slide.id)} aria-label={t('presentationMode.outline.deleteSlide')}>
-                            {Icons.trash(10)}
+                          <button className="shrink-0 rounded-md p-1.5 text-text-tertiary hover:bg-bg-hover hover:text-status-error" onClick={() => removeSlide(chapter.id, slide.id)} aria-label={t('presentationMode.outline.deleteSlide')}>
+                            {Icons.trash(11)}
                           </button>
                         )}
                       </div>
                     </li>
                   )
                 })}
-              </ol>
-              {editable && (
-                <button className="mt-2 flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-text-accent hover:bg-bg-hover" onClick={() => addSlide(chapter.id)}>
-                  {Icons.plus(10)} {t('presentationMode.outline.addSlide')}
+              </ol>}
+              {editable && expanded && (
+                <button className="mx-3 mb-3 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-2xs font-medium text-text-accent hover:bg-bg-hover" onClick={() => addSlide(chapter.id)}>
+                  {Icons.plus(11)} {t('presentationMode.outline.addSlide')}
                 </button>
               )}
             </li>
@@ -335,17 +657,17 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
         })}
       </ol>
       {editable && (
-        <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-border-subtle pt-2.5">
-          <button className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-text-secondary hover:bg-bg-hover" onClick={addChapter}>
-            {Icons.plus(10)} {t('presentationMode.outline.addChapter')}
+        <div className="sticky bottom-0 mt-4 flex items-center justify-between gap-2 rounded-xl border border-border-subtle bg-bg-elevated/95 p-2.5 shadow-lg backdrop-blur">
+          <button className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-text-secondary hover:bg-bg-hover" onClick={addChapter}>
+            {Icons.plus(12)} {t('presentationMode.outline.addChapter')}
           </button>
           <button
-            className="rounded-lg bg-accent-primary px-3 py-1.5 text-[10px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[image:var(--brand-gradient)] px-3 text-xs font-semibold text-text-on-brand disabled:cursor-not-allowed disabled:opacity-45"
             disabled={!valid || busy}
             onClick={() => onConfirm(draft)}
             data-testid="presentation-outline-confirm"
           >
-            {busy ? t('presentationMode.outline.confirming') : t('presentationMode.outline.confirm')}
+            {Icons.check(12)} {busy ? t('presentationMode.outline.confirming') : t('presentationMode.outline.confirm')}
           </button>
         </div>
       )}
@@ -361,10 +683,18 @@ export function PresentationModePane() {
   const agentRunning = useAtomValue(currentAgentRunningAtom)
   const messages = useAtomValue(currentMessagesAtom)
   const respondOutline = useSetAtom(respondPresentationOutlineAtom)
+  const respondTemplate = useSetAtom(respondPresentationTemplateAtom)
   const pendingChoice = useAtomValue(currentHumanRequestAtom) !== null
   const [outlineSubmitting, setOutlineSubmitting] = useState(false)
+  const [templateSubmitting, setTemplateSubmitting] = useState(false)
+  const [paneView, setStoredPaneView] = useAtom(presentationPaneViewFamily(sessionId ?? ''))
   const scrollRef = useRef<HTMLDivElement | null>(null)
   useAutoHideScrollbar(scrollRef)
+
+  const setPaneView = (view: PresentationPaneView) => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+    setStoredPaneView(view)
+  }
 
   const activeStageId: PresentationStageId = position?.mode === 'presentation'
     && PRESENTATION_STAGES.some(stage => stage.id === position.stage)
@@ -389,6 +719,7 @@ export function PresentationModePane() {
   )
   const sources = position?.mode === 'presentation' ? position.presentationSources ?? [] : []
   const outline = position?.mode === 'presentation' ? position.presentationOutline ?? [] : []
+  const outlineSlideCount = outline.reduce((total, chapter) => total + chapter.slides.length, 0)
   const outlineRequestId = position?.mode === 'presentation'
     ? position.presentationOutlineConfirmationId ?? null
     : null
@@ -396,7 +727,32 @@ export function PresentationModePane() {
     && Boolean(outlineRequestId)
     && !position?.presentationOutlineConfirmed
   const outlineBusy = outlineSubmitting || (outlineEditable && agentRunning)
-  const pendingHuman = pendingChoice || (outlineEditable && !agentRunning)
+  const templateCandidates = position?.mode === 'presentation'
+    ? position.presentationTemplateCandidates ?? []
+    : []
+  const templateRequestId = position?.mode === 'presentation'
+    ? position.presentationTemplateSelectionId ?? null
+    : null
+  const templateStatus = position?.mode === 'presentation'
+    ? position.presentationTemplateSelectionStatus ?? 'idle'
+    : 'idle'
+  const templateError = position?.mode === 'presentation'
+    ? position.presentationTemplateSelectionError ?? null
+    : null
+  const [selectedTemplateId, setSelectedTemplateId] = useAtom(
+    presentationTemplateSelectionFamily(templateRequestId ?? ''),
+  )
+  const templatePending = Boolean(templateRequestId) && templateStatus === 'pending'
+  let displayedTemplateId: string | null = null
+  if (templatePending) {
+    displayedTemplateId = selectedTemplateId
+  } else if (templateStatus === 'selected') {
+    displayedTemplateId = position?.presentationSelectedTemplate?.templateId ?? null
+  }
+  const templateBusy = templateSubmitting || (templatePending && agentRunning)
+  const pendingHuman = pendingChoice
+    || (outlineEditable && !agentRunning)
+    || (templatePending && !agentRunning)
   const latestAssistant = messages.findLast(message => message.role === 'assistant')
   const failed = Boolean(latestAssistant?.error)
   const overallPercent = totalStepCount === 0
@@ -410,6 +766,25 @@ export function PresentationModePane() {
       .finally(() => setOutlineSubmitting(false))
   }
 
+  const answerTemplate = (action: 'select' | 'skip' | 'refresh') => {
+    if (!sessionId || !templateRequestId || templateBusy) return
+    if (action === 'select' && !selectedTemplateId) return
+    setTemplateSubmitting(true)
+    void respondTemplate({
+      sessionId,
+      requestId: templateRequestId,
+      action,
+      ...(action === 'select' && selectedTemplateId ? { templateId: selectedTemplateId } : {}),
+    }).finally(() => {
+      setTemplateSubmitting(false)
+      setPaneView('progress')
+    })
+  }
+
+  useEffect(() => {
+    if (templatePending && templateCandidates.length > 0) setStoredPaneView('templates')
+  }, [setStoredPaneView, templateCandidates.length, templatePending, templateRequestId])
+
   let status = t('presentationMode.status.paused')
   let statusTone = 'bg-bg-hover text-text-secondary'
   if (pendingHuman) {
@@ -422,6 +797,15 @@ export function PresentationModePane() {
     status = t('presentationMode.status.failed')
     statusTone = 'bg-status-error-bg text-status-error'
   }
+  let detailTitle = t('presentationMode.outline.title')
+  let detailMeta = t('presentationMode.outline.summary', { chapters: outline.length, slides: outlineSlideCount })
+  if (paneView === 'sources') {
+    detailTitle = t('presentationMode.sources.title')
+    detailMeta = t('presentationMode.sources.count', { count: sources.length })
+  } else if (paneView === 'templates') {
+    detailTitle = t('presentationMode.templates.title')
+    detailMeta = t('presentationMode.templates.count', { count: templateCandidates.length })
+  }
 
   return (
     <div
@@ -432,22 +816,65 @@ export function PresentationModePane() {
         className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4"
         style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}
       >
-        <span className="flex shrink-0 text-text-accent">{Icons.presentation(16)}</span>
+        {paneView === 'progress' ? (
+          <span className="flex shrink-0 text-text-accent">{Icons.presentation(16)}</span>
+        ) : (
+          <button
+            className="flex size-6 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+            onClick={() => setPaneView('progress')}
+            aria-label={t('presentationMode.backToProgress')}
+            data-testid="presentation-detail-back"
+          >
+            <span className="rotate-180">{Icons.chevronRight(14)}</span>
+          </button>
+        )}
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
-          {t('presentationMode.title')}
+          {paneView === 'progress' ? t('presentationMode.title') : detailTitle}
         </h2>
-        <span className="shrink-0 text-2xs tabular-nums text-text-tertiary">
-          {completedStepCount}/{totalStepCount}
-        </span>
-        <span
-          className={cn('shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium', statusTone)}
-          data-testid="presentation-status"
-        >
-          {status}
-        </span>
+        {paneView === 'progress' ? (
+          <span
+            className={cn('shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium', statusTone)}
+            data-testid="presentation-status"
+          >
+            {status}
+          </span>
+        ) : (
+          <span className="shrink-0 text-2xs tabular-nums text-text-tertiary">{detailMeta}</span>
+        )}
       </div>
 
       <div ref={scrollRef} className="auto-hide-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {paneView === 'sources' && (
+          <div className="px-4 py-4" data-testid="presentation-sources-detail">
+            <PresentationSourcesPanel sources={sources} />
+          </div>
+        )}
+        {paneView === 'outline' && (
+          <div className="px-4 py-4" data-testid="presentation-outline-detail">
+            <PresentationOutlinePanel
+              key={outlineRequestId ?? `outline-${outline.map(chapter => chapter.id).join('-')}`}
+              chapters={outline}
+              sources={sources}
+              editable={outlineEditable}
+              busy={outlineBusy}
+              onConfirm={confirmOutline}
+            />
+          </div>
+        )}
+        {paneView === 'templates' && (
+          <div className="px-4 py-4">
+            <PresentationTemplatesPanel
+              candidates={templateCandidates}
+              retrievalError={templateError}
+              selectedId={displayedTemplateId}
+              interactive={templatePending}
+              busy={templateBusy}
+              onSelect={setSelectedTemplateId}
+              onAnswer={answerTemplate}
+            />
+          </div>
+        )}
+        {paneView === 'progress' && <>
         <div className="px-4 pb-3 pt-4">
           <section className="rounded-xl bg-bg-subtle px-3.5 py-3" data-testid="presentation-overview">
             <div className="flex items-center justify-between gap-3">
@@ -501,6 +928,8 @@ export function PresentationModePane() {
                     && stepIndex === stageStepIndex
                     && stageStepIndex < stage.steps.length
                   const report = reports.get(`${stage.id}/${stepId}`)
+                  const ownsDetailArtifact = stepId === 'collect_evidence'
+                    || stepId === 'map_slides'
                   let stepState = 'pending'
                   if (stepComplete) stepState = 'complete'
                   else if (stepCurrent) stepState = 'current'
@@ -542,8 +971,8 @@ export function PresentationModePane() {
                           className="mt-1 animate-enter motion-reduce:animate-none"
                           data-testid={`presentation-report-${stepId}`}
                         >
-                          <p className="text-2xs leading-5 text-text-tertiary">{report.summary}</p>
-                          {report.evidence.length > 0 && (
+                          <p className="line-clamp-2 text-2xs leading-5 text-text-tertiary">{report.summary}</p>
+                          {!ownsDetailArtifact && report.evidence.length > 0 && (
                             <div className="mt-1 flex flex-wrap gap-1">
                               {report.evidence.slice(0, 3).map(item => (
                                 <span
@@ -559,26 +988,31 @@ export function PresentationModePane() {
                         </div>
                       )}
                       {stepId === 'collect_evidence' && sources.length > 0 && (
-                        <PresentationSourcesPanel sources={sources} />
-                      )}
-                      {stepId === 'shape_chapters' && outline.length > 0 && !outline.some(chapter => chapter.slides.length > 0) && (
-                        <PresentationOutlinePanel
-                          key={`chapters-${outline.map(chapter => chapter.id).join('-')}`}
-                          chapters={outline}
-                          sources={sources}
-                          editable={false}
-                          busy={false}
-                          onConfirm={() => {}}
+                        <PresentationArtifactLink
+                          title={t('presentationMode.sources.title')}
+                          meta={t('presentationMode.sources.count', { count: sources.length })}
+                          testId="presentation-open-sources"
+                          onOpen={() => setPaneView('sources')}
                         />
                       )}
-                      {stepId === 'map_slides' && outline.some(chapter => chapter.slides.length > 0) && (
-                        <PresentationOutlinePanel
-                          key={outlineRequestId ?? 'confirmed-outline'}
-                          chapters={outline}
-                          sources={sources}
-                          editable={outlineEditable}
-                          busy={outlineBusy}
-                          onConfirm={confirmOutline}
+                      {stepId === 'map_slides' && outlineSlideCount > 0 && (
+                        <PresentationArtifactLink
+                          title={t('presentationMode.outline.slideBlueprint')}
+                          meta={t('presentationMode.outline.summary', { chapters: outline.length, slides: outlineSlideCount })}
+                          testId="presentation-open-outline"
+                          needsAttention={outlineEditable}
+                          onOpen={() => setPaneView('outline')}
+                        />
+                      )}
+                      {stepId === 'design_visual_direction' && templateCandidates.length > 0 && (
+                        <PresentationArtifactLink
+                          title={t('presentationMode.templates.title')}
+                          meta={templateStatus === 'selected'
+                            ? t('presentationMode.templates.selected')
+                            : t('presentationMode.templates.count', { count: templateCandidates.length })}
+                          testId="presentation-open-templates"
+                          needsAttention={templatePending}
+                          onOpen={() => setPaneView('templates')}
                         />
                       )}
                     </li>
@@ -654,6 +1088,7 @@ export function PresentationModePane() {
             )
           })}
         </ol>
+        </>}
       </div>
     </div>
   )

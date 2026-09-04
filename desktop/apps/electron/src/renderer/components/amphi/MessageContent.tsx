@@ -20,6 +20,8 @@ import { BuildConfirmCard } from './BuildConfirmCard'
 import { TaskConfirmCard } from './TaskConfirmCard'
 import { WorkflowConfirmCard } from './WorkflowConfirmCard'
 import { WorkflowResultCard } from './WorkflowResultCard'
+import { PresentationOutlineConfirmCard } from './PresentationOutlineConfirmCard'
+import { PresentationTemplateSelectionCard } from './PresentationTemplateSelectionCard'
 
 export interface MessageContentProps {
   /** Ordered content blocks (append-only, growing progressively while streaming). */
@@ -54,6 +56,8 @@ export function MessageContent({
       b.type === 'confirmation' ||
       b.type === 'build_confirm' ||
       b.type === 'task_confirm' ||
+      b.type === 'presentation_outline_confirm' ||
+      b.type === 'presentation_template_selection' ||
       b.type === 'workflow_confirm' ||
       b.type === 'build_stage' ||
       b.type === 'workflow_step' ||
@@ -61,7 +65,7 @@ export function MessageContent({
   )
   const hasPendingReview = blocks.some(
     (block) =>
-      (block.type === 'build_confirm' || block.type === 'task_confirm' || block.type === 'workflow_confirm') &&
+      (block.type === 'build_confirm' || block.type === 'task_confirm' || block.type === 'presentation_outline_confirm' || block.type === 'presentation_template_selection' || block.type === 'workflow_confirm') &&
       (block.status ?? 'pending') === 'pending',
   )
   // Streaming with an execution process: keep everything inside the container and do not surface the answer, so that
@@ -153,6 +157,30 @@ function renderAnswerBlocks(blocks: MessageBlock[], sessionId?: string, streamin
         nodes.push(
           <TaskConfirmCard
             key={block.requestId || `task-${index}`}
+            block={block}
+            sessionId={sessionId}
+          />,
+        )
+      }
+    }
+    if (block.type === 'presentation_outline_confirm') {
+      flushText()
+      if ((block.status ?? 'pending') !== 'pending') {
+        nodes.push(
+          <PresentationOutlineConfirmCard
+            key={block.requestId || `presentation-outline-${index}`}
+            block={block}
+            sessionId={sessionId}
+          />,
+        )
+      }
+    }
+    if (block.type === 'presentation_template_selection') {
+      flushText()
+      if ((block.status ?? 'pending') !== 'pending') {
+        nodes.push(
+          <PresentationTemplateSelectionCard
+            key={block.requestId || `presentation-template-${index}`}
             block={block}
             sessionId={sessionId}
           />,

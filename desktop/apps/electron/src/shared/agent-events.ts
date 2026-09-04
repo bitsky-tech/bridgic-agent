@@ -15,7 +15,7 @@
  * Re-exported through `./types` so consumers keep importing from `@shared/types`.
  */
 
-import type { SubAgentMode } from '@app/shared/types'
+import type { PresentationTemplateCandidate, SubAgentMode } from '@app/shared/types'
 
 /** Single option inside an `AskUserQuestion`. */
 export interface AskUserQuestionOption {
@@ -118,6 +118,7 @@ export interface PresentationSlideOutline {
   title: string
   purpose?: string | null
   keyMessage?: string | null
+  contentOutline: string[]
   sourceIds: string[]
 }
 
@@ -141,6 +142,11 @@ export interface ThinkPosition {
   presentationOutline?: PresentationChapterOutline[]
   presentationOutlineConfirmed?: boolean
   presentationOutlineConfirmationId?: string | null
+  presentationTemplateCandidates?: PresentationTemplateCandidate[]
+  presentationTemplateSelectionId?: string | null
+  presentationTemplateSelectionStatus?: 'idle' | 'pending' | 'selected' | 'skipped'
+  presentationTemplateSelectionError?: string | null
+  presentationSelectedTemplate?: PresentationTemplateCandidate | null
 }
 
 /** Session-level projection of one active saved Workflow run. */
@@ -234,6 +240,14 @@ export type AgentEvent =
       operation?: 'create' | 'edit'
       workflowId?: string | null
       originalTaskMarkdown?: string | null
+    }
+  | {
+      type: 'presentation_outline_confirm_request'
+      requestId: string
+    }
+  | {
+      type: 'presentation_template_selection_request'
+      requestId: string
     }
   | {
       type: 'workflow_confirm_request'

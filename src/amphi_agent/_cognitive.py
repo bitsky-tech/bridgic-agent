@@ -302,6 +302,7 @@ class MainThink(CognitiveWorker):
         for spec in TOOL_LIBRARY.all()
         if spec.tool_name not in {
             "report_presentation_step",
+            "ppt_rag",
             "report_workflow_step",
             "request_human_task_confirm",
             "request_human_workflow_confirm",

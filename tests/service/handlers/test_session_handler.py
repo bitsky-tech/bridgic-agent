@@ -3,7 +3,7 @@ from pathlib import Path
 import httpx
 
 from src.amphi_service.auth import LOCAL_USER_ID
-from src.amphi_service.handler._session_handler import _turn_messages
+from src.amphi_service.handler._session_handler import _thinking_mode, _turn_messages
 from src.amphi_store import SessionTurnRecord, SessionTurnRepository, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
 
@@ -58,6 +58,198 @@ def test_think_scope_projects_build_stage_boundaries() -> None:
         for block in messages[0]["blocks"]
         if block.get("type") == "build_stage"
     ] == ["clarify", "explore", None]
+
+
+def test_presentation_outline_review_projects_a_durable_confirmation_card() -> None:
+    """A reload restores the same outline review that was published live."""
+    turn = SessionTurnRecord(
+        id="turn-presentation-outline",
+        user_id=LOCAL_USER_ID,
+        session_id="session-presentation-outline",
+        session_ordinal=0,
+        user_input=UserInput(text="Create a presentation"),
+        ota_records=[{
+            "action_result": {
+                "results": [{
+                    "tool_id": "map-slides",
+                    "tool_name": "report_presentation_step",
+                    "tool_arguments": {"summary": "Mapped the deck"},
+                    "tool_result": {
+                        "summary": "Mapped the deck",
+                        "outline_confirmation_id": "outline-1",
+                        "status": "awaiting_outline_confirmation",
+                    },
+                }],
+            },
+        }],
+        agent_state={
+            "think": {"mode": "presentation", "stage": "ppt_plan"},
+            "interaction": {"kind": "presentation_outline_confirm", "request_id": "outline-1"},
+        },
+        status=TurnStatus.AWAITING_HUMAN,
+    )
+
+    messages = _turn_messages(
+        turn.session_id,
+        0,
+        turn,
+        0,
+        is_last=True,
+        subagents={},
+        show_pending_interaction=True,
+    )
+
+    assert [
+        block
+        for block in messages[0]["blocks"]
+        if block.get("type") == "presentation_outline_confirm"
+    ] == [{
+        "type": "presentation_outline_confirm",
+        "requestId": "outline-1",
+        "status": "pending",
+        "feedback": None,
+    }]
+
+
+def test_presentation_template_selection_restores_card_and_gallery_state() -> None:
+    """Reload restores both the compact interaction block and right-pane candidates."""
+    candidate = {
+        "template_id": "template-editorial-1",
+        "version": "sha256:test",
+        "title": "Editorial Research",
+        "semantic_tags": ["editorial"],
+        "strengths": ["timeline"],
+        "colors": ["#F7F4EE", "#25324A"],
+        "fonts": ["Aptos"],
+        "preview_paths": [],
+        "agentic_use_for_roles": ["cover", "timeline"],
+        "agentic_risks": [],
+        "structural_evidence": {},
+        "materialize_ref": {"provider": "local", "path": "/templates/editorial.pptx"},
+    }
+    turn = SessionTurnRecord(
+        id="turn-presentation-template",
+        user_id=LOCAL_USER_ID,
+        session_id="session-presentation-template",
+        session_ordinal=0,
+        user_input=UserInput(text="Create a presentation"),
+        ota_records=[{
+            "action_result": {
+                "results": [{
+                    "tool_id": "retrieve-templates",
+                    "tool_name": "ppt_rag",
+                    "tool_arguments": {"limit": 8},
+                    "tool_result": {
+                        "candidates": [candidate],
+                        "template_selection_id": "template-selection-1",
+                        "status": "awaiting_template_selection",
+                    },
+                }],
+            },
+        }],
+        agent_state={
+            "think": {
+                "mode": "presentation",
+                "stage": "ppt_plan",
+                "step_index": 3,
+                "outline_confirmed": True,
+                "template_candidates": [candidate],
+                "template_selection_id": "template-selection-1",
+                "template_selection_status": "pending",
+            },
+            "interaction": {
+                "presentation_template_selection": True,
+                "request_id": "template-selection-1",
+            },
+        },
+        status=TurnStatus.AWAITING_HUMAN,
+    )
+
+    messages = _turn_messages(
+        turn.session_id,
+        0,
+        turn,
+        0,
+        is_last=True,
+        subagents={},
+        show_pending_interaction=True,
+    )
+
+    assert [
+        block
+        for block in messages[0]["blocks"]
+        if block.get("type") == "presentation_template_selection"
+    ] == [{
+        "type": "presentation_template_selection",
+        "requestId": "template-selection-1",
+        "status": "pending",
+        "selectedTemplateId": None,
+        "feedback": None,
+    }]
+    thinking_mode = _thinking_mode([turn])
+    assert thinking_mode is not None
+    assert thinking_mode["presentation_template_selection_id"] == "template-selection-1"
+    assert thinking_mode["presentation_template_selection_status"] == "pending"
+    assert thinking_mode["presentation_template_candidates"] == [candidate]
+
+
+def test_completed_presentation_template_selection_restores_its_history_card() -> None:
+    """A completed template decision retains the identity needed for REST reconstruction."""
+    turn = SessionTurnRecord(
+        id="turn-presentation-template-selected",
+        user_id=LOCAL_USER_ID,
+        session_id="session-presentation-template-selected",
+        session_ordinal=0,
+        user_input=UserInput(text="Create a presentation"),
+        ota_records=[{
+            "action_result": {
+                "results": [{
+                    "tool_id": "retrieve-templates",
+                    "tool_name": "ppt_rag",
+                    "tool_arguments": {"limit": 8},
+                    "tool_result": {
+                        "search_id": "search-1",
+                        "template_selection_id": "template-selection-1",
+                        "status": "selected",
+                        "selected_template_id": "template-editorial-1",
+                        "feedback": None,
+                    },
+                }],
+            },
+        }],
+        agent_state={
+            "think": {
+                "mode": "presentation",
+                "stage": "ppt_plan",
+                "step_index": 2,
+                "outline_confirmed": True,
+                "template_selection_status": "selected",
+            },
+        },
+        status=TurnStatus.COMPLETED,
+    )
+
+    messages = _turn_messages(
+        turn.session_id,
+        0,
+        turn,
+        0,
+        is_last=True,
+        subagents={},
+        show_pending_interaction=True,
+    )
+
+    assert [
+        block
+        for block in messages[0]["blocks"]
+        if block.get("type") == "presentation_template_selection"
+    ] == [{
+        "type": "presentation_template_selection",
+        "requestId": "template-selection-1",
+        "status": "selected",
+        "selectedTemplateId": "template-editorial-1",
+        "feedback": None,
+    }]
 
 
 async def test_create_session(service_client: httpx.AsyncClient, test_sandbox: IsolatedPaths) -> None:

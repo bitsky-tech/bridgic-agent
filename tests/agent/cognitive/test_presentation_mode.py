@@ -1,12 +1,18 @@
 from pathlib import Path
+
+import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall, ToolArgument
+from bridgic.amphibious._type import ThinkResult
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext
 from src.amphi_agent._state import (
     AwaitingPresentationOutlineConfirm,
+    AwaitingPresentationTemplateSelection,
     NormalStageState,
+    PresentationChapterOutline,
     PresentationStageState,
     PresentationStepRecord,
+    PresentationTemplateCandidate,
 )
 from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_agent._workspace import Workspace
@@ -16,10 +22,15 @@ from src.amphi_agent.cognitive import (
     PresentationBriefThink,
     PresentationPlanThink,
 )
-from src.amphi_agent.prompts.presentation import PRESENTATION_BRIEF_PERSONA
+from src.amphi_agent.prompts.presentation import PRESENTATION_BRIEF_PERSONA, PRESENTATION_PLAN_PERSONA
 from src.amphi_agent.tools._presentation import PresentationStepReport
 from src.amphi_agent.tools._request_human import RequestPresentation
-from src.amphi_service.protocol import StageEvent
+from src.amphi_agent._invocation import AgentInvocation
+from src.amphi_service.protocol import (
+    PresentationOutlineConfirmRequestEvent,
+    PresentationTemplateSelectionRequestEvent,
+    StageEvent,
+)
 from src.amphi_service.runtime._session_events import SessionEventBroker
 
 
@@ -115,6 +126,34 @@ def test_presentation_continue_prompt_matches_the_current_cursor() -> None:
     ready_note = ready.ota_record[-1].observation_result or ""
     assert 'switch(stage="ppt_compose"' in ready_note
     assert "do not repeat a completed step" in ready_note
+
+
+def test_presentation_plan_context_excludes_renderer_preview_assets() -> None:
+    """The Agent sees the selected template contract without local preview paths."""
+    ota_context = AmphiOTAContext()
+    ota_context.transition_think(PresentationStageState(
+        stage="ppt_plan",
+        outline=[PresentationChapterOutline(id="chapter-1", title="Story")],
+        selected_template=PresentationTemplateCandidate(
+            template_id="template-1",
+            version="version-1",
+            title="Editorial",
+            preview_paths=[f"/private/previews/slide-{index}.jpg" for index in range(1, 7)],
+            structural_evidence={
+                "overview": "Editorial template",
+                "representative_slides": [{"slide_number": 1}],
+            },
+            materialize_ref={"provider": "local", "template_id": "template-1"},
+        ),
+        template_selection_status="selected",
+    ))
+
+    block = PresentationPlanThink().plan_data_block(ota_context)
+
+    assert "Editorial template" in block
+    assert '"template_id": "template-1"' in block
+    assert "/private/previews/" not in block
+    assert "representative_slides" not in block
 
 
 async def test_presentation_contracts_are_invalidated_on_entry_and_backtrack(tmp_path: Path) -> None:
@@ -229,7 +268,7 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
     )]
     assert state.sources[0].id == "source-001"
     assert state.sources[0].kind == "web"
-    assert "Current step id: shape_chapters" in worker.progress_block(ota_context)
+    assert "Current step id: map_slides" in worker.progress_block(ota_context)
 
     completed = AmphiOTAContext()
     completed.transition_think(PresentationStageState(
@@ -237,6 +276,32 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
         step_index=len(PRESENTATION_STAGE_STEPS["ppt_plan"]),
     ))
     assert await worker.legality_check(switch, completed, context) is None
+
+
+async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
+    """The Plan ThinkUnit enforces the atomic template-selection handoff."""
+    worker = PresentationPlanThink()
+    context = AmphiContext()
+    ppt_call = StepToolCall(call_id="ppt-rag", tool="ppt_rag", tool_arguments=[])
+    ota_context = AmphiOTAContext(ota_record=[OTARecord(think_result=ThinkResult(
+        step_content="Choose templates and continue.",
+        tool_calls=[ppt_call, StepToolCall(call_id="switch", tool="switch", tool_arguments=[])],
+    ))])
+    ota_context.transition_think(PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    ))
+
+    reason = await worker.legality_check(ppt_call, ota_context, context)
+
+    assert reason is not None and "only tool call" in reason
+
+    ota_context.ota_record[-1].think_result = ThinkResult(
+        step_content="Choose templates.",
+        tool_calls=[ppt_call],
+    )
+    assert await worker.legality_check(ppt_call, ota_context, context) is None
 
 
 def test_presentation_progress_event_contains_the_durable_cursor() -> None:
@@ -275,7 +340,42 @@ def test_presentation_progress_event_contains_the_durable_cursor() -> None:
         "presentation_outline": [],
         "presentation_outline_confirmed": False,
         "presentation_outline_confirmation_id": None,
+        "presentation_template_candidates": [],
+        "presentation_template_selection_id": None,
+        "presentation_template_selection_status": "idle",
+        "presentation_template_selection_error": None,
+        "presentation_selected_template": None,
     }
+
+
+def test_presentation_outline_confirmation_is_published_as_a_framework_interaction() -> None:
+    """The parked outline review reaches the live conversation surface."""
+    publisher = SessionEventBroker().open("presentation-outline-confirm")
+
+    AgentInvocation._publish_interaction(
+        publisher,
+        AwaitingPresentationOutlineConfirm(request_id="outline-1"),
+    )
+
+    assert len(publisher._buffer) == 1
+    event = publisher._buffer[0]
+    assert isinstance(event, PresentationOutlineConfirmRequestEvent)
+    assert event.payload() == {"request_id": "outline-1"}
+
+
+def test_presentation_template_selection_is_published_as_a_framework_interaction() -> None:
+    """A verified template shortlist reaches the dedicated user-selection surface."""
+    publisher = SessionEventBroker().open("presentation-template-selection")
+
+    AgentInvocation._publish_interaction(
+        publisher,
+        AwaitingPresentationTemplateSelection(request_id="template-selection-1"),
+    )
+
+    assert len(publisher._buffer) == 1
+    event = publisher._buffer[0]
+    assert isinstance(event, PresentationTemplateSelectionRequestEvent)
+    assert event.payload() == {"request_id": "template-selection-1"}
 
 
 async def test_presentation_brief_artifact_is_required_for_the_stage_handoff(tmp_path: Path) -> None:
@@ -306,7 +406,6 @@ def test_presentation_step_catalog_matches_the_intended_production_order() -> No
     """Plan derives its visual direction from the confirmed content blueprint."""
     assert [step.step_id for step in PRESENTATION_STAGE_STEPS["ppt_plan"]] == [
         "collect_evidence",
-        "shape_chapters",
         "map_slides",
         "design_visual_direction",
     ]
@@ -320,12 +419,41 @@ def test_presentation_step_catalog_matches_the_intended_production_order() -> No
     assert "supplied files and conversation first" in collect.instruction
     assert "one sufficient source is enough" in collect.instruction
     assert "3–5 high-quality sources" in collect.instruction
+    assert "content_outline" in PRESENTATION_PLAN_PERSONA
+
+
+def test_legacy_plan_cursor_collapses_the_removed_chapter_step() -> None:
+    """Saved four-step Plan sessions resume at the equivalent three-step cursor."""
+    state = PresentationStageState.model_validate({
+        "stage": "ppt_plan",
+        "step_index": 3,
+        "reports": [
+            {"stage": "ppt_plan", "step_id": "collect_evidence", "summary": "Collected.", "evidence": []},
+            {"stage": "ppt_plan", "step_id": "shape_chapters", "summary": "Shaped.", "evidence": []},
+            {"stage": "ppt_plan", "step_id": "map_slides", "summary": "Mapped.", "evidence": []},
+        ],
+    })
+
+    assert state.step_index == 2
+    assert [report.step_id for report in state.reports] == ["collect_evidence", "map_slides"]
+
+
+def test_slide_map_requires_page_content_outlines() -> None:
+    """A page title alone is not a sufficiently detailed production blueprint."""
+    with pytest.raises(ValueError, match="non-empty `content_outline`"):
+        PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+            "map_slides",
+            {"chapters": [{
+                "title": "Opening",
+                "slides": [{"title": "Why this matters"}],
+            }]},
+        )
 
 
 async def test_slide_map_report_parks_for_editable_outline_confirmation() -> None:
     """The runtime owns outline ids and stops before visual design for review."""
     agent = AmphiAgent()
-    state = PresentationStageState(stage="ppt_plan", step_index=2).apply_plan_step_data(
+    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
         "collect_evidence",
         {"sources": [{
             "kind": "conversation",
@@ -347,6 +475,10 @@ async def test_slide_map_report_parks_for_editable_outline_confirmation() -> Non
                     "slides": [{
                         "title": "Why this story matters",
                         "key_message": "The subject remains relevant.",
+                        "content_outline": [
+                            "Introduce the central question.",
+                            "Connect the question to the audience.",
+                        ],
                         "source_ids": ["source-001"],
                     }],
                 }]},
@@ -360,9 +492,13 @@ async def test_slide_map_report_parks_for_editable_outline_confirmation() -> Non
 
     next_state = ota_context.think_status
     assert isinstance(next_state, PresentationStageState)
-    assert next_state.step_index == 3
+    assert next_state.step_index == 2
     assert next_state.outline[0].id == "chapter-001"
     assert next_state.outline[0].slides[0].id == "slide-001"
+    assert next_state.outline[0].slides[0].content_outline == [
+        "Introduce the central question.",
+        "Connect the question to the audience.",
+    ]
     assert next_state.outline_confirmation_id.startswith("presentation_outline_")
     assert next_state.outline_confirmed is False
     assert isinstance(ota_context.interaction_status, AwaitingPresentationOutlineConfirm)

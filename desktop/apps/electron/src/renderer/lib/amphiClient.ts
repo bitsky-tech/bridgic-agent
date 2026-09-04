@@ -46,6 +46,7 @@ import type {
   AskUserQuestion,
   ContextUsageSnapshot,
   PermissionItem,
+  PresentationTemplateCandidate,
   SubAgentMode,
   ThinkPosition,
   WorkflowRunState,
@@ -716,6 +717,48 @@ const contextUsageSnapshotSchema = z.object({
     current_input_tokens: 0,
   }),
 })
+
+const presentationTemplateCandidateSchema = z.object({
+  template_id: z.string(),
+  version: z.string(),
+  title: z.string(),
+  aspect_ratio: z.string().nullable().optional(),
+  slide_count: z.number().int().positive().nullable().optional(),
+  semantic_tags: z.array(z.string()).default([]),
+  strengths: z.array(z.string()).default([]),
+  colors: z.array(z.string()).default([]),
+  fonts: z.array(z.string()).default([]),
+  preview_paths: z.array(z.string()).default([]),
+  role_coverage: z.number().min(0).max(1).nullable().optional(),
+  agentic_fit: z.enum(['strong', 'usable', 'weak']).nullable().optional(),
+  agentic_reason: z.string().nullable().optional(),
+  agentic_use_for_roles: z.array(z.string()).default([]),
+  agentic_risks: z.array(z.string()).default([]),
+  structural_evidence: z.record(z.string(), z.unknown()).default({}),
+  materialize_ref: z.record(z.string(), z.unknown()).default({}),
+})
+
+function mapPresentationTemplateCandidate(candidate: z.infer<typeof presentationTemplateCandidateSchema>): PresentationTemplateCandidate {
+  return {
+    templateId: candidate.template_id,
+    version: candidate.version,
+    title: candidate.title,
+    ...(candidate.aspect_ratio !== undefined ? { aspectRatio: candidate.aspect_ratio } : {}),
+    ...(candidate.slide_count !== undefined ? { slideCount: candidate.slide_count } : {}),
+    semanticTags: candidate.semantic_tags,
+    strengths: candidate.strengths,
+    colors: candidate.colors,
+    fonts: candidate.fonts,
+    previewPaths: candidate.preview_paths,
+    ...(candidate.role_coverage !== undefined ? { roleCoverage: candidate.role_coverage } : {}),
+    ...(candidate.agentic_fit !== undefined ? { agenticFit: candidate.agentic_fit } : {}),
+    ...(candidate.agentic_reason !== undefined ? { agenticReason: candidate.agentic_reason } : {}),
+    agenticUseForRoles: candidate.agentic_use_for_roles,
+    agenticRisks: candidate.agentic_risks,
+    structuralEvidence: candidate.structural_evidence,
+    materializeRef: candidate.materialize_ref,
+  }
+}
 const sessionMessagesSchema = z
   .object({
     messages: z.array(z.object({
@@ -814,11 +857,17 @@ const sessionMessagesSchema = z
             title: z.string(),
             purpose: z.string().nullable().optional(),
             key_message: z.string().nullable().optional(),
+            content_outline: z.array(z.string()).default([]),
             source_ids: z.array(z.string()).default([]),
           })).default([]),
         })).default([]),
         presentation_outline_confirmed: z.boolean().default(false),
         presentation_outline_confirmation_id: z.string().nullable().optional(),
+        presentation_template_candidates: z.array(presentationTemplateCandidateSchema).optional(),
+        presentation_template_selection_id: z.string().nullable().optional(),
+        presentation_template_selection_status: z.enum(['idle', 'pending', 'selected', 'skipped']).optional(),
+        presentation_template_selection_error: z.string().nullable().optional(),
+        presentation_selected_template: presentationTemplateCandidateSchema.nullable().optional(),
       })
       .nullable()
       .optional(),
@@ -1433,11 +1482,17 @@ export class AmphiClient {
             title: string
             purpose?: string | null
             key_message?: string | null
+            content_outline: string[]
             source_ids: string[]
           }>
         }>
         presentation_outline_confirmed?: boolean
         presentation_outline_confirmation_id?: string | null
+        presentation_template_candidates?: Array<z.infer<typeof presentationTemplateCandidateSchema>>
+        presentation_template_selection_id?: string | null
+        presentation_template_selection_status?: 'idle' | 'pending' | 'selected' | 'skipped'
+        presentation_template_selection_error?: string | null
+        presentation_selected_template?: z.infer<typeof presentationTemplateCandidateSchema> | null
       } | null
       workflow_run?: {
         workflow_id: string
@@ -1514,17 +1569,35 @@ export class AmphiClient {
                   presentationOutline: (res.thinking_mode.presentation_outline ?? []).map(chapter => ({
                     id: chapter.id,
                     title: chapter.title,
-                    summary: chapter.summary,
+                    ...(chapter.summary !== undefined ? { summary: chapter.summary } : {}),
                     slides: chapter.slides.map(slide => ({
                       id: slide.id,
                       title: slide.title,
-                      purpose: slide.purpose,
-                      keyMessage: slide.key_message,
+                      ...(slide.purpose !== undefined ? { purpose: slide.purpose } : {}),
+                      ...(slide.key_message !== undefined ? { keyMessage: slide.key_message } : {}),
+                      contentOutline: slide.content_outline,
                       sourceIds: slide.source_ids,
                     })),
                   })),
                   presentationOutlineConfirmed: res.thinking_mode.presentation_outline_confirmed ?? false,
                   presentationOutlineConfirmationId: res.thinking_mode.presentation_outline_confirmation_id ?? null,
+                  ...(
+                    res.thinking_mode.presentation_template_candidates !== undefined
+                    || res.thinking_mode.presentation_template_selection_id !== undefined
+                    || res.thinking_mode.presentation_template_selection_status !== undefined
+                    || res.thinking_mode.presentation_template_selection_error !== undefined
+                    || res.thinking_mode.presentation_selected_template !== undefined
+                      ? {
+                          presentationTemplateCandidates: (res.thinking_mode.presentation_template_candidates ?? []).map(mapPresentationTemplateCandidate),
+                          presentationTemplateSelectionId: res.thinking_mode.presentation_template_selection_id ?? null,
+                          presentationTemplateSelectionStatus: res.thinking_mode.presentation_template_selection_status ?? 'idle' as const,
+                          presentationTemplateSelectionError: res.thinking_mode.presentation_template_selection_error ?? null,
+                          presentationSelectedTemplate: res.thinking_mode.presentation_selected_template
+                            ? mapPresentationTemplateCandidate(res.thinking_mode.presentation_selected_template)
+                            : null,
+                        }
+                      : {}
+                  ),
                 }
               : {}),
           }

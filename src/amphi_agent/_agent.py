@@ -58,6 +58,7 @@ from ._state import (
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
     AwaitingPresentationOutlineConfirm,
+    AwaitingPresentationTemplateSelection,
     AwaitingWorkflowRunChoice,
     BuildStageState,
     AwaitingSubAgent,
@@ -65,6 +66,7 @@ from ._state import (
     NormalStageState,
     PresentationStageState,
     PresentationStepRecord,
+    PresentationTemplateCandidate,
     RoundPermission,
     CallVerdict,
     SubAgentCall,
@@ -517,6 +519,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         for cv in gate.verdicts:
             if cv.verdict == Permission.DENY.value:
                 result.results.append(self._denied_step(cv))
+        self._prepare_ppt_rag_action_results(result, ota_context)
         self._save_large_tool_results(result, context)
         duration_ms = int((time.monotonic() - start) * 1000)
         ota_context._current_record().act_duration_ms = duration_ms
@@ -536,6 +539,83 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 )
 
         return result
+
+    def _prepare_ppt_rag_action_results(self, result: Optional[ActionResult], ota_context: AmphiOTAContext) -> None:
+        """Consume PPT candidates before generic large-result spill handling."""
+        if result is None:
+            return
+        for step in getattr(result, "results", None) or []:
+            if step.tool_name == "ppt_rag" and step.success:
+                self._prepare_ppt_rag_action_step(step, ota_context)
+
+    def _prepare_ppt_rag_action_step(self, step: ActionStepResult, ota_context: AmphiOTAContext) -> None:
+        """Move a PPT shortlist into presentation state and retain only a compact receipt."""
+        def reject(message: str) -> None:
+            step.success = False
+            step.error = message
+            step.tool_result = None
+
+        current_status = ota_context.think_status
+        payload = step.tool_result
+        if (
+            isinstance(payload, dict)
+            and payload.get("status") == "awaiting_template_selection"
+            and isinstance(current_status, PresentationStageState)
+            and current_status.template_selection_id == payload.get("template_selection_id")
+        ):
+            return
+        try:
+            payload = json.loads(payload) if isinstance(payload, str) else payload
+        except (TypeError, ValueError) as exc:
+            reject(f"PPT template retrieval returned invalid JSON: {exc}")
+            return
+        if not isinstance(payload, dict):
+            reject("PPT template retrieval returned an invalid result object.")
+            return
+        if not isinstance(current_status, PresentationStageState) or current_status.stage != "ppt_plan" or current_status.step_index != 2:
+            reject("PPT template retrieval is only valid during Plan's visual-direction step.")
+            return
+
+        candidates: List[PresentationTemplateCandidate] = []
+        invalid_candidates: List[str] = []
+        raw_candidates = payload.get("candidates")
+        for index, candidate in enumerate(raw_candidates[:8] if isinstance(raw_candidates, list) else []):
+            try:
+                candidates.append(PresentationTemplateCandidate.model_validate(candidate))
+            except (TypeError, ValueError) as exc:
+                invalid_candidates.append(f"candidate {index + 1}: {exc}")
+        retrieval_failed = payload.get("status") == "retrieval_failed"
+        retrieval_error = str(payload.get("retrieval_error") or "").strip()[:1_000]
+        if retrieval_failed and not retrieval_error:
+            retrieval_error = "Template retrieval did not return an actionable result."
+        if not candidates and not retrieval_failed:
+            detail = f" ({invalid_candidates[0]})" if invalid_candidates else ""
+            reject("PPT template retrieval returned no selectable candidates." + detail)
+            return
+
+        request_id = f"presentation_template_{uuid4().hex}"
+        next_status = current_status.model_copy(update={
+            "template_candidates": candidates,
+            "template_selection_id": request_id,
+            "template_selection_status": "pending",
+            "template_selection_error": retrieval_error or None,
+            "selected_template": None,
+        })
+        ota_context.transition_think(next_status)
+        ota_context.transition_interaction(AwaitingPresentationTemplateSelection(request_id=request_id))
+        step.tool_result = {
+            "search_id": payload.get("search_id"),
+            "index_id": payload.get("index_id"),
+            "retrieval_mode": payload.get("retrieval_mode"),
+            "template_selection_id": request_id,
+            "status": "awaiting_template_selection",
+            "candidate_count": len(candidates),
+            "candidate_ids": [candidate.template_id for candidate in candidates],
+            **({"retrieval_error": retrieval_error} if retrieval_error else {}),
+            **({"discarded_candidate_count": len(invalid_candidates)} if invalid_candidates else {}),
+        }
+        if ota_context.stream is not None:
+            self._publish_stage(ota_context, next_status)
 
     async def _execute_tool_calls(
         self,
@@ -708,6 +788,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         "goal": result.goal,
                         "message": "The presentation request entered the dedicated pipeline.",
                     }
+
+            # Present the verified PPT template shortlist for explicit user selection.
+            elif step.tool_name == "ppt_rag":
+                self._prepare_ppt_rag_action_step(step, ota_context)
 
             # Complete current Presentation production step
             elif step.tool_name == "report_presentation_step":
@@ -1219,6 +1303,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 raise RuntimeError("This Session has no pending Build confirmation.")
             if input_type == "presentation_outline_confirm":
                 raise RuntimeError("This Session has no pending presentation outline confirmation.")
+            if input_type == "presentation_template_selection":
+                raise RuntimeError("This Session has no pending presentation template selection.")
 
             # Resume durable cognitive cursors after completion, cancellation, or infrastructure failure.
             if latest_turn is not None:
@@ -1349,6 +1435,13 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 await self._resume_workflow_confirm(ota_context, context, latest_turn, original_user_input)
             elif interaction.get("presentation_outline_confirm") is True:
                 await self._resume_presentation_outline_confirm(
+                    ota_context,
+                    context,
+                    latest_turn,
+                    original_user_input,
+                )
+            elif interaction.get("presentation_template_selection") is True:
+                await self._resume_presentation_template_selection(
                     ota_context,
                     context,
                     latest_turn,
@@ -2007,7 +2100,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 if not (report.stage == "ppt_plan" and report.step_id == "map_slides")
             ]
             state = state.model_copy(update={
-                "step_index": 2,
+                "step_index": 1,
                 "reports": reports,
                 "outline_confirmed": False,
                 "outline_confirmation_id": None,
@@ -2028,6 +2121,149 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             )
 
         ota_context.ota_record = [OTARecord.model_validate(record) for record in pending_turn.ota_records]
+
+        def update_confirmation_result(status: str) -> None:
+            for record in reversed(ota_context.ota_record):
+                steps = (record.action_result or {}).get("results") or []
+                for step in reversed(steps):
+                    if step.get("tool_name") != "report_presentation_step":
+                        continue
+                    payload = step.get("tool_result")
+                    if (
+                        not isinstance(payload, dict)
+                        or payload.get("outline_confirmation_id") != pending.request_id
+                    ):
+                        continue
+                    payload.update({"status": status, "feedback": feedback or None})
+                    return
+
+        update_confirmation_result("revision_requested" if direct_reply else "confirmed")
+        record = ota_context.ota_record[-1] if ota_context.ota_record else None
+        if record is None:
+            ota_context.ota_record.append(OTARecord(observation_result=message))
+        else:
+            existing = getattr(record, "observation_result", None)
+            record.observation_result = f"{existing}\n{message}" if existing else message
+        ota_context.transition_think(state)
+        ota_context.transition_interaction(None)
+        context.session = context.session.without_last()
+        ota_context.user_input = original_user_input
+
+    async def _resume_presentation_template_selection(self, ota_context: AmphiOTAContext, context: AmphiContext, pending_turn: SessionTurnRecord, original_user_input: Any) -> None:
+        """Resume Plan after the user selects, skips, or refreshes templates."""
+        def field(name: str) -> Any:
+            if isinstance(ota_context.user_input, dict):
+                return ota_context.user_input.get(name)
+            return getattr(ota_context.user_input, name, None)
+
+        pending = AwaitingPresentationTemplateSelection.model_validate(
+            pending_turn.agent_state.get("interaction") or {},
+        )
+        input_type = field("type")
+        if input_type not in {None, "chat", "presentation_template_selection"}:
+            raise RuntimeError("This Session is waiting for a presentation template selection.")
+        direct_reply = input_type != "presentation_template_selection"
+        if not direct_reply and field("request_id") != pending.request_id:
+            raise RuntimeError("This presentation template selection does not match the pending request.")
+
+        state = ota_context.think_status
+        if not isinstance(state, PresentationStageState) or state.stage != "ppt_plan" or state.step_index != 2:
+            raise RuntimeError("Presentation template selection requires Plan's visual-direction step.")
+        feedback = render_input(ota_context.user_input).strip() if direct_reply else ""
+        action = "feedback" if direct_reply else str(field("action") or "")
+        selected_template: Optional[PresentationTemplateCandidate] = None
+        if action == "select":
+            template_id = str(field("template_id") or "")
+            selected_template = next(
+                (candidate for candidate in state.template_candidates if candidate.template_id == template_id),
+                None,
+            )
+            if selected_template is None:
+                raise RuntimeError("The selected presentation template is not part of this shortlist.")
+            state = state.model_copy(update={
+                "template_selection_id": None,
+                "template_selection_status": "selected",
+                "template_selection_error": None,
+                "selected_template": selected_template,
+            })
+            selected_context = selected_template.agent_context()
+            message = (
+                "The user selected this verified PowerPoint template. Treat its id, version, "
+                "materialization reference, and structural evidence as the visual-direction source of truth:\n\n"
+                + json.dumps(selected_context, ensure_ascii=False, indent=2)
+            )
+        elif action == "skip":
+            state = state.model_copy(update={
+                "template_selection_id": None,
+                "template_selection_status": "skipped",
+                "template_selection_error": None,
+                "selected_template": None,
+            })
+            message = "The user explicitly chose not to use a retrieved template. Continue with a custom visual system."
+        elif action == "refresh":
+            excluded = (
+                list(dict.fromkeys([
+                    *state.template_excluded_ids,
+                    *(candidate.template_id for candidate in state.template_candidates),
+                ]))
+                if state.template_candidates
+                else []
+            )
+            state = state.model_copy(update={
+                "template_candidates": [],
+                "template_selection_id": None,
+                "template_selection_status": "idle",
+                "template_selection_error": None,
+                "selected_template": None,
+                "template_excluded_ids": excluded,
+            })
+            message = (
+                "The user requested another template batch. Call `ppt_rag` again by itself; "
+                "the previous candidate ids are excluded by runtime state."
+            )
+        elif direct_reply:
+            state = state.model_copy(update={
+                "template_candidates": [],
+                "template_selection_id": None,
+                "template_selection_status": "idle",
+                "template_selection_error": None,
+                "selected_template": None,
+            })
+            message = (
+                "The user replied while reviewing template candidates. Re-run template retrieval "
+                f"around this feedback:\n\n{feedback}"
+            )
+        else:
+            raise RuntimeError("Presentation template selection requires action `select`, `skip`, or `refresh`.")
+
+        ota_context.ota_record = [OTARecord.model_validate(record) for record in pending_turn.ota_records]
+
+        def update_selection_result() -> None:
+            for record in reversed(ota_context.ota_record):
+                steps = (record.action_result or {}).get("results") or []
+                for step in reversed(steps):
+                    if step.get("tool_name") != "ppt_rag":
+                        continue
+                    payload = step.get("tool_result")
+                    if not isinstance(payload, dict) or payload.get("template_selection_id") != pending.request_id:
+                        continue
+                    search_id = payload.get("search_id")
+                    payload.clear()
+                    payload.update({
+                        "search_id": search_id,
+                        "template_selection_id": pending.request_id,
+                        "status": (
+                            "selected" if action == "select"
+                            else "skipped" if action == "skip"
+                            else "refresh_requested" if action == "refresh"
+                            else "revision_requested"
+                        ),
+                        "selected_template_id": selected_template.template_id if selected_template else None,
+                        "feedback": feedback or None,
+                    })
+                    return
+
+        update_selection_result()
         record = ota_context.ota_record[-1] if ota_context.ota_record else None
         if record is None:
             ota_context.ota_record.append(OTARecord(observation_result=message))
@@ -2471,6 +2707,17 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 ],
                 "presentation_outline_confirmed": status.outline_confirmed,
                 "presentation_outline_confirmation_id": status.outline_confirmation_id,
+                "presentation_template_candidates": [
+                    candidate.model_dump(mode="json") for candidate in status.template_candidates
+                ],
+                "presentation_template_selection_id": status.template_selection_id,
+                "presentation_template_selection_status": status.template_selection_status,
+                "presentation_template_selection_error": status.template_selection_error,
+                "presentation_selected_template": (
+                    status.selected_template.model_dump(mode="json")
+                    if status.selected_template is not None
+                    else None
+                ),
             })
         ota_context.stream.publish("stage", **payload)
 
@@ -2501,6 +2748,12 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     "outline": [],
                     "outline_confirmed": False,
                     "outline_confirmation_id": None,
+                    "template_candidates": [],
+                    "template_selection_id": None,
+                    "template_selection_status": "idle",
+                    "template_selection_error": None,
+                    "selected_template": None,
+                    "template_excluded_ids": [],
                 } if reset_plan else {}),
             })
         if isinstance(current_status, WorkflowStageState):

@@ -13,6 +13,8 @@ import { TaskConfirmCard } from '@/components/amphi/TaskConfirmCard'
 import { WorkflowConfirmCard } from '@/components/amphi/WorkflowConfirmCard'
 import { PermissionApproval } from '@/components/permissions'
 import { Icons } from '@/components/amphi/Icons'
+import { PresentationOutlineConfirmCard } from '@/components/amphi/PresentationOutlineConfirmCard'
+import { PresentationTemplateSelectionCard } from '@/components/amphi/PresentationTemplateSelectionCard'
 import { HumanRequestChoice } from './HumanRequestBanner'
 
 interface InteractionPresentation {
@@ -46,6 +48,20 @@ function presentationFor(
       icon: Icons.file(15),
     }
   }
+  if (block.type === 'presentation_outline_confirm') {
+    return {
+      title: t('humanRequest.framework.presentationOutlineTitle'),
+      summary: t('humanRequest.framework.presentationOutlineSummary'),
+      icon: Icons.presentation(15),
+    }
+  }
+  if (block.type === 'presentation_template_selection') {
+    return {
+      title: t('humanRequest.framework.presentationTemplateTitle'),
+      summary: t('humanRequest.framework.presentationTemplateSummary'),
+      icon: Icons.presentation(15),
+    }
+  }
   return {
     title: t('humanRequest.framework.workflowTitle'),
     summary: t('humanRequest.framework.workflowSummary'),
@@ -76,6 +92,12 @@ function InteractionBody({
   }
   if (block.type === 'task_confirm') {
     return <TaskConfirmCard block={block} sessionId={sessionId} floating />
+  }
+  if (block.type === 'presentation_outline_confirm') {
+    return <PresentationOutlineConfirmCard block={block} sessionId={sessionId} floating />
+  }
+  if (block.type === 'presentation_template_selection') {
+    return <PresentationTemplateSelectionCard block={block} sessionId={sessionId} floating />
   }
   return <WorkflowConfirmCard block={block} floating />
 }

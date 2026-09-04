@@ -611,6 +611,7 @@ describe('AmphiClient session transcript', () => {
           slides: [{
             id: 'slide-001',
             title: 'The strategy at a glance',
+            content_outline: ['State the strategic choice.', 'Preview the three priorities.'],
             source_ids: ['source-001'],
           }],
         }],
@@ -646,6 +647,7 @@ describe('AmphiClient session transcript', () => {
         slides: [{
           id: 'slide-001',
           title: 'The strategy at a glance',
+          contentOutline: ['State the strategic choice.', 'Preview the three priorities.'],
           sourceIds: ['source-001'],
         }],
       }],

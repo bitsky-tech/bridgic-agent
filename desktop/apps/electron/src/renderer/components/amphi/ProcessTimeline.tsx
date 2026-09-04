@@ -22,6 +22,8 @@ import { Icons } from './Icons'
 import { Collapse } from './Collapse'
 import { StickyScroll } from './StickyScroll'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
+import { PresentationOutlineConfirmCard } from './PresentationOutlineConfirmCard'
+import { PresentationTemplateSelectionCard } from './PresentationTemplateSelectionCard'
 import { MessageThinking } from './MessageThinking'
 import { ToolCallRow } from './ToolCallRow'
 import { SubagentCard } from './SubagentCard'
@@ -211,6 +213,14 @@ function TimelineBlock({ block, streaming, sessionId }: { block: MessageBlock; s
   ) {
     if ('status' in block && (block.status ?? 'pending') === 'pending') return null
     return <CompletedInteractionRow block={block} sessionId={sessionId} />
+  }
+  if (block.type === 'presentation_outline_confirm') {
+    if ((block.status ?? 'pending') === 'pending') return null
+    return <PresentationOutlineConfirmCard block={block} sessionId={sessionId} />
+  }
+  if (block.type === 'presentation_template_selection') {
+    if ((block.status ?? 'pending') === 'pending') return null
+    return <PresentationTemplateSelectionCard block={block} sessionId={sessionId} />
   }
   return null
 }

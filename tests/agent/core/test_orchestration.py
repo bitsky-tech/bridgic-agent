@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from src.amphi_agent import (
 from src.amphi_agent._state import (
     AwaitingBuildConflict,
     AwaitingPresentationOutlineConfirm,
+    AwaitingPresentationTemplateSelection,
     AwaitingTaskConfirm,
     AwaitingWorkflowConfirm,
     AwaitingWorkflowRunChoice,
@@ -34,7 +36,10 @@ from src.amphi_agent.tools._request_human import (
 )
 from src.amphi_agent.tools._presentation import PresentationStepReport
 from src.amphi_agent.tools._workflow import EditWorkflow, WorkflowStepReport
-from src.amphi_service.protocol import WsPresentationOutlineConfirmMessage
+from src.amphi_service.protocol import (
+    WsPresentationOutlineConfirmMessage,
+    WsPresentationTemplateSelectionMessage,
+)
 from src.amphi_store import (
     Repository,
     SessionRecord,
@@ -204,7 +209,7 @@ async def _start_run(harness: _Harness, workflow_id: str, request: str) -> Amphi
 
 async def test_presentation_outline_confirmation(orchestration: _Harness) -> None:
     """An edited Plan outline resumes the parked Turn before visual design."""
-    state = PresentationStageState(stage="ppt_plan", step_index=2).apply_plan_step_data(
+    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
         "collect_evidence",
         {"sources": [{
             "kind": "conversation",
@@ -221,6 +226,7 @@ async def test_presentation_outline_confirmation(orchestration: _Harness) -> Non
                 "title": "Original chapter",
                 "slides": [{
                     "title": "Original slide",
+                    "content_outline": ["Introduce the original framing."],
                     "source_ids": ["source-001"],
                 }],
             }]},
@@ -245,6 +251,7 @@ async def test_presentation_outline_confirmation(orchestration: _Harness) -> Non
                 "id": "slide-001",
                 "title": "Edited slide",
                 "key_message": "Use the clearer user-owned framing.",
+                "content_outline": ["Open with the audience's central question."],
                 "source_ids": ["source-001"],
             }],
         }],
@@ -253,12 +260,309 @@ async def test_presentation_outline_confirmation(orchestration: _Harness) -> Non
 
     resumed = confirmed.think_status
     assert isinstance(resumed, PresentationStageState)
-    assert resumed.step_index == 3
+    assert resumed.step_index == 2
     assert resumed.outline_confirmed is True
     assert resumed.outline_confirmation_id is None
     assert resumed.outline[0].title == "Edited chapter"
     assert resumed.outline[0].slides[0].title == "Edited slide"
+    assert resumed.outline[0].slides[0].content_outline == [
+        "Open with the audience's central question."
+    ]
     assert confirmed.interaction_status is None
+    assert _payload(confirmed, "report_presentation_step")["status"] == "confirmed"
+
+
+async def test_presentation_outline_direct_feedback_returns_to_slide_mapping(orchestration: _Harness) -> None:
+    """A chat reply to the outline review reopens the combined narrative and page-map step."""
+    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+        "collect_evidence",
+        {"sources": [{
+            "kind": "conversation",
+            "title": "Original request",
+            "excerpt": "Explain the subject to students.",
+        }]},
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("report_presentation_step", PresentationStepReport(
+            "Mapped the deck.",
+            ["source-001"],
+            {"chapters": [{
+                "title": "Original chapter",
+                "slides": [{
+                    "title": "Original slide",
+                    "content_outline": ["Introduce the original framing."],
+                    "source_ids": ["source-001"],
+                }],
+            }]},
+        )),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationOutlineConfirm)
+
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-outline-feedback")],
+    )
+    revised = AmphiOTAContext(user_input="Make the opening shorter and add a comparison slide.")
+    await orchestration.agent.init_state(revised, orchestration.context)
+
+    resumed = revised.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.step_index == 1
+    assert resumed.outline_confirmed is False
+    assert resumed.outline_confirmation_id is None
+    assert all(report.step_id != "map_slides" for report in resumed.reports)
+    assert revised.interaction_status is None
+    assert _payload(revised, "report_presentation_step")["status"] == "revision_requested"
+
+
+async def test_presentation_template_selection(orchestration: _Harness) -> None:
+    """A retrieved shortlist parks Plan and the selected template resumes the same Turn."""
+    candidate = {
+        "template_id": "template-editorial-1",
+        "version": "sha256:test",
+        "title": "Editorial Research",
+        "aspect_ratio": "16:9",
+        "slide_count": 18,
+        "semantic_tags": ["editorial", "research"],
+        "strengths": ["cover", "timeline"],
+        "colors": ["#F7F4EE", "#25324A", "#7566E8"],
+        "fonts": ["Aptos"],
+        "preview_paths": [f"/templates/previews/editorial-{index}.jpg" for index in range(1, 7)],
+        "role_coverage": 0.8,
+        "agentic_fit": "strong",
+        "agentic_reason": "The editorial hierarchy fits the confirmed research outline.",
+        "agentic_use_for_roles": ["cover", "content", "timeline"],
+        "agentic_risks": [],
+        "structural_evidence": {"representative_slides": [1, 3, 8]},
+        "materialize_ref": {"provider": "local", "path": "/templates/editorial.pptx"},
+    }
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        goal="Explain a research strategy",
+        outline_confirmed=True,
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({"candidates": [candidate]})),
+        state,
+    )
+
+    await _apply(orchestration, plan)
+
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    request_id = plan.interaction_status.request_id
+    assert plan.think_status.template_selection_status == "pending"
+    assert plan.think_status.template_candidates[0].template_id == "template-editorial-1"
+    receipt = _payload(plan, "ppt_rag")
+    assert receipt["status"] == "awaiting_template_selection"
+    assert receipt["candidate_ids"] == ["template-editorial-1"]
+    assert "candidates" not in receipt
+
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template")],
+    )
+    selected = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="select",
+        template_id="template-editorial-1",
+    ))
+    await orchestration.agent.init_state(selected, orchestration.context)
+
+    resumed = selected.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "selected"
+    assert resumed.template_selection_id is None
+    assert resumed.selected_template is not None
+    assert resumed.selected_template.template_id == "template-editorial-1"
+    assert len(resumed.selected_template.preview_paths) == 6
+    assert selected.interaction_status is None
+    assert _payload(selected, "ppt_rag")["status"] == "selected"
+    assert _payload(selected, "ppt_rag")["selected_template_id"] == "template-editorial-1"
+    assert set(_payload(selected, "ppt_rag")) == {
+        "search_id", "template_selection_id", "status", "selected_template_id", "feedback",
+    }
+    assert _payload(selected, "ppt_rag")["template_selection_id"] == request_id
+    assert "/templates/previews/" not in str(selected.ota_record[-1].observation_result)
+
+
+async def test_presentation_template_refresh_excludes_the_current_batch(orchestration: _Harness) -> None:
+    """Another-batch resumes Plan with the previous ids excluded from the next retrieval."""
+    candidate = {
+        "template_id": "template-first-batch",
+        "version": "sha256:test",
+        "title": "First batch",
+    }
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({"candidates": [candidate]})),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    request_id = plan.interaction_status.request_id
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template-refresh")],
+    )
+    refreshed = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="refresh",
+    ))
+
+    await orchestration.agent.init_state(refreshed, orchestration.context)
+
+    resumed = refreshed.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "idle"
+    assert resumed.template_selection_id is None
+    assert resumed.template_candidates == []
+    assert resumed.template_excluded_ids == ["template-first-batch"]
+    assert _payload(refreshed, "ppt_rag")["status"] == "refresh_requested"
+
+
+async def test_presentation_template_failure_can_be_skipped(orchestration: _Harness) -> None:
+    """A failed retrieval still parks on a user choice that can advance without a template."""
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({
+            "status": "retrieval_failed",
+            "retrieval_error": "The local template index is unavailable.",
+            "candidates": [],
+        })),
+        state,
+    )
+
+    await _apply(orchestration, plan)
+
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    assert plan.think_status.template_candidates == []
+    assert plan.think_status.template_selection_error == "The local template index is unavailable."
+    request_id = plan.interaction_status.request_id
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template-failure")],
+    )
+    skipped = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="skip",
+    ))
+
+    await orchestration.agent.init_state(skipped, orchestration.context)
+
+    resumed = skipped.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "skipped"
+    assert resumed.template_selection_error is None
+    assert skipped.interaction_status is None
+
+
+async def test_presentation_template_retry_after_exhaustion_resets_exclusions(orchestration: _Harness) -> None:
+    """Retrying an empty batch starts again from the full catalogue."""
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+        template_excluded_ids=["template-previous"],
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({
+            "status": "retrieval_failed",
+            "retrieval_error": "No new candidates remain.",
+            "candidates": [],
+        })),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    request_id = plan.interaction_status.request_id
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template-retry")],
+    )
+    retried = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="refresh",
+    ))
+
+    await orchestration.agent.init_state(retried, orchestration.context)
+
+    resumed = retried.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "idle"
+    assert resumed.template_selection_error is None
+    assert resumed.template_excluded_ids == []
+
+
+def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestration: _Harness) -> None:
+    """The dedicated PPT handoff consumes a large shortlist before the 16K file fallback."""
+    candidate = {
+        "template_id": "template-large",
+        "version": "sha256:test",
+        "title": "Large candidate",
+        "structural_evidence": {"overview": "x" * 20_000},
+    }
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    result = ActionResult(results=[_step(
+        "ppt_rag",
+        json.dumps({"search_id": "search-large", "candidates": [candidate]}),
+    )])
+    ota_context = AmphiOTAContext()
+    ota_context.transition_think(state)
+
+    orchestration.agent._prepare_ppt_rag_action_results(result, ota_context)
+    orchestration.agent._save_large_tool_results(result, orchestration.context)
+
+    receipt = result.results[0].tool_result
+    assert isinstance(receipt, dict)
+    assert receipt["status"] == "awaiting_template_selection"
+    assert receipt["candidate_ids"] == ["template-large"]
+    assert len(json.dumps(receipt)) < 16 * 1024
+    assert ota_context.think_status.template_candidates[0].template_id == "template-large"
+    assert isinstance(ota_context.interaction_status, AwaitingPresentationTemplateSelection)
+
+
+def test_invalid_ppt_rag_payload_is_discarded_before_generic_spill(orchestration: _Harness) -> None:
+    """A malformed large result cannot remain attached after the step becomes failed."""
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    result = ActionResult(results=[_step("ppt_rag", "{" + "x" * 20_000)])
+    ota_context = AmphiOTAContext()
+    ota_context.transition_think(state)
+
+    orchestration.agent._prepare_ppt_rag_action_results(result, ota_context)
+    orchestration.agent._save_large_tool_results(result, orchestration.context)
+
+    step = result.results[0]
+    assert step.success is False
+    assert step.tool_result is None
+    assert step.error is not None and "invalid JSON" in step.error
 
 
 async def test_build_entry(orchestration: _Harness) -> None:
