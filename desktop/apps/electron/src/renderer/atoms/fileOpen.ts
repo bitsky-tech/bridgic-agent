@@ -1,8 +1,7 @@
 /**
- * File-open gate atoms — a session-file double-click opens it with the OS
- * default program, but first asks for a confirmation the user can choose to
- * remember. Remembered keys live in `GuiSettings.fileOpen` and persist across
- * sessions / restarts.
+ * File-open gate atoms. Session-owned .xlsx workbooks are routed into the
+ * embedded Excel workbench; other files open with the OS default program after
+ * the user's remembered confirmation policy is applied.
  *
  * Key model: a file WITH an extension is remembered by its lowercased
  * extension (".TXT" === "txt" → one decision covers every .txt); a file
@@ -21,6 +20,8 @@ import { rlog } from '@/lib/logger'
 import { settingsAtom, updateSettingsAtom } from './settings'
 import { showToastAtom } from './toast'
 import { ModalKind, openModalAtom } from './amphi'
+import { queueExcelWorkbookOpenAtom } from './excel'
+import { viewedSessionIdAtom } from './navigation'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -43,6 +44,11 @@ export function deriveFileOpenKey(name: string): { kind: FileOpenKeyKind; key: s
     : { kind: 'name', key: name }
 }
 
+/** Only OOXML workbooks are supported by the embedded importer today. */
+export function isEmbeddedExcelWorkbook(name: string): boolean {
+  return /\.xlsx$/i.test(name.trim())
+}
+
 /** True when the file's key is already approved for confirm-free opening. */
 function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string): boolean {
   const { autoOpenExtensions, autoOpenFilenames } = settings.fileOpen
@@ -54,6 +60,11 @@ function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string)
  * remembered; otherwise routes to the FileOpenConfirm modal.
  */
 export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) => {
+  const sessionId = get(viewedSessionIdAtom)
+  if (sessionId && isEmbeddedExcelWorkbook(file.name)) {
+    set(queueExcelWorkbookOpenAtom, { sessionId, path: file.path })
+    return
+  }
   const { kind, key } = deriveFileOpenKey(file.name)
   if (isRemembered(get(settingsAtom), kind, key)) {
     void window.api.shell.openPath(file.path).catch((err: unknown) => {

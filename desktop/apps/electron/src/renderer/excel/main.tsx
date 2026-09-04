@@ -7,6 +7,7 @@ if (!window.excelHostApi) {
   const canceled = { ok: false as const, reason: 'canceled' as const }
   const fallback: ExcelHostPreloadAPI = {
     open: async () => ({ canceled: true as const }),
+    openRequestedWorkbook: async () => ({ canceled: true as const }),
     save: async () => canceled,
     saveAs: async () => canceled,
     closeSession: async () => undefined,
@@ -14,6 +15,7 @@ if (!window.excelHostApi) {
     getRecoveryState: async () => null,
     setRecoveryState: async () => undefined,
     onConfigChanged: () => () => undefined,
+    onWorkbookOpenRequested: () => () => undefined,
   }
   window.excelHostApi = fallback
 }

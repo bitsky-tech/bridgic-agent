@@ -4,12 +4,14 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import type {
   EmbeddedBrowserBounds,
   ExcelHostConfig,
   ExcelHostSessionInfo,
   ExcelHostSnapshot,
+  ExcelWorkbookOpenRequest,
 } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { windowLog } from './logger'
@@ -40,6 +42,7 @@ interface ExcelHostRecord {
   crashed: boolean
   dirty: boolean
   recoveryState: unknown | null
+  workbookOpenRequests: Map<string, string>
   ready: Promise<void>
 }
 
@@ -94,6 +97,40 @@ export class ExcelHost {
     this.syncVisibility()
     await record.ready
     return this.infoFor(record)
+  }
+
+  /** Ensure the Session target and ask that exact renderer to import a local workbook. */
+  async openWorkbook(
+    sessionId: string,
+    config: ExcelHostConfig,
+    request: ExcelWorkbookOpenRequest,
+  ): Promise<void> {
+    const id = this.normalizeSessionId(sessionId)
+    const normalizedRequest = this.normalizeWorkbookOpenRequest(request)
+    await this.ensureSession(id, config)
+    const record = this.records.get(id)
+    if (!record || record.view.webContents.isDestroyed()) {
+      throw new Error(`Excel Session does not exist: ${id}`)
+    }
+    const requestId = randomUUID()
+    record.workbookOpenRequests.set(requestId, normalizedRequest.path)
+    record.view.webContents.send(IPC.events.excelWorkbookOpenRequested, {
+      requestId,
+      replaceInitialBlank: normalizedRequest.replaceInitialBlank,
+    })
+  }
+
+  /** Redeem a one-shot workbook request only from the target it was issued to. */
+  consumeWorkbookOpenRequest(webContentsId: number, requestId: string): string {
+    if (typeof requestId !== 'string' || requestId.length === 0) {
+      throw new Error('Excel workbook open request id is invalid')
+    }
+    const record = this.recordForWebContents(webContentsId)
+    if (!record) throw new Error('Excel Session does not own this renderer')
+    const path = record.workbookOpenRequests.get(requestId)
+    if (!path) throw new Error('Excel workbook open request is invalid or expired')
+    record.workbookOpenRequests.delete(requestId)
+    return path
   }
 
   closeSession(sessionId: string): void {
@@ -197,6 +234,7 @@ export class ExcelHost {
       crashed: false,
       dirty: false,
       recoveryState: null,
+      workbookOpenRequests: new Map(),
       ready: Promise.resolve(),
     }
     this.records.set(sessionId, record)
@@ -394,6 +432,19 @@ export class ExcelHost {
       throw new Error('Excel host theme is invalid')
     }
     return { sessionId, locale: config.locale, theme: config.theme }
+  }
+
+  private normalizeWorkbookOpenRequest(request: ExcelWorkbookOpenRequest): ExcelWorkbookOpenRequest {
+    if (!request || typeof request !== 'object') {
+      throw new TypeError('Excel workbook open request is required')
+    }
+    if (typeof request.path !== 'string' || request.path.trim().length === 0) {
+      throw new Error('Excel workbook path is invalid')
+    }
+    if (typeof request.replaceInitialBlank !== 'boolean') {
+      throw new TypeError('Excel initial workbook replacement flag must be a boolean')
+    }
+    return { path: request.path, replaceInitialBlank: request.replaceInitialBlank }
   }
 
   private normalizeSessionId(sessionId: string): string {

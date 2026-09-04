@@ -105,6 +105,8 @@ const api: ElectronAPI = {
     snapshot: () => ipcRenderer.invoke(IPC.excelHost.snapshot),
     ensureSession: (sessionId, config) =>
       ipcRenderer.invoke(IPC.excelHost.ensureSession, sessionId, config),
+    openWorkbook: (sessionId, config, request) =>
+      ipcRenderer.invoke(IPC.excelHost.openWorkbook, sessionId, config, request),
     closeSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.closeSession, sessionId),
     activateSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.activateSession, sessionId),
     setBounds: (bounds) => ipcRenderer.invoke(IPC.excelHost.setBounds, bounds),

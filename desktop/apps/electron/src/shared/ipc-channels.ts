@@ -30,12 +30,14 @@ export const IPC = {
   },
   excel: {
     open: 'excel:open',
+    openRequestedWorkbook: 'excel:openRequestedWorkbook',
     save: 'excel:save',
     saveAs: 'excel:saveAs',
   },
   excelHost: {
     snapshot: 'excel-host:snapshot',
     ensureSession: 'excel-host:ensureSession',
+    openWorkbook: 'excel-host:openWorkbook',
     closeSession: 'excel-host:closeSession',
     closeCurrentSession: 'excel-host:closeCurrentSession',
     activateSession: 'excel-host:activateSession',
@@ -209,6 +211,7 @@ export const IPC = {
     embeddedBrowserChanged: 'embedded-browser-changed',
     excelHostChanged: 'excel-host-changed',
     excelHostConfigChanged: 'excel-host-config-changed',
+    excelWorkbookOpenRequested: 'excel-workbook-open-requested',
     // A watched session-file directory changed on disk → renderer re-reads it.
     fsChanged: 'fs-changed',
   },

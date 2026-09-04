@@ -76,7 +76,11 @@ import '@univerjs/preset-sheets-filter/lib/index.css'
 import '@univerjs/preset-sheets-hyper-link/lib/index.css'
 import '@univerjs/preset-sheets-sort/lib/index.css'
 import { defaultTheme } from '@univerjs/themes'
-import type { ExcelHostConfig } from '../../shared/types'
+import type {
+  ExcelDocumentHandle,
+  ExcelHostConfig,
+  ExcelWorkbookOpenTicket,
+} from '../../shared/types'
 import { Icons } from '../components/amphi/Icons'
 import {
   EXCEL_SHOW_ZEROS_CUSTOM_KEY,
@@ -1124,6 +1128,23 @@ function newWorkbookTab(config: ExcelHostConfig, ordinal: number): WorkbookTab {
   }
 }
 
+function openedWorkbookTab(document: ExcelDocumentHandle, snapshot: IWorkbookData): WorkbookTab {
+  return {
+    tabId: crypto.randomUUID(),
+    documentId: document.documentId,
+    fileName: document.fileName,
+    snapshot,
+    mtimeMs: document.mtimeMs,
+    dirty: false,
+    changeVersion: 0,
+    revision: 0,
+  }
+}
+
+function isPristineInitialWorkbook(tab: WorkbookTab): boolean {
+  return tab.documentId === null && !tab.dirty && tab.changeVersion === 0
+}
+
 function recoveryState(value: unknown): ExcelRecoveryState | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<ExcelRecoveryState>
@@ -1162,6 +1183,7 @@ export function ExcelHostApp() {
   const [formulaDialog, setFormulaDialog] = useState<FormulaDialogState | null>(null)
   const [recentFunctions, setRecentFunctions] = useState(loadRecentFormulas)
   const [busy, setBusy] = useState<BusyAction>(null)
+  const [pendingWorkbookOpenTickets, setPendingWorkbookOpenTickets] = useState<ExcelWorkbookOpenTicket[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<OperationNotice>(null)
   const [viewPreferences, setViewPreferences] = useState<ExcelViewPreferences>({
@@ -1175,6 +1197,7 @@ export function ExcelHostApp() {
     zoom: 1,
   })
   const nextNoticeId = useRef(1)
+  const externalWorkbookOpenPendingRef = useRef(false)
   const editorRef = useRef<SheetEditorHandle>(null)
   const copy = COPY[config.locale]
   const activeTab = useMemo(
@@ -1189,6 +1212,10 @@ export function ExcelHostApp() {
       setEditorTheme(next.theme)
     }
   }), [api, config.sessionId])
+
+  useEffect(() => api.onWorkbookOpenRequested((ticket) => {
+    setPendingWorkbookOpenTickets((current) => [...current, ticket])
+  }), [api])
 
   useEffect(() => {
     let disposed = false
@@ -1266,6 +1293,23 @@ export function ExcelHostApp() {
     if (activeTabId) markDirty(activeTabId, snapshot)
   }, [activeTabId, markDirty])
 
+  const importOpenedWorkbook = useCallback(async (
+    document: ExcelDocumentHandle,
+    replaceInitialBlank: boolean,
+  ) => {
+    const snapshot = await importXlsx(document.bytes, univerLocale(config))
+    const tab = openedWorkbookTab(document, snapshot)
+    setTabs((current) => (
+      replaceInitialBlank
+      && current.length === 1
+      && current[0] !== undefined
+      && isPristineInitialWorkbook(current[0])
+        ? [tab]
+        : [...current, tab]
+    ))
+    setActiveTabId(tab.tabId)
+  }, [config])
+
   const addBlankTab = () => {
     setFormulaDialog(null)
     const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
@@ -1282,25 +1326,42 @@ export function ExcelHostApp() {
     try {
       const result = await api.open()
       if (result.canceled) return
-      const snapshot = await importXlsx(result.document.bytes, univerLocale(config))
-      const tab: WorkbookTab = {
-        tabId: crypto.randomUUID(),
-        documentId: result.document.documentId,
-        fileName: result.document.fileName,
-        snapshot,
-        mtimeMs: result.document.mtimeMs,
-        dirty: false,
-        changeVersion: 0,
-        revision: 0,
-      }
-      setTabs((current) => [...current, tab])
-      setActiveTabId(tab.tabId)
+      await importOpenedWorkbook(result.document, false)
     } catch (cause) {
       setError(`${copy.openFailed}: ${errorMessage(cause)}`)
     } finally {
       setBusy(null)
     }
   }
+
+
+  useEffect(() => {
+    if (!recoveryLoaded || busy !== null || pendingWorkbookOpenTickets.length === 0) return
+    const ticket = pendingWorkbookOpenTickets[0]
+    if (!ticket || externalWorkbookOpenPendingRef.current) return
+    externalWorkbookOpenPendingRef.current = true
+    queueMicrotask(() => {
+      setPendingWorkbookOpenTickets((current) => current.slice(1))
+      setFormulaDialog(null)
+      setBusy('opening')
+      setError(null)
+      void api.openRequestedWorkbook(ticket.requestId).then(async (result) => {
+        if (!result.canceled) await importOpenedWorkbook(result.document, ticket.replaceInitialBlank)
+      }).catch((cause) => {
+        setError(`${copy.openFailed}: ${errorMessage(cause)}`)
+      }).finally(() => {
+        externalWorkbookOpenPendingRef.current = false
+        setBusy(null)
+      })
+    })
+  }, [
+    api,
+    busy,
+    copy.openFailed,
+    importOpenedWorkbook,
+    pendingWorkbookOpenTickets,
+    recoveryLoaded,
+  ])
 
   const persistWorkbook = useCallback(async (tab: WorkbookTab, saveAs: boolean) => {
     const snapshot = tab.tabId === activeTabId
@@ -1495,12 +1556,8 @@ export function ExcelHostApp() {
         </div>
         <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
           <HostButton disabled={busy !== null} label={copy.new} onClick={addBlankTab}>{Icons.plus(13)} {copy.new}</HostButton>
-          <HostButton disabled={busy !== null} label={copy.open} onClick={() => void openWorkbook()}>{Icons.folder(13)} {copy.open}</HostButton>
           {activeTab ? (
-            <>
-              <HostButton disabled={busy !== null} label={copy.save} onClick={() => void persistWorkbook(activeTab, false)}>{Icons.save(13)} {copy.save}</HostButton>
-              <HostButton disabled={busy !== null} label={copy.saveAs} onClick={() => void persistWorkbook(activeTab, true)}>{Icons.download(13)} {copy.saveAs}</HostButton>
-            </>
+            <HostButton disabled={busy !== null} label={copy.save} onClick={() => void persistWorkbook(activeTab, false)}>{Icons.save(13)} {copy.save}</HostButton>
           ) : null}
           <span className="ml-1 max-w-32 truncate text-[10px] text-text-tertiary">{activeTab ? status : copy.localOnly}</span>
         </div>

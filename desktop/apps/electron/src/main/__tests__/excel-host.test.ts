@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'bun:test'
 import type { BrowserWindow, Rectangle, WebContentsView } from 'electron'
 import { ExcelHost } from '../excel-host'
+import { IPC } from '../../shared/ipc-channels'
 
 class FakeDebugger {
   private attached = false
@@ -139,6 +140,29 @@ describe('ExcelHost Session target ownership', () => {
     expect(first.targetId).toBe('excel-target-1')
     expect(afterAnotherWorkbookTab.targetId).toBe(first.targetId)
     expect(afterAnotherWorkbookTab.webContentsId).toBe(first.webContentsId)
+  })
+
+  it('routes an opaque workbook ticket to the exact Session target without creating another target', async () => {
+    const { manager, views } = setup()
+    const config = { sessionId: 'session-a', locale: 'zh-CN', theme: 'dark' } as const
+
+    await manager.openWorkbook('session-a', config, {
+      path: '/tmp/report.xlsx',
+      replaceInitialBlank: true,
+    })
+
+    expect(views).toHaveLength(1)
+    const delivery = views[0]?.webContents.sent.find(
+      (message) => message.channel === IPC.events.excelWorkbookOpenRequested,
+    )
+    expect(delivery?.value).toEqual({
+      requestId: expect.any(String),
+      replaceInitialBlank: true,
+    })
+    expect(delivery?.value).not.toHaveProperty('path')
+    const requestId = (delivery?.value as { requestId: string }).requestId
+    expect(manager.consumeWorkbookOpenRequest(1, requestId)).toBe('/tmp/report.xlsx')
+    expect(() => manager.consumeWorkbookOpenRequest(1, requestId)).toThrow('invalid or expired')
   })
 
   it('creates a different target for a different Agent Session and keeps both alive', async () => {

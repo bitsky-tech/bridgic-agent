@@ -1,5 +1,9 @@
 import { IPC } from '../../shared/ipc-channels'
-import type { EmbeddedBrowserBounds, ExcelHostConfig } from '../../shared/types'
+import type {
+  EmbeddedBrowserBounds,
+  ExcelHostConfig,
+  ExcelWorkbookOpenRequest,
+} from '../../shared/types'
 import type { EmbeddedBrowserManager } from '../embedded-browser-manager'
 import type { ExcelHost } from '../excel-host'
 import { loggedHandle } from './logged-handle'
@@ -11,6 +15,13 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
   loggedHandle(
     IPC.excelHost.ensureSession,
     (_event, sessionId: string, config: ExcelHostConfig) => excelHost.ensureSession(sessionId, config),
+  )
+
+  loggedHandle(
+    IPC.excelHost.openWorkbook,
+    (_event, sessionId: string, config: ExcelHostConfig, request: ExcelWorkbookOpenRequest) => (
+      excelHost.openWorkbook(sessionId, config, request)
+    ),
   )
 
   loggedHandle(IPC.excelHost.closeSession, (_event, sessionId: string) => {

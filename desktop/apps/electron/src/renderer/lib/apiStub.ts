@@ -124,6 +124,7 @@ export function installApiStub(): void {
         crashed: false,
         dirty: false,
       }),
+      openWorkbook: async () => {},
       closeSession: async () => {},
       activateSession: async () => {},
       setBounds: async () => {},

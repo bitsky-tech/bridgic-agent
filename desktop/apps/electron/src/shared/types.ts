@@ -108,6 +108,20 @@ export interface ExcelDocumentHandle {
 
 export type ExcelOpenResult = { canceled: true } | { canceled: false; document: ExcelDocumentHandle }
 
+/** A workbook path routed from the trusted app renderer toward a Session-owned
+ * Excel target. The child receives only a one-shot ticket so the resulting read
+ * and write capability remains bound to that target. */
+export interface ExcelWorkbookOpenRequest {
+  path: string
+  replaceInitialBlank: boolean
+}
+
+/** One-shot ticket delivered only to the Session-owned Excel renderer. */
+export interface ExcelWorkbookOpenTicket {
+  requestId: string
+  replaceInitialBlank: boolean
+}
+
 export interface ExcelSaveRequest {
   documentId: string
   bytes: Uint8Array
@@ -147,6 +161,7 @@ export interface ExcelHostSnapshot {
 /** Narrow preload contract exposed only inside the trusted Excel host page. */
 export interface ExcelHostPreloadAPI {
   open(): Promise<ExcelOpenResult>
+  openRequestedWorkbook(requestId: string): Promise<ExcelOpenResult>
   save(request: ExcelSaveRequest): Promise<ExcelSaveResult>
   saveAs(request: ExcelSaveAsRequest): Promise<ExcelSaveResult>
   /** Close the Session target that owns this preload after its final workbook tab closes. */
@@ -155,6 +170,7 @@ export interface ExcelHostPreloadAPI {
   getRecoveryState(): Promise<unknown | null>
   setRecoveryState(state: unknown): Promise<void>
   onConfigChanged(callback: (config: ExcelHostConfig) => void): () => void
+  onWorkbookOpenRequested(callback: (ticket: ExcelWorkbookOpenTicket) => void): () => void
 }
 
 export type {
@@ -430,6 +446,7 @@ export interface ElectronAPI {
   excelHost: {
     snapshot(): Promise<ExcelHostSnapshot>
     ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo>
+    openWorkbook(sessionId: string, config: ExcelHostConfig, request: ExcelWorkbookOpenRequest): Promise<void>
     closeSession(sessionId: string): Promise<void>
     activateSession(sessionId: string | null): Promise<void>
     setBounds(bounds: EmbeddedBrowserBounds): Promise<void>

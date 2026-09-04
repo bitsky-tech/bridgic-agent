@@ -8,6 +8,7 @@ GlobalRegistrator.register()
 
 const browserCalls: string[] = []
 const excelEnsureCalls: string[] = []
+const excelOpenCalls: Array<{ sessionId: string; path: string; replaceInitialBlank: boolean }> = []
 let nativeWindowForeground = true
 let onWindowForegroundChanged: ((foreground: boolean) => void) | null = null
 const emptyTab: EmbeddedBrowserTabInfo = {
@@ -54,6 +55,9 @@ const excelHostApi: ElectronAPI['excelHost'] = {
       crashed: false,
       dirty: false,
     }
+  },
+  openWorkbook: async (sessionId, _config, request) => {
+    excelOpenCalls.push({ sessionId, ...request })
   },
   closeSession: async () => undefined,
   activateSession: async () => undefined,
@@ -103,7 +107,12 @@ const {
   setFilesNeedsAttentionAtom,
 } = await import('@/atoms/files-attention')
 const { browserNeedsAttentionFamily } = await import('@/atoms/browser-attention')
-const { excelHostSnapshotAtom, setExcelHostSnapshotAtom } = await import('@/atoms/excel')
+const {
+  queueExcelWorkbookOpenAtom,
+  excelExpandedAtom,
+  excelHostSnapshotAtom,
+  setExcelHostSnapshotAtom,
+} = await import('@/atoms/excel')
 const {
   requestRightPanelCollapseAtom,
   rightPanelCollapseRequestAtom,
@@ -126,6 +135,7 @@ beforeEach(async () => {
 afterEach(() => {
   browserCalls.length = 0
   excelEnsureCalls.length = 0
+  excelOpenCalls.length = 0
   browserApi.setVisible = defaultSetVisible
   excelHostApi.setVisible = defaultExcelSetVisible
   onWindowForegroundChanged = null
@@ -304,6 +314,41 @@ describe('SessionResourcePanel', () => {
     })
     expect(excelButton.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
       .not.toBeNull()
+
+    const expandButton = host.querySelector<HTMLButtonElement>('[data-testid="excel-toggle-expanded"]')!
+    expect(expandButton.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => expandButton.click())
+    expect(store.get(excelExpandedAtom)).toBe(true)
+    expect(expandButton.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens a routed workbook in Excel and replaces only the target startup workbook', async () => {
+    const store = createStore()
+    const sessionId = 'session-routed-workbook'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Files)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { root } = await mountPanel(store)
+
+    await act(async () => {
+      store.set(queueExcelWorkbookOpenAtom, {
+        sessionId,
+        path: '/Users/me/session/analysis.xlsx',
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(excelOpenCalls).toEqual([{
+      sessionId,
+      path: '/Users/me/session/analysis.xlsx',
+      replaceInitialBlank: true,
+    }])
 
     await act(async () => root.unmount())
   })

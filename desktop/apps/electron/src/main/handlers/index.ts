@@ -22,7 +22,7 @@ export function registerAllHandlers(windowManager: WindowManager, quitApp: () =>
   registerAppHandlers(quitApp)
   registerShellHandlers()
   registerDialogHandlers()
-  registerExcelHandlers()
+  registerExcelHandlers(windowManager.getExcelHost())
   // Local-fs reads for the session-file tree / @ popover (display only).
   registerFsHandlers()
   // Live watchers that keep the expanded session-file tree in sync with disk.

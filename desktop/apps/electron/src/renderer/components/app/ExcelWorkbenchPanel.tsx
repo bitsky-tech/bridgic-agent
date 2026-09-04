@@ -4,7 +4,9 @@ import { useTranslation } from 'react-i18next'
 import type { EmbeddedBrowserBounds, ExcelHostConfig } from '@shared/types'
 import {
   activeExcelHostSessionAtom,
+  consumeExcelWorkbookOpenRequestAtom,
   excelExpandedAtom,
+  pendingExcelWorkbookOpenRequestsAtom,
 } from '@/atoms/excel'
 import {
   browserSurfaceBlockedAtom,
@@ -12,9 +14,12 @@ import {
 } from '@/atoms/browser'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
 import { themeAtom } from '@/atoms/theme'
+import { showToastAtom } from '@/atoms/toast'
 import { Icons } from '@/components/amphi/Icons'
+import { Tooltip } from '@/components/amphi/Tooltip'
 import { rlog } from '@/lib/logger'
 import { SESSION_STATUS_BAR_HEIGHT_PX } from './SessionStatusBar'
+import { WorkbenchExpandIcon } from './WorkbenchToolPrimitives'
 
 type ExcelLaunchState =
   | { status: 'idle' | 'creating' | 'ready' }
@@ -25,17 +30,52 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   const { t, i18n } = useTranslation()
   const sessionId = useAtomValue(viewedSessionIdAtom)
   const hostSession = useAtomValue(activeExcelHostSessionAtom)
+  const pendingWorkbookOpenRequests = useAtomValue(pendingExcelWorkbookOpenRequestsAtom)
   const expanded = useAtomValue(excelExpandedAtom)
   const surfaceBlocked = useAtomValue(browserSurfaceBlockedAtom)
   const resolvedTheme = useAtomValue(themeAtom).resolved
   const setExpanded = useSetAtom(excelExpandedAtom)
+  const consumeWorkbookOpenRequest = useSetAtom(consumeExcelWorkbookOpenRequestAtom)
+  const showToast = useSetAtom(showToastAtom)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const openingWorkbookRequestRef = useRef<number | null>(null)
   const [hostError, setHostError] = useState<{ sessionId: string; message: string } | null>(null)
   const config = useMemo<ExcelHostConfig | null>(() => sessionId ? ({
     sessionId,
     locale: i18n.resolvedLanguage?.toLocaleLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
     theme: resolvedTheme === 'dark' ? 'dark' : 'light',
   }) : null, [i18n.resolvedLanguage, resolvedTheme, sessionId])
+
+  const pendingWorkbookOpenRequest = pendingWorkbookOpenRequests.find(
+    (request) => request.sessionId === sessionId,
+  ) ?? null
+  useEffect(() => {
+    if (!active || !sessionId || !config || !pendingWorkbookOpenRequest) return
+    if (openingWorkbookRequestRef.current === pendingWorkbookOpenRequest.requestId) return
+    openingWorkbookRequestRef.current = pendingWorkbookOpenRequest.requestId
+    const replaceInitialBlank = hostSession === null
+    void window.api.excelHost.openWorkbook(sessionId, config, {
+      path: pendingWorkbookOpenRequest.path,
+      replaceInitialBlank,
+    }).catch((cause) => {
+      rlog.warn('[excel-host] opening routed workbook failed', cause)
+      showToast(t('error.cannotOpenFile'))
+    }).finally(() => {
+      consumeWorkbookOpenRequest(pendingWorkbookOpenRequest.requestId)
+      if (openingWorkbookRequestRef.current === pendingWorkbookOpenRequest.requestId) {
+        openingWorkbookRequestRef.current = null
+      }
+    })
+  }, [
+    active,
+    config,
+    consumeWorkbookOpenRequest,
+    hostSession,
+    pendingWorkbookOpenRequest,
+    sessionId,
+    showToast,
+    t,
+  ])
 
   useEffect(() => {
     if (!active || !sessionId || !config || !hostSession) return
@@ -84,15 +124,18 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
             {status}{hostSession?.targetId ? ` · CDP ${hostSession.targetId.slice(0, 8)}` : ''}
           </span>
         </div>
-        <button
-          aria-label={expanded ? t('excel.exitExpanded') : t('excel.expand')}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-          onClick={() => setExpanded((value) => !value)}
-          title={expanded ? t('excel.exitExpanded') : t('excel.expand')}
-          type="button"
-        >
-          {expanded ? Icons.shrink(14) : Icons.expand(14)}
-        </button>
+        <Tooltip content={expanded ? t('excel.exitExpanded') : t('excel.expand')}>
+          <button
+            aria-label={expanded ? t('excel.exitExpanded') : t('excel.expand')}
+            aria-pressed={expanded}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+            data-testid="excel-toggle-expanded"
+            onClick={() => setExpanded((value) => !value)}
+            type="button"
+          >
+            <WorkbenchExpandIcon expanded={expanded} />
+          </button>
+        </Tooltip>
       </header>
 
       <div ref={viewportRef} className="relative min-h-0 flex-1 bg-bg-app" data-testid="excel-native-canvas">

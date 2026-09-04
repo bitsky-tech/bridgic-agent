@@ -11,7 +11,8 @@
  *    would nudge the whole line of text — the link is inline inside a paragraph, so the jitter would ripple through the entire paragraph.
  *  - Grouping uses the named `group/filelink`: a paragraph may contain several file links, and an anonymous group would make
  *    hovering any one of them light up the icons of every link.
- *  - Opening still goes through `requestFileOpenAtom` (confirmation dialog + remembering + failure toast); no separate path is started here.
+ *  - Opening still goes through `requestFileOpenAtom`: .xlsx enters the Session Excel workbench, while other files use the
+ *    remembered OS-open confirmation policy. No separate path is started here.
  */
 import { useSetAtom } from 'jotai'
 import type { ReactNode } from 'react'

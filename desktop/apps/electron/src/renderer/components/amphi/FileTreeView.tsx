@@ -36,7 +36,7 @@ export interface FileTreeViewProps {
   onMention?: (node: DirTreeNode) => void
   /** Make file rows pickable (@ popover browse mode). */
   onPickFile?: (node: DirTreeNode) => void
-  /** Double-click a FILE row → open it with the OS default program.
+  /** Double-click a FILE row → route it through the shared file opener.
    *  Absent (e.g. @ popover) disables open-on-double-click; folders ignore it. */
   onOpen?: (node: DirTreeNode) => void
   /** Keyboard-selected row (@ popover); rendered with the hover background. */
@@ -129,7 +129,7 @@ function TreeNodeRow({
     else if (pickable) onPickFile(node)
   }
 
-  // Double-clicking a file = open with the system default application; double-clicking a folder does nothing extra (single-click expansion as before).
+  // Double-clicking a file enters the shared opener (.xlsx uses the embedded Excel workbench); folders still use single-click expansion.
   const handleDoubleClick = (): void => {
     if (openable) onOpen?.(node)
   }

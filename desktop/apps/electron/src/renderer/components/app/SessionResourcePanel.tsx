@@ -15,7 +15,10 @@ import {
   setBrowserHandoffPendingAtom,
   setSessionWorkbenchSurfaceAtom,
 } from '@/atoms/browser'
-import { activeExcelHostSessionAtom } from '@/atoms/excel'
+import {
+  activeExcelHostSessionAtom,
+  pendingExcelWorkbookOpenRequestsAtom,
+} from '@/atoms/excel'
 import {
   filesNeedsAttentionFamily,
   setFilesNeedsAttentionAtom,
@@ -176,6 +179,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const modeExitCollapseRequest = useAtomValue(currentSessionModeExitCollapseRequestAtom)
   const browserSession = useAtomValue(activeEmbeddedBrowserSessionAtom)
   const excelHostSession = useAtomValue(activeExcelHostSessionAtom)
+  const pendingExcelWorkbookOpenRequests = useAtomValue(pendingExcelWorkbookOpenRequestsAtom)
   const browserAgentActive = useAtomValue(currentBrowserAgentActiveAtom)
   const rightCollapsed = useAtomValue(rightPanelCollapsedAtom)
   const collapseRequest = useAtomValue(rightPanelCollapseRequestAtom)
@@ -192,6 +196,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const railRef = useRef<HTMLDivElement>(null)
   const lastFocusedRailTabRef = useRef<string | null>(null)
   const modeSurfaceHadFocusRef = useRef(false)
+  const selectedExcelOpenRequestRef = useRef<number | null>(null)
   const [nativeHideAcknowledgement, setNativeHideAcknowledgement] = useState(0)
   const [pendingBrowserExit, setPendingBrowserExit] = useState<PendingBrowserExit | null>(null)
   const [excelExitPending, setExcelExitPending] = useState(false)
@@ -372,6 +377,20 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
     if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
     commitToolSelection(surface)
   }
+
+  const pendingExcelOpenRequest = pendingExcelWorkbookOpenRequests.find(
+    (request) => request.sessionId === viewedSessionId,
+  ) ?? null
+  useEffect(() => {
+    if (!pendingExcelOpenRequest) {
+      selectedExcelOpenRequestRef.current = null
+      return
+    }
+    if (excelSelected && contentOpen) return
+    if (selectedExcelOpenRequestRef.current === pendingExcelOpenRequest.requestId) return
+    selectedExcelOpenRequestRef.current = pendingExcelOpenRequest.requestId
+    selectTool(SessionWorkbenchSurface.Excel)
+  }, [contentOpen, excelSelected, pendingExcelOpenRequest]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectMode = () => {
     if (excelExitPending) return

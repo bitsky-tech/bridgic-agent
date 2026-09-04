@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, extname } from 'node:path'
+import { basename, extname, isAbsolute } from 'node:path'
 import {
   BrowserWindow,
   dialog,
@@ -16,6 +16,7 @@ import type {
   ExcelSaveResult,
 } from '../../shared/types'
 import { IPC } from '../../shared/ipc-channels'
+import type { ExcelHost } from '../excel-host'
 import { loggedHandle } from './logged-handle'
 
 const MAX_WORKBOOK_BYTES = 150 * 1024 * 1024
@@ -41,6 +42,16 @@ function ensureXlsxName(name: string): string {
   return extname(safeName).toLocaleLowerCase() === '.xlsx' ? safeName : `${safeName}.xlsx`
 }
 
+function workbookPath(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('Workbook path must be a string')
+  const path = value.trim()
+  if (!isAbsolute(path)) throw new Error('Workbook path must be absolute')
+  if (extname(path).toLocaleLowerCase() !== '.xlsx') {
+    throw new Error('Only .xlsx workbooks can be opened')
+  }
+  return path
+}
+
 async function atomicWrite(path: string, bytes: Uint8Array, mode?: number): Promise<void> {
   const temporaryPath = `${path}.bridgic-${randomUUID()}.tmp`
   try {
@@ -52,7 +63,7 @@ async function atomicWrite(path: string, bytes: Uint8Array, mode?: number): Prom
 }
 
 /** Register capability-scoped .xlsx I/O. Paths never cross the preload bridge. */
-export function registerExcelHandlers(): void {
+export function registerExcelHandlers(excelHost: ExcelHost): void {
   const documents = new Map<string, AuthorizedDocument>()
   const ownersWithCleanup = new WeakSet<WebContents>()
 
@@ -82,6 +93,19 @@ export function registerExcelHandlers(): void {
     mtimeMs: (await stat(path)).mtimeMs,
   })
 
+  const openWorkbookPath = async (
+    event: IpcMainInvokeEvent,
+    value: unknown,
+  ): Promise<ExcelOpenResult> => {
+    const path = workbookPath(value)
+    const file = await stat(path)
+    if (!file.isFile()) throw new Error('Workbook path is not a file')
+    if (file.size > MAX_WORKBOOK_BYTES) throw new RangeError('Workbook exceeds the 150 MB limit')
+    const bytes = new Uint8Array(await readFile(path))
+    const documentId = authorize(event, path)
+    return { canceled: false, document: await documentResult(documentId, path, bytes) }
+  }
+
   loggedHandle(IPC.excel.open, async (event): Promise<ExcelOpenResult> => {
     const options: OpenDialogOptions = {
       title: 'Open Excel Workbook',
@@ -93,15 +117,12 @@ export function registerExcelHandlers(): void {
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return { canceled: true }
-    const path = result.filePaths[0]
-    if (extname(path).toLocaleLowerCase() !== '.xlsx') {
-      throw new Error('Only .xlsx workbooks can be opened')
-    }
-    const file = await stat(path)
-    if (file.size > MAX_WORKBOOK_BYTES) throw new RangeError('Workbook exceeds the 150 MB limit')
-    const bytes = new Uint8Array(await readFile(path))
-    const documentId = authorize(event, path)
-    return { canceled: false, document: await documentResult(documentId, path, bytes) }
+    return openWorkbookPath(event, result.filePaths[0])
+  })
+
+  loggedHandle(IPC.excel.openRequestedWorkbook, (event, requestId: string) => {
+    const path = excelHost.consumeWorkbookOpenRequest(event.sender.id, requestId)
+    return openWorkbookPath(event, path)
   })
 
   loggedHandle(

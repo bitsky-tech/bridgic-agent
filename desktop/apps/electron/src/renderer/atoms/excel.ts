@@ -7,7 +7,34 @@ import { SessionWorkbenchSurface, sessionWorkbenchSurfaceAtom } from './workbenc
 
 type ExcelStateUpdate<T> = T | ((current: T) => T)
 
+export interface PendingExcelWorkbookOpenRequest {
+  requestId: number
+  sessionId: string
+  path: string
+}
+
+let nextWorkbookOpenRequestId = 1
+
 export const excelHostSnapshotAtom = atom<ExcelHostSnapshot>({ sessions: [] })
+
+/** Workbook clicks waiting for their Session-owned Excel target to become active. */
+export const pendingExcelWorkbookOpenRequestsAtom = atom<PendingExcelWorkbookOpenRequest[]>([])
+
+export const queueExcelWorkbookOpenAtom = atom(
+  null,
+  (get, set, request: Omit<PendingExcelWorkbookOpenRequest, 'requestId'>) => {
+    set(pendingExcelWorkbookOpenRequestsAtom, [
+      ...get(pendingExcelWorkbookOpenRequestsAtom),
+      { ...request, requestId: nextWorkbookOpenRequestId++ },
+    ])
+  },
+)
+
+export const consumeExcelWorkbookOpenRequestAtom = atom(null, (get, set, requestId: number) => {
+  const current = get(pendingExcelWorkbookOpenRequestsAtom)
+  const next = current.filter((request) => request.requestId !== requestId)
+  if (next.length !== current.length) set(pendingExcelWorkbookOpenRequestsAtom, next)
+})
 
 /** Apply target inventory and retract a visible Excel surface when its final tab
  * closes and therefore disposes the Session target. Keep Excel selected so the
@@ -72,5 +99,12 @@ export const purgeExcelStateAtom = atom(null, (get, set, sessionId: string) => {
     set(excelHostSnapshotAtom, {
       sessions: snapshot.sessions.filter((session) => session.sessionId !== sessionId),
     })
+  }
+  const pendingOpenRequests = get(pendingExcelWorkbookOpenRequestsAtom)
+  if (pendingOpenRequests.some((request) => request.sessionId === sessionId)) {
+    set(
+      pendingExcelWorkbookOpenRequestsAtom,
+      pendingOpenRequests.filter((request) => request.sessionId !== sessionId),
+    )
   }
 })

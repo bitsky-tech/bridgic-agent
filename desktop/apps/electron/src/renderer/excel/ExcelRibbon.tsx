@@ -607,6 +607,7 @@ export function ExcelRibbon({
                 label={`${copy.actions['set-zoom']} ${Math.round(viewState.zoom * 100)}%`}
                 onAction={action}
                 variant="tall"
+                wide
               />
               <div className="grid h-14 grid-flow-col grid-rows-2 gap-x-0.5" data-quick-layout="view-options">
                 <CompactToggle
@@ -775,7 +776,7 @@ function CompactToggle({ checked, disabled, id, label, onAction }: {
   )
 }
 
-function CompactMenu({ active = false, activeId, disabled, icon: Icon, items, label, onAction, variant }: {
+function CompactMenu({ active = false, activeId, disabled, icon: Icon, items, label, onAction, variant, wide = false }: {
   active?: boolean
   activeId?: ExcelRibbonAction
   disabled: boolean
@@ -784,6 +785,7 @@ function CompactMenu({ active = false, activeId, disabled, icon: Icon, items, la
   label: string
   onAction: (action: ExcelRibbonAction, value?: ExcelRibbonActionValue) => void
   variant: 'inline' | 'tall'
+  wide?: boolean
 }) {
   const anchorRef = useRef<HTMLButtonElement>(null)
   const menu = useRibbonPopup(anchorRef, 256, Math.max(76, items.length * 32 + 12))
@@ -792,8 +794,17 @@ function CompactMenu({ active = false, activeId, disabled, icon: Icon, items, la
     ? 'flex h-7 w-full items-center gap-1 rounded px-1 text-[10px] text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-35'
     : 'flex h-14 w-full flex-col items-center justify-center gap-1 rounded px-0.5 text-[9px] text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-35'
   const className = `${layout} ${active ? 'bg-blue-500/10 text-blue-500' : ''}`
+  let containerSize = 'h-14 w-12'
+  let labelWidth = 'max-w-11'
+  if (variant === 'inline') {
+    containerSize = 'h-7 w-[76px]'
+    labelWidth = 'flex-1'
+  } else if (wide) {
+    containerSize = 'h-14 w-20'
+    labelWidth = 'max-w-[76px]'
+  }
   return (
-    <div className={`relative ${variant === 'inline' ? 'h-7 w-[76px]' : 'h-14 w-12'}`}>
+    <div className={`relative ${containerSize}`} data-compact-width={wide ? 'wide' : 'normal'}>
       <button
         {...tooltip.anchorProps}
         aria-expanded={menu.open}
@@ -812,7 +823,7 @@ function CompactMenu({ active = false, activeId, disabled, icon: Icon, items, la
         type="button"
       >
         <Icon className="shrink-0" size={18} strokeWidth={1.7} />
-        <span className={`flex min-w-0 items-center gap-px truncate ${variant === 'inline' ? 'flex-1' : 'max-w-11'}`}>{label}<ChevronDown className="shrink-0" size={8} /></span>
+        <span className={`flex min-w-0 items-center gap-px truncate ${labelWidth}`}>{label}<ChevronDown className="shrink-0" size={8} /></span>
       </button>
       {tooltip.element}
       {menu.open ? createPortal(
