@@ -109,6 +109,11 @@ export function installApiStub(): void {
       setBounds: async () => {},
       setVisible: async () => {},
     },
+    word: {
+      readDocument: async () => {
+        throw new Error('Word document reads require Electron')
+      },
+    },
     backend: {
       snapshot: async () => ({
         state: BackendState.Idle,

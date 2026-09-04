@@ -73,6 +73,7 @@ import {
   purgeSessionWorkbenchStateAtom,
   SessionWorkbenchSurface,
 } from './workbench'
+import { purgeWordStateAtom } from './word'
 
 /** Re-export so existing `import type { AgentMessage } from '@/atoms/agent'`
  *  call sites keep working. Single source of truth in
@@ -585,6 +586,7 @@ export const purgeSessionAtom = atom(null, (get, set, id: string) => {
   set(purgeBrowserAttentionAtom, id)
   set(purgeFilesAttentionAtom, id)
   set(purgeSessionWorkbenchStateAtom, id)
+  set(purgeWordStateAtom, id)
   // build.ts owns the brief family; dynamic import keeps the dep acyclic.
   void import('./build').then((m) => m.purgeBuildState(id))
   void import('./session-focus-pane').then((m) => m.purgeSessionFocusPaneState(id))

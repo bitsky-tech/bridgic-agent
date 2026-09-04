@@ -14,6 +14,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { cn } from '@/lib/cn'
+import { isDocxFileName } from '@/lib/fileTypes'
 import { extColor, findNode, formatSize, pruneExpanded } from '@/lib/fileTree'
 import { APP_PRODUCT_NAME } from '@shared/app-meta'
 import type { DirListResult, DirTreeNode } from '@shared/dir-tree'
@@ -60,9 +61,9 @@ export interface MountRowProps {
   onChildMenuToggle: (relPath: string) => void
   onCopyChildPath: (node: DirTreeNode) => void
   onRevealChild: (node: DirTreeNode) => void
-  /** Double-click to open: a file-type mount root (system default application). Folder roots have no such behaviour. */
+  /** Open a file-type mount root. DOCX uses single-click; other file types use double-click. */
   onOpenRoot: () => void
-  /** Double-click to open: a child file row (system default application). */
+  /** Open a child file row. DOCX uses single-click; other file types use double-click. */
   onOpenChild: (node: DirTreeNode) => void
 }
 
@@ -101,9 +102,14 @@ export function MountRow({
   )
 
   const expandable = m.kind === 'folder' && m.exists
-  // Double-clicking a file-type mount root = open with the system default application; stale paths (line-through) do not respond.
+  // DOCX roots open in the Word surface on one click; other files retain the established double-click behaviour.
   const rootOpenable = m.kind === 'file' && m.exists
+  const rootOpensOnClick = rootOpenable && isDocxFileName(m.name)
   const toggleRoot = (): void => {
+    if (rootOpensOnClick) {
+      onOpenRoot()
+      return
+    }
     if (!expandable) return
     if (!open) {
       // Every root expansion re-reads this level from disk (snapshot semantics): out-of-band deletions/additions are immediately visible;
@@ -165,7 +171,7 @@ export function MountRow({
       <div
         onClick={toggleRoot}
         onDoubleClick={() => {
-          if (rootOpenable) onOpenRoot()
+          if (rootOpenable && !rootOpensOnClick) onOpenRoot()
         }}
         className={cn(
           'group relative flex items-center gap-1.5 px-2 py-[5px] rounded-md',

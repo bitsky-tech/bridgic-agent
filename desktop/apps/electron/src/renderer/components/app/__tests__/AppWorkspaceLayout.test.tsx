@@ -19,8 +19,13 @@ afterAll(async () => {
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
+const {
+  SessionWorkbenchSurface,
+  setSessionWorkbenchSurfaceAtom,
+} = await import('@/atoms/browser')
 const { settingsAtom } = await import('@/atoms/settings')
 const { materializeSessionAtom, newSessionAtom } = await import('@/atoms/sessions')
+const { wordExpandedAtom } = await import('@/atoms/word')
 const { AppWorkspaceLayout } = await import('../AppWorkspaceLayout')
 
 describe('AppWorkspaceLayout Session dock composition', () => {
@@ -37,7 +42,7 @@ describe('AppWorkspaceLayout Session dock composition', () => {
         <Provider store={store}>
           <AppWorkspaceLayout
             left={<div>left</div>}
-            center={<div>center</div>}
+            center={<div data-testid="workspace-center">center</div>}
             right={<div>session tools</div>}
           />
         </Provider>,
@@ -52,6 +57,16 @@ describe('AppWorkspaceLayout Session dock composition', () => {
 
     expect(host.querySelector('[data-testid="session-right-dock"]')).not.toBeNull()
     expect(host.textContent).toContain('session tools')
+
+    await act(async () => {
+      store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Word)
+      store.set(wordExpandedAtom, true)
+    })
+
+    expect(host.querySelector('[data-testid="workspace-center"]')?.parentElement?.className)
+      .toContain('hidden')
+    expect(host.querySelector('[data-testid="session-right-dock"]')?.className)
+      .toContain('flex-1')
 
     await act(async () => root.unmount())
     host.remove()

@@ -1,8 +1,7 @@
 /**
- * File-open gate atoms — a session-file double-click opens it with the OS
- * default program, but first asks for a confirmation the user can choose to
- * remember. Remembered keys live in `GuiSettings.fileOpen` and persist across
- * sessions / restarts.
+ * File-open routing atoms. DOCX files open inside the Session Word surface;
+ * every other file opens with the OS default program after the existing
+ * rememberable confirmation gate.
  *
  * Key model: a file WITH an extension is remembered by its lowercased
  * extension (".TXT" === "txt" → one decision covers every .txt); a file
@@ -16,11 +15,13 @@
  */
 import { atom } from 'jotai'
 import type { GuiSettings } from '@app/shared/types'
+import { isDocxFileName } from '@/lib/fileTypes'
 import { i18n } from '@/lib/i18n'
 import { rlog } from '@/lib/logger'
 import { settingsAtom, updateSettingsAtom } from './settings'
 import { showToastAtom } from './toast'
 import { ModalKind, openModalAtom } from './amphi'
+import { requestWordFileOpenAtom } from './word'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -50,10 +51,13 @@ function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string)
 }
 
 /**
- * Double-click entry point. Opens directly when the file's key is already
- * remembered; otherwise routes to the FileOpenConfirm modal.
+ * Shared entry point for file rows and Agent-generated local file links.
  */
 export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) => {
+  if (isDocxFileName(file.name)) {
+    set(requestWordFileOpenAtom, file)
+    return
+  }
   const { kind, key } = deriveFileOpenKey(file.name)
   if (isRemembered(get(settingsAtom), kind, key)) {
     void window.api.shell.openPath(file.path).catch((err: unknown) => {

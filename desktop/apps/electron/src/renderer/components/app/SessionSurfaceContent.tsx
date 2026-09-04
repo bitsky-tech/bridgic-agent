@@ -12,6 +12,7 @@ import { SpecPreviewPane } from './SpecPreviewPane'
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel'
 import { WorkflowResultsPanel } from './WorkflowResultsPanel'
 import { WorkflowRunDetailsPane } from './WorkflowRunDetailsPane'
+import { WordWorkbenchPanel } from './WordWorkbenchPanel'
 import { cn } from '@/lib/cn'
 
 export interface SessionSurfaceContentProps {
@@ -65,6 +66,13 @@ export function SessionSurfaceContent({
         testId="session-workbench-schedules-content"
       >
         <ScheduleWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Schedules)} />
+      </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={isToolActive(SessionWorkbenchSurface.Word)}
+        labelledBy="session-workbench-word-tab"
+        testId="session-workbench-word-content"
+      >
+        <WordWorkbenchPanel />
       </WorkbenchSurface>
 
       <div

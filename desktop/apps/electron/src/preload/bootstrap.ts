@@ -95,6 +95,9 @@ const api: ElectronAPI = {
     setVisible: (visible, focusHost) =>
       ipcRenderer.invoke(IPC.browser.setVisible, visible, focusHost),
   },
+  word: {
+    readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
+  },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
     refresh: (expectedEndpointEpoch) =>

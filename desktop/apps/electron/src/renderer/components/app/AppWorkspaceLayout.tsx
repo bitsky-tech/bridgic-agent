@@ -8,6 +8,7 @@ import {
   sessionWorkbenchSurfaceAtom,
 } from '@/atoms/browser'
 import { sessionFocusPaneOpenAtom } from '@/atoms/session-focus-pane-view'
+import { wordExpandedAtom } from '@/atoms/word'
 import { AppLayout } from '@/components/amphi'
 
 export interface AppWorkspaceLayoutProps {
@@ -25,9 +26,11 @@ export interface AppWorkspaceLayoutProps {
 export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutProps) {
   const showSessionDock = useAtomValue(showRightPanelAtom)
   const browserExpanded = useAtomValue(browserExpandedAtom)
+  const wordExpanded = useAtomValue(wordExpandedAtom)
   const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
   const focusPaneOpen = useAtomValue(sessionFocusPaneOpenAtom)
   const browserLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Browser
+  const wordLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Word
 
   return (
     <AppLayout
@@ -37,7 +40,7 @@ export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutPr
       center={center}
       right={right}
       rightKind={browserLayout ? 'browser' : 'panel'}
-      rightExpanded={browserLayout && browserExpanded}
+      rightExpanded={(browserLayout && browserExpanded) || (wordLayout && wordExpanded)}
     />
   )
 }

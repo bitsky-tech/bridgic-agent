@@ -94,6 +94,11 @@
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@univerjs/core": "0.25.1",
+    "@univerjs/docs-ui": "0.25.1",
+    "@univerjs/preset-docs-core": "0.25.1",
+    "@univerjs/preset-docs-drawing": "0.25.1",
+    "@univerjs/preset-docs-hyper-link": "0.25.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "i18next": "^25.0.0",
@@ -101,9 +106,11 @@
     "jotai": "^2.16.0",
     "jotai-family": "^1.0.2",
     "lucide-react": "^0.561.0",
+    "mammoth": "1.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-i18next": "^17.0.2",
+    "rxjs": "7.8.2",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.0.0"
   }

@@ -98,7 +98,7 @@ export function SessionAssetsSearch({
         return (
           <div
             key={rowKey}
-            // File → open with the system default application (behind the confirmation gate); folder → reveal in
+            // File → route DOCX to Word or use the confirmed system opener; folder → reveal in
             // the file manager. Search results are flat with no tree to expand, so a folder cannot reuse the tree
             // view's "click to expand" — and with no action at all, clicking a folder hit sitting at the top of
             // the list would do nothing and look broken.

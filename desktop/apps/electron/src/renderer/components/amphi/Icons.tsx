@@ -72,6 +72,53 @@ export const Icons = {
       <path d="M9 2v3h3" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   ),
+  wordDocument: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M4 1.5h5.2L12.5 5v8.5a1 1 0 01-1 1H4a1 1 0 01-1-1v-11a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+      <path d="M9 1.5V5h3.5M5 7l1.15 4L8 8.5l1.85 2.5L11 7" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  expand: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  shrink: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M2 6h4V2M14 6h-4V2M2 10h4v4M14 10h-4v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  undo: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M5.5 4L2.5 7l3 3M3 7h6a4 4 0 010 8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  redo: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M10.5 4l3 3-3 3M13 7H7a4 4 0 000 8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  bulletedList: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <circle cx="3" cy="4" r=".8" fill="currentColor" /><circle cx="3" cy="8" r=".8" fill="currentColor" /><circle cx="3" cy="12" r=".8" fill="currentColor" />
+      <path d="M6 4h7M6 8h7M6 12h7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  ),
+  numberedList: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M2.5 3.2h1v2M2.4 8c.2-.6 1.4-.6 1.4.1 0 .5-1.4 1-1.4 1.7h1.5M2.4 12c.3-.5 1.5-.4 1.5.3 0 .6-1.2.8-1.5.4.3-.4 1.6-.2 1.6.5 0 .8-1.4.9-1.7.2" stroke="currentColor" strokeWidth=".9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6 4h7M6 8h7M6 12h7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  ),
+  alignLeft: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M2.5 4h11M2.5 7h7M2.5 10h11M2.5 13h8" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" /></svg>
+  ),
+  alignCenter: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M2.5 4h11M4.5 7h7M2.5 10h11M4 13h8" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" /></svg>
+  ),
+  alignRight: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M2.5 4h11M6.5 7h7M2.5 10h11M5.5 13h8" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" /></svg>
+  ),
   play: (s = 16) => (
     <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
       <path d="M5 3l8 5-8 5V3z" fill="currentColor" />

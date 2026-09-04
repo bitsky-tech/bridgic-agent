@@ -260,6 +260,12 @@ export interface EmbeddedBrowserSnapshot {
   sessions: EmbeddedBrowserSessionInfo[]
 }
 
+export interface WordDocumentReadResult {
+  bytes: Uint8Array
+  fileName: string
+  mtimeMs: number
+}
+
 /**
  * The shape exposed on `window.api` by the preload script.
  * Imported by both renderer and preload so the contract stays in sync.
@@ -358,6 +364,10 @@ export interface ElectronAPI {
     hasHorizontalOverflow(sessionId: string, tabId: string): Promise<boolean>
     setBounds(bounds: EmbeddedBrowserBounds): Promise<void>
     setVisible(visible: boolean, focusHost?: boolean): Promise<void>
+  }
+  word: {
+    /** Read one explicitly opened .docx file for renderer-side conversion. */
+    readDocument(path: string): Promise<WordDocumentReadResult>
   }
   backend: {
     snapshot(): Promise<BackendSnapshot>
