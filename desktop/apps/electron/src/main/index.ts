@@ -402,9 +402,12 @@ function bootstrapPrimaryInstance(): void {
     await embeddedBrowserController.start()
     if (windowsSessionEnding) return
     const registerEmbeddedBrowser = (snapshot: ReturnType<typeof pythonClient.snapshot>) => {
-      if (snapshot.state !== BackendState.Ready || !snapshot.endpoint) return
+      if (snapshot.state !== BackendState.Ready || !snapshot.endpoint) {
+        embeddedBrowserController.suspendRegistration()
+        return
+      }
       void embeddedBrowserController.registerWithDaemon(snapshot.endpoint).catch((error) => {
-        mainLog.warn('[embedded-browser] daemon registration failed; browser tools remain unavailable', error)
+        mainLog.warn('[embedded-browser] daemon registration failed; retrying automatically in 10 seconds', error)
       })
     }
     pythonClient.onState(registerEmbeddedBrowser)

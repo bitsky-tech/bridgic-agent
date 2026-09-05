@@ -154,7 +154,7 @@ async def test_controller_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await harness.host.unregister_controller("desktop-new") is True
 
     # Check 4: Removing the active controller produces the controlled unavailable error.
-    with pytest.raises(EmbeddedBrowserUnavailableError, match="desktop app is not running"):
+    with pytest.raises(EmbeddedBrowserUnavailableError, match="controller_not_registered"):
         await handle.invoke("get_current_page_info")
 
 
@@ -207,3 +207,48 @@ async def test_sync_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
     assert third is not second
     assert third.sync_calls == 1
     assert controller.health_calls == 2
+
+
+async def test_registration_refresh_preserves_live_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An identical registration must not disconnect clients or erase Session targets."""
+    harness = BrowserHarness(monkeypatch)
+    await harness.register("desktop", "generation-1")
+    session = harness.host.for_session("session-a")
+    await session.invoke("get_current_page_info")
+    client = harness.client("session-a")
+    controller = harness.host._controller
+    await harness.host.register_controller(**vars(controller))
+    assert await session.invoke("get_current_page_info") == "page:session-a"
+    assert harness.client("session-a") is client
+    assert len(harness.clients) == 1
+    assert not client._closing
+    await harness.host.shutdown()
+
+
+async def test_attach_failure_is_diagnosed_and_retryable(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """A failed CDP attach keeps the registration and allows the same handle to retry."""
+    from tests.agent.browser._harness import FakeClient
+
+    harness = BrowserHarness(monkeypatch)
+    controller = await harness.register("desktop", "generation-1")
+    handle = harness.host.for_session("session-a")
+    original = FakeClient.start_and_bind_embedded
+    attempts = 0
+
+    async def attach(client: FakeClient, target_id: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("CDP transport disconnected")
+        await original(client, target_id)
+
+    monkeypatch.setattr(FakeClient, "start_and_bind_embedded", attach)
+    with pytest.raises(EmbeddedBrowserUnavailableError, match="browser_attach_failed"):
+        await handle.invoke("get_current_page_info")
+    assert "CDP transport disconnected" in caplog.text
+    assert "session=session-a" in caplog.text
+    assert harness.host.controller_status()["available"] is True
+    assert await handle.invoke("get_current_page_info") == "page:session-a"
+    assert controller.health_calls == 2
+    assert harness.clients[0]._closing
+    await harness.host.shutdown()

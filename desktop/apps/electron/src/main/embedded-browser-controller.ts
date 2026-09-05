@@ -16,6 +16,7 @@ import { mainLog } from './logger'
 const LOOPBACK_HOST = '127.0.0.1'
 const MAX_BODY_BYTES = 16 * 1024
 const REQUEST_TIMEOUT_MS = 3_000
+const REGISTRATION_REFRESH_MS = 10_000
 
 interface ControllerRegistration {
   controller_id: string
@@ -45,6 +46,9 @@ export class EmbeddedBrowserController {
   private registeredDaemon: BackendEndpoint | null = null
   private registrationInflight: Promise<void> | null = null
   private stopping = false
+  private desiredDaemon: BackendEndpoint | null = null
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private refreshInflight: Promise<void> | null = null
 
   constructor(
     private readonly browser: EmbeddedBrowserManager,
@@ -97,6 +101,8 @@ export class EmbeddedBrowserController {
   /** Register or refresh this Electron controller in the active daemon. */
   async registerWithDaemon(endpoint: BackendEndpoint): Promise<void> {
     if (this.stopping || !endpoint.token || !this.controlUrl) return
+    this.desiredDaemon = endpoint
+    this.scheduleRefresh()
     if (
       this.registeredDaemon?.baseUrl === endpoint.baseUrl
       && this.registeredDaemon.token === endpoint.token
@@ -104,8 +110,9 @@ export class EmbeddedBrowserController {
       return
     }
     if (this.registrationInflight) {
-      await this.registrationInflight
-      if (this.stopping || !this.controlUrl) return
+      // A failed old endpoint must not prevent a newer daemon from registering.
+      await this.registrationInflight.catch(() => {})
+      if (this.stopping || !this.controlUrl || this.desiredDaemon !== endpoint) return
       if (
         this.registeredDaemon?.baseUrl === endpoint.baseUrl
         && this.registeredDaemon.token === endpoint.token
@@ -123,9 +130,66 @@ export class EmbeddedBrowserController {
     }
   }
 
+  /** Suspend repair while the daemon is being rediscovered. */
+  suspendRegistration(): void {
+    this.desiredDaemon = null
+    if (this.refreshTimer) clearTimeout(this.refreshTimer)
+    this.refreshTimer = null
+  }
+
+  private scheduleRefresh(): void {
+    if (this.stopping || !this.desiredDaemon || this.refreshTimer || this.refreshInflight) return
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      const refresh = this.refreshRegistration().catch((error) => {
+        mainLog.warn('[embedded-browser] registration check failed; retrying in 10 seconds', error)
+      })
+      this.refreshInflight = refresh
+      void refresh.finally(() => {
+        this.refreshInflight = null
+        this.scheduleRefresh()
+      })
+    }, REGISTRATION_REFRESH_MS)
+    this.refreshTimer.unref()
+  }
+
+  private async refreshRegistration(): Promise<void> {
+    const endpoint = this.desiredDaemon
+    if (!endpoint || this.stopping) return
+    await this.registrationInflight?.catch(() => {})
+    if (this.stopping || this.desiredDaemon !== endpoint) return
+    const response = await fetch(`${endpoint.baseUrl}${GATEWAY_API_PATHS.BrowserController}`, {
+      headers: this.daemonHeaders(endpoint),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    if (!response.ok) throw new Error(`browser controller status failed: HTTP ${response.status}`)
+    const status: unknown = await response.json()
+    if (this.stopping || this.desiredDaemon !== endpoint) return
+    if (!status || typeof status !== 'object' || !('available' in status)
+      || typeof status.available !== 'boolean') {
+      throw new Error('browser controller status returned an invalid response')
+    }
+    // Another desktop may have explicitly taken ownership. Do not steal it back.
+    if (status.available) {
+      if (!('controller_id' in status) || !('generation' in status)) {
+        throw new Error('browser controller status returned no owner')
+      }
+      if (status.controller_id === this.controllerId && status.generation === this.generation) {
+        this.registeredDaemon = endpoint
+      }
+      return
+    }
+    mainLog.warn('[embedded-browser] daemon lost browser registration; restoring it')
+    // URL/token can stay unchanged even when the daemon loses its registration.
+    this.registeredDaemon = null
+    await this.registerWithDaemon(endpoint)
+  }
+
   /** Best-effort unregister and stop accepting daemon commands. */
   async stop(): Promise<void> {
     this.stopping = true
+    this.suspendRegistration()
+    await this.refreshInflight
     try {
       await this.registrationInflight
     } catch {

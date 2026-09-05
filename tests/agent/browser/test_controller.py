@@ -2,6 +2,7 @@ import io
 import json
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -465,7 +466,7 @@ def test_request_wire(monkeypatch: pytest.MonkeyPatch) -> None:
         captured.update({"request": request, "timeout": timeout})
         return io.BytesIO(b'{"status":"ok"}')
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: SimpleNamespace(open=urlopen))
     controller = _EmbeddedBrowserController(
         controller_id="desktop",
         generation="generation-1",
@@ -518,7 +519,7 @@ def test_request_failures(monkeypatch: pytest.MonkeyPatch) -> None:
         payload = io.BytesIO(b'{"error":"tab does not belong to this session"}')
         raise urllib.error.HTTPError(request.full_url, code, "rejected", {}, payload)
 
-    monkeypatch.setattr(urllib.request, "urlopen", reject)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: SimpleNamespace(open=reject))
 
     # Check 1: A domain conflict stays distinct from controller unavailability.
     with pytest.raises(RuntimeError, match="HTTP 409.*tab does not belong") as conflict:
@@ -532,10 +533,59 @@ def test_request_failures(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         urllib.request,
-        "urlopen",
-        lambda request, timeout: io.BytesIO(b"not-json"),
+        "build_opener",
+        lambda *handlers: SimpleNamespace(open=lambda request, timeout: io.BytesIO(b"not-json")),
     )
 
     # Check 3: Invalid JSON cannot enter the browser controller state model.
     with pytest.raises(RuntimeError, match="invalid JSON"):
         controller._request("GET", "/v1/health", None)
+
+
+@pytest.mark.parametrize("failure,code", [
+    (TimeoutError("timed out"), "controller_timeout"),
+    (urllib.error.URLError(TimeoutError("timed out")), "controller_timeout"),
+    (urllib.error.URLError(ConnectionRefusedError(61, "refused")), "controller_connection_refused"),
+    (urllib.error.URLError(OSError(54, "reset")), "controller_connection_failed"),
+    (urllib.error.HTTPError("http://127.0.0.1", 401, "Unauthorized", {}, None), "controller_auth_failed"),
+    (urllib.error.HTTPError("http://127.0.0.1", 403, "Forbidden", {}, None), "controller_auth_failed"),
+    (urllib.error.HTTPError("http://127.0.0.1", 503, "Unavailable", {}, None), "controller_server_error"),
+])
+def test_control_failure_diagnostics(monkeypatch, caplog, failure, code) -> None:
+    """Surface a stable cause and recovery action, and log without credentials."""
+    controller = _EmbeddedBrowserController("desktop", "generation", "http://127.0.0.1:3210", "secret-token", "http://127.0.0.1:9222", 123)
+
+    def fail(request, timeout):
+        raise failure
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: SimpleNamespace(open=fail))
+    with pytest.raises(EmbeddedBrowserUnavailableError, match=code) as caught:
+        controller._request("GET", "/v1/health", None)
+    assert caught.value.__cause__ is failure
+    assert "fully quit" in str(caught.value)
+    assert "desktop app is not running" not in str(caught.value)
+    assert code in caplog.text
+    assert "secret-token" not in caplog.text + str(caught.value)
+
+
+def test_loopback_control_bypasses_system_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise urllib's real routing without opening a socket or contacting a proxy."""
+    from urllib.response import addinfourl
+
+    destinations = []
+
+    def respond(handler, request):
+        destinations.append(request.host)
+        response = addinfourl(io.BytesIO(b'{"status":"ok"}'), {}, request.full_url, 200)
+        response.msg = "OK"
+        return response
+
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {"http": "http://proxy.invalid:8080"})
+    monkeypatch.setattr(urllib.request, "proxy_bypass", lambda host: False)
+    monkeypatch.setattr(urllib.request.HTTPHandler, "http_open", respond)
+    # Establish that the default opener really would route loopback via this proxy.
+    with urllib.request.build_opener().open("http://127.0.0.1:3210/v1/health"):
+        pass
+    controller = _EmbeddedBrowserController("desktop", "generation", "http://127.0.0.1:3210", "secret-token", "http://127.0.0.1:9222", 123)
+    assert controller._request("GET", "/v1/health", None) == {"status": "ok"}
+    assert destinations == ["proxy.invalid:8080", "127.0.0.1:3210"]

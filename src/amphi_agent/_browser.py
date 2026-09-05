@@ -81,17 +81,45 @@ class EmbeddedBrowserUnavailableError(RuntimeError):
     """Raised when the desktop App cannot provide its embedded browser."""
 
 
-_EMBEDDED_BROWSER_UNAVAILABLE_MESSAGE = (
-    "The browser is unavailable because the desktop app is not running "
-    "or its browser connection was interrupted. Open the desktop app (it may remain "
-    "hidden in the tray) and retry."
-)
-
-
-def _embedded_browser_unavailable(
-    cause: Optional[BaseException] = None,
-) -> EmbeddedBrowserUnavailableError:
-    error = EmbeddedBrowserUnavailableError(_EMBEDDED_BROWSER_UNAVAILABLE_MESSAGE)
+def _embedded_browser_unavailable(cause: Optional[BaseException] = None, *, context: str = "controller discovery", stage: str = "controller") -> EmbeddedBrowserUnavailableError:
+    """Describe the control failure without claiming that the desktop has exited."""
+    reason = cause.reason if isinstance(cause, urllib.error.URLError) else cause
+    if stage == "cdp":
+        code = "browser_attach_failed"
+        detail = "The desktop controller responded, but the agent could not attach to the embedded browser."
+    elif cause is None:
+        code = "controller_not_registered"
+        detail = "The backend has no registered desktop browser controller."
+    elif isinstance(cause, urllib.error.HTTPError):
+        code = "controller_auth_failed" if cause.code in (401, 403) else "controller_server_error"
+        detail = (
+            f"The desktop browser controller rejected the connection credentials (HTTP {cause.code})."
+            if cause.code in (401, 403)
+            else f"The desktop browser controller reported a service error (HTTP {cause.code})."
+        )
+    elif isinstance(reason, TimeoutError):
+        code = "controller_timeout"
+        detail = "The desktop browser controller did not respond within 3 seconds."
+    elif isinstance(reason, ConnectionRefusedError):
+        code = "controller_connection_refused"
+        detail = "The local desktop browser control port refused the connection."
+    else:
+        code = "controller_connection_failed"
+        detail = "The backend could not communicate with the local desktop browser controller."
+    error = EmbeddedBrowserUnavailableError(
+        f"Browser control unavailable [{code}]. {detail} "
+        "The desktop window may still be open. Keep Bridgic Agent running and retry shortly; "
+        "if this persists, fully quit the app from its menu or tray and reopen it. "
+        "Opening the Browser panel alone does not reconnect the control channel."
+    )
+    logger.warning(
+        "[embedded-browser] %s context=%s cause=%s errno=%s",
+        code,
+        context,
+        type(reason).__name__ if reason is not None else "none",
+        getattr(reason, "errno", None),
+        exc_info=cause is not None,
+    )
     if cause is not None:
         error.__cause__ = cause
     return error
@@ -268,6 +296,7 @@ class _EmbeddedBrowserController:
         path: str,
         body: Optional[dict[str, Any]],
     ) -> dict[str, Any]:
+        context = f"controller={self.controller_id} generation={self.generation} {method} {self.control_url}{path}"
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
             f"{self.control_url.rstrip('/')}{path}",
@@ -279,14 +308,16 @@ class _EmbeddedBrowserController:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=_CONTROLLER_TIMEOUT_SECONDS) as response:
+            # This authenticated loopback channel must never use OS/environment proxies.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request, timeout=_CONTROLLER_TIMEOUT_SECONDS) as response:
                 payload = response.read()
         except urllib.error.HTTPError as exc:
             # Authentication failures and server failures indicate that the App
             # controller itself is unusable. Ordinary domain 4xx responses are
             # operation errors and must not invalidate sibling Sessions.
-            if exc.code == 401 or exc.code >= 500:
-                raise _embedded_browser_unavailable(exc)
+            if exc.code in (401, 403) or exc.code >= 500:
+                raise _embedded_browser_unavailable(exc, context=context)
             try:
                 error_payload = exc.read()
                 parsed_error = json.loads(error_payload.decode("utf-8"))
@@ -302,7 +333,7 @@ class _EmbeddedBrowserController:
                 f"Electron browser controller rejected the request (HTTP {exc.code}){detail}",
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise _embedded_browser_unavailable(exc)
+            raise _embedded_browser_unavailable(exc, context=context)
         try:
             parsed = json.loads(payload.decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError) as exc:
@@ -1402,6 +1433,10 @@ class BrowserHost:
             self._controller = controller
             self._connected_controller_generation = None
             self._owner_generation += 1
+            logger.info(
+                "[embedded-browser] registered controller=%s generation=%s pid=%s",
+                controller_id, generation, owner_pid,
+            )
 
     async def unregister_controller(self, controller_id: str) -> bool:
         """Remove one matching Electron controller without touching a replacement."""
@@ -1409,6 +1444,7 @@ class BrowserHost:
             controller = self._controller
             if controller is None or controller.controller_id != controller_id:
                 return False
+            logger.info("[embedded-browser] unregistered controller=%s", controller_id)
             self._controller = None
             self._connected_controller_generation = None
             self._owner_generation += 1
@@ -1693,7 +1729,12 @@ class BrowserHost:
                 embedded_controller=controller,
                 embedded_session_id=session_id,
             )
-            await client.start_and_bind_embedded(target_id)
+            try:
+                await client.start_and_bind_embedded(target_id)
+            except Exception as exc:
+                raise _embedded_browser_unavailable(
+                    exc, context=f"session={session_id} controller={controller.controller_id}", stage="cdp",
+                ) from exc
             return client
         except BaseException:
             if client is not None:
@@ -1744,6 +1785,10 @@ class BrowserHost:
             return
         async with self._lock:
             if self._controller is controller:
+                logger.warning(
+                    "[embedded-browser] invalidated connection controller=%s generation=%s; next operation will reconnect",
+                    controller.controller_id, controller.generation,
+                )
                 self._connected_controller_generation = None
                 self._owner_generation += 1
 
