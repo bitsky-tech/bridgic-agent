@@ -12,6 +12,7 @@ export interface SessionSurfaceRailTabsProps {
   hasBrowserOpenPage: boolean
   hasPresentationOpen: boolean
   hasExcelWorkbook: boolean
+  hasWordDocument: boolean
   isBrowserAgentActive: boolean
   isBrowserBusy: boolean
   isPowerPointAgentActive: boolean
@@ -34,6 +35,7 @@ export function SessionSurfaceRailTabs({
   hasBrowserOpenPage,
   hasPresentationOpen,
   hasExcelWorkbook,
+  hasWordDocument,
   isBrowserAgentActive,
   isBrowserBusy,
   isPowerPointAgentActive,
@@ -89,9 +91,9 @@ export function SessionSurfaceRailTabs({
     {
       ariaLabel: t('session.resourcePanel.word'),
       icon: Icons.wordDocument(17),
-      isOpenInBackground: false,
+      isOpenInBackground: hasWordDocument,
       label: t('session.resourcePanel.word'),
-      showActiveIndicator: true,
+      showActiveIndicator: hasWordDocument,
       surface: SessionWorkbenchSurface.Word,
       testId: 'session-workbench-word',
     },

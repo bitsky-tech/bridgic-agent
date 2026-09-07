@@ -384,6 +384,7 @@
     "workflowRunExportFailed": "导出执行结果失败：{{msg}}"
   },
   "excel": {
+    "closePanel": "关闭 Excel 面板",
     "defaultFileName": "工作簿.xlsx",
     "defaultWorkbookName": "工作簿",
     "dismissError": "关闭错误提示",
@@ -2044,6 +2045,9 @@
     },
     "resourcePanel": {
       "agent": "Bridgic",
+      "agentBackground": "Bridgic 有后台任务",
+      "agentRunning": "Bridgic 正在执行任务",
+      "agentViewing": "正在查看 Bridgic 任务",
       "browser": "浏览器",
       "browserActiveShort": "操作中",
       "browserAgentActive": "Bridgic 正在操作浏览器",
@@ -2667,6 +2671,7 @@
     "citationPrompt": "请输入引文（例如：作者，2026）",
     "clearFormatting": "清除格式",
     "closeDocument": "关闭 {{title}}",
+    "closePanel": "关闭 Word 面板",
     "collapseRibbon": "收起功能区",
     "contentsEmpty": "请先应用标题样式，以生成目录条目。",
     "copy": "复制",
@@ -2764,6 +2769,7 @@
     "save": "保存",
     "search": "查找",
     "searchPrompt": "在文档中查找",
+    "sessionTargetReady": "Session target 已就绪 · {{target}}",
     "sessionWorkspace": "会话文档工作台",
     "showFormatting": "显示格式标记",
     "shrinkFont": "减小字号",

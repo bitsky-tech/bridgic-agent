@@ -82,6 +82,7 @@ import type {
   ExcelWorkbookOpenTicket,
 } from '../../shared/types'
 import { Icons } from '../components/amphi/Icons'
+import { OfficeDocumentTabs } from '../components/app/OfficeWorkbenchChrome'
 import {
   EXCEL_SHOW_ZEROS_CUSTOM_KEY,
   clearUnsupportedWorkbookFeatures,
@@ -211,22 +212,18 @@ function loadRecentFormulas(): string[] {
 
 interface Copy {
   close: string
+  documentTabs: string
   closeUnsaved: string
   dismissError: string
   dismissNotice: string
-  localOnly: string
   lossyOverwrite: string
   lossySaveAs: string
   new: string
   open: string
   openFailed: string
-  save: string
   saveAs: string
   saveConflict: string
   saveFailed: string
-  saved: string
-  saving: string
-  opening: string
   unsaved: string
   workbook: string
   emptyTitle: string
@@ -236,22 +233,18 @@ interface Copy {
 const COPY: Record<ExcelHostConfig['locale'], Copy> = {
   'en-US': {
     close: 'Close workbook',
+    documentTabs: 'Excel workbook tabs',
     closeUnsaved: 'This workbook has unsaved changes. Close it and discard those changes?',
     dismissError: 'Dismiss error',
     dismissNotice: 'Dismiss message',
-    localOnly: 'Local .xlsx files stay on this device.',
     lossyOverwrite: 'This file contains Excel objects that cannot be reproduced safely ({features}). The original will not be overwritten. Use Save as to create a simplified copy.',
     lossySaveAs: 'This workbook contains Excel objects that cannot be reproduced safely ({features}). Save a simplified copy without those objects?',
     new: 'New',
     open: 'Open',
     openFailed: 'Could not open this workbook',
-    save: 'Save',
     saveAs: 'Save as',
     saveConflict: 'The file changed on disk. Use Save as to keep both versions.',
     saveFailed: 'Could not save this workbook',
-    saved: 'Saved',
-    saving: 'Saving…',
-    opening: 'Opening…',
     unsaved: 'Unsaved changes',
     workbook: 'Workbook',
     emptyTitle: 'No workbook tabs',
@@ -259,22 +252,18 @@ const COPY: Record<ExcelHostConfig['locale'], Copy> = {
   },
   'zh-CN': {
     close: '关闭工作簿',
+    documentTabs: 'Excel 工作簿标签',
     closeUnsaved: '此工作簿有未保存的更改。要关闭并放弃这些更改吗？',
     dismissError: '关闭错误提示',
     dismissNotice: '关闭操作提示',
-    localOnly: '本地 .xlsx 文件只保留在此设备上。',
     lossyOverwrite: '此文件包含当前无法安全还原的 Excel 对象（{features}）。为保护原文件，不会执行覆盖保存；请使用“另存为”创建简化副本。',
     lossySaveAs: '此工作簿包含当前无法安全还原的 Excel 对象（{features}）。是否另存一个不含这些对象的简化副本？',
     new: '新建',
     open: '打开',
     openFailed: '无法打开此工作簿',
-    save: '保存',
     saveAs: '另存为',
     saveConflict: '磁盘中的文件已被修改。请使用“另存为”保留两个版本。',
     saveFailed: '无法保存此工作簿',
-    saved: '已保存',
-    saving: '正在保存…',
-    opening: '正在打开…',
     unsaved: '有未保存的更改',
     workbook: '工作簿',
     emptyTitle: '没有工作簿标签页',
@@ -1516,52 +1505,31 @@ export function ExcelHostApp() {
     }
   }, [])
 
-  let status = activeTab?.dirty ? copy.unsaved : copy.saved
-  if (busy === 'opening') status = copy.opening
-  else if (busy === 'saving') status = copy.saving
-
   return (
     <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-bg-surface text-text-primary">
-      <header className="flex h-10 shrink-0 items-end gap-1 border-b border-border-subtle bg-bg-app px-2">
-        <div className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist">
-          {tabs.map((tab) => (
-            <div
-              key={tab.tabId}
-              className={`group flex h-8 max-w-56 shrink-0 items-center gap-1 rounded-t-md border border-b-0 px-2 text-[11px] ${tab.tabId === activeTabId ? 'border-border-subtle bg-bg-surface text-text-primary' : 'border-transparent text-text-tertiary hover:bg-bg-hover hover:text-text-secondary'}`}
-            >
-              <button
-                aria-selected={tab.tabId === activeTabId}
-                className="flex min-w-0 flex-1 items-center gap-1"
-                onClick={() => {
-                  setFormulaDialog(null)
-                  setActiveTabId(tab.tabId)
-                }}
-                role="tab"
-                type="button"
-              >
-                <span className="flex shrink-0 text-emerald-600">{Icons.spreadsheet(12)}</span>
-                <span className="truncate">{tab.fileName}</span>
-                {tab.dirty ? <span aria-label={copy.unsaved} className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" /> : null}
-              </button>
-              <button
-                aria-label={`${copy.close}: ${tab.fileName}`}
-                className="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded opacity-50 hover:bg-black/10 hover:opacity-100"
-                onClick={() => closeTab(tab)}
-                type="button"
-              >
-                {Icons.x(11)}
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
-          <HostButton disabled={busy !== null} label={copy.new} onClick={addBlankTab}>{Icons.plus(13)} {copy.new}</HostButton>
-          {activeTab ? (
-            <HostButton disabled={busy !== null} label={copy.save} onClick={() => void persistWorkbook(activeTab, false)}>{Icons.save(13)} {copy.save}</HostButton>
-          ) : null}
-          <span className="ml-1 max-w-32 truncate text-[10px] text-text-tertiary">{activeTab ? status : copy.localOnly}</span>
-        </div>
-      </header>
+      <OfficeDocumentTabs
+        activeId={activeTabId}
+        icon={<span className="flex shrink-0 text-emerald-600 dark:text-emerald-400">{Icons.spreadsheet(16)}</span>}
+        label={copy.documentTabs}
+        newDisabled={busy !== null}
+        newLabel={copy.new}
+        onClose={(id) => {
+          const tab = tabs.find((item) => item.tabId === id)
+          if (tab) closeTab(tab)
+        }}
+        onCreate={addBlankTab}
+        onSelect={(id) => {
+          setFormulaDialog(null)
+          setActiveTabId(id)
+        }}
+        tabs={tabs.map((tab) => ({
+          id: tab.tabId,
+          label: tab.fileName,
+          closeLabel: `${copy.close}: ${tab.fileName}`,
+          dirtyLabel: tab.dirty ? copy.unsaved : undefined,
+        }))}
+        testIdPrefix="excel"
+      />
 
       {activeTab ? (
         <ExcelRibbon

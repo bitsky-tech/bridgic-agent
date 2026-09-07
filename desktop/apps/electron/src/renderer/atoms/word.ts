@@ -7,6 +7,22 @@ import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workb
 type WordStateUpdate<T> = T | ((current: T) => T)
 
 const expandedWordSessionsAtom = atom<ReadonlySet<string>>(new Set<string>())
+const wordDocumentCountsAtom = atom<ReadonlyMap<string, number>>(new Map())
+
+/** Include blank documents and keep the rail scoped to the viewed Session. */
+export const wordHasOpenDocumentsAtom = atom((get) => {
+  const sessionId = get(viewedSessionIdAtom)
+  return sessionId !== null && (get(wordDocumentCountsAtom).get(sessionId) ?? 0) > 0
+})
+
+export const setWordDocumentCountAtom = atom(null, (get, set, update: { sessionId: string; count: number }) => {
+  const current = get(wordDocumentCountsAtom)
+  if ((current.get(update.sessionId) ?? 0) === update.count) return
+  const next = new Map(current)
+  if (update.count > 0) next.set(update.sessionId, update.count)
+  else next.delete(update.sessionId)
+  set(wordDocumentCountsAtom, next)
+})
 
 export interface WordFileOpenRequest {
   id: string
@@ -75,6 +91,7 @@ export const wordExpandedAtom = atom(
 
 /** Release the transient renderer projection after an Agent Session is deleted. */
 export const purgeWordStateAtom = atom(null, (get, set, sessionId: string) => {
+  set(setWordDocumentCountAtom, { sessionId, count: 0 })
   const current = get(expandedWordSessionsAtom)
   if (current.has(sessionId)) {
     const next = new Set(current)

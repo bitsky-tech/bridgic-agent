@@ -13,13 +13,12 @@ import {
   setNativeSurfaceRectAtom,
 } from '@/atoms/browser'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
+import { setRightPanelCollapsedAtom } from '@/atoms/layout'
 import { themeAtom } from '@/atoms/theme'
 import { showToastAtom } from '@/atoms/toast'
 import { Icons } from '@/components/amphi/Icons'
-import { Tooltip } from '@/components/amphi/Tooltip'
 import { rlog } from '@/lib/logger'
-import { SESSION_STATUS_BAR_HEIGHT_PX } from './SessionStatusBar'
-import { WorkbenchExpandIcon } from './WorkbenchToolPrimitives'
+import { OfficeAppHeader, OfficePanelControls } from './OfficeWorkbenchChrome'
 
 type ExcelLaunchState =
   | { status: 'idle' | 'creating' | 'ready' }
@@ -35,6 +34,7 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   const surfaceBlocked = useAtomValue(browserSurfaceBlockedAtom)
   const resolvedTheme = useAtomValue(themeAtom).resolved
   const setExpanded = useSetAtom(excelExpandedAtom)
+  const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
   const consumeWorkbookOpenRequest = useSetAtom(consumeExcelWorkbookOpenRequestAtom)
   const showToast = useSetAtom(showToastAtom)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -114,29 +114,25 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-bg-surface" data-testid="excel-workbench">
-      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600">
-          {Icons.spreadsheet(14)}
-        </span>
-        <div className="min-w-0 flex-1">
-          <strong className="block truncate text-xs font-semibold text-text-primary">Excel</strong>
-          <span className="block truncate text-[9px] text-text-tertiary" title={hostSession?.targetId ?? undefined}>
-            {status}{hostSession?.targetId ? ` · CDP ${hostSession.targetId.slice(0, 8)}` : ''}
-          </span>
-        </div>
-        <Tooltip content={expanded ? t('excel.exitExpanded') : t('excel.expand')}>
-          <button
-            aria-label={expanded ? t('excel.exitExpanded') : t('excel.expand')}
-            aria-pressed={expanded}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
-            data-testid="excel-toggle-expanded"
-            onClick={() => setExpanded((value) => !value)}
-            type="button"
-          >
-            <WorkbenchExpandIcon expanded={expanded} />
-          </button>
-        </Tooltip>
-      </header>
+      <OfficeAppHeader
+        icon={Icons.spreadsheet(16)}
+        iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+        subtitle={`${status} · ${sessionId.slice(0, 8).toUpperCase()}`}
+        testId="excel-app-header"
+        title="Excel"
+      >
+        <OfficePanelControls
+          closeLabel={t('excel.closePanel')}
+          expanded={expanded}
+          expandLabel={expanded ? t('excel.exitExpanded') : t('excel.expand')}
+          onClose={() => {
+            setExpanded(false)
+            setRightCollapsed(true)
+          }}
+          onToggleExpanded={() => setExpanded((value) => !value)}
+          testIdPrefix="excel"
+        />
+      </OfficeAppHeader>
 
       <div ref={viewportRef} className="relative min-h-0 flex-1 bg-bg-app" data-testid="excel-native-canvas">
         {!nativeVisible ? (
@@ -186,13 +182,7 @@ function ExcelLaunchEmptyState({ config, sessionId }: {
       className="flex h-full min-h-0 flex-col bg-bg-surface"
       data-testid="excel-launch-empty-state"
     >
-      <header
-        className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4"
-        style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}
-      >
-        <span className="flex text-emerald-600">{Icons.spreadsheet(16)}</span>
-        <span className="text-sm font-semibold text-text-primary">Excel</span>
-      </header>
+      <OfficeAppHeader icon={Icons.spreadsheet(16)} iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" title="Excel" />
       <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
         <div className="max-w-sm">
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-app text-emerald-600">

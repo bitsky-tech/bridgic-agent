@@ -33,9 +33,11 @@ import {
   type ReactNode,
 } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileText, Maximize2, Minimize2, Plus, Save, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { ZoomIn, ZoomOut } from 'lucide-react'
 
+import { Icons } from '@/components/amphi/Icons'
 import { Tooltip } from '@/components/amphi/Tooltip'
+import { OfficeAppHeader, OfficeDocumentTabs, OfficePanelControls } from '@/components/app/OfficeWorkbenchChrome'
 import { cn } from '@/lib/cn'
 import type {
   WordDomainStore,
@@ -65,6 +67,7 @@ import { WordRibbon, type WordRibbonTab } from './WordRibbon'
 
 export interface StructuredWordEditorProps {
   expanded: boolean
+  onClose?: () => void
   onSaveRequested?: () => void
   onToggleExpanded: () => void
   persistenceStatus?: WordPersistenceStatus
@@ -119,6 +122,7 @@ export async function replaceUniverSnapshotWithRetry(executor: UniverCommandExec
 /** Univer OSS-backed Word frontend shared by the right dock and Session-owned renderer target. */
 export function StructuredWordEditor({
   expanded,
+  onClose,
   onSaveRequested = () => undefined,
   onToggleExpanded,
   persistenceStatus = 'saved',
@@ -241,36 +245,43 @@ export function StructuredWordEditor({
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden bg-bg-app" data-testid="word-workbench">
-      <header className="flex h-10 shrink-0 items-end gap-1 border-b border-border-subtle bg-bg-app px-2" data-testid="word-document-header">
-        <div aria-label={t('word.documentTabs')} className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="word-document-tabs" role="tablist">
-          {workspace.documents.map((item) => {
-            const active = item.id === activeDocument.id
-            const title = item.title.trim() || t('word.untitled')
-            const fileName = title.toLocaleLowerCase().endsWith('.docx') ? title : `${title}.docx`
-            return (
-              <div className={cn('group flex h-8 min-w-[132px] max-w-56 shrink-0 items-center gap-1 rounded-t-md border border-b-0 px-2 text-[11px]', active ? 'border-border-subtle bg-bg-surface text-text-primary' : 'border-transparent text-text-tertiary hover:bg-bg-hover hover:text-text-secondary')} key={item.id}>
-                <Tooltip content={fileName} delayMs={0}>
-                  <button aria-selected={active} className="flex min-w-0 flex-1 items-center gap-1 text-left" data-testid="word-document-tab" onClick={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.activate', documentId: item.id }) }} role="tab" type="button">
-                    <FileText className={cn('size-3 shrink-0', active ? 'text-blue-600' : 'text-text-tertiary')} />
-                    <span className="truncate">{fileName}</span>
-                  </button>
-                </Tooltip>
-                <Tooltip content={t('word.closeDocument', { title: fileName })} delayMs={0}>
-                  <button aria-label={t('word.closeDocument', { title: fileName })} className="ml-0.5 flex size-4 shrink-0 items-center justify-center rounded opacity-50 hover:bg-black/10 hover:opacity-100" onClick={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.close', documentId: item.id }) }} type="button"><X className="size-[11px]" /></button>
-                </Tooltip>
-              </div>
-            )
-          })}
-        </div>
-        <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
-          <HostButton label={t('word.newDocument')} onClick={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.create' }) }}><Plus className="size-[13px]" />{t('word.newDocument')}</HostButton>
-          <HostButton label={t('word.save')} onClick={() => { flushActiveSnapshot(); onSaveRequested() }}><Save className="size-[13px]" />{t('word.save')}</HostButton>
-          <span aria-live="polite" className={cn('ml-1 max-w-28 truncate text-[10px] text-text-tertiary', persistenceStatus === 'error' && 'text-status-error')}>
-            {t(`word.persistence.${persistenceStatus}`)}
+      <OfficeAppHeader
+        icon={Icons.wordDocument(16)}
+        iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+        subtitle={t('word.sessionTargetReady', { target: workspace.sessionId.slice(0, 8).toUpperCase() })}
+        testId="word-app-header"
+        title="Word"
+      >
+        <OfficePanelControls
+          closeLabel={t('word.closePanel')}
+          expanded={expanded}
+          expandLabel={expanded ? t('word.exitExpanded') : t('word.expand')}
+          onClose={onClose ? () => { flushActiveSnapshot(); onSaveRequested(); onClose() } : undefined}
+          onToggleExpanded={showExpandControl ? onToggleExpanded : undefined}
+          testIdPrefix="word"
+          toggleTestId="word-expand-toggle"
+        />
+      </OfficeAppHeader>
+      <OfficeDocumentTabs
+        actions={persistenceStatus === 'error' ? (
+          <span className="max-w-28 truncate text-[10px] text-status-error" role="alert">
+            {t('word.persistence.error')}
           </span>
-          {showExpandControl ? <HeaderButton label={expanded ? t('word.exitExpanded') : t('word.expand')} onClick={onToggleExpanded} pressed={expanded} testId="word-expand-toggle">{expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}</HeaderButton> : null}
-        </div>
-      </header>
+        ) : undefined}
+        activeId={activeDocument.id}
+        icon={<span className="flex shrink-0 text-blue-600 dark:text-blue-400">{Icons.wordDocument(16)}</span>}
+        label={t('word.documentTabs')}
+        newLabel={t('word.newDocument')}
+        onClose={(documentId) => { flushActiveSnapshot(); void store.dispatch({ type: 'document.close', documentId }) }}
+        onCreate={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.create' }) }}
+        onSelect={(documentId) => { flushActiveSnapshot(); void store.dispatch({ type: 'document.activate', documentId }) }}
+        tabs={workspace.documents.map((item) => {
+          const title = item.title.trim() || t('word.untitled')
+          const fileName = title.toLocaleLowerCase().endsWith('.docx') ? title : `${title}.docx`
+          return { id: item.id, label: fileName, closeLabel: t('word.closeDocument', { title: fileName }) }
+        })}
+        testIdPrefix="word"
+      />
 
       <WordRibbon
         activeTab={activeRibbonTab}
@@ -559,14 +570,6 @@ async function dispatchReferenceCommand(store: WordDomainStore, documentId: stri
   }
   if (command.kind === 'footnote') return (await store.dispatch({ type: 'document.footnote.update', documentId, footnoteId: command.id, text: command.text })).ok
   return (await store.dispatch({ type: 'document.citation.update', documentId, citationId: command.id, text: command.text })).ok
-}
-
-function HeaderButton({ children, label, onClick, pressed, testId }: { children: ReactNode; label: string; onClick: () => void; pressed?: boolean; testId?: string }) {
-  return <Tooltip content={label} delayMs={0}><button aria-label={label} aria-pressed={pressed} className={cn('flex size-7 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary', pressed && 'bg-blue-500/10 text-blue-600')} data-testid={testId} onClick={onClick} type="button">{children}</button></Tooltip>
-}
-
-function HostButton({ children, label, onClick }: { children: ReactNode; label: string; onClick: () => void }) {
-  return <Tooltip content={label} delayMs={0}><button aria-label={label} className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary" onClick={onClick} type="button">{children}</button></Tooltip>
 }
 
 function FooterButton({ children, label, onClick }: { children: ReactNode; label: string; onClick: () => void }) {

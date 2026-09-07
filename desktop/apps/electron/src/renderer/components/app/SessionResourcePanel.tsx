@@ -4,6 +4,7 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { viewedSessionIdAtom } from '@/atoms/amphi'
 import {
+  currentAgentRunningAtom,
   currentBrowserAgentActiveAtom,
   currentPowerPointAgentActiveAtom,
 } from '@/atoms/agent'
@@ -38,6 +39,7 @@ import {
 } from '@/atoms/layout'
 import { presentationExpandedAtom } from '@/atoms/presentation'
 import { activeEmbeddedPowerPointSessionAtom } from '@/atoms/powerpoint'
+import { wordHasOpenDocumentsAtom } from '@/atoms/word'
 import {
   consumeSessionModeExitCollapseRequestAtom,
   currentSessionModeExitCollapseRequestAtom,
@@ -224,6 +226,7 @@ export function FilesAttentionAnnouncer() {
 function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: string | null }) {
   const { t } = useTranslation()
   const store = useStore()
+  const agentRunning = useAtomValue(currentAgentRunningAtom)
   const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
   const modeSurface = useAtomValue(sessionModeSurfaceAtom)
   const selectedModeSurface = useAtomValue(selectedSessionModeSurfaceAtom)
@@ -231,6 +234,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   const browserSession = useAtomValue(activeEmbeddedBrowserSessionAtom)
   const powerPointSession = useAtomValue(activeEmbeddedPowerPointSessionAtom)
   const excelHostSession = useAtomValue(activeExcelHostSessionAtom)
+  const wordHasOpenDocuments = useAtomValue(wordHasOpenDocumentsAtom)
   const pendingExcelWorkbookOpenRequests = useAtomValue(pendingExcelWorkbookOpenRequestsAtom)
   const browserAgentActive = useAtomValue(currentBrowserAgentActiveAtom)
   const powerPointAgentActive = useAtomValue(currentPowerPointAgentActiveAtom)
@@ -705,6 +709,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
 
       <SessionSurfaceRail
         isAgentActive={selectedModeSurface !== null}
+        isAgentRunning={viewedSessionId !== null && agentRunning}
         isContentOpen={contentOpen}
         isModeAvailable={modeSurface !== null}
         modeAriaLabel={modeAriaLabel}
@@ -720,6 +725,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
           hasBrowserOpenPage={browserHasOpenPage}
           hasPresentationOpen={powerPointSession !== null}
           hasExcelWorkbook={excelHostSession !== null}
+          hasWordDocument={wordHasOpenDocuments}
           isBrowserAgentActive={browserAgentActive && browserActivityKind === 'agent'}
           isBrowserBusy={browserBusy}
           isPowerPointAgentActive={powerPointAgentActive && powerPointActivityKind === 'agent'}

@@ -14,7 +14,7 @@ import {
 } from '@/lib/wordPersistence'
 import { Icons } from '@/components/amphi/Icons'
 import { Tooltip } from '@/components/amphi/Tooltip'
-import { SESSION_STATUS_BAR_HEIGHT_PX } from '@/components/app/SessionStatusBar'
+import { OfficeAppHeader } from '@/components/app/OfficeWorkbenchChrome'
 import { rlog } from '@/lib/logger'
 
 const WordEditor = lazy(() => import('./WordEditor').then((module) => ({ default: module.WordEditor })))
@@ -50,6 +50,8 @@ function prepareWordFile(request: WordFileOpenRequest): Promise<PreparedWordFile
 export interface SessionWordEditorProps {
   defaultTitle: string
   expanded: boolean
+  onClose?: () => void
+  onDocumentCountChange?: (sessionId: string, count: number) => void
   onOpenFileError?: (name: string, cause: unknown) => void
   onOpenFileRequestHandled?: (requestId: string) => void
   onToggleExpanded?: () => void
@@ -62,6 +64,8 @@ export interface SessionWordEditorProps {
 export function SessionWordEditor({
   defaultTitle,
   expanded,
+  onClose,
+  onDocumentCountChange = () => undefined,
   onOpenFileError = () => undefined,
   onOpenFileRequestHandled = () => undefined,
   onToggleExpanded = () => undefined,
@@ -74,6 +78,8 @@ export function SessionWordEditor({
       defaultTitle={defaultTitle}
       expanded={expanded}
       key={sessionId}
+      onClose={onClose}
+      onDocumentCountChange={onDocumentCountChange}
       onOpenFileError={onOpenFileError}
       onOpenFileRequestHandled={onOpenFileRequestHandled}
       onToggleExpanded={onToggleExpanded}
@@ -87,13 +93,15 @@ export function SessionWordEditor({
 function SessionWordEditorInstance({
   defaultTitle,
   expanded,
+  onClose,
+  onDocumentCountChange,
   onOpenFileError,
   onOpenFileRequestHandled,
   onToggleExpanded,
   openFileRequest,
   sessionId,
   showExpandControl,
-}: Required<SessionWordEditorProps>) {
+}: Required<Omit<SessionWordEditorProps, 'onClose'>> & Pick<SessionWordEditorProps, 'onClose'>) {
   const [persistenceStatus, setPersistenceStatus] = useState<WordPersistenceStatus>('saving')
   const [store, setStore] = useState<ReturnType<typeof createWordDomainStore> | null>(null)
   const persisterRef = useRef<WordWorkspacePersister | null>(null)
@@ -130,6 +138,20 @@ function SessionWordEditorInstance({
       else delete window.__bridgicWord
     }
   }, [store])
+
+  useEffect(() => {
+    if (!store) return
+    let previousCount: number | undefined
+    const publishDocumentCount = () => {
+      const workspace = store.getSnapshot()
+      const count = workspace.documents.length
+      if (count === previousCount) return
+      previousCount = count
+      onDocumentCountChange(workspace.sessionId, count)
+    }
+    publishDocumentCount()
+    return store.subscribe(publishDocumentCount)
+  }, [onDocumentCountChange, store])
 
   useEffect(() => {
     if (!store || !openFileRequest) return
@@ -172,6 +194,7 @@ function SessionWordEditorInstance({
 
   return <WordSessionSurface
     expanded={expanded}
+    onClose={onClose}
     onSaveRequested={() => persisterRef.current?.flush()}
     onToggleExpanded={onToggleExpanded}
     persistenceStatus={persistenceStatus}
@@ -181,8 +204,9 @@ function SessionWordEditorInstance({
   />
 }
 
-function WordSessionSurface({ expanded, onSaveRequested, onToggleExpanded, openingFileName, persistenceStatus, showExpandControl, store }: {
+function WordSessionSurface({ expanded, onClose, onSaveRequested, onToggleExpanded, openingFileName, persistenceStatus, showExpandControl, store }: {
   expanded: boolean
+  onClose?: () => void
   onSaveRequested: () => void
   onToggleExpanded: () => void
   openingFileName: string | null
@@ -201,6 +225,7 @@ function WordSessionSurface({ expanded, onSaveRequested, onToggleExpanded, openi
     <Suspense fallback={<div className="h-full min-h-0 bg-bg-app" data-testid="word-core-loading" />}>
       <WordEditor
         expanded={expanded}
+        onClose={onClose}
         onSaveRequested={onSaveRequested}
         onToggleExpanded={onToggleExpanded}
         persistenceStatus={persistenceStatus}
@@ -215,10 +240,7 @@ function WordFileOpeningState({ fileName }: { fileName: string }) {
   const { t } = useTranslation()
   return (
     <section className="flex h-full min-h-0 flex-col bg-bg-surface" data-testid="word-file-opening-state">
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4" style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}>
-        <span className="flex text-blue-600">{Icons.wordDocument(16)}</span>
-        <span className="text-sm font-semibold text-text-primary">Word</span>
-      </header>
+      <OfficeAppHeader icon={Icons.wordDocument(16)} iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-400" title="Word" />
       <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
         <div>
           <div aria-hidden="true" className="mx-auto size-6 animate-spin rounded-full border-2 border-blue-600/20 border-t-blue-600" />
@@ -235,10 +257,7 @@ function WordLaunchEmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useTranslation()
   return (
     <section className="flex h-full min-h-0 flex-col bg-bg-surface" data-testid="word-launch-empty-state">
-      <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-4" style={{ height: SESSION_STATUS_BAR_HEIGHT_PX }}>
-        <span className="flex text-blue-600">{Icons.wordDocument(16)}</span>
-        <span className="text-sm font-semibold text-text-primary">Word</span>
-      </header>
+      <OfficeAppHeader icon={Icons.wordDocument(16)} iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-400" title="Word" />
       <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
         <div className="max-w-sm">
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-app text-blue-600">

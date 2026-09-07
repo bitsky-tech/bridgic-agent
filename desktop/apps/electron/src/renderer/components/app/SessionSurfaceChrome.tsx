@@ -10,6 +10,7 @@ import type { KeyboardEvent, ReactNode, Ref } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/cn'
 import { AgentDockEntry } from './AgentDockEntry'
+import { SurfaceStatusIcon, type SurfaceStatus } from './SurfaceStatusIcon'
 
 export interface WorkbenchSurfaceProps {
   isActive: boolean
@@ -120,9 +121,10 @@ export function SurfaceRailButton({
   testId,
 }: SurfaceRailButtonProps) {
   const showAttention = needsAttention
-  let statusIndicatorState = 'background-open'
+  let statusIndicatorState: SurfaceStatus | undefined
   if (showAttention) statusIndicatorState = 'attention'
-  else if (isActive) statusIndicatorState = 'active'
+  else if (isActive && (showActiveIndicator || isOpenInBackground)) statusIndicatorState = 'active'
+  else if (!isActive && isOpenInBackground) statusIndicatorState = 'background-open'
   return (
     <button
       id={`${testId}-tab`}
@@ -139,37 +141,31 @@ export function SurfaceRailButton({
       onClick={onClick}
       onKeyDown={navigateSurfaceRail}
       className={cn(
-        'relative flex h-[50px] w-full flex-col items-center justify-center gap-1 rounded-[10px]',
+        'relative flex h-[50px] w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-[10px]',
         'border border-transparent text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary',
-        isActive && 'bg-bg-selected text-text-primary',
-        isBusy && !showAttention && 'border-brand-blue/30 bg-accent-blue-subtle text-text-accent',
+        isActive && !isBusy && !showAttention && 'text-text-primary hover:bg-transparent hover:text-text-primary',
+        isBusy && !showAttention && 'border-brand-blue/30 bg-accent-blue-subtle text-text-accent hover:bg-accent-blue-subtle hover:text-text-accent',
         showAttention && 'animate-surface-attention border-status-warning/40 bg-status-warning-bg text-status-warning hover:bg-status-warning-bg hover:text-status-warning motion-reduce:animate-none',
       )}
     >
-      {(isActive && showActiveIndicator) || isOpenInBackground || showAttention ? (
-        <span
-          aria-hidden="true"
-          className={cn(
-            'absolute -right-[3px] top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full',
-            showAttention ? 'bg-status-warning' : 'bg-text-secondary/65',
-          )}
-          data-state={statusIndicatorState}
-          data-testid={`${testId}-status-indicator`}
-        />
-      ) : null}
-      <span className={cn(
-        'flex h-5 items-center justify-center',
-        isBusy && !showAttention && 'text-text-accent',
-        isPulsing && 'animate-pulse motion-reduce:animate-none',
-      )}>
+      <SurfaceStatusIcon
+        busy={isBusy}
+        pulsing={isPulsing}
+        selected={isActive}
+        state={statusIndicatorState}
+        testId={`${testId}-status-indicator`}
+      >
         {icon}
-      </span>
+      </SurfaceStatusIcon>
       {/* 58px is the button's real content box (rail 68 − mx-0.5 4 − dock border 2 − p-px 2 −
           this button's own border 2). It has to be stated explicitly: `truncate` needs a
           definite width, and a flex column's `items-center` lets an oversized child overflow
           instead of clamping it. `tracking-tight` buys back the last couple of pixels so the
           English labels fit without widening the rail or shortening the product's vocabulary. */}
-      <span className="max-w-[58px] truncate text-2xs font-medium leading-none tracking-tight">{label}</span>
+      <span className={cn(
+        'max-w-[58px] truncate text-2xs leading-none tracking-tight',
+        isActive ? 'font-semibold' : 'font-medium',
+      )}>{label}</span>
     </button>
   )
 }
@@ -177,6 +173,7 @@ export function SurfaceRailButton({
 export interface SessionSurfaceRailProps {
   children: ReactNode
   isAgentActive: boolean
+  isAgentRunning: boolean
   isContentOpen: boolean
   modeAriaLabel: string
   isModeAvailable: boolean
@@ -189,6 +186,7 @@ export interface SessionSurfaceRailProps {
 export function SessionSurfaceRail({
   children,
   isAgentActive,
+  isAgentRunning,
   isContentOpen,
   modeAriaLabel,
   isModeAvailable,
@@ -225,6 +223,7 @@ export function SessionSurfaceRail({
       >
         <AgentDockEntry
           active={isAgentActive}
+          running={isAgentRunning}
           modeAvailable={isModeAvailable}
           modeAriaLabel={modeAriaLabel}
           onOpenMode={onOpenMode}

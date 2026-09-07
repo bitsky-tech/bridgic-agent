@@ -126,6 +126,7 @@ const {
 } = await import('@/atoms/layout')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { i18n } = await import('@/lib/i18n')
+const { createWordWorkspace } = await import('@/lib/wordDomain')
 const {
   BrowserAttentionAnnouncer,
   FilesAttentionAnnouncer,
@@ -271,11 +272,9 @@ describe('SessionResourcePanel', () => {
     const filesStatus = files.querySelector<HTMLElement>(
       '[data-testid="session-workbench-files-status-indicator"]',
     )
-    expect(files.className).toContain('bg-bg-selected')
+    expect(filesStatus?.dataset.selected).toBe('true')
     expect(filesStatus?.dataset.state).toBe('active')
-    expect(filesStatus?.className).toContain('-right-[3px]')
-    expect(filesStatus?.className).toContain('h-5')
-    expect(filesStatus?.className).toContain('bg-text-secondary/65')
+    expect(filesStatus?.dataset.appearance).toBe('selection-capsule')
     expect(files.querySelector('.left-0')).toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('true')
@@ -289,7 +288,7 @@ describe('SessionResourcePanel', () => {
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Workflows)
-    expect(workflows.className).toContain('bg-bg-selected')
+    expect(workflows.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(workflows.querySelector('[data-testid="session-workbench-workflows-status-indicator"]')?.getAttribute('data-state')).toBe('active')
     expect(files.querySelector('[data-testid="session-workbench-files-status-indicator"]')).toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('false')
@@ -308,6 +307,74 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('true')
 
     await act(async () => root.unmount())
+  })
+
+  it('tracks blank Word documents in the background until the final document closes', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-word-lifecycle')
+    const { host, root } = await mountPanel(store)
+    const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-workbench-word-status-indicator"]')
+    const word = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-word"]')!
+    try {
+      expect(indicator()).toBeNull()
+      await act(async () => {
+        expect((await window.__bridgicWord?.dispatch({ type: 'document.create' }))?.ok).toBe(true)
+      })
+      expect(indicator()?.dataset.state).toBe('background-open')
+      expect(indicator()?.dataset.appearance).toBe('icon-tile')
+      expect(word.getAttribute('aria-busy')).toBeNull()
+      expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+
+      const first = await window.__bridgicWord?.dispatch({ type: 'workspace.get' })
+      if (!first?.ok) throw new Error('Word workspace is unavailable')
+      expect(first.state.documents).toHaveLength(1)
+      await act(async () => {
+        await window.__bridgicWord?.dispatch({ type: 'document.create' })
+        await window.__bridgicWord?.dispatch({ type: 'document.close', documentId: first.state.activeDocumentId })
+      })
+      expect(indicator()?.dataset.state).toBe('background-open')
+
+      await act(async () => word.click())
+      expect(indicator()?.dataset.state).toBe('active')
+      await act(async () => word.click())
+      expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+      expect(indicator()?.dataset.state).toBe('background-open')
+
+      const remaining = await window.__bridgicWord?.dispatch({ type: 'workspace.get' })
+      if (!remaining?.ok) throw new Error('Word workspace is unavailable')
+      await act(async () => {
+        await window.__bridgicWord?.dispatch({ type: 'document.close', documentId: remaining.state.activeDocumentId })
+      })
+      expect(indicator()).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('restores the Word background marker for the viewed Session without leaking it across Sessions', async () => {
+    const sessionId = 'session-word-restored'
+    const storageKey = `bridgic.word.workspace.${sessionId}`
+    window.localStorage.setItem(storageKey, JSON.stringify(createWordWorkspace(sessionId, 'Blank document')))
+    const store = createStore()
+    store.set(activeSessionIdAtom, sessionId)
+    const { host, root } = await mountPanel(store)
+    const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-workbench-word-status-indicator"]')
+    try {
+      expect(indicator()?.dataset.state).toBe('background-open')
+      await act(async () => {
+        store.set(activeSessionIdAtom, 'session-word-empty')
+        await Promise.resolve()
+      })
+      expect(indicator()).toBeNull()
+      await act(async () => {
+        store.set(activeSessionIdAtom, sessionId)
+        await Promise.resolve()
+      })
+      expect(indicator()?.dataset.state).toBe('background-open')
+    } finally {
+      await act(async () => root.unmount())
+      window.localStorage.removeItem(storageKey)
+    }
   })
 
   it('shows PPT as active without a background marker until a presentation is created', async () => {
@@ -885,6 +952,40 @@ describe('SessionResourcePanel', () => {
     await act(async () => root.unmount())
   })
 
+  it('shows live Agent work without a mode panel and isolates it to the viewed Session', async () => {
+    const store = createStore()
+    const sessionId = 'session-agent-live'
+    store.set(activeSessionIdAtom, sessionId)
+    const { host, root } = await mountPanel(store)
+    const launcher = () => host.querySelector<HTMLButtonElement>('[data-testid="session-agent-launcher"]')!
+    const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-agent-status-indicator"]')
+    try {
+      expect(indicator()).toBeNull()
+      await act(async () => {
+        store.set(streamingFamily(sessionId), {
+          messageId: 'agent-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
+        })
+      })
+      expect(launcher().getAttribute('aria-busy')).toBe('true')
+      expect(launcher().getAttribute('aria-label')).toBe('Bridgic 正在执行任务')
+      expect(indicator()?.dataset.state).toBe('running')
+      expect(launcher().disabled).toBe(true)
+      expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
+
+      await act(async () => store.set(activeSessionIdAtom, 'session-agent-idle'))
+      expect(launcher().getAttribute('aria-busy')).toBeNull()
+      expect(indicator()).toBeNull()
+
+      await act(async () => store.set(activeSessionIdAtom, sessionId))
+      expect(indicator()?.dataset.state).toBe('running')
+      await act(async () => store.set(streamingFamily(sessionId), undefined))
+      expect(launcher().getAttribute('aria-busy')).toBeNull()
+      expect(indicator()).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
   it('uses the same static Bridgic launcher to open and collapse an available Build task', async () => {
     const store = createStore()
     const sessionId = 'session-build-task'
@@ -897,15 +998,24 @@ describe('SessionResourcePanel', () => {
     expect(launcher.textContent).toContain('Bridgic')
     expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('background-open')
-    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.className).toContain('bg-text-secondary/65')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('icon-tile')
+
+    await act(async () => store.set(streamingFamily(sessionId), {
+      messageId: 'build-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
+    }))
+    expect(launcher.getAttribute('aria-busy')).toBe('true')
+    expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
+    await act(async () => store.set(streamingFamily(sessionId), undefined))
+    expect(launcher.getAttribute('aria-busy')).toBeNull()
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('background-open')
 
     await act(async () => launcher.click())
     expect(host.querySelector('[data-testid="session-mode-surface"]')).not.toBeNull()
     expect(host.textContent).toContain('保留静态 Bridgic 标识')
     expect(launcher.textContent).toContain('Bridgic')
-    expect(launcher.className).toContain('bg-bg-selected')
+    expect(launcher.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('active')
-    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.className).toContain('bg-text-secondary/65')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('selection-capsule')
     expect(launcher.querySelector('.left-0')).toBeNull()
 
     await act(async () => launcher.click())
@@ -1146,7 +1256,7 @@ describe('SessionResourcePanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('uses one right-edge rail for background-open and focused tool states', async () => {
+  it('styles the icon for background-open and focused tool states', async () => {
     const store = createStore()
     const sessionId = 'session-browser-open-page'
     store.set(activeSessionIdAtom, sessionId)
@@ -1161,10 +1271,7 @@ describe('SessionResourcePanel', () => {
     expect(browserButton?.getAttribute('aria-busy')).toBeNull()
     expect(host.querySelector('[data-testid="browser-attention-status"]')?.textContent).toBe('')
     expect(backgroundIndicator?.dataset.state).toBe('background-open')
-    expect(backgroundIndicator?.className).toContain('-right-[3px]')
-    expect(backgroundIndicator?.className).toContain('h-5')
-    expect(backgroundIndicator?.className).toContain('w-0.5')
-    expect(backgroundIndicator?.className).toContain('bg-text-secondary/65')
+    expect(backgroundIndicator?.dataset.appearance).toBe('icon-tile')
     expect(browserButton?.querySelector('svg rect')).toBeNull()
 
     await act(async () => {
@@ -1172,14 +1279,13 @@ describe('SessionResourcePanel', () => {
       await Promise.resolve()
     })
     expect(browserButton?.getAttribute('aria-selected')).toBe('true')
-    expect(browserButton?.className).toContain('bg-bg-selected')
+    expect(browserButton?.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(browserButton?.querySelector('.left-0')).toBeNull()
     const activeIndicator = browserButton?.querySelector<HTMLElement>(
       '[data-testid="session-workbench-browser-status-indicator"]',
     )
     expect(activeIndicator?.dataset.state).toBe('active')
-    expect(activeIndicator?.className).toContain('-right-[3px]')
-    expect(activeIndicator?.className).toContain('bg-text-secondary/65')
+    expect(activeIndicator?.dataset.appearance).toBe('selection-capsule')
     await act(async () => {
       browserButton?.click()
       await Promise.resolve()
@@ -1209,6 +1315,7 @@ describe('SessionResourcePanel', () => {
     expect(browserButton.getAttribute('aria-busy')).toBe('true')
     expect(browserButton.getAttribute('data-attention')).toBeNull()
     expect(browserButton.className).toContain('bg-accent-blue-subtle')
+    expect(browserButton.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(browserButton.className).not.toContain('animate-surface-attention')
     expect(browserButton.querySelector('.animate-pulse')).not.toBeNull()
 
@@ -1539,7 +1646,7 @@ describe('SessionResourcePanel', () => {
         await Promise.resolve()
       })
       expect(browserButton.getAttribute('data-attention')).toBeNull()
-      expect(browserButton.className).toContain('bg-bg-selected')
+      expect(browserButton.querySelector('[data-selected="true"]')).not.toBeNull()
     } finally {
       await act(async () => root.unmount())
       jest.useRealTimers()

@@ -384,6 +384,7 @@
     "workflowRunExportFailed": "Failed to export run result: {{msg}}"
   },
   "excel": {
+    "closePanel": "Close Excel panel",
     "defaultFileName": "Workbook.xlsx",
     "defaultWorkbookName": "Workbook",
     "dismissError": "Dismiss error",
@@ -2044,6 +2045,9 @@
     },
     "resourcePanel": {
       "agent": "Bridgic",
+      "agentBackground": "Bridgic has a background task",
+      "agentRunning": "Bridgic is working",
+      "agentViewing": "Viewing the Bridgic task",
       "browser": "Browser",
       "browserActiveShort": "In use",
       "browserAgentActive": "Bridgic is operating the browser",
@@ -2667,6 +2671,7 @@
     "citationPrompt": "Citation (for example, Author, 2026)",
     "clearFormatting": "Clear formatting",
     "closeDocument": "Close {{title}}",
+    "closePanel": "Close Word panel",
     "collapseRibbon": "Collapse ribbon",
     "contentsEmpty": "Apply a heading style to create table-of-contents entries.",
     "copy": "Copy",
@@ -2764,6 +2769,7 @@
     "save": "Save",
     "search": "Find",
     "searchPrompt": "Find in document",
+    "sessionTargetReady": "Session target ready · {{target}}",
     "sessionWorkspace": "Session document workspace",
     "showFormatting": "Show formatting marks",
     "shrinkFont": "Decrease font size",

@@ -2,8 +2,10 @@ import { useCallback } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
+import { setRightPanelCollapsedAtom } from '@/atoms/layout'
 import {
   completeWordFileOpenAtom,
+  setWordDocumentCountAtom,
   wordExpandedAtom,
   wordFileOpenRequestAtom,
 } from '@/atoms/word'
@@ -18,8 +20,13 @@ export function WordWorkbenchPanel() {
   const expanded = useAtomValue(wordExpandedAtom)
   const openFileRequest = useAtomValue(wordFileOpenRequestAtom)
   const setExpanded = useSetAtom(wordExpandedAtom)
+  const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
   const completeFileOpen = useSetAtom(completeWordFileOpenAtom)
+  const setDocumentCount = useSetAtom(setWordDocumentCountAtom)
   const showToast = useSetAtom(showToastAtom)
+  const handleDocumentCountChange = useCallback((id: string, count: number) => {
+    setDocumentCount({ sessionId: id, count })
+  }, [setDocumentCount])
   const handleFileOpenComplete = useCallback((requestId: string) => {
     completeFileOpen(requestId)
   }, [completeFileOpen])
@@ -32,7 +39,12 @@ export function WordWorkbenchPanel() {
     <SessionWordEditor
       defaultTitle={t('word.untitled')}
       expanded={expanded}
+      onClose={() => {
+        setExpanded(false)
+        setRightCollapsed(true)
+      }}
       onOpenFileError={handleFileOpenError}
+      onDocumentCountChange={handleDocumentCountChange}
       onOpenFileRequestHandled={handleFileOpenComplete}
       onToggleExpanded={() => setExpanded((value) => !value)}
       openFileRequest={openFileRequest}
