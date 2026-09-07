@@ -95,9 +95,9 @@ export interface SurfaceRailButtonProps {
   label: string
   onClick: () => void
   isOpenInBackground?: boolean
+  showActiveIndicator?: boolean
   isBusy?: boolean
   isPulsing?: boolean
-  showActiveIndicator?: boolean
   isSelected: boolean
   needsAttention?: boolean
   testId: string
@@ -112,9 +112,9 @@ export function SurfaceRailButton({
   label,
   onClick,
   isOpenInBackground = false,
+  showActiveIndicator = true,
   isBusy = false,
   isPulsing = false,
-  showActiveIndicator = true,
   isSelected,
   needsAttention = false,
   testId,

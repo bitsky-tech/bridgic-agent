@@ -7,6 +7,7 @@ import type {
   EmbeddedBrowserSnapshot,
   EmbeddedPowerPointSnapshot,
   ElectronAPI,
+  ExcelHostSnapshot,
   FsChangedEvent,
   GuiSettings,
   WindowCloseRequest,
@@ -44,6 +45,11 @@ const api: ElectronAPI = {
   dialog: {
     open: (options) => ipcRenderer.invoke(IPC.dialog.open, options),
     save: (options) => ipcRenderer.invoke(IPC.dialog.save, options),
+  },
+  excel: {
+    open: () => ipcRenderer.invoke(IPC.excel.open),
+    save: (request) => ipcRenderer.invoke(IPC.excel.save, request),
+    saveAs: (request) => ipcRenderer.invoke(IPC.excel.saveAs, request),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settings.get),
@@ -111,6 +117,18 @@ const api: ElectronAPI = {
   word: {
     readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
   },
+  excelHost: {
+    snapshot: () => ipcRenderer.invoke(IPC.excelHost.snapshot),
+    ensureSession: (sessionId, config) =>
+      ipcRenderer.invoke(IPC.excelHost.ensureSession, sessionId, config),
+    openWorkbook: (sessionId, config, request) =>
+      ipcRenderer.invoke(IPC.excelHost.openWorkbook, sessionId, config, request),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.excelHost.setBounds, bounds),
+    setVisible: (visible, focusHost) =>
+      ipcRenderer.invoke(IPC.excelHost.setVisible, visible, focusHost),
+  },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
     refresh: (expectedEndpointEpoch) =>
@@ -174,6 +192,8 @@ const api: ElectronAPI = {
       subscribe<string>(IPC.events.powerPointCloseRequested, callback),
     onPowerPointExpandedChanged: (callback) =>
       subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
+    onExcelHostChanged: (callback) =>
+      subscribe<ExcelHostSnapshot>(IPC.events.excelHostChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },
 }

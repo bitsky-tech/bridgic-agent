@@ -9,6 +9,21 @@ export interface WorkbenchToolSurfaceProps {
   testId?: string
 }
 
+export function WorkbenchExpandIcon({ expanded, size = 15 }: {
+  expanded: boolean
+  size?: number
+}) {
+  return expanded ? (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M6.5 2.5v4h-4M9.5 13.5v-4h4M6.5 6.5L2.5 2.5M9.5 9.5l4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.5 6.5v-4h4M13.5 9.5v4h-4M6.5 2.5l-4 4M9.5 13.5l4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 /** Common viewport shell only. Each workbench tool still owns its data and interaction state. */
 export function WorkbenchToolSurface({
   children,

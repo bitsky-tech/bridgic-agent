@@ -4,6 +4,8 @@ import { registerBackendHandlers } from './backend'
 import { registerBrowserHandlers } from './browser'
 import { registerDialogHandlers } from './dialog'
 import { registerDraftsHandlers } from './drafts'
+import { registerExcelHandlers } from './excel'
+import { registerExcelHostHandlers } from './excel-host'
 import { registerFsHandlers } from './fs'
 import { registerFsWatchHandlers } from './fs-watch'
 import { registerIssueReportHandlers } from './issue-report'
@@ -18,10 +20,11 @@ import { registerUpdateHandlers } from './update'
 import { registerWindowHandlers } from './window'
 import { registerWordHandlers } from './word'
 
-export function registerAllHandlers(windowManager: WindowManager): void {
-  registerAppHandlers()
+export function registerAllHandlers(windowManager: WindowManager, quitApp: () => Promise<void>): void {
+  registerAppHandlers(quitApp)
   registerShellHandlers()
   registerDialogHandlers()
+  registerExcelHandlers(windowManager.getExcelHost())
   // Local-fs reads for the session-file tree / @ popover (display only).
   registerFsHandlers()
   // Live watchers that keep the expanded session-file tree in sync with disk.
@@ -36,17 +39,18 @@ export function registerAllHandlers(windowManager: WindowManager): void {
   // Theme is part of GuiSettings (settings.theme) — no separate IPC namespace.
   // OS-level dark-mode probing remains under `registerSystemHandlers`.
   registerWindowHandlers(windowManager)
-  registerBrowserHandlers(windowManager.getEmbeddedBrowser())
+  registerBrowserHandlers(windowManager.getEmbeddedBrowser(), windowManager.getExcelHost())
   registerPowerPointHandlers(windowManager.getEmbeddedPowerPoint(), (channel, value) => {
     const window = windowManager.getMainWindow()
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   })
   registerWordHandlers()
+  registerExcelHostHandlers(windowManager.getExcelHost(), windowManager.getEmbeddedBrowser())
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after
   // the backend handlers because it drives pythonClient during the handover.
-  registerUpdateHandlers()
+  registerUpdateHandlers(windowManager.getExcelHost())
   registerSystemHandlers()
   registerIssueReportHandlers()
   // Native toasts for daemon `schedule.notify` frames (relayed by the renderer).

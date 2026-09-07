@@ -31,6 +31,7 @@ export default defineConfig({
         main: resolve(configDir, 'src/renderer/index.html'),
         powerpoint: resolve(configDir, 'src/renderer/powerpoint.html'),
         word: resolve(configDir, 'src/renderer/word.html'),
+        excel: resolve(configDir, 'src/renderer/excel.html'),
       },
     },
   },

@@ -28,6 +28,25 @@ export const IPC = {
     open: 'dialog:open',
     save: 'dialog:save',
   },
+  excel: {
+    open: 'excel:open',
+    openRequestedWorkbook: 'excel:openRequestedWorkbook',
+    save: 'excel:save',
+    saveAs: 'excel:saveAs',
+  },
+  excelHost: {
+    snapshot: 'excel-host:snapshot',
+    ensureSession: 'excel-host:ensureSession',
+    openWorkbook: 'excel-host:openWorkbook',
+    closeSession: 'excel-host:closeSession',
+    closeCurrentSession: 'excel-host:closeCurrentSession',
+    activateSession: 'excel-host:activateSession',
+    setBounds: 'excel-host:setBounds',
+    setVisible: 'excel-host:setVisible',
+    setDirty: 'excel-host:setDirty',
+    getRecoveryState: 'excel-host:getRecoveryState',
+    setRecoveryState: 'excel-host:setRecoveryState',
+  },
   /**
    * GuiSettings (single JSON blob at ~/.bridgic/amphi/gui-settings.json).
    * Whole-blob style — `get()` returns the entire shape, `set(next)`
@@ -208,6 +227,9 @@ export const IPC = {
     embeddedPowerPointChanged: 'embedded-powerpoint-changed',
     powerPointCloseRequested: 'powerpoint-close-requested',
     powerPointExpandedChanged: 'powerpoint-expanded-changed',
+    excelHostChanged: 'excel-host-changed',
+    excelHostConfigChanged: 'excel-host-config-changed',
+    excelWorkbookOpenRequested: 'excel-workbook-open-requested',
     // A watched session-file directory changed on disk → renderer re-reads it.
     fsChanged: 'fs-changed',
   },

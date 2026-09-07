@@ -1,10 +1,9 @@
 import { app, shell } from 'electron'
-import { quitWithDaemon } from '../quit-with-daemon'
 import { IPC, type AppPathName } from '../../shared/ipc-channels'
 import { getLogFilePath } from '../logger'
 import { loggedHandle } from './logged-handle'
 
-export function registerAppHandlers(): void {
+export function registerAppHandlers(quitApp: () => Promise<void>): void {
   loggedHandle(IPC.app.getVersion, () => app.getVersion())
 
   loggedHandle(IPC.app.getPath, (_event, name: AppPathName) => {
@@ -20,7 +19,7 @@ export function registerAppHandlers(): void {
   // gets the same "other clients are connected" confirmation instead of
   // tripping the before-quit intercept into an unexpected second dialog.
   loggedHandle(IPC.app.quit, async () => {
-    await quitWithDaemon()
+    await quitApp()
   })
 
   loggedHandle(IPC.app.openLogFile, async () => {

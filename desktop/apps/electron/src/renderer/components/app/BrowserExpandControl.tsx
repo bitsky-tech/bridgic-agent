@@ -5,6 +5,7 @@ import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
+import { WorkbenchExpandIcon } from './WorkbenchToolPrimitives'
 
 /** Inputs for the Browser expansion action and its optional coachmark. */
 export interface BrowserExpandControlProps {
@@ -99,7 +100,7 @@ export function BrowserExpandControl({
             reminderId && 'bg-accent-blue-subtle text-text-accent ring-1 ring-inset ring-brand-blue/20',
           )}
         >
-          <ExpandIcon expanded={expanded} size={15} />
+          <WorkbenchExpandIcon expanded={expanded} />
           {reminderId && !coachmarkVisible ? (
             <span
               aria-hidden="true"
@@ -117,18 +118,6 @@ function CloseIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
       <path d="m3.25 3.25 5.5 5.5m0-5.5-5.5 5.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function ExpandIcon({ expanded, size }: { expanded: boolean; size: number }) {
-  return expanded ? (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M6.5 2.5v4h-4M9.5 13.5v-4h4M6.5 6.5L2.5 2.5M9.5 9.5l4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ) : (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M2.5 6.5v-4h4M13.5 9.5v4h-4M6.5 2.5l-4 4M9.5 13.5l4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

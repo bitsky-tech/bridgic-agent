@@ -10,6 +10,8 @@ mock.module('@/assets/logo.svg', () => ({ default: 'logo.svg' }))
 mock.module('@/assets/logo-dark.svg', () => ({ default: 'logo-dark.svg' }))
 
 const browserCalls: string[] = []
+const excelEnsureCalls: string[] = []
+const excelOpenCalls: Array<{ sessionId: string; path: string; replaceInitialBlank: boolean }> = []
 let nativeWindowForeground = true
 let onWindowForegroundChanged: ((foreground: boolean) => void) | null = null
 const emptyTab: EmbeddedBrowserTabInfo = {
@@ -25,6 +27,7 @@ const emptyTab: EmbeddedBrowserTabInfo = {
   crashed: false,
 }
 const defaultSetVisible: ElectronAPI['browser']['setVisible'] = async () => undefined
+const defaultExcelSetVisible: ElectronAPI['excelHost']['setVisible'] = async () => undefined
 const browserApi: ElectronAPI['browser'] = {
   snapshot: async () => ({ sessions: [] }),
   closeSession: async () => undefined,
@@ -43,8 +46,30 @@ const browserApi: ElectronAPI['browser'] = {
   setBounds: async () => undefined,
   setVisible: defaultSetVisible,
 }
+const excelHostApi: ElectronAPI['excelHost'] = {
+  snapshot: async () => ({ sessions: [] }),
+  ensureSession: async (sessionId) => {
+    excelEnsureCalls.push(sessionId)
+    return {
+      sessionId,
+      targetId: `excel-target-${sessionId}`,
+      webContentsId: 50,
+      ready: true,
+      crashed: false,
+      dirty: false,
+    }
+  },
+  openWorkbook: async (sessionId, _config, request) => {
+    excelOpenCalls.push({ sessionId, ...request })
+  },
+  closeSession: async () => undefined,
+  activateSession: async () => undefined,
+  setBounds: async () => undefined,
+  setVisible: defaultExcelSetVisible,
+}
 ;(window as typeof window & { api: ElectronAPI }).api = {
   browser: browserApi,
+  excelHost: excelHostApi,
   events: {
     onWindowForegroundChanged: (callback: (foreground: boolean) => void) => {
       onWindowForegroundChanged = callback
@@ -88,6 +113,12 @@ const {
 const { browserNeedsAttentionFamily } = await import('@/atoms/browser-attention')
 const { powerPointNeedsAttentionFamily } = await import('@/atoms/powerpoint-attention')
 const {
+  queueExcelWorkbookOpenAtom,
+  excelExpandedAtom,
+  excelHostSnapshotAtom,
+  setExcelHostSnapshotAtom,
+} = await import('@/atoms/excel')
+const {
   requestRightPanelCollapseAtom,
   rightPanelCollapseRequestAtom,
   rightPanelCollapsedAtom,
@@ -109,7 +140,10 @@ beforeEach(async () => {
 
 afterEach(() => {
   browserCalls.length = 0
+  excelEnsureCalls.length = 0
+  excelOpenCalls.length = 0
   browserApi.setVisible = defaultSetVisible
+  excelHostApi.setVisible = defaultExcelSetVisible
   onWindowForegroundChanged = null
   document.body.replaceChildren()
 })
@@ -225,11 +259,12 @@ describe('SessionResourcePanel', () => {
       'session-workbench-results',
       'session-workbench-presentation',
       'session-workbench-word',
+      'session-workbench-excel',
       'session-workbench-browser',
     ])
     const toolList = host.querySelector('[data-testid="session-workbench-files"]')?.parentElement
-    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(6)
-    expect(toolList?.children).toHaveLength(6)
+    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(7)
+    expect(toolList?.children).toHaveLength(7)
 
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     const files = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
@@ -376,6 +411,115 @@ describe('SessionResourcePanel', () => {
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Results)
     expect(host.querySelector('[data-testid="session-workbench-results-content"]')?.getAttribute('aria-hidden'))
       .toBe('false')
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows an Excel launch surface without creating a target until New Excel is clicked', async () => {
+    const store = createStore()
+    const sessionId = 'session-excel-launch'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    const { host, root } = await mountPanel(store)
+
+    const excelButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-excel"]',
+    )!
+    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
+    expect(excelEnsureCalls).toEqual([])
+    expect(excelButton.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
+      .toBeNull()
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="excel-create-workbook"]')?.click()
+      await Promise.resolve()
+    })
+    expect(excelEnsureCalls).toEqual([sessionId])
+
+    await act(async () => {
+      store.set(excelHostSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'excel-target-launch',
+          webContentsId: 50,
+          ready: true,
+          crashed: false,
+          dirty: false,
+        }],
+      })
+      await Promise.resolve()
+    })
+    expect(excelButton.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
+      .not.toBeNull()
+
+    const expandButton = host.querySelector<HTMLButtonElement>('[data-testid="excel-toggle-expanded"]')!
+    expect(expandButton.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => expandButton.click())
+    expect(store.get(excelExpandedAtom)).toBe(true)
+    expect(expandButton.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens a routed workbook in Excel and replaces only the target startup workbook', async () => {
+    const store = createStore()
+    const sessionId = 'session-routed-workbook'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Files)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { root } = await mountPanel(store)
+
+    await act(async () => {
+      store.set(queueExcelWorkbookOpenAtom, {
+        sessionId,
+        path: '/Users/me/session/analysis.xlsx',
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(excelOpenCalls).toEqual([{
+      sessionId,
+      path: '/Users/me/session/analysis.xlsx',
+      replaceInitialBlank: true,
+    }])
+
+    await act(async () => root.unmount())
+  })
+
+  it('collapses Excel when its final workbook tab closes and reopens the launch surface', async () => {
+    const store = createStore()
+    const sessionId = 'session-excel-final-tab-close'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(setExcelHostSnapshotAtom, {
+      sessions: [{
+        sessionId,
+        targetId: 'excel-target-final-tab',
+        webContentsId: 50,
+        ready: true,
+        crashed: false,
+        dirty: false,
+      }],
+    })
+    const { host, root } = await mountPanel(store)
+
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    await act(async () => store.set(setExcelHostSnapshotAtom, { sessions: [] }))
+
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-excel"]')?.click()
+    })
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
+      .toBeNull()
 
     await act(async () => root.unmount())
   })
@@ -803,6 +947,7 @@ describe('SessionResourcePanel', () => {
         'session-workbench-results',
         'session-workbench-presentation',
         'session-workbench-word',
+        'session-workbench-excel',
         'session-workbench-browser',
       ])
 
@@ -1560,6 +1705,46 @@ describe('SessionResourcePanel', () => {
     })
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     expect(store.get(filesNeedsAttentionFamily(sessionId))).toBe(false)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
+
+    await act(async () => root.unmount())
+  })
+
+  it('keeps Excel selected until its Session target is hidden before showing a renderer tool', async () => {
+    const hidden = deferred()
+    excelHostApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'session-excel-to-files'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(excelHostSnapshotAtom, {
+      sessions: [{
+        sessionId,
+        targetId: 'excel-target-a',
+        webContentsId: 50,
+        ready: true,
+        crashed: false,
+        dirty: false,
+      }],
+    })
+    const { host, root } = await mountPanel(store)
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')?.click()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('true')
+
+    await act(async () => {
+      hidden.release()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
 
     await act(async () => root.unmount())

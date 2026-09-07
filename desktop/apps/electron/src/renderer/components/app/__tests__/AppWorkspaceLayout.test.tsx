@@ -24,6 +24,7 @@ const {
   setSessionWorkbenchSurfaceAtom,
 } = await import('@/atoms/browser')
 const { settingsAtom } = await import('@/atoms/settings')
+const { excelExpandedAtom } = await import('@/atoms/excel')
 const { materializeSessionAtom, newSessionAtom } = await import('@/atoms/sessions')
 const { wordExpandedAtom } = await import('@/atoms/word')
 const { AppWorkspaceLayout } = await import('../AppWorkspaceLayout')
@@ -67,6 +68,13 @@ describe('AppWorkspaceLayout Session dock composition', () => {
       .toContain('hidden')
     expect(host.querySelector('[data-testid="session-right-dock"]')?.className)
       .toContain('flex-1')
+
+    await act(async () => {
+      store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+      store.set(excelExpandedAtom, true)
+    })
+    expect(host.querySelector('[data-testid="workspace-center"]')?.parentElement?.className).toContain('hidden')
+    expect(host.querySelector('[data-testid="session-right-dock"]')?.className).toContain('flex-1')
 
     await act(async () => root.unmount())
     host.remove()

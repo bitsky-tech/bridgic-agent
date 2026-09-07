@@ -42,6 +42,11 @@ export function installApiStub(): void {
       open: async () => ({ canceled: true, filePaths: [] }),
       save: async () => ({ canceled: true, filePath: '' }),
     },
+    excel: {
+      open: async () => ({ canceled: true as const }),
+      save: async () => ({ ok: false as const, reason: 'canceled' as const }),
+      saveAs: async () => ({ ok: false as const, reason: 'canceled' as const }),
+    },
     settings: {
       get: async () => memorySettings,
       set: async (next) => {
@@ -131,6 +136,22 @@ export function installApiStub(): void {
         throw new Error('Word document reads require Electron')
       },
     },
+    excelHost: {
+      snapshot: async () => ({ sessions: [] }),
+      ensureSession: async (sessionId) => ({
+        sessionId,
+        targetId: null,
+        webContentsId: 0,
+        ready: false,
+        crashed: false,
+        dirty: false,
+      }),
+      openWorkbook: async () => {},
+      closeSession: async () => {},
+      activateSession: async () => {},
+      setBounds: async () => {},
+      setVisible: async () => {},
+    },
     backend: {
       snapshot: async () => ({
         state: BackendState.Idle,
@@ -209,6 +230,7 @@ export function installApiStub(): void {
       onEmbeddedPowerPointChanged: noopUnsub,
       onPowerPointCloseRequested: noopUnsub,
       onPowerPointExpandedChanged: noopUnsub,
+      onExcelHostChanged: noopUnsub,
       onFsChanged: noopUnsub,
     },
   }

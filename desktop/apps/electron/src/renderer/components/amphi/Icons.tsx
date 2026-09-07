@@ -84,6 +84,18 @@ export const Icons = {
       <path d="M9 1.5V5h3.5M5 7l1.15 4L8 8.5l1.85 2.5L11 7" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  spreadsheet: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <rect x="2" y="1.5" width="12" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M2 5.5h12M6 5.5v9M10 5.5v9M2 9.5h12" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  ),
+  save: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <path d="M2 2h9l3 3v9H2V2z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M5 2v4h6V2M5 14v-5h6v5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  ),
   expand: (s = 16) => (
     <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
       <path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />

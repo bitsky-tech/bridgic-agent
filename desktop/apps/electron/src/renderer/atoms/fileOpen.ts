@@ -1,7 +1,6 @@
 /**
- * File-open routing atoms. DOCX files open inside the Session Word surface;
- * every other file opens with the OS default program after the existing
- * rememberable confirmation gate.
+ * File-open routing for Session-owned Office editors and the remembered
+ * confirmation flow for files opened with the OS default program.
  *
  * Key model: a file WITH an extension is remembered by its lowercased
  * extension (".TXT" === "txt" → one decision covers every .txt); a file
@@ -26,6 +25,7 @@ import { setRightPanelCollapsedAtom } from './layout'
 import { viewedSessionIdAtom } from './navigation'
 import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workbench'
 import { requestWordFileOpenAtom } from './word'
+import { queueExcelWorkbookOpenAtom } from './excel'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -52,6 +52,11 @@ export function deriveFileOpenKey(name: string): { kind: FileOpenKeyKind; key: s
     : { kind: 'name', key: name }
 }
 
+/** Only OOXML workbooks are supported by the embedded importer today. */
+export function isEmbeddedExcelWorkbook(name: string): boolean {
+  return /\.xlsx$/i.test(name.trim())
+}
+
 /** True when the file's key is already approved for confirm-free opening. */
 function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string): boolean {
   const { autoOpenExtensions, autoOpenFilenames } = settings.fileOpen
@@ -64,6 +69,11 @@ function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string)
 export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) => {
   if (isDocxFileName(file.name)) {
     set(requestWordFileOpenAtom, file)
+    return
+  }
+  const sessionId = get(viewedSessionIdAtom)
+  if (sessionId && isEmbeddedExcelWorkbook(file.name)) {
+    set(queueExcelWorkbookOpenAtom, { sessionId, path: file.path })
     return
   }
   const { kind, key } = deriveFileOpenKey(file.name)

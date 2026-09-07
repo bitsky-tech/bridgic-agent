@@ -14,7 +14,13 @@ const desktopChannel = applyDesktopChannel()
 import { app, nativeTheme, powerMonitor, protocol, screen, session } from 'electron'
 import { join } from 'node:path'
 import log, { mainLog, isDebugMode, telemetryLog } from './logger'
-import { WindowManager, buildPreloadPath, buildRendererIndexHtml } from './window-manager'
+import {
+  WindowManager,
+  buildExcelPreloadPath,
+  buildExcelRendererIndexHtml,
+  buildPreloadPath,
+  buildRendererIndexHtml,
+} from './window-manager'
 import { setupDeepLink } from './deep-link'
 import { onQuitForUpdate, setAutoUpdateSink, startUpdateChecks } from './auto-update'
 import { initNotificationService } from './notifications'
@@ -104,7 +110,9 @@ mainLog.info(
 // In Electron, the renderer Vite dev server URL is injected by scripts/electron-dev.ts.
 const devServerUrl = process.env.VITE_DEV_SERVER_URL
 const preloadPath = buildPreloadPath()
+const excelPreloadPath = buildExcelPreloadPath()
 const rendererIndexHtml = buildRendererIndexHtml()
+const excelRendererHtml = buildExcelRendererIndexHtml()
 
 /**
  * Load GuiSettings synchronously BEFORE constructing BrowserWindow.
@@ -173,8 +181,10 @@ onTelemetryConsentChanged((consented) => {
 
 const windowManager = new WindowManager({
   preloadPath,
+  excelPreloadPath,
   devServerUrl,
   rendererIndexHtml,
+  excelRendererHtml,
   additionalArguments: [initialSettingsArg, localResourceTokenArg],
   backgroundColorOverride,
   onMainWindowCreated: (window) => usageTelemetry.attachMainWindow(window),
@@ -190,6 +200,7 @@ const shutdownEmbeddedBrowser = async () => {
   } finally {
     await windowManager.getEmbeddedBrowser().shutdown()
     windowManager.getEmbeddedPowerPoint().closeAll()
+    windowManager.getExcelHost().shutdown()
   }
 }
 let telemetryShutdownComplete = false
@@ -202,8 +213,10 @@ const shutdownUsageTelemetry = (): Promise<void> => {
   return telemetryShutdownPromise
 }
 const shutdownBeforeQuit = async () => {
+  if (!await windowManager.getExcelHost().confirmClose()) return false
   await shutdownUsageTelemetry()
   await shutdownEmbeddedBrowser()
+  return true
 }
 const quitApp = () => quitWithDaemon(shutdownBeforeQuit)
 
@@ -317,7 +330,7 @@ function bootstrapPrimaryInstance(): void {
     return url ? new URL(url).origin : undefined
   })
 
-  registerAllHandlers(windowManager)
+  registerAllHandlers(windowManager, quitApp)
 
   // Dev-only: project icon.png is NOT bundled into the prod app (only
   // dist/** ships per electron-builder.yml), but in dev the source

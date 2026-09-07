@@ -43,7 +43,7 @@ import type {
  */
 export type UpdateInstallResult =
   | { ok: true }
-  | { ok: false; reason: 'no-update-staged' | 'daemon-busy' | 'update-disabled'; detail?: string }
+  | { ok: false; reason: 'no-update-staged' | 'daemon-busy' | 'update-disabled' | 'unsaved-workbooks'; detail?: string }
 
 /**
  * Why a manual check did or did not start.
@@ -98,6 +98,82 @@ export interface IssueReportExportRequest {
 export type IssueReportExportResult =
   | { ok: true; path: string }
   | { ok: false; reason: 'cancelled' }
+
+/** A workbook selected through the native Excel file picker. The opaque id is
+ * the renderer's only authority to overwrite the selected path later. */
+export interface ExcelDocumentHandle {
+  documentId: string
+  fileName: string
+  bytes: Uint8Array
+  mtimeMs: number
+}
+
+export type ExcelOpenResult = { canceled: true } | { canceled: false; document: ExcelDocumentHandle }
+
+/** A workbook path routed from the trusted app renderer toward a Session-owned
+ * Excel target. The child receives only a one-shot ticket so the resulting read
+ * and write capability remains bound to that target. */
+export interface ExcelWorkbookOpenRequest {
+  path: string
+  replaceInitialBlank: boolean
+}
+
+/** One-shot ticket delivered only to the Session-owned Excel renderer. */
+export interface ExcelWorkbookOpenTicket {
+  requestId: string
+  replaceInitialBlank: boolean
+}
+
+export interface ExcelSaveRequest {
+  documentId: string
+  bytes: Uint8Array
+  expectedMtimeMs: number
+}
+
+export type ExcelSaveResult =
+  | { ok: true; documentId: string; fileName: string; mtimeMs: number }
+  | { ok: false; reason: 'canceled' | 'conflict' }
+
+export interface ExcelSaveAsRequest {
+  bytes: Uint8Array
+  suggestedName: string
+}
+
+export interface ExcelHostConfig {
+  sessionId: string
+  locale: 'en-US' | 'zh-CN'
+  theme: 'light' | 'dark'
+}
+
+/** One native Excel surface per Agent Session. Workbook tabs live inside this
+ * target and therefore do not create additional WebContents/CDP targets. */
+export interface ExcelHostSessionInfo {
+  sessionId: string
+  targetId: string | null
+  webContentsId: number
+  ready: boolean
+  crashed: boolean
+  dirty: boolean
+}
+
+export interface ExcelHostSnapshot {
+  sessions: ExcelHostSessionInfo[]
+}
+
+/** Narrow preload contract exposed only inside the trusted Excel host page. */
+export interface ExcelHostPreloadAPI {
+  open(): Promise<ExcelOpenResult>
+  openRequestedWorkbook(requestId: string): Promise<ExcelOpenResult>
+  save(request: ExcelSaveRequest): Promise<ExcelSaveResult>
+  saveAs(request: ExcelSaveAsRequest): Promise<ExcelSaveResult>
+  /** Close the Session target that owns this preload after its final workbook tab closes. */
+  closeSession(): Promise<void>
+  setDirty(dirty: boolean): Promise<void>
+  getRecoveryState(): Promise<unknown | null>
+  setRecoveryState(state: unknown): Promise<void>
+  onConfigChanged(callback: (config: ExcelHostConfig) => void): () => void
+  onWorkbookOpenRequested(callback: (ticket: ExcelWorkbookOpenTicket) => void): () => void
+}
 
 export type {
   AutostartResult,
@@ -327,6 +403,14 @@ export interface ElectronAPI {
     open(options: OpenDialogOptions): Promise<OpenDialogReturnValue>
     save(options: SaveDialogOptions): Promise<SaveDialogReturnValue>
   }
+  excel: {
+    /** Pick and read one local .xlsx workbook. */
+    open(): Promise<ExcelOpenResult>
+    /** Overwrite only a path previously authorized by open/saveAs. */
+    save(request: ExcelSaveRequest): Promise<ExcelSaveResult>
+    /** Pick a destination and write a new .xlsx workbook. */
+    saveAs(request: ExcelSaveAsRequest): Promise<ExcelSaveResult>
+  }
   /**
    * GuiSettings IPC — single whole-blob shape. Theme is part of
    * `settings.theme`; no separate `window.api.theme` anymore.
@@ -414,6 +498,15 @@ export interface ElectronAPI {
   word: {
     /** Read one explicitly opened .docx file for renderer-side conversion. */
     readDocument(path: string): Promise<WordDocumentReadResult>
+  }
+  excelHost: {
+    snapshot(): Promise<ExcelHostSnapshot>
+    ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo>
+    openWorkbook(sessionId: string, config: ExcelHostConfig, request: ExcelWorkbookOpenRequest): Promise<void>
+    closeSession(sessionId: string): Promise<void>
+    activateSession(sessionId: string | null): Promise<void>
+    setBounds(bounds: EmbeddedBrowserBounds): Promise<void>
+    setVisible(visible: boolean, focusHost?: boolean): Promise<void>
   }
   backend: {
     snapshot(): Promise<BackendSnapshot>
@@ -506,6 +599,7 @@ export interface ElectronAPI {
     onEmbeddedPowerPointChanged(callback: (snapshot: EmbeddedPowerPointSnapshot) => void): () => void
     onPowerPointCloseRequested(callback: (sessionId: string) => void): () => void
     onPowerPointExpandedChanged(callback: (expanded: boolean) => void): () => void
+    onExcelHostChanged(callback: (snapshot: ExcelHostSnapshot) => void): () => void
     /** A watched session-file directory changed on disk — re-read that level. */
     onFsChanged(callback: (event: FsChangedEvent) => void): () => void
   }
@@ -514,6 +608,8 @@ export interface ElectronAPI {
 declare global {
   interface Window {
     api: ElectronAPI
+    /** Available only to the dedicated Excel WebContentsView renderer. */
+    excelHostApi?: ExcelHostPreloadAPI
     /** Startup-only capability exposed by preload to the trusted top-level
      * renderer. It is absent in plain-browser previews and child frames. */
     __localResourceToken__?: string

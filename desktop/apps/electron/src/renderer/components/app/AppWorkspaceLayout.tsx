@@ -10,6 +10,7 @@ import {
 import { sessionFocusPaneOpenAtom } from '@/atoms/session-focus-pane-view'
 import { presentationExpandedAtom } from '@/atoms/presentation'
 import { wordExpandedAtom } from '@/atoms/word'
+import { excelExpandedAtom } from '@/atoms/excel'
 import { AppLayout } from '@/components/amphi'
 
 export interface AppWorkspaceLayoutProps {
@@ -27,6 +28,7 @@ export interface AppWorkspaceLayoutProps {
 export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutProps) {
   const showSessionDock = useAtomValue(showRightPanelAtom)
   const browserExpanded = useAtomValue(browserExpandedAtom)
+  const excelExpanded = useAtomValue(excelExpandedAtom)
   const wordExpanded = useAtomValue(wordExpandedAtom)
   const presentationExpanded = useAtomValue(presentationExpandedAtom)
   const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
@@ -34,10 +36,12 @@ export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutPr
   const browserLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Browser
   const presentationLayout = !focusPaneOpen
     && workbenchSurface === SessionWorkbenchSurface.Presentation
-  let rightKind: 'panel' | 'browser' | 'presentation' = 'panel'
+  let rightKind: 'panel' | 'browser' | 'presentation' | 'excel' = 'panel'
   if (browserLayout) rightKind = 'browser'
   else if (presentationLayout) rightKind = 'presentation'
   const wordLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Word
+  const excelLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Excel
+  if (excelLayout) rightKind = 'excel'
 
   return (
     <AppLayout
@@ -49,7 +53,8 @@ export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutPr
       rightKind={rightKind}
       rightExpanded={(browserLayout && browserExpanded)
         || (presentationLayout && presentationExpanded)
-        || (wordLayout && wordExpanded)}
+        || (wordLayout && wordExpanded)
+        || (excelLayout && excelExpanded)}
     />
   )
 }

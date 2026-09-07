@@ -72,6 +72,7 @@ import {
   purgePresentationSessionAtom,
   releasePresentationTemplateSelectionState,
 } from './presentation'
+import { purgeExcelStateAtom } from './excel'
 import {
   notifySessionWorkbenchActivityAtom,
   purgeSessionWorkbenchStateAtom,
@@ -609,6 +610,7 @@ export const purgeSessionAtom = atom(null, (get, set, id: string) => {
   set(purgeFilesAttentionAtom, id)
   set(purgePowerPointAttentionAtom, id)
   set(purgePresentationSessionAtom, id)
+  set(purgeExcelStateAtom, id)
   set(purgeSessionWorkbenchStateAtom, id)
   set(purgeWordStateAtom, id)
   // build.ts owns the brief family; dynamic import keeps the dep acyclic.
