@@ -54,7 +54,7 @@ from bridgic.core.model.types import Message, Role
 
 from src.amphi_service.i18n import backend_i18n
 
-from .._prompt import AGENT_NAME
+from ..prompts.shared import AGENT_NAME
 from ..prompts.render import _ui_language
 from ._audit import write_classify_record
 from ._policy import Policy, load_policy, soft_deny_ids, soft_deny_title
@@ -186,7 +186,7 @@ def _build_system_prompt(policy: Policy) -> str:
 
     The locale is named as the fallback for ``reason``'s language. ``reason`` is
     rendered verbatim on the approval card, so it
-    follows the user's own language exactly as the agent's replies do (``_prompt.py``'s
+    follows the user's own language exactly as the agent's replies do (``prompts/main.py``'s
     CRITICAL language rule) — but the requests are not always readable (a scheduled or
     resumed Run carries none, and paths / commands / quoted logs carry no language of
     their own), and with nothing named to fall back to the model used to pick a language

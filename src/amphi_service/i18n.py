@@ -94,7 +94,7 @@ def detect_locale(*texts: str | None) -> Locale | None:
     """Infer the language the user is writing in, newest message first.
 
     This is what the product's display text follows: everything the model writes already
-    matches the user's input language (``_prompt.py``'s CRITICAL language rule), so the
+    matches the user's input language (``prompts/main.py``'s CRITICAL language rule), so the
     backend's own strings — security labels, conflict cards, tool returns — must key off
     the same signal or one approval card ends up mixing both languages.
 

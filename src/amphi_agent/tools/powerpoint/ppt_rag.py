@@ -13,7 +13,7 @@ from bridgic.core.model.types import Message, Role
 from pydantic import Field
 
 from ..._state import PresentationStageState
-from ...ppt_rag import build_ppt_search_profile, get_ppt_template_catalog
+from .template_catalog import build_ppt_search_profile, get_ppt_template_catalog
 
 
 _ROUTING_SYSTEM = """\

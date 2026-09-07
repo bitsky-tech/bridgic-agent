@@ -25,7 +25,7 @@ from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
 from ._browser import BrowserHost
 from ._powerpoint import PowerPointHost, SessionPowerPoint
 from ._cognitive import MainThink
-from ._prompt import AGENT_NAME
+from .prompts.shared import AGENT_NAME
 from ._context import (
     AmphiContext,
     AmphiOTAContext,

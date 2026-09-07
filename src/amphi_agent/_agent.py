@@ -48,7 +48,7 @@ from .cognitive import (
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
 from ._error import AgentEmptyAnswerError
-from ._prompt import TITLE_PROMPT
+from .prompts.title import TITLE_PROMPT
 from ._state import (
     AgentResult,
     AwaitingPermission,
@@ -1246,7 +1246,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # Initialize the agent turn context
         ########################
         # Display language: the connection's stated language is only the fallback. What the
-        # model writes already follows the user's input language (see _prompt.py's CRITICAL
+        # model writes already follows the user's input language (see prompts/main.py's CRITICAL
         # language rule), so the backend's own display text has to key off the same signal —
         # otherwise one approval card carries an English classifier reason beside a Chinese
         # security label. Resume frames and signal-less inputs keep the connection's value.

@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from src.amphi_agent import _prompt
 from src.amphi_agent import prompts
+from src.amphi_agent.prompts.render import render_main_persona, render_stage_persona
 from src.amphi_service.i18n import use_locale
 
 
@@ -42,7 +42,7 @@ def test_rendered_personas_preserve_original_bytes(profile: str, expected: str) 
         for qualified_name in BASELINE["templates"]:
             module_name, name = qualified_name.rsplit(".", 1)
             module = importlib.import_module(f"{prompts.__name__}.{module_name}")
-            render = _prompt.render_main_persona if module_name == "main" else _prompt.render_stage_persona
+            render = render_main_persona if module_name == "main" else render_stage_persona
             personas[qualified_name] = render(TOOL_PROFILES[tool_profile], template=getattr(module, name))
     payload = json.dumps(personas, ensure_ascii=False, sort_keys=True)
     assert hashlib.sha256(payload.encode()).hexdigest() == expected
@@ -64,8 +64,6 @@ def test_mode_exports_preserve_import_compatibility(mode: str, stage: str, name:
     package = importlib.import_module(f"{prompts.__name__}.{mode}")
     module = importlib.import_module(f"{package.__name__}.{stage}")
     assert getattr(package, name) is getattr(module, name)
-    if mode in {"build", "workflow"}:
-        assert getattr(_prompt, name) is getattr(module, name)
 
 
 def test_general_prompts_do_not_depend_on_mode_packages() -> None:

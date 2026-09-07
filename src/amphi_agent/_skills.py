@@ -2,10 +2,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import yaml
-from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 
 from ..amphi_store import SkillRepository
 
@@ -39,12 +38,11 @@ class Skill:
 
 
 class SkillLibrary:
-    """``AmphiContext.skills`` — store-backed catalogue + the load tool.
+    """``AmphiContext.skills`` — store-backed catalogue.
 
     Built with a ``user_id``; :meth:`load` pulls the user's installed skills
     from the store. ``MainThink.skills_block`` advertises their name, one-line
-    description, and absolute location for path-based ``view_skill`` access;
-    :meth:`as_tools` exposes the legacy ``load_skill`` adapter.
+    description, and absolute location for path-based ``view_skill`` access.
     """
 
     _BUILTIN_ROOT = Path(__file__).resolve().parent / "builtin_skills"
@@ -154,36 +152,6 @@ class SkillLibrary:
     def all_data(self) -> Dict[str, Skill]:
         """Return all installed Skills for worker-owned selection policy."""
         return dict(self._skills)
-
-    def as_tools(self) -> List[ToolSpec]:
-        """The skill tools the OTA loop carries this turn (load on demand)."""
-        skills = self.data()
-        if not skills:
-            return []
-        return [self._load_tool()]
-
-    def _load_tool(self) -> ToolSpec:
-        skills = self.data()
-
-        async def load_skill(name: str) -> str:
-            """Load the full instructions for a named skill from the catalogue.
-
-            Call this once you have decided a catalogued skill is relevant —
-            it returns the skill's body so you can follow it.
-
-            Args:
-                name: The skill's name, exactly as shown in the catalogue.
-
-            Returns:
-                The skill's body, or an error listing the available names.
-            """
-            skill = skills.get(name)
-            if skill is None:
-                available = ", ".join(skills) or "(none)"
-                return f"Error: no skill named {name!r}. Available: {available}"
-            return f"(skill {name!r} is file-backed; read its directory: {skill.skill_dir})"
-
-        return FunctionToolSpec.from_raw(load_skill)
 
 
 __all__ = ["Skill", "SkillGroup", "SkillSource", "SkillLibrary"]

@@ -33,13 +33,9 @@ from .prompts.compaction import (
     render_turn_compaction_prompt,
 )
 from ._skills import Skill
-from ._prompt import (
-    PERSONA,
-    SUB_AGENT_PERSONA,
-    TURN_FAILED_MESSAGE,
-    render_main_persona,
-    time_in_local_tz,
-)
+from .prompts.main import PERSONA, SUB_AGENT_PERSONA
+from .prompts.render import render_main_persona, time_in_local_tz
+from .prompts.shared import TURN_FAILED_MESSAGE
 from ._state import (
     ContextCompactionState,
     NormalStageState,

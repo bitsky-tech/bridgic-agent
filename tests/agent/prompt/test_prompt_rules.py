@@ -1,15 +1,13 @@
-from src.amphi_agent._prompt import (
+from src.amphi_agent.prompts.build import (
     CLARIFY_PERSONA,
     EXPLORE_PERSONA,
     GENERATE_PERSONA,
-    PERSONA,
-    SUB_AGENT_PERSONA,
-    TITLE_PROMPT,
     VERIFY_PERSONA,
-    WORKFLOW_PERSONA,
-    render_main_persona,
-    render_stage_persona,
 )
+from src.amphi_agent.prompts.main import PERSONA, SUB_AGENT_PERSONA
+from src.amphi_agent.prompts.render import render_main_persona, render_stage_persona
+from src.amphi_agent.prompts.title import TITLE_PROMPT
+from src.amphi_agent.prompts.workflow import WORKFLOW_PERSONA
 from src.amphi_agent.prompts.presentation import (
     PRESENTATION_BRIEF_PERSONA,
     PRESENTATION_COMPOSE_PERSONA,
