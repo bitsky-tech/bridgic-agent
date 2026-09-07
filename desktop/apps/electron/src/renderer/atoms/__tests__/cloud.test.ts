@@ -17,6 +17,7 @@ import {
   CLOUD_PROVIDER_ID,
   cloudAccountAtom,
   cloudErrorAtom,
+  cloudRefreshAtom,
   cloudSignInAtom,
   cloudSignedInAtom,
 } from '../cloud'
@@ -162,5 +163,59 @@ describe('cloud sign-in', () => {
     expect(store.get(cloudSignedInAtom)).toBe(false)
     // A rejected sign-in must not leave a half-written credential behind.
     expect(recorded.some((r) => r.url === `${DAEMON}/me/providers` && r.body !== null)).toBe(false)
+  })
+})
+
+describe('cloud refresh', () => {
+  it('re-reads the model list, so a withdrawn model stops being offered', async () => {
+    const store = createStore()
+    harness(store)
+    await store.set(cloudSignInAtom, { email: 'a@b.com', password: 'secret-pass' })
+
+    // The operator withdraws one model and puts another on sale. Nothing on
+    // this machine changed, and the local list is now a lie in both
+    // directions: it offers a model that 404s and hides one that works.
+    const recorded = harness(store, {
+      '/me/models': jsonResponse([
+        {
+          model_id: 'agnes-2.5-flash',
+          display_name: 'Agnes 2.5 Flash',
+          context_window: 512_000,
+          filing_number: null,
+        },
+      ]),
+    })
+    await store.set(cloudRefreshAtom)
+
+    const write = recorded.find((r) => r.url === `${DAEMON}/me/providers` && r.body !== null)
+    expect(write?.body).toMatchObject({
+      provider_id: CLOUD_PROVIDER_ID,
+      models: ['agnes-2.5-flash'],
+      model_limits: { 'agnes-2.5-flash': { input: 512_000 } },
+    })
+    // The token is not re-sent. The upsert keeps the stored one when the field
+    // is absent, and a refresh has no reason to move a secret around.
+    expect((write?.body as { api_key?: string }).api_key).toBeUndefined()
+  })
+
+  it('drops the stored credential when the gateway rejects the token', async () => {
+    const store = createStore()
+    harness(store)
+    await store.set(cloudSignInAtom, { email: 'a@b.com', password: 'secret-pass' })
+
+    // `8787/me` and not `/me`: the daemon has a `/me` of its own, and the
+    // harness matches an override against every request.
+    const recorded = harness(store, {
+      '8787/me': jsonResponse({ detail: 'Invalid or expired credentials' }, 401),
+    })
+    await store.set(cloudRefreshAtom)
+
+    expect(store.get(cloudSignedInAtom)).toBe(false)
+    // Clearing the session in memory is not enough: the credential IS the
+    // token, so leaving the row behind keeps a dead channel in the model
+    // picker, and its stale model list with it.
+    expect(
+      recorded.some((r) => r.url === `${DAEMON}/me/providers/${CLOUD_PROVIDER_ID}`),
+    ).toBe(true)
   })
 })

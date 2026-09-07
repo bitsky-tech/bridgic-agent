@@ -51,6 +51,25 @@ export interface CloudCredentials {
   password: string
 }
 
+/**
+ * A gateway failure with its status kept beside the message.
+ *
+ * The message is the gateway's own `detail`, written for a human and rewritten
+ * whenever the wording is. Deciding "this token is dead" by looking for `401`
+ * or `credential` inside that string is a guess that holds until someone edits
+ * a sentence; the status is the fact. Null means the request never reached the
+ * gateway at all.
+ */
+export class CloudError extends Error {
+  readonly status: number | null
+
+  constructor(message: string, status: number | null) {
+    super(message)
+    this.name = 'CloudError'
+    this.status = status
+  }
+}
+
 const _token = atom<string | null>(null)
 const _account = atom<CloudAccount | null>(null)
 const _error = atom<string | null>(null)
@@ -88,7 +107,7 @@ async function cloudFetch<T>(
     // indistinguishable here. Surfacing that string tells the user nothing, so
     // it is replaced with the one thing they can act on.
     rlog.warn('[cloud] request failed before a response', cause)
-    throw new Error(i18n.t('cloud.unreachable'))
+    throw new CloudError(i18n.t('cloud.unreachable'), null)
   }
   if (!response.ok) {
     // The gateway puts a human-readable reason in `detail`; surface it rather
@@ -101,7 +120,7 @@ async function cloudFetch<T>(
     } catch {
       // Non-JSON error body; the status line is all we have.
     }
-    throw new Error(detail)
+    throw new CloudError(detail, response.status)
   }
   return (await response.json()) as T
 }
@@ -117,6 +136,43 @@ interface ModelPayload {
   display_name: string
   context_window: number
   filing_number: string | null
+}
+
+/**
+ * Pull `/me/models` and make the local channel say the same thing.
+ *
+ * Run on sign-in and again on every refresh. What an account may buy is the
+ * operator's to change, and nothing tells this machine when they do — a list
+ * frozen at sign-in keeps offering models that were withdrawn, which 404 with
+ * a reason the user never sees, and hides ones put on sale since.
+ *
+ * `credential` is given on sign-in only. The backend upsert overwrites just the
+ * fields it is handed, so a refresh rewrites the list without moving the token
+ * around; `current_model` reconciliation follows either way.
+ */
+async function syncModels(
+  set: Setter,
+  token: string,
+  credential?: { apiKey: string },
+): Promise<void> {
+  const models = await cloudFetch<ModelPayload[]>('/me/models', { token })
+  await set(addProviderAtom, {
+    providerId: CLOUD_PROVIDER_ID,
+    ...(credential
+      ? {
+          apiKey: credential.apiKey,
+          baseUrl: `${CLOUD_BASE_URL}/v1`,
+          protocol: 'openai' as const,
+          displayName: i18n.t('cloud.channelName'),
+        }
+      : {}),
+    models: models.map((m) => m.model_id),
+    modelLimits: Object.fromEntries(
+      models
+        .filter((m) => m.context_window > 0)
+        .map((m) => [m.model_id, { input: m.context_window }]),
+    ),
+  })
 }
 
 /**
@@ -138,23 +194,7 @@ async function performSignIn(
       register ? '/auth/register' : '/auth/login',
       { method: 'POST', body: JSON.stringify(input) },
     )
-    const models = await cloudFetch<ModelPayload[]>('/me/models', {
-      token: auth.access_token,
-    })
-
-    await set(addProviderAtom, {
-      providerId: CLOUD_PROVIDER_ID,
-      apiKey: auth.access_token,
-      baseUrl: `${CLOUD_BASE_URL}/v1`,
-      protocol: 'openai',
-      displayName: i18n.t('cloud.channelName'),
-      models: models.map((m) => m.model_id),
-      modelLimits: Object.fromEntries(
-        models
-          .filter((m) => m.context_window > 0)
-          .map((m) => [m.model_id, { input: m.context_window }]),
-      ),
-    })
+    await syncModels(set, auth.access_token, { apiKey: auth.access_token })
 
     set(_token, auth.access_token)
     // The rate is not on the token response, so seed a placeholder and let the
@@ -230,18 +270,32 @@ export const cloudRefreshAtom = atom(
         creditsPerYuan: me.credits_per_yuan,
       })
       set(_error, null)
+      // Re-read what this account may buy while the token is known good. In
+      // its own try: the balance is what this atom exists to load, and a
+      // model list that would not come back must not take it down.
+      try {
+        await syncModels(set, token)
+      } catch (cause) {
+        rlog.warn('[cloud] refreshing the model list failed', cause)
+      }
     } catch (err) {
       // A rejected token means the account was suspended, or the password
-      // changed elsewhere. Drop the session rather than showing a balance that
-      // is no longer ours to show.
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.includes('401') || message.toLowerCase().includes('credential')) {
+      // changed elsewhere. Drop the session *and* the credential: the token IS
+      // the credential, so a row left behind is a dead channel still sitting in
+      // the model picker, offering whatever it last saw. Same end state as
+      // signing out, which is what a rejected token amounts to.
+      if (err instanceof CloudError && err.status === 401) {
         set(_token, null)
         set(_account, null)
+        try {
+          await set(deleteProviderAtom, CLOUD_PROVIDER_ID)
+        } catch (cause) {
+          rlog.warn('[cloud] removing the rejected channel failed', cause)
+        }
       } else {
         rlog.warn('[cloud] balance refresh failed', err)
       }
-      if (!quiet) set(_error, message)
+      if (!quiet) set(_error, err instanceof Error ? err.message : String(err))
     } finally {
       if (!quiet) set(_busy, false)
     }
