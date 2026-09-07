@@ -91,7 +91,7 @@ export function isSegmentsEmpty(segments: Segment[]): boolean {
 
 /** `group` values for capability-entity mentions. These persisted protocol values are stable ASCII
  *  ids — never display copy, never localized; SlashMenu maps them to translated display labels.
- *  The daemon matches them too (_workflows.py / _cognitive.py), so both sides change in lockstep.
+ *  The daemon matches them too (_workflows.py / cognitive/base.py), so both sides change in lockstep.
  *  Skills can be inserted from the "/" menu; schedule references come from the "@" menu, kept
  *  separate from the run-now action in the "/" menu. Single source of truth: menu grouping and
  *  badge colours both reuse these values. */

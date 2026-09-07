@@ -7,7 +7,7 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role, ToolCallBlock, ToolResultBlock
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink, Session
-from src.amphi_agent._cognitive import render_input
+from src.amphi_agent.cognitive import render_input
 from src.amphi_agent.prompts.shared import TURN_FAILED_MESSAGE
 from src.amphi_agent._workspace import Workspace
 from src.amphi_service.i18n import backend_i18n, use_locale

@@ -1,3 +1,5 @@
+"""Shared cognitive mechanics and the normal-mode Main worker."""
+
 import json
 import logging
 import math
@@ -10,62 +12,46 @@ from bridgic.amphibious import CognitiveWorker, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
-from ..amphi_service.i18n import backend_i18n, detect_locale
-from ..amphi_service.protocol.llms._image_inputs import (
+from ...amphi_service.i18n import backend_i18n, detect_locale
+from ...amphi_service.protocol.llms._image_inputs import (
     IMAGE_INPUTS_EXTRA,
     ImageInputUnsupportedError,
     ImageInputValidationError,
     inspect_image_input,
     validate_image_inputs,
 )
-from ..amphi_store import SessionTurnRecord, TurnStatus
-from ._context import (
+from ...amphi_store import SessionTurnRecord, TurnStatus
+from .._context import (
     AmphiContext,
     AmphiOTAContext,
     ContextUsageBreakdown,
     ContextUsageSnapshot,
     _view,
 )
-from ._error import ContextWindowExceededError
-from .prompts.compaction import (
+from .._error import ContextWindowExceededError
+from ..prompts.compaction import (
     COMPACTION_SYSTEM_PROMPT,
     render_session_compaction_prompt,
     render_turn_compaction_prompt,
 )
-from ._skills import Skill
-from .prompts.main import PERSONA, SUB_AGENT_PERSONA
-from .prompts.render import render_main_persona, time_in_local_tz
-from .prompts.shared import TURN_FAILED_MESSAGE
-from ._state import (
+from .._skills import Skill
+from ..prompts.main import PERSONA
+from ..prompts.render import render_main_persona, time_in_local_tz
+from ..prompts.shared import TURN_FAILED_MESSAGE
+from .._state import (
     ContextCompactionState,
     NormalStageState,
     TurnCompactionState,
 )
-from ._tools import TOOL_LIBRARY
-from ._thinking_debug import write_thinking_debug
-from .tools import (
+from .._tools import TOOL_LIBRARY
+from .._thinking_debug import write_thinking_debug
+from ..tools import (
     BROWSER_ADVANCED_TOOL_NAMES,
-    BROWSER_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
-    switch_tool,
 )
-from .tools.request_human import RequestHumanChoice
+from ..tools.request_human import RequestHumanChoice
 
-__all__ = [
-    "BuildThink",
-    "ClarifyThink",
-    "ExploreThink",
-    "GenerateThink",
-    "MainThink",
-    "SubAgentThink",
-    "CHILD_TOOL_NAMES",
-    "ToolSurface",
-    "VerifyThink",
-    "WorkflowRunThink",
-    "WorkflowThink",
-    "render_input",
-]
 
 logger = logging.getLogger(__name__)
 # Marker on ``Message.extras`` for the per-round <runtime_state> USER tail: live
@@ -82,29 +68,6 @@ CONTEXT_COMPACTION_KEEP_TURN_ROUNDS = 4
 CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS = 32_000
 CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS = 2_048
 CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE = 8
-
-
-CHILD_TOOL_NAMES = BROWSER_TOOL_NAMES | frozenset({
-    "bash",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "glob",
-    "grep",
-    "web_search",
-    "web_fetch",
-    "read_image",
-    "generate_image",
-    "workspace_status",
-    "workspace_diff",
-    "workspace_history",
-    "load_workspace_tools",
-    "view_skill",
-    "manage_skills",
-    "list_workflow_runs",
-    "read_workflow_run",
-    "request_human_choice",
-})
 
 
 @dataclass(frozen=True)
@@ -1960,49 +1923,5 @@ class MainThink(CognitiveWorker):
         )
         return input_tokens, output_tokens, cached_input_tokens
 
-################################################################################################################
-# Child Agent — an isolated normal-mode worker with its own role and tool surface
-################################################################################################################
-class SubAgentThink(MainThink):
-    """Run one focused delegated task inside a Child Session."""
 
-    persona: str = SUB_AGENT_PERSONA
-    allowed_tools: frozenset[str] = CHILD_TOOL_NAMES
-    show_build_context: bool = False
-    show_workspace_checkpoints: bool = False
-    workflow_run_owner_label: str = "root Session"
-
-    async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
-        """Render the catalogues and shared workspace available to a Child Session."""
-        return [
-            await self.skills_block(ota_context, context),
-            await self.workflows_block(ota_context, context),
-            await self.memory_block(ota_context, context),
-            await self.workspace_block(ota_context, context),
-        ]
-
-
-_BUILD_THINK_EXPORTS = frozenset({
-    "BuildThink",
-    "ClarifyThink",
-    "ExploreThink",
-    "GenerateThink",
-    "VerifyThink",
-})
-_WORKFLOW_THINK_EXPORTS = frozenset({
-    "WorkflowRunThink",
-    "WorkflowThink",
-})
-
-
-def __getattr__(name: str) -> Any:
-    """Lazily preserve legacy mode imports from ``amphi_agent._cognitive``."""
-    if name in _BUILD_THINK_EXPORTS:
-        from .cognitive import build
-
-        return getattr(build, name)
-    if name in _WORKFLOW_THINK_EXPORTS:
-        from .cognitive import workflow
-
-        return getattr(workflow, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+__all__ = ["MainThink", "ToolSurface", "render_input"]

@@ -3,14 +3,20 @@ from types import SimpleNamespace
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role
 
-import src.amphi_agent._cognitive as legacy_cognitive
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session
-from src.amphi_agent._cognitive import SubAgentThink
 from src.amphi_agent.cognitive import (
+    BuildThink,
     ClarifyThink,
     ExploreThink,
     GenerateThink,
+    PresentationBriefThink,
+    PresentationComposeThink,
+    PresentationPlanThink,
+    PresentationReviewThink,
+    PresentationThink,
+    SubAgentThink,
     VerifyThink,
+    WorkflowRunThink,
     WorkflowThink,
 )
 from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
@@ -21,12 +27,15 @@ SESSION_ID = "session-mode"
 PROMPT_TIME = "2026-08-19 12:00 (UTC+08:00)"
 
 
-def test_mode_workers_are_modular_with_legacy_import_compatibility() -> None:
-    """Build and Workflow workers live in cognitive modules without breaking old imports."""
-    assert ClarifyThink.__module__ == "src.amphi_agent.cognitive.build"
-    assert WorkflowThink.__module__ == "src.amphi_agent.cognitive.workflow"
-    assert legacy_cognitive.ClarifyThink is ClarifyThink
-    assert legacy_cognitive.WorkflowThink is WorkflowThink
+def test_mode_workers_keep_their_shared_inheritance() -> None:
+    """Mode bases and stages retain the shared cognitive behavior after the split."""
+    for worker_type in (SubAgentThink, BuildThink, PresentationThink, WorkflowRunThink):
+        assert worker_type.__bases__ == (MainThink,)
+    for worker_type in (ClarifyThink, ExploreThink, GenerateThink, VerifyThink):
+        assert worker_type.__bases__ == (BuildThink,)
+    for worker_type in (PresentationBriefThink, PresentationPlanThink, PresentationComposeThink, PresentationReviewThink):
+        assert worker_type.__bases__ == (PresentationThink,)
+    assert WorkflowThink.__bases__ == (WorkflowRunThink,)
 
 
 def _context(*, child: bool = False) -> AmphiContext:

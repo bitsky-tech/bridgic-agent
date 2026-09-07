@@ -9,9 +9,6 @@ from bridgic.core.model.types import Message
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session, SkillLibrary
 from src.amphi_agent._tools import TOOL_LIBRARY
-from src.amphi_agent._cognitive import (
-    SubAgentThink,
-)
 from src.amphi_agent._state import PresentationStageState
 from src.amphi_agent.cognitive import (
     ClarifyThink,
@@ -21,6 +18,7 @@ from src.amphi_agent.cognitive import (
     PresentationComposeThink,
     PresentationPlanThink,
     PresentationReviewThink,
+    SubAgentThink,
     VerifyThink,
     WorkflowRunThink,
     WorkflowThink,

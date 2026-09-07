@@ -1,6 +1,6 @@
 from bridgic.core.model.types import Message, Role, TextBlock, ToolCallBlock, ToolResultBlock
 
-from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from src.amphi_service.protocol.llms.anthropic_llm import (
     _CACHE_UNSUPPORTED,

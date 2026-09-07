@@ -4,7 +4,7 @@ The core agent stack is built on the bridgic-amphibious two-loop framework:
 
 * **contexts** (:mod:`._context`) — ``AmphiOTAContext`` (small loop, one
   observe-think-act run) + ``AmphiContext`` (big loop, cross-turn knowledge);
-* **cognitive workers** (:mod:`._cognitive`) — the autonomous ``MainThink``
+* **cognitive workers** (:mod:`.cognitive`) — the autonomous ``MainThink``
   cycle plus the build pipeline's per-stage workers;
 * **agent** (:mod:`._agent`) — ``AmphiAgent`` orchestrates the workers over the
   contexts via ``on_agent``;
@@ -25,7 +25,7 @@ from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
 from ._browser import BrowserHost
 from ._powerpoint import PowerPointHost
 from .tools.powerpoint.session import SessionPowerPoint
-from ._cognitive import MainThink
+from .cognitive import MainThink
 from .prompts.shared import AGENT_NAME
 from ._context import (
     AmphiContext,

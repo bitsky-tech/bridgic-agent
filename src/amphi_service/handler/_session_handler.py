@@ -328,7 +328,7 @@ class SessionFileHandler(BaseHandler):
     ``.work/.build/task.md`` as the build brief from this (and later the other stage
     artifacts as read-only previews). Containment is fail-closed: the resolved
     real path must stay inside the workspace root, mirroring the @mention
-    resolution rule in ``render_input`` (amphi_agent/_cognitive.py).
+    resolution rule in ``render_input`` (amphi_agent/cognitive/base.py).
     """
 
     tags = ["sessions"]
@@ -1305,7 +1305,7 @@ def _reasoning_text(round_: Dict[str, Any]) -> str:
 
     ``reasoning_content`` (OpenAI / DeepSeek wire — a plain string) is preferred;
     otherwise the Anthropic ``thinking_blocks`` (``[{"thinking": str, ...}]``) are
-    joined. Both are captured per round during the turn (see ``_cognitive.py``)
+    joined. Both are captured per round during the turn (see ``cognitive/base.py``)
     and survive the OTA ``model_dump`` → reload roundtrip.
     """
     if not isinstance(round_, dict):

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from bridgic.core.model.types import Role
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext
-from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA, MainThink
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA, MainThink
 
 
 def _workspace(changed: list[str]) -> SimpleNamespace:

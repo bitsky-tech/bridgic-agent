@@ -1,25 +1,17 @@
-"""Cognitive workers for executing saved Workflows."""
+"""Shared context, tools, and legality checks for saved Workflow stages."""
 
 from typing import Any, List, Optional, Tuple
 
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
-from .._cognitive import MainThink, render_input
-from .._context import AmphiContext, AmphiOTAContext, _view
-from .._state import WorkflowStageState
-from ..prompts.render import render_stage_persona
-from ..prompts.workflow import WORKFLOW_PERSONA
-from ..tools import switch_tool
-
-__all__ = [
-    "WorkflowRunThink",
-    "WorkflowThink",
-]
+from ..base import MainThink, render_input
+from ..._context import AmphiContext, AmphiOTAContext, _view
+from ..._state import WorkflowStageState
+from ...prompts.render import render_stage_persona
+from ...tools import switch_tool
 
 
-# Workflow runtime — one saved source section at a time
-################################################################################################################
 class WorkflowRunThink(MainThink):
     """Provide stable source, prompt, tool, and legality mechanics for Workflow stages."""
 
@@ -300,18 +292,4 @@ class WorkflowRunThink(MainThink):
             return "workflow step report rejected: the current section does not exist."
         return None
 
-
-class WorkflowThink(WorkflowRunThink):
-    """Execute the current section of a saved Workflow."""
-
-    persona: str = WORKFLOW_PERSONA
-    workflow_stage: str = "execute"
-
-    async def legality_check(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Ensure an execution report belongs to the active WORKFLOW.md section."""
-        return await self.report_legality_reason(call, ota_context, context, "execute")
+__all__ = ["WorkflowRunThink"]

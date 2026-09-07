@@ -26,11 +26,6 @@ from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.automa.args import ArgsMappingRule, InOrder
 from bridgic.core.model.types import Message, Role, ToolCall
 
-from ._cognitive import (
-    MainThink,
-    SubAgentThink,
-    render_input,
-)
 from .cognitive import (
     PRESENTATION_STAGE_ARTIFACTS,
     PRESENTATION_STAGE_ORDER,
@@ -38,12 +33,15 @@ from .cognitive import (
     ClarifyThink,
     ExploreThink,
     GenerateThink,
+    MainThink,
     PresentationBriefThink,
     PresentationComposeThink,
     PresentationPlanThink,
     PresentationReviewThink,
+    SubAgentThink,
     VerifyThink,
     WorkflowThink,
+    render_input,
 )
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
