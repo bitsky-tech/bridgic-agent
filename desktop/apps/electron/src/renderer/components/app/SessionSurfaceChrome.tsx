@@ -173,7 +173,6 @@ export function SurfaceRailButton({
 export interface SessionSurfaceRailProps {
   children: ReactNode
   isAgentActive: boolean
-  isAgentRunning: boolean
   isContentOpen: boolean
   modeAriaLabel: string
   isModeAvailable: boolean
@@ -186,7 +185,6 @@ export interface SessionSurfaceRailProps {
 export function SessionSurfaceRail({
   children,
   isAgentActive,
-  isAgentRunning,
   isContentOpen,
   modeAriaLabel,
   isModeAvailable,
@@ -223,7 +221,6 @@ export function SessionSurfaceRail({
       >
         <AgentDockEntry
           active={isAgentActive}
-          running={isAgentRunning}
           modeAvailable={isModeAvailable}
           modeAriaLabel={modeAriaLabel}
           onOpenMode={onOpenMode}

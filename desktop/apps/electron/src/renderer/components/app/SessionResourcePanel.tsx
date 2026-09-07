@@ -4,7 +4,6 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { viewedSessionIdAtom } from '@/atoms/amphi'
 import {
-  currentAgentRunningAtom,
   currentBrowserAgentActiveAtom,
   currentPowerPointAgentActiveAtom,
 } from '@/atoms/agent'
@@ -226,7 +225,6 @@ export function FilesAttentionAnnouncer() {
 function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: string | null }) {
   const { t } = useTranslation()
   const store = useStore()
-  const agentRunning = useAtomValue(currentAgentRunningAtom)
   const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
   const modeSurface = useAtomValue(sessionModeSurfaceAtom)
   const selectedModeSurface = useAtomValue(selectedSessionModeSurfaceAtom)
@@ -709,7 +707,6 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
 
       <SessionSurfaceRail
         isAgentActive={selectedModeSurface !== null}
-        isAgentRunning={viewedSessionId !== null && agentRunning}
         isContentOpen={contentOpen}
         isModeAvailable={modeSurface !== null}
         modeAriaLabel={modeAriaLabel}

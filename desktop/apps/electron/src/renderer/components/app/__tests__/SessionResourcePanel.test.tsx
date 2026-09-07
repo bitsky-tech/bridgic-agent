@@ -952,7 +952,7 @@ describe('SessionResourcePanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('shows live Agent work without a mode panel and isolates it to the viewed Session', async () => {
+  it('keeps an unavailable Agent launcher idle while the Session is streaming', async () => {
     const store = createStore()
     const sessionId = 'session-agent-live'
     store.set(activeSessionIdAtom, sessionId)
@@ -966,9 +966,9 @@ describe('SessionResourcePanel', () => {
           messageId: 'agent-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
         })
       })
-      expect(launcher().getAttribute('aria-busy')).toBe('true')
-      expect(launcher().getAttribute('aria-label')).toBe('Bridgic 正在执行任务')
-      expect(indicator()?.dataset.state).toBe('running')
+      expect(launcher().getAttribute('aria-busy')).toBeNull()
+      expect(launcher().getAttribute('aria-label')).toBe('Bridgic')
+      expect(indicator()).toBeNull()
       expect(launcher().disabled).toBe(true)
       expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
 
@@ -977,7 +977,7 @@ describe('SessionResourcePanel', () => {
       expect(indicator()).toBeNull()
 
       await act(async () => store.set(activeSessionIdAtom, sessionId))
-      expect(indicator()?.dataset.state).toBe('running')
+      expect(indicator()).toBeNull()
       await act(async () => store.set(streamingFamily(sessionId), undefined))
       expect(launcher().getAttribute('aria-busy')).toBeNull()
       expect(indicator()).toBeNull()
@@ -1003,7 +1003,9 @@ describe('SessionResourcePanel', () => {
     await act(async () => store.set(streamingFamily(sessionId), {
       messageId: 'build-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
     }))
-    expect(launcher.getAttribute('aria-busy')).toBe('true')
+    expect(launcher.getAttribute('aria-busy')).toBeNull()
+    expect(launcher.getAttribute('aria-label')).toContain('Bridgic 有后台内容，点击返回')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('background-open')
     expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
     await act(async () => store.set(streamingFamily(sessionId), undefined))
     expect(launcher.getAttribute('aria-busy')).toBeNull()
@@ -1017,6 +1019,15 @@ describe('SessionResourcePanel', () => {
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('active')
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('selection-capsule')
     expect(launcher.querySelector('.left-0')).toBeNull()
+
+    await act(async () => store.set(streamingFamily(sessionId), {
+      messageId: 'build-viewing-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
+    }))
+    expect(launcher.getAttribute('aria-busy')).toBeNull()
+    expect(launcher.getAttribute('aria-label')).toContain('正在查看 Bridgic 内容')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('active')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('selection-capsule')
+    await act(async () => store.set(streamingFamily(sessionId), undefined))
 
     await act(async () => launcher.click())
     expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()

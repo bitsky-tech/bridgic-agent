@@ -5,7 +5,6 @@ import { SurfaceStatusIcon, type SurfaceStatus } from './SurfaceStatusIcon'
 
 interface AgentDockEntryProps {
   active: boolean
-  running: boolean
   modeAvailable: boolean
   modeAriaLabel?: string
   onOpenMode: () => void
@@ -14,19 +13,16 @@ interface AgentDockEntryProps {
 /** Permanent Bridgic entry: opens the current Agent mode surface when one is available. */
 export function AgentDockEntry({
   active,
-  running,
   modeAvailable,
   modeAriaLabel,
   onOpenMode,
 }: AgentDockEntryProps) {
   const { t } = useTranslation()
   let iconState: SurfaceStatus | undefined
-  if (running) iconState = 'running'
-  else if (active) iconState = 'active'
+  if (active) iconState = 'active'
   else if (modeAvailable) iconState = 'background-open'
   let statusLabel = t('session.resourcePanel.agent')
-  if (running) statusLabel = t('session.resourcePanel.agentRunning')
-  else if (active) statusLabel = t('session.resourcePanel.agentViewing')
+  if (active) statusLabel = t('session.resourcePanel.agentViewing')
   else if (modeAvailable) statusLabel = t('session.resourcePanel.agentBackground')
   const accessibleLabel = modeAvailable && modeAriaLabel
     ? `${statusLabel} · ${modeAriaLabel}`
@@ -38,21 +34,18 @@ export function AgentDockEntry({
       aria-controls={modeAvailable ? 'session-surface-mode' : undefined}
       aria-expanded={modeAvailable ? active : undefined}
       aria-label={accessibleLabel}
-      aria-busy={running || undefined}
       title={accessibleLabel}
       className={cn(
         'relative flex h-[53px] w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-[10px]',
         'border border-transparent text-text-accent-purple transition-colors hover:bg-bg-hover',
         'disabled:cursor-default disabled:hover:bg-transparent',
         active && 'hover:bg-transparent',
-        running && 'text-text-accent',
       )}
       data-testid="session-agent-launcher"
       disabled={!modeAvailable}
       onClick={modeAvailable ? onOpenMode : undefined}
     >
       <SurfaceStatusIcon
-        busy={running}
         selected={active}
         state={iconState}
         testId="session-agent-status-indicator"

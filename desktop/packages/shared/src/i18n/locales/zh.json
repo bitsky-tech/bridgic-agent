@@ -2045,9 +2045,8 @@
     },
     "resourcePanel": {
       "agent": "Bridgic",
-      "agentBackground": "Bridgic 有后台任务",
-      "agentRunning": "Bridgic 正在执行任务",
-      "agentViewing": "正在查看 Bridgic 任务",
+      "agentBackground": "Bridgic 有后台内容，点击返回",
+      "agentViewing": "正在查看 Bridgic 内容",
       "browser": "浏览器",
       "browserActiveShort": "操作中",
       "browserAgentActive": "Bridgic 正在操作浏览器",

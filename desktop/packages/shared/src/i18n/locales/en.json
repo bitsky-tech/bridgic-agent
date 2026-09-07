@@ -2045,9 +2045,8 @@
     },
     "resourcePanel": {
       "agent": "Bridgic",
-      "agentBackground": "Bridgic has a background task",
-      "agentRunning": "Bridgic is working",
-      "agentViewing": "Viewing the Bridgic task",
+      "agentBackground": "Bridgic has background content. Click to return",
+      "agentViewing": "Viewing Bridgic content",
       "browser": "Browser",
       "browserActiveShort": "In use",
       "browserAgentActive": "Bridgic is operating the browser",
