@@ -27,6 +27,7 @@ export const SessionWorkbenchSurface = {
   Results: 'results',
   Schedules: 'schedules',
   Presentation: 'presentation',
+  Word: 'word',
   Browser: 'browser',
 } as const
 export type SessionWorkbenchSurface =

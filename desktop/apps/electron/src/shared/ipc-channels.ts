@@ -111,6 +111,9 @@ export const IPC = {
     setExpanded: 'powerpoint:setExpanded',
     openFile: 'powerpoint:openFile',
   },
+  word: {
+    readDocument: 'word:read-document',
+  },
   // Bridgic Agent Python daemon coordination — the live backend
   // control plane (discover / spawn / stop / clients). The renderer chats with
   // the daemon directly over HTTP+WS; these channels are the main-process

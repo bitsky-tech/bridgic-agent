@@ -14,6 +14,7 @@ import { PresentationModePane } from './PresentationModePane'
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel'
 import { WorkflowResultsPanel } from './WorkflowResultsPanel'
 import { WorkflowRunDetailsPane } from './WorkflowRunDetailsPane'
+import { WordWorkbenchPanel } from './WordWorkbenchPanel'
 import { cn } from '@/lib/cn'
 
 export interface SessionSurfaceContentProps {
@@ -81,6 +82,13 @@ export function SessionSurfaceContent({
         testId="session-workbench-presentation-content"
       >
         <EmbeddedPowerPointPanel active={isToolActive(SessionWorkbenchSurface.Presentation)} />
+      </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={isToolActive(SessionWorkbenchSurface.Word)}
+        labelledBy="session-workbench-word-tab"
+        testId="session-workbench-word-content"
+      >
+        <WordWorkbenchPanel />
       </WorkbenchSurface>
 
       <div

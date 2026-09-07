@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next'
 import type { MouseEvent } from 'react'
 import type { DirTreeNode } from '@shared/dir-tree'
 import { cn } from '@/lib/cn'
+import { isDocxFileName } from '@/lib/fileTypes'
 import { extColor, formatSize } from '@/lib/fileTree'
 import { Icons } from './Icons'
 import { RowActionMenu } from './RowActionMenu'
@@ -37,8 +38,8 @@ export interface FileTreeViewProps {
   onMention?: (node: DirTreeNode) => void
   /** Make file rows pickable (@ popover browse mode). */
   onPickFile?: (node: DirTreeNode) => void
-  /** Double-click a FILE row → open it with the OS default program.
-   *  Absent (e.g. @ popover) disables open-on-double-click; folders ignore it. */
+  /** Open a file row. DOCX uses single-click; other files retain double-click.
+   *  Absent (e.g. @ popover) disables opening; folders ignore it. */
   onOpen?: (node: DirTreeNode) => void
   /** Files owned by an in-app viewer open on the first click instead. */
   openOnSingleClick?: (node: DirTreeNode) => boolean
@@ -128,18 +129,19 @@ function TreeNodeRow({
   const expandable = isFolder && !node.unreadable
   const isOpen = expandable && expanded.has(node.relPath)
   const pickable = !isFolder && onPickFile !== undefined
-  // Double-click to open applies to file rows only (folders keep single-click expansion); openable also makes the row show clickable feedback.
+  // File rows are openable only in the Files panel; the @ picker keeps its own selection behaviour.
   const openable = !isFolder && onOpen !== undefined
+  const opensOnClick = openable && (isDocxFileName(node.name) || openOnSingleClick?.(node))
 
   const handleRowClick = (event: MouseEvent<HTMLDivElement>): void => {
     if (expandable) onToggle(node)
-    else if (openable && openOnSingleClick?.(node) && event.detail < 2) onOpen?.(node)
+    else if (opensOnClick && event.detail < 2) onOpen?.(node)
     else if (pickable) onPickFile(node)
   }
 
-  // Double-clicking a file = open with the system default application; double-clicking a folder does nothing extra (single-click expansion as before).
+  // Files without an in-app owner keep the existing OS-open double-click interaction.
   const handleDoubleClick = (): void => {
-    if (openable && !openOnSingleClick?.(node)) onOpen?.(node)
+    if (openable && !opensOnClick) onOpen?.(node)
   }
 
   const menuOpen = menu !== undefined && menu.menuFor === node.relPath
@@ -147,6 +149,7 @@ function TreeNodeRow({
   return (
     <div>
       <div
+        data-file-tree-path={node.relPath}
         onClick={handleRowClick}
         onDoubleClick={handleDoubleClick}
         className={cn(

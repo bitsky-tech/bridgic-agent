@@ -15,6 +15,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { cn } from '@/lib/cn'
+import { isDocxFileName } from '@/lib/fileTypes'
 import { extColor, findNode, formatSize, pruneExpanded } from '@/lib/fileTree'
 import { APP_PRODUCT_NAME } from '@shared/app-meta'
 import type { DirListResult, DirTreeNode } from '@shared/dir-tree'
@@ -61,9 +62,9 @@ export interface MountRowProps {
   onChildMenuToggle: (relPath: string) => void
   onCopyChildPath: (node: DirTreeNode) => void
   onRevealChild: (node: DirTreeNode) => void
-  /** Double-click to open: a file-type mount root (system default application). Folder roots have no such behaviour. */
+  /** Open a file-type mount root. In-app file owners use single-click; other file types use double-click. */
   onOpenRoot: () => void
-  /** Double-click to open: a child file row (system default application). */
+  /** Open a child file row. In-app file owners use single-click; other file types use double-click. */
   onOpenChild: (node: DirTreeNode) => void
   /** Identify files that an in-app viewer owns and opens on one click. */
   openOnSingleClick: (name: string) => boolean
@@ -105,9 +106,9 @@ export function MountRow({
   )
 
   const expandable = m.kind === 'folder' && m.exists
-  // Double-clicking a file-type mount root = open with the system default application; stale paths (line-through) do not respond.
+  // In-app file owners open on one click; other files retain the established double-click behaviour.
   const rootOpenable = m.kind === 'file' && m.exists
-  const rootOpensOnSingleClick = rootOpenable && openOnSingleClick(m.name)
+  const rootOpensOnSingleClick = rootOpenable && (openOnSingleClick(m.name) || isDocxFileName(m.name))
   const toggleRoot = (): void => {
     if (!expandable) return
     if (!open) {

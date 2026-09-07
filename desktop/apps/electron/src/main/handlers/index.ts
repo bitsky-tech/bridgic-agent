@@ -16,6 +16,7 @@ import { registerShellHandlers } from './shell'
 import { registerSystemHandlers } from './system'
 import { registerUpdateHandlers } from './update'
 import { registerWindowHandlers } from './window'
+import { registerWordHandlers } from './word'
 
 export function registerAllHandlers(windowManager: WindowManager): void {
   registerAppHandlers()
@@ -40,6 +41,7 @@ export function registerAllHandlers(windowManager: WindowManager): void {
     const window = windowManager.getMainWindow()
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   })
+  registerWordHandlers()
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after

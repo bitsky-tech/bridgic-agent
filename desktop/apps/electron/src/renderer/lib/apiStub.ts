@@ -126,6 +126,11 @@ export function installApiStub(): void {
       setExpanded: async () => {},
       openFile: async () => { throw new Error('Opening PowerPoint files requires Electron') },
     },
+    word: {
+      readDocument: async () => {
+        throw new Error('Word document reads require Electron')
+      },
+    },
     backend: {
       snapshot: async () => ({
         state: BackendState.Idle,

@@ -54,3 +54,42 @@ describe('FileTreeView in-app file owners', () => {
     host.remove()
   })
 })
+
+const wordNodes: DirTreeNode[] = [
+  { name: 'report.docx', kind: 'file', relPath: 'report.docx', sizeBytes: 10 },
+  { name: 'notes.txt', kind: 'file', relPath: 'notes.txt', sizeBytes: 5 },
+]
+
+describe('FileTreeView file opening', () => {
+  it('opens DOCX on one click while retaining double-click for other files', async () => {
+    const onOpen = mock((_node: DirTreeNode) => {})
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <FileTreeView
+          expanded={new Set()}
+          nodes={wordNodes}
+          onOpen={onOpen}
+          onToggle={() => undefined}
+        />,
+      )
+    })
+    const docx = host.querySelector<HTMLElement>('[data-file-tree-path="report.docx"]')!
+    const text = host.querySelector<HTMLElement>('[data-file-tree-path="notes.txt"]')!
+
+    await act(async () => docx.click())
+    await act(async () => text.click())
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onOpen).toHaveBeenLastCalledWith(wordNodes[0]!)
+
+    await act(async () => text.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+    expect(onOpen).toHaveBeenCalledTimes(2)
+    expect(onOpen).toHaveBeenLastCalledWith(wordNodes[1]!)
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+})

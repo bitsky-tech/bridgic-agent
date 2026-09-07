@@ -24,7 +24,7 @@ export interface SessionSurfaceRailTabsProps {
   selectedSurface: SessionWorkbenchSurface
 }
 
-/** Render the five independent Session tools with a Browser-specific activity state. */
+/** Render the independent Session tools with a Browser-specific activity state. */
 export function SessionSurfaceRailTabs({
   browserAriaLabel,
   browserLabel,
@@ -83,6 +83,15 @@ export function SessionSurfaceRailTabs({
       showActiveIndicator: hasPresentationOpen,
       surface: SessionWorkbenchSurface.Presentation,
       testId: 'session-workbench-presentation',
+    },
+    {
+      ariaLabel: t('session.resourcePanel.word'),
+      icon: Icons.wordDocument(17),
+      isOpenInBackground: false,
+      label: t('session.resourcePanel.word'),
+      showActiveIndicator: true,
+      surface: SessionWorkbenchSurface.Word,
+      testId: 'session-workbench-word',
     },
     {
       ariaLabel: browserAriaLabel,

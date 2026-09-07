@@ -30,6 +30,7 @@ export default defineConfig({
       input: {
         main: resolve(configDir, 'src/renderer/index.html'),
         powerpoint: resolve(configDir, 'src/renderer/powerpoint.html'),
+        word: resolve(configDir, 'src/renderer/word.html'),
       },
     },
   },

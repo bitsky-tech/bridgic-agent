@@ -11,7 +11,7 @@
  *    would nudge the whole line of text — the link is inline inside a paragraph, so the jitter would ripple through the entire paragraph.
  *  - Grouping uses the named `group/filelink`: a paragraph may contain several file links, and an anonymous group would make
  *    hovering any one of them light up the icons of every link.
- *  - Opening still goes through `requestFileOpenAtom` (confirmation dialog + remembering + failure toast); no separate path is started here.
+ *  - Opening goes through the shared file router for in-app editors or the confirmed system-open flow.
  *  - The anchor carries `break-all`, and it is load-bearing, not cosmetic. The wrapper is an
  *    `inline-flex` container, so the anchor is a flex item whose `min-width: auto` resolves to its
  *    min-content width. An ancestor's `overflow-wrap: break-word` does not reduce that intrinsic

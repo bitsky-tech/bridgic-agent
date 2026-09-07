@@ -108,6 +108,9 @@ const api: ElectronAPI = {
     setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
     openFile: (sessionId, absPath) => ipcRenderer.invoke(IPC.powerpoint.openFile, sessionId, absPath),
   },
+  word: {
+    readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
+  },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
     refresh: (expectedEndpointEpoch) =>

@@ -1,10 +1,13 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, jest } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it, jest, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ElectronAPI, EmbeddedBrowserTabInfo } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@app/shared/types'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+mock.module('@/assets/logo.svg', () => ({ default: 'logo.svg' }))
+mock.module('@/assets/logo-dark.svg', () => ({ default: 'logo-dark.svg' }))
 
 const browserCalls: string[] = []
 let nativeWindowForeground = true
@@ -221,11 +224,12 @@ describe('SessionResourcePanel', () => {
       'session-workbench-workflows',
       'session-workbench-results',
       'session-workbench-presentation',
+      'session-workbench-word',
       'session-workbench-browser',
     ])
     const toolList = host.querySelector('[data-testid="session-workbench-files"]')?.parentElement
-    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(5)
-    expect(toolList?.children).toHaveLength(5)
+    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(6)
+    expect(toolList?.children).toHaveLength(6)
 
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     const files = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
@@ -245,6 +249,7 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="workflow-results-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="schedule-workbench-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
 
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
@@ -254,10 +259,18 @@ describe('SessionResourcePanel', () => {
     expect(files.querySelector('[data-testid="session-workbench-files-status-indicator"]')).toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('false')
 
-    await act(async () => workflows.click())
+    const word = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-word"]')!
+    await act(async () => word.click())
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Word)
+    expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('false')
+    expect(window.__bridgicWord?.sessionId).toBe('session-tools')
+    expect((await window.__bridgicWord?.dispatch({ type: 'workspace.get' }))?.ok).toBe(true)
+    expect(host.querySelector('[data-testid="word-create-document"]')).not.toBeNull()
+
+    await act(async () => word.click())
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     expect(host.querySelector('[data-testid="session-surface-rail"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('true')
 
     await act(async () => root.unmount())
   })
@@ -789,6 +802,7 @@ describe('SessionResourcePanel', () => {
         'session-workbench-workflows',
         'session-workbench-results',
         'session-workbench-presentation',
+        'session-workbench-word',
         'session-workbench-browser',
       ])
 
