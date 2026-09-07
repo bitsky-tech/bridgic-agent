@@ -28,14 +28,13 @@ from src.amphi_agent._state import (
     WorkflowStageState,
 )
 from src.amphi_agent._workspace import Workspace
-from src.amphi_agent.tools._request_human import (
+from src.amphi_agent.tools.build import (
     RequestBuild,
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
-    RequestRunWorkflow,
 )
-from src.amphi_agent.tools._presentation import PresentationStepReport
-from src.amphi_agent.tools._workflow import EditWorkflow, WorkflowStepReport
+from src.amphi_agent.tools.powerpoint import PresentationStepReport
+from src.amphi_agent.tools.workflow import EditWorkflow, RequestRunWorkflow, WorkflowStepReport
 from src.amphi_service.protocol import (
     WsPresentationOutlineConfirmMessage,
     WsPresentationTemplateSelectionMessage,

@@ -4,8 +4,8 @@ from typing import Any
 import pytest
 
 from src.amphi_agent._browser import SessionBrowser, _SessionBrowserClient
-from src.amphi_agent.tools import _browser as browser_module
-from src.amphi_agent.tools._browser import (
+from src.amphi_agent.tools.browser import operations as browser_module
+from src.amphi_agent.tools.browser import (
     browser_close,
     browser_fill_form,
     browser_input,

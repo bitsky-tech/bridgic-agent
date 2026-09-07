@@ -80,18 +80,16 @@ from .security._routing import append_user_decisions, read_user_decisions
 from .security._classifier import MAX_USER_MESSAGES as _CLASSIFIER_MAX_USER_MESSAGES
 from .security._classify import label_text
 from .security._engine import model_facing_reason
-from .tools._request_human import (
+from .tools.build import (
     RequestBuild,
-    RequestPresentation,
-    RequestRunWorkflow,
-    RequestHumanChoice,
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
 )
+from .tools.request_human import RequestHumanChoice
 from .tools._bash import current_execution_mode, current_tool_call_id
-from .tools._presentation import PresentationStepReport
+from .tools.powerpoint import PresentationStepReport, RequestPresentation
 from .tools._subagent import BackgroundSubagentRequest, SubagentRequest
-from .tools._workflow import EditWorkflow, WorkflowStepReport
+from .tools.workflow import EditWorkflow, RequestRunWorkflow, WorkflowStepReport
 from ..amphi_store import (
     SessionTurnRecord,
     TurnStatus,

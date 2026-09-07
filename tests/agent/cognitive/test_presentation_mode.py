@@ -23,8 +23,7 @@ from src.amphi_agent.cognitive import (
     PresentationPlanThink,
 )
 from src.amphi_agent.prompts.presentation import PRESENTATION_BRIEF_PERSONA, PRESENTATION_PLAN_PERSONA
-from src.amphi_agent.tools._presentation import PresentationStepReport
-from src.amphi_agent.tools._request_human import RequestPresentation
+from src.amphi_agent.tools.powerpoint import PresentationStepReport, RequestPresentation
 from src.amphi_agent._invocation import AgentInvocation
 from src.amphi_service.protocol import (
     PresentationOutlineConfirmRequestEvent,

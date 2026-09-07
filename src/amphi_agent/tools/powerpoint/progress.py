@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
-from .._state import PresentationStepRecord
+from ..._state import PresentationStepRecord
 
 
 class PresentationToolRejection(ValueError):

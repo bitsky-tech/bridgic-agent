@@ -12,7 +12,7 @@ from src.amphi_agent._powerpoint import (
     PowerPointPageView,
     PowerPointWriteResult,
 )
-from src.amphi_agent.tools._powerpoint import (
+from src.amphi_agent.tools.powerpoint import (
     edit_ppt_page,
     get_ppt_page,
     goto_ppt_page,

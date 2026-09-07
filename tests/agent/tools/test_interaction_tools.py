@@ -3,16 +3,14 @@ import json
 import pytest
 
 from src.amphi_agent.tools._help import help as product_help
-from src.amphi_agent.tools._presentation import PresentationToolRejection, report_presentation_step
-from src.amphi_agent.tools._request_human import (
-    RequestHumanRejection,
+from src.amphi_agent.tools.build import (
     request_build,
-    request_presentation,
-    request_human_choice,
     request_human_task_confirm,
     request_human_workflow_confirm,
-    request_run_workflow,
 )
+from src.amphi_agent.tools.powerpoint import PresentationToolRejection, report_presentation_step, request_presentation
+from src.amphi_agent.tools.request_human import RequestHumanRejection, request_human_choice
+from src.amphi_agent.tools.workflow import request_run_workflow
 from src.amphi_agent.tools._subagent import run_subagent, start_subagent
 from src.amphi_agent.tools._switch import switch
 

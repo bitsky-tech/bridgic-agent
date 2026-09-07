@@ -8,7 +8,7 @@ from bridgic.core.model.types import Message, Response, Role
 
 from src.amphi_agent._state import PresentationChapterOutline, PresentationSlideOutline, PresentationStageState
 from src.amphi_agent.ppt_rag import LocalPPTTemplateCatalog, build_ppt_search_profile, build_ppt_template_index
-from src.amphi_agent.tools._ppt_rag import ppt_rag
+from src.amphi_agent.tools.powerpoint.ppt_rag import ppt_rag
 from tests.agent.tools._harness import ToolHarness
 
 

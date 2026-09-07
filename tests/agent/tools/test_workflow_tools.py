@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.amphi_agent.tools._workflow import (
+from src.amphi_agent.tools.workflow import (
     WorkflowToolRejection,
     edit_workflow,
     list_workflow_runs,

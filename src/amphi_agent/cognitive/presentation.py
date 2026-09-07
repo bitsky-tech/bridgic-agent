@@ -19,7 +19,7 @@ from ..prompts.presentation import (
 )
 from ..prompts.render import render_stage_persona
 from ..tools import switch_tool
-from ..tools._presentation import parse_presentation_step_data
+from ..tools.powerpoint import parse_presentation_step_data
 
 
 @dataclass(frozen=True)

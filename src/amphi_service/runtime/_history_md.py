@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, List, Sequence, Tuple
 
-from ...amphi_agent.tools._request_human import RequestHumanChoice
+from ...amphi_agent.tools.request_human import RequestHumanChoice
 from ...amphi_store import SessionTurnRecord
 
 _INLINE_MAX = 160  # arg values longer than this (or multi-line) drop to a fenced block

@@ -54,7 +54,7 @@ from .tools import (
     WORKSPACE_ADVANCED_TOOL_NAMES,
     switch_tool,
 )
-from .tools._request_human import RequestHumanChoice
+from .tools.request_human import RequestHumanChoice
 
 __all__ = [
     "BuildThink",
