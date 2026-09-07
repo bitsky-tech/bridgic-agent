@@ -310,7 +310,12 @@ function bootstrapPrimaryInstance(): void {
   // Register only on the default session used by the trusted application UI.
   // The embedded browser has its own persistent session and cannot access this
   // local-file bridge.
-  installLocalResourceProtocol(session.defaultSession, localResourceToken)
+  installLocalResourceProtocol(session.defaultSession, localResourceToken, () => {
+    const window = windowManager.getMainWindow()
+    if (!window || window.isDestroyed()) return undefined
+    const url = window.webContents.getURL()
+    return url ? new URL(url).origin : undefined
+  })
 
   registerAllHandlers(windowManager)
 

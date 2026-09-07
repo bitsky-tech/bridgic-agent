@@ -13,6 +13,7 @@ import {
   currentMessagesAtom,
   currentThinkingModeAtom,
 } from '@/atoms/agent'
+import type { PresentationPageSize } from '@/atoms/presentation'
 import {
   presentationPaneViewFamily,
   presentationTemplateSelectionFamily,
@@ -29,7 +30,13 @@ import {
   parseLocalResourceReference,
   toLocalResourceDisplayUrl,
 } from '@/components/markdown/localResource'
+import {
+  loadPresentationTemplatePreview,
+  type PresentationTemplatePreviewPage,
+  presentationTemplateSourceUrl,
+} from '@/lib/presentationTemplatePreview'
 import { SESSION_STATUS_BAR_HEIGHT_PX } from './SessionStatusBar'
+import { PresentationSlidePreview } from './PresentationSlidePreview'
 
 const PRESENTATION_STAGES = [
   {
@@ -147,6 +154,49 @@ function templateColor(value: string | undefined, fallback: string): string {
   return value && /^#[\da-f]{3}(?:[\da-f]{3})?$/i.test(value.trim()) ? value.trim() : fallback
 }
 
+function NativePresentationTemplatePreview({ page, pageSize }: {
+  page: PresentationTemplatePreviewPage
+  pageSize: PresentationPageSize
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [previewWidth, setPreviewWidth] = useState(320)
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const update = () => {
+      const bounds = container.getBoundingClientRect()
+      if (bounds.width <= 0 || bounds.height <= 0) return
+      setPreviewWidth(Math.min(bounds.width, bounds.height * (pageSize.width / pageSize.height)))
+    }
+    update()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [pageSize.height, pageSize.width])
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex size-full items-center justify-center bg-black/5"
+      data-testid="presentation-template-native-preview"
+    >
+      <PresentationSlidePreview
+        pageSize={pageSize}
+        slide={page.slide}
+        slideNumber={page.slideNumber}
+        width={previewWidth}
+        selected={false}
+        suppressMediaPlayback
+      />
+    </div>
+  )
+}
+
 function PresentationTemplatePreview({ candidate, hovering }: {
   candidate: PresentationTemplateCandidate
   hovering: boolean
@@ -154,30 +204,52 @@ function PresentationTemplatePreview({ candidate, hovering }: {
   const { t } = useTranslation()
   const [activeIndex, setActiveIndex] = useState(0)
   const [failedUrls, setFailedUrls] = useState<string[]>([])
+  const nativeSourceUrl = presentationTemplateSourceUrl(candidate)
+  const [nativePreview, setNativePreview] = useState<Awaited<ReturnType<typeof loadPresentationTemplatePreview>>>(null)
+  const [nativeSettled, setNativeSettled] = useState(nativeSourceUrl === null)
   const previewUrls = candidate.previewPaths
     .map(templatePreviewUrl)
     .filter((value): value is string => value !== null)
   const previewKey = previewUrls.join('\u0000')
   const availableUrls = previewUrls.filter(url => !failedUrls.includes(url))
-  const previewUrl = availableUrls.length > 0 ? availableUrls[activeIndex % availableUrls.length] : null
+  const nativePages = nativePreview?.pages ?? []
+  const previewCount = nativePages.length || availableUrls.length
+  const visibleIndex = hovering ? activeIndex : 0
+  const nativePage = nativePages.length > 0 ? nativePages[visibleIndex % nativePages.length] : null
+  const previewUrl = nativePages.length === 0 && nativeSettled && availableUrls.length > 0
+    ? availableUrls[visibleIndex % availableUrls.length]
+    : null
   const paper = templateColor(candidate.colors[0], '#f8f6f1')
   const ink = templateColor(candidate.colors[1], '#273142')
   const accent = templateColor(candidate.colors[2], '#7c6cf2')
 
   useEffect(() => {
-    if (!hovering || availableUrls.length < 2) return
+    let active = true
+    void loadPresentationTemplatePreview(candidate).then((preview) => {
+      if (active) {
+        setNativePreview(preview)
+        setNativeSettled(true)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [candidate])
+
+  useEffect(() => {
+    if (!hovering || previewCount < 2) return
     const timer = window.setInterval(() => {
-      setActiveIndex(current => (current + 1) % availableUrls.length)
+      setActiveIndex(current => (current + 1) % previewCount)
     }, 1_000)
     return () => window.clearInterval(timer)
-  }, [availableUrls.length, hovering, previewKey])
+  }, [hovering, previewCount, previewKey])
 
-  if (previewUrl) {
-    return (
-      <div
-        className="relative size-full"
-        data-testid="presentation-template-preview"
-      >
+  if (nativePage || previewUrl) {
+    let previewContent = null
+    if (nativePage && nativePreview) {
+      previewContent = <NativePresentationTemplatePreview page={nativePage} pageSize={nativePreview.pageSize} />
+    } else if (previewUrl) {
+      previewContent = (
         <img
           key={previewUrl}
           src={previewUrl}
@@ -186,9 +258,17 @@ function PresentationTemplatePreview({ candidate, hovering }: {
           loading="lazy"
           onError={() => setFailedUrls(current => current.includes(previewUrl) ? current : [...current, previewUrl])}
         />
-        {availableUrls.length > 1 && hovering && (
+      )
+    }
+    return (
+      <div
+        className="relative size-full"
+        data-testid="presentation-template-preview"
+      >
+        {previewContent}
+        {previewCount > 1 && hovering && (
           <span className="absolute bottom-2 right-2 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-white backdrop-blur-sm">
-            {(activeIndex % availableUrls.length) + 1}/{availableUrls.length}
+            {(visibleIndex % previewCount) + 1}/{previewCount}
           </span>
         )}
       </div>
@@ -274,7 +354,7 @@ function PresentationTemplatesPanel({
                 onMouseLeave={() => setHoveredTemplateId(null)}
                 className={cn(
                   'group overflow-hidden rounded-xl border bg-bg-elevated text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-border-default hover:shadow-md',
-                  selected ? 'border-accent-primary ring-2 ring-accent-primary/20' : 'border-border-subtle',
+                  selected ? 'border-text-accent ring-2 ring-text-accent/20' : 'border-border-subtle',
                 )}
                 aria-pressed={selected}
                 aria-disabled={!interactive}
@@ -283,7 +363,7 @@ function PresentationTemplatesPanel({
               >
                 <div className="relative aspect-video overflow-hidden border-b border-border-subtle bg-bg-subtle">
                   <PresentationTemplatePreview
-                    key={`${candidate.templateId}:${candidate.version}:${hoveredTemplateId === candidate.templateId ? 'hover' : 'idle'}`}
+                    key={`${candidate.templateId}:${candidate.version}`}
                     candidate={candidate}
                     hovering={hoveredTemplateId === candidate.templateId}
                   />
@@ -291,7 +371,7 @@ function PresentationTemplatesPanel({
                     {badge}
                   </span>
                   {selected && (
-                    <span className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-accent-primary text-white shadow">
+                    <span className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-text-accent text-white shadow">
                       {Icons.check(12)}
                     </span>
                   )}
@@ -508,7 +588,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
           if (editable) {
             chapterSummary = (
               <textarea
-                className="mt-1 min-h-12 w-full resize-y rounded-md border border-border-subtle bg-bg-input px-2 py-1.5 text-2xs leading-5 text-text-tertiary outline-none focus:border-accent-primary"
+                className="mt-1 min-h-12 w-full resize-y rounded-md border border-border-subtle bg-bg-input px-2 py-1.5 text-2xs leading-5 text-text-tertiary outline-none focus:border-text-accent"
                 value={chapter.summary ?? ''}
                 onChange={event => patchChapter(chapter.id, { summary: event.target.value })}
                 aria-label={t('presentationMode.outline.chapterSummary')}
@@ -542,7 +622,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                 <div className="min-w-0 flex-1">
                   {editable ? (
                     <input
-                      className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
+                      className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-text-accent focus:bg-bg-input"
                       value={chapter.title}
                       onChange={event => patchChapter(chapter.id, { title: event.target.value })}
                       aria-label={t('presentationMode.outline.chapterTitle')}
@@ -583,7 +663,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                         <div className="min-w-0 flex-1">
                           {editable ? (
                             <input
-                              className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
+                              className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-text-primary outline-none hover:border-border-default focus:border-text-accent focus:bg-bg-input"
                               value={slide.title}
                               onChange={event => patchSlide(chapter.id, slide.id, { title: event.target.value })}
                               aria-label={t('presentationMode.outline.slideTitle')}
@@ -591,7 +671,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                           ) : <p className="text-xs font-semibold leading-5 text-text-primary">{slide.title}</p>}
                           {(editable || slide.purpose) && (editable ? (
                             <input
-                              className="mt-1 w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-2xs leading-5 text-text-secondary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
+                              className="mt-1 w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-2xs leading-5 text-text-secondary outline-none hover:border-border-default focus:border-text-accent focus:bg-bg-input"
                               value={slide.purpose ?? ''}
                               onChange={event => patchSlide(chapter.id, slide.id, { purpose: event.target.value })}
                               placeholder={t('presentationMode.outline.purpose')}
@@ -600,7 +680,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                           ) : <p className="mt-1 text-2xs leading-5 text-text-secondary">{slide.purpose}</p>)}
                           {(editable || slide.keyMessage) && (editable ? (
                             <textarea
-                              className="mt-1 min-h-9 w-full resize-y rounded-md border border-transparent bg-transparent px-1.5 py-1 text-2xs leading-5 text-text-tertiary outline-none hover:border-border-default focus:border-accent-primary focus:bg-bg-input"
+                              className="mt-1 min-h-9 w-full resize-y rounded-md border border-transparent bg-transparent px-1.5 py-1 text-2xs leading-5 text-text-tertiary outline-none hover:border-border-default focus:border-text-accent focus:bg-bg-input"
                               value={slide.keyMessage ?? ''}
                               onChange={event => patchSlide(chapter.id, slide.id, { keyMessage: event.target.value })}
                               placeholder={t('presentationMode.outline.keyMessage')}
@@ -609,7 +689,7 @@ function PresentationOutlinePanel({ chapters, sources, editable, busy, onConfirm
                           ) : <p className="mt-1 text-2xs leading-5 text-text-tertiary">{slide.keyMessage}</p>)}
                           {editable ? (
                             <textarea
-                              className="mt-2 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-2xs leading-5 text-text-secondary outline-none focus:border-accent-primary"
+                              className="mt-2 min-h-20 w-full resize-y rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-2xs leading-5 text-text-secondary outline-none focus:border-text-accent"
                               value={slide.contentOutline.join('\n')}
                               onChange={event => patchSlide(chapter.id, slide.id, {
                                 contentOutline: event.target.value.split('\n').slice(0, 8),
@@ -945,7 +1025,7 @@ export function PresentationModePane() {
                     >
                       {stepCurrent && agentRunning ? (
                         <span
-                          className="absolute -left-[20px] top-0.5 flex size-4 items-center justify-center rounded-full bg-bg-surface text-accent-primary"
+                          className="absolute -left-[20px] top-0.5 flex size-4 items-center justify-center rounded-full bg-bg-surface text-text-accent"
                           data-testid="presentation-step-spinner"
                           role="status"
                           aria-label={t('presentationMode.status.running')}
@@ -956,7 +1036,7 @@ export function PresentationModePane() {
                         <span className={cn(
                           'absolute -left-[17px] top-1.5 size-2 rounded-full ring-2 ring-bg-surface',
                           stepComplete && 'bg-status-success',
-                          stepCurrent && 'bg-accent-primary',
+                          stepCurrent && 'bg-text-accent',
                           !stepComplete && !stepCurrent && 'bg-border-default',
                         )} />
                       )}
@@ -1038,7 +1118,7 @@ export function PresentationModePane() {
                 <span className={cn(
                   'absolute left-0 top-0.5 flex size-6 items-center justify-center rounded-full text-2xs font-semibold',
                   complete && 'bg-status-success-bg text-status-success',
-                  current && 'bg-accent-primary text-white shadow-sm',
+                  current && 'bg-accent-blue-subtle text-text-accent ring-1 ring-text-accent/30 shadow-sm',
                   !complete && !current && 'border border-border-default bg-bg-surface text-text-tertiary',
                 )}>
                   {current && stage.steps.length === 0 && agentRunning ? (

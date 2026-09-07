@@ -958,10 +958,33 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
   const shapeTree = firstByLocalName(document, 'spTree')
   if (shapeTree) await importTree(shapeTree, ROOT_COORDINATE_TRANSFORM, relationships)
   elements = applyImportedAnimations(document, sourceShapeIds, elements)
-  const backgroundRoot = firstByLocalName(document, 'bg')
-    ?? (layoutDocument ? firstByLocalName(layoutDocument, 'bg') : null)
-    ?? (masterDocument ? firstByLocalName(masterDocument, 'bg') : null)
+  const backgroundOwner = [
+    { document, relationships },
+    { document: layoutDocument, relationships: layoutRelationships },
+    { document: masterDocument, relationships: masterRelationships },
+  ].find(owner => owner.document && firstByLocalName(owner.document, 'bg'))
+  const backgroundRoot = backgroundOwner?.document ? firstByLocalName(backgroundOwner.document, 'bg') : null
   const background = colorFrom(backgroundRoot, '#FFFFFF', themeColors)
+  const backgroundBlip = backgroundRoot ? firstByLocalName(backgroundRoot, 'blip') : null
+  const backgroundSource = backgroundOwner
+    ? await imageSourceFromBlip(backgroundBlip, backgroundOwner.relationships)
+    : null
+  if (backgroundSource) {
+    elements.unshift({
+      id: createPresentationId('image'),
+      type: 'image',
+      x: 0,
+      y: 0,
+      width: pageSize.width,
+      height: pageSize.height,
+      rotation: 0,
+      opacity: opacityFrom(backgroundBlip),
+      altText: '',
+      fit: 'cover',
+      shadow: false,
+      source: backgroundSource,
+    })
+  }
   const notesTarget = [...relationships.values()].find((target) => target.includes('/notesSlides/'))
   const notesFile = notesTarget ? archive.file(notesTarget) : null
   let notes = ''
@@ -979,8 +1002,17 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
   }
 }
 
+export interface PresentationPptxImportOptions {
+  /** One-based source slide numbers. Omit to import the complete deck. */
+  slideNumbers?: readonly number[]
+}
+
 /** Import common editable PowerPoint content from an OOXML .pptx archive. */
-export async function importPresentationPptx(bytes: ArrayBuffer | Uint8Array, fileName = 'Imported presentation.pptx'): Promise<PresentationDocument> {
+export async function importPresentationPptx(
+  bytes: ArrayBuffer | Uint8Array,
+  fileName = 'Imported presentation.pptx',
+  options: PresentationPptxImportOptions = {},
+): Promise<PresentationDocument> {
   const archive = await JSZip.loadAsync(bytes)
   const themeColors = await themeColorsFromArchive(archive)
   const accentColors = ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].flatMap((name) => {
@@ -1008,7 +1040,18 @@ export async function importPresentationPptx(bytes: ArrayBuffer | Uint8Array, fi
     .sort((left, right) => Number(left.match(/\d+/)?.[0]) - Number(right.match(/\d+/)?.[0]))
   const slidePaths = orderedPaths.length > 0 ? orderedPaths : fallbackPaths
   if (slidePaths.length === 0) throw new Error('The presentation contains no slides')
-  const slides = await Promise.all(slidePaths.map((path, index) => importSlide(archive, path, pageSize, slideSizeEmu, index)))
+  const requestedSlideNumbers = options.slideNumbers
+    ? [...new Set(options.slideNumbers.filter(number => Number.isInteger(number) && number >= 1 && number <= slidePaths.length))]
+    : []
+  const selectedSlideNumbers = options.slideNumbers && requestedSlideNumbers.length === 0
+    ? [1]
+    : requestedSlideNumbers
+  const selectedSlides = selectedSlideNumbers.length > 0
+    ? selectedSlideNumbers.map(number => ({ path: slidePaths[number - 1]!, sourceIndex: number - 1 }))
+    : slidePaths.map((path, sourceIndex) => ({ path, sourceIndex }))
+  const slides = await Promise.all(selectedSlides.map(({ path, sourceIndex }) => (
+    importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex)
+  )))
   return {
     id: createPresentationId('presentation'),
     master: {

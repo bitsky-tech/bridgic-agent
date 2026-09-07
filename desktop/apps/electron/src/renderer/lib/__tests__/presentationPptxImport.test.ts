@@ -5,6 +5,34 @@ import { createPresentationTestDocument as createInitialPresentationDocument } f
 import { createPresentationPptx } from '../presentationPptx'
 
 describe('importPresentationPptx', () => {
+  it('preserves slide, layout and master background images behind foreground elements', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const bytes = await createPresentationPptx(createInitialPresentationDocument())
+    const owners = ['slides/slide1.xml', 'slideLayouts/slideLayout1.xml', 'slideMasters/slideMaster1.xml']
+    for (const owner of owners) {
+      const archive = await JSZip.loadAsync(bytes)
+      for (const part of owners) {
+        const file = archive.file(`ppt/${part}`)!
+        archive.file(file.name, (await file.async('text')).replace(/<p:bg>.*?<\/p:bg>/s, ''))
+      }
+      const file = archive.file(`ppt/${owner}`)!
+      const background = '<p:bg><p:bgPr><a:blipFill><a:blip r:embed="templateBackground"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>'
+      archive.file(file.name, (await file.async('text')).replace(/(<p:cSld[^>]*>)/, `$1${background}`))
+      const [folder, name] = owner.split('/')
+      const rels = archive.file(`ppt/${folder}/_rels/${name}.rels`)!
+      archive.file(rels.name, (await rels.async('text')).replace('</Relationships>',
+        '<Relationship Id="templateBackground" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/template-background.png"/></Relationships>'))
+      archive.file('ppt/media/template-background.png', new Uint8Array([137, 80, 78, 71]))
+      const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
+      const first = imported.slides[0]!.elements[0]!
+      expect(first.type).toBe('image')
+      if (first.type !== 'image') throw new Error('Background missing')
+      expect(first.source.fileName).toBe('template-background.png')
+      expect([first.x, first.y, first.width, first.height]).toEqual([0, 0, imported.pageSize.width, imported.pageSize.height])
+      expect(imported.slides[0]!.elements.slice(1).some(element => element.type === 'text')).toBe(true)
+    }
+  })
+
   it('round-trips editable slides, geometry, notes and page size', async () => {
     const source = createInitialPresentationDocument()
     source.master.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
@@ -29,6 +57,28 @@ describe('importPresentationPptx', () => {
     expect(importedText?.type).toBe('text')
     if (importedText?.type === 'text') expect(importedText.characterSpacing).toBeCloseTo(125, 1)
     expect(imported.slides[0]!.elements.some((element) => element.type !== 'text')).toBe(true)
+  })
+
+  it('imports only the requested source slides for lightweight template previews', async () => {
+    const source = createInitialPresentationDocument()
+    const first = source.slides[0]!
+    const second = structuredClone(first)
+    second.id = 'preview-slide-2'
+    second.name = 'Second source slide'
+    const third = structuredClone(first)
+    third.id = 'preview-slide-3'
+    third.name = 'Third source slide'
+    source.slides = [first, second, third]
+    source.selectedSlideId = first.id
+    const bytes = await createPresentationPptx(source)
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+
+    const imported = await importPresentationPptx(bytes, 'preview.pptx', {
+      slideNumbers: [1, 3, 3, 99],
+    })
+
+    expect(imported.slides).toHaveLength(2)
+    expect(imported.slides.map(slide => slide.name)).toEqual(['Slide 1', 'Slide 3'])
   })
 
   it('preserves mixed shape-picture z-order, source crop and text-box layout', async () => {
