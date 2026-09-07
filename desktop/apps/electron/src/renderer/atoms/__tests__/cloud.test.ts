@@ -15,6 +15,7 @@ import { BackendState } from '../../../main/python-client/types'
 import { backendSnapshotAtom } from '../backend'
 import {
   CLOUD_PROVIDER_ID,
+  wholeCredits,
   cloudAccountAtom,
   cloudErrorAtom,
   cloudRefreshAtom,
@@ -74,14 +75,18 @@ function harness(
       if (url.endsWith(path)) return response.clone()
     }
 
+    // Credits cross as exact decimal strings, never JSON numbers — a number is
+    // a double by the time this parses it. The fixtures said number and the
+    // client's types agreed, so nothing here noticed that production sends
+    // eighteen decimal places of string.
     if (url.endsWith('/auth/login')) {
-      return jsonResponse({ access_token: 'tok-abc', account_id: 7, credits_balance: 50_000 })
+      return jsonResponse({ access_token: 'tok-abc', account_id: 7, credits_balance: '50000' })
     }
     if (url.includes('8787') && url.endsWith('/me')) {
       return jsonResponse({
         account_id: 7,
         email: 'a@b.com',
-        credits_balance: 50_000,
+        credits_balance: '9969.155500000000000000',
         credits_per_yuan: 1000,
       })
     }
@@ -141,7 +146,10 @@ describe('cloud sign-in', () => {
     expect(store.get(cloudAccountAtom)).toEqual({
       accountId: 7,
       email: 'a@b.com',
-      creditsBalance: 50_000,
+      // A number, converted at the boundary. Left as the string it arrives as,
+      // `toLocaleString` returns it untouched and the balance renders with all
+      // eighteen places.
+      creditsBalance: 9969.1555,
       // Read back from the gateway rather than assumed: the balance is
       // unreadable without it, and a hard-coded guess goes wrong silently.
       creditsPerYuan: 1000,
@@ -217,5 +225,20 @@ describe('cloud refresh', () => {
     expect(
       recorded.some((r) => r.url === `${DAEMON}/me/providers/${CLOUD_PROVIDER_ID}`),
     ).toBe(true)
+  })
+})
+
+describe('wholeCredits', () => {
+  it('shows whole credits, grouped', () => {
+    expect(wholeCredits(9969.1555)).toBe('9,969')
+    expect(wholeCredits(50_000)).toBe('50,000')
+  })
+
+  it('rounds down, never up', () => {
+    // The stored balance is exact to eighteen places and this is only how it is
+    // shown. The one thing the display must not do is claim more money than the
+    // account has, so .9 is still not a whole credit.
+    expect(wholeCredits(9969.9)).toBe('9,969')
+    expect(wholeCredits(0.8)).toBe('0')
   })
 })

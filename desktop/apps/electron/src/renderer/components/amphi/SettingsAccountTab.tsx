@@ -11,6 +11,7 @@ import {
   cloudRegisterAtom,
   cloudSignInAtom,
   cloudSignOutAtom,
+  wholeCredits,
 } from '@/atoms/cloud'
 import { rlog } from '@/lib/logger'
 import { PasswordField } from './PasswordField'
@@ -91,7 +92,7 @@ export function SettingsAccountTab() {
           <span className="flex items-center gap-2">
             <span className="flex flex-col items-end">
               <span className="text-sm font-semibold tabular-nums text-text-primary">
-                {t('cloud.credits', { n: account.creditsBalance.toLocaleString() })}
+                {t('cloud.credits', { n: wholeCredits(account.creditsBalance) })}
               </span>
               {/* Credits are our own unit, so the balance is unreadable without
                   the rate. The rate comes from the server; a zero means it has

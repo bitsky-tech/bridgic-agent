@@ -32,11 +32,34 @@ export const CLOUD_BASE_URL = 'http://127.0.0.1:8787'
 export interface CloudAccount {
   accountId: number
   email: string
+  /**
+   * Credits, as a number, converted once here.
+   *
+   * The gateway sends an exact decimal string — a JSON number would be a double
+   * by the time this parsed it, and the balance is money. Nothing on this side
+   * does arithmetic that has to be exact, so it is read into a number at the
+   * boundary rather than carried as a string every consumer would have to
+   * convert. Typed `number` while holding the string is what hid the bug:
+   * `String.prototype.toLocaleString` returns its own value untouched, so the
+   * balance rendered with all eighteen decimal places and the formatting call
+   * looked correct.
+   */
   creditsBalance: number
   /** How many credits one yuan buys. Served by the gateway, never assumed:
    *  a balance means nothing without it, and a hard-coded guess keeps being
    *  wrong silently after operations changes the rate. */
   creditsPerYuan: number
+}
+
+/**
+ * A balance as a customer reads it: whole credits, grouped.
+ *
+ * Rounded **down**, never up. This is display only — the stored balance keeps
+ * all of its places — and the one thing a shown balance must not do is claim
+ * more money than the account has.
+ */
+export function wholeCredits(balance: number): string {
+  return Math.floor(balance).toLocaleString()
 }
 
 export interface CloudModel {
@@ -128,7 +151,8 @@ async function cloudFetch<T>(
 interface TokenResponse {
   access_token: string
   account_id: number
-  credits_balance: number
+  /** An exact decimal string, not a number — see `CloudAccount.creditsBalance`. */
+  credits_balance: string
 }
 
 interface ModelPayload {
@@ -202,7 +226,7 @@ async function performSignIn(
     set(_account, {
       accountId: auth.account_id,
       email: input.email,
-      creditsBalance: auth.credits_balance,
+      creditsBalance: Number(auth.credits_balance),
       creditsPerYuan: 0,
     })
     await set(cloudRefreshAtom, { quiet: true })
@@ -260,13 +284,13 @@ export const cloudRefreshAtom = atom(
       const me = await cloudFetch<{
         account_id: number
         email: string
-        credits_balance: number
+        credits_balance: string
         credits_per_yuan: number
       }>('/me', { token })
       set(_account, {
         accountId: me.account_id,
         email: me.email,
-        creditsBalance: me.credits_balance,
+        creditsBalance: Number(me.credits_balance),
         creditsPerYuan: me.credits_per_yuan,
       })
       set(_error, null)
