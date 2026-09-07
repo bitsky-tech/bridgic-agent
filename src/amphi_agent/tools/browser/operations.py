@@ -5,7 +5,7 @@ from typing import Dict, List, Literal, Optional
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
-from ..._browser import SessionBrowser
+from .session import SessionBrowser
 
 _BRIDGIC_BROWSER_METHOD_TO_TOOL_NAME = {
     "navigate_to": "browser_open",

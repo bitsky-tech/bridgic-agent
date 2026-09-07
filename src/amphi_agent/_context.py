@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from bridgic.amphibious import Context, OTAContext
 
-from ._browser import SessionBrowser
-from ._powerpoint import SessionPowerPoint
+from .tools.browser.session import SessionBrowser
+from .tools.powerpoint.session import SessionPowerPoint
 from ._session import Session
 from ._memory import Memory
 from ._llm_provider import LlmProvider

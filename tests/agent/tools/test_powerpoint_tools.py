@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from src.amphi_agent._powerpoint import (
+from src.amphi_agent.tools.powerpoint.session import (
     PowerPointAsset,
     PowerPointDiagnostic,
     PowerPointPage,

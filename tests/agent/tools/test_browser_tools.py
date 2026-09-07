@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from src.amphi_agent._browser import SessionBrowser, _SessionBrowserClient
+from src.amphi_agent.tools.browser.session import SessionBrowser, _SessionBrowserClient
 from src.amphi_agent.tools.browser import operations as browser_module
 from src.amphi_agent.tools.browser import (
     browser_close,
