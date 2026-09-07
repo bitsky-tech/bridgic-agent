@@ -96,6 +96,9 @@
     "esbuild",
     "sharp",
   ],
+  "patchedDependencies": {
+    "app-builder-lib@26.8.1": "patches/app-builder-lib@26.8.1.patch",
+  },
   "packages": {
     "7zip-bin": ["7zip-bin@5.2.0", "https://registry.npmmirror.com/7zip-bin/-/7zip-bin-5.2.0.tgz", {}, "sha512-ukTPVhqG4jNzMro2qA9HSCSSVJN3aN7tlb+hfqYCt3ER0yWroeA2VR38MNrOHLQ/cVj+DaIMad0kFCtWWowh/A=="],
 
