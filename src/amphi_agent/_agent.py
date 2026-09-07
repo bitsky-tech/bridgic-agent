@@ -16,6 +16,7 @@ from bridgic.amphibious import (
     RETURN,
     StepToolCall,
     ThinkUnit,
+    ThinkUnitDescriptor,
     think_unit,
     OTARecord,
 )
@@ -30,17 +31,9 @@ from .cognitive import (
     PRESENTATION_STAGE_ARTIFACTS,
     PRESENTATION_STAGE_ORDER,
     PRESENTATION_STAGE_STEPS,
-    ClarifyThink,
-    ExploreThink,
-    GenerateThink,
     MainThink,
-    PresentationBriefThink,
-    PresentationComposeThink,
-    PresentationPlanThink,
-    PresentationReviewThink,
     SubAgentThink,
-    VerifyThink,
-    WorkflowThink,
+    get_cognitive_stages,
     render_input,
 )
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
@@ -172,21 +165,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     main = think_unit(MainThink(), max_attempts=DEFAULT_MAX_ROUNDS)
     subagent = think_unit(SubAgentThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
-    # Build pipeline — one think unit per stage, dispatched by on_agent.
-    clarify = think_unit(ClarifyThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    explore = think_unit(ExploreThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    generate = think_unit(GenerateThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    verify = think_unit(VerifyThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-
-    # Presentation pipeline — brief, plan, compose, and review the live deck.
-    ppt_brief = think_unit(PresentationBriefThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    ppt_plan = think_unit(PresentationPlanThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    ppt_compose = think_unit(PresentationComposeThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    ppt_review = think_unit(PresentationReviewThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-
-    # Saved Workflow runtime.
-    execute = think_unit(WorkflowThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-
     def __init__(self, max_rounds: int = DEFAULT_MAX_ROUNDS, verbose: bool = False) -> None:
         super().__init__(verbose=verbose)
         self._max_rounds = max_rounds
@@ -219,11 +197,22 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "report_workflow_step",
         }
 
-        self.thinking_modes = {
-            "build": ("clarify", "explore", "generate", "verify"),
-            "presentation": ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"),
-            "run_workflow": ("execute",),
-        }
+        self.thinking_modes: dict[str, tuple[str, ...]] = {}
+        descriptors: dict[str, ThinkUnitDescriptor] = {}
+        for stage in get_cognitive_stages():
+            descriptor = getattr(AmphiAgent, stage.stage, None)
+            if not isinstance(descriptor, ThinkUnitDescriptor) or stage.stage in ("main", "subagent"):
+                if hasattr(AmphiAgent, stage.stage) or (
+                    hasattr(self, stage.stage) and not isinstance(getattr(self, stage.stage), ThinkUnitDescriptor)
+                ):
+                    raise ValueError(f"Cognitive stage {stage.stage!r} would overwrite an Agent attribute.")
+                descriptors[stage.stage] = think_unit(stage.worker_class(), max_attempts=DEFAULT_MAX_ROUNDS)
+            self.thinking_modes[stage.mode] = (*self.thinking_modes.get(stage.mode, ()), stage.stage)
+
+        # The framework resolves ThinkUnits on the class; reuse existing declarations
+        # so later instances preserve worker templates and explicit subclass overrides.
+        for name, descriptor in descriptors.items():
+            setattr(AmphiAgent, name, descriptor)
 
 
     ############################################################################

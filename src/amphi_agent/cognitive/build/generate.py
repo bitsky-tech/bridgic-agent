@@ -5,11 +5,13 @@ from typing import List, Optional
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
+from ..registry import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ...prompts.build.generate import GENERATE_PERSONA
 
 
+@cognitive_stage(mode="build", stage="generate", order=30)
 class GenerateThink(BuildThink):
     """Generate a reusable workflow from this build's implementation plan."""
 

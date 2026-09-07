@@ -1,4 +1,8 @@
-"""Common and mode-specific cognitive workers registered by the main agent."""
+"""Common and mode-specific cognitive workers registered by the main agent.
+
+Import business packages here so their stage decorators run before the Agent
+reads their definitions. Each business package imports its own stage modules.
+"""
 
 from .base import MainThink, ToolSurface, render_input
 from .subagent import CHILD_TOOL_NAMES, SubAgentThink
@@ -14,9 +18,12 @@ from .presentation import (
     PresentationThink,
 )
 from .workflow import WorkflowRunThink, WorkflowThink
+from .registry import CognitiveStage, get_cognitive_stages
 
 __all__ = [
     "CHILD_TOOL_NAMES",
+    "CognitiveStage",
+    "get_cognitive_stages",
     "MainThink",
     "SubAgentThink",
     "ToolSurface",

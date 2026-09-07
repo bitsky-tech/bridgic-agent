@@ -6,11 +6,13 @@ from typing import List, Optional, Tuple
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
+from ..registry import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ...prompts.build.clarify import CLARIFY_PERSONA
 
 
+@cognitive_stage(mode="build", stage="clarify", order=10)
 class ClarifyThink(BuildThink):
     """Clarify requirements and maintain this build's task definition."""
 

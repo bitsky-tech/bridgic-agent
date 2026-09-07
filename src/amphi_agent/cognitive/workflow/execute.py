@@ -6,9 +6,11 @@ from bridgic.amphibious import StepToolCall
 
 from ..._context import AmphiContext, AmphiOTAContext
 from ...prompts.workflow.execute import WORKFLOW_PERSONA
+from ..registry import cognitive_stage
 from .base import WorkflowRunThink
 
 
+@cognitive_stage(mode="run_workflow", stage="execute", order=10)
 class WorkflowThink(WorkflowRunThink):
     """Execute the current section of a saved Workflow."""
 

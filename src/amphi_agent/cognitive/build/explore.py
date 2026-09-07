@@ -5,12 +5,14 @@ from typing import Dict, List, Optional
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
+from ..registry import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill, SkillGroup
 from ...prompts.build.explore import EXPLORE_PERSONA
 
 
+@cognitive_stage(mode="build", stage="explore", order=20)
 class ExploreThink(BuildThink):
     """Explore and record this build's implementation plan."""
 

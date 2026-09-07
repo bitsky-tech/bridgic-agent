@@ -6,11 +6,13 @@ from typing import List, Optional
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
+from ..registry import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext
 from ...prompts.build.verify import VERIFY_PERSONA
 
 
+@cognitive_stage(mode="build", stage="verify", order=40)
 class VerifyThink(BuildThink):
     """Safely test the generated workflow against the task definition."""
 
