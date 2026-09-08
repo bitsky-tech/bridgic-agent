@@ -9,9 +9,11 @@ from ..._state import NormalStageState
 from ..._tools import TOOL_LIBRARY
 from ...prompts.main import SUB_AGENT_PERSONA
 from ...tools import FILE_SYSTEM_TOOL_NAMES
+from ..register import cognitive_stage
 from .main import MainThink
 
 
+@cognitive_stage(mode="normal", stage="subagent", order=20)
 class SubAgentThink(MainThink):
     """Run one focused delegated task inside a Child Session."""
 

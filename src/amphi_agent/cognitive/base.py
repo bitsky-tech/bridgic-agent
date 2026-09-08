@@ -5,9 +5,10 @@ import logging
 import math
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
+from uuid import uuid4
 
-from bridgic.amphibious import CognitiveWorker, StepToolCall
+from bridgic.amphibious import ActionStepResult, CognitiveWorker, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -37,11 +38,21 @@ from .._skills import Skill
 from ..prompts.render import time_in_local_tz
 from ..prompts.shared import TURN_FAILED_MESSAGE
 from .._state import (
+    AwaitingFeedback,
+    AwaitingSubAgent,
+    SubAgentCall,
+    CallVerdict,
     ContextCompactionState,
     TurnCompactionState,
 )
 from .._thinking_debug import write_thinking_debug
+from ..security import Permission
 from ..tools.request_human import RequestHumanChoice
+from ..tools._subagent import BackgroundSubagentRequest, SubagentRequest
+
+
+if TYPE_CHECKING:
+    from .._agent import AmphiAgent
 
 
 logger = logging.getLogger(__name__)
@@ -236,7 +247,7 @@ class BaseThink(CognitiveWorker):
     permission_mode_override: Optional[str] = None
 
     ############################################################################
-    # The shared thinking phase
+    # The agent design
     ############################################################################
     async def thinking(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Dict[str, Any]], str]:
         # Persist the source cognitive scope before this round can switch state.
@@ -297,6 +308,63 @@ class BaseThink(CognitiveWorker):
         for key, value in result.capture.items():
             setattr(record, key, value)
         return result.tool_calls, result.content
+    
+    def prepare_action_step(self, step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
+        """Consume mode-owned results before generic spilling and tool-result events."""
+        return None
+
+    async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
+        """Apply shared interactions and park the complete child batch."""
+        gate = agent._get_current_ota_permission_status(ota_context)
+        effective_execution_mode = (
+            gate.execution_mode or agent._effective_execution_mode(ota_context, context)
+        )
+        subagent_calls: List[SubAgentCall] = []
+        for step in getattr(ota_context.action_result, "results", None) or []:
+            if not step.success:
+                continue
+
+            if step.tool_name == "request_human_choice":
+                result = step.tool_result
+                if isinstance(result, RequestHumanChoice) and result.questions:
+                    ota_context.transition_interaction(AwaitingFeedback(
+                        questions=result.questions,
+                        prompt=result.prompt,
+                        request_id=f"human_{uuid4().hex}",
+                    ))
+                    step.tool_result = result.questions
+            elif step.tool_name == "run_subagent":
+                request = step.tool_result
+                if isinstance(request, SubagentRequest):
+                    tool_call_id = str(getattr(step, "tool_id", None) or "")
+                    subagent_calls.append(SubAgentCall.create(
+                        tool_call_id,
+                        request.goal,
+                        execution_mode=effective_execution_mode,
+                    ))
+                    step.tool_result = (
+                        "Sub-agent dispatch accepted. The parent Agent will pause "
+                        "until every requested sub-agent finishes."
+                    )
+            elif step.tool_name == "start_subagent":
+                request = step.tool_result
+                if isinstance(request, BackgroundSubagentRequest):
+                    invocation = context.invocations
+                    parent_session_id = context.session.id
+                    tool_call_id = str(getattr(step, "tool_id", None) or "")
+                    call = SubAgentCall.create(
+                        tool_call_id,
+                        request.goal,
+                        execution_mode=effective_execution_mode,
+                    )
+                    child_session_id = await invocation.start_subagent(parent_session_id, call)
+                    step.tool_result = (
+                        f"Background sub-agent session `{child_session_id}` started. "
+                        "It will continue independently; do not wait for its result."
+                    )
+
+        if subagent_calls:
+            ota_context.transition_subagents(AwaitingSubAgent(calls=subagent_calls))
 
     ############################################################################
     # Context estimation and compaction
@@ -1489,9 +1557,65 @@ class BaseThink(CognitiveWorker):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, call: StepToolCall, ota_context: Optional[AmphiOTAContext], context: AmphiContext) -> Optional[str]:
-        """Allow calls unless the concrete worker adds a business restriction."""
-        return None
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+        """Isolate shared control calls and validate their cognitive transitions."""
+        resolved = self._exclusive_call_verdicts(calls, verdicts, {"switch", "request_human_choice"})
+
+        def switch_reason(call: StepToolCall) -> Optional[str]:
+            if call.tool != "switch" or ota_context is None:
+                return None
+            status = ota_context.think_status
+            if status.mode == "normal":
+                return None
+            arguments = {
+                _view(argument, "name"): _view(argument, "value")
+                for argument in call.tool_arguments
+            }
+            requested_mode = arguments.get("mode") or None
+            target_stage = arguments.get("stage") or None
+            if requested_mode not in (None, "normal"):
+                return (
+                    f"switch rejected: omit mode to remain in `{status.mode}`, "
+                    "or use mode `normal` to return to Main."
+                )
+            if requested_mode == "normal":
+                if target_stage:
+                    return "switch rejected: mode `normal` cannot be combined with a target stage."
+                return None
+            if not target_stage:
+                return "switch rejected: provide a target stage, or use mode `normal` to return to Main."
+            return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = switch_reason(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
+        return resolved
+
+    @staticmethod
+    def _exclusive_call_verdicts(calls: List[StepToolCall], verdicts: List[CallVerdict], control_tools: set[str]) -> List[CallVerdict]:
+        """Keep one control request alone without upgrading any permission verdict.
+
+        Every inheritance layer inspects the original batch, so controls owned
+        by different layers also reject each other rather than choosing a winner.
+        """
+        controls = [call for call in calls if call.tool in control_tools]
+        if not controls:
+            return list(verdicts)
+        selected = controls[0] if len(controls) == 1 else None
+        reason = (
+            f"control-flow rejected: `{selected.tool}` must run alone; issue other tools in a later round."
+            if selected is not None
+            else "control-flow rejected: only one exclusive control tool may run per round; request just one."
+        )
+        return [
+            verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
+            if verdict.verdict != Permission.DENY.value and call is not selected
+            else verdict
+            for call, verdict in zip(calls, verdicts)
+        ]
 
     ############################################################################
     # Tools and Skills selection

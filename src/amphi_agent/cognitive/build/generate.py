@@ -5,9 +5,11 @@ from typing import List, Optional
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
+from ...security import Permission
 from ..register import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
+from ..._state import CallVerdict
 from ...prompts.build.generate import GENERATE_PERSONA
 
 
@@ -17,6 +19,9 @@ class GenerateThink(BuildThink):
 
     persona: str = GENERATE_PERSONA
 
+    ############################################################################
+    # Dynamic prompt assembly
+    ############################################################################
     async def assemble_messages(
         self,
         ota_context: AmphiOTAContext,
@@ -61,41 +66,38 @@ class GenerateThink(BuildThink):
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
-    async def legality_check(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Check whether generate may execute a control-flow tool.
+    ############################################################################
+    # Legality check
+    ############################################################################
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts)
 
-        Parameters
-        ----------
-        call : StepToolCall
-            Proposed tool call.
-        ota_context : Optional[AmphiOTAContext]
-            Active turn carrying the build identifier.
-        context : AmphiContext
-            Session context carrying the workspace.
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            if getattr(call, "tool", None) != "switch":
+                return None
 
-        Returns
-        -------
-        Optional[str]
-            ``None`` when legal; otherwise an actionable rejection reason.
-        """
-        if getattr(call, "tool", None) != "switch":
-            return None
+            target_stage = next(
+                (
+                    _view(argument, "value")
+                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
+                    if _view(argument, "name") == "stage"
+                ),
+                None,
+            )
+            if target_stage != "verify":
+                return None
 
-        target_stage = next(
-            (
-                _view(argument, "value")
-                for argument in reversed(getattr(call, "tool_arguments", None) or [])
-                if _view(argument, "name") == "stage"
-            ),
-            None,
-        )
-        if target_stage != "verify":
-            return None
+            reason = self.workflow_validation_reason(context)
+            return f"switch rejected: {reason}" if reason else None
 
-        reason = self.workflow_validation_reason(context)
-        return f"switch rejected: {reason}" if reason else None
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved

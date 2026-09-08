@@ -8,6 +8,7 @@ from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext
 from src.amphi_agent._state import (
     AwaitingPresentationOutlineConfirm,
     AwaitingPresentationTemplateSelection,
+    CallVerdict,
     NormalStageState,
     PresentationChapterOutline,
     PresentationStageState,
@@ -31,6 +32,7 @@ from src.amphi_service.protocol import (
     StageEvent,
 )
 from src.amphi_service.runtime._session_events import SessionEventBroker
+from tests.agent.cognitive._harness import legality_reason
 
 
 def test_presentation_pipeline_is_registered() -> None:
@@ -85,18 +87,29 @@ def test_presentation_step_record_repairs_legacy_character_evidence() -> None:
     assert record.evidence == [".presentation/brief.md"]
 
 
-def test_presentation_pipeline_switches_and_resumes() -> None:
+async def test_presentation_pipeline_switches_and_resumes() -> None:
     """Stage handoffs and cross-Turn restoration preserve the presentation mode."""
     agent = AmphiAgent()
-    current = PresentationStageState(stage="ppt_brief")
+    context = AmphiContext()
+    ota_context = AmphiOTAContext(ota_record=[OTARecord()])
+    ota_context.transition_think(PresentationStageState(stage="ppt_brief"))
 
-    planned = agent._switch_status(current, "presentation", "ppt_plan")
-    finished = agent._switch_status(planned, "normal", None)
-    ota_context = AmphiOTAContext()
+    for target, expected in [
+        ({"mode": "presentation", "stage": "ppt_plan"}, PresentationStageState(stage="ppt_plan")),
+        ({"mode": "normal"}, NormalStageState()),
+    ]:
+        ota_context.action_result = ActionResult(results=[ActionStepResult(
+            tool_id="switch-stage",
+            tool_name="switch",
+            tool_arguments=target,
+            tool_result=target,
+            success=True,
+        )])
+        async for _ in agent.after_action(ota_context, context):
+            pass
+        assert ota_context.think_status == expected
+
     agent._resume_think_stage(ota_context, {"mode": "presentation", "stage": "ppt_review"})
-
-    assert planned == PresentationStageState(stage="ppt_plan")
-    assert finished == NormalStageState()
     assert ota_context.think_status == PresentationStageState(stage="ppt_review")
 
 
@@ -215,7 +228,7 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
         tool_arguments=[ToolArgument(name="stage", value="ppt_compose")],
     )
 
-    reason = await worker.legality_check(switch, ota_context, context)
+    reason = await legality_reason(worker, switch, ota_context, context)
     assert reason is not None and "collect_evidence" in reason
     assert "Current step id: collect_evidence" in worker.progress_block(ota_context)
 
@@ -232,7 +245,7 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
             ),
         ],
     )
-    assert await worker.legality_check(report_call, ota_context, context) is None
+    assert await legality_reason(worker, report_call, ota_context, context) is None
 
     agent = AmphiAgent()
     ota_context.ota_record.append(OTARecord(action_result=ActionResult(results=[
@@ -274,7 +287,7 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
         stage="ppt_plan",
         step_index=len(PRESENTATION_STAGE_STEPS["ppt_plan"]),
     ))
-    assert await worker.legality_check(switch, completed, context) is None
+    assert await legality_reason(worker, switch, completed, context) is None
 
 
 async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
@@ -284,7 +297,7 @@ async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
     ppt_call = StepToolCall(call_id="ppt-rag", tool="ppt_rag", tool_arguments=[])
     ota_context = AmphiOTAContext(ota_record=[OTARecord(think_result=ThinkResult(
         step_content="Choose templates and continue.",
-        tool_calls=[ppt_call, StepToolCall(call_id="switch", tool="switch", tool_arguments=[])],
+        tool_calls=[ppt_call, StepToolCall(call_id="switch", tool="switch", tool_arguments=[ToolArgument(name="mode", value="normal")])],
     ))])
     ota_context.transition_think(PresentationStageState(
         stage="ppt_plan",
@@ -292,15 +305,18 @@ async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
         outline_confirmed=True,
     ))
 
-    reason = await worker.legality_check(ppt_call, ota_context, context)
+    calls = ota_context.think_result.tool_calls
+    verdicts = [CallVerdict(id=call.call_id, tool=call.tool, verdict="allow") for call in calls]
+    resolved = await worker.legality_check(ota_context, context, calls, verdicts)
 
-    assert reason is not None and "only tool call" in reason
+    assert all(verdict.verdict == "deny" for verdict in resolved)
+    assert all("control-flow rejected" in (verdict.reason or "") for verdict in resolved)
 
     ota_context.ota_record[-1].think_result = ThinkResult(
         step_content="Choose templates.",
         tool_calls=[ppt_call],
     )
-    assert await worker.legality_check(ppt_call, ota_context, context) is None
+    assert await legality_reason(worker, ppt_call, ota_context, context) is None
 
 
 def test_presentation_progress_event_contains_the_durable_cursor() -> None:
@@ -389,7 +405,7 @@ async def test_presentation_brief_artifact_is_required_for_the_stage_handoff(tmp
         tool_arguments=[ToolArgument(name="stage", value="ppt_plan")],
     )
 
-    reason = await worker.legality_check(switch, ota_context, context)
+    reason = await legality_reason(worker, switch, ota_context, context)
     assert reason is not None and ".presentation/brief.md" in reason
 
     artifact = workspace.work_dir / ".presentation" / "brief.md"
@@ -397,7 +413,7 @@ async def test_presentation_brief_artifact_is_required_for_the_stage_handoff(tmp
     artifact.parent.mkdir(parents=True)
     artifact.write_text("# Brief\n\nAudience: board", encoding="utf-8")
 
-    assert await worker.legality_check(switch, ota_context, context) is None
+    assert await legality_reason(worker, switch, ota_context, context) is None
     assert "Audience: board" in worker.artifacts_block(context)
 
 
@@ -501,3 +517,13 @@ async def test_slide_map_report_parks_for_editable_outline_confirmation() -> Non
     assert next_state.outline_confirmation_id.startswith("presentation_outline_")
     assert next_state.outline_confirmed is False
     assert isinstance(ota_context.interaction_status, AwaitingPresentationOutlineConfirm)
+
+    # Replaying the handled receipt must not advance again or replace its confirmation.
+    expected_state = next_state.model_dump()
+    expected_interaction = ota_context.interaction_status.model_dump()
+    expected_receipt = dict(ota_context.action_result.results[0].tool_result)
+    async for _ in agent.after_action(ota_context, AmphiContext()):
+        raise AssertionError("after_action must not yield a visible value")
+    assert ota_context.think_status.model_dump() == expected_state
+    assert ota_context.interaction_status.model_dump() == expected_interaction
+    assert ota_context.action_result.results[0].tool_result == expected_receipt

@@ -5,9 +5,11 @@ from typing import Dict, List, Optional
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
+from ...security import Permission
 from ..register import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
+from ..._state import CallVerdict
 from ..._skills import Skill, SkillGroup
 from ...prompts.build.explore import EXPLORE_PERSONA
 
@@ -18,19 +20,9 @@ class ExploreThink(BuildThink):
 
     persona: str = EXPLORE_PERSONA
 
-    def select_skills(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> Dict[str, Skill]:
-        """Select enabled Skills plus the Explore-only built-in ``how-to``."""
-        selected = super().select_skills(ota_context, context)
-        skills = context.skills
-        how_to = skills.all_data().get("how-to") if skills is not None else None
-        if how_to is not None and how_to.group is SkillGroup.BUILTIN:
-            selected["how-to"] = how_to
-        return selected
-
+    ############################################################################
+    # Dynamic prompt assembly
+    ############################################################################
     async def assemble_messages(
         self,
         ota_context: AmphiOTAContext,
@@ -74,49 +66,62 @@ class ExploreThink(BuildThink):
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
-    async def legality_check(
+    ############################################################################
+    # Legality check
+    ############################################################################
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            if getattr(call, "tool", None) != "switch":
+                return None
+
+            target_stage = next(
+                (
+                    _view(argument, "value")
+                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
+                    if _view(argument, "name") == "stage"
+                ),
+                None,
+            )
+            if target_stage != "generate":
+                return None
+            package = self.build_package(context)
+            body = package.read_document("explore.md") if package is not None else None
+            if body:
+                reason = self.human_document_reason("explore.md", body)
+                return f"switch rejected: {reason}" if reason else None
+            return (
+                "switch rejected: write explore.md before handing off to "
+                "generate; it is the operation sequence generate builds from. Create "
+                "explore.md now as a complete, non-empty file, then call switch "
+                "again."
+            )
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
+    ############################################################################
+    # Tools and Skills selection
+    ############################################################################
+    def select_skills(
         self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
+        ota_context: AmphiOTAContext,
         context: AmphiContext,
-    ) -> Optional[str]:
-        """Check whether explore may execute a control-flow tool.
-
-        Parameters
-        ----------
-        call : StepToolCall
-            Proposed tool call.
-        ota_context : Optional[AmphiOTAContext]
-            Active turn carrying the build identifier.
-        context : AmphiContext
-            Session context carrying the workspace.
-
-        Returns
-        -------
-        Optional[str]
-            ``None`` when legal; otherwise an actionable rejection reason.
-        """
-        if getattr(call, "tool", None) != "switch":
-            return None
-
-        target_stage = next(
-            (
-                _view(argument, "value")
-                for argument in reversed(getattr(call, "tool_arguments", None) or [])
-                if _view(argument, "name") == "stage"
-            ),
-            None,
-        )
-        if target_stage != "generate":
-            return None
-        package = self.build_package(context)
-        body = package.read_document("explore.md") if package is not None else None
-        if body:
-            reason = self.human_document_reason("explore.md", body)
-            return f"switch rejected: {reason}" if reason else None
-        return (
-            "switch rejected: write explore.md before handing off to "
-            "generate; it is the operation sequence generate builds from. Create "
-            "explore.md now as a complete, non-empty file, then call switch "
-            "again."
-        )
+    ) -> Dict[str, Skill]:
+        """Select enabled Skills plus the Explore-only built-in ``how-to``."""
+        selected = super().select_skills(ota_context, context)
+        skills = context.skills
+        how_to = skills.all_data().get("how-to") if skills is not None else None
+        if how_to is not None and how_to.group is SkillGroup.BUILTIN:
+            selected["how-to"] = how_to
+        return selected

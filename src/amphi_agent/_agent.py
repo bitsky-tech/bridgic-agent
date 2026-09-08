@@ -6,7 +6,7 @@ import secrets
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from bridgic.amphibious import (
@@ -28,13 +28,11 @@ from bridgic.core.automa.args import ArgsMappingRule, InOrder
 from bridgic.core.model.types import Message, Role, ToolCall
 
 from .cognitive import (
-    PRESENTATION_STAGE_ARTIFACTS,
     PRESENTATION_STAGE_ORDER,
     PRESENTATION_STAGE_STEPS,
-    MainThink,
-    SubAgentThink,
     get_cognitive_stages,
     render_input,
+    BaseThink,
 )
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
@@ -43,9 +41,6 @@ from .prompts.title import TITLE_PROMPT
 from ._state import (
     AgentResult,
     AwaitingPermission,
-    AwaitingFeedback,
-    AwaitingTaskConfirm,
-    AwaitingWorkflowConfirm,
     AwaitingBuildConfirm,
     AwaitingBuildConflict,
     AwaitingPresentationOutlineConfirm,
@@ -56,11 +51,9 @@ from ._state import (
     ContextCompactionState,
     NormalStageState,
     PresentationStageState,
-    PresentationStepRecord,
     PresentationTemplateCandidate,
     RoundPermission,
     CallVerdict,
-    SubAgentCall,
     SubAgentsCompleted,
     WorkflowStageState,
 )
@@ -71,16 +64,7 @@ from .security._routing import append_user_decisions, read_user_decisions
 from .security._classifier import MAX_USER_MESSAGES as _CLASSIFIER_MAX_USER_MESSAGES
 from .security._classify import label_text
 from .security._engine import model_facing_reason
-from .tools.build import (
-    RequestBuild,
-    RequestHumanTaskConfirm,
-    RequestHumanWorkflowConfirm,
-)
-from .tools.request_human import RequestHumanChoice
 from .tools._bash import current_execution_mode, current_tool_call_id
-from .tools.powerpoint import PresentationStepReport, RequestPresentation
-from .tools._subagent import BackgroundSubagentRequest, SubagentRequest
-from .tools.workflow import EditWorkflow, RequestRunWorkflow, WorkflowStepReport
 from ..amphi_store import (
     SessionTurnRecord,
     TurnStatus,
@@ -161,10 +145,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         When True, the framework prints its internal run summary.
     """
 
-    # Autonomous agent loop.
-    main = think_unit(MainThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-    subagent = think_unit(SubAgentThink(), max_attempts=DEFAULT_MAX_ROUNDS)
-
     def __init__(self, max_rounds: int = DEFAULT_MAX_ROUNDS, verbose: bool = False) -> None:
         super().__init__(verbose=verbose)
         self._max_rounds = max_rounds
@@ -184,24 +164,12 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "run_subagent",
             "start_subagent",
         ])
-        self.exclusive_control_tools = {
-            "switch",
-            "edit_workflow",
-            "request_build",
-            "request_presentation",
-            "request_run_workflow",
-            "request_human_choice",
-            "request_human_task_confirm",
-            "request_human_workflow_confirm",
-            "report_presentation_step",
-            "report_workflow_step",
-        }
 
         self.thinking_modes: dict[str, tuple[str, ...]] = {}
         descriptors: dict[str, ThinkUnitDescriptor] = {}
         for stage in get_cognitive_stages():
             descriptor = getattr(AmphiAgent, stage.stage, None)
-            if not isinstance(descriptor, ThinkUnitDescriptor) or stage.stage in ("main", "subagent"):
+            if not isinstance(descriptor, ThinkUnitDescriptor):
                 if hasattr(AmphiAgent, stage.stage) or (
                     hasattr(self, stage.stage) and not isinstance(getattr(self, stage.stage), ThinkUnitDescriptor)
                 ):
@@ -363,118 +331,133 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             return
 
         ########################
-        # Tool Permission Check
-        ########################
-        if not current_ota_permission_status.reviewed:  # if not reviewed, using permission_check to check the permission
-            verdicts = await self.permission_check(
-                ota_context,
-                context,
-                execution_mode=effective_execution_mode,
-            )
-            if any(v.verdict == Permission.ASK.value for v in verdicts):  # If any ask, interaction with the user to get the approval
-                ask = [
-                    (i, c, v)
-                    for i, (c, v) in enumerate(zip(calls, verdicts))
-                    if v.verdict == Permission.ASK.value
-                ]
-                questions = [
-                    {
-                        "question": "Approve {}({})?".format(
-                            c.tool,
-                            ", ".join(f"{name}={value}" for name, value in self._tool_args(c).items()),
-                        ),
-                        "options": [{"label": "allow"}, {"label": "deny"}],
-                    }
-                    for _, c, v in ask
-                ]
-                # Plain-language summary: independent of the safety classifier, generated for every
-                # ASK command (present in every execution mode, so the approval card's
-                # plain-language/command toggle always works); on failure it falls back to an empty
-                # string and the frontend shows the raw command.
-                summaries = await describe_commands(
-                    self.llm,
-                    [{"tool": c.tool, "arguments": self._tool_args(c)} for _, c, _ in ask],
-                )
-                items = [
-                    {
-                        "call_index": i,
-                        "tool": c.tool,
-                        "arguments": self._tool_args(c),
-                        "capability": v.capability,
-                        "boundary": v.boundary,
-                        "label": v.reason or "",
-                        "label_id": v.label_id,
-                        "summary": summaries[k] if k < len(summaries) else "",
-                        # Objective decision flags: the approval card derives the risk level and
-                        # high-risk stripping from them. The frontend must not parse the label — on
-                        # the auto path that is free text generated by the classifier.
-                        "sensitive": v.sensitive,
-                        "deletion": v.deletion,
-                        "regenerable": v.regenerable,
-                        "uncertain_destruction": v.uncertain_destruction,
-                        "touches_risk_surface": v.touches_risk_surface,
-                    }
-                    for k, (i, c, v) in enumerate(ask)
-                ]
-                permission = {
-                    "calls": [c.model_dump() for c in calls],
-                    "verdicts": [v.verdict for v in verdicts],
-                    "questions": questions,
-                    "items": items,
-                    "execution_mode": effective_execution_mode,
-                }
-                request_id = uuid4().hex
-                # Approval record: the full command + judgement + explanation are written to the
-                # session's permissions directory (under a readable filename) for later auditing.
-                workspace = context.workspace
-                audit_path = write_approval_record(
-                    workspace.permission_dir if workspace is not None else None,
-                    request_id,
-                    effective_execution_mode,
-                    [
-                        {
-                            "tool": c.tool,
-                            "arguments": self._tool_args(c),
-                            "capability": v.capability,
-                            "boundary": v.boundary,
-                            "reason": model_facing_reason(v),
-                            "summary": summaries[k] if k < len(summaries) else "",
-                        }
-                        for k, (i, c, v) in enumerate(ask)
-                    ],
-                )
-                if audit_path is not None:
-                    permission["audit_file"] = str(audit_path)
-
-                # Transition to AwaitingPermission
-                ota_context.transition_interaction(AwaitingPermission(permission=permission, request_id=request_id))
-                logger.warning(
-                    "[permission] approval parked request_id=%s asks=%d denies=%d tools=%s audit=%s",
-                    request_id,
-                    len(ask),
-                    sum(1 for v in verdicts if v.verdict == Permission.DENY.value),
-                    [c.tool for _, c, _ in ask],
-                    audit_path.name if audit_path is not None else "-",
-                )
-                yield RETURN(decision.model_copy(update={"tool_calls": []}))
-                return
-        else:  # if reviewed, using the reviewed verdicts verbatim
-            verdicts = self._reviewed_verdicts(current_ota_permission_status.verdicts)
-
-        ########################
         # Tool Legality Check
         ########################
+        if current_ota_permission_status.reviewed:
+            verdicts = self._reviewed_verdicts(current_ota_permission_status.verdicts)
+        else:
+            verdicts = [
+                CallVerdict(id=call.call_id, tool=call.tool, arguments=self._tool_args(call), verdict=Permission.ALLOW.value)
+                for call in calls
+            ]
         verdicts = await self.legality_check(ota_context, context, calls, verdicts)
 
         ########################
-        # Run Action Tool Call
+        # Tool Permission Check
         ########################
+        if not current_ota_permission_status.reviewed:
+            legal_indices = [index for index, verdict in enumerate(verdicts) if verdict.verdict == Permission.ALLOW.value]
+            if legal_indices:
+                permission_verdicts = await self.permission_check(
+                    ota_context,
+                    context,
+                    [calls[index] for index in legal_indices],
+                    execution_mode=effective_execution_mode,
+                )
+                for index, verdict in zip(legal_indices, permission_verdicts):
+                    verdicts[index] = verdict
+
         ota_context.ota_record[-1].permission = RoundPermission(
             execution_mode=effective_execution_mode,
             reviewed=current_ota_permission_status.reviewed,
             verdicts=verdicts,
             items=current_ota_permission_status.items,
         )
+
+        ########################
+        # Tool Permission Approval
+        ########################
+        if any(v.verdict == Permission.ASK.value for v in verdicts):  # If any ask, interaction with the user to get the approval
+            ask = [
+                (i, c, v)
+                for i, (c, v) in enumerate(zip(calls, verdicts))
+                if v.verdict == Permission.ASK.value
+            ]
+            questions = [
+                {
+                    "question": "Approve {}({})?".format(
+                        c.tool,
+                        ", ".join(f"{name}={value}" for name, value in self._tool_args(c).items()),
+                    ),
+                    "options": [{"label": "allow"}, {"label": "deny"}],
+                }
+                for _, c, v in ask
+            ]
+            # Plain-language summary: independent of the safety classifier, generated for every
+            # ASK command (present in every execution mode, so the approval card's
+            # plain-language/command toggle always works); on failure it falls back to an empty
+            # string and the frontend shows the raw command.
+            summaries = await describe_commands(
+                self.llm,
+                [{"tool": c.tool, "arguments": self._tool_args(c)} for _, c, _ in ask],
+            )
+            items = [
+                {
+                    "call_index": i,
+                    "tool": c.tool,
+                    "arguments": self._tool_args(c),
+                    "capability": v.capability,
+                    "boundary": v.boundary,
+                    "label": v.reason or "",
+                    "label_id": v.label_id,
+                    "summary": summaries[k] if k < len(summaries) else "",
+                    # Objective decision flags: the approval card derives the risk level and
+                    # high-risk stripping from them. The frontend must not parse the label — on
+                    # the auto path that is free text generated by the classifier.
+                    "sensitive": v.sensitive,
+                    "deletion": v.deletion,
+                    "regenerable": v.regenerable,
+                    "uncertain_destruction": v.uncertain_destruction,
+                    "touches_risk_surface": v.touches_risk_surface,
+                }
+                for k, (i, c, v) in enumerate(ask)
+            ]
+            permission = {
+                "calls": [c.model_dump() for c in calls],
+                "verdicts": [v.verdict for v in verdicts],
+                "questions": questions,
+                "items": items,
+                "execution_mode": effective_execution_mode,
+            }
+            request_id = uuid4().hex
+            # Approval record: the full command + judgement + explanation are written to the
+            # session's permissions directory (under a readable filename) for later auditing.
+            workspace = context.workspace
+            audit_path = write_approval_record(
+                workspace.permission_dir if workspace is not None else None,
+                request_id,
+                effective_execution_mode,
+                [
+                    {
+                        "tool": c.tool,
+                        "arguments": self._tool_args(c),
+                        "capability": v.capability,
+                        "boundary": v.boundary,
+                        "reason": model_facing_reason(v),
+                        "summary": summaries[k] if k < len(summaries) else "",
+                    }
+                    for k, (i, c, v) in enumerate(ask)
+                ],
+            )
+            if audit_path is not None:
+                permission["audit_file"] = str(audit_path)
+
+            # Transition to AwaitingPermission
+            ota_context.transition_interaction(AwaitingPermission(permission=permission, request_id=request_id))
+            logger.warning(
+                "[permission] approval parked request_id=%s asks=%d denies=%d tools=%s audit=%s",
+                request_id,
+                len(ask),
+                sum(1 for v in verdicts if v.verdict == Permission.DENY.value),
+                [c.tool for _, c, _ in ask],
+                audit_path.name if audit_path is not None else "-",
+            )
+            yield RETURN(decision.model_copy(update={"tool_calls": []}))
+            return
+
+        ########################
+        # Run Action Tool Call
+        ########################
         executable_calls = [
             call for call, verdict in zip(calls, verdicts)
             if verdict.verdict == Permission.ALLOW.value
@@ -504,7 +487,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         for cv in gate.verdicts:
             if cv.verdict == Permission.DENY.value:
                 result.results.append(self._denied_step(cv))
-        self._prepare_ppt_rag_action_results(result, ota_context)
+        worker = self._current_think_worker(ota_context, context)
+        for step in result.results:
+            if step.success:
+                worker.prepare_action_step(step, ota_context, context, self)
         self._save_large_tool_results(result, context)
         duration_ms = int((time.monotonic() - start) * 1000)
         ota_context._current_record().act_duration_ms = duration_ms
@@ -525,88 +511,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         return result
 
-    def _prepare_ppt_rag_action_results(self, result: Optional[ActionResult], ota_context: AmphiOTAContext) -> None:
-        """Consume PPT candidates before generic large-result spill handling."""
-        if result is None:
-            return
-        for step in getattr(result, "results", None) or []:
-            if step.tool_name == "ppt_rag" and step.success:
-                self._prepare_ppt_rag_action_step(step, ota_context)
-
-    def _prepare_ppt_rag_action_step(self, step: ActionStepResult, ota_context: AmphiOTAContext) -> None:
-        """Move a PPT shortlist into presentation state and retain only a compact receipt."""
-        def reject(message: str) -> None:
-            step.success = False
-            step.error = message
-            step.tool_result = None
-
-        current_status = ota_context.think_status
-        payload = step.tool_result
-        if (
-            isinstance(payload, dict)
-            and payload.get("status") == "awaiting_template_selection"
-            and isinstance(current_status, PresentationStageState)
-            and current_status.template_selection_id == payload.get("template_selection_id")
-        ):
-            return
-        try:
-            payload = json.loads(payload) if isinstance(payload, str) else payload
-        except (TypeError, ValueError) as exc:
-            reject(f"PPT template retrieval returned invalid JSON: {exc}")
-            return
-        if not isinstance(payload, dict):
-            reject("PPT template retrieval returned an invalid result object.")
-            return
-        if not isinstance(current_status, PresentationStageState) or current_status.stage != "ppt_plan" or current_status.step_index != 2:
-            reject("PPT template retrieval is only valid during Plan's visual-direction step.")
-            return
-
-        candidates: List[PresentationTemplateCandidate] = []
-        invalid_candidates: List[str] = []
-        raw_candidates = payload.get("candidates")
-        for index, candidate in enumerate(raw_candidates[:8] if isinstance(raw_candidates, list) else []):
-            try:
-                candidates.append(PresentationTemplateCandidate.model_validate(candidate))
-            except (TypeError, ValueError) as exc:
-                invalid_candidates.append(f"candidate {index + 1}: {exc}")
-        retrieval_failed = payload.get("status") == "retrieval_failed"
-        retrieval_error = str(payload.get("retrieval_error") or "").strip()[:1_000]
-        if retrieval_failed and not retrieval_error:
-            retrieval_error = "Template retrieval did not return an actionable result."
-        if not candidates and not retrieval_failed:
-            detail = f" ({invalid_candidates[0]})" if invalid_candidates else ""
-            reject("PPT template retrieval returned no selectable candidates." + detail)
-            return
-
-        request_id = f"presentation_template_{uuid4().hex}"
-        next_status = current_status.model_copy(update={
-            "template_candidates": candidates,
-            "template_selection_id": request_id,
-            "template_selection_status": "pending",
-            "template_selection_error": retrieval_error or None,
-            "selected_template": None,
-        })
-        ota_context.transition_think(next_status)
-        ota_context.transition_interaction(AwaitingPresentationTemplateSelection(request_id=request_id))
-        step.tool_result = {
-            "search_id": payload.get("search_id"),
-            "index_id": payload.get("index_id"),
-            "retrieval_mode": payload.get("retrieval_mode"),
-            "template_selection_id": request_id,
-            "status": "awaiting_template_selection",
-            "candidate_count": len(candidates),
-            "candidate_ids": [candidate.template_id for candidate in candidates],
-            **({"retrieval_error": retrieval_error} if retrieval_error else {}),
-            **({"discarded_candidate_count": len(invalid_candidates)} if invalid_candidates else {}),
-        }
-        if ota_context.stream is not None:
-            self._publish_stage(ota_context, next_status)
-
-    async def _execute_tool_calls(
-        self,
-        ota_context: AmphiOTAContext,
-        context: Optional[AmphiContext] = None,
-    ) -> ActionResult:
+    async def _execute_tool_calls(self, ota_context: AmphiOTAContext, context: Optional[AmphiContext] = None) -> ActionResult:
         """Execute admitted calls and fail every unmatched call explicitly."""
         decision = ota_context.think_result
         calls = list(getattr(decision, "tool_calls", None) or [])
@@ -690,503 +595,29 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         return ActionResult(results=results)
 
     async def after_action(self, ota_context: AmphiOTAContext, context: AmphiContext) -> None:
-        """Apply this round's control-flow tools and fold denied calls.
+        """Fold all-denied rounds and delegate results through the active cognitive worker.
 
-        switch: re-aim the think dimension (mode + stage).
-        request_human_choice: end the turn awaiting the user.
-        request_build: enter Build or ask how to resolve Build intent.
-        request_presentation: enter the dedicated presentation pipeline.
-        report_presentation_step: retain one production result and advance its cursor.
-        request_run_workflow: start or resolve one Session-owned Run.
-        edit_workflow: restore one saved Workflow into Build for modification.
-        report_workflow_step: persist one section result and advance or stop.
-        request_human_task_confirm: park Clarify for task-definition review.
-        run_subagent: collect every allowed delegation into one runtime batch.
-        start_subagent: create a background Child Session and continue.
-
-        Also surfaces an ALL-denied round: when before_action drops every call, the
-        framework skips action_tool_call (empty tool_calls) and the blocked calls are
-        never folded — do it here (always runs) onto a fresh action_result, or the
-        model re-loops the stage blind to why a call was vetoed. (The permission PARK
-        records no round permission, so it is untouched by this fold.)
+        All-denied rounds skip action_tool_call, so fold their verdicts here too.
+        Permission replay also enters here and uses the same worker delegation.
         """
         gate = self._get_current_ota_permission_status(ota_context)
-        effective_execution_mode = (
-            gate.execution_mode or self._effective_execution_mode(ota_context, context)
-        )
         denied = [cv for cv in gate.verdicts if cv.verdict == Permission.DENY.value]
-        if denied and ota_context.action_result is None:
+        if denied and ota_context.action_result is None and not isinstance(ota_context.interaction_status, AwaitingPermission):
             ota_context.action_result = ActionResult(results=[self._denied_step(cv) for cv in denied])
 
-        subagent_calls: List[SubAgentCall] = []
-        for step in getattr(ota_context.action_result, "results", None) or []:
-            if not step.success:
-                continue
-
-            # Switch
-            if step.tool_name == "switch":
-                sig = step.tool_result
-                current_status = ota_context.think_status
-                target_mode = sig.get("mode") or current_status.mode
-                if (
-                    isinstance(current_status, WorkflowStageState)
-                    and target_mode != "normal"
-                ):
-                    raise ValueError(
-                        "Workflow stages advance automatically; switch only exits to normal mode."
-                    )
-                else:
-                    next_status = self._switch_status(
-                        current_status,
-                        target_mode,
-                        sig.get("stage"),
-                    )
-                if isinstance(current_status, PresentationStageState) and isinstance(next_status, PresentationStageState):
-                    current_index = PRESENTATION_STAGE_ORDER.index(current_status.stage)
-                    target_index = PRESENTATION_STAGE_ORDER.index(next_status.stage)
-                    if target_index <= current_index:
-                        self._invalidate_presentation_artifacts(
-                            context,
-                            PRESENTATION_STAGE_ORDER[target_index:],
-                        )
-                ota_context.transition_think(next_status)
-                if sig.get("reason") and not isinstance(next_status, NormalStageState):
-                    self._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
-                if isinstance(next_status, BuildStageState):
-                    await self._sync_build_space(ota_context, context)
-                elif isinstance(next_status, NormalStageState):
-                    self._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
-                    if isinstance(current_status, BuildStageState):
-                        self._close_build_bindings(context)
-                    elif isinstance(current_status, WorkflowStageState):
-                        self._close_run_workflow_bindings(context)
-
-            # Request Presentation
-            elif step.tool_name == "request_presentation":
-                result = step.tool_result
-                if isinstance(result, RequestPresentation):
-                    self._invalidate_presentation_artifacts(context, PRESENTATION_STAGE_ORDER)
-                    ota_context.transition_think(PresentationStageState(goal=result.goal))
-                    step.tool_result = {
-                        "mode": "presentation",
-                        "stage": "ppt_brief",
-                        "goal": result.goal,
-                        "message": "The presentation request entered the dedicated pipeline.",
-                    }
-
-            # Present the verified PPT template shortlist for explicit user selection.
-            elif step.tool_name == "ppt_rag":
-                self._prepare_ppt_rag_action_step(step, ota_context)
-
-            # Complete current Presentation production step
-            elif step.tool_name == "report_presentation_step":
-                result = step.tool_result
-                current_status = ota_context.think_status
-                if isinstance(result, PresentationStepReport) and isinstance(current_status, PresentationStageState):
-                    stage_steps = PRESENTATION_STAGE_STEPS.get(current_status.stage, ())
-                    if current_status.step_index >= len(stage_steps):
-                        raise RuntimeError("Cannot report a completed Presentation stage.")
-                    current_step = stage_steps[current_status.step_index]
-                    report = PresentationStepRecord(
-                        stage=current_status.stage,
-                        step_id=current_step.step_id,
-                        summary=result.summary,
-                        evidence=result.evidence,
-                    )
-                    reports = [
-                        item
-                        for item in current_status.reports
-                        if (item.stage, item.step_id) != (report.stage, report.step_id)
-                    ]
-                    reports.append(report)
-                    next_status = current_status.apply_plan_step_data(
-                        current_step.step_id,
-                        result.data,
-                    ).model_copy(update={
-                        "step_index": current_status.step_index + 1,
-                        "reports": reports,
-                    })
-                    if current_status.stage == "ppt_plan" and current_step.step_id == "map_slides":
-                        request_id = f"presentation_outline_{uuid4().hex}"
-                        next_status = next_status.model_copy(update={
-                            "outline_confirmed": False,
-                            "outline_confirmation_id": request_id,
-                        })
-                        ota_context.transition_interaction(AwaitingPresentationOutlineConfirm(
-                            request_id=request_id,
-                        ))
-                    ota_context.transition_think(next_status)
-                    step.tool_result = {
-                        "mode": "presentation",
-                        "stage": current_status.stage,
-                        "step_index": current_status.step_index,
-                        "step_count": len(stage_steps),
-                        "step_id": current_step.step_id,
-                        "summary": result.summary,
-                        "evidence": result.evidence,
-                        "data": result.data,
-                        "next_step_index": next_status.step_index,
-                    }
-                    if current_status.stage == "ppt_plan" and current_step.step_id == "map_slides":
-                        step.tool_result.update({
-                            "outline_confirmation_id": next_status.outline_confirmation_id,
-                            "status": "awaiting_outline_confirmation",
-                        })
-                        if ota_context.stream is not None:
-                            self._publish_stage(ota_context, next_status)
-
-            # Request Build
-            elif step.tool_name == "request_build":
-                result = step.tool_result
-                if isinstance(result, RequestBuild):
-                    if result.mode == "start":
-                        workflow_id = self._requested_edit_workflow_id(ota_context)
-                        ota_context.transition_think(BuildStageState(
-                            stage="clarify",
-                            workflow_id=workflow_id,
-                        ))
-                        await self._sync_build_space(ota_context, context, create=True)
-                        step.tool_result = {
-                            "mode": "start",
-                            "goal": result.goal,
-                            **({"workflow_id": workflow_id} if workflow_id else {}),
-                            "message": "The user's explicit Workflow request entered a new Build.",
-                        }
-                    else:
-                        workspace = context.workspace
-                        retained = workspace.build_checkpoint() if workspace is not None else None
-                        if retained is None:
-                            step.tool_result = {
-                                "mode": "ask",
-                                "request_id": result.request_id,
-                                "goal": result.goal,
-                                "reason": result.reason,
-                                "status": "pending",
-                            }
-                            ota_context.transition_interaction(AwaitingBuildConfirm(
-                                request_id=result.request_id,
-                                goal=result.goal,
-                                reason=result.reason,
-                            ))
-                        else:
-                            conflict = self._build_request_interaction(
-                                context,
-                                result,
-                                requested_workflow_id=self._requested_edit_workflow_id(ota_context),
-                            )
-                            ota_context.transition_interaction(conflict)
-                            step.tool_result = {
-                                "mode": "ask",
-                                "goal": result.goal,
-                                **conflict.model_dump(mode="json"),
-                                "status": "pending",
-                            }
-
-            # Edit Workflow
-            elif step.tool_name == "edit_workflow":
-                result = step.tool_result
-                if isinstance(result, EditWorkflow):
-                    workflows = context.workflows
-                    session_id = context.session.id
-                    workflow = workflows.get(result.workflow_id) if workflows is not None else None
-                    if workflows is not None and session_id:
-                        await workflows.associate_session(session_id, result.workflow_id)
-                    existing = await self._enter_or_resume_build(
-                        ota_context,
-                        context,
-                        result.workflow_id,
-                    )
-                    competing = existing is not None and existing.workflow_id != result.workflow_id
-                    step.tool_result = {
-                        "workflow_id": result.workflow_id,
-                        "workflow_name": workflow.name if workflow is not None else result.workflow_id,
-                        "message": (
-                            "A different unfinished Build remains active, so the selected "
-                            "Workflow has not been restored yet. Compare the two intents and "
-                            "call request_build with mode `ask` if the user must choose between them."
-                            if competing
-                            else (
-                                "The requested Workflow is already the active editable Build."
-                                if existing is not None
-                                else "The saved Workflow was restored as an editable Build baseline."
-                            )
-                        ),
-                    }
-
-            # Complete current Workflow section
-            elif step.tool_name == "report_workflow_step":
-                result = step.tool_result
-                current_status = ota_context.think_status
-                if isinstance(result, WorkflowStepReport) and isinstance(current_status, WorkflowStageState):
-                    source = self._workflow_source(current_status, context)
-                    stage_steps = source.steps(current_status.stage)
-                    current_step = stage_steps[current_status.step_index]
-                    workspace = context.workspace
-                    if workspace is None:
-                        raise RuntimeError("Cannot report Workflow progress without an active Run.")
-                    state = workspace.run_workflow
-                    if state is None:
-                        raise RuntimeError("Workflow Run space is not bound.")
-                    state.checkpoint_cursor(
-                        expected_workflow_id=current_status.workflow_id,
-                        expected_generation=current_status.generation,
-                        expected_stage=current_status.stage,
-                        expected_step_index=current_status.step_index,
-                        stage=current_status.stage,
-                        step_index=current_status.step_index,
-                    )
-                    workflow_runs = context.workflow_runs
-                    if workflow_runs is None:
-                        raise RuntimeError("Cannot record Workflow progress without its result library.")
-                    workflow_runs.require_run_workflow(state.root)
-                    durable_summary = workflow_runs.record_step(
-                        stage=current_status.stage,
-                        step_number=current_step.index,
-                        step_title=current_step.title,
-                        status=result.status,
-                        summary=result.summary,
-                        evidence=result.evidence,
-                    )
-                    reported_summary = (
-                        durable_summary if result.status == "failure" else result.summary
-                    )
-                    if result.status == "success":
-                        next_step_index = current_status.step_index + 1
-                        state.checkpoint_cursor(
-                            expected_workflow_id=current_status.workflow_id,
-                            expected_generation=current_status.generation,
-                            expected_stage=current_status.stage,
-                            expected_step_index=current_status.step_index,
-                            stage=current_status.stage,
-                            step_index=next_step_index,
-                        )
-                    step.tool_result = {
-                        "workflow_id": source.workflow_id,
-                        "generation": current_status.generation,
-                        "workflow_name": source.name,
-                        "phase": current_status.stage,
-                        "step_index": current_status.step_index,
-                        "step_number": current_step.index,
-                        "step_count": len(stage_steps),
-                        "title": current_step.title,
-                        **self._workflow_sections(source),
-                        "status": result.status,
-                        "summary": reported_summary,
-                        "evidence": result.evidence,
-                    }
-                    self._publish_workflow_progress(
-                        ota_context,
-                        context,
-                        current_status,
-                        result.status,
-                        reported_summary,
-                        source=source,
-                    )
-                    if result.status == "failure":
-                        terminal_summary = (
-                            f"Workflow `{source.name}` stopped during "
-                            f"{current_status.stage} section {current_step.index} "
-                            f"(`{current_step.title}`): {reported_summary}"
-                        )
-                        try:
-                            published = await self._publish_workflow_run(
-                                context,
-                                current_status,
-                                status=WorkflowRunStatus.FAILED,
-                            )
-                        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-                            step.success = False
-                            step.error = (
-                                "The Workflow failure was recorded, but its terminal "
-                                f"result could not be saved: {exc}. Retry the failure report."
-                            )
-                            step.tool_result = {
-                                **step.tool_result,
-                                "status": "save_failed",
-                            }
-                            continue
-                        step.tool_result = {
-                            **step.tool_result,
-                            "run_id": published.run_id,
-                            "run_status": published.status.value,
-                            "created_at": published.created_at.isoformat(),
-                            "published_result_dir": str(published.result_dir.resolve()),
-                        }
-                        await self._finish_workflow_run(
-                            ota_context,
-                            context,
-                            current_status,
-                            generation=current_status.generation,
-                            summary=terminal_summary,
-                            published=published,
-                        )
-                    else:
-                        next_status = WorkflowStageState(
-                            workflow_id=state.workflow_id,
-                            generation=state.generation,
-                            stage=state.stage,
-                            step_index=state.step_index,
-                        )
-                        ota_context.transition_think(next_status)
-                        published = await self._settle_workflow_boundary(ota_context, context)
-                        if published is not None:
-                            step.tool_result = {
-                                **step.tool_result,
-                                "run_id": published.run_id,
-                                "run_status": published.status.value,
-                                "created_at": published.created_at.isoformat(),
-                                "published_result_dir": str(published.result_dir.resolve()),
-                            }
-
-            # Request_human_choice
-            elif step.tool_name == "request_human_choice":
-                result = step.tool_result
-                if isinstance(result, RequestHumanChoice) and result.questions:
-                    ota_context.transition_interaction(AwaitingFeedback(
-                        questions=result.questions,
-                        prompt=result.prompt,
-                        request_id=f"human_{uuid4().hex}",
-                    ))
-                    step.tool_result = result.questions
-
-            # Enter or resolve a Session-owned Workflow Run
-            elif step.tool_name == "request_run_workflow":
-                result = step.tool_result
-                if isinstance(result, RequestRunWorkflow):
-                    step.tool_result = {
-                        "workflow_id": result.workflow_id,
-                        "action": result.action,
-                        "reason": result.reason,
-                    }
-                    if result.action == "ask":
-                        choice = self._workflow_run_request_interaction(
-                            context,
-                            result.workflow_id,
-                            result.reason,
-                        )
-                        ota_context.transition_interaction(choice)
-                        step.tool_result = {
-                            **choice.model_dump(mode="json"),
-                            "status": "pending",
-                        }
-                    else:
-                        source, resolved_action = await self._enter_or_resume_run_workflow(
-                            ota_context,
-                            context,
-                            result.workflow_id,
-                            result.action,
-                        )
-                        step.tool_result = {
-                            "workflow_id": source.workflow_id,
-                            "workflow_name": source.name,
-                            **self._workflow_sections(source),
-                            "status": resolved_action,
-                            "reason": result.reason,
-                        }
-
-            # Task_confirm
-            elif step.tool_name == "request_human_task_confirm":
-                result = step.tool_result
-                if isinstance(result, RequestHumanTaskConfirm):
-                    workspace = context.workspace
-                    build = workspace.build if workspace is not None else None
-                    think = ota_context.think_status
-                    workflow_id = think.workflow_id if isinstance(think, BuildStageState) else None
-                    workflows = context.workflows
-                    task_markdown = (
-                        workflows.require_package(build.root).read_document("task.md")
-                        if workflows is not None and build is not None
-                        else ""
-                    )
-                    previous_confirmation = (
-                        build.last_task_confirmation if build is not None else None
-                    )
-                    previous_task_markdown = (
-                        previous_confirmation["task_markdown"]
-                        if previous_confirmation is not None
-                        else None
-                    )
-                    if previous_task_markdown is None:
-                        previous_task_markdown = (
-                            build.edit_task_baseline
-                            if build is not None and workflow_id is not None
-                            else ""
-                        )
-                    payload = {
-                        "request_id": result.request_id,
-                        "task_markdown": task_markdown,
-                        "previous_task_markdown": previous_task_markdown,
-                        "operation": "edit" if workflow_id else "create",
-                        "workflow_id": workflow_id,
-                        "original_task_markdown": (
-                            build.edit_task_baseline
-                            if build is not None and workflow_id is not None
-                            else None
-                        ),
-                        "status": "pending",
-                    }
-                    ota_context.transition_interaction(AwaitingTaskConfirm(task_confirm=payload))
-                    step.tool_result = payload
-
-            # Workflow_confirm
-            elif step.tool_name == "request_human_workflow_confirm":
-                result = step.tool_result
-                if isinstance(result, RequestHumanWorkflowConfirm):
-                    think = ota_context.think_status
-                    workflow_id = think.workflow_id if isinstance(think, BuildStageState) else None
-                    workflows = context.workflows
-                    workflow = workflows.get(workflow_id) if workflows is not None and workflow_id else None
-                    payload = {
-                        "request_id": result.request_id,
-                        "default_name": workflow.name if workflow is not None else result.default_name,
-                        "summary": result.summary,
-                        "operation": "edit" if workflow_id else "create",
-                        "workflow_id": workflow_id,
-                        "status": "pending",
-                    }
-                    ota_context.transition_interaction(AwaitingWorkflowConfirm(workflow_confirm=payload))
-                    step.tool_result = payload
-
-            # Child Agent
-            elif step.tool_name == "run_subagent":
-                request = step.tool_result
-                if isinstance(request, SubagentRequest):
-                    tool_call_id = str(getattr(step, "tool_id", None) or "")
-                    subagent_calls.append(SubAgentCall.create(
-                        tool_call_id,
-                        request.goal,
-                        execution_mode=effective_execution_mode,
-                    ))
-                    step.tool_result = (
-                        "Sub-agent dispatch accepted. The parent Agent will pause "
-                        "until every requested sub-agent finishes."
-                    )
-
-            elif step.tool_name == "start_subagent":
-                request = step.tool_result
-                if isinstance(request, BackgroundSubagentRequest):
-                    invocation = context.invocations
-                    parent_session_id = context.session.id
-                    tool_call_id = str(getattr(step, "tool_id", None) or "")
-                    call = SubAgentCall.create(
-                        tool_call_id,
-                        request.goal,
-                        execution_mode=effective_execution_mode,
-                    )
-                    child_session_id = await invocation.start_subagent(parent_session_id, call)
-                    step.tool_result = (
-                        f"Background sub-agent session `{child_session_id}` started. "
-                        "It will continue independently; do not wait for its result."
-                    )
-
-            # Ordinary tools may succeed without stdout/result text, e.g. shell
-            # install commands. Make that explicit before persistence/replay so
-            # renderers do not confuse empty output with a pending HITL answer.
-            if step.tool_result in (None, ""):
-                step.tool_result = EMPTY_SUCCESS_TOOL_RESULT
-
-        if subagent_calls:
-            ota_context.transition_subagents(AwaitingSubAgent(calls=subagent_calls))
+        successful_steps = [
+            step for step in getattr(ota_context.action_result, "results", None) or []
+            if step.success
+        ]
+        worker = self._current_think_worker(ota_context, context)
+        try:
+            await worker.handle_action_result(ota_context, context, self)
+        finally:
+            # Normalize executed successes after cognitive handling, including errors.
+            # Keep the original success set even if mode handling rejects a result.
+            for step in successful_steps:
+                if step.tool_result in (None, ""):
+                    step.tool_result = EMPTY_SUCCESS_TOOL_RESULT
 
         if False:  # the framework's template validator requires async-gen shape
             yield
@@ -1445,147 +876,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             ota_context.transition_think(PresentationStageState.model_validate(think))
         elif think.get("mode") == "run_workflow":
             ota_context.transition_think(WorkflowStageState.model_validate(think))
-
-    async def _enter_or_resume_build(self, ota_context: AmphiOTAContext, context: AmphiContext, workflow_id: Optional[str] = None) -> Optional[BuildStageState]:
-        """Enter a new Build or reopen the unfinished Build for semantic routing.
-
-        Returns
-        -------
-        BuildStageState, optional
-            The reopened unfinished Build state. ``None`` means a new Build was
-            created for the requested operation.
-        """
-        workspace = context.workspace
-        if workspace is None:
-            ota_context.transition_think(BuildStageState(stage="clarify", workflow_id=workflow_id))
-            return None
-        if not workspace.has_build:
-            ota_context.transition_think(BuildStageState(stage="clarify", workflow_id=workflow_id))
-            await self._sync_build_space(ota_context, context, create=True)
-            return None
-
-        build = await workspace.prepare_build_space("resume")
-        existing = BuildStageState(stage=build.stage, workflow_id=build.workflow_id)
-        ota_context.transition_think(existing)
-        await self._sync_build_space(ota_context, context)
-        return existing
-
-    @staticmethod
-    def _card_option(prefix: str, option_id: str) -> dict:
-        """One choice-card option. Id, label and description all derive from the catalog
-        by naming convention (``{prefix}.option_{id}`` / ``{prefix}.desc_{id}``), so the
-        id ↔ copy coupling is structural — pairing an id with another option's label
-        can no longer happen by hand-copied dict drift."""
-        return {
-            "id": option_id,
-            "label": backend_i18n.text(f"{prefix}.option_{option_id}"),
-            "description": backend_i18n.text(f"{prefix}.desc_{option_id}"),
-        }
-
-    def _build_request_interaction(self, context: AmphiContext,  request: RequestBuild, *, requested_workflow_id: Optional[str] = None) -> AwaitingBuildConflict:
-        """Create the unfinished-Build interaction requested through ``request_build``."""
-        workspace = context.workspace
-        checkpoint = workspace.build_checkpoint() if workspace is not None else None
-        if checkpoint is None:
-            raise RuntimeError("Cannot ask about an unfinished Build when none is retained.")
-        reason = (request.reason or "").strip()
-        if not reason:
-            raise ValueError("request_build mode `ask` requires a conflict reason for an unfinished Build.")
-        existing_stage = checkpoint.stage
-        existing_workflow_id = checkpoint.workflow_id
-        if requested_workflow_id:
-            question = backend_i18n.text("agent.build_conflict.question_replace", reason=reason)
-            options = [
-                self._card_option("agent.build_conflict", "keep"),
-                self._card_option("agent.build_conflict", "replace_edit"),
-            ]
-        else:
-            question = backend_i18n.text("agent.build_conflict.question_new", reason=reason)
-            options = [
-                self._card_option("agent.build_conflict", "keep"),
-                self._card_option("agent.build_conflict", "merge"),
-                self._card_option("agent.build_conflict", "replace_new"),
-            ]
-        conflict = AwaitingBuildConflict(
-            existing_stage=existing_stage,
-            existing_workflow_id=existing_workflow_id,
-            requested_workflow_id=requested_workflow_id,
-            reason=reason,
-            request_id=request.request_id or f"build_conflict_{uuid4().hex}",
-            questions=[{
-                "question": question,
-                "header": backend_i18n.text("agent.build_conflict.header"),
-                "options": options,
-                "multiSelect": False,
-            }],
-        )
-        self._close_build_bindings(context)
-        return conflict
-
-    def _workflow_run_request_interaction(self, context: AmphiContext, requested_workflow_id: str, reason: Optional[str]) -> AwaitingWorkflowRunChoice:
-        """Create the unfinished-Run interaction requested through ``request_run_workflow``."""
-        if context.session.is_child:
-            raise RuntimeError("Child Sessions cannot control Workflow Runs.")
-        workflows = context.workflows
-        workspace = context.workspace
-        if workflows is None or workspace is None or not context.session.id:
-            raise RuntimeError("Cannot request a Workflow Run choice without a Session.")
-        existing_state = workspace.run_workflow_checkpoint()
-        if existing_state is None:
-            raise RuntimeError("Cannot request a Workflow Run choice without an unfinished Run.")
-        requested = workflows.get(requested_workflow_id)
-        if requested is None:
-            raise RuntimeError(
-                f"Workflow `{requested_workflow_id}` is unavailable for restart."
-            )
-        same_workflow = existing_state.workflow_id == requested_workflow_id
-        target_text = (
-            backend_i18n.text(
-                "agent.workflow_run_choice.target_same",
-                name=existing_state.workflow_name,
-            )
-            if same_workflow
-            else backend_i18n.text(
-                "agent.workflow_run_choice.target_other",
-                name=requested.name,
-            )
-        )
-        question = backend_i18n.text(
-            "agent.workflow_run_choice.question",
-            reason=reason or backend_i18n.text("agent.workflow_run_choice.default_reason"),
-            target=target_text,
-        )
-        return AwaitingWorkflowRunChoice(
-            existing_workflow_id=existing_state.workflow_id,
-            requested_workflow_id=requested_workflow_id,
-            reason=reason,
-            request_id=f"workflow_run_choice_{uuid4().hex}",
-            questions=[{
-                "question": question,
-                "header": backend_i18n.text("agent.workflow_run_choice.header"),
-                "options": [
-                    self._card_option("agent.workflow_run_choice", "resume"),
-                    self._card_option("agent.workflow_run_choice", "restart"),
-                ],
-                "multiSelect": False,
-            }],
-        )
-
-    @staticmethod
-    def _requested_edit_workflow_id(ota_context: AmphiOTAContext) -> Optional[str]:
-        """Return the most recent successful edit target from this Agent turn."""
-        def value(item: Any, name: str) -> Any:
-            return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
-
-        for record in reversed(ota_context.ota_record):
-            steps = value(value(record, "action_result"), "results") or []
-            for step in reversed(steps):
-                if value(step, "tool_name") != "edit_workflow" or not value(step, "success"):
-                    continue
-                result = value(step, "tool_result")
-                workflow_id = result.get("workflow_id") if isinstance(result, dict) else None
-                return str(workflow_id or "").strip() or None
-        return None
 
     @staticmethod
     def _input_value(user_input: Any, name: str) -> Any:
@@ -2491,9 +1781,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     async def _resume_permission(self, ota_context: AmphiOTAContext, context: AmphiContext, permission: Dict[str, Any], rounds: List[Any], original_user_input: Any) -> None:
 
-        def _reviewed_call_verdict(
-            call: StepToolCall, original: str, resolved: str, instruction: Optional[str] = None
-        ) -> CallVerdict:
+        def _reviewed_call_verdict(call: StepToolCall, original: str, resolved: str, instruction: Optional[str] = None) -> CallVerdict:
+            recorded = recorded_verdicts.get(call.call_id)
             reason = None
             if resolved == Permission.DENY.value:
                 if original == Permission.ASK.value:
@@ -2505,7 +1794,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         if instruction else "Denied by the user."
                     )
                 else:
-                    reason = "Denied by the tool-permission policy."
+                    reason = (recorded.reason if recorded is not None else None) or "Denied by the tool-permission policy."
+            if recorded is not None:
+                return recorded.model_copy(update={"verdict": resolved, "reason": reason})
             return CallVerdict(
                 id=call.call_id,
                 tool=call.tool,
@@ -2515,6 +1806,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             )
 
         ota_context.ota_record = [OTARecord.model_validate(r) for r in rounds]
+        recorded_verdicts = {
+            verdict.id: verdict
+            for verdict in self._get_current_ota_permission_status(ota_context).verdicts
+        }
         calls = [StepToolCall.model_validate(c) for c in permission.get("calls") or []]
         verdicts = permission.get("verdicts") or []
         # Decisions arrive on a dedicated permission_answer frame and are aligned item by item via
@@ -2707,49 +2002,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         ota_context.stream.publish("stage", **payload)
 
     @staticmethod
-    def _switch_status(current_status: Any, target_mode: str, target_stage: Optional[str]) -> Any:
-        """Build the next state for an already-admitted cognitive switch."""
-        if target_mode == "normal":
-            return NormalStageState()
-        if target_mode != current_status.mode:
-            raise RuntimeError(f"Cannot switch from `{current_status.mode}` to `{target_mode}`.")
-        if isinstance(current_status, BuildStageState):
-            return current_status.model_copy(update={"stage": str(target_stage)})
-        if isinstance(current_status, PresentationStageState):
-            target = str(target_stage)
-            current_index = PRESENTATION_STAGE_ORDER.index(current_status.stage)
-            target_index = PRESENTATION_STAGE_ORDER.index(target)
-            reports = current_status.reports
-            if target_index <= current_index:
-                retained_stages = set(PRESENTATION_STAGE_ORDER[:target_index])
-                reports = [report for report in reports if report.stage in retained_stages]
-            reset_plan = target_index <= PRESENTATION_STAGE_ORDER.index("ppt_plan")
-            return current_status.model_copy(update={
-                "stage": target,
-                "step_index": 0,
-                "reports": reports,
-                **({
-                    "sources": [],
-                    "outline": [],
-                    "outline_confirmed": False,
-                    "outline_confirmation_id": None,
-                    "template_candidates": [],
-                    "template_selection_id": None,
-                    "template_selection_status": "idle",
-                    "template_selection_error": None,
-                    "selected_template": None,
-                    "template_excluded_ids": [],
-                } if reset_plan else {}),
-            })
-        if isinstance(current_status, WorkflowStageState):
-            step_index = current_status.step_index if target_stage == current_status.stage else 0
-            return current_status.model_copy(update={
-                "stage": target_stage,
-                "step_index": step_index,
-            })
-        raise RuntimeError("Normal mode does not expose the cognitive switch.")
-
-    @staticmethod
     def _stamp_mode_exit(
         ota_context: AmphiOTAContext,
         status: Any,
@@ -2818,28 +2070,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             context.workflow_runs.close_run_workflow()
         if context.workflows is not None:
             context.workflows.close_package()
-
-    @staticmethod
-    def _invalidate_presentation_artifacts(context: AmphiContext, stages: Iterable[str]) -> None:
-        """Remove exact derived contracts that no longer belong to the active cursor."""
-        workspace = context.workspace
-        if workspace is None:
-            return
-        for stage in stages:
-            relative = PRESENTATION_STAGE_ARTIFACTS.get(stage)
-            if relative is None:
-                continue
-            path = workspace.work_dir / relative
-            if path.parent.is_symlink():
-                raise RuntimeError(
-                    f"Cannot invalidate Presentation artifact through symlinked directory `{path.parent}`."
-                )
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                raise RuntimeError(
-                    f"Cannot invalidate stale Presentation artifact `{relative}`: {exc}."
-                ) from exc
 
     @staticmethod
     async def _open_run_workflow(context: AmphiContext) -> Any:
@@ -3329,10 +2559,11 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         self,
         ota_context: AmphiOTAContext,
         context: AmphiContext,
+        calls: List[StepToolCall],
         *,
         execution_mode: Optional[str] = None,
     ) -> List[CallVerdict]:
-        """Evaluate system permissions for the proposed tool calls.
+        """Evaluate system permissions for the tool calls admitted by legality checks.
 
         Parameters
         ----------
@@ -3340,15 +2571,16 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             Active turn containing the proposed tool calls and current Think stage.
         context : AmphiContext
             Session workspace, execution mode, mounts, and safety classifier context.
+        calls : List[StepToolCall]
+            Tool calls that passed legality checks, in their original relative order.
         execution_mode : Optional[str]
             Effective mode already resolved for this round; omitted to resolve it here.
 
         Returns
         -------
         List[CallVerdict]
-            Permission verdicts aligned one-to-one with the proposed tool calls.
+            Permission verdicts aligned one-to-one with the supplied tool calls.
         """
-        calls = getattr(ota_context.think_result, "tool_calls", None) or []
         execution_mode = execution_mode or self._effective_execution_mode(ota_context, context)
         workspace = context.workspace
         root = (
@@ -3413,7 +2645,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             return "subagent"
         return status.stage
 
-    def _current_think_worker(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Any:
+    def _current_think_worker(self, ota_context: AmphiOTAContext, context: AmphiContext) -> BaseThink:
         """Return the worker bound to the active cognitive state and Session role."""
         unit_name = self._current_think_unit_name(ota_context, context)
         unit = getattr(self, unit_name, None)
@@ -3439,221 +2671,39 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         return list(select_tools(ota_context, context))
 
     async def legality_check(self, ota_context: AmphiOTAContext, context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
-        """Evaluate Agent- and Worker-level action legality after permission.
-
-        Parameters
-        ----------
-        ota_context : AmphiOTAContext
-            Active turn and current Think stage.
-        context : AmphiContext
-            Session context used by legality rules.
-        calls : List[StepToolCall]
-            Complete proposed call batch in model order.
-        verdicts : List[CallVerdict]
-            Permission verdicts aligned one-to-one with ``calls``.
-
-        Returns
-        -------
-        List[CallVerdict]
-            Final admission verdicts with illegal allowed calls downgraded to deny.
-
-        """
+        """Check executable tools and registered routing, then delegate business policy."""
+        visible_tools = {spec.tool_name for spec in ota_context.tools or []}
         think_status = ota_context.think_status
 
-        def _agent_legality_check(call: StepToolCall) -> Optional[str]:
-            """Check one call against Agent-owned execution invariants."""
-            tool_name = getattr(call, "tool", None)
-            visible_tools = {
-                spec.tool_name for spec in getattr(ota_context, "tools", None) or []
-            }
-            if tool_name not in visible_tools:
+        def engine_reason(call: StepToolCall) -> Optional[str]:
+            if call.tool not in visible_tools:
                 return (
-                    f"tool `{tool_name}` rejected: it is not available in this "
+                    f"tool `{call.tool}` rejected: it is not available in this "
                     "Session's current ToolSurface."
                 )
-            if tool_name == "switch":
-                if isinstance(think_status, NormalStageState):
-                    return "switch rejected: Main enters cognitive modes through their dedicated tools."
+            if call.tool == "switch":
                 arguments = self._tool_args(call)
-                requested_mode = arguments.get("mode") or None
-                target_stage = arguments.get("stage") or None
-                if requested_mode not in (None, "normal"):
-                    return (
-                        f"switch rejected: omit mode to remain in `{think_status.mode}`, "
-                        "or use mode `normal` to return to Main."
-                    )
-                if requested_mode == "normal":
-                    if target_stage:
+                target_stage = arguments.get("stage")
+                if think_status.mode != "normal" and not arguments.get("mode") and target_stage:
+                    registered_stages = self.thinking_modes.get(think_status.mode)
+                    unit = getattr(self, str(target_stage), None)
+                    if registered_stages is None or target_stage not in registered_stages or unit is None:
                         return (
-                            "switch rejected: mode `normal` cannot be combined with "
-                            "a target stage."
+                            f"switch rejected: target stage `{target_stage}` is not registered "
+                            f"for mode `{think_status.mode}`."
                         )
-                    return None
-                if not target_stage:
-                    return (
-                        "switch rejected: provide a target stage, or use mode `normal` "
-                        "to return to Main."
-                    )
-
-                target_mode = think_status.mode
-                registered_stages = self.thinking_modes.get(target_mode)
-                unit = getattr(self, str(target_stage), None)
-                if (
-                    registered_stages is None
-                    or target_stage not in registered_stages
-                    or unit is None
-                ):
-                    return (
-                        f"switch rejected: target stage `{target_stage}` is not registered "
-                        f"for mode `{target_mode}`."
-                    )
-            if tool_name == "request_build":
-                arguments = self._tool_args(call)
-                if arguments.get("mode", "ask") != "ask":
-                    return None
-                workspace = context.workspace
-                retained = workspace.build_checkpoint() if workspace is not None else None
-                if retained is not None and not str(arguments.get("reason") or "").strip():
-                    return (
-                        "request_build rejected: mode `ask` requires a concrete reason "
-                        "when resolving an unfinished Build conflict."
-                    )
             return None
 
-        worker = self._current_think_worker(ota_context, context)
-        think_legality_check = getattr(worker, "legality_check", None)
-
-        resolved: List[CallVerdict] = []
-        for call, verdict in zip(calls, verdicts):
-            if verdict.verdict != Permission.ALLOW.value:
-                resolved.append(verdict)
+        resolved = list(verdicts)
+        for index, (call, verdict) in enumerate(zip(calls, verdicts)):
+            if verdict.verdict == Permission.DENY.value:
                 continue
+            reason = engine_reason(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
 
-            reason = _agent_legality_check(call)
-            if reason is None and callable(think_legality_check):
-                reason = await think_legality_check(call, ota_context, context)
-            if (
-                reason is None
-                and getattr(call, "tool", None) == "switch"
-                and isinstance(think_status, BuildStageState)
-            ):
-                arguments = self._tool_args(call)
-                if (
-                    arguments.get("mode") != "normal"
-                    and arguments.get("stage")
-                    and not str(arguments.get("reason") or "").strip()
-                ):
-                    reason = (
-                        "switch rejected: a Build stage handoff requires a non-empty, "
-                        "self-contained reason for the next stage."
-                    )
-            resolved.append(
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if reason else verdict
-            )
-
-        if (
-            len(calls) > 1
-            and any(getattr(call, "tool", None) == "request_human_task_confirm" for call in calls)
-        ):
-            reason = (
-                "task confirmation rejected: request_human_task_confirm must run alone "
-                "after the final task.md write has completed."
-            )
-            resolved = [
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if (
-                    verdict.verdict == Permission.ALLOW.value
-                    and getattr(call, "tool", None) == "request_human_task_confirm"
-                )
-                else verdict
-                for call, verdict in zip(calls, resolved)
-            ]
-
-        build_controls = {"edit_workflow", "request_build"}
-        if len(calls) > 1 and any(getattr(call, "tool", None) in build_controls for call in calls):
-            reason = "Build control rejected: Build entry tools must run alone."
-            resolved = [
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if verdict.verdict == Permission.ALLOW.value and getattr(call, "tool", None) in build_controls
-                else verdict
-                for call, verdict in zip(calls, resolved)
-            ]
-
-        # Entering presentation mode changes the next ThinkUnit. Keep that state
-        # transition atomic, matching the existing Build and Workflow entry rule.
-        presentation_controls = {"report_presentation_step", "request_presentation"}
-        if len(calls) > 1 and any(getattr(call, "tool", None) in presentation_controls for call in calls):
-            reason = "Presentation control rejected: entry and step reports must run alone."
-            resolved = [
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if verdict.verdict == Permission.ALLOW.value and getattr(call, "tool", None) in presentation_controls
-                else verdict
-                for call, verdict in zip(calls, resolved)
-            ]
-
-        workflow_controls = {
-            "request_run_workflow",
-            "report_workflow_step",
-        }
-        if len(calls) > 1 and any(getattr(call, "tool", None) in workflow_controls for call in calls):
-            reason = (
-                "Workflow control rejected: Run entry, step-report, and completion "
-                "tools must run alone."
-            )
-            resolved = [
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if verdict.verdict == Permission.ALLOW.value and getattr(call, "tool", None) in workflow_controls
-                else verdict
-                for call, verdict in zip(calls, resolved)
-            ]
-
-        control_flow_tools = self.exclusive_control_tools | {"run_subagent"}
-        allowed_control_tools = [
-            str(getattr(call, "tool", ""))
-            for call, verdict in zip(calls, resolved)
-            if verdict.verdict == Permission.ALLOW.value
-            and getattr(call, "tool", None) in control_flow_tools
-        ]
-        exclusive_count = sum(
-            tool in self.exclusive_control_tools for tool in allowed_control_tools
-        )
-        invalid_control_mix = exclusive_count > 1 or (
-            exclusive_count == 1 and "run_subagent" in allowed_control_tools
-        )
-        if invalid_control_mix:
-            reason = (
-                "control-flow rejected: only one exclusive control tool may run per "
-                "round; run_subagent may be batched only with other run_subagent calls."
-            )
-            resolved = [
-                verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-                if (
-                    verdict.verdict == Permission.ALLOW.value
-                    and getattr(call, "tool", None) in control_flow_tools
-                )
-                else verdict
-                for call, verdict in zip(calls, resolved)
-            ]
-        return resolved
+        worker = self._current_think_worker(ota_context, context)
+        return await worker.legality_check(ota_context, context, calls, resolved)
 
     @staticmethod
     def _recent_user_messages(ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:

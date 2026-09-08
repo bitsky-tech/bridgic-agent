@@ -17,6 +17,9 @@ class PresentationBriefThink(PresentationThink):
 
     persona = PRESENTATION_BRIEF_PERSONA
 
+    ############################################################################
+    # Tools and Skills selection
+    ############################################################################
     def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
         """Keep production reports out of the brief stage."""
         return [

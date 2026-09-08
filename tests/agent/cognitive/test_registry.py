@@ -8,13 +8,14 @@ import pytest
 from bridgic.amphibious import AmphibiousAutoma, Context, OTAContext, RETURN, ThinkUnit, ThinkUnitDescriptor, think_unit
 from bridgic.core.model.types import Message, Role
 
-from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, cognitive
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session, cognitive
+from src.amphi_agent._state import NormalStageState
 from src.amphi_agent.cognitive import get_cognitive_stages
 from src.amphi_agent.cognitive import register as registration
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.register import cognitive_stage
 from src.amphi_service.protocol.llms._streaming import StreamResult
-from tests.agent.cognitive._harness import tool_call
+from tests.agent.cognitive._harness import legality_reason, tool_call
 
 
 @pytest.fixture
@@ -44,12 +45,13 @@ def test_existing_workers_keep_their_bindings_and_mode_order() -> None:
         "execute": cognitive.WorkflowThink,
     }
     units = {name: value for name, value in vars(AmphiAgent).items() if isinstance(value, ThinkUnitDescriptor)}
-    assert list(units) == list(expected)
+    assert list(units) == [stage.stage for stage in get_cognitive_stages()]
     for name, worker_type in expected.items():
         assert type(units[name]._worker_template) is worker_type
         assert units[name]._max_attempts == 200
     expected_modes = {
         "build": ("clarify", "explore", "generate", "verify"),
+        "normal": ("main", "subagent"),
         "presentation": ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"),
         "run_workflow": ("execute",),
     }
@@ -57,6 +59,72 @@ def test_existing_workers_keep_their_bindings_and_mode_order() -> None:
     assert agent.thinking_modes == expected_modes
     agent.thinking_modes["build"] = ()
     assert AmphiAgent().thinking_modes == expected_modes
+
+
+def test_normal_workers_register_and_reuse_their_templates() -> None:
+    normal = [stage for stage in get_cognitive_stages() if stage.mode == "normal"]
+    assert [(stage.stage, stage.order, stage.worker_class) for stage in normal] == [
+        ("main", 10, cognitive.MainThink),
+        ("subagent", 20, cognitive.SubAgentThink),
+    ]
+    first = AmphiAgent(max_rounds=7)
+    second = AmphiAgent(max_rounds=11)
+    for name in ("main", "subagent"):
+        assert getattr(first, name) is getattr(second, name)
+        assert getattr(first, name)._worker_template is getattr(second, name)._worker_template
+    assert (first._max_rounds, second._max_rounds) == (7, 11)
+
+
+def test_normal_registration_preserves_explicit_subclass_overrides() -> None:
+    class MainOverride(cognitive.MainThink):
+        pass
+
+    class SubAgentOverride(cognitive.SubAgentThink):
+        pass
+
+    class CustomAgent(AmphiAgent):
+        main = think_unit(MainOverride(), max_attempts=3)
+        subagent = think_unit(SubAgentOverride(), max_attempts=5)
+
+    child = CustomAgent()
+    parent = AmphiAgent()
+    assert type(child.main._worker_template) is MainOverride
+    assert type(child.subagent._worker_template) is SubAgentOverride
+    assert type(parent.main._worker_template) is cognitive.MainThink
+    assert type(parent.subagent._worker_template) is cognitive.SubAgentThink
+    assert child.main._max_attempts == 3
+    assert child.subagent._max_attempts == 5
+
+
+@pytest.mark.parametrize("is_child", [False, True])
+async def test_registered_normal_workers_keep_session_routing_and_prompts(is_child: bool) -> None:
+    session = Session()
+    if is_child:
+        session.parent_session_id = "parent-session"
+    context = AmphiContext(session=session)
+    ota_context = AmphiOTAContext(user_input="Describe the available capabilities.")
+    agent = AmphiAgent()
+    unit_name = "subagent" if is_child else "main"
+    worker = agent._current_think_worker(ota_context, context)
+    assert agent._current_think_unit_name(ota_context, context) == unit_name
+    assert worker is getattr(agent, unit_name)._worker_template
+    assert ota_context.think_status == NormalStageState()
+
+    messages = await worker.assemble_messages(ota_context, context)
+    names = {tool.tool_name for tool in ota_context.tools}
+    assert {"read_file", "request_human_choice", "web_search"} <= names
+    assert "switch" not in names
+    if is_child:
+        assert not {"request_build", "request_presentation", "run_subagent", "start_subagent"} & names
+        assert worker.persona == cognitive.SubAgentThink.persona
+        assert "This Session is a Child Agent" in messages[0].content
+    else:
+        assert {"request_build", "request_presentation", "run_subagent", "start_subagent"} <= names
+        assert worker.persona == cognitive.MainThink.persona
+        assert "a general-purpose agent" in messages[0].content
+    assert messages[0].role == Role.SYSTEM
+    assert messages[-1].role == Role.USER
+    assert "Describe the available capabilities." in messages[-1].content
 
 
 def test_registry_only_provides_ordered_definitions(registry) -> None:
@@ -106,7 +174,7 @@ def test_duplicate_stage_name_does_not_replace_the_first_worker(registry) -> Non
     assert type(AmphiAgent.first._worker_template) is FirstThink
 
 
-@pytest.mark.parametrize("name", ["on_agent", "thinking_modes", "name", "main", "subagent"])
+@pytest.mark.parametrize("name", ["on_agent", "thinking_modes", "name"])
 def test_existing_attributes_are_not_overwritten(registry, name: str) -> None:
     cognitive_stage(mode="demo", stage="first", order=10)(BaseThink)
     cognitive_stage(mode="demo", stage=name, order=20)(BaseThink)
@@ -226,8 +294,8 @@ async def test_registered_base_worker_runs_shared_thinking_without_main_policy(r
     ota_context = AmphiOTAContext(user_input="Run the custom workflow")
     context = AmphiContext()
     call = tool_call("edit_workflow", workflow_id="missing-workflow")
-    assert await CustomThink().legality_check(call, ota_context, context) is None
-    assert await cognitive.MainThink().legality_check(call, ota_context, context) is not None
+    assert await legality_reason(CustomThink(), call, ota_context, context) is None
+    assert await legality_reason(cognitive.MainThink(), call, ota_context, context) is not None
     llm = SimpleNamespace(stream_turn=AsyncMock(return_value=StreamResult(
         tool_calls=[],
         content="Custom workflow completed",

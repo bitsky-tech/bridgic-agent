@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
+from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall, ToolArgument
+from bridgic.amphibious._type import ThinkResult
 
 from src.amphi_agent import (
     AmphiAgent,
@@ -23,8 +24,10 @@ from src.amphi_agent._state import (
     AwaitingWorkflowConfirm,
     AwaitingWorkflowRunChoice,
     BuildStageState,
+    CallVerdict,
     NormalStageState,
     PresentationStageState,
+    RoundPermission,
     WorkflowStageState,
 )
 from src.amphi_agent._workspace import Workspace
@@ -512,7 +515,7 @@ async def test_presentation_template_retry_after_exhaustion_resets_exclusions(or
     assert resumed.template_excluded_ids == []
 
 
-def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestration: _Harness) -> None:
+async def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     """The dedicated PPT handoff consumes a large shortlist before the 16K file fallback."""
     candidate = {
         "template_id": "template-large",
@@ -532,8 +535,13 @@ def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestration: _
     ota_context = AmphiOTAContext()
     ota_context.transition_think(state)
 
-    orchestration.agent._prepare_ppt_rag_action_results(result, ota_context)
-    orchestration.agent._save_large_tool_results(result, orchestration.context)
+    async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
+        return result
+
+    monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
+    executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
+    assert executed is result
+    assert not orchestration.workspace.tool_result_dir.exists()
 
     receipt = result.results[0].tool_result
     assert isinstance(receipt, dict)
@@ -544,7 +552,7 @@ def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestration: _
     assert isinstance(ota_context.interaction_status, AwaitingPresentationTemplateSelection)
 
 
-def test_invalid_ppt_rag_payload_is_discarded_before_generic_spill(orchestration: _Harness) -> None:
+async def test_invalid_ppt_rag_payload_is_discarded_before_generic_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     """A malformed large result cannot remain attached after the step becomes failed."""
     state = PresentationStageState(
         stage="ppt_plan",
@@ -555,8 +563,13 @@ def test_invalid_ppt_rag_payload_is_discarded_before_generic_spill(orchestration
     ota_context = AmphiOTAContext()
     ota_context.transition_think(state)
 
-    orchestration.agent._prepare_ppt_rag_action_results(result, ota_context)
-    orchestration.agent._save_large_tool_results(result, orchestration.context)
+    async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
+        return result
+
+    monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
+    executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
+    assert executed is result
+    assert not orchestration.workspace.tool_result_dir.exists()
 
     step = result.results[0]
     assert step.success is False
@@ -1036,6 +1049,72 @@ async def test_run_entry(orchestration: _Harness) -> None:
     assert (restarted_checkpoint.stage, restarted_checkpoint.step_index) == ("execute", 0)
     assert restarted_checkpoint.workflow_input.text == "Create today's report"
     assert not partial.exists()
+
+
+@pytest.mark.parametrize("action", ["resume", "restart", "ask"])
+async def test_active_workflow_handles_admitted_reentry_requests(orchestration: _Harness, action: str) -> None:
+    """Workflow-owned re-entry tools retain their state effects after admission and execution."""
+    saved = await _save_workflow(orchestration, f"active-reentry-{action}")
+    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    initial = started.think_status
+    assert isinstance(initial, WorkflowStageState)
+    partial = orchestration.workflow_runs.require_run_workflow().result_dir / "partial.txt"
+    partial.write_text("Retain this attempt unless restarted.\n", encoding="utf-8")
+    arguments = {
+        "workflow_id": saved.workflow_id,
+        "action": action,
+        "reason": "Resolve the user's intent for the unfinished report.",
+    }
+    call = StepToolCall(
+        call_id="active-run-reentry",
+        tool="request_run_workflow",
+        tool_arguments=[ToolArgument(name=name, value=value) for name, value in arguments.items()],
+    )
+    requested = AmphiOTAContext(
+        user_input="Resolve the current report attempt.",
+        ota_record=[OTARecord(think_result=ThinkResult(step_content="Resolve the active Run.", tool_calls=[call]))],
+    )
+    requested.transition_think(initial)
+    requested.tools = orchestration.agent._select_current_tools(requested, orchestration.context)
+    assert "request_run_workflow" in {tool.tool_name for tool in requested.tools}
+    admitted = await orchestration.agent.legality_check(
+        requested,
+        orchestration.context,
+        [call],
+        [CallVerdict(id=call.call_id, tool=call.tool, arguments=arguments, verdict="allow")],
+    )
+    assert [verdict.verdict for verdict in admitted] == ["allow"]
+    requested.ota_record[-1].permission = RoundPermission(
+        execution_mode="full",
+        reviewed=True,
+        verdicts=admitted,
+    )
+
+    requested.action_result = await orchestration.agent.action_tool_call(requested, orchestration.context)
+    assert requested.action_result.results[0].success is True
+    await _apply(orchestration, requested)
+
+    payload = _payload(requested, "request_run_workflow")
+    state = requested.think_status
+    assert isinstance(state, WorkflowStageState)
+    assert state.workflow_id == saved.workflow_id
+    checkpoint = orchestration.workspace.run_workflow_checkpoint()
+    assert checkpoint is not None
+    assert checkpoint.workflow_input.text == "Create today's report"
+    if action == "ask":
+        assert isinstance(requested.interaction_status, AwaitingWorkflowRunChoice)
+        assert payload["status"] == "pending"
+        assert requested.interaction_status.existing_workflow_id == saved.workflow_id
+        assert requested.interaction_status.requested_workflow_id == saved.workflow_id
+        assert state == initial
+        assert partial.exists()
+    else:
+        assert requested.interaction_status is None
+        assert payload["status"] == {"resume": "resumed", "restart": "restarted"}[action]
+        assert (state.stage, state.step_index) == ("execute", 0)
+        assert checkpoint.generation == state.generation
+        assert (state.generation == initial.generation) is (action == "resume")
+        assert partial.exists() is (action == "resume")
 
 
 async def test_run_completion(orchestration: _Harness) -> None:

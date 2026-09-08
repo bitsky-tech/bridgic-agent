@@ -1,19 +1,123 @@
 """Shared context, tools, and legality checks for saved Workflow stages."""
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
-from bridgic.amphibious import StepToolCall
+from bridgic.amphibious import ActionStepResult, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
 from ..base import BaseThink, render_input
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
+from ...security import Permission
 from ..._tools import TOOL_LIBRARY
-from ..._state import WorkflowStageState
+from ..._state import CallVerdict, AwaitingWorkflowRunChoice, NormalStageState, WorkflowStageState
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
+from ...tools.workflow import RequestRunWorkflow, WorkflowStepReport
+from ....amphi_store import WorkflowRunStatus
+from ....amphi_service.i18n import backend_i18n
+
+if TYPE_CHECKING:
+    from ..._agent import AmphiAgent
+
+
+async def handle_workflow_run_request(step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
+    """Resolve a Run request from normal conversation or an active Workflow stage."""
+    def workflow_run_request_interaction(context: AmphiContext, requested_workflow_id: str, reason: Optional[str]) -> AwaitingWorkflowRunChoice:
+        """Create the unfinished-Run interaction requested through ``request_run_workflow``."""
+        def card_option(prefix: str, option_id: str) -> dict:
+            """One choice-card option. Id, label and description all derive from the catalog
+            by naming convention (``{prefix}.option_{id}`` / ``{prefix}.desc_{id}``), so the
+            id ↔ copy coupling is structural — pairing an id with another option's label
+            can no longer happen by hand-copied dict drift."""
+            return {
+                "id": option_id,
+                "label": backend_i18n.text(f"{prefix}.option_{option_id}"),
+                "description": backend_i18n.text(f"{prefix}.desc_{option_id}"),
+            }
+
+        if context.session.is_child:
+            raise RuntimeError("Child Sessions cannot control Workflow Runs.")
+        workflows = context.workflows
+        workspace = context.workspace
+        if workflows is None or workspace is None or not context.session.id:
+            raise RuntimeError("Cannot request a Workflow Run choice without a Session.")
+        existing_state = workspace.run_workflow_checkpoint()
+        if existing_state is None:
+            raise RuntimeError("Cannot request a Workflow Run choice without an unfinished Run.")
+        requested = workflows.get(requested_workflow_id)
+        if requested is None:
+            raise RuntimeError(
+                f"Workflow `{requested_workflow_id}` is unavailable for restart."
+            )
+        same_workflow = existing_state.workflow_id == requested_workflow_id
+        target_text = (
+            backend_i18n.text(
+                "agent.workflow_run_choice.target_same",
+                name=existing_state.workflow_name,
+            )
+            if same_workflow
+            else backend_i18n.text(
+                "agent.workflow_run_choice.target_other",
+                name=requested.name,
+            )
+        )
+        question = backend_i18n.text(
+            "agent.workflow_run_choice.question",
+            reason=reason or backend_i18n.text("agent.workflow_run_choice.default_reason"),
+            target=target_text,
+        )
+        return AwaitingWorkflowRunChoice(
+            existing_workflow_id=existing_state.workflow_id,
+            requested_workflow_id=requested_workflow_id,
+            reason=reason,
+            request_id=f"workflow_run_choice_{uuid4().hex}",
+            questions=[{
+                "question": question,
+                "header": backend_i18n.text("agent.workflow_run_choice.header"),
+                "options": [
+                    card_option("agent.workflow_run_choice", "resume"),
+                    card_option("agent.workflow_run_choice", "restart"),
+                ],
+                "multiSelect": False,
+            }],
+        )
+
+    result = step.tool_result
+    if isinstance(result, RequestRunWorkflow):
+        step.tool_result = {
+            "workflow_id": result.workflow_id,
+            "action": result.action,
+            "reason": result.reason,
+        }
+        if result.action == "ask":
+            choice = workflow_run_request_interaction(
+                context,
+                result.workflow_id,
+                result.reason,
+            )
+            ota_context.transition_interaction(choice)
+            step.tool_result = {
+                **choice.model_dump(mode="json"),
+                "status": "pending",
+            }
+        else:
+            source, resolved_action = await agent._enter_or_resume_run_workflow(
+                ota_context,
+                context,
+                result.workflow_id,
+                result.action,
+            )
+            step.tool_result = {
+                "workflow_id": source.workflow_id,
+                "workflow_name": source.name,
+                **agent._workflow_sections(source),
+                "status": resolved_action,
+                "reason": result.reason,
+            }
 
 
 class WorkflowRunThink(BaseThink):
@@ -22,29 +126,159 @@ class WorkflowRunThink(BaseThink):
     workflow_stage: str = ""
     permission_mode_override: Optional[str] = "full"
 
-    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
-        """Expose the enabled Skills selected for this mode."""
-        skills = context.skills
-        return skills.data() if skills is not None else {}
+    ############################################################################
+    # The agent design
+    ############################################################################
+    async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
+        """Apply a Workflow section report or an explicit exit from its active Run."""
+        await super().handle_action_result(ota_context, context, agent)
 
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Keep only the active automatic Workflow stage's trace."""
-        boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (scope := self._record_think_scope(ota_context.ota_record[index]))
-                is not None
-                and scope[0] == mode
-                and scope[1] != stage
-            )
-        ), None)
-        if boundary is None:
-            return ota_context, None
-        return ota_context.model_copy(update={
-            "ota_record": list(ota_context.ota_record[boundary + 1:]),
-        }), boundary
+        for step in getattr(ota_context.action_result, "results", None) or []:
+            if not step.success:
+                continue
 
+            if step.tool_name == "switch":
+                sig = step.tool_result
+                current_status = ota_context.think_status
+                target_mode = sig.get("mode") or current_status.mode
+                if target_mode != "normal":
+                    raise ValueError(
+                        "Workflow stages advance automatically; switch only exits to normal mode."
+                    )
+                ota_context.transition_think(NormalStageState())
+                agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
+                agent._close_run_workflow_bindings(context)
+
+            elif step.tool_name == "request_run_workflow":
+                await handle_workflow_run_request(step, ota_context, context, agent)
+
+            elif step.tool_name == "report_workflow_step":
+                result = step.tool_result
+                current_status = ota_context.think_status
+                if isinstance(result, WorkflowStepReport) and isinstance(current_status, WorkflowStageState):
+                    source = agent._workflow_source(current_status, context)
+                    stage_steps = source.steps(current_status.stage)
+                    current_step = stage_steps[current_status.step_index]
+                    workspace = context.workspace
+                    if workspace is None:
+                        raise RuntimeError("Cannot report Workflow progress without an active Run.")
+                    state = workspace.run_workflow
+                    if state is None:
+                        raise RuntimeError("Workflow Run space is not bound.")
+                    state.checkpoint_cursor(
+                        expected_workflow_id=current_status.workflow_id,
+                        expected_generation=current_status.generation,
+                        expected_stage=current_status.stage,
+                        expected_step_index=current_status.step_index,
+                        stage=current_status.stage,
+                        step_index=current_status.step_index,
+                    )
+                    workflow_runs = context.workflow_runs
+                    if workflow_runs is None:
+                        raise RuntimeError("Cannot record Workflow progress without its result library.")
+                    workflow_runs.require_run_workflow(state.root)
+                    durable_summary = workflow_runs.record_step(
+                        stage=current_status.stage,
+                        step_number=current_step.index,
+                        step_title=current_step.title,
+                        status=result.status,
+                        summary=result.summary,
+                        evidence=result.evidence,
+                    )
+                    reported_summary = (
+                        durable_summary if result.status == "failure" else result.summary
+                    )
+                    if result.status == "success":
+                        next_step_index = current_status.step_index + 1
+                        state.checkpoint_cursor(
+                            expected_workflow_id=current_status.workflow_id,
+                            expected_generation=current_status.generation,
+                            expected_stage=current_status.stage,
+                            expected_step_index=current_status.step_index,
+                            stage=current_status.stage,
+                            step_index=next_step_index,
+                        )
+                    step.tool_result = {
+                        "workflow_id": source.workflow_id,
+                        "generation": current_status.generation,
+                        "workflow_name": source.name,
+                        "phase": current_status.stage,
+                        "step_index": current_status.step_index,
+                        "step_number": current_step.index,
+                        "step_count": len(stage_steps),
+                        "title": current_step.title,
+                        **agent._workflow_sections(source),
+                        "status": result.status,
+                        "summary": reported_summary,
+                        "evidence": result.evidence,
+                    }
+                    agent._publish_workflow_progress(
+                        ota_context,
+                        context,
+                        current_status,
+                        result.status,
+                        reported_summary,
+                        source=source,
+                    )
+                    if result.status == "failure":
+                        terminal_summary = (
+                            f"Workflow `{source.name}` stopped during "
+                            f"{current_status.stage} section {current_step.index} "
+                            f"(`{current_step.title}`): {reported_summary}"
+                        )
+                        try:
+                            published = await agent._publish_workflow_run(
+                                context,
+                                current_status,
+                                status=WorkflowRunStatus.FAILED,
+                            )
+                        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+                            step.success = False
+                            step.error = (
+                                "The Workflow failure was recorded, but its terminal "
+                                f"result could not be saved: {exc}. Retry the failure report."
+                            )
+                            step.tool_result = {
+                                **step.tool_result,
+                                "status": "save_failed",
+                            }
+                            continue
+                        step.tool_result = {
+                            **step.tool_result,
+                            "run_id": published.run_id,
+                            "run_status": published.status.value,
+                            "created_at": published.created_at.isoformat(),
+                            "published_result_dir": str(published.result_dir.resolve()),
+                        }
+                        await agent._finish_workflow_run(
+                            ota_context,
+                            context,
+                            current_status,
+                            generation=current_status.generation,
+                            summary=terminal_summary,
+                            published=published,
+                        )
+                    else:
+                        next_status = WorkflowStageState(
+                            workflow_id=state.workflow_id,
+                            generation=state.generation,
+                            stage=state.stage,
+                            step_index=state.step_index,
+                        )
+                        ota_context.transition_think(next_status)
+                        published = await agent._settle_workflow_boundary(ota_context, context)
+                        if published is not None:
+                            step.tool_result = {
+                                **step.tool_result,
+                                "run_id": published.run_id,
+                                "run_status": published.status.value,
+                                "created_at": published.created_at.isoformat(),
+                                "published_result_dir": str(published.result_dir.resolve()),
+                            }
+
+    ############################################################################
+    # Dynamic prompt assembly
+    ############################################################################
     async def assemble_messages(
         self,
         ota_context: AmphiOTAContext,
@@ -69,139 +303,9 @@ class WorkflowRunThink(BaseThink):
         messages += self.turn_messages_block(turn_context, context)
         return messages
 
-    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Add this Workflow Run's writable directories to its Session environment."""
-        lines = ["<Workspace>", self.working_directory_block(context)]
-        workspace = context.workspace
-        workflow_run = workspace.run_workflow if workspace is not None else None
-        if workflow_run is not None and workflow_run.is_available:
-            workflow_runs = context.workflow_runs
-            if workflow_runs is None:
-                raise RuntimeError("Workflow Run space is bound without its result library.")
-            active_run = workflow_runs.require_run_workflow(workflow_run.root)
-            lines.extend([
-                "- Workflow final result directory (active, writable): "
-                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
-                "- Workflow background work directory (active, writable): "
-                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
-            ])
-        lines.append(self.environment_block(context))
-        lines.append("</Workspace>")
-        return "\n".join(lines)
-
-    async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
-        """Render Workflow context from stable catalogues to live runtime state."""
-        return [
-            self.transcript_block(ota_context, context),
-            await self.skills_block(ota_context, context),
-            await self.schedules_block(ota_context, context),
-            await self.workflow_run_block(ota_context, context, self.workflow_stage),
-            await self.memory_block(ota_context, context),
-            await self.workspace_block(ota_context, context),
-        ]
-
-    def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Return the stable Workflow-stage persona."""
-        tools = self.select_tools(ota_context, context)
-        return render_stage_persona(
-            [tool.tool_name for tool in tools],
-            template=self.persona,
-        ).strip()
-
-    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
-        """Select this mode's tools in stable catalogue order."""
-        tools = [
-            *super().select_tools(ota_context, context),
-            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
-                "bash",
-                "create_schedule",
-                "delete_schedule",
-                "generate_image",
-                "get_schedule",
-                "list_schedules",
-                "list_workflow_runs",
-                "read_image",
-                "read_workflow_run",
-                "remove_workflow",
-                "report_workflow_step",
-                "request_human_choice",
-                "request_run_workflow",
-                "run_subagent",
-                "start_subagent",
-                "update_schedule",
-                "web_fetch",
-                "web_search",
-            }),
-            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
-            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
-            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
-        ]
-        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
-        return [*tools, switch_tool]
-
-    @staticmethod
-    def run_request_legality_reason(
-        call: StepToolCall,
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Validate a replacement request from an active Workflow stage."""
-        arguments = {
-            _view(argument, "name"): _view(argument, "value")
-            for argument in getattr(call, "tool_arguments", None) or []
-        }
-        workflow_id = str(arguments.get("workflow_id") or "").strip()
-        action = str(arguments.get("action") or "start")
-        workflows = context.workflows
-        workspace = context.workspace
-        active = workspace.run_workflow_checkpoint() if workspace is not None else None
-        if workflows is None or active is None:
-            return "request_run_workflow rejected: no unfinished Workflow Run is active."
-        if action == "start":
-            return (
-                "request_run_workflow rejected: this Workflow stage already owns an unfinished Run; "
-                "choose resume, restart, or ask."
-            )
-        if action == "resume" and active.workflow_id != workflow_id:
-            return (
-                "request_run_workflow rejected: resume must target the active Workflow "
-                f"`{active.workflow_id}`."
-            )
-        try:
-            workflows.source(workflow_id)
-        except ValueError as exc:
-            return f"request_run_workflow rejected: {exc}."
-        return None
-
-    @staticmethod
-    def state(ota_context: AmphiOTAContext, expected_stage: str) -> WorkflowStageState:
-        """Return the active Workflow state for the expected cognitive stage."""
-        state = ota_context.think_status
-        if not isinstance(state, WorkflowStageState) or state.stage != expected_stage:
-            raise RuntimeError(f"Workflow {expected_stage} Think requires its active stage.")
-        return state
-
-    def source(self, state: WorkflowStageState, context: AmphiContext) -> Any:
-        """Return the validated source selected by the active runtime state."""
-        workspace = context.workspace
-        workflows = context.workflows
-        workflow_runs = context.workflow_runs
-        durable = workspace.run_workflow if workspace is not None else None
-        if workspace is None or workflows is None or workflow_runs is None or durable is None:
-            raise RuntimeError("Workflow Run context is unavailable.")
-        run = workflow_runs.require_run_workflow(durable.root)
-        source = workflows.require_package(run.source_dir)
-        reason = source.validation_reason()
-        if reason is not None:
-            raise ValueError(f"Pinned Workflow package is invalid: {reason}")
-        if (
-            durable.workflow_id != state.workflow_id
-            or durable.generation != state.generation
-            or durable.stage != state.stage
-            or durable.step_index != state.step_index
-        ):
-            raise RuntimeError("Workflow cognitive state does not match `.run/.state.json`.")
-        return source
-
+    ##############
+    # Input
+    ##############
     @staticmethod
     def workflow_input(context: AmphiContext) -> str:
         """Render the original structured input with its persisted references resolved."""
@@ -226,6 +330,37 @@ class WorkflowRunThink(BaseThink):
             for input_run in workflow_runs.referenced_runs(state.workflow_input):
                 path_map[input_run.run_id] = str(input_run.result_dir)
         return render_input(state.workflow_input, path_map)
+
+    ##############
+    # Blocks
+    ##############
+    def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Return the stable Workflow-stage persona."""
+        tools = self.select_tools(ota_context, context)
+        return render_stage_persona(
+            [tool.tool_name for tool in tools],
+            template=self.persona,
+        ).strip()
+
+    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Add this Workflow Run's writable directories to its Session environment."""
+        lines = ["<Workspace>", self.working_directory_block(context)]
+        workspace = context.workspace
+        workflow_run = workspace.run_workflow if workspace is not None else None
+        if workflow_run is not None and workflow_run.is_available:
+            workflow_runs = context.workflow_runs
+            if workflow_runs is None:
+                raise RuntimeError("Workflow Run space is bound without its result library.")
+            active_run = workflow_runs.require_run_workflow(workflow_run.root)
+            lines.extend([
+                "- Workflow final result directory (active, writable): "
+                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
+                "- Workflow background work directory (active, writable): "
+                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
+            ])
+        lines.append(self.environment_block(context))
+        lines.append("</Workspace>")
+        return "\n".join(lines)
 
     async def workflow_run_block(
         self, ota_context: AmphiOTAContext, context: AmphiContext, expected_stage: str,
@@ -294,49 +429,188 @@ class WorkflowRunThink(BaseThink):
         )
         return runtime
 
-    async def report_legality_reason(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-        expected_stage: str,
-    ) -> Optional[str]:
-        """Return why a Workflow control call is illegal in the active section."""
-        tool_name = getattr(call, "tool", None)
-        if tool_name == "request_run_workflow":
-            if ota_context is None:
-                return "request_run_workflow rejected: no Workflow Run is active."
-            return self.run_request_legality_reason(call, context)
-        if ota_context is None:
-            return (
-                "workflow control rejected: no Workflow run is active."
-                if tool_name in {
-                    "switch",
-                    "report_workflow_step",
+    async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
+        """Render Workflow context from stable catalogues to live runtime state."""
+        return [
+            self.transcript_block(ota_context, context),
+            await self.skills_block(ota_context, context),
+            await self.schedules_block(ota_context, context),
+            await self.workflow_run_block(ota_context, context, self.workflow_stage),
+            await self.memory_block(ota_context, context),
+            await self.workspace_block(ota_context, context),
+        ]
+
+    ############################################################################
+    # Legality check
+    ############################################################################
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+        """Validate controls against this stage's bound Run and pinned source."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_run_workflow", "report_workflow_step"})
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            tool_name = getattr(call, "tool", None)
+            if tool_name == "request_run_workflow":
+                if ota_context is None:
+                    return "request_run_workflow rejected: no Workflow Run is active."
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
                 }
-                else None
-            )
-        try:
-            state = self.state(ota_context, expected_stage)
-            source = self.source(state, context)
-        except (RuntimeError, ValueError) as exc:
-            return f"workflow control rejected: {exc}."
-        steps = source.steps(state.stage)
-        if tool_name == "switch":
-            arguments = {
-                _view(argument, "name"): _view(argument, "value")
-                for argument in getattr(call, "tool_arguments", None) or []
-            }
-            if arguments.get("mode") == "normal":
+                workflow_id = str(arguments.get("workflow_id") or "").strip()
+                action = str(arguments.get("action") or "start")
+                workflows = context.workflows
+                workspace = context.workspace
+                active = workspace.run_workflow_checkpoint() if workspace is not None else None
+                if workflows is None or active is None:
+                    return "request_run_workflow rejected: no unfinished Workflow Run is active."
+                if action == "start":
+                    return (
+                        "request_run_workflow rejected: this Workflow stage already owns an unfinished Run; "
+                        "choose resume, restart, or ask."
+                    )
+                if action == "resume" and active.workflow_id != workflow_id:
+                    return (
+                        "request_run_workflow rejected: resume must target the active Workflow "
+                        f"`{active.workflow_id}`."
+                    )
+                try:
+                    workflows.source(workflow_id)
+                except ValueError as exc:
+                    return f"request_run_workflow rejected: {exc}."
                 return None
-            return (
-                "switch rejected: Workflow stages advance automatically; use mode "
-                "`normal` only for an explicit user-requested pause or exit."
-            )
-        if tool_name != "report_workflow_step":
+            if ota_context is None:
+                return (
+                    "workflow control rejected: no Workflow run is active."
+                    if tool_name in {
+                        "switch",
+                        "report_workflow_step",
+                    }
+                    else None
+                )
+            try:
+                state = self.state(ota_context, self.workflow_stage)
+                source = self.source(state, context)
+            except (RuntimeError, ValueError) as exc:
+                return f"workflow control rejected: {exc}."
+            steps = source.steps(state.stage)
+            if tool_name == "switch":
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                if arguments.get("mode") == "normal":
+                    return None
+                return (
+                    "switch rejected: Workflow stages advance automatically; use mode "
+                    "`normal` only for an explicit user-requested pause or exit."
+                )
+            if tool_name != "report_workflow_step":
+                return None
+            if state.step_index >= len(steps):
+                return "workflow step report rejected: the current section does not exist."
             return None
-        if state.step_index >= len(steps):
-            return "workflow step report rejected: the current section does not exist."
-        return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
+
+    ############################################################################
+    # Tools and Skills selection
+    ############################################################################
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select this mode's tools in stable catalogue order."""
+        tools = [
+            *super().select_tools(ota_context, context),
+            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
+                "bash",
+                "create_schedule",
+                "delete_schedule",
+                "generate_image",
+                "get_schedule",
+                "list_schedules",
+                "list_workflow_runs",
+                "read_image",
+                "read_workflow_run",
+                "remove_workflow",
+                "report_workflow_step",
+                "request_human_choice",
+                "request_run_workflow",
+                "run_subagent",
+                "start_subagent",
+                "update_schedule",
+                "web_fetch",
+                "web_search",
+            }),
+            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
+            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
+            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
+        ]
+        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
+        return [*tools, switch_tool]
+
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Expose the enabled Skills selected for this mode."""
+        skills = context.skills
+        return skills.data() if skills is not None else {}
+
+    ############################################################################
+    # Helpers
+    ############################################################################
+    @staticmethod
+    def state(ota_context: AmphiOTAContext, expected_stage: str) -> WorkflowStageState:
+        """Return the active Workflow state for the expected cognitive stage."""
+        state = ota_context.think_status
+        if not isinstance(state, WorkflowStageState) or state.stage != expected_stage:
+            raise RuntimeError(f"Workflow {expected_stage} Think requires its active stage.")
+        return state
+
+    def source(self, state: WorkflowStageState, context: AmphiContext) -> Any:
+        """Return the validated source selected by the active runtime state."""
+        workspace = context.workspace
+        workflows = context.workflows
+        workflow_runs = context.workflow_runs
+        durable = workspace.run_workflow if workspace is not None else None
+        if workspace is None or workflows is None or workflow_runs is None or durable is None:
+            raise RuntimeError("Workflow Run context is unavailable.")
+        run = workflow_runs.require_run_workflow(durable.root)
+        source = workflows.require_package(run.source_dir)
+        reason = source.validation_reason()
+        if reason is not None:
+            raise ValueError(f"Pinned Workflow package is invalid: {reason}")
+        if (
+            durable.workflow_id != state.workflow_id
+            or durable.generation != state.generation
+            or durable.stage != state.stage
+            or durable.step_index != state.step_index
+        ):
+            raise RuntimeError("Workflow cognitive state does not match `.run/.state.json`.")
+        return source
+
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Keep only the active automatic Workflow stage's trace."""
+        boundary = next((
+            index
+            for index in range(len(ota_context.ota_record) - 1, -1, -1)
+            if (
+                (scope := self._record_think_scope(ota_context.ota_record[index]))
+                is not None
+                and scope[0] == mode
+                and scope[1] != stage
+            )
+        ), None)
+        if boundary is None:
+            return ota_context, None
+        return ota_context.model_copy(update={
+            "ota_record": list(ota_context.ota_record[boundary + 1:]),
+        }), boundary
 
 __all__ = ["WorkflowRunThink"]

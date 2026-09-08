@@ -185,7 +185,7 @@ async def test_control_mix(test_sandbox: IsolatedPaths) -> None:
     }
 
     Checks:
-    1. An exclusive human-control call cannot share a round with awaited delegation.
+    1. Multiple human-control calls reject the whole round, including awaited delegation.
     2. The whole control-flow batch is returned as failed results without side effects.
     """
     calls = [
@@ -196,6 +196,12 @@ async def test_control_mix(test_sandbox: IsolatedPaths) -> None:
             prompt="Choose how to continue",
         ),
         _call("call-child", "run_subagent", goal="Inspect the isolated concern"),
+        _call(
+            "call-other-choice",
+            "request_human_choice",
+            questions='[{"question":"Publish?","options":[{"label":"Yes"},{"label":"No"}]}]',
+            prompt="Choose whether to publish",
+        ),
     ]
     ota_context = _ota(calls, [request_human_choice_tool, run_subagent_tool])
     context = _context(test_sandbox.sessions / SESSION_ID)
@@ -204,10 +210,10 @@ async def test_control_mix(test_sandbox: IsolatedPaths) -> None:
     admitted = await _invoke(agent.before_action(ota_context, context))
     gate = ota_context.ota_record[-1].permission
 
-    # Check 1: An exclusive human-control call cannot share a round with awaited delegation.
+    # Check 1: Multiple human-control calls reject the whole round, including awaited delegation.
     assert admitted.tool_calls == []
-    assert [verdict.verdict for verdict in gate.verdicts] == ["deny", "deny"]
-    assert all("only one exclusive control tool" in (verdict.reason or "") for verdict in gate.verdicts)
+    assert [verdict.verdict for verdict in gate.verdicts] == ["deny", "deny", "deny"]
+    assert all("control-flow rejected" in (verdict.reason or "") for verdict in gate.verdicts)
 
     ota_context.think_result = admitted
     await _invoke(agent.after_action(ota_context, context))
@@ -216,6 +222,7 @@ async def test_control_mix(test_sandbox: IsolatedPaths) -> None:
     assert [step.tool_name for step in ota_context.action_result.results] == [
         "request_human_choice",
         "run_subagent",
+        "request_human_choice",
     ]
     assert all(step.success is False for step in ota_context.action_result.results)
     assert ota_context.interaction_status is None

@@ -2,8 +2,10 @@ from pathlib import Path
 
 from bridgic.amphibious import StepToolCall, ToolArgument
 
-from src.amphi_agent import Session
+from src.amphi_agent import AmphiContext, AmphiOTAContext, Session
+from src.amphi_agent._state import CallVerdict
 from src.amphi_agent._workspace import Workspace
+from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_store import SessionRecord
 from tests._support.sandbox import IsolatedPaths
 
@@ -38,6 +40,23 @@ def tool_call(tool: str, **arguments: str) -> StepToolCall:
     )
 
 
+async def legality_reason(worker: BaseThink, call: StepToolCall, ota_context: AmphiOTAContext | None, context: AmphiContext) -> str | None:
+    """Inspect one stage precondition through the batch legality interface."""
+    verdict = CallVerdict(
+        id=call.call_id or "call-legality",
+        tool=call.tool,
+        arguments={argument.name: argument.value for argument in call.tool_arguments},
+        verdict="allow",
+    )
+    resolved = await worker.legality_check(ota_context, context, [call], [verdict])
+    assert len(resolved) == 1
+    if resolved[0].verdict == "allow":
+        return None
+    assert resolved[0].verdict == "deny"
+    assert resolved[0].reason
+    return resolved[0].reason
+
+
 def write_workflow_source(root: Path) -> None:
     workflow = root / "workflow"
     workflow.mkdir(parents=True, exist_ok=True)
@@ -56,6 +75,7 @@ __all__ = [
     "SESSION_ID",
     "USER_ID",
     "WORKFLOW_ID",
+    "legality_reason",
     "make_session",
     "make_workspace",
     "tool_call",
