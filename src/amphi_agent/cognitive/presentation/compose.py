@@ -2,7 +2,7 @@
 
 from ...prompts.presentation.compose import PRESENTATION_COMPOSE_PERSONA
 
-from ..registry import cognitive_stage
+from ..register import cognitive_stage
 from .base import PresentationThink
 
 

@@ -2,41 +2,31 @@
 
 import json
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from bridgic.amphibious import StepToolCall
+from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
 from ..._context import AmphiContext, AmphiOTAContext, _view
+from ..._skills import Skill
+from ..._tools import TOOL_LIBRARY
 from ..._state import PresentationStageState
 from ...prompts.render import render_stage_persona
-from ...tools import switch_tool
+from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 from ...tools.powerpoint import parse_presentation_step_data
-from ..base import MainThink
+from ..base import BaseThink
 from .shared import PRESENTATION_STAGE_ARTIFACTS, PRESENTATION_STAGE_ORDER, PRESENTATION_STAGE_STEPS
 
 
-class PresentationThink(MainThink):
+class PresentationThink(BaseThink):
     """Shared tool surface and context for all presentation stages."""
 
-    allowed_tools = (
-        MainThink.allowed_tools
-        - {
-            "create_schedule",
-            "delete_schedule",
-            "edit_workflow",
-            "get_schedule",
-            "help",
-            "list_schedules",
-            "remove_workflow",
-            "request_build",
-            "request_presentation",
-            "request_run_workflow",
-            "start_subagent",
-            "update_schedule",
-        }
-        | {"report_presentation_step", "ppt_rag"}
-    )
+
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Expose the enabled Skills selected for this mode."""
+        skills = context.skills
+        return skills.data() if skills is not None else {}
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
         """Project the current Turn to the active presentation stage and its handoff."""
@@ -195,9 +185,28 @@ class PresentationThink(MainThink):
         tools = self.select_tools(ota_context, context)
         return render_stage_persona([tool.tool_name for tool in tools], template=self.persona).strip()
 
-    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Any]:
-        """Return presentation tools plus the cognitive handoff control."""
-        tools = super().select_tools(ota_context, context)
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select this mode's tools in stable catalogue order."""
+        tools = [
+            *super().select_tools(ota_context, context),
+            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
+                "bash",
+                "generate_image",
+                "list_workflow_runs",
+                "ppt_rag",
+                "read_image",
+                "read_workflow_run",
+                "report_presentation_step",
+                "request_human_choice",
+                "run_subagent",
+                "web_fetch",
+                "web_search",
+            }),
+            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
+            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
+            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
+        ]
+        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
         state = ota_context.think_status
         expose_ppt_rag = (
             isinstance(state, PresentationStageState)
@@ -215,12 +224,9 @@ class PresentationThink(MainThink):
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.context_blocks(ota_context, context)
         umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
-        system = self.assemble_system(
-            ota_context,
-            context,
-            self.system_block(ota_context, context),
-            umbrella,
-        )
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
 
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)

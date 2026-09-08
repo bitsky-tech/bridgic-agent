@@ -6,12 +6,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 from bridgic.amphibious import AmphibiousAutoma, Context, OTAContext, RETURN, ThinkUnit, ThinkUnitDescriptor, think_unit
+from bridgic.core.model.types import Message, Role
 
-from src.amphi_agent import AmphiAgent, cognitive
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, cognitive
 from src.amphi_agent.cognitive import get_cognitive_stages
-from src.amphi_agent.cognitive import registry as registration
-from src.amphi_agent.cognitive.base import MainThink
-from src.amphi_agent.cognitive.registry import cognitive_stage
+from src.amphi_agent.cognitive import register as registration
+from src.amphi_agent.cognitive.base import BaseThink
+from src.amphi_agent.cognitive.register import cognitive_stage
+from src.amphi_service.protocol.llms._streaming import StreamResult
+from tests.agent.cognitive._harness import tool_call
 
 
 @pytest.fixture
@@ -59,13 +62,13 @@ def test_existing_workers_keep_their_bindings_and_mode_order() -> None:
 def test_registry_only_provides_ordered_definitions(registry) -> None:
     calls = []
 
-    class FirstThink(MainThink):
+    class FirstThink(BaseThink):
         def __init__(self):
             calls.append("created")
             super().__init__()
 
-    cognitive_stage(mode="demo", stage="second", order=20)(MainThink)
-    cognitive_stage(mode="demo", stage="tied", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="second", order=20)(BaseThink)
+    cognitive_stage(mode="demo", stage="tied", order=10)(BaseThink)
     assert cognitive_stage(mode="demo", stage="first", order=10)(FirstThink) is FirstThink
     stages = get_cognitive_stages()
     assert [stage.stage for stage in stages] == ["first", "tied", "second"]
@@ -80,7 +83,7 @@ def test_registry_only_provides_ordered_definitions(registry) -> None:
 
 
 def test_agent_instances_own_separate_writable_modes(registry) -> None:
-    cognitive_stage(mode="demo", stage="custom_stage", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="custom_stage", order=10)(BaseThink)
     first = AmphiAgent()
     second = AmphiAgent()
     assert vars(first)["thinking_modes"] is first.thinking_modes
@@ -92,12 +95,12 @@ def test_agent_instances_own_separate_writable_modes(registry) -> None:
 
 
 def test_duplicate_stage_name_does_not_replace_the_first_worker(registry) -> None:
-    class FirstThink(MainThink):
+    class FirstThink(BaseThink):
         pass
 
     cognitive_stage(mode="demo", stage="first", order=10)(FirstThink)
     with pytest.raises(ValueError, match="already registered"):
-        cognitive_stage(mode="another_mode", stage="first", order=20)(MainThink)
+        cognitive_stage(mode="another_mode", stage="first", order=20)(BaseThink)
     agent = AmphiAgent()
     assert agent.thinking_modes == {"demo": ("first",)}
     assert type(AmphiAgent.first._worker_template) is FirstThink
@@ -105,8 +108,8 @@ def test_duplicate_stage_name_does_not_replace_the_first_worker(registry) -> Non
 
 @pytest.mark.parametrize("name", ["on_agent", "thinking_modes", "name", "main", "subagent"])
 def test_existing_attributes_are_not_overwritten(registry, name: str) -> None:
-    cognitive_stage(mode="demo", stage="first", order=10)(MainThink)
-    cognitive_stage(mode="demo", stage=name, order=20)(MainThink)
+    cognitive_stage(mode="demo", stage="first", order=10)(BaseThink)
+    cognitive_stage(mode="demo", stage=name, order=20)(BaseThink)
     with pytest.raises(ValueError, match="overwrite an Agent attribute"):
         AmphiAgent()
     assert not hasattr(AmphiAgent, "first")
@@ -115,10 +118,10 @@ def test_existing_attributes_are_not_overwritten(registry, name: str) -> None:
 def test_subclass_cannot_mask_a_base_attribute_collision(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     existing = object()
     monkeypatch.setattr(AmphiAgent, "custom_stage", existing, raising=False)
-    cognitive_stage(mode="demo", stage="custom_stage", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="custom_stage", order=10)(BaseThink)
 
     class ChildAgent(AmphiAgent):
-        custom_stage = think_unit(MainThink())
+        custom_stage = think_unit(BaseThink())
 
     with pytest.raises(ValueError, match="overwrite an Agent attribute"):
         ChildAgent()
@@ -126,11 +129,11 @@ def test_subclass_cannot_mask_a_base_attribute_collision(registry, monkeypatch: 
 
 
 def test_constructor_failure_does_not_partially_bind_stages(registry) -> None:
-    class BrokenThink(MainThink):
+    class BrokenThink(BaseThink):
         def __init__(self):
             raise RuntimeError("broken worker constructor")
 
-    cognitive_stage(mode="demo", stage="first", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="first", order=10)(BaseThink)
     cognitive_stage(mode="demo", stage="broken", order=20)(BrokenThink)
     with pytest.raises(RuntimeError, match="broken worker constructor"):
         AmphiAgent()
@@ -142,7 +145,7 @@ def test_later_instances_reuse_worker_templates(registry) -> None:
     calls = []
 
     @cognitive_stage(mode="demo", stage="custom_stage", order=10)
-    class CustomThink(MainThink):
+    class CustomThink(BaseThink):
         def __init__(self):
             calls.append("created")
             super().__init__()
@@ -157,7 +160,7 @@ def test_later_instances_reuse_worker_templates(registry) -> None:
 
 
 def test_subclass_created_first_inherits_shared_templates(registry) -> None:
-    cognitive_stage(mode="demo", stage="custom_stage", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="custom_stage", order=10)(BaseThink)
 
     class ChildAgent(AmphiAgent):
         pass
@@ -173,10 +176,10 @@ def test_subclass_created_first_inherits_shared_templates(registry) -> None:
 
 
 def test_explicit_subclass_worker_override_is_preserved(registry) -> None:
-    class OverrideThink(MainThink):
+    class OverrideThink(BaseThink):
         pass
 
-    cognitive_stage(mode="demo", stage="custom_stage", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="custom_stage", order=10)(BaseThink)
 
     class ChildAgent(AmphiAgent):
         custom_stage = think_unit(OverrideThink(), max_attempts=3)
@@ -184,13 +187,13 @@ def test_explicit_subclass_worker_override_is_preserved(registry) -> None:
     child = ChildAgent()
     parent = AmphiAgent()
     assert type(child.custom_stage._worker_template) is OverrideThink
-    assert type(parent.custom_stage._worker_template) is MainThink
+    assert type(parent.custom_stage._worker_template) is BaseThink
     assert child.custom_stage._max_attempts == 3
 
 
 async def test_agent_owned_descriptors_run_with_fresh_workers(registry) -> None:
     @cognitive_stage(mode="custom", stage="custom_stage", order=10)
-    class CustomThink(MainThink):
+    class CustomThink(BaseThink):
         async def thinking(self, ota_context, context):
             self.calls = getattr(self, "calls", 0) + 1
             return str(self.calls)
@@ -209,8 +212,48 @@ async def test_agent_owned_descriptors_run_with_fresh_workers(registry) -> None:
     assert not hasattr(agent.custom_stage._worker_template, "calls")
 
 
+async def test_registered_base_worker_runs_shared_thinking_without_main_policy(registry) -> None:
+    @cognitive_stage(mode="custom", stage="custom_stage", order=10)
+    class CustomThink(BaseThink):
+        async def assemble_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[Message]:
+            ota_context.tools = self.select_tools(ota_context, context)
+            return [
+                Message.from_text("Follow the custom workflow.", role=Role.SYSTEM),
+                await self.current_user_message(ota_context, context),
+            ]
+
+    agent = AmphiAgent()
+    ota_context = AmphiOTAContext(user_input="Run the custom workflow")
+    context = AmphiContext()
+    call = tool_call("edit_workflow", workflow_id="missing-workflow")
+    assert await CustomThink().legality_check(call, ota_context, context) is None
+    assert await cognitive.MainThink().legality_check(call, ota_context, context) is not None
+    llm = SimpleNamespace(stream_turn=AsyncMock(return_value=StreamResult(
+        tool_calls=[],
+        content="Custom workflow completed",
+        usage=SimpleNamespace(input_tokens=13, output_tokens=4),
+    )))
+
+    class RuntimeProbe(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
+        custom_stage = agent.custom_stage
+
+        async def on_agent(self, ota_context, context):
+            result = yield ThinkUnit("custom_stage")
+            yield RETURN(result)
+
+    result = await RuntimeProbe().arun(llm=llm, ota_context=ota_context, context=context)
+
+    assert result == "Custom workflow completed"
+    llm.stream_turn.assert_awaited_once()
+    messages, tools = llm.stream_turn.call_args.args
+    assert messages[0].content == "Follow the custom workflow."
+    assert tools is None
+    assert ota_context.context_usage.input_tokens == 13
+    assert ota_context.context_usage.output_tokens == 4
+
+
 async def test_on_agent_round_limit_overrides_descriptor_default_per_instance(registry, monkeypatch: pytest.MonkeyPatch) -> None:
-    cognitive_stage(mode="custom", stage="custom_stage", order=10)(MainThink)
+    cognitive_stage(mode="custom", stage="custom_stage", order=10)(BaseThink)
     agents = [AmphiAgent(max_rounds=7), AmphiAgent(max_rounds=11)]
     body = AsyncMock(return_value="done")
     monkeypatch.setattr(AmphiAgent, "init_state", AsyncMock())
@@ -237,5 +280,5 @@ def test_reading_registry_does_not_import_business_packages(registry, tmp_path: 
     package.mkdir()
     (package / "__init__.py").write_text("raise RuntimeError('this package must not be imported by registry access')\n")
     monkeypatch.setattr(cognitive, "__path__", [str(tmp_path)])
-    cognitive_stage(mode="demo", stage="custom_stage", order=10)(MainThink)
+    cognitive_stage(mode="demo", stage="custom_stage", order=10)(BaseThink)
     assert AmphiAgent().thinking_modes == {"demo": ("custom_stage",)}

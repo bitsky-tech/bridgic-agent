@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
-from .base import MainThink
+from .base import BaseThink
 
 
-_Worker = TypeVar("_Worker", bound=MainThink)
+_Worker = TypeVar("_Worker", bound=BaseThink)
 
 
 @dataclass(frozen=True)
@@ -16,7 +16,7 @@ class CognitiveStage:
     mode: str
     stage: str
     order: int
-    worker_class: type[MainThink]
+    worker_class: type[BaseThink]
 
 
 _registry: dict[str, CognitiveStage] = {}

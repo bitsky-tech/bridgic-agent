@@ -1,11 +1,10 @@
-"""Shared cognitive mechanics and the normal-mode Main worker."""
+"""Shared model calls, context management, and tool access for cognitive workers."""
 
 import json
 import logging
 import math
 import os
 import re
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from bridgic.amphibious import CognitiveWorker, StepToolCall
@@ -35,21 +34,13 @@ from ..prompts.compaction import (
     render_turn_compaction_prompt,
 )
 from .._skills import Skill
-from ..prompts.main import PERSONA
-from ..prompts.render import render_main_persona, time_in_local_tz
+from ..prompts.render import time_in_local_tz
 from ..prompts.shared import TURN_FAILED_MESSAGE
 from .._state import (
     ContextCompactionState,
-    NormalStageState,
     TurnCompactionState,
 )
-from .._tools import TOOL_LIBRARY
 from .._thinking_debug import write_thinking_debug
-from ..tools import (
-    BROWSER_ADVANCED_TOOL_NAMES,
-    SKILLS_ADVANCED_TOOL_NAMES,
-    WORKSPACE_ADVANCED_TOOL_NAMES,
-)
 from ..tools.request_human import RequestHumanChoice
 
 
@@ -68,18 +59,6 @@ CONTEXT_COMPACTION_KEEP_TURN_ROUNDS = 4
 CONTEXT_COMPACTION_SUMMARY_MAX_INPUT_TOKENS = 32_000
 CONTEXT_COMPACTION_SUMMARY_MAX_RETAINED_TOKENS = 2_048
 CONTEXT_COMPACTION_MAX_SUMMARY_CALLS_PER_SCOPE = 8
-
-
-@dataclass(frozen=True)
-class ToolSurface:
-    """The exact ordered tool specs exposed in one cognitive round."""
-
-    specs: Tuple[ToolSpec, ...]
-
-    @property
-    def names(self) -> Tuple[str, ...]:
-        """Return prompt-ready names derived from the runtime specs."""
-        return tuple(spec.tool_name for spec in self.specs)
 
 
 def _node_environment_summary(workspace: Optional[Any]) -> str:
@@ -247,29 +226,17 @@ def render_input(user_input: Any, path_map: Optional[Dict[str, str]] = None) -> 
 
 
 ################################################################################################################
-# Main Worker — the autonomous observe-think-act cycle
+# Shared cognitive worker mechanics
 ################################################################################################################
-class MainThink(CognitiveWorker):
-    persona: str = PERSONA
+class BaseThink(CognitiveWorker):
+    """Provide shared thinking mechanics without a concrete mode policy."""
+
+    persona: str = ""
     extra_body: Optional[Dict[str, Any]] = None
     permission_mode_override: Optional[str] = None
-    show_build_context: bool = True
-    show_workspace_checkpoints: bool = True
-    workflow_run_owner_label: str = "this Session"
-    allowed_tools: frozenset[str] = frozenset(
-        spec.tool_name
-        for spec in TOOL_LIBRARY.all()
-        if spec.tool_name not in {
-            "report_presentation_step",
-            "ppt_rag",
-            "report_workflow_step",
-            "request_human_task_confirm",
-            "request_human_workflow_confirm",
-        }
-    )
 
     ############################################################################
-    # The main worker's observe-think-act agent loop
+    # The shared thinking phase
     ############################################################################
     async def thinking(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Dict[str, Any]], str]:
         # Persist the source cognitive scope before this round can switch state.
@@ -331,6 +298,9 @@ class MainThink(CognitiveWorker):
             setattr(record, key, value)
         return result.tool_calls, result.content
 
+    ############################################################################
+    # Context estimation and compaction
+    ############################################################################
     @staticmethod
     def _estimate_request_tokens(messages: Sequence[Message], tools: Sequence[Any]) -> int:
         """Conservatively estimate final request tokens when no provider counter exists."""
@@ -365,13 +335,7 @@ class MainThink(CognitiveWorker):
         ).encode("utf-8"))
         return max(1, math.ceil(byte_count / 2))
 
-    async def _estimate_context_breakdown(
-        self,
-        messages: Sequence[Message],
-        tools: Sequence[Any],
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> ContextUsageBreakdown:
+    async def _estimate_context_breakdown(self, messages: Sequence[Message], tools: Sequence[Any], ota_context: AmphiOTAContext, context: AmphiContext) -> ContextUsageBreakdown:
         """Estimate the final prompt's persisted context components."""
         def dump(value: Any) -> Any:
             model_dump = getattr(value, "model_dump", None)
@@ -480,14 +444,7 @@ class MainThink(CognitiveWorker):
                 request_estimate = self._estimate_request_tokens(messages, tools)
         return messages, request_estimate
 
-    async def compact_messages(
-        self,
-        messages: List[Message],
-        tools: List[Any],
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        target: int,
-    ) -> List[Message]:
+    async def compact_messages(self, messages: List[Message], tools: List[Any], ota_context: AmphiOTAContext, context: AmphiContext, target: int) -> List[Message]:
         """Compact both growing history scopes with bounded rolling summaries."""
         before_tokens = self._estimate_request_tokens(messages, tools)
         input_capacity = context.llm_provider.input_capacity()
@@ -695,7 +652,7 @@ class MainThink(CognitiveWorker):
                     index + 1,
                     f'<turn_round number="{index + 1}">\n{payload}\n</turn_round>',
                 ))
-            user_request = await self.user_input_block(ota_context, context)
+            user_request = self._render_user_input(ota_context.user_input, context)
 
             def render(previous: str, history: str) -> str:
                 return render_turn_compaction_prompt(
@@ -751,14 +708,7 @@ class MainThink(CognitiveWorker):
             if stream is not None:
                 stream.publish("context_compaction", active=False)
 
-    def _record_model_usage(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        result: Any,
-        request_estimate: int,
-        breakdown_estimate: ContextUsageBreakdown,
-    ) -> None:
+    def _record_model_usage(self, ota_context: AmphiOTAContext, context: AmphiContext, result: Any, request_estimate: int, breakdown_estimate: ContextUsageBreakdown,) -> None:
         """Record one model call's totals, input composition, and cache usage."""
         def scale_breakdown(target: int) -> ContextUsageBreakdown:
             names = (
@@ -844,202 +794,205 @@ class MainThink(CognitiveWorker):
     # Dynamic prompt assembly
     ############################################################################
     async def assemble_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """The next model call as a NATIVE message list (not a flattened text blob).
-        Both isolated reasoning and hydrated Session runs receive an
-        :class:`AmphiContext`; a hydrated turn assembles as::
+        """Build the model request using the concrete worker's prompt policy."""
+        raise NotImplementedError("Think workers must implement assemble_messages().")
 
-            # Root SYSTEM: stable persona, then context from stable to volatile
-            SYSTEM:
-                You are Bridgic Agent, a general-purpose agent that helps users on
-                their machine. …(full persona)…
-                The tools currently available … <exact ToolSurface names>
-
-                <context>
-                <transcript>
-                /Users/me/.bridgic/sessions/s_42/history.md
-                </transcript>
-                <skills>
-                - <name>: <description>
-                </skills>
-                <schedules>
-                - <name> (id: <schedule_id>, status: enabled, …)
-                </schedules>
-                <workflows>
-                - <name> (id: <workflow_id>, entry: <path>): <description>
-                </workflows>
-                <workflow_results>
-                - <name> result (run_id: <run_id>, status: completed, …)
-                </workflow_results>
-                <memories>
-                The user prefers pnpm over npm.
-                </memories>
-                <Workspace>
-                - Working directory: /Users/me/.bridgic/sessions/s_42/.work
-                - OS: Darwin 24.6.0 (arm64)
-                - Node environment: bundled Node with one app-level base shared across Sessions, Builds, Workflow Runs, and Child Agents
-                - Python environment: app-level base shared across Sessions, Builds, Workflow Runs, and Child Agents
-                - Changed files: none
-                </Workspace>
-                </context>
-
-            ``SubAgentThink`` gives a Child Session its own persona and tool ceiling
-            while retaining the same native message structure::
-
-                SYSTEM:
-                    …(the Child persona, rendered with only Child ToolSurface names)…
-
-                    <context>
-                    <skills>
-                    …optional enabled Skills, usable through view_skill…
-                    </skills>
-                    <workflow_results>
-                    …optional read-only Workflow results…
-                    </workflow_results>
-                    <memories>
-                    …optional recalled memory…
-                    </memories>
-                    <Workspace>
-                    - Session work directory: /Users/me/.bridgic/sessions/root/.work
-                    - Mounted directories / files: [...]
-                    - OS: Darwin 24.6.0 (arm64)
-                    - Node environment: bundled Node with one app-level base shared across Sessions, Builds, Workflow Runs, and Child Agents
-                    - Python environment: app-level base shared across Sessions, Builds, Workflow Runs, and Child Agents
-                    - Changed files: ...
-                    </Workspace>
-                    </context>
-
-            # past turns (session_messages_block): persisted OTA replay
-            USER:  what python version is acme-api on?
-            AI:    ToolCall(id=call_0, name=read_file, args={"path": "pyproject.toml"})
-            TOOL:  (call_0) "[project]\nrequires-python = '>=3.13'"
-            AI:    It targets Python 3.13.
-
-            # this turn's request
-            USER:  count the TODOs under src/
-
-                   <current_time>
-                   2026-07-26 10:00 (UTC+08:00)
-                   </current_time>
-
-            # this turn's rounds so far (turn_messages_block): AI tool-call + TOOL result, paired by id
-            AI:    "Let me grep for them."
-                   ToolCall(id=call_0_0, name=grep, args={"pattern": "TODO", "path": "src"})
-            TOOL:  (call_0_0) "src/app.py:12: # TODO: validate input
-                               src/db.py:88: # TODO: index this"
-        """
-        surface = self.tool_surface(ota_context, context)
-        ota_context.tools = list(surface.specs)
-        blocks = await self.context_blocks(ota_context, context)
-        umbrella = "<context>\n" + "\n\n".join(b for b in blocks if b) + "\n</context>"
-        system = self.assemble_system(
-            ota_context,
-            context,
-            self.system_block(ota_context, context),
-            umbrella,
-        )
-
-        messages = [Message.from_text(system, role=Role.SYSTEM)]
-        messages += await self.session_messages_block(ota_context, context)
-        messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(ota_context, context)
-        return messages
-
-    @staticmethod
-    def _record_think_scope(record: Any) -> Optional[Tuple[str, str]]:
-        """Return one round's cognitive mode and stage, including legacy Build records."""
-        scope = _view(record, "think_scope")
-        mode = str(_view(scope, "mode") or "").strip()
-        stage = str(_view(scope, "stage") or "").strip()
-        if mode and stage:
-            return mode, stage
-        legacy_build_stage = str(_view(record, "build_stage") or "").strip()
-        return ("build", legacy_build_stage) if legacy_build_stage else None
-
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Return the full current-Turn trace unless a specialized worker projects it."""
-        return ota_context, None
-
-    async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
-        """Render Main context from the most stable prefix to live round state."""
-        return [
-            self.transcript_block(ota_context, context),
-            await self.skills_block(ota_context, context),
-            await self.schedules_block(ota_context, context),
-            await self.workflows_block(ota_context, context),
-            await self.memory_block(ota_context, context),
-            await self.workspace_block(ota_context, context),
+    ##############
+    # Input
+    ##############
+    def _render_user_input(self, user_input: Any, context: AmphiContext) -> str:
+        """Render one current or persisted input with live, ownership-gated paths."""
+        blocks = _view(user_input, "blocks") or []
+        mention_ids = [
+            str(_view(block, "id"))
+            for block in blocks
+            if _view(block, "type") == "mention" and _view(block, "id")
         ]
+        workspace = context.workspace
+        path_map = (
+            workspace.reference_map(mention_ids)
+            if workspace is not None and mention_ids
+            else {}
+        )
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None:
+            for block in blocks:
+                if _view(block, "type") != "mention" or _view(block, "group") != "WorkflowRun":
+                    continue
+                block_id = str(_view(block, "id") or "")
+                run = workflow_runs.get(block_id)
+                if run is not None and run.is_published:
+                    path_map[block_id] = str(run.result_dir)
+        return render_input(user_input, path_map)
 
-    def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """The persona / system-instructions piece — ``assemble_messages`` composes
-        the full SYSTEM message from this plus the ``<context>`` umbrella."""
-        surface = ToolSurface(tuple(ota_context.tools))
-        return render_main_persona(surface.names, template=self.persona).strip()
+    def _image_inputs(self, user_input: Any, context: AmphiContext) -> List[Dict[str, Any]]:
+        """Resolve owned image mentions into small provider-neutral descriptors."""
+        def resolve_path(base: str, relative: str) -> Optional[str]:
+            if not relative:
+                return os.path.realpath(base)
+            normalized = relative.replace("/", os.sep)
+            if os.path.isabs(normalized):
+                return None
+            real_base = os.path.realpath(base)
+            candidate = os.path.realpath(os.path.join(real_base, normalized))
+            if candidate == real_base or candidate.startswith(real_base + os.sep):
+                return candidate
+            return None
 
-    def current_time_block(
-        self, ota_context: AmphiOTAContext, context: AmphiContext,
-    ) -> str:
+        blocks = _view(user_input, "blocks") or []
+        mentions = [
+            block for block in blocks
+            if _view(block, "type") == "mention" and _view(block, "id")
+        ]
+        workspace = context.workspace
+        if workspace is None or not mentions:
+            return []
+        path_map = workspace.reference_map([
+            str(_view(block, "id")) for block in mentions
+        ])
+        images: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for block in mentions:
+            block_id = str(_view(block, "id") or "")
+            base = path_map.get(block_id)
+            if not base:
+                continue
+            path = resolve_path(base, str(_view(block, "path") or ""))
+            if not path or path in seen:
+                continue
+            image = inspect_image_input(path, str(_view(block, "label") or block_id))
+            if image is not None:
+                images.append(image)
+                seen.add(path)
+        return validate_image_inputs(images)
+
+    ##############
+    # Blocks
+    ##############
+    def current_time_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render one clock snapshot shared by every model round in this Invocation."""
         if not ota_context.prompt_time:
             ota_context.prompt_time = time_in_local_tz()
         return f"<current_time>\n{ota_context.prompt_time}\n</current_time>"
 
-    def assemble_system(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        *blocks: str,
-    ) -> str:
-        """Compose the stable-first SYSTEM prefix without per-Invocation metadata."""
-        return "\n\n".join(block for block in blocks if block)
+    async def current_user_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Append this Invocation's timestamp to the current user request."""
+        request = self._render_user_input(ota_context.user_input, context)
+        return f"{request}\n\n{self.current_time_block(ota_context, context)}"
 
-    async def runtime_state_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Render this round's LIVE state — Workspace changed files (plus recent
-        checkpoints) and open browser tabs — as one ``<runtime_state>`` block.
-
-        Kept out of SYSTEM on purpose: this text changes between rounds (every
-        file write, every navigation), and prompt caching is a byte-prefix match,
-        so it rides at the very end of the request instead (see
-        ``append_runtime_state``)."""
-        lines: List[str] = []
-        workspace = context.workspace
-        if workspace is not None:
-            try:
-                lines.extend(workspace.checkpoints.changed_files_context_lines())
-                if self.show_workspace_checkpoints:
-                    lines.extend(workspace.checkpoints.checkpoint_context_lines(max_count=3))
-            except Exception as exc:  # noqa: BLE001
-                lines.append(f"- Changed files: unavailable ({type(exc).__name__}: {exc})")
-        browser = await self.browser_block(ota_context, context)
-        if browser:
-            lines.append(browser)
-        if not lines:
+    def transcript_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """The on-disk transcript path (``history.md``) as bare data — ``""`` until
+        the session has past turns."""
+        root = context.session.workspace_root
+        if not root or not context.session.get_all():
             return ""
-        return (
-            "<runtime_state>\n"
-            "Live workspace and browser state as of this round (may change between rounds).\n"
-            + "\n".join(lines)
-            + "\n</runtime_state>"
+        return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
+
+    async def skills_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """The available skills as a tagged block (``""`` when absent or empty) —
+        one bullet per skill (name + one-line description), bodies stay out::
+
+            <skills>
+            - <name>: <description>
+            </skills>
+        """
+        selected = self.select_skills(ota_context, context)
+        ota_context.selected_skill_dirs = [
+            skill.skill_dir for skill in selected.values() if skill.skill_dir
+        ]
+        if not selected:
+            return ""
+        lines = [
+            f"- {s.name} (location: {json.dumps(s.skill_dir, ensure_ascii=False)}): "
+            f"{s.description}"
+            for s in selected.values()
+        ]
+        return "<skills>\n" + "\n".join(lines) + "\n</skills>"
+
+    async def schedules_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Render a compact catalogue of the user's scheduled tasks."""
+        schedules = context.schedules
+        # No catalogue at all = the feature is unavailable → say nothing.
+        if schedules is None:
+            return ""
+        # An *empty* catalogue still renders. Omitting it left the model with no
+        # format reference, and it invented `list_schedules(enabled="None")` —
+        # two failed rounds before it recovered. Stating "none" also lets it
+        # answer "you have no scheduled tasks" without calling a tool at all.
+        if schedules.is_empty():
+            return "<schedules>\n(none)\n</schedules>"
+        lines = []
+        for schedule in schedules.search():
+            status = "enabled" if schedule.enabled else "paused"
+            next_run = (
+                schedule.next_run_at.isoformat(timespec="minutes")
+                if schedule.next_run_at is not None else "none"
+            )
+            lines.append(
+                f"- {schedule.name} (id: {schedule.schedule_id}, status: {status}, "
+                f"cron: {json.dumps(schedule.cron)}, next: {next_run})"
+            )
+        return "<schedules>\n" + "\n".join(lines) + "\n</schedules>"
+
+    async def memory_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """The recalled long-term memories as a tagged block (``""`` when memory is
+        absent or empty)::
+
+            <memories>
+            - <fact>
+            </memories>
+        """
+        memory = context.memory
+        if memory is None or not memory.recalled:
+            return ""
+        lines = [f"- {item.content}" for item in memory.recalled]
+        return "<memories>\n" + "\n".join(lines) + "\n</memories>"
+
+    def working_directory_block(self, context: AmphiContext) -> str:
+        """Render the Session directory used to resolve relative file-tool paths."""
+        workspace = context.workspace
+        work_dir = (
+            str(workspace.work_dir)
+            if workspace is not None and workspace.work_dir.is_dir()
+            else None
+        )
+        return "- Session work directory (default for relative file-tool paths): " + (
+            json.dumps(work_dir, ensure_ascii=False)
+            if work_dir is not None
+            else "unavailable without an initialized Workspace"
         )
 
-    async def append_runtime_state(
-        self,
-        messages: List[Message],
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> List[Message]:
-        """Append the ``<runtime_state>`` USER tail to this round's request.
+    def environment_block(self, context: AmphiContext) -> str:
+        """Render mounted paths and the shared execution environment."""
+        workspace = context.workspace
+        work_dir = (
+            str(workspace.work_dir)
+            if workspace is not None and workspace.work_dir.is_dir()
+            else None
+        )
+        mount_roots = workspace.mount_roots() if workspace is not None else []
+        mount_roots = [root for root in mount_roots if work_dir is None or root != work_dir]
+        return "\n".join([
+            f"- Mounted directories / files: {json.dumps(mount_roots, ensure_ascii=False)}",
+            "- OS: "
+            + (
+                f"{workspace.environment.os_name} {workspace.environment.os_release} ({workspace.environment.architecture})"
+                if workspace is not None
+                else "unavailable without an active Workspace"
+            ),
+            f"- Shell: {_shell_environment_summary(workspace)}",
+            f"- Node environment: {_node_environment_summary(workspace)}",
+            f"- Python environment: {_python_environment_summary(workspace)}",
+        ])
 
-        The tail is flagged ``VOLATILE_TAIL_EXTRA`` and NEVER persisted (the OTA
-        record does not store it), so replayed history stays byte-stable for the
-        provider prompt cache while the model still sees fresh live state."""
-        state = await self.runtime_state_block(ota_context, context)
-        if not state:
-            return messages
-        return [
-            *messages,
-            Message.from_text(state, role=Role.USER, extras={VOLATILE_TAIL_EXTRA: True}),
-        ]
+    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Render common Session paths and environment without mode-specific state."""
+        return "\n".join([
+            "<Workspace>",
+            self.working_directory_block(context),
+            self.environment_block(context),
+            "</Workspace>",
+        ])
 
     async def browser_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render lightweight metadata for an already-open browser."""
@@ -1106,198 +1059,59 @@ class MainThink(CognitiveWorker):
         lines.append("</browser>")
         return "\n".join(lines)
 
-    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Render stable Session paths plus active mode and mounted paths::
+    async def runtime_state_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Render this round's LIVE state — Workspace changed files (plus recent
+        checkpoints) and open browser tabs — as one ``<runtime_state>`` block.
 
-            <Workspace>
-            - Session work directory (default for relative file-tool paths): /…/.work
-            - Build work directory (active, writable): /…/.work/.build
-            - Workflow final result directory (active, writable): /…/.work/.run/result
-            - Workflow background work directory (active, writable): /…/.work/.run/background/work
-            - Retained Build: stage: generate, operation: create
-            - Retained Workflow Run: Example (workflow_id: wf_1, stage: execute,
-              step_index: 1, owner: this Session)
-            - Mounted directories / files: ["/Users/me/project"]
-            - OS: Darwin 24.6.0 (arm64)
-            - Shell: Bash (`/bin/bash`) via the `bash` tool
-            - Node environment: bundled Node with one app-level base shared across Sessions, Builds, Workflow Runs, and Child Agents
-            - Python environment: app-level base shared across Sessions, Builds, Workflow Runs, and Child Agents
-            - Changed files: none
-            </Workspace>
-        """
+        Kept out of SYSTEM on purpose: this text changes between rounds (every
+        file write, every navigation), and prompt caching is a byte-prefix match,
+        so it rides at the very end of the request instead (see
+        ``append_runtime_state``)."""
+        lines: List[str] = []
         workspace = context.workspace
-        work_dir = (
-            str(workspace.work_dir)
-            if workspace is not None and workspace.work_dir.is_dir()
-            else None
+        if workspace is not None:
+            try:
+                lines.extend(workspace.checkpoints.changed_files_context_lines())
+                lines.extend(workspace.checkpoints.checkpoint_context_lines(max_count=3))
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"- Changed files: unavailable ({type(exc).__name__}: {exc})")
+        browser = await self.browser_block(ota_context, context)
+        if browser:
+            lines.append(browser)
+        if not lines:
+            return ""
+        return (
+            "<runtime_state>\n"
+            "Live workspace and browser state as of this round (may change between rounds).\n"
+            + "\n".join(lines)
+            + "\n</runtime_state>"
         )
-        is_main = isinstance(ota_context.think_status, NormalStageState)
-        mount_roots = workspace.mount_roots() if workspace is not None else []
-        mount_roots = [root for root in mount_roots if work_dir is None or root != work_dir]
-        lines = [
-            "<Workspace>",
-            "- Session work directory (default for relative file-tool paths): "
-            + (
-                json.dumps(work_dir, ensure_ascii=False)
-                if work_dir is not None
-                else "unavailable without an initialized Workspace"
-            ),
-        ]
-        build = workspace.build if workspace is not None else None
-        if self.show_build_context and build is not None and build.is_available:
-            lines.append(
-                "- Build work directory (active, writable): "
-                f"{json.dumps(str(build.root), ensure_ascii=False)}"
-            )
-        workflow_run = workspace.run_workflow if workspace is not None else None
-        if workflow_run is not None and workflow_run.is_available:
-            workflow_runs = context.workflow_runs
-            if workflow_runs is None:
-                raise RuntimeError("Workflow Run space is bound without its result library.")
-            active_run = workflow_runs.require_run_workflow(workflow_run.root)
-            lines.extend([
-                "- Workflow final result directory (active, writable): "
-                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
-                "- Workflow background work directory (active, writable): "
-                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
-            ])
-        if is_main and workspace is not None:
-            if self.show_build_context:
-                build_checkpoint = workspace.build_checkpoint()
-                if build_checkpoint is not None:
-                    workflow_id = build_checkpoint.workflow_id
-                    operation = "edit" if workflow_id else "create"
-                    details = [
-                        f"stage: {build_checkpoint.stage}",
-                        f"operation: {operation}",
-                    ]
-                    if workflow_id:
-                        details.append(f"workflow_id: {workflow_id}")
-                    lines.append("- Retained Build: " + ", ".join(details))
 
-            run_checkpoint = workspace.run_workflow_checkpoint()
-            if run_checkpoint is not None:
-                lines.append(
-                    f"- Retained Workflow Run: {run_checkpoint.workflow_name} "
-                    f"(workflow_id: {run_checkpoint.workflow_id}, "
-                    f"stage: {run_checkpoint.stage}, "
-                    f"step_index: {run_checkpoint.step_index}, "
-                    f"owner: {self.workflow_run_owner_label})"
-                )
-        lines.extend([
-            f"- Mounted directories / files: {json.dumps(mount_roots, ensure_ascii=False)}",
-            "- OS: "
-            + (
-                f"{workspace.environment.os_name} {workspace.environment.os_release} ({workspace.environment.architecture})"
-                if workspace is not None
-                else "unavailable without an active Workspace"
-            ),
-            f"- Shell: {_shell_environment_summary(workspace)}",
-            f"- Node environment: {_node_environment_summary(workspace)}",
-        ])
-        lines.append(f"- Python environment: {_python_environment_summary(workspace)}")
-        # Live state (changed files, checkpoints) deliberately lives in
-        # ``runtime_state_block`` — putting it here would change the SYSTEM text
-        # on every file write and invalidate the whole cached request prefix.
-        lines.append("</Workspace>")
-        return "\n".join(lines)
+    ##############
+    # Message List
+    ##############
+    async def current_user_message(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Message:
+        """Build the current multimodal user Message with capability validation."""
+        return self._user_message(
+            ota_context.user_input,
+            await self.current_user_block(ota_context, context),
+            context,
+            reject_unsupported=True,
+        )
 
-    async def memory_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """The recalled long-term memories as a tagged block (``""`` when memory is
-        absent or empty)::
-
-            <memories>
-            - <fact>
-            </memories>
-        """
-        memory = context.memory
-        if memory is None or not memory.recalled:
-            return ""
-        lines = [f"- {item.content}" for item in memory.recalled]
-        return "<memories>\n" + "\n".join(lines) + "\n</memories>"
-
-    async def skills_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """The available skills as a tagged block (``""`` when absent or empty) —
-        one bullet per skill (name + one-line description), bodies stay out::
-
-            <skills>
-            - <name>: <description>
-            </skills>
-        """
-        selected = self.select_skills(ota_context, context)
-        ota_context.selected_skill_dirs = [
-            skill.skill_dir for skill in selected.values() if skill.skill_dir
-        ]
-        if not selected:
-            return ""
-        lines = [
-            f"- {s.name} (location: {json.dumps(s.skill_dir, ensure_ascii=False)}): "
-            f"{s.description}"
-            for s in selected.values()
-        ]
-        return "<skills>\n" + "\n".join(lines) + "\n</skills>"
-
-    async def schedules_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Render a compact catalogue of the user's scheduled tasks."""
-        schedules = context.schedules
-        # No catalogue at all = the feature is unavailable → say nothing.
-        if schedules is None:
-            return ""
-        # An *empty* catalogue still renders. Omitting it left the model with no
-        # format reference, and it invented `list_schedules(enabled="None")` —
-        # two failed rounds before it recovered. Stating "none" also lets it
-        # answer "you have no scheduled tasks" without calling a tool at all.
-        if schedules.is_empty():
-            return "<schedules>\n(none)\n</schedules>"
-        lines = []
-        for schedule in schedules.search():
-            status = "enabled" if schedule.enabled else "paused"
-            next_run = (
-                schedule.next_run_at.isoformat(timespec="minutes")
-                if schedule.next_run_at is not None else "none"
-            )
-            lines.append(
-                f"- {schedule.name} (id: {schedule.schedule_id}, status: {status}, "
-                f"cron: {json.dumps(schedule.cron)}, next: {next_run})"
-            )
-        return "<schedules>\n" + "\n".join(lines) + "\n</schedules>"
-
-    async def workflows_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Render saved Workflow definitions and recent global results."""
-        workflows = context.workflows
-        workflow_runs = context.workflow_runs
-        if workflows is None and workflow_runs is None:
-            return ""
-        blocks = []
-        if workflows is not None and workflows.data():
-            lines = [
-                f"- {workflow.name} (id: {workflow.workflow_id}, "
-                f"entry: {json.dumps(str(workflow.entry_path), ensure_ascii=False)}): "
-                f"{workflow.description or '(no description)'}"
-                for workflow in workflows.data().values()
-            ]
-            blocks.append("<workflows>\n" + "\n".join(lines) + "\n</workflows>")
-        runs = workflow_runs.runs()[:10] if workflow_runs is not None else ()
-        if runs:
-            run_lines = [
-                f"- {run.workflow_name} result (run_id: {run.run_id}, "
-                f"status: {run.status.value}, "
-                f"result path: {json.dumps(str(run.result_dir), ensure_ascii=False)}, "
-                f"intermediate work path: "
-                f"{json.dumps(str(run.background_work_dir), ensure_ascii=False)}, "
-                f"input: {json.dumps(run.workflow_input.text, ensure_ascii=False)})"
-                for run in runs
-            ]
-            blocks.append("<workflow_results>\n" + "\n".join(run_lines) + "\n</workflow_results>")
-        return "\n\n".join(blocks)
-
-    def transcript_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """The on-disk transcript path (``history.md``) as bare data — ``""`` until
-        the session has past turns."""
-        root = context.session.workspace_root
-        if not root or not context.session.get_all():
-            return ""
-        return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
+    def _user_message(self, user_input: Any, text: str, context: AmphiContext, *, reject_unsupported: bool) -> Message:
+        """Create a user Message and attach images only when the model can accept them."""
+        try:
+            images = self._image_inputs(user_input, context)
+        except ImageInputValidationError:
+            if reject_unsupported:
+                raise
+            images = []
+        support = context.llm_provider.supports_image_input()
+        if images and support is False and reject_unsupported:
+            raise ImageInputUnsupportedError(context.llm_provider.model_id)
+        extras = {IMAGE_INPUTS_EXTRA: images} if images and support is not False else {}
+        return Message.from_text(text, role=Role.USER, extras=extras)
 
     async def session_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
         """Replay the persisted Session summary followed by uncovered raw Turns."""
@@ -1319,16 +1133,6 @@ class MainThink(CognitiveWorker):
             ),
             *self._session_messages(remaining, context),
         ]
-
-    @staticmethod
-    def _compaction_summary_message(scope: str, summary: str, through_name: str, through: int) -> Message:
-        """Render one persisted summary as low-authority Assistant history."""
-        content = (
-            f"<{scope}_summary {through_name}=\"{through}\">\n"
-            f"{summary.strip()}\n"
-            f"</{scope}_summary>"
-        )
-        return Message.from_text(content, role=Role.AI)
 
     def _session_messages(self, turns: Sequence[SessionTurnRecord], context: AmphiContext) -> List[Message]:
         """Replay persisted Turns oldest-first, reusing only the global normal-mode projection."""
@@ -1474,104 +1278,6 @@ class MainThink(CognitiveWorker):
             if question:
                 messages.append(Message.from_text(question, role=Role.AI))
         return messages
-
-    def _render_user_input(self, user_input: Any, context: AmphiContext) -> str:
-        """Render one current or persisted input with live, ownership-gated paths."""
-        blocks = _view(user_input, "blocks") or []
-        mention_ids = [
-            str(_view(block, "id"))
-            for block in blocks
-            if _view(block, "type") == "mention" and _view(block, "id")
-        ]
-        workspace = context.workspace
-        path_map = (
-            workspace.reference_map(mention_ids)
-            if workspace is not None and mention_ids
-            else {}
-        )
-        workflow_runs = context.workflow_runs
-        if workflow_runs is not None:
-            for block in blocks:
-                if _view(block, "type") != "mention" or _view(block, "group") != "WorkflowRun":
-                    continue
-                block_id = str(_view(block, "id") or "")
-                run = workflow_runs.get(block_id)
-                if run is not None and run.is_published:
-                    path_map[block_id] = str(run.result_dir)
-        return render_input(user_input, path_map)
-
-    def _image_inputs(self, user_input: Any, context: AmphiContext) -> List[Dict[str, Any]]:
-        """Resolve owned image mentions into small provider-neutral descriptors."""
-        def resolve_path(base: str, relative: str) -> Optional[str]:
-            if not relative:
-                return os.path.realpath(base)
-            normalized = relative.replace("/", os.sep)
-            if os.path.isabs(normalized):
-                return None
-            real_base = os.path.realpath(base)
-            candidate = os.path.realpath(os.path.join(real_base, normalized))
-            if candidate == real_base or candidate.startswith(real_base + os.sep):
-                return candidate
-            return None
-
-        blocks = _view(user_input, "blocks") or []
-        mentions = [
-            block for block in blocks
-            if _view(block, "type") == "mention" and _view(block, "id")
-        ]
-        workspace = context.workspace
-        if workspace is None or not mentions:
-            return []
-        path_map = workspace.reference_map([
-            str(_view(block, "id")) for block in mentions
-        ])
-        images: List[Dict[str, Any]] = []
-        seen: set[str] = set()
-        for block in mentions:
-            block_id = str(_view(block, "id") or "")
-            base = path_map.get(block_id)
-            if not base:
-                continue
-            path = resolve_path(base, str(_view(block, "path") or ""))
-            if not path or path in seen:
-                continue
-            image = inspect_image_input(path, str(_view(block, "label") or block_id))
-            if image is not None:
-                images.append(image)
-                seen.add(path)
-        return validate_image_inputs(images)
-
-    def _user_message(self, user_input: Any, text: str, context: AmphiContext, *, reject_unsupported: bool) -> Message:
-        """Create a user Message and attach images only when the model can accept them."""
-        try:
-            images = self._image_inputs(user_input, context)
-        except ImageInputValidationError:
-            if reject_unsupported:
-                raise
-            images = []
-        support = context.llm_provider.supports_image_input()
-        if images and support is False and reject_unsupported:
-            raise ImageInputUnsupportedError(context.llm_provider.model_id)
-        extras = {IMAGE_INPUTS_EXTRA: images} if images and support is not False else {}
-        return Message.from_text(text, role=Role.USER, extras=extras)
-
-    async def user_input_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Render this Turn's request through the shared structured-input path."""
-        return self._render_user_input(ota_context.user_input, context)
-
-    async def current_user_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Append volatile runtime metadata after this Invocation's user request."""
-        request = await self.user_input_block(ota_context, context)
-        return f"{request}\n\n{self.current_time_block(ota_context, context)}"
-
-    async def current_user_message(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Message:
-        """Build the current multimodal user Message with capability validation."""
-        return self._user_message(
-            ota_context.user_input,
-            await self.current_user_block(ota_context, context),
-            context,
-            reject_unsupported=True,
-        )
 
     def turn_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
         """Render this turn's completed rounds for the next model call.
@@ -1756,131 +1462,51 @@ class MainThink(CognitiveWorker):
                 messages.append(Message.from_text(str(obs), role=Role.USER))
         return messages
 
-    async def legality_check(
-        self,
-        call: StepToolCall,
-        ota_context: Optional[AmphiOTAContext],
-        context: AmphiContext,
-    ) -> Optional[str]:
-        """Validate Main's Workflow entry request against the loaded catalogue."""
-        tool_name = getattr(call, "tool", None)
-        if tool_name not in {"edit_workflow", "request_run_workflow"}:
-            return None
-        if tool_name == "request_run_workflow" and ota_context is not None and any(
-            _view(step, "tool_name") == "report_workflow_step"
-            for record in ota_context.ota_record
-            for step in (_view(_view(record, "action_result"), "results") or [])
-        ):
-            return "workflow run rejected: this turn already ran the Workflow; summarize its reports."
-        arguments = {
-            _view(argument, "name"): _view(argument, "value")
-            for argument in getattr(call, "tool_arguments", None) or []
-        }
-        workflow_id = str(arguments.get("workflow_id") or "").strip()
-        workflows = context.workflows
-        if workflows is None:
-            return f"{tool_name} rejected: no Workflow catalogue is available."
-        if tool_name == "request_run_workflow":
-            workspace = context.workspace
-            active = (
-                workspace.run_workflow_checkpoint()
-                if workspace is not None
-                else None
-            )
-            action = str(arguments.get("action") or "start")
-            if active is None:
-                if action != "start":
-                    return (
-                        f"request_run_workflow rejected: `{action}` requires an "
-                        "unfinished Run; use action `start`."
-                    )
-                try:
-                    workflows.source(workflow_id)
-                except ValueError as exc:
-                    return f"request_run_workflow rejected: {exc}."
-                return None
-            state = active
-            if action == "start":
-                return (
-                    "request_run_workflow rejected: this Session already owns an "
-                    "unfinished Run; choose resume, restart, or ask."
-                )
-            if action == "resume":
-                if state.workflow_id == workflow_id:
-                    return None
-                return (
-                    "request_run_workflow rejected: resume must target the unfinished "
-                    f"Workflow `{state.workflow_id}`."
-                )
-            try:
-                workflows.source(workflow_id)
-            except ValueError as exc:
-                return f"request_run_workflow rejected: {exc}."
-            return None
-        try:
-            workflows.source(workflow_id)
-        except ValueError as exc:
-            return f"{tool_name} rejected: {exc}."
+    @staticmethod
+    def _compaction_summary_message(scope: str, summary: str, through_name: str, through: int) -> Message:
+        """Render one persisted summary as low-authority Assistant history."""
+        content = (
+            f"<{scope}_summary {through_name}=\"{through}\">\n"
+            f"{summary.strip()}\n"
+            f"</{scope}_summary>"
+        )
+        return Message.from_text(content, role=Role.AI)
+
+    async def append_runtime_state(self, messages: List[Message], ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
+        """Append the ``<runtime_state>`` USER tail to this round's request.
+
+        The tail is flagged ``VOLATILE_TAIL_EXTRA`` and NEVER persisted (the OTA
+        record does not store it), so replayed history stays byte-stable for the
+        provider prompt cache while the model still sees fresh live state."""
+        state = await self.runtime_state_block(ota_context, context)
+        if not state:
+            return messages
+        return [
+            *messages,
+            Message.from_text(state, role=Role.USER, extras={VOLATILE_TAIL_EXTRA: True}),
+        ]
+
+    ############################################################################
+    # Legality check
+    ############################################################################
+    async def legality_check(self, call: StepToolCall, ota_context: Optional[AmphiOTAContext], context: AmphiContext) -> Optional[str]:
+        """Allow calls unless the concrete worker adds a business restriction."""
         return None
 
     ############################################################################
-    # Worker helpers — visible toolset · usage / tool-call decode
+    # Tools and Skills selection
     ############################################################################
-    def tool_surface(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> ToolSurface:
-        """Build this round's ordered runtime and prompt tool surface.
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select tools explicitly in the concrete mode or stage worker."""
+        return []
 
-        The surface starts with every builtin except ``switch``
-        (a build-stage control, never shown in normal chat); ``allowed_tools`` narrows
-        the set when a stage gates it. Browser advanced tools appear only after
-        ``load_browser_tools`` sets ``browser_tool_loaded``; workspace and skill advanced
-        tools follow their own lazy-load flags."""
-        specs = [s for s in TOOL_LIBRARY.all()]
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Select Skills explicitly in the concrete mode or stage worker."""
+        return {}
 
-        if not ota_context.browser_tool_loaded:
-            specs = [
-                s for s in specs
-                if s.tool_name not in BROWSER_ADVANCED_TOOL_NAMES
-            ]
-        if not ota_context.workspace_tools_loaded:
-            specs = [
-                s for s in specs
-                if s.tool_name not in WORKSPACE_ADVANCED_TOOL_NAMES
-            ]
-        if not ota_context.skills_tool_loaded:
-            specs = [
-                s for s in specs
-                if s.tool_name not in SKILLS_ADVANCED_TOOL_NAMES
-            ]
-        allowed = (
-            {spec.tool_name for spec in specs}
-            if self.allowed_tools is None
-            else set(self.allowed_tools)
-        )
-        if ota_context.browser_tool_loaded:
-            allowed |= BROWSER_ADVANCED_TOOL_NAMES
-        if ota_context.workspace_tools_loaded:
-            allowed |= WORKSPACE_ADVANCED_TOOL_NAMES
-        if ota_context.skills_tool_loaded:
-            allowed |= SKILLS_ADVANCED_TOOL_NAMES
-        return ToolSurface(tuple(s for s in specs if s.tool_name in allowed))
-
-    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Any]:
-        """Return the runtime specs from this round's shared tool surface."""
-        return list(self.tool_surface(ota_context, context).specs)
-
-    def select_skills(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> Dict[str, Skill]:
-        """Select the enabled Skills visible to this Think worker."""
-        skills = context.skills
-        return skills.data() if skills is not None else {}
-
+    ############################################################################
+    # Helpers — visible toolset · usage / tool-call decode
+    ############################################################################
     @staticmethod
     def _usage_values(usage: Any) -> Tuple[int, int, Optional[int]]:
         """Normalize provider usage to input, output, and cache-read tokens."""
@@ -1923,5 +1549,19 @@ class MainThink(CognitiveWorker):
         )
         return input_tokens, output_tokens, cached_input_tokens
 
+    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
+        """Return the full current-Turn trace unless a specialized worker projects it."""
+        return ota_context, None
 
-__all__ = ["MainThink", "ToolSurface", "render_input"]
+    @staticmethod
+    def _record_think_scope(record: Any) -> Optional[Tuple[str, str]]:
+        """Return one round's cognitive mode and stage, including legacy Build records."""
+        scope = _view(record, "think_scope")
+        mode = str(_view(scope, "mode") or "").strip()
+        stage = str(_view(scope, "stage") or "").strip()
+        if mode and stage:
+            return mode, stage
+        legacy_build_stage = str(_view(record, "build_stage") or "").strip()
+        return ("build", legacy_build_stage) if legacy_build_stage else None
+
+__all__ = ["BaseThink", "render_input"]

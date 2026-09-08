@@ -5,6 +5,7 @@ from bridgic.core.model.types import Role
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session
 from src.amphi_agent.cognitive import (
+    BaseThink,
     BuildThink,
     ClarifyThink,
     ExploreThink,
@@ -29,8 +30,9 @@ PROMPT_TIME = "2026-08-19 12:00 (UTC+08:00)"
 
 def test_mode_workers_keep_their_shared_inheritance() -> None:
     """Mode bases and stages retain the shared cognitive behavior after the split."""
-    for worker_type in (SubAgentThink, BuildThink, PresentationThink, WorkflowRunThink):
-        assert worker_type.__bases__ == (MainThink,)
+    assert SubAgentThink.__bases__ == (MainThink,)
+    for worker_type in (MainThink, BuildThink, PresentationThink, WorkflowRunThink):
+        assert worker_type.__bases__ == (BaseThink,)
     for worker_type in (ClarifyThink, ExploreThink, GenerateThink, VerifyThink):
         assert worker_type.__bases__ == (BuildThink,)
     for worker_type in (PresentationBriefThink, PresentationPlanThink, PresentationComposeThink, PresentationReviewThink):
@@ -77,7 +79,7 @@ async def test_message_scopes() -> None:
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
 
-    async def assemble(worker: MainThink, state: dict[str, object], child: bool) -> tuple[list[Role], list[str]]:
+    async def assemble(worker: BaseThink, state: dict[str, object], child: bool) -> tuple[list[Role], list[str]]:
         ota_context = AmphiOTAContext(
             user_input="Current build request",
             prompt_time=PROMPT_TIME,

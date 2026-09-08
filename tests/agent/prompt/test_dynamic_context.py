@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from pytest import MonkeyPatch
+from bridgic.core.model.types import Message, Role
+from pytest import MonkeyPatch, mark
 
 from src.amphi_agent import (
     AmphiContext,
@@ -19,12 +21,18 @@ from src.amphi_agent import (
 from src.amphi_agent.tools.browser.session import SessionBrowserState, SessionBrowserTab
 from src.amphi_agent.cognitive import SubAgentThink
 from src.amphi_agent.cognitive import (
+    BaseThink,
     ClarifyThink,
     ExploreThink,
     GenerateThink,
+    PresentationBriefThink,
+    PresentationComposeThink,
+    PresentationPlanThink,
+    PresentationReviewThink,
     VerifyThink,
     WorkflowThink,
 )
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA
 from src.amphi_agent._workspace import Workspace
 from src.amphi_store import (
     SessionRecord,
@@ -120,6 +128,156 @@ def _dynamic_context(system: str) -> str:
     context = system[start + 2 :]
     assert context.endswith("\n</context>")
     return context
+
+
+@mark.parametrize(("worker_type", "owner", "shows_build"), [
+    (MainThink, "this Session", True),
+    (SubAgentThink, "root Session", False),
+])
+async def test_retained_workflow_workspace_context(tmp_path: Path, worker_type: type[BaseThink], owner: str, shows_build: bool) -> None:
+    """Normal workers retain their own Run wording, visibility, and Workspace order."""
+    checkpoint = SimpleNamespace(
+        workflow_name="Retained report", workflow_id="workflow-retained", stage="execute", step_index=2,
+    )
+    workspace = SimpleNamespace(
+        work_dir=tmp_path,
+        mount_roots=lambda: [str(tmp_path)],
+        build=None,
+        run_workflow=None,
+        build_checkpoint=lambda: SimpleNamespace(stage="generate", workflow_id="workflow-build"),
+        run_workflow_checkpoint=lambda: checkpoint,
+        environment=SimpleNamespace(
+            os_name="Darwin", os_release="25.0.0", architecture="arm64",
+            node_executable=None, node_version=None, python_executable=None, python_version=None,
+        ),
+    )
+    context = AmphiContext.model_construct(session=_session(tmp_path), workspace=workspace)
+    ota_context = AmphiOTAContext(user_input="Inspect retained work", prompt_time=PROMPT_TIME)
+    worker = worker_type()
+    block = await worker.workspace_block(ota_context, context)
+    retained_line = (
+        "- Retained Workflow Run: Retained report (workflow_id: workflow-retained, "
+        f"stage: execute, step_index: 2, owner: {owner})"
+    )
+
+    assert block.count(retained_line) == 1
+    assert block.index(retained_line) < block.index("- Mounted directories / files:")
+    if shows_build:
+        assert block.index("- Retained Build:") < block.index(retained_line)
+    else:
+        assert "- Retained Build:" not in block
+    messages = await worker.assemble_messages(ota_context, context)
+    assert block in messages[0].content
+    assert "- Retained Workflow Run:" not in await BaseThink().workspace_block(ota_context, context)
+
+    stage_context = AmphiOTAContext(state={"think": {"mode": "build", "stage": "clarify"}})
+    assert "- Retained Workflow Run:" not in await worker.workspace_block(stage_context, context)
+    checkpoint = None
+    assert "- Retained Workflow Run:" not in await worker.workspace_block(ota_context, context)
+    assert "- Retained Workflow Run:" not in await worker.workspace_block(ota_context, AmphiContext())
+
+
+@mark.parametrize(("worker_type", "active_directory"), [
+    (MainThink, None),
+    (SubAgentThink, None),
+    (ClarifyThink, "build"),
+    (ExploreThink, "build"),
+    (GenerateThink, "build"),
+    (VerifyThink, "build"),
+    (PresentationBriefThink, None),
+    (PresentationPlanThink, None),
+    (PresentationComposeThink, None),
+    (PresentationReviewThink, None),
+    (WorkflowThink, "run"),
+])
+async def test_workspace_business_context_belongs_to_its_mode(tmp_path: Path, worker_type: type[BaseThink], active_directory: str | None) -> None:
+    """Each worker chooses its business paths even when other spaces are bound."""
+    workspace = SimpleNamespace(
+        work_dir=tmp_path,
+        mount_roots=lambda: [str(tmp_path), "/mounted/project"],
+        build=SimpleNamespace(root=tmp_path / ".build", is_available=True),
+        run_workflow=SimpleNamespace(root=tmp_path / ".run", is_available=True),
+        build_checkpoint=lambda: SimpleNamespace(stage="generate", workflow_id="workflow-build"),
+        run_workflow_checkpoint=lambda: SimpleNamespace(
+            workflow_name="Retained report", workflow_id="workflow-retained", stage="execute", step_index=2,
+        ),
+        environment=SimpleNamespace(
+            os_name="Darwin", os_release="25.0.0", architecture="arm64",
+            node_executable=None, node_version=None, python_executable=None, python_version=None,
+        ),
+    )
+    context = AmphiContext.model_construct(
+        workspace=workspace,
+        workflow_runs=SimpleNamespace(require_run_workflow=lambda root: SimpleNamespace(
+            result_dir=root / "result", background_work_dir=root / "background/work",
+        )),
+    )
+    ota_context = AmphiOTAContext()
+    block = await worker_type().workspace_block(ota_context, context)
+
+    assert ("- Build work directory (active, writable):" in block) == (active_directory == "build")
+    assert ("- Workflow final result directory (active, writable):" in block) == (active_directory == "run")
+    assert ("- Workflow background work directory (active, writable):" in block) == (active_directory == "run")
+    assert ("- Retained Build:" in block) == (worker_type is MainThink)
+    assert ("- Retained Workflow Run:" in block) == (worker_type in {MainThink, SubAgentThink})
+    assert '- Mounted directories / files: ["/mounted/project"]' in block
+    assert "- OS: Darwin 25.0.0 (arm64)" in block
+    assert block.startswith("<Workspace>\n- Session work directory")
+    assert block.endswith("\n</Workspace>")
+    if active_directory is not None:
+        assert block.index("(active, writable):") < block.index("- Mounted directories / files:")
+    common = await BaseThink().workspace_block(ota_context, context)
+    assert "(active, writable):" not in common
+    assert "- Retained" not in common
+
+
+@mark.parametrize(("worker_type", "shows_checkpoints"), [
+    (MainThink, True),
+    (SubAgentThink, False),
+])
+async def test_normal_runtime_context_keeps_worker_policy(tmp_path: Path, worker_type: type[BaseThink], shows_checkpoints: bool) -> None:
+    """Child runtime context omits checkpoint controls and preserves the volatile tail."""
+    changed = ["- Changed files: report.txt"]
+    checkpoint_calls = []
+
+    def checkpoint_lines(max_count: int) -> list[str]:
+        checkpoint_calls.append(max_count)
+        return ["- Recent checkpoints: cp-1"]
+
+    tab = SessionBrowserTab(title="Report", url="https://example.test/report")
+
+    async def browser_state() -> SessionBrowserState:
+        return SessionBrowserState(tabs=(tab,), active_tab=tab)
+
+    context = AmphiContext.model_construct(
+        session=_session(tmp_path),
+        workspace=SimpleNamespace(checkpoints=SimpleNamespace(
+            changed_files_context_lines=lambda: changed,
+            checkpoint_context_lines=checkpoint_lines,
+        )),
+        browser=SimpleNamespace(state=browser_state),
+    )
+    worker = worker_type()
+    ota_context = AmphiOTAContext()
+    prefix = [Message.from_text("Stable persona", role=Role.SYSTEM)]
+    messages = await worker.append_runtime_state(prefix, ota_context, context)
+
+    assert messages[:-1] == prefix
+    assert messages[-1].role is Role.USER
+    assert messages[-1].extras[VOLATILE_TAIL_EXTRA] is True
+    assert "- Changed files: report.txt" in messages[-1].content
+    assert "<browser>" in messages[-1].content
+    assert ("- Recent checkpoints: cp-1" in messages[-1].content) == shows_checkpoints
+    assert checkpoint_calls == ([3] if shows_checkpoints else [])
+
+    def unavailable_changes() -> list[str]:
+        raise OSError("Changes unavailable")
+
+    context.workspace.checkpoints.changed_files_context_lines = unavailable_changes
+    failed_state = await worker.runtime_state_block(ota_context, context)
+    assert "- Changed files: unavailable (OSError: Changes unavailable)" in failed_state
+    assert "<browser>" in failed_state
+    assert "- Recent checkpoints:" not in failed_state
 
 
 async def test_main_context(test_sandbox: IsolatedPaths, prompt_store: None) -> None:
@@ -338,7 +496,7 @@ async def test_build_contexts(test_sandbox: IsolatedPaths, prompt_store: None) -
         workspace=workspace,
     )
 
-    async def assemble(worker: MainThink, stage: str) -> str:
+    async def assemble(worker: BaseThink, stage: str) -> str:
         ota_context = AmphiOTAContext(
             user_input="Build the workflow",
             prompt_time=PROMPT_TIME,

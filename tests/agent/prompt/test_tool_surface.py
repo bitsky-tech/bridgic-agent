@@ -11,6 +11,7 @@ from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink
 from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_agent._state import PresentationStageState
 from src.amphi_agent.cognitive import (
+    BaseThink,
     ClarifyThink,
     ExploreThink,
     GenerateThink,
@@ -169,7 +170,7 @@ def test_lazy_tools() -> None:
     worker = MainThink()
     context = _context()
     ota_context = AmphiOTAContext(user_input="Inspect tools")
-    baseline = set(worker.tool_surface(ota_context, context).names)
+    baseline = {spec.tool_name for spec in worker.select_tools(ota_context, context)}
 
     # Check 1: The default surface withholds every advanced lazy group.
     advanced = (
@@ -187,12 +188,41 @@ def test_lazy_tools() -> None:
     )
     for flag, expected in cases:
         setattr(ota_context, flag, True)
-        expanded = set(worker.tool_surface(ota_context, context).names)
+        expanded = {spec.tool_name for spec in worker.select_tools(ota_context, context)}
         assert expanded - baseline == expected
         setattr(ota_context, flag, False)
 
     # Check 3: Disabling the flag restores the original default surface.
-    assert set(worker.tool_surface(ota_context, context).names) == baseline
+    assert {spec.tool_name for spec in worker.select_tools(ota_context, context)} == baseline
+
+
+async def test_base_worker_does_not_select_tools_or_skills_implicitly(prompt_store: None) -> None:
+    """A custom worker opts into capabilities even when the Session has them loaded."""
+    skills = await SkillLibrary(USER_ID).load()
+    assert skills.data()
+    context = _context(skills=skills)
+    ota_context = AmphiOTAContext(
+        user_input="Run a custom workflow",
+        browser_tool_loaded=True,
+        workspace_tools_loaded=True,
+        skills_tool_loaded=True,
+    )
+    worker = BaseThink()
+
+    assert worker.select_tools(ota_context, context) == []
+    assert worker.select_skills(ota_context, context) == {}
+
+
+@pytest.mark.parametrize("worker_type", [ClarifyThink, PresentationBriefThink, WorkflowThink])
+def test_main_tool_policy_does_not_change_specialized_modes(monkeypatch: pytest.MonkeyPatch, worker_type: type[BaseThink]) -> None:
+    context = _context()
+    ota_context = AmphiOTAContext(user_input="Inspect mode tools")
+    worker = worker_type()
+    original = tuple(spec.tool_name for spec in worker.select_tools(ota_context, context))
+    monkeypatch.setattr(MainThink, "select_tools", lambda self, ota_context, context: [])
+
+    assert MainThink().select_tools(ota_context, context) == []
+    assert tuple(spec.tool_name for spec in worker.select_tools(ota_context, context)) == original
 
 
 def test_mode_tools() -> None:
@@ -216,7 +246,7 @@ def test_mode_tools() -> None:
     context = _context()
     ota_context = AmphiOTAContext(user_input="Inspect mode tools")
 
-    def names(worker: MainThink) -> set[str]:
+    def names(worker: BaseThink) -> set[str]:
         return {spec.tool_name for spec in worker.select_tools(ota_context, context)}
 
     main = names(MainThink())
@@ -418,6 +448,7 @@ async def test_explore_skill(prompt_store: None) -> None:
     1. A disabled built-in Skill is absent from normal Agent Context.
     2. Explore restores the product-owned how-to Skill for implementation discovery.
     3. Only Explore records the disabled Skill directory as model-visible.
+    4. Every existing mode retains its enabled Skills without exposing other disabled Skills.
     """
     skills = await SkillLibrary(USER_ID).load()
     how_to = await SkillRepository().get_by_name(USER_ID, "how-to")
@@ -444,3 +475,15 @@ async def test_explore_skill(prompt_store: None) -> None:
     # Check 3: Only Explore records the disabled Skill directory as model-visible.
     assert how_to.skill_dir not in main_ota.selected_skill_dirs
     assert how_to.skill_dir in explore_ota.selected_skill_dirs
+
+    # Check 4: Every existing mode retains its enabled Skills and only Explore adds how-to.
+    enabled_names = {name for name, skill in skills.all_data().items() if skill.enabled}
+    assert enabled_names
+    for worker_type in (
+        MainThink, SubAgentThink, ClarifyThink, ExploreThink, GenerateThink, VerifyThink,
+        WorkflowThink, PresentationBriefThink, PresentationPlanThink,
+        PresentationComposeThink, PresentationReviewThink,
+    ):
+        selected = worker_type().select_skills(explore_ota, context)
+        expected = enabled_names | ({"how-to"} if worker_type is ExploreThink else set())
+        assert set(selected) == expected, worker_type.__name__

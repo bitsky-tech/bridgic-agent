@@ -1,27 +1,31 @@
 """Shared context, tools, and legality checks for saved Workflow stages."""
 
-from typing import Any, List, Optional, Tuple
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 from bridgic.amphibious import StepToolCall
+from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
-from ..base import MainThink, render_input
+from ..base import BaseThink, render_input
 from ..._context import AmphiContext, AmphiOTAContext, _view
+from ..._skills import Skill
+from ..._tools import TOOL_LIBRARY
 from ..._state import WorkflowStageState
 from ...prompts.render import render_stage_persona
-from ...tools import switch_tool
+from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 
 
-class WorkflowRunThink(MainThink):
+class WorkflowRunThink(BaseThink):
     """Provide stable source, prompt, tool, and legality mechanics for Workflow stages."""
 
     workflow_stage: str = ""
     permission_mode_override: Optional[str] = "full"
-    allowed_tools = (
-        MainThink.allowed_tools
-        - {"edit_workflow", "help", "request_build", "request_presentation"}
-        | {"report_workflow_step"}
-    )
+
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Expose the enabled Skills selected for this mode."""
+        skills = context.skills
+        return skills.data() if skills is not None else {}
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
         """Keep only the active automatic Workflow stage's trace."""
@@ -50,12 +54,9 @@ class WorkflowRunThink(MainThink):
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.context_blocks(ota_context, context)
         umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
-        system = self.assemble_system(
-            ota_context,
-            context,
-            self.system_block(ota_context, context),
-            umbrella,
-        )
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
 
         turn_context, _ = self._stage_turn_context(
             ota_context,
@@ -67,6 +68,26 @@ class WorkflowRunThink(MainThink):
         messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
+
+    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Add this Workflow Run's writable directories to its Session environment."""
+        lines = ["<Workspace>", self.working_directory_block(context)]
+        workspace = context.workspace
+        workflow_run = workspace.run_workflow if workspace is not None else None
+        if workflow_run is not None and workflow_run.is_available:
+            workflow_runs = context.workflow_runs
+            if workflow_runs is None:
+                raise RuntimeError("Workflow Run space is bound without its result library.")
+            active_run = workflow_runs.require_run_workflow(workflow_run.root)
+            lines.extend([
+                "- Workflow final result directory (active, writable): "
+                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
+                "- Workflow background work directory (active, writable): "
+                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
+            ])
+        lines.append(self.environment_block(context))
+        lines.append("</Workspace>")
+        return "\n".join(lines)
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
         """Render Workflow context from stable catalogues to live runtime state."""
@@ -87,9 +108,35 @@ class WorkflowRunThink(MainThink):
             template=self.persona,
         ).strip()
 
-    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Any]:
-        """Return Workflow runtime tools plus the cognitive-mode switch."""
-        tools = super().select_tools(ota_context, context)
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select this mode's tools in stable catalogue order."""
+        tools = [
+            *super().select_tools(ota_context, context),
+            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
+                "bash",
+                "create_schedule",
+                "delete_schedule",
+                "generate_image",
+                "get_schedule",
+                "list_schedules",
+                "list_workflow_runs",
+                "read_image",
+                "read_workflow_run",
+                "remove_workflow",
+                "report_workflow_step",
+                "request_human_choice",
+                "request_run_workflow",
+                "run_subagent",
+                "start_subagent",
+                "update_schedule",
+                "web_fetch",
+                "web_search",
+            }),
+            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
+            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
+            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
+        ]
+        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
         return [*tools, switch_tool]
 
     @staticmethod

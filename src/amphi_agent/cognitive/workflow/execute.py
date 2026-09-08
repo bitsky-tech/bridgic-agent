@@ -6,7 +6,7 @@ from bridgic.amphibious import StepToolCall
 
 from ..._context import AmphiContext, AmphiOTAContext
 from ...prompts.workflow.execute import WORKFLOW_PERSONA
-from ..registry import cognitive_stage
+from ..register import cognitive_stage
 from .base import WorkflowRunThink
 
 

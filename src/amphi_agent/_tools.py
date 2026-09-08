@@ -7,7 +7,9 @@ from .tools import (
     BROWSER_BASIC_TOOL_NAMES,
     BROWSER_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
+    SKILLS_BASIC_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
+    WORKSPACE_BASIC_TOOL_NAMES,
     bash_tool,
     browser_tool_specs,
     create_schedule_tool,
@@ -119,6 +121,20 @@ class ToolLibrary:
 
     def get_browser_tools(self, *, include_advanced: bool = False) -> List[ToolSpec]:
         names = BROWSER_TOOL_NAMES if include_advanced else BROWSER_BASIC_TOOL_NAMES
+        return self.select(names)
+
+    def get_workspace_tools(self, *, include_advanced: bool = False) -> List[ToolSpec]:
+        """Return Workspace tools according to their lazy-load state."""
+        names = WORKSPACE_BASIC_TOOL_NAMES
+        if include_advanced:
+            names |= WORKSPACE_ADVANCED_TOOL_NAMES
+        return self.select(names)
+
+    def get_skills_tools(self, *, include_advanced: bool = False) -> List[ToolSpec]:
+        """Return Skill tools according to their lazy-load state."""
+        names = SKILLS_BASIC_TOOL_NAMES
+        if include_advanced:
+            names |= SKILLS_ADVANCED_TOOL_NAMES
         return self.select(names)
 
 

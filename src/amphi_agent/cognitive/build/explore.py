@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
 
-from ..registry import cognitive_stage
+from ..register import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill, SkillGroup
@@ -17,7 +17,6 @@ class ExploreThink(BuildThink):
     """Explore and record this build's implementation plan."""
 
     persona: str = EXPLORE_PERSONA
-    allowed_tools = BuildThink.allowed_tools
 
     def select_skills(
         self,
@@ -59,12 +58,9 @@ class ExploreThink(BuildThink):
             "task.md",
         )
         umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
-        system = self.assemble_system(
-            ota_context,
-            context,
-            self.system_block(ota_context, context),
-            umbrella,
-        )
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
 
         turn_context, _ = self._stage_turn_context(
             ota_context,

@@ -1,15 +1,20 @@
 """Shared capabilities and history policy for Workflow Build stages."""
 
+import json
 import re
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from ..base import MainThink
+from bridgic.core.agentic.tool_specs import ToolSpec
+
+from ..base import BaseThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
+from ..._skills import Skill
+from ..._tools import TOOL_LIBRARY
 from ...prompts.render import render_stage_persona
-from ...tools import switch_tool
+from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 
 
-class BuildThink(MainThink):
+class BuildThink(BaseThink):
     """Provide the shared history policy and capabilities for Build stages.
 
     Notes
@@ -19,22 +24,11 @@ class BuildThink(MainThink):
     and tool access.
     """
 
-    allowed_tools: frozenset[str] = (
-        MainThink.allowed_tools
-        - frozenset({
-            "edit_workflow",
-            "help",
-            "request_presentation",
-            "request_run_workflow",
-            "remove_workflow",
-            "start_subagent",
-            "create_schedule",
-            "delete_schedule",
-            "get_schedule",
-            "list_schedules",
-            "update_schedule",
-        })
-    )
+
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Expose the enabled Skills selected for this mode."""
+        skills = context.skills
+        return skills.data() if skills is not None else {}
 
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
         """Project one stable Build-stage trace with its entry and switch context."""
@@ -86,7 +80,7 @@ class BuildThink(MainThink):
         return turn_context, transitions[-1] if transitions else None
 
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Render the Build-stage persona with its exact current ToolSurface."""
+        """Render the Build-stage persona with its exact current tool selection."""
         tools = self.select_tools(ota_context, context)
         return render_stage_persona(
             [tool.tool_name for tool in tools],
@@ -110,6 +104,19 @@ class BuildThink(MainThink):
         if workflows is None:
             raise RuntimeError("Build space is bound without its Workflow library.")
         return workflows.require_package(build.root)
+
+    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Add the active Build directory to the shared Session environment."""
+        lines = ["<Workspace>", self.working_directory_block(context)]
+        build = self.build_space(context)
+        if build is not None:
+            lines.append(
+                "- Build work directory (active, writable): "
+                f"{json.dumps(str(build.root), ensure_ascii=False)}"
+            )
+        lines.append(self.environment_block(context))
+        lines.append("</Workspace>")
+        return "\n".join(lines)
 
     def build_workspace_block(self, context: AmphiContext) -> str:
         """Render the active Build root and its current file tree."""
@@ -241,11 +248,25 @@ class BuildThink(MainThink):
         package = self.build_package(context)
         return package.validation_reason() if package is not None else "no active build package."
 
-    def select_tools(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> List[Any]:
-        """Return this stage's gated tools plus the build switch."""
-        tools = super().select_tools(ota_context, context)
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select this mode's tools in stable catalogue order."""
+        tools = [
+            *super().select_tools(ota_context, context),
+            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
+                "bash",
+                "generate_image",
+                "list_workflow_runs",
+                "read_image",
+                "read_workflow_run",
+                "request_build",
+                "request_human_choice",
+                "run_subagent",
+                "web_fetch",
+                "web_search",
+            }),
+            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
+            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
+            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
+        ]
+        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
         return [*tools, switch_tool]

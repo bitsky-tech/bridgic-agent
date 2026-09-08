@@ -4,10 +4,13 @@ import re
 from typing import List, Optional, Tuple
 
 from bridgic.amphibious import StepToolCall
+from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
-from ..registry import cognitive_stage
+from ..register import cognitive_stage
 from .base import BuildThink
+from ..._tools import TOOL_LIBRARY
+from ...tools import switch_tool
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ...prompts.build.clarify import CLARIFY_PERSONA
 
@@ -17,9 +20,6 @@ class ClarifyThink(BuildThink):
     """Clarify requirements and maintain this build's task definition."""
 
     persona: str = CLARIFY_PERSONA
-    allowed_tools = BuildThink.allowed_tools | {
-        "request_human_task_confirm",
-    }
 
     _MERMAID_DIAGRAM_TYPES = frozenset({
         "architecture-beta", "block-beta", "classdiagram", "erdiagram", "gantt",
@@ -28,6 +28,12 @@ class ClarifyThink(BuildThink):
         "sequencediagram", "statediagram", "statediagram-v2", "timeline",
         "treemap-beta", "xychart-beta", "zenuml",
     })
+
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Add this stage's confirmation tool without changing catalogue order."""
+        tools = super().select_tools(ota_context, context)
+        names = [tool.tool_name for tool in tools]
+        return [*TOOL_LIBRARY.select([*names, "request_human_task_confirm"]), switch_tool]
 
     async def assemble_messages(
         self,
@@ -68,12 +74,9 @@ class ClarifyThink(BuildThink):
             "task.md",
         )
         umbrella = "<context>\n" + "\n\n".join(b for b in blocks if b) + "\n</context>"
-        system = self.assemble_system(
-            ota_context,
-            context,
-            self.system_block(ota_context, context),
-            umbrella,
-        )
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
 
         turn_context, _ = self._stage_turn_context(
             ota_context,

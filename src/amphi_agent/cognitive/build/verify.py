@@ -4,10 +4,13 @@ import re
 from typing import List, Optional
 
 from bridgic.amphibious import StepToolCall
+from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
-from ..registry import cognitive_stage
+from ..register import cognitive_stage
 from .base import BuildThink
+from ..._tools import TOOL_LIBRARY
+from ...tools import switch_tool
 from ..._context import AmphiContext, AmphiOTAContext
 from ...prompts.build.verify import VERIFY_PERSONA
 
@@ -17,7 +20,12 @@ class VerifyThink(BuildThink):
     """Safely test the generated workflow against the task definition."""
 
     persona: str = VERIFY_PERSONA
-    allowed_tools = BuildThink.allowed_tools | {"request_human_workflow_confirm"}
+
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Add this stage's confirmation tool without changing catalogue order."""
+        tools = super().select_tools(ota_context, context)
+        names = [tool.tool_name for tool in tools]
+        return [*TOOL_LIBRARY.select([*names, "request_human_workflow_confirm"]), switch_tool]
 
     async def assemble_messages(
         self,
@@ -48,12 +56,9 @@ class VerifyThink(BuildThink):
             "verify.md",
         )
         umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
-        system = self.assemble_system(
-            ota_context,
-            context,
-            self.system_block(ota_context, context),
-            umbrella,
-        )
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
 
         turn_context, _ = self._stage_turn_context(
             ota_context,
