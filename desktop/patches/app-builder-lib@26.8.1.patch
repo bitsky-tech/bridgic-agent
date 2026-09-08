@@ -1,0 +1,36 @@
+diff --git a/out/targets/pkg.js b/out/targets/pkg.js
+index 2878d7f0872f9609bfce095f8cc101c01d5234f1..f00468cfd38a64ca3361c1f7bb2ef080d718da4a 100644
+--- a/out/targets/pkg.js
++++ b/out/targets/pkg.js
+@@ -150,11 +150,26 @@ class PkgTarget extends core_1.Target {
+             });
+             distInfo = distInfo.replace("</installer-gui-script>", `${startContent}${mustCloseContent}${endContent}`);
+         }
+-        const insertIndex = distInfo.lastIndexOf("</installer-gui-script>");
+-        distInfo =
+-            distInfo.substring(0, insertIndex) +
+-                `    <domains enable_anywhere="${options.allowAnywhere}" enable_currentUserHome="${options.allowCurrentUserHome}" enable_localSystem="${options.allowRootDirectory}" />\n` +
+-                distInfo.substring(insertIndex);
++        let insertIndex = distInfo.lastIndexOf("</installer-gui-script>");
++        // `<domains>` is a deprecated Distribution element. On macOS 26 the Installer
++        // probes the current-user-home domain while parsing it -- even when
++        // enable_currentUserHome="false" -- and that probe trips
++        // kTCCServiceSystemPolicyAppData, so the user is asked to grant access to
++        // "data from other apps" before the install even starts. When both home-domain
++        // options are off, `rootVolumeOnly` expresses the same restriction in the
++        // current spelling and does not prompt.
++        if (options.allowAnywhere === false && options.allowCurrentUserHome === false) {
++            distInfo = distInfo.replace("<options ", `<options rootVolumeOnly="true" `);
++            // The replace grew the document before insertIndex, so recompute it for the
++            // background/welcome/license/conclusion insertions below.
++            insertIndex = distInfo.lastIndexOf("</installer-gui-script>");
++        }
++        else {
++            distInfo =
++                distInfo.substring(0, insertIndex) +
++                    `    <domains enable_anywhere="${options.allowAnywhere}" enable_currentUserHome="${options.allowCurrentUserHome}" enable_localSystem="${options.allowRootDirectory}" />\n` +
++                    distInfo.substring(insertIndex);
++        }
+         if (options.background != null) {
+             const background = await this.packager.getResource(options.background.file);
+             if (background != null) {
