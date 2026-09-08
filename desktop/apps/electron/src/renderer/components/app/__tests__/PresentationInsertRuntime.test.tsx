@@ -1,12 +1,14 @@
 import { afterAll, afterEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Root } from 'react-dom/client'
+import type { PresentationTextElement } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const { StrictMode, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { renderToStaticMarkup } = await import('react-dom/server')
 const { Simulate } = await import('react-dom/test-utils')
 const fabric = await import('fabric')
 const { createBlankPresentationDocument } = await import('@/atoms/presentation')
@@ -22,6 +24,9 @@ const {
   createPresentationMediaFabricObject,
   createPresentationMediaRuntime,
   createPresentationVerticalTextFabricObject,
+  createPresentationTextFabricObject,
+  createPresentationFabricObject,
+  getPresentationTextFabricFramePatch,
   estimatePresentationDocumentBytes,
   isPresentationRotationLocked,
   PresentationNumberField,
@@ -30,10 +35,15 @@ const {
   trimPresentationHistoryEntries,
 } = await import('../PresentationWorkbenchPanel')
 const {
+  getPresentationPieSlices,
   getPresentationChartRange,
   getPresentationChartValueRatio,
   PresentationSlidePreview,
 } = await import('../PresentationSlidePreview')
+
+const { importPresentationPptx } = await import('@/lib/presentationPptxImport')
+const { createPresentationPptx } = await import('@/lib/presentationPptx')
+const { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } = await import('@/lib/presentationMarkdown')
 
 const mountedRoots = new Set<Root>()
 
@@ -54,6 +64,534 @@ function fileSource(type: string, name: string, payload = 'AA==') {
 }
 
 describe('presentation Insert runtime safeguards', () => {
+  it.each([[0.2, 0.3], [2e-300, 3e-300], [2e300, 3e300]].map(values => [values] as const))('normalizes fractional pie data consistently in preview and Fabric: %j', async (values) => {
+    const element = { ...createPresentationChartElement('pie'), width: 800, height: 400, title: undefined, showLegend: false,
+      categories: ['A', 'B'], series: [{ name: 'Total', values }], colors: ['#FF6600', '#00AA88'] }
+    const model = createBlankPresentationDocument('Proportions')
+    model.slides[0]!.elements = [element]
+    const host = document.createElement('div')
+    host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} selected={false} width={1280} />)
+    const numbers = host.querySelector('path[fill="#FF6600"]')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)!.map(Number)
+    const angle = (Math.atan2(numbers[2]! - numbers[0]!, -(numbers[3]! - numbers[1]!)) * 180 / Math.PI + 360) % 360
+    expect(angle).toBeCloseTo(144)
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing pie group')
+    const path = group.getObjects().find(object => object instanceof fabric.Path && object.fill === '#FF6600')!
+    if (!(path instanceof fabric.Path)) throw new Error('Missing first pie sector')
+    const start = path.path[0] as ['M', number, number]
+    const end = path.path[1] as ['L', number, number]
+    const fabricAngle = (Math.atan2(end[1] - start[1], -(end[2] - start[2])) * 180 / Math.PI + 360) % 360
+    expect(fabricAngle).toBeCloseTo(144)
+    group.dispose()
+  })
+
+  it.each(['transparent', '#FFFFFF', '#152945'])('leaves a real hole in single-value doughnuts over %s', async (fill) => {
+    const element = { ...createPresentationChartElement('doughnut'), width: 800, height: 400, title: undefined, showLegend: false,
+      categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [0, 50, 0] }], colors: ['#FF6600', '#00AA88', '#2266EE'], chartAreaFill: fill, plotAreaFill: fill }
+    const model = createBlankPresentationDocument('Open ring')
+    model.slides[0]!.elements = [element]
+    const host = document.createElement('div')
+    host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} selected={false} width={1280} />)
+    const path = host.querySelector('path[fill="#00AA88"]')!
+    expect(path.getAttribute('fill-rule')).toBe('evenodd')
+    expect(path.getAttribute('d')!.match(/M /g)).toHaveLength(2)
+    expect(path.getAttribute('d')!.match(/ A /g)).toHaveLength(4)
+    expect(host.querySelectorAll('circle')).toHaveLength(0)
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing doughnut group')
+    const ring = group.getObjects().find(object => object instanceof fabric.Path)!
+    expect(ring.fill).toBe('#00AA88')
+    expect(ring.fillRule).toBe('evenodd')
+    expect(ring.path.filter(command => command[0] === 'M')).toHaveLength(2)
+    expect(group.getObjects().some(object => object instanceof fabric.Circle)).toBe(false)
+    group.dispose()
+  })
+
+  it('draws no sectors for all-zero or nonpositive data and retains the positive category index', () => {
+    expect(getPresentationPieSlices([0, -1, NaN, Infinity])).toEqual([])
+    expect(getPresentationPieSlices([0, 0.001, 0])).toEqual([{ index: 1, start: 0, end: 360 }])
+    expect(getPresentationPieSlices([0, 2, 0, 3]).map(slice => slice.index)).toEqual([1, 3])
+  })
+
+  it.each(['line', 'lineArrow', 'lineDoubleArrow', 'elbowConnector', 'elbowArrow', 'curvedConnector', 'curvedArrow'] as const)('preserves the existing %s path, transform and editability across repeated exports', async (type) => {
+    for (const transform of [{ rotation: 0 }, { rotation: 37, flipHorizontal: true }, { rotation: 90, flipVertical: true }]) {
+      let model = createBlankPresentationDocument('Connector fidelity')
+      const element = { id: 'connector', type, x: 100, y: 150, width: 700, height: 300, fill: 'transparent', borderColor: '#111111', borderWidth: 6, ...transform }
+      model.slides[0]!.elements = [element]
+      const original = await createPresentationFabricObject(fabric, element, () => undefined)
+      if (!(original instanceof fabric.Group)) throw new Error('Missing connector group')
+      const originalPath = original.getObjects().find(object => object instanceof fabric.Path)!
+      for (let round = 0; round < 2; round++) {
+        model = await importPresentationPptx(await createPresentationPptx(model))
+        model.slides = [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides[0]!), { document: model }).slide]
+        const reopened = model.slides[0]!.elements[0]!
+        expect(reopened.type).toBe(type)
+        const current = await createPresentationFabricObject(fabric, reopened, () => undefined)
+        if (!(current instanceof fabric.Group)) throw new Error('Connector lost editability')
+        const currentPath = current.getObjects().find(object => object instanceof fabric.Path)!
+        expect(currentPath.path).toEqual(originalPath.path)
+        currentPath.calcTransformMatrix().forEach((value, index) => expect(value).toBeCloseTo(originalPath.calcTransformMatrix()[index]!, 2))
+        current.dispose()
+      }
+      original.dispose()
+    }
+  })
+
+  it('keeps table cells on the authored grid and text centered without rescaling for long labels', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      for (const headerRow of [false, true]) {
+        const table = { ...createPresentationTableElement([['Revenue', '100'], ['A long label that wraps into multiple lines', '60']]),
+          x: 100, y: 100, width: 800, height: 400, headerRow, headerTextColor: '#111111', textColor: '#222222' }
+        const group = await createPresentationFabricObject(fabric, table, () => undefined)
+        if (!(group instanceof fabric.Group)) throw new Error('Missing table group')
+        expect(group).toMatchObject({ left: 100, top: 100, width: 800, height: 400, scaleX: 1, scaleY: 1 })
+        const cells = group.getObjects().filter(object => object instanceof fabric.Rect && object.strokeWidth === 1)
+        const texts = group.getObjects().filter(object => object instanceof fabric.Textbox)
+        expect(cells).toHaveLength(4)
+        expect(texts).toHaveLength(4)
+        cells.forEach((cell, index) => {
+          const center = cell.getCenterPoint()
+          expect(center.x).toBeCloseTo(300 + index % 2 * 400)
+          expect(center.y).toBeCloseTo(200 + Math.floor(index / 2) * 200)
+          expect(texts[index]!.getCenterPoint().y).toBeCloseTo(center.y)
+          expect(texts[index]!.fill).toBe(headerRow && index < 2 ? '#111111' : '#222222')
+        })
+        group.dispose()
+      }
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it.each(['column', 'bar', 'line', 'pie', 'doughnut'] as const)('keeps %s plot coordinates and background fixed in full-size and small chart frames', async (chartType) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      for (const [width, height] of [[800, 400], [8, 8]] as const) {
+        const chart = { ...createPresentationChartElement(chartType), x: 100, y: 100, width, height,
+          title: 'Long title whose wrapping must not shrink the plot', showLegend: true,
+          categories: ['A', 'B', 'C'], series: [{ name: 'Very long series name', values: [50, -30, 20] }], colors: ['#FF0000', '#00AA00', '#0000FF'] }
+        const group = await createPresentationFabricObject(fabric, chart, () => undefined)
+        if (!(group instanceof fabric.Group)) throw new Error('Missing chart group')
+        const sx = width / Math.max(180, width)
+        const sy = height / Math.max(120, height)
+        expect(group.getScaledWidth()).toBeCloseTo(width)
+        expect(group.getScaledHeight()).toBeCloseTo(height)
+        const background = group.getObjects().find(object => object.stroke === '#E3E4EA')!
+        const center = background.getCenterPoint()
+        expect(center.x).toBeCloseTo(100 + width / 2)
+        expect(center.y).toBeCloseTo(100 + height / 2)
+        const plot = group.getObjects().find(object => object instanceof fabric.Rect && object.fill === 'transparent' && object.stroke === 'transparent')!
+        expect(plot.getCenterPoint().x).toBeCloseTo(100 + (chartType === 'bar' ? 100 : 54) * sx + plot.width * sx / 2)
+        expect(plot.getCenterPoint().y).toBeCloseTo(100 + 38 * sy + plot.height * sy / 2)
+        if (chartType === 'pie' || chartType === 'doughnut') {
+          const slices = group.getObjects().filter(object => object instanceof fabric.Path)
+          expect(slices).toHaveLength(2)
+          for (const slice of slices) {
+            const start = slice.path[0] as ['M', number, number]
+            const world = fabric.util.transformPoint(new fabric.Point(start[1] - slice.pathOffset.x, start[2] - slice.pathOffset.y), slice.calcTransformMatrix())
+            // The authored path coordinate must keep its location inside the plot after grouping.
+            expect(world.x).toBeCloseTo(100 + start[1] * sx)
+            expect(world.y).toBeCloseTo(100 + start[2] * sy)
+          }
+        }
+        group.dispose()
+      }
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it.each([0, 45, 90])('draws straight-line endpoints on the full authored diagonal at %s degrees', async (rotation) => {
+    const element = { id: 'native-line', type: 'line' as const, x: 100, y: 100, width: 800, height: 400, rotation,
+      fill: 'transparent', borderColor: '#111111', borderWidth: 4 }
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing line group')
+    const path = group.getObjects().find(object => object instanceof fabric.Path)!
+    const angle = rotation * Math.PI / 180
+    const endpoints = [path.path[0], path.path[1]] as ['M' | 'L', number, number][]
+    endpoints.forEach(([, x, y], index) => {
+      const point = fabric.util.transformPoint(new fabric.Point(x - path.pathOffset.x, y - path.pathOffset.y), path.calcTransformMatrix())
+      expect(point.x).toBeCloseTo(100 + index * (800 * Math.cos(angle) - 400 * Math.sin(angle)))
+      expect(point.y).toBeCloseTo(100 + index * (800 * Math.sin(angle) + 400 * Math.cos(angle)))
+    })
+    group.dispose()
+  })
+
+  it.each([true, false])('uses authored empty-paragraph font metrics in preview and editable text with wrapping=%s', async (wordWrap) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const model = createBlankPresentationDocument('Blank paragraphs')
+      const element: PresentationTextElement = { id: 'blank', type: 'text', text: '\nBefore\n\n\nAfter\n', x: 0, y: 0, width: 600, height: 600,
+        rotation: 0, fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', wordWrap, lineHeight: 1,
+        paragraphs: [{ start: 0, end: 0, style: {}, endStyle: { fontSize: 64 } }, { start: 1, end: 7, style: {} },
+          { start: 8, end: 8, style: {}, endStyle: { fontSize: 128 } }, { start: 9, end: 9, style: {}, endStyle: { fontSize: 16 } },
+          { start: 10, end: 15, style: {} }, { start: 16, end: 16, style: {}, endStyle: { fontSize: 80 } }],
+      }
+      model.slides[0]!.elements = [element]
+      const host = document.createElement('div')
+      document.body.append(host)
+      const root = createRoot(host)
+      mountedRoots.add(root)
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      const emptySpans = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="presentation-text-paragraph"] > span > span')).filter(span => span.textContent === '\u200b')
+      expect(emptySpans.map(span => span.style.fontSize)).toEqual(['64px', '128px', '16px', '80px'])
+      const object = createPresentationTextFabricObject(fabric, element)
+      for (const [line, size] of [[0, 64], [2, 128], [3, 16], [5, 80]] as const) expect(object.getHeightOfLine(line)).toBeCloseTo(size * 1.13)
+      expect(object.height).toBeCloseTo((64 + 32 + 128 + 16 + 32 + 80) * 1.13)
+      object.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it.each(['rect', 'roundRect', 'ellipse'] as const)('centers %s strokes on the authored frame without shifting editor geometry', async (type) => {
+    const element = { id: 'stroke', type, x: 100, y: 100, width: 500, height: 400, rotation: 0,
+      fill: '#FFE0B0', borderColor: '#000000', borderWidth: 32 }
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Expected a shape frame')
+    expect(group).toMatchObject({ left: 100, top: 100, width: 500, height: 400 })
+    expect(group.getObjects()[1]!.getBoundingRect()).toMatchObject({ left: 84, top: 84, width: 532, height: 432 })
+    group.dispose()
+  })
+
+  it('keeps short fixed baseline advances when a following paragraph needs a negative layout height', async () => {
+    const top = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop')!
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!
+    const large = (content: HTMLElement | null) => Array.from(content?.children ?? []).some(child => (child as HTMLElement).style.fontSize === '120px')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() {
+      if (!this.querySelector('[data-line-probe]')) return 0
+      return large(this) ? 58 : 32
+    } })
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+      const probe = this.getAttribute('data-line-probe')
+      const natural = this.parentElement?.style.getPropertyValue('--ppt-run-line-height') === '1.13'
+      if (probe === 'bottom' && natural) return large(this.parentElement) ? 136 : 27
+      if (probe === 'bottom') return large(this.parentElement) ? 58 : 32
+      if (probe === 'baseline') return large(this.parentElement) ? 58 : 24
+      return 0
+    } })
+    try {
+      const model = createBlankPresentationDocument('Short fixed spacing')
+      const element: PresentationTextElement = { id: 'fixed', type: 'text', text: 'Small\nLARGE\nSmall', x: 0, y: 0, width: 600, height: 620,
+        rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 32,
+        textRuns: [{ start: 6, end: 11, style: { fontSize: 120 } }] }
+      model.slides[0]!.elements = [element]
+      const host = document.createElement('div')
+      document.body.append(host)
+      const root = createRoot(host)
+      mountedRoots.add(root)
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      expect(host.querySelector<HTMLElement>('[data-testid="presentation-text-content"]')!.style.overflow).toBe('visible')
+      let cursor = 0
+      const baselines = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="presentation-text-paragraph"]')).map(paragraph => {
+        const content = paragraph.firstElementChild as HTMLElement
+        const before = Number.parseFloat(content.style.marginTop)
+        const after = Number.parseFloat(content.style.marginBottom)
+        const baseline = cursor + before + (large(content) ? 58 : 24)
+        cursor += Math.max(0, content.offsetHeight + before + after) + (Number.parseFloat(paragraph.style.marginBottom) || 0)
+        return baseline
+      })
+      expect(baselines[1]! - baselines[0]!).toBeCloseTo(32)
+      expect(baselines[2]! - baselines[1]!).toBeCloseTo(32)
+      const normal = { ...model.slides[0]!, elements: [{ ...element, textRuns: undefined }] }
+      await act(async () => { root.render(<PresentationSlidePreview slide={normal} width={1280} selected={false} />) })
+      for (const paragraph of host.querySelectorAll<HTMLElement>('[data-testid="presentation-text-paragraph"]')) expect(paragraph.style.marginBottom).toBe('0px')
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'offsetTop', top)
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+    }
+  })
+
+  it.each(['eastAsianVertical', 'stacked'] as const)('renders %s markers and spaces with the same run styles in previews and Fabric', async (textDirection) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 24 }) }),
+    })
+    try {
+      const model = createBlankPresentationDocument('Vertical list')
+      const element: PresentationTextElement = { id: 'vertical', type: 'text', text: '背　景\n甲乙', x: 40, y: 40, width: 600, height: 600,
+        rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', textDirection,
+        paragraphs: [{ start: 0, end: 3, style: { listStyle: 'bullet', listBulletChar: '◆', listMarkerFontFamily: 'Georgia' } },
+          { start: 4, end: 6, style: { listStyle: 'number', listNumberFormat: 'romanUcPeriod' } }],
+        textRuns: [{ start: 2, end: 3, style: { color: '#FF0000', opacity: 0.5 } }] }
+      model.slides[0]!.elements = [element]
+      const host = document.createElement('div')
+      document.body.append(host)
+      const root = createRoot(host)
+      mountedRoots.add(root)
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      const content = host.querySelector('[data-testid="presentation-text-content"]')!
+      const spans = Array.from(content.children) as HTMLElement[]
+      const group = createPresentationVerticalTextFabricObject(fabric, element)
+      const glyphs = group.getObjects().filter((object): object is InstanceType<typeof fabric.Text> => object instanceof fabric.Text)
+      expect(content.textContent).toBe('◆ 背　景I. 甲乙')
+      expect(glyphs.map(glyph => glyph.text).join('')).toBe(content.textContent)
+      expect(spans[0]!.style.fontFamily).toContain('Georgia')
+      expect(glyphs[0]!.fontFamily).toContain('Georgia')
+      expect(spans[4]!.style.top).toBe('160px')
+      expect(glyphs[4]!.top - glyphs[2]!.top).toBe(80)
+      expect(renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />)).toContain('color-mix(in srgb, #FF0000 50%, transparent)')
+      expect(glyphs[4]!.fill).toBe('rgba(255,0,0,0.5)')
+      group.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it('uses measured line bounds for fixed spacing even when the first run is much smaller', async () => {
+    const top = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop')!
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() {
+      return this.querySelector('[data-line-probe]') ? 48 : 0
+    } })
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+      const probe = this.getAttribute('data-line-probe')
+      const natural = this.parentElement?.style.getPropertyValue('--ppt-run-line-height') === '1.13'
+      if (probe === 'top') return 0
+      if (probe === 'bottom') return natural ? 90.4 : 48
+      if (probe === 'baseline') return natural ? 70.33 : 42
+      return 0
+    } })
+    try {
+      const model = createBlankPresentationDocument('Fixed spacing')
+      model.slides[0]!.elements = [{ id: 'fixed', type: 'text', text: 'Small LARGE', x: 0, y: 0, width: 600, height: 96,
+        rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 48,
+        textRuns: [{ start: 6, end: 11, style: { fontSize: 80 } }] }]
+      const host = document.createElement('div')
+      document.body.append(host)
+      const root = createRoot(host)
+      mountedRoots.add(root)
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      const content = host.querySelector('[data-testid="presentation-text-paragraph"]')!.firstElementChild as HTMLElement
+      const baseline = 42 + Number.parseFloat(content.style.marginTop)
+      const contentHeight = 48 + Number.parseFloat(content.style.marginTop) + Number.parseFloat(content.style.marginBottom)
+      expect(baseline).toBeCloseTo(80 * 1.13 * 0.778)
+      expect(contentHeight).toBeCloseTo(80 * 1.13)
+      expect(contentHeight).toBeLessThan(96)
+      expect(content.style.getPropertyValue('--ppt-run-line-height')).toBe('0')
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'offsetTop', top)
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+    }
+  })
+
+  it('paints run alpha separately from the canvas object opacity', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const object = createPresentationTextFabricObject(fabric, {
+        id: 'alpha', type: 'text', text: 'Hidden Visible', x: 0, y: 0, width: 600, height: 100, rotation: 0,
+        fontSize: 40, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', opacity: 0.5,
+        textRuns: [{ start: 0, end: 7, style: { opacity: 0 } }],
+      })
+      expect(object.opacity).toBe(0.5)
+      expect(new fabric.Color(object.styles[0]![0]!.fill as string).getAlpha()).toBe(0)
+      expect(new fabric.Color(object.styles[0]![7]!.fill as string).getAlpha()).toBe(1)
+      object.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it.each([1.08, 2.5, 4])('keeps single-line preview and canvas content inside a short frame at %s line height', async (lineHeight) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const model = createBlankPresentationDocument('Line height')
+      const element = { id: 'line-height', type: 'text' as const, text: 'Heading', x: 40, y: 40, width: 600, height: 64,
+        rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400 as const, color: '#111111', align: 'left' as const,
+        lineHeight, wordWrap: true }
+      model.slides[0]!.elements = [element]
+      const host = document.createElement('div')
+      document.body.append(host)
+      const root = createRoot(host)
+      mountedRoots.add(root)
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      const paragraph = host.querySelector<HTMLElement>('[data-testid="presentation-text-paragraph"]')!
+      const content = paragraph.firstElementChild as HTMLElement
+      const text = Array.from(content.children).find(node => node.textContent === 'Heading') as HTMLElement
+      const previewHeight = Number(content.style.getPropertyValue('--ppt-run-line-height')) * Number.parseFloat(text.style.fontSize)
+        + Number.parseFloat(content.style.marginTop) + Number.parseFloat(content.style.marginBottom)
+      const object = createPresentationTextFabricObject(fabric, element)
+      expect(previewHeight).toBeCloseTo(object.height)
+      expect(previewHeight).toBeLessThan(element.height)
+      const baseline: number[] = []
+      object._renderChar = (...args) => { baseline.push(args[6] + object.height / 2) }
+      object._renderTextCommon({ save() {}, restore() {}, direction: 'ltr' } as CanvasRenderingContext2D, 'fillText')
+      expect(baseline[0]).toBeGreaterThan(element.fontSize / 2)
+      expect(baseline[0]).toBeLessThan(element.height)
+      object.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it('shares proportional leading across differently sized wrapped lines while retaining the natural first line', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const object = createPresentationTextFabricObject(fabric, {
+        id: 'mixed', type: 'text', text: 'Large\nSmall', x: 0, y: 0, width: 600, height: 300, rotation: 0,
+        fontSize: 60, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineHeight: 2.5,
+        textRuns: [{ start: 6, end: 11, style: { fontSize: 40 } }], paragraphs: [{ start: 0, end: 11, style: {} }],
+      })
+      const baseline = new Map<number, number>()
+      object._renderChar = (...args) => { baseline.set(args[2], args[6] + object.height / 2) }
+      object._renderTextCommon({ save() {}, restore() {}, direction: 'ltr' } as CanvasRenderingContext2D, 'fillText')
+      expect(baseline.get(0)).toBeCloseTo(60 * 1.13 * 0.778)
+      const sharedLeading = (60 + 40) * 1.13 * (2.5 - 1) / 2
+      expect(baseline.get(1)! - baseline.get(0)!).toBeCloseTo(60 * 1.13 * 0.222 + sharedLeading + 40 * 1.13 * 0.778)
+      object.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it.each([true, false])('lays out paragraph-specific alignment and baseline spacing with wrapping=%s', (wordWrap) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const object = createPresentationTextFabricObject(fabric, {
+        id: 'paragraphs', type: 'text', text: 'First\nSecond\nThird', x: 40, y: 40, width: 600, height: 400,
+        rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', wordWrap,
+        paragraphs: [{ start: 0, end: 5, style: { align: 'left', lineSpacing: 32, spaceAfter: 8 } },
+          { start: 6, end: 18, style: { align: 'right', lineSpacing: 64, spaceBefore: 4 } }],
+      })
+      const locations = new Map<number, { x: number; y: number }>()
+      object._renderChar = (...args) => { locations.set(args[2], { x: args[5], y: args[6] }) }
+      object._renderTextCommon({ save() {}, restore() {}, direction: 'ltr' } as CanvasRenderingContext2D, 'fillText')
+      expect(locations.size).toBe(3)
+      expect(locations.get(1)!.y - locations.get(0)!.y).toBeCloseTo(44)
+      expect(locations.get(2)!.y - locations.get(1)!.y).toBeCloseTo(64)
+      expect(object.width).toBe(600)
+      expect(object._getLineLeftOffset(0)).toBe(0)
+      expect(object._getLineLeftOffset(1)).toBeCloseTo(600 - object.getLineWidth(1))
+      expect(object._getLineLeftOffset(2)).toBeCloseTo(600 - object.getLineWidth(2))
+      object.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it('renders fixed baseline spacing across lines with different font sizes', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const object = createPresentationTextFabricObject(fabric, {
+        id: 'fixed-spacing', type: 'text', text: 'Large\nSmall\nLarger', x: 40, y: 40, width: 600, height: 400,
+        rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 100,
+        textRuns: [{ start: 6, end: 11, style: { fontSize: 20 } }, { start: 12, end: 18, style: { fontSize: 60 } }],
+      })
+      const baselines = new Map<number, number>()
+      object._renderChar = (...args) => { baselines.set(args[2], args[6]) }
+      object._renderTextCommon({ save() {}, restore() {}, direction: 'ltr' } as CanvasRenderingContext2D, 'fillText')
+      expect(baselines.size).toBe(3)
+      expect(baselines.get(1)! - baselines.get(0)!).toBeCloseTo(100)
+      expect(baselines.get(2)! - baselines.get(1)!).toBeCloseTo(100)
+      object.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it.each(['horizontal', 'vertical', 'vertical270'] as const)('persists side-handle resizing for %s text without scaling its font', (textDirection) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
+    })
+    try {
+      const element = { id: 'resized', type: 'text' as const, text: 'Resize this text', x: 80, y: 60, width: 200, height: 240,
+        rotation: 30, textDirection, flipHorizontal: true, fontSize: 24, fontFamily: 'Arial', fontWeight: 400 as const,
+        color: '#111111', align: 'left' as const, verticalAlign: 'middle' as const, wordWrap: true,
+        textInsets: { left: 8, right: 12, top: 10, bottom: 14 }, lineSpacing: 48,
+      }
+      const object = createPresentationTextFabricObject(fabric, element)
+      object.set('width', object.width + 100)
+      expect(object.scaleX).toBe(1)
+      const patch = getPresentationTextFabricFramePatch(object, element)!
+      expect(patch.width).toBe(textDirection === 'horizontal' ? 300 : 200)
+      expect(patch.height).toBe(textDirection === 'horizontal' ? 240 : 340)
+      expect(patch.fontSize).toBeUndefined()
+      const rebuilt = createPresentationTextFabricObject(fabric, { ...element, ...patch })
+      expect(rebuilt.width).toBeCloseTo(object.width)
+      expect(rebuilt.left).toBeCloseTo(object.left)
+      expect(rebuilt.top).toBeCloseTo(object.top)
+      expect(rebuilt.getHeightOfLine(0)).toBe(48)
+      object.dispose(); rebuilt.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
+  it('keeps inline styles on grapheme boundaries and applies rotated text frames in Fabric', () => {
+    const getContext = HTMLCanvasElement.prototype.getContext
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 24 }) }),
+    })
+    try {
+      const element = {
+        id: 'styled-text', type: 'text' as const, x: 80, y: 100, width: 200, height: 400, rotation: 30,
+        fontSize: 24, fontFamily: 'Aptos', fontWeight: 400 as const, color: '#111111', align: 'center' as const,
+        verticalAlign: 'middle' as const, textDirection: 'vertical270' as const, wordWrap: true,
+        flipHorizontal: true, text: 'A😀B\n2中文', textInsets: { left: 8, right: 12, top: 10, bottom: 14 },
+        textRuns: [
+          { start: 1, end: 3, style: { fontSize: 40, fontWeight: 700 as const, color: '#0088CC' } },
+          { start: 5, end: 6, style: { fontSize: 20, baseline: 'superscript' as const } },
+        ],
+      }
+      const object = createPresentationTextFabricObject(fabric, element)
+      expect(object.angle).toBe(120)
+      expect(object.flipX).toBe(true)
+      expect(object.width).toBe(376)
+      expect(object.styles[0]![1]).toMatchObject({ fontSize: 40, fontWeight: 700, fill: '#0088CC' })
+      expect(object.styles[0]![2]).toMatchObject({ fontSize: 24, fontWeight: 400 })
+      expect(object.styles[1]![0]).toMatchObject({ fontSize: 12, deltaY: -7 })
+      expect(Number.isFinite(object.left)).toBe(true)
+      expect(Number.isFinite(object.top)).toBe(true)
+      const originalFrame = getPresentationTextFabricFramePatch(object, element)!
+      expect(originalFrame.x).toBeCloseTo(element.x)
+      expect(originalFrame.y).toBeCloseTo(element.y)
+      expect(originalFrame.rotation).toBe(30)
+      object.set({ left: object.left + 15, top: object.top - 9 })
+      expect(getPresentationTextFabricFramePatch(object, element)!.x).toBeCloseTo(95)
+      expect(getPresentationTextFabricFramePatch(object, element)!.y).toBeCloseTo(91)
+      object.set({ scaleX: 2, scaleY: 3 })
+      expect(getPresentationTextFabricFramePatch(object, element)).toMatchObject({
+        width: 600, height: 800, fontSize: 72,
+        textInsets: { left: 24, right: 36, top: 20, bottom: 28 },
+      })
+      object.dispose()
+      const tracked = createPresentationTextFabricObject(fabric, {
+        ...element, text: 'AB', wordWrap: false, characterSpacing: 200,
+        textRuns: [{ start: 1, end: 2, style: { fontSize: 12, characterSpacing: -100 } }],
+      })
+      const untracked = createPresentationTextFabricObject(fabric, {
+        ...element, text: 'AB', wordWrap: false, characterSpacing: 0,
+        textRuns: [{ start: 1, end: 2, style: { fontSize: 12, characterSpacing: 0 } }],
+      })
+      expect(tracked.getLineWidth(0) - untracked.getLineWidth(0)).toBeCloseTo(3.6)
+      tracked.dispose()
+      untracked.dispose()
+    } finally {
+      Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: getContext })
+    }
+  })
+
+  it('keeps a thin preset path centered in its authored frame after rotation', async () => {
+    const object = await createPresentationFabricObject(fabric, {
+      id: 'thin-line', type: 'line', x: 120, y: 70, width: 300, height: 1, rotation: 90,
+      fill: 'transparent', borderColor: '#000000', borderWidth: 1,
+    }, () => undefined)
+    expect(object).toBeInstanceOf(fabric.Group)
+    const group = object as InstanceType<typeof fabric.Group>
+    const path = group.getObjects()[1]!
+    expect(group).toMatchObject({ width: 300, height: 1, angle: 90, left: 120, top: 70 })
+    expect(path.getCenterPoint().x).toBeCloseTo(119.5)
+    expect(path.getCenterPoint().y).toBeCloseTo(220)
+    group.dispose()
+  })
+
   it('keeps media Fabric groups and their background children aligned to model geometry', () => {
     const getContext = HTMLCanvasElement.prototype.getContext
     Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -805,7 +1343,7 @@ describe('presentation Insert runtime safeguards', () => {
     })
 
     const textBox = host.querySelector<HTMLElement>('[data-testid="presentation-text-preview"]')!
-    const content = textBox.firstElementChild as HTMLElement
+    const content = textBox.querySelector('[data-testid="presentation-text-content"]')!.firstElementChild as HTMLElement
     expect(textBox.style.left).toBe('520px')
     expect(textBox.style.width).toBe('240px')
     expect(textBox.style.fontSize).toBe('60px')
@@ -844,7 +1382,7 @@ describe('presentation Insert runtime safeguards', () => {
     })
 
     const textBox = host.querySelector<HTMLElement>('[data-testid="presentation-text-preview"]')!
-    const glyphs = Array.from(textBox.children) as HTMLElement[]
+    const glyphs = Array.from(textBox.querySelector('[data-testid="presentation-text-content"]')!.children) as HTMLElement[]
     expect(glyphs).toHaveLength(40)
     expect(glyphs[0]!.textContent).toBe('万')
     expect(glyphs[5]!.textContent).toBe('孤')

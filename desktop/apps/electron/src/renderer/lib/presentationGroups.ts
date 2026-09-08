@@ -10,6 +10,7 @@ import {
 import {
   isPresentationShapeElement,
   isPresentationTextElement,
+  supportsPresentationElementRotation,
 } from '@/lib/presentationInsert'
 
 export interface PresentationElementBounds {
@@ -63,8 +64,9 @@ export function resolvePresentationCanvasSelectionScope(element: PresentationEle
 }
 
 function isElementCenterInsideBounds(element: PresentationElement, bounds: PresentationElementBounds): boolean {
-  const centerX = element.x + (element.width / 2)
-  const centerY = element.y + (element.height / 2)
+  const angle = (supportsPresentationElementRotation(element) ? element.rotation : 0) * Math.PI / 180
+  const centerX = element.x + (Math.cos(angle) * element.width - Math.sin(angle) * element.height) / 2
+  const centerY = element.y + (Math.sin(angle) * element.width + Math.cos(angle) * element.height) / 2
   return centerX >= bounds.x && centerX <= bounds.x + bounds.width
     && centerY >= bounds.y && centerY <= bounds.y + bounds.height
 }
@@ -171,10 +173,17 @@ export function getPresentationAnimationOwner(elements: readonly PresentationEle
 
 export function getPresentationElementBounds(elements: readonly PresentationElement[]): PresentationElementBounds {
   if (elements.length === 0) return { x: 0, y: 0, width: 0, height: 0 }
-  const left = Math.min(...elements.map((element) => element.x))
-  const top = Math.min(...elements.map((element) => element.y))
-  const right = Math.max(...elements.map((element) => element.x + element.width))
-  const bottom = Math.max(...elements.map((element) => element.y + element.height))
+  const corners = elements.flatMap(element => {
+    const angle = (supportsPresentationElementRotation(element) ? element.rotation : 0) * Math.PI / 180
+    return [[0, 0], [element.width, 0], [0, element.height], [element.width, element.height]].map(([x, y]) => ({
+      x: element.x + Math.cos(angle) * x! - Math.sin(angle) * y!,
+      y: element.y + Math.sin(angle) * x! + Math.cos(angle) * y!,
+    }))
+  })
+  const left = Math.min(...corners.map(point => point.x))
+  const top = Math.min(...corners.map(point => point.y))
+  const right = Math.max(...corners.map(point => point.x))
+  const bottom = Math.max(...corners.map(point => point.y))
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 

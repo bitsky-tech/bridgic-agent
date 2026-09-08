@@ -1,3 +1,4 @@
+import { presentationChartBlankDisplay, presentationChartHoleSize } from '@/lib/presentationCharts'
 import JSZip from 'jszip'
 import { DOMParser as XmldomParser } from '@xmldom/xmldom'
 import {
@@ -14,9 +15,13 @@ import {
   type PresentationTableElement,
   type PresentationChartElement,
   type PresentationTextElement,
+  type PresentationTextRun,
+  type PresentationTextStyle,
+  type PresentationTextParagraph,
+  type PresentationParagraphStyle,
   type PresentationTransition,
 } from '@/atoms/presentation'
-import { getPresentationShapeDefinition, isSupportedPresentationShapeType } from '@/lib/presentationShapes'
+import { getPresentationShapeDefinition, isPresentationLineShape, isSupportedPresentationShapeType, PRESENTATION_CONNECTOR_NAMESPACE } from '@/lib/presentationShapes'
 import {
   presentationCharacterSpacingFromPoints,
   presentationFontSizeFromPoints,
@@ -80,8 +85,8 @@ async function relationshipTargets(archive: JSZip, sourcePath: string): Promise<
   }))
 }
 
-async function themeColorsFromArchive(archive: JSZip): Promise<Map<string, string>> {
-  const themePath = Object.keys(archive.files).find((path) => /^ppt\/theme\/theme\d+\.xml$/i.test(path))
+async function themeColorsFromArchive(archive: JSZip, relatedThemePath?: string): Promise<Map<string, string>> {
+  const themePath = relatedThemePath ?? Object.keys(archive.files).find((path) => /^ppt\/theme\/theme\d+\.xml$/i.test(path))
   const themeFile = themePath ? archive.file(themePath) : null
   if (!themeFile) return new Map(defaultThemeColors)
   const document = parseXml(await themeFile.async('text'))
@@ -97,6 +102,48 @@ async function themeColorsFromArchive(archive: JSZip): Promise<Map<string, strin
   return colors
 }
 
+async function themeFontsFromArchive(archive: JSZip, relatedThemePath?: string): Promise<Map<string, string>> {
+  const themePath = relatedThemePath ?? Object.keys(archive.files).find(path => /^ppt\/theme\/theme\d+\.xml$/i.test(path))
+  const file = themePath ? archive.file(themePath) : null
+  const fonts = new Map<string, string>()
+  if (!file) return fonts
+  const theme = parseXml(await file.async('text'))
+  for (const [kind, prefix] of [['majorFont', '+mj'], ['minorFont', '+mn']] as const) {
+    const family = firstByLocalName(theme, kind)
+    if (!family) continue
+    for (const [name, suffix] of [['latin', 'lt'], ['ea', 'ea'], ['cs', 'cs']] as const) {
+      const typeface = directChildrenByLocalName(family, name)[0]?.getAttribute('typeface')
+      if (typeface) fonts.set(`${prefix}-${suffix}`, typeface)
+    }
+    for (const font of directChildrenByLocalName(family, 'font')) {
+      const script = font.getAttribute('script')
+      const typeface = font.getAttribute('typeface')
+      if (script && typeface) fonts.set(`${prefix}:${script}`, typeface)
+    }
+  }
+  return fonts
+}
+
+function themeTextFont(reference: string | null | undefined, text: string, language: string | null, fonts: ReadonlyMap<string, string>): string {
+  if (!reference) return 'Aptos'
+  if (!/^\+m[jn]-(lt|ea|cs)$/.test(reference)) return reference
+  const explicit = fonts.get(reference)
+  if (explicit) return explicit
+  const prefix = reference.slice(0, 3)
+  let script = 'Hans'
+  if (/^ja/i.test(language ?? '') || /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)) script = 'Jpan'
+  else if (/^ko/i.test(language ?? '') || /\p{Script=Hangul}/u.test(text)) script = 'Hang'
+  else if (/^zh-(TW|HK|MO|Hant)/i.test(language ?? '')) script = 'Hant'
+  return (reference.endsWith('-ea') ? fonts.get(`${prefix}:${script}`) : undefined)
+    ?? fonts.get(`${prefix}-lt`) ?? 'Aptos'
+}
+
+interface TextImportContext {
+  fonts: ReadonlyMap<string, string>
+  defaultTextStyle: Element | null
+  masterTextStyles: Element | null
+}
+
 function numberAttribute(element: Element | null, name: string, fallback = 0): number {
   const raw = element?.getAttribute(name)
   if (raw === null || raw === undefined || raw === '') return fallback
@@ -110,19 +157,27 @@ interface ImportedColor {
 }
 
 interface CoordinateTransform {
-  scaleX: number
-  scaleY: number
-  translateX: number
-  translateY: number
-  rotation: number
+  a: number
+  b: number
+  c: number
+  d: number
+  e: number
+  f: number
 }
 
 const ROOT_COORDINATE_TRANSFORM: CoordinateTransform = {
-  scaleX: 1,
-  scaleY: 1,
-  translateX: 0,
-  translateY: 0,
-  rotation: 0,
+  a: 1, b: 0, c: 0, d: 1, e: 0, f: 0,
+}
+
+function composeTransform(parent: CoordinateTransform, child: CoordinateTransform): CoordinateTransform {
+  return {
+    a: parent.a * child.a + parent.c * child.b,
+    b: parent.b * child.a + parent.d * child.b,
+    c: parent.a * child.c + parent.c * child.d,
+    d: parent.b * child.c + parent.d * child.d,
+    e: parent.a * child.e + parent.c * child.f + parent.e,
+    f: parent.b * child.e + parent.d * child.f + parent.f,
+  }
 }
 
 const defaultThemeColors = new Map<string, string>([
@@ -179,6 +234,18 @@ function importedColorFrom(root: Element | null, fallback: string, themeColors: 
     color: colorFrom(colorRoot, fallback, themeColors),
     opacity: opacityFrom(colorNode),
   }
+}
+
+/** An explicit no-fill line overrides the theme; alpha belongs to the stroke, not the shape. */
+function shapeStrokeFrom(shape: Element, shapeProperties: Element, themeColors: ReadonlyMap<string, string>) {
+  const line = directChildrenByLocalName(shapeProperties, 'ln')[0]
+  const style = directChildrenByLocalName(shape, 'style')[0]
+  const noFill = line && directChildrenByLocalName(line, 'noFill').length > 0
+  const fill = noFill ? null : (line ? directChildrenByLocalName(line, 'solidFill')[0] : null)
+    ?? (style ? firstByLocalName(style, 'lnRef') : null)
+  const stroke = importedColorFrom(fill, 'transparent', themeColors)
+  if (noFill || stroke.opacity === 0 || stroke.color === 'transparent') return { color: 'transparent', opacity: 1, width: 0 }
+  return { ...stroke, width: line ? presentationFontSizeFromPoints(Math.max(0, numberAttribute(line, 'w') / 12_700)) : 0 }
 }
 
 function textAlignmentFrom(value: string | null | undefined): PresentationTextElement['align'] {
@@ -252,23 +319,49 @@ function shapeGeometry(
   const sourceY = numberAttribute(offset, 'y')
   const sourceWidth = numberAttribute(extent, 'cx', EMU_PER_INCH)
   const sourceHeight = numberAttribute(extent, 'cy', EMU_PER_INCH)
+  const angle = numberAttribute(transform, 'rot') / 60_000 * Math.PI / 180
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  const matrix = coordinateTransform
+  const axisX = { x: (matrix.a * cos + matrix.c * sin) * scaleX, y: (matrix.b * cos + matrix.d * sin) * scaleY }
+  const axisY = { x: (-matrix.a * sin + matrix.c * cos) * scaleX, y: (-matrix.b * sin + matrix.d * cos) * scaleY }
+  const width = Math.max(1, sourceWidth * Math.hypot(axisX.x, axisX.y))
+  const height = Math.max(1, sourceHeight * Math.hypot(axisY.x, axisY.y))
+  const rotation = Math.atan2(axisX.y, axisX.x)
+  const centerX = (matrix.a * (sourceX + sourceWidth / 2) + matrix.c * (sourceY + sourceHeight / 2) + matrix.e) * scaleX
+  const centerY = (matrix.b * (sourceX + sourceWidth / 2) + matrix.d * (sourceY + sourceHeight / 2) + matrix.f) * scaleY
+  const mirrored = axisX.x * axisY.y - axisX.y * axisY.x < 0
+  const rounded = (value: number) => Math.round(value * 1_000_000) / 1_000_000
+  // OOXML rotates around the frame center; the renderer stores a rotated top-left origin.
   return {
-    x: Math.round((sourceX * coordinateTransform.scaleX + coordinateTransform.translateX) * scaleX),
-    y: Math.round((sourceY * coordinateTransform.scaleY + coordinateTransform.translateY) * scaleY),
-    width: Math.max(8, Math.round(sourceWidth * coordinateTransform.scaleX * scaleX)),
-    height: Math.max(8, Math.round(sourceHeight * coordinateTransform.scaleY * scaleY)),
-    rotation: Math.round(numberAttribute(transform, 'rot') / 60_000 + coordinateTransform.rotation),
+    x: rounded(centerX - (Math.cos(rotation) * width - Math.sin(rotation) * height) / 2),
+    y: rounded(centerY - (Math.sin(rotation) * width + Math.cos(rotation) * height) / 2),
+    width: rounded(width),
+    height: rounded(height),
+    rotation: rounded(rotation * 180 / Math.PI),
     ...(transform?.getAttribute('flipH') === '1' ? { flipHorizontal: true } : {}),
-    ...(transform?.getAttribute('flipV') === '1' ? { flipVertical: true } : {}),
+    ...((transform?.getAttribute('flipV') === '1') !== mirrored ? { flipVertical: true } : {}),
   }
 }
 
+function storedConnectorType(shape: Element): PresentationShapeType | undefined {
+  const type = shape.getElementsByTagNameNS(PRESENTATION_CONNECTOR_NAMESPACE, 'connector')[0]?.getAttribute('type')
+  return type && isSupportedPresentationShapeType(type) && isPresentationLineShape(type) ? type : undefined
+}
+
 function shapeTypeFrom(shape: Element): PresentationShapeType {
+  const stored = storedConnectorType(shape)
+  if (stored) return stored
   const preset = firstByLocalName(shape, 'prstGeom')?.getAttribute('prst')
-  if (shape.localName === 'cxnSp') {
-    if (preset?.startsWith('bentConnector')) return 'elbowConnector'
-    if (preset?.startsWith('curvedConnector')) return 'curvedConnector'
-    return 'line'
+  if (shape.localName === 'cxnSp' || preset === 'line' || preset?.includes('Connector')) {
+    const begin = firstByLocalName(shape, 'headEnd')?.getAttribute('type')
+    const end = firstByLocalName(shape, 'tailEnd')?.getAttribute('type')
+    const hasBegin = Boolean(begin && begin !== 'none')
+    const hasEnd = Boolean(end && end !== 'none')
+    if (preset?.startsWith('bentConnector')) return hasBegin || hasEnd ? 'elbowArrow' : 'elbowConnector'
+    if (preset?.startsWith('curvedConnector')) return hasBegin || hasEnd ? 'curvedArrow' : 'curvedConnector'
+    if (hasBegin && hasEnd) return 'lineDoubleArrow'
+    return hasBegin || hasEnd ? 'lineArrow' : 'line'
   }
   return preset && isSupportedPresentationShapeType(preset) ? preset : 'rect'
 }
@@ -280,27 +373,115 @@ function textFrom(
   slideSizeEmu: { width: number; height: number },
   themeColors: ReadonlyMap<string, string>,
   fallbackShape?: Element,
+  coordinateTransform = ROOT_COORDINATE_TRANSFORM,
+  context: TextImportContext = { fonts: new Map(), defaultTextStyle: null, masterTextStyles: null },
 ): PresentationTextElement | null {
   const textBody = directChildrenByLocalName(shape, 'txBody')[0] ?? firstByLocalName(shape, 'txBody')
   if (!textBody) return null
-  const paragraphs = elementsByLocalName(textBody, 'p').map((paragraph) => (
-    elementsByLocalName(paragraph, 't').map((text) => text.textContent ?? '').join('')
-  ))
-  const text = paragraphs.join('\n')
+  const paragraphNodes = directChildrenByLocalName(textBody, 'p')
+  const chunks = paragraphNodes.flatMap((paragraph, index) => [
+    ...(index ? [{ text: '\n', node: paragraph, paragraph }] : []),
+    ...Array.from(paragraph.childNodes).filter((node): node is Element => node.nodeType === 1)
+      .flatMap(node => {
+        if (node.localName === 'br') return [{ text: '\n', node, paragraph }]
+        if (node.localName !== 'r' && node.localName !== 'fld') return []
+        return [{ text: firstByLocalName(node, 't')?.textContent ?? '', node, paragraph }]
+      }),
+  ])
+  const paragraphs = chunks.map(chunk => chunk.text)
+  const text = paragraphs.join('')
   if (!text) return null
   const fallbackTextBody = fallbackShape
     ? directChildrenByLocalName(fallbackShape, 'txBody')[0] ?? firstByLocalName(fallbackShape, 'txBody')
     : null
-  const runProperties = firstByLocalName(textBody, 'rPr')
-    ?? firstByLocalName(textBody, 'defRPr')
-    ?? firstByLocalName(textBody, 'endParaRPr')
-    ?? (fallbackTextBody ? firstByLocalName(fallbackTextBody, 'rPr') ?? firstByLocalName(fallbackTextBody, 'defRPr') ?? firstByLocalName(fallbackTextBody, 'endParaRPr') : null)
-  const paragraphProperties = firstByLocalName(textBody, 'pPr') ?? (fallbackTextBody ? firstByLocalName(fallbackTextBody, 'pPr') : null)
+  const placeholderType = firstByLocalName(shape, 'ph')?.getAttribute('type')
+  let masterStyleName = 'otherStyle'
+  if (placeholderType === 'title' || placeholderType === 'ctrTitle') masterStyleName = 'titleStyle'
+  else if (firstByLocalName(shape, 'ph')) masterStyleName = 'bodyStyle'
+  const masterStyle = context.masterTextStyles ? firstByLocalName(context.masterTextStyles, masterStyleName) : null
+  const levelProperties = (style: Element | null, level: number): Element | null => (
+    style ? directChildrenByLocalName(style, `lvl${level + 1}pPr`)[0] ?? directChildrenByLocalName(style, 'defPPr')[0] ?? null : null
+  )
+  const paragraphDefaults = (paragraph: Element): (Element | null)[] => {
+    const own = directChildrenByLocalName(paragraph, 'pPr')[0] ?? null
+    const level = Math.max(0, Math.min(8, Math.floor(numberAttribute(own, 'lvl'))))
+    const fallbackParagraph = fallbackTextBody ? directChildrenByLocalName(fallbackTextBody, 'p')[0] : null
+    return [
+      levelProperties(context.defaultTextStyle, level),
+      levelProperties(masterStyle, level),
+      levelProperties(fallbackTextBody ? directChildrenByLocalName(fallbackTextBody, 'lstStyle')[0] ?? null : null, level),
+      fallbackParagraph ? directChildrenByLocalName(fallbackParagraph, 'pPr')[0] ?? null : null,
+      levelProperties(directChildrenByLocalName(textBody, 'lstStyle')[0] ?? null, level),
+      own,
+    ]
+  }
+  const fontReference = firstByLocalName(firstByLocalName(shape, 'style') ?? shape, 'fontRef')
+    ?? (fallbackShape ? firstByLocalName(firstByLocalName(fallbackShape, 'style') ?? fallbackShape, 'fontRef') : null)
+  const fontCollection = fontReference?.getAttribute('idx')
+  const themeRunProperties = fontCollection === 'major' || fontCollection === 'minor'
+    ? parseXml(`<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:latin typeface="+m${fontCollection === 'major' ? 'j' : 'n'}-lt"/><a:ea typeface="+m${fontCollection === 'major' ? 'j' : 'n'}-ea"/><a:cs typeface="+m${fontCollection === 'major' ? 'j' : 'n'}-cs"/></a:rPr>`).documentElement
+    : null
+  const resolveRunProperties = (node: Element, paragraph: Element) => {
+    const merged = parseXml('<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>').documentElement
+    const defaults = [
+      fallbackTextBody ? firstByLocalName(fallbackTextBody, 'endParaRPr') : null,
+      fallbackTextBody ? firstByLocalName(fallbackTextBody, 'defRPr') : null,
+      fallbackTextBody ? firstByLocalName(fallbackTextBody, 'rPr') : null,
+      ...paragraphDefaults(paragraph).slice(0, 4).map(properties => properties ? directChildrenByLocalName(properties, 'defRPr')[0] ?? null : null),
+      themeRunProperties,
+      ...paragraphDefaults(paragraph).slice(4).map(properties => properties ? directChildrenByLocalName(properties, 'defRPr')[0] ?? null : null),
+      directChildrenByLocalName(node, node === paragraph ? 'endParaRPr' : 'rPr')[0],
+    ]
+    for (const properties of defaults) {
+      if (!properties) continue
+      for (const attribute of Array.from(properties.attributes)) merged.setAttribute(attribute.name, attribute.value)
+      const childNames = new Set<string>()
+      for (const child of Array.from(properties.childNodes)) {
+        if (child.nodeType !== 1) continue
+        const name = (child as Element).localName
+        if (childNames.has(name)) continue
+        childNames.add(name)
+        const old = directChildrenByLocalName(merged, (child as Element).localName)[0]
+        if (old) merged.removeChild(old)
+        merged.appendChild(child.cloneNode(true))
+      }
+    }
+    return merged
+  }
+  const firstChunk = chunks.find(chunk => chunk.text.trim()) ?? chunks[0]!
+  const runProperties = resolveRunProperties(firstChunk.node, firstChunk.paragraph)
+  const resolveParagraphProperties = (paragraph: Element) => {
+    const paragraphProperties = parseXml('<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>').documentElement
+    for (const properties of paragraphDefaults(paragraph)) {
+      if (!properties) continue
+      for (const attribute of Array.from(properties.attributes)) paragraphProperties.setAttribute(attribute.name, attribute.value)
+      for (const child of Array.from(properties.childNodes)) {
+        if (child.nodeType !== 1) continue
+        const name = (child as Element).localName
+        const choices = ['buNone', 'buChar', 'buAutoNum', 'buBlip']
+        for (const oldName of choices.includes(name) ? choices : [name]) {
+          const old = directChildrenByLocalName(paragraphProperties, oldName)[0]
+          if (old) paragraphProperties.removeChild(old)
+        }
+        paragraphProperties.appendChild(child.cloneNode(true))
+      }
+    }
+    return paragraphProperties
+  }
+  const paragraphProperties = resolveParagraphProperties(firstChunk.paragraph)
   const bodyProperties = directChildrenByLocalName(textBody, 'bodyPr')[0]
     ?? firstByLocalName(textBody, 'bodyPr')
     ?? (fallbackTextBody ? firstByLocalName(fallbackTextBody, 'bodyPr') : null)
   const fontSizePoints = Math.max(6, numberAttribute(runProperties, 'sz', 1_800) / 100)
-  const fontSize = presentationFontSizeFromPoints(fontSizePoints)
+  const pageScaleX = pageSize.width / slideSizeEmu.width
+  const pageScaleY = pageSize.height / slideSizeEmu.height
+  const scaleX = Math.hypot(coordinateTransform.a * pageScaleX, coordinateTransform.b * pageScaleY)
+  const scaleY = Math.hypot(coordinateTransform.c * pageScaleX, coordinateTransform.d * pageScaleY)
+  const autoFit = bodyProperties ? firstByLocalName(bodyProperties, 'normAutofit') : null
+  const autoFitScale = Math.max(0.01, Math.min(1, numberAttribute(autoFit, 'fontScale', 100_000) / 100_000))
+  const spacingReduction = Math.max(0, Math.min(1, numberAttribute(autoFit, 'lnSpcReduction') / 100_000))
+  const fontScale = scaleY * EMU_PER_INCH / 96 * autoFitScale
+  const fontSize = presentationFontSizeFromPoints(fontSizePoints) * fontScale
   const weight = runProperties?.getAttribute('b') === '1' ? 700 : 400
   const alignment = paragraphProperties?.getAttribute('algn')
   const latinTypeface = firstByLocalName(runProperties ?? textBody, 'latin')?.getAttribute('typeface')
@@ -308,16 +489,15 @@ function textFrom(
   const typeface = presentationTextUsesCjk(text)
     ? eastAsianTypeface || latinTypeface
     : latinTypeface || eastAsianTypeface
-  const lineSpacingPercent = numberAttribute(firstByLocalName(firstByLocalName(paragraphProperties ?? textBody, 'lnSpc') ?? textBody, 'spcPct'), 'val', 0)
+  const lineSpacingNode = firstByLocalName(paragraphProperties, 'lnSpc')
+  const lineSpacingPercent = lineSpacingNode ? numberAttribute(firstByLocalName(lineSpacingNode, 'spcPct'), 'val') : 0
+  const lineSpacingPoints = lineSpacingNode ? numberAttribute(firstByLocalName(lineSpacingNode, 'spcPts'), 'val') / 100 : 0
   const characterSpacing = presentationCharacterSpacingFromPoints(
     numberAttribute(runProperties, 'spc', 0) / 100,
     fontSizePoints,
   )
   const baselineValue = numberAttribute(runProperties, 'baseline', 0)
-  const fontReference = firstByLocalName(firstByLocalName(shape, 'style') ?? shape, 'fontRef')
   const importedColor = importedColorFrom(firstByLocalName(runProperties ?? textBody, 'solidFill') ?? fontReference, '#1D1D28', themeColors)
-  const scaleX = pageSize.width / slideSizeEmu.width
-  const scaleY = pageSize.height / slideSizeEmu.height
   const anchor = bodyProperties?.getAttribute('anchor')
   const textDirection = textDirectionFrom(bodyProperties?.getAttribute('vert'))
   let verticalAlign: PresentationTextElement['verticalAlign']
@@ -330,20 +510,92 @@ function textFrom(
   let baseline: PresentationTextElement['baseline'] | undefined
   if (baselineValue > 0) baseline = 'superscript'
   else if (baselineValue < 0) baseline = 'subscript'
+  const textStyleFrom = (properties: Element, content: string): PresentationTextStyle => {
+    const points = Math.max(6, numberAttribute(properties, 'sz', 1_800) / 100)
+    const latin = firstByLocalName(properties, 'latin')?.getAttribute('typeface')
+    const eastAsian = firstByLocalName(properties, 'ea')?.getAttribute('typeface')
+    const family = presentationTextUsesCjk(content) ? eastAsian || latin : latin || eastAsian
+    const shift = numberAttribute(properties, 'baseline')
+    const runColor = importedColorFrom(firstByLocalName(properties, 'solidFill') ?? fontReference, '#1D1D28', themeColors)
+    let runBaseline: PresentationTextElement['baseline'] = 'normal'
+    if (shift > 0) runBaseline = 'superscript'
+    else if (shift < 0) runBaseline = 'subscript'
+    return {
+      fontSize: presentationFontSizeFromPoints(points) * fontScale,
+      fontFamily: themeTextFont(family, content, properties.getAttribute('lang'), context.fonts),
+      fontWeight: properties.getAttribute('b') === '1' ? 700 : 400,
+      italic: properties.getAttribute('i') === '1',
+      underline: Boolean(properties.getAttribute('u') && properties.getAttribute('u') !== 'none'),
+      strikethrough: Boolean(properties.getAttribute('strike') && properties.getAttribute('strike') !== 'noStrike'),
+      color: runColor.color,
+      ...(runColor.opacity < 1 ? { opacity: runColor.opacity } : {}),
+      baseline: runBaseline,
+      characterSpacing: presentationCharacterSpacingFromPoints(numberAttribute(properties, 'spc') / 100, points),
+      ...(firstByLocalName(properties, 'highlight') ? { highlightColor: colorFrom(firstByLocalName(properties, 'highlight'), '#FFFF00', themeColors) } : {}),
+    }
+  }
+  let textOffset = 0
+  const textRuns: PresentationTextRun[] = chunks.map(chunk => {
+    const run: PresentationTextRun = {
+      start: textOffset, end: textOffset + chunk.text.length,
+      style: textStyleFrom(resolveRunProperties(chunk.node, chunk.paragraph), chunk.text),
+    }
+    textOffset = run.end
+    return run
+  }).filter(run => run.end > run.start)
+  let paragraphOffset = 0
+  const paragraphsWithStyles: PresentationTextParagraph[] = paragraphNodes.map(paragraph => {
+    const properties = resolveParagraphProperties(paragraph)
+    const spacing = firstByLocalName(properties, 'lnSpc')
+    const fixed = numberAttribute(spacing ? firstByLocalName(spacing, 'spcPts') : null, 'val') / 100
+    const proportional = numberAttribute(spacing ? firstByLocalName(spacing, 'spcPct') : null, 'val') / 100_000
+    const paragraphChunks = chunks.filter(chunk => chunk.paragraph === paragraph && chunk.node !== paragraph)
+    const sourceText = paragraphChunks.map(chunk => chunk.text).join('')
+    const first = paragraphChunks.find(chunk => chunk.text.trim())
+    const endStyle = !sourceText ? textStyleFrom(resolveRunProperties(paragraph, paragraph), '') : undefined
+    const paragraphSize = first ? presentationFontSizeFromPoints(numberAttribute(resolveRunProperties(first.node, paragraph), 'sz', 1800) / 100) * fontScale : endStyle?.fontSize ?? fontSize
+    const paragraphSpace = (name: string) => {
+      const space = firstByLocalName(properties, name)
+      if (!space) return 0
+      const points = firstByLocalName(space, 'spcPts')
+      return points ? presentationFontSizeFromPoints(numberAttribute(points, 'val') / 100) * scaleY * EMU_PER_INCH / 96
+        : numberAttribute(firstByLocalName(space, 'spcPct'), 'val') / 100_000 * paragraphSize
+    }
+    let paragraphListStyle: PresentationTextElement['listStyle'] = 'none'
+    const autoNumber = firstByLocalName(properties, 'buAutoNum')
+    if (autoNumber) paragraphListStyle = 'number'
+    else if (firstByLocalName(properties, 'buChar')) paragraphListStyle = 'bullet'
+    const style: PresentationParagraphStyle = {
+      align: textAlignmentFrom(properties.getAttribute('algn')),
+      lineSpacing: fixed > 0 ? presentationFontSizeFromPoints(fixed) * scaleY * EMU_PER_INCH / 96 : 0,
+      lineHeight: Math.max(0.1, (proportional || (spacingReduction ? 1 : 1.08)) - spacingReduction),
+      listStyle: paragraphListStyle,
+      ...(autoNumber?.getAttribute('type') ? { listNumberFormat: autoNumber.getAttribute('type')! } : {}),
+      ...(firstByLocalName(properties, 'buChar')?.getAttribute('char') ? { listBulletChar: firstByLocalName(properties, 'buChar')!.getAttribute('char')! } : {}),
+      ...(firstByLocalName(properties, 'buFont')?.getAttribute('typeface') ? { listMarkerFontFamily: firstByLocalName(properties, 'buFont')!.getAttribute('typeface')! } : {}),
+      ...(autoNumber?.hasAttribute('startAt') ? { listStartAt: Math.max(1, Math.min(32767, numberAttribute(autoNumber, 'startAt', 1))) } : {}),
+      indentLevel: Math.max(0, numberAttribute(properties, 'lvl')),
+      spaceBefore: paragraphSpace('spcBef'), spaceAfter: paragraphSpace('spcAft'),
+    }
+    const result = { start: paragraphOffset, end: paragraphOffset + sourceText.length, style, ...(endStyle ? { endStyle } : {}) }
+    paragraphOffset = result.end + 1
+    return result
+  })
   return {
     id: createPresentationId('text'),
     type: 'text',
     ...geometry,
     text,
+    ...(textRuns.length > 1 || textRuns.some(run => run.style.opacity !== undefined) ? { textRuns } : {}),
+    paragraphs: paragraphsWithStyles,
     fontSize,
-    fontFamily: typeface && !typeface.startsWith('+m') ? typeface : 'Aptos',
+    fontFamily: themeTextFont(typeface, text, runProperties.getAttribute('lang'), context.fonts),
     fontWeight: weight,
     italic: runProperties?.getAttribute('i') === '1',
     underline: Boolean(runProperties?.getAttribute('u') && runProperties?.getAttribute('u') !== 'none'),
     strikethrough: Boolean(runProperties?.getAttribute('strike') && runProperties?.getAttribute('strike') !== 'noStrike'),
     shadow: Boolean(firstByLocalName(runProperties ?? textBody, 'outerShdw')),
     color: importedColor.color,
-    ...(importedColor.opacity < 1 ? { opacity: importedColor.opacity } : {}),
     align: textAlignmentFrom(alignment),
     verticalAlign,
     ...(textDirection ? { textDirection } : {}),
@@ -354,7 +606,8 @@ function textFrom(
       right: numberAttribute(bodyProperties, 'rIns', DEFAULT_TEXT_HORIZONTAL_INSET_EMU) * scaleX,
       bottom: numberAttribute(bodyProperties, 'bIns', DEFAULT_TEXT_VERTICAL_INSET_EMU) * scaleY,
     },
-    ...(lineSpacingPercent > 0 ? { lineHeight: lineSpacingPercent / 100_000 } : {}),
+    ...(lineSpacingPercent > 0 || spacingReduction > 0 ? { lineHeight: Math.max(0.1, (lineSpacingPercent > 0 ? lineSpacingPercent / 100_000 : 1) - spacingReduction) } : {}),
+    ...(lineSpacingPoints > 0 ? { lineSpacing: presentationFontSizeFromPoints(lineSpacingPoints) * scaleY * EMU_PER_INCH / 96 } : {}),
     ...(characterSpacing ? { characterSpacing } : {}),
     ...(baseline ? { baseline } : {}),
     ...(listStyle !== 'none' ? { listStyle, indentLevel: Math.max(0, numberAttribute(paragraphProperties, 'lvl', 0)) } : {}),
@@ -474,11 +727,8 @@ function svgShapeFrom(
     ? svgGradientFrom(gradient, themeColors)
     : { defs: '', paint: noFill ? 'none' : importedFill.color }
   const fillOpacity = gradient || noFill ? 1 : importedFill.opacity
-  const line = directChildrenByLocalName(shapeProperties, 'ln')[0] ?? null
-  const lineFill = (line ? directChildrenByLocalName(line, 'solidFill')[0] ?? null : null)
-    ?? (style ? firstByLocalName(style, 'lnRef') : null)
-  const stroke = lineFill ? importedColorFrom(lineFill, 'transparent', themeColors) : { color: 'transparent', opacity: 1 }
-  const strokeWidth = line ? Math.max(0, numberAttribute(line, 'w') / 12_700) : 0
+  const stroke = shapeStrokeFrom(shape, shapeProperties, themeColors)
+  const strokeWidth = stroke.width
   const customGeometry = directChildrenByLocalName(shapeProperties, 'custGeom')[0] ?? null
   const width = Math.max(1, geometry.width)
   const height = Math.max(1, geometry.height)
@@ -503,15 +753,24 @@ function svgShapeFrom(
       body = `<ellipse cx="${width / 2}" cy="${height / 2}" rx="${width / 2}" ry="${height / 2}" fill="${xmlEscape(fill.paint)}" fill-opacity="${fillOpacity}" stroke="${xmlEscape(stroke.color)}" stroke-opacity="${stroke.opacity}" stroke-width="${strokeWidth}"/>`
     } else {
       const definition = getPresentationShapeDefinition(shapeType)
-      body = `<path d="${xmlEscape(definition.path)}" transform="scale(${width / 100} ${height / 100})" fill="${definition.strokeOnly ? 'none' : xmlEscape(fill.paint)}" fill-opacity="${fillOpacity}" fill-rule="evenodd" stroke="${xmlEscape(stroke.color)}" stroke-opacity="${stroke.opacity}" stroke-width="${strokeWidth}" vector-effect="non-scaling-stroke"/>`
+      body = `<path d="${xmlEscape(definition.drawingPath ?? definition.path)}" transform="scale(${width / 100} ${height / 100})" fill="${definition.strokeOnly ? 'none' : xmlEscape(fill.paint)}" fill-opacity="${fillOpacity}" fill-rule="evenodd" stroke="${xmlEscape(stroke.color)}" stroke-opacity="${stroke.opacity}" stroke-width="${strokeWidth}" vector-effect="non-scaling-stroke"/>`
     }
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs>${fill.defs}</defs>${body}</svg>`
+  // Include centered strokes and joins up to SVG's default miter limit of four.
+  const padding = strokeWidth * 2
+  const paddedWidth = width + padding * 2
+  const paddedHeight = height + padding * 2
+  const angle = geometry.rotation * Math.PI / 180
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${paddedWidth}" height="${paddedHeight}" viewBox="${-padding} ${-padding} ${paddedWidth} ${paddedHeight}"><defs>${fill.defs}</defs>${body}</svg>`
   const sourceId = firstByLocalName(shape, 'cNvPr')?.getAttribute('id') ?? createPresentationId('shape-svg')
   return {
     id: createPresentationId('image'),
     type: 'image',
     ...geometry,
+    x: geometry.x - padding * Math.cos(angle) + padding * Math.sin(angle),
+    y: geometry.y - padding * Math.sin(angle) - padding * Math.cos(angle),
+    width: paddedWidth,
+    height: paddedHeight,
     altText: firstByLocalName(shape, 'cNvPr')?.getAttribute('descr') ?? firstByLocalName(shape, 'cNvPr')?.getAttribute('name') ?? '',
     fit: 'contain',
     shadow: Boolean(firstByLocalName(shapeProperties, 'outerShdw')),
@@ -530,7 +789,32 @@ function visualShapeFrom(
 ): PresentationShapeElement | PresentationImageElement | null {
   const shapeProperties = directChildrenByLocalName(shape, 'spPr')[0] ?? firstByLocalName(shape, 'spPr')
   if (!shapeProperties) return null
-  if (directChildrenByLocalName(shapeProperties, 'custGeom').length > 0 || directChildrenByLocalName(shapeProperties, 'gradFill').length > 0) {
+  const type = shapeTypeFrom(shape)
+  let connectorPath: string | undefined
+  if (storedConnectorType(shape)) {
+    const path = firstByLocalName(shapeProperties, 'path')
+    if (path && numberAttribute(path, 'w') === 1000000 && numberAttribute(path, 'h') === 1000000) {
+      connectorPath = customPathData(path).replace(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi, value => String(Number(value) / 10000))
+    }
+  } else if (isPresentationLineShape(type) && type !== 'line') {
+    const bent = type === 'elbowConnector' || type === 'elbowArrow'
+    const curved = type === 'curvedConnector' || type === 'curvedArrow'
+    connectorPath = 'M 0 0 L 100 100'
+    if (bent) connectorPath = 'M 0 0 H 50 V 100 H 100'
+    if (curved) connectorPath = 'M 0 0 C 50 0 50 100 100 100'
+    const arrow = (name: string, atEnd: boolean) => {
+      const end = firstByLocalName(shape, name)?.getAttribute('type')
+      if (!end || end === 'none') return ''
+      const angle = (bent || curved ? 0 : Math.atan2(geometry.height, geometry.width)) + (atEnd ? 0 : Math.PI)
+      const length = Math.max(6, shapeStrokeFrom(shape, shapeProperties, themeColors).width * 3)
+      const tipX = atEnd ? geometry.width : 0
+      const tipY = atEnd ? geometry.height : 0
+      const point = (offset: number) => `${(tipX - Math.cos(angle + offset) * length) / geometry.width * 100} ${(tipY - Math.sin(angle + offset) * length) / geometry.height * 100}`
+      return ` M ${point(-Math.PI / 6)} L ${atEnd ? '100 100' : '0 0'} L ${point(Math.PI / 6)}`
+    }
+    connectorPath += arrow('headEnd', false) + arrow('tailEnd', true)
+  }
+  if ((directChildrenByLocalName(shapeProperties, 'custGeom').length > 0 && !connectorPath) || directChildrenByLocalName(shapeProperties, 'gradFill').length > 0) {
     return svgShapeFrom(shape, geometry, themeColors)
   }
   const style = directChildrenByLocalName(shape, 'style')[0] ?? firstByLocalName(shape, 'style')
@@ -538,21 +822,22 @@ function visualShapeFrom(
   const solidFill = directChildrenByLocalName(shapeProperties, 'solidFill')[0]
     ?? (style ? firstByLocalName(style, 'fillRef') : null)
   const importedFill = importedColorFrom(solidFill, 'transparent', themeColors)
-  const fill = noFill ? 'transparent' : importedFill.color
-  const line = directChildrenByLocalName(shapeProperties, 'ln')[0] ?? null
-  const lineFill = (line ? directChildrenByLocalName(line, 'solidFill')[0] ?? null : null)
-    ?? (style ? firstByLocalName(style, 'lnRef') : null)
-  const borderColor = lineFill ? colorFrom(lineFill, 'transparent', themeColors) : 'transparent'
-  const borderWidth = line ? Math.max(0, numberAttribute(line, 'w') / 12_700) : 0
+  const fill = noFill || importedFill.opacity === 0 ? 'transparent' : importedFill.color
+  const stroke = shapeStrokeFrom(shape, shapeProperties, themeColors)
+  if (fill !== 'transparent' && stroke.width > 0 && stroke.opacity !== importedFill.opacity) return svgShapeFrom(shape, geometry, themeColors)
+  const borderColor = stroke.color
+  const borderWidth = stroke.width
+  const opacity = fill === 'transparent' ? stroke.opacity : importedFill.opacity
   if (fill === 'transparent' && borderColor === 'transparent') return null
   return {
     id: createPresentationId('shape'),
-    type: shapeTypeFrom(shape),
+    type,
     ...geometry,
+    ...(connectorPath ? { connectorPath } : {}),
     fill,
     borderColor,
     borderWidth,
-    ...(importedFill.opacity < 1 ? { opacity: importedFill.opacity } : {}),
+    ...(opacity < 1 ? { opacity } : {}),
     shadow: Boolean(firstByLocalName(shapeProperties, 'outerShdw')),
   }
 }
@@ -652,7 +937,6 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
   if (!slideFile) throw new Error(`Missing ${slidePath}`)
   const document = parseXml(await slideFile.async('text'))
   const relationships = await relationshipTargets(archive, slidePath)
-  const themeColors = await themeColorsFromArchive(archive)
   const layoutPath = [...relationships.values()].find((target) => target.includes('/slideLayouts/'))
   const layoutFile = layoutPath ? archive.file(layoutPath) : null
   const layoutDocument = layoutFile ? parseXml(await layoutFile.async('text')) : null
@@ -661,6 +945,15 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
   const masterFile = masterPath ? archive.file(masterPath) : null
   const masterDocument = masterFile ? parseXml(await masterFile.async('text')) : null
   const masterRelationships = masterPath ? await relationshipTargets(archive, masterPath) : new Map<string, string>()
+  const themePath = [...masterRelationships.values()].find(target => target.includes('/theme/'))
+  const [themeColors, fonts, presentationXml] = await Promise.all([
+    themeColorsFromArchive(archive, themePath), themeFontsFromArchive(archive, themePath), archive.file('ppt/presentation.xml')!.async('text'),
+  ])
+  const textContext: TextImportContext = {
+    fonts,
+    defaultTextStyle: firstByLocalName(parseXml(presentationXml), 'defaultTextStyle'),
+    masterTextStyles: masterDocument ? firstByLocalName(masterDocument, 'txStyles') : null,
+  }
   let elements: PresentationElement[] = []
   const sourceShapeIds = new Map<string, string>()
 
@@ -710,6 +1003,16 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     }
   }
 
+  const imageCropFrom = (fill: Element | null) => {
+    const cropNode = fill ? firstByLocalName(fill, 'srcRect') : null
+    return cropNode ? {
+      left: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'l') / 100_000)),
+      top: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 't') / 100_000)),
+      right: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'r') / 100_000)),
+      bottom: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'b') / 100_000)),
+    } : undefined
+  }
+
   const importShape = async (
     shape: Element,
     coordinateTransform: CoordinateTransform,
@@ -723,18 +1026,20 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const blip = blipFill ? firstByLocalName(blipFill, 'blip') : null
     const imageSource = await imageSourceFromBlip(blip, relationshipMap)
     const opacity = opacityFrom(blip)
+    const crop = imageCropFrom(blipFill)
     const visual: PresentationShapeElement | PresentationImageElement | null = imageSource ? {
       id: createPresentationId('image'),
       type: 'image',
       ...geometry,
       altText: firstByLocalName(shape, 'cNvPr')?.getAttribute('descr') ?? '',
       fit: 'cover',
+      ...(crop ? { crop } : {}),
       ...(shapeTypeFrom(shape) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(shapeProperties && firstByLocalName(shapeProperties, 'outerShdw')),
       source: imageSource,
     } : visualShapeFrom(shape, geometry, themeColors)
-    const text = textFrom(shape, geometry, pageSize, slideSizeEmu, themeColors, fallbackShape)
+    const text = textFrom(shape, geometry, pageSize, slideSizeEmu, themeColors, fallbackShape, coordinateTransform, textContext)
     const groupId = parentGroupId ?? (visual && text ? createPresentationId('group') : undefined)
     if (visual) elements.push(withGroup(visual, groupId))
     if (text) elements.push(withGroup(text, groupId))
@@ -753,13 +1058,7 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const source = await imageSourceFromBlip(blip, relationshipMap)
     if (!source) return
     const geometry = shapeGeometry(picture, pageSize, slideSizeEmu, coordinateTransform)
-    const cropNode = firstByLocalName(picture, 'srcRect')
-    const crop = cropNode ? {
-      left: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'l') / 100_000)),
-      top: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 't') / 100_000)),
-      right: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'r') / 100_000)),
-      bottom: Math.max(0, Math.min(0.999, numberAttribute(cropNode, 'b') / 100_000)),
-    } : undefined
+    const crop = imageCropFrom(picture)
     const opacity = opacityFrom(blip)
     const importedImage: PresentationImageElement = withGroup({
       id: createPresentationId('image'),
@@ -781,13 +1080,18 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
   const cachedValues = (root: Element | null): string[] => {
     if (!root) return []
     const cache = firstByLocalName(root, 'strCache') ?? firstByLocalName(root, 'numCache') ?? root
-    return elementsByLocalName(cache, 'pt')
+    const points = elementsByLocalName(cache, 'pt')
       .map((point) => ({
         index: numberAttribute(point, 'idx'),
         value: firstByLocalName(point, 'v')?.textContent ?? '',
       }))
-      .sort((left, right) => left.index - right.index)
-      .map((point) => point.value)
+      .filter(point => Number.isInteger(point.index) && point.index >= 0)
+    const declaredCount = numberAttribute(firstByLocalName(cache, 'ptCount'), 'val')
+    const count = points.reduce((size, point) => Math.max(size, point.index + 1), Math.max(0, Math.floor(declaredCount)))
+    if (count > 1_048_576) throw new Error('PowerPoint chart cache exceeds the supported worksheet size')
+    const values = Array.from({ length: count }, () => '')
+    for (const point of points) values[point.index] = point.value
+    return values
   }
 
   const importGraphicFrame = async (
@@ -797,6 +1101,15 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     parentGroupId?: string,
   ) => {
     const geometry = shapeGeometry(frame, pageSize, slideSizeEmu, coordinateTransform)
+    // A mirrored group can decompose into a half-turn plus a vertical flip.
+    // Graphic frames preserve the equivalent flips without enabling rotation.
+    if (Math.abs(Math.abs(geometry.rotation) - 180) < 0.000001) {
+      geometry.x -= geometry.width
+      geometry.y -= geometry.height
+      geometry.rotation = 0
+      geometry.flipHorizontal = !geometry.flipHorizontal
+      geometry.flipVertical = !geometry.flipVertical
+    }
     const sourceId = firstByLocalName(frame, 'cNvPr')?.getAttribute('id')
     const table = firstByLocalName(frame, 'tbl')
     if (table) {
@@ -809,20 +1122,26 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       const firstCell = firstByLocalName(table, 'tc')
       const firstCellProperties = firstCell ? firstByLocalName(firstCell, 'tcPr') : null
       const firstRunProperties = firstCell ? firstByLocalName(firstCell, 'rPr') : null
+      const headerRow = /^(1|true)$/.test(firstByLocalName(table, 'tblPr')?.getAttribute('firstRow') ?? '')
       const secondRow = directChildrenByLocalName(table, 'tr')[1] ?? null
-      const bodyCellProperties = secondRow ? firstByLocalName(secondRow, 'tcPr') : null
+      const bodyCell = headerRow && secondRow ? firstByLocalName(secondRow, 'tc') : firstCell
+      const bodyCellProperties = bodyCell ? firstByLocalName(bodyCell, 'tcPr') : null
+      const bodyRunProperties = bodyCell ? firstByLocalName(bodyCell, 'rPr') : null
+      const cellFill = (properties: Element | null) => properties ? directChildrenByLocalName(properties, 'solidFill')[0] ?? null : null
       const line = firstCellProperties ? firstByLocalName(firstCellProperties, 'ln') : null
       const importedTable: PresentationTableElement = withGroup({
         id: createPresentationId('table'),
         type: 'table',
         ...geometry,
         cells: rows,
-        headerRow: rows.length > 1,
-        headerFill: colorFrom(firstByLocalName(firstCellProperties ?? table, 'solidFill'), '#F4F1FF', themeColors),
-        bodyFill: colorFrom(firstByLocalName(bodyCellProperties ?? table, 'solidFill'), '#FFFFFF', themeColors),
-        textColor: colorFrom(firstRunProperties, '#20202B', themeColors),
+        headerRow,
+        headerFill: colorFrom(cellFill(firstCellProperties), '#F4F1FF', themeColors),
+        ...(headerRow ? { headerTextColor: colorFrom(firstRunProperties, '#20202B', themeColors) } : {}),
+        bodyFill: colorFrom(cellFill(bodyCellProperties), '#FFFFFF', themeColors),
+        textColor: colorFrom(bodyRunProperties, '#20202B', themeColors),
         borderColor: colorFrom(firstByLocalName(line ?? table, 'solidFill'), '#D9D7E2', themeColors),
-        fontSize: presentationFontSizeFromPoints(Math.max(6, numberAttribute(firstRunProperties, 'sz', 1_400) / 100)),
+        fontSize: presentationFontSizeFromPoints(Math.max(6, numberAttribute(firstRunProperties, 'sz', 1_400) / 100))
+          * Math.hypot(coordinateTransform.c * pageSize.width / slideSizeEmu.width, coordinateTransform.d * pageSize.height / slideSizeEmu.height) * EMU_PER_INCH / 96,
       }, parentGroupId)
       elements.push(importedTable)
       if (sourceId) sourceShapeIds.set(sourceId, importedTable.id)
@@ -860,23 +1179,38 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     else if (firstByLocalName(chartRoot, 'barDir')?.getAttribute('val') === 'bar') chartType = 'bar'
     const seriesNodes = directChildrenByLocalName(chartRoot, 'ser')
     const series = seriesNodes.map((seriesNode, seriesIndex) => {
-      const values = cachedValues(firstByLocalName(seriesNode, 'val')).map((value) => Number(value))
+      const values = cachedValues(firstByLocalName(seriesNode, 'val')).map(value => value.trim() === '' ? null : Number(value))
       const name = firstByLocalName(firstByLocalName(seriesNode, 'tx') ?? seriesNode, 'v')?.textContent?.trim()
       return {
         name: name || `Series ${seriesIndex + 1}`,
-        values: values.map((value) => Number.isFinite(value) ? value : 0),
+        values: values.map(value => value === null || Number.isFinite(value) ? value : null),
       }
     })
     const categories = cachedValues(firstByLocalName(seriesNodes[0] ?? chartRoot, 'cat'))
-    const colors = seriesNodes.map((seriesNode, seriesIndex) => (
+    const seriesColors = seriesNodes.map((seriesNode, seriesIndex) => (
       colorFrom(firstByLocalName(firstByLocalName(seriesNode, 'spPr') ?? seriesNode, 'solidFill'), ['#4472C4', '#ED7D31', '#A5A5A5'][seriesIndex % 3]!, themeColors)
     ))
+    let colors = seriesColors
+    if (chartType === 'pie' || chartType === 'doughnut') {
+      const points = new Map(directChildrenByLocalName(seriesNodes[0] ?? chartRoot, 'dPt').map(point => [
+        numberAttribute(firstByLocalName(point, 'idx'), 'val'),
+        directChildrenByLocalName(point, 'spPr')[0] ?? null,
+      ]))
+      const varyColors = !/^(0|false)$/.test(firstByLocalName(chartRoot, 'varyColors')?.getAttribute('val') ?? '')
+      colors = Array.from({ length: Math.max(categories.length, series[0]?.values.length ?? 0) }, (_, index) => {
+        const fallback = (varyColors ? themeColors.get(`accent${index % 6 + 1}`) : seriesColors[0]) ?? '#4472C4'
+        return colorFrom(points.get(index) ?? null, fallback, themeColors)
+      })
+    }
     const chartAreaProperties = directChildrenByLocalName(chartDocument.documentElement, 'spPr')[0] ?? null
     const plotAreaProperties = plotArea ? directChildrenByLocalName(plotArea, 'spPr')[0] ?? null : null
     const categoryAxis = plotArea ? firstByLocalName(plotArea, 'catAx') : null
     const valueAxis = plotArea ? firstByLocalName(plotArea, 'valAx') : null
-    const dataLabels = directChildrenByLocalName(chartRoot, 'dLbls')[0] ?? null
-    const showValue = Boolean(dataLabels && firstByLocalName(dataLabels, 'showVal')?.getAttribute('val') !== '0')
+    // Pie-family charts have no axes; their shared text color lives in the legend/title.
+    const titleColor = colorFrom(firstByLocalName(chartDocument, 'title'), '#666571', themeColors)
+    const chartTextColor = colorFrom(chartChild(firstByLocalName(chartDocument, 'legend'), 'txPr'), titleColor, themeColors)
+    const dataLabels = directChildrenByLocalName(chartRoot, 'dLbls')[0] ?? firstByLocalName(chartRoot, 'dLbls')
+    const showValue = Boolean(dataLabels && elementsByLocalName(dataLabels, 'showVal').some(node => /^(1|true)$/.test(node.getAttribute('val') ?? '')))
     const importedChart: PresentationChartElement = withGroup({
       id: createPresentationId('chart'),
       type: 'chart',
@@ -886,12 +1220,14 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       series,
       showLegend: Boolean(firstByLocalName(chartDocument, 'legend')),
       showValue,
+      displayBlanksAs: presentationChartBlankDisplay(firstByLocalName(chartDocument, 'dispBlanksAs')?.getAttribute('val') ?? undefined),
+      ...(chartType === 'doughnut' ? { holeSize: presentationChartHoleSize(numberAttribute(firstByLocalName(chartRoot, 'holeSize'), 'val', 50)) } : {}),
       title: elementsByLocalName(firstByLocalName(chartDocument, 'title') ?? chartDocument, 't').map((node) => node.textContent ?? '').join('').trim() || undefined,
       colors,
       chartAreaFill: chartFill(chartAreaProperties, '#FFFFFF'),
       plotAreaFill: chartFill(plotAreaProperties, 'transparent'),
-      categoryAxisLabelColor: colorFrom(chartChild(categoryAxis, 'txPr'), '#666571', themeColors),
-      valueAxisLabelColor: colorFrom(chartChild(valueAxis, 'txPr'), '#666571', themeColors),
+      categoryAxisLabelColor: colorFrom(chartChild(categoryAxis, 'txPr'), chartTextColor, themeColors),
+      valueAxisLabelColor: colorFrom(chartChild(valueAxis, 'txPr'), chartTextColor, themeColors),
       gridLineColor: colorFrom(chartChild(chartChild(valueAxis, 'majorGridlines'), 'solidFill'), '#E9EAF0', themeColors),
       dataLabelColor: colorFrom(chartChild(dataLabels, 'txPr'), '#20202B', themeColors),
     }, parentGroupId)
@@ -909,13 +1245,22 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const childExtent = directChildrenByLocalName(transform, 'chExt')[0] ?? firstByLocalName(transform, 'chExt')
     const childScaleX = numberAttribute(extent, 'cx', 1) / Math.max(1, numberAttribute(childExtent, 'cx', 1))
     const childScaleY = numberAttribute(extent, 'cy', 1) / Math.max(1, numberAttribute(childExtent, 'cy', 1))
-    return {
-      scaleX: parent.scaleX * childScaleX,
-      scaleY: parent.scaleY * childScaleY,
-      translateX: parent.translateX + parent.scaleX * (numberAttribute(offset, 'x') - numberAttribute(childOffset, 'x') * childScaleX),
-      translateY: parent.translateY + parent.scaleY * (numberAttribute(offset, 'y') - numberAttribute(childOffset, 'y') * childScaleY),
-      rotation: parent.rotation + numberAttribute(transform, 'rot') / 60_000,
-    }
+    const angle = numberAttribute(transform, 'rot') / 60_000 * Math.PI / 180
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
+    const flipX = transform.getAttribute('flipH') === '1' ? -1 : 1
+    const flipY = transform.getAttribute('flipV') === '1' ? -1 : 1
+    const a = cos * childScaleX * flipX
+    const b = sin * childScaleX * flipX
+    const c = -sin * childScaleY * flipY
+    const d = cos * childScaleY * flipY
+    const childCenterX = numberAttribute(childOffset, 'x') + numberAttribute(childExtent, 'cx') / 2
+    const childCenterY = numberAttribute(childOffset, 'y') + numberAttribute(childExtent, 'cy') / 2
+    return composeTransform(parent, {
+      a, b, c, d,
+      e: numberAttribute(offset, 'x') + numberAttribute(extent, 'cx') / 2 - a * childCenterX - c * childCenterY,
+      f: numberAttribute(offset, 'y') + numberAttribute(extent, 'cy') / 2 - b * childCenterX - d * childCenterY,
+    })
   }
 
   const importTree = async (
@@ -946,14 +1291,14 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     }
   }
 
-  const showMasterShapes = firstByLocalName(document, 'cSld')?.getAttribute('showMasterSp') !== '0'
-    && firstByLocalName(layoutDocument ?? document, 'cSld')?.getAttribute('showMasterSp') !== '0'
+  const showInheritedShapes = !['0', 'false'].includes(document.documentElement.getAttribute('showMasterSp') ?? '')
+  const showMasterShapes = showInheritedShapes && !['0', 'false'].includes(layoutDocument?.documentElement.getAttribute('showMasterSp') ?? '')
   const masterShapeTree = masterDocument ? firstByLocalName(masterDocument, 'spTree') : null
   if (showMasterShapes && masterShapeTree) {
     await importTree(masterShapeTree, ROOT_COORDINATE_TRANSFORM, masterRelationships, undefined, true)
   }
   const layoutShapeTree = layoutDocument ? firstByLocalName(layoutDocument, 'spTree') : null
-  if (layoutShapeTree) await importTree(layoutShapeTree, ROOT_COORDINATE_TRANSFORM, layoutRelationships, undefined, true)
+  if (showInheritedShapes && layoutShapeTree) await importTree(layoutShapeTree, ROOT_COORDINATE_TRANSFORM, layoutRelationships, undefined, true)
   sourceShapeIds.clear()
   const shapeTree = firstByLocalName(document, 'spTree')
   if (shapeTree) await importTree(shapeTree, ROOT_COORDINATE_TRANSFORM, relationships)

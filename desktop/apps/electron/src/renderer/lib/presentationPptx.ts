@@ -1,5 +1,9 @@
+import { presentationChartBlankDisplay, presentationChartHoleSize } from '@/lib/presentationCharts'
+import { correctPresentationChartData, correctPresentationGraphicFlips } from '@/lib/presentationChartPptx'
 import PptxGenJS from 'pptxgenjs'
 import JSZip from 'jszip'
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
+import { correctPresentationTextXml } from '@/lib/presentationTextPptx'
 import {
   getPresentationPageSize,
   type PresentationChartType,
@@ -29,7 +33,7 @@ import {
   normalizePresentationFileSource,
   type PresentationFileKind,
 } from '@/lib/presentationInsert'
-import { getPresentationLineEnds, isPresentationLineShape } from '@/lib/presentationShapes'
+import { getPresentationLineEnds, getPresentationShapePath, isPresentationLineShape, presentationConnectorCommands, PRESENTATION_CONNECTOR_NAMESPACE } from '@/lib/presentationShapes'
 import {
   presentationCharacterSpacingToPoints,
   presentationFontSizeToPoints,
@@ -40,6 +44,77 @@ import {
 } from '@/lib/presentationTransitions'
 
 const SLIDE_HEIGHT_INCHES = 7.5
+
+function correctConnectorGeometryXml(xml: string, elements: readonly PresentationElement[]): string {
+  const connectors = new Map(elements.filter(isPresentationShapeElement)
+    .filter(element => isPresentationLineShape(element.type) && (element.type !== 'line' || element.connectorPath))
+    .map(element => [element.id, element]))
+  if (connectors.size === 0) return xml
+  const document = new DOMParser().parseFromString(xml, 'text/xml')
+  const drawingNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+  for (const name of Array.from(document.getElementsByTagNameNS('http://schemas.openxmlformats.org/presentationml/2006/main', 'cNvPr'))) {
+    const element = connectors.get(name.getAttribute('name') ?? '')
+    if (!element) continue
+    const shape = name.parentNode?.parentNode as typeof name | null | undefined
+    if (!shape || shape.nodeType !== 1) continue
+    const properties = shape.getElementsByTagNameNS(drawingNs, 'prstGeom')[0]?.parentNode
+    if (!properties) continue
+    const geometry = document.createElementNS(drawingNs, 'a:custGeom')
+    for (const tag of ['avLst', 'gdLst', 'ahLst', 'cxnLst']) geometry.appendChild(document.createElementNS(drawingNs, `a:${tag}`))
+    const paths = document.createElementNS(drawingNs, 'a:pathLst')
+    const path = document.createElementNS(drawingNs, 'a:path')
+    path.setAttribute('w', '1000000')
+    path.setAttribute('h', '1000000')
+    path.setAttribute('fill', 'none')
+    let x = 0
+    let y = 0
+    for (const { command, values } of presentationConnectorCommands(getPresentationShapePath(element)) ?? []) {
+      let points = values
+      if (command === 'H') points = [values[0]!, y]
+      if (command === 'V') points = [x, values[0]!]
+      const tag = ({ M: 'moveTo', C: 'cubicBezTo', Q: 'quadBezTo', Z: 'close' } as Record<string, string>)[command] ?? 'lnTo'
+      const node = document.createElementNS(drawingNs, `a:${tag}`)
+      for (let index = 0; index < points.length; index += 2) {
+        x = points[index]!
+        y = points[index + 1]!
+        const point = document.createElementNS(drawingNs, 'a:pt')
+        point.setAttribute('x', String(Math.round(x * 10000)))
+        point.setAttribute('y', String(Math.round(y * 10000)))
+        node.appendChild(point)
+      }
+      path.appendChild(node)
+    }
+    paths.appendChild(path)
+    geometry.appendChild(paths)
+    const preset = shape.getElementsByTagNameNS(drawingNs, 'prstGeom')[0]!
+    properties.replaceChild(geometry, preset)
+    // Arrowheads are already part of the authored path; native heads would draw them twice.
+    for (const tag of ['headEnd', 'tailEnd']) for (const end of Array.from(shape.getElementsByTagNameNS(drawingNs, tag))) end.parentNode?.removeChild(end)
+    const extensions = name.getElementsByTagNameNS(drawingNs, 'extLst')[0] ?? name.appendChild(document.createElementNS(drawingNs, 'a:extLst'))
+    const extension = document.createElementNS(drawingNs, 'a:ext')
+    extension.setAttribute('uri', PRESENTATION_CONNECTOR_NAMESPACE)
+    const marker = document.createElementNS(PRESENTATION_CONNECTOR_NAMESPACE, 'bridgic:connector')
+    marker.setAttribute('type', element.type)
+    extension.appendChild(marker)
+    extensions.appendChild(extension)
+  }
+  return new XMLSerializer().serializeToString(document)
+}
+
+function correctTableHeaderXml(xml: string, elements: readonly PresentationElement[]): string {
+  const tables = new Map(elements.filter(isPresentationTableElement).map(element => [element.id, element]))
+  if (tables.size === 0) return xml
+  const document = new DOMParser().parseFromString(xml, 'text/xml')
+  const presentationNs = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+  const drawingNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+  for (const frame of Array.from(document.getElementsByTagNameNS(presentationNs, 'graphicFrame'))) {
+    const element = tables.get(frame.getElementsByTagNameNS(presentationNs, 'cNvPr')[0]?.getAttribute('name') ?? '')
+    const properties = frame.getElementsByTagNameNS(drawingNs, 'tblPr')[0]
+    // PptxGenJS writes cell formatting but omits the semantic first-row flag.
+    if (element && properties) properties.setAttribute('firstRow', element.headerRow ? '1' : '0')
+  }
+  return new XMLSerializer().serializeToString(document)
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -709,11 +784,14 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     await correctChartAxisReferences(archive)
     await correctChartRelationshipTargets(archive)
     await Promise.all(transitions.map(async (transition, index) => {
-      if (transition.effect === 'none' && !slidesWithAudio[index] && !slidesWithAnimations[index]) return
       const slidePath = `ppt/slides/slide${index + 1}.xml`
       const slideFile = archive.file(slidePath)
       if (!slideFile) throw new Error(`PPTX exporter did not create ${slidePath}`)
-      let xml = await slideFile.async('text')
+      let xml = correctPresentationTextXml(await slideFile.async('text'), document.slides[index]?.elements ?? [])
+      xml = correctTableHeaderXml(xml, document.slides[index]?.elements ?? [])
+      xml = correctConnectorGeometryXml(xml, document.slides[index]?.elements ?? [])
+      await correctPresentationChartData(archive, xml, index + 1, document.slides[index]?.elements ?? [])
+      xml = correctPresentationGraphicFlips(xml, document.slides[index]?.elements ?? [])
       if (slidesWithAudio[index]) xml = await correctAudioFileTags(archive, xml, index + 1)
       if (transition.effect !== 'none') {
         xml = insertTransitionXml(ensureTransitionNamespaces(xml), transitionXml(transition))
@@ -757,6 +835,10 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     for (const candidate of sourceElements as unknown[]) {
       if (!hasValidGeometry(candidate)) continue
       const element = candidate
+      const angle = element.rotation * Math.PI / 180
+      // Convert the renderer's rotated top-left origin back to OOXML's unrotated frame.
+      const frameX = element.x + (Math.cos(angle) * element.width - Math.sin(angle) * element.height - element.width) / 2
+      const frameY = element.y + (Math.sin(angle) * element.width + Math.cos(angle) * element.height - element.height) / 2
 
       if (isPresentationTextElement(element)) {
         if (!element.text.trim()) continue
@@ -770,9 +852,10 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
             ? Math.max(0, Math.round(element.indentLevel))
             : 0
         }
-        slide.addText(typeof element.text === 'string' ? element.text : '', {
-          x: x(element.x),
-          y: y(element.y),
+        // Generate the frame and relationships here; the final pass writes model-owned DrawingML paragraphs.
+        slide.addText(element.text, {
+          x: x(frameX),
+          y: y(frameY),
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
@@ -787,7 +870,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           align: ['left', 'center', 'right', 'justify'].includes(element.align) ? element.align : 'left',
           bold: typeof element.fontWeight === 'number' && element.fontWeight >= 600,
           italic: Boolean(element.italic),
-          underline: element.underline || hasHyperlink ? { style: 'sng' } : undefined,
+          underline: (element.underline || hasHyperlink) ? { style: 'sng' } : undefined,
           strike: Boolean(element.strikethrough),
           superscript: element.baseline === 'superscript',
           subscript: element.baseline === 'subscript',
@@ -797,9 +880,10 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           charSpacing: typeof element.characterSpacing === 'number' && Number.isFinite(element.characterSpacing)
             ? presentationCharacterSpacingToPoints(element.characterSpacing, presentationFontSizeToPoints(element.fontSize))
             : undefined,
-          lineSpacingMultiple: typeof element.lineHeight === 'number' && Number.isFinite(element.lineHeight) && element.lineHeight > 0
+          lineSpacingMultiple: !element.lineSpacing && typeof element.lineHeight === 'number' && Number.isFinite(element.lineHeight) && element.lineHeight > 0
             ? element.lineHeight
             : undefined,
+          lineSpacing: element.lineSpacing ? presentationFontSizeToPoints(element.lineSpacing) : undefined,
           bullet,
           indentLevel,
           color: hasHyperlink ? '2563EB' : presentationColor(element.color, '20202B'),
@@ -830,8 +914,8 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
         const naturalHeight = crop ? height / visibleHeight : width / aspectRatio
         slide.addImage({
           data: source.dataUrl,
-          x: x(element.x),
-          y: y(element.y),
+          x: x(frameX),
+          y: y(frameY),
           w: naturalWidth,
           h: naturalHeight,
           sizing: crop ? {
@@ -892,7 +976,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
             text: typeof row[columnIndex] === 'string' ? row[columnIndex] : '',
             options: {
               fill: { color: element.headerRow && rowIndex === 0 ? headerFill : bodyFill },
-              color: element.headerRow && rowIndex === 0 ? 'FFFFFF' : textColor,
+              color: element.headerRow && rowIndex === 0 ? presentationColor(element.headerTextColor, 'FFFFFF') : textColor,
               bold: element.headerRow && rowIndex === 0,
               border: { color: borderColor, pt: 1 },
               fontFace: 'Aptos',
@@ -959,16 +1043,20 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
           w: x(element.width),
           h: y(element.height),
           barDir: chart.barDir,
+          displayBlanksAs: presentationChartBlankDisplay(element.displayBlanksAs),
+          ...(element.chartType === 'doughnut' ? { holeSize: presentationChartHoleSize(element.holeSize) } : {}),
           chartColors,
           chartArea: { fill: chartFill(element.chartAreaFill, 'FFFFFF') },
-          plotArea: { fill: chartFill(element.plotAreaFill, 'FFFFFF') },
+          plotArea: { fill: chartFill(element.plotAreaFill ?? 'transparent', 'FFFFFF') },
           catAxisLabelColor: presentationColor(element.categoryAxisLabelColor, '666571'),
           valAxisLabelColor: presentationColor(element.valueAxisLabelColor, '666571'),
           valGridLine: { color: presentationColor(element.gridLineColor, 'E9EAF0'), size: 1 },
           showLegend: Boolean(element.showLegend),
           legendPos: 'b',
+          legendColor: presentationColor(element.categoryAxisLabelColor, '666571'),
           showTitle: Boolean(title),
           title: title || undefined,
+          titleColor: presentationColor(element.categoryAxisLabelColor, '20202B'),
           showValue: Boolean(element.showValue),
           dataLabelColor: presentationColor(element.dataLabelColor, '20202B'),
           showPercent: false,
@@ -985,11 +1073,12 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       if (!shapeType) continue
       const lineShape = isPresentationLineShape(element.type)
       const borderWidth = Number.isFinite(element.borderWidth) ? element.borderWidth : 0
+      const opacity = typeof element.opacity === 'number' ? Math.max(0, Math.min(1, element.opacity)) : 1
       slide.addShape(
         shapeType,
         {
-          x: x(element.x),
-          y: y(element.y),
+          x: x(frameX),
+          y: y(frameY),
           w: x(element.width),
           h: y(element.height),
           rotate: element.rotation,
@@ -1000,12 +1089,12 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
             ? { color: 'FFFFFF', transparency: 100 }
             : {
                 color: presentationColor(element.fill, 'FFFFFF'),
-                transparency: typeof element.opacity === 'number' ? Math.round((1 - Math.max(0, Math.min(1, element.opacity))) * 100) : 0,
+                transparency: element.fill === 'transparent' ? 100 : Math.round((1 - opacity) * 100),
               },
           line: {
             color: presentationColor(element.borderColor, '20202B'),
-            width: lineShape ? Math.max(1, borderWidth) : borderWidth,
-            transparency: !lineShape && borderWidth === 0 ? 100 : 0,
+            width: presentationFontSizeToPoints(lineShape ? Math.max(1, borderWidth) : borderWidth),
+            transparency: element.borderColor === 'transparent' || (!lineShape && borderWidth === 0) ? 100 : Math.round((1 - opacity) * 100),
             ...getPresentationLineEnds(element.type),
           },
           hyperlink: toPptxHyperlink(element.hyperlink, document),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
+import { DOMParser } from '@xmldom/xmldom'
 import {
   PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
@@ -116,8 +117,13 @@ describe('createPresentationPptx', () => {
     expect(firstSlideXml).toContain('<a:buChar')
     expect(firstSlideXml).toContain(' baseline="30000"')
     expect(firstSlideXml).toContain('prst="heart"')
-    expect(firstSlideXml).toContain('<a:headEnd type="arrow"')
-    expect(firstSlideXml).toContain('<a:tailEnd type="arrow"')
+    const slideTree = new DOMParser().parseFromString(firstSlideXml!, 'text/xml')
+    const arrow = Array.from(slideTree.getElementsByTagName('p:sp')).find(shape => shape.getElementsByTagName('p:cNvPr')[0]?.getAttribute('name') === 'double-arrow-line')!
+    const geometry = arrow.getElementsByTagName('a:custGeom')[0]!
+    const points = Array.from(geometry.getElementsByTagName('a:pt')).map(point => [Number(point.getAttribute('x')), Number(point.getAttribute('y'))])
+    expect(points).toEqual([[120000, 810000], [880000, 190000], [120000, 810000], [150000, 610000], [120000, 810000], [320000, 820000], [880000, 190000], [850000, 390000], [880000, 190000], [680000, 180000]])
+    expect(arrow.getElementsByTagName('a:headEnd').length).toBe(0)
+    expect(arrow.getElementsByTagName('a:tailEnd').length).toBe(0)
     const firstNotesXml = await archive.file('ppt/notesSlides/notesSlide1.xml')?.async('text')
     expect(firstNotesXml).toContain('Speaker note exported from Bridgic.')
   })

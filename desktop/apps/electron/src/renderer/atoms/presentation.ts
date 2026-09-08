@@ -2,6 +2,7 @@ import { atom } from 'jotai'
 import { atomFamily } from 'jotai-family'
 import { i18n } from '@/lib/i18n'
 import { createDefaultPresentationTransition } from '@/lib/presentationTransitions'
+import { presentationTextDisplaySegments, presentationTextParagraphs, presentationParagraphSegments, presentationParagraphTextStyle, patchPresentationText } from '@/lib/presentationText'
 import { viewedSessionIdAtom } from './navigation'
 
 export const PRESENTATION_WIDTH = 1280
@@ -199,6 +200,10 @@ export interface PresentationElementBase {
 export interface PresentationTextElement extends PresentationElementBase {
   type: 'text'
   text: string
+  /** Inline style ranges use UTF-16 offsets into text, excluding generated list markers. */
+  textRuns?: PresentationTextRun[]
+  /** Paragraph ranges exclude their terminating newline; internal newlines are soft breaks. */
+  paragraphs?: PresentationTextParagraph[]
   fontSize: number
   fontFamily: string
   fontWeight: 400 | 500 | 600 | 700
@@ -209,6 +214,8 @@ export interface PresentationTextElement extends PresentationElementBase {
   highlightColor?: string
   characterSpacing?: number
   lineHeight?: number
+  /** Fixed line advance in model pixels, independent of run font sizes. */
+  lineSpacing?: number
   indentLevel?: number
   listStyle?: 'none' | 'bullet' | 'number'
   color: string
@@ -226,12 +233,44 @@ export interface PresentationTextElement extends PresentationElementBase {
   }
 }
 
+export type PresentationTextStyle = Partial<Pick<PresentationTextElement,
+  'fontSize' | 'fontFamily' | 'fontWeight' | 'italic' | 'underline' | 'strikethrough'
+  | 'baseline' | 'highlightColor' | 'characterSpacing' | 'color'
+>> & { opacity?: number }
+
+export interface PresentationTextRun {
+  start: number
+  end: number
+  style: PresentationTextStyle
+}
+
+export type PresentationParagraphStyle = Partial<Pick<PresentationTextElement,
+  'align' | 'lineHeight' | 'lineSpacing' | 'indentLevel' | 'listStyle'
+>> & {
+  spaceBefore?: number
+  spaceAfter?: number
+  /** Start of a numbering sequence; repeated values at the same level continue that sequence. */
+  listStartAt?: number
+  listNumberFormat?: string
+  listBulletChar?: string
+  listMarkerFontFamily?: string
+}
+
+export interface PresentationTextParagraph {
+  start: number
+  end: number
+  style: PresentationParagraphStyle
+  endStyle?: PresentationTextStyle
+}
+
 export interface PresentationShapeElement extends PresentationElementBase {
   type: PresentationShapeType
   fill: string
   borderColor: string
   borderWidth: number
   radius?: number
+  /** Connector geometry in a 100 x 100 coordinate space. */
+  connectorPath?: string
 }
 
 export interface PresentationImageElement extends PresentationElementBase {
@@ -273,6 +312,7 @@ export interface PresentationTableElement extends PresentationElementBase {
   cells: string[][]
   headerRow: boolean
   headerFill: string
+  headerTextColor?: string
   bodyFill: string
   textColor: string
   borderColor: string
@@ -283,7 +323,7 @@ export type PresentationChartType = 'column' | 'bar' | 'line' | 'pie' | 'doughnu
 
 export interface PresentationChartSeries {
   name: string
-  values: number[]
+  values: Array<number | null>
 }
 
 export interface PresentationChartElement extends PresentationElementBase {
@@ -293,6 +333,8 @@ export interface PresentationChartElement extends PresentationElementBase {
   series: PresentationChartSeries[]
   showLegend: boolean
   showValue?: boolean
+  displayBlanksAs?: 'gap' | 'zero' | 'span'
+  holeSize?: number
   title?: string
   colors: string[]
   chartAreaFill?: string
@@ -328,42 +370,110 @@ export interface PresentationComment {
 
 export interface PresentationVerticalTextLayout {
   columnAdvance: number
+  columnOffsets: number[]
   columns: string[]
   rowAdvance: number
   rowsPerColumn: number
+  sourceOffsets: number[][]
+  glyphStyles: PresentationTextStyle[][]
+  rowOffsets: number[][]
+  columnHeights: number[]
 }
 
 /** Flow upright glyphs down the text frame, then continue in columns from right to left. */
 export function layoutPresentationVerticalText(element: PresentationTextElement): PresentationVerticalTextLayout {
   const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
+  const contentWidth = Math.max(0, element.width - insets.left - insets.right)
   const contentHeight = Math.max(element.fontSize, element.height - insets.top - insets.bottom)
-  const rowAdvance = Math.max(1, element.fontSize * (element.lineHeight ?? 1.08))
+  // Tracking follows the glyphs down a column; paragraph line spacing separates columns.
+  const rowAdvance = Math.max(1, element.fontSize * (1 + (element.characterSpacing ?? 0) / 1_000))
+  const columnAdvance = element.lineSpacing ?? element.fontSize * (element.lineHeight ?? 1.2)
   const rowsPerColumn = Math.max(1, Math.floor((contentHeight - element.fontSize) / rowAdvance) + 1)
-  const columns = element.text.split('\n').flatMap((paragraph) => {
-    const glyphs = Array.from(paragraph).filter((glyph) => !/\s/u.test(glyph))
-    if (glyphs.length === 0) return ['']
-    return Array.from({ length: Math.ceil(glyphs.length / rowsPerColumn) }, (_, index) => (
-      glyphs.slice(index * rowsPerColumn, (index + 1) * rowsPerColumn).join('')
-    ))
+  const columns: string[] = []
+  const sourceOffsets: number[][] = []
+  const glyphStyles: PresentationTextStyle[][] = []
+  const rowOffsets: number[][] = []
+  const columnWidths: number[] = []
+  const columnHeights: number[] = []
+  const columnParagraphs: ReturnType<typeof presentationTextParagraphs> = []
+  for (const [paragraphIndex, paragraphStyle] of presentationTextParagraphs(element).entries()) {
+    let column = 0
+    let nextRow = 0
+    const startColumn = () => {
+      column = columns.length
+      columns.push(''); sourceOffsets.push([]); rowOffsets.push([]); glyphStyles.push([])
+      columnParagraphs.push(paragraphStyle)
+      columnWidths.push(presentationParagraphTextStyle(element, paragraphStyle).fontSize ?? element.fontSize); columnHeights.push(0)
+      nextRow = 0
+    }
+    startColumn()
+    for (const segment of presentationParagraphSegments(element, paragraphStyle, paragraphIndex)) {
+      let offset = segment.start
+      for (const glyph of Array.from(segment.text)) {
+        if (glyph === '\n') {
+          startColumn()
+          offset += glyph.length
+          continue
+        }
+        const style = segment.style
+        const size = style.fontSize ?? element.fontSize
+        if (element.wordWrap !== false && columns[column] && nextRow + size > contentHeight) {
+          // A breakable space at an automatic wrap boundary does not start another column.
+          if (glyph === ' ' || glyph === '\t') {
+            if (segment.end > segment.start) offset += glyph.length
+            continue
+          }
+          startColumn()
+        }
+        // Spaces occupy authored cells; generated markers share the paragraph's source offset.
+        columns[column] += glyph
+        sourceOffsets[column]!.push(offset)
+        glyphStyles[column]!.push(style)
+        rowOffsets[column]!.push(nextRow)
+        columnWidths[column] = Math.max(columnWidths[column]!, size)
+        columnHeights[column] = nextRow + size
+        nextRow += Math.max(1, size * (1 + (style.characterSpacing ?? 0) / 1_000))
+        if (segment.end > segment.start) offset += glyph.length
+      }
+    }
+  }
+  const firstSpace = columnParagraphs[0]?.style.spaceBefore ?? 0
+  const lastSpace = columnParagraphs[columnParagraphs.length - 1]?.style.spaceAfter ?? 0
+  const advances = columnWidths.map((width, index) => {
+    const paragraph = columnParagraphs[index]!
+    const next = columnParagraphs[index + 1]
+    return (paragraph.style.lineSpacing || width * (paragraph.style.lineHeight ?? 1.2))
+      + (next && paragraph !== next ? (paragraph.style.spaceAfter ?? 0) + (next.style.spaceBefore ?? 0) : 0)
+  })
+  const blockWidth = firstSpace + lastSpace + columnWidths.reduce((sum, width, index) => sum + (index === columnWidths.length - 1 ? width : advances[index]!), 0)
+  const availableWidth = Math.max(0, contentWidth - blockWidth)
+  let blockLeft = 0
+  if (element.align === 'right') blockLeft = availableWidth
+  else if (element.align === 'center') blockLeft = availableWidth / 2
+  let columnRight = blockLeft + blockWidth - firstSpace
+  const columnOffsets = columnWidths.map((width, index) => {
+    const left = columnRight - width
+    columnRight -= advances[index]!
+    return Math.round(left * 1_000_000) / 1_000_000
   })
   return {
-    columnAdvance: element.fontSize * 1.2,
+    columnAdvance,
+    columnOffsets,
     columns,
     rowAdvance,
     rowsPerColumn,
+    sourceOffsets,
+    glyphStyles,
+    rowOffsets,
+    columnHeights,
   }
 }
 
 /** Add visual list markers while keeping the underlying editable text marker-free. */
 export function formatPresentationText(element: PresentationTextElement): string {
-  const listed = !element.listStyle || element.listStyle === 'none'
-    ? element.text
-    : element.text.split('\n').map((line, index) => {
-      if (!line.trim()) return line
-      return element.listStyle === 'bullet' ? `• ${line}` : `${index + 1}. ${line}`
-    }).join('\n')
+  const listed = presentationTextDisplaySegments(element).map(segment => segment.text).join('')
   if (element.textDirection !== 'eastAsianVertical' && element.textDirection !== 'stacked') return listed
-  const columns = layoutPresentationVerticalText({ ...element, text: listed }).columns.map((column) => Array.from(column))
+  const columns = layoutPresentationVerticalText(element).columns.map((column) => Array.from(column))
   const rowCount = Math.max(0, ...columns.map((column) => column.length))
   return Array.from({ length: rowCount }, (_, rowIndex) => (
     [...columns].reverse().map((column) => column[rowIndex] ?? '　').join('　')
@@ -372,13 +482,25 @@ export function formatPresentationText(element: PresentationTextElement): string
 
 /** Remove markers generated by formatPresentationText after direct canvas editing. */
 export function stripPresentationTextFormatting(text: string, element: PresentationTextElement): string {
-  let unformatted = text
-  if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') {
-    // Vertical text is rendered as a composed group and is edited through the
-    // text inspector, so the display projection must never overwrite source.
-    unformatted = element.text
-  }
-  return stripPresentationListMarkers(unformatted, element.listStyle)
+  if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') return element.text
+  if (!element.paragraphs?.length) return stripPresentationListMarkers(text, element.listStyle)
+  const originalMarkers = presentationTextParagraphs(element).map(paragraph => paragraph.marker).filter(Boolean)
+  let offset = 0
+  const paragraphs = presentationTextParagraphs(element).map((paragraph) => {
+    const prefix = paragraph.marker
+    const start = offset
+    offset += prefix.length + paragraph.text.length + 1
+    return { ...paragraph, start, end: offset - 1 }
+  })
+  const displayed = { ...element, text: formatPresentationText(element), paragraphs, textRuns: undefined }
+  return presentationTextParagraphs(patchPresentationText(displayed, { text })).map(paragraph => {
+    const listStyle = paragraph.style.listStyle
+    if (listStyle === 'bullet' || listStyle === 'number') {
+      const marker = [paragraph.marker, ...originalMarkers].find(marker => marker && paragraph.text.startsWith(marker))
+      if (marker) return paragraph.text.slice(marker.length)
+    }
+    return paragraph.text
+  }).join('\n')
 }
 
 /** Remove only generated list markers from horizontal display text. */

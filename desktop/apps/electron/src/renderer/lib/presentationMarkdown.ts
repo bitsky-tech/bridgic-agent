@@ -14,9 +14,14 @@ import {
   type PresentationSlide,
   type PresentationSlideLayout,
   type PresentationTextElement,
+  type PresentationTextRun,
+  type PresentationTextParagraph,
+  type PresentationParagraphStyle,
+  type PresentationTextStyle,
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { normalizePresentationDesignColor, presentationThemeTextColors } from '@/lib/presentationDesign'
+import { patchPresentationText, PRESENTATION_TEXT_STYLE_KEYS, PRESENTATION_TEXT_RUN_STYLE_KEYS, PRESENTATION_PARAGRAPH_STYLE_KEYS, PRESENTATION_NUMBER_FORMATS } from '@/lib/presentationText'
 
 export type PresentationMarkdownAssets = Record<string, PresentationFileSource>
 
@@ -131,9 +136,9 @@ const COMPONENT_ATTRS: Record<NativeComponent['name'], Set<string>> = {
     ...COMMON_COMPONENT_ATTRS,
     'fontSize', 'fontFamily', 'fontWeight', 'italic', 'underline', 'strikethrough', 'baseline',
     'highlightColor', 'characterSpacing', 'lineHeight', 'indentLevel', 'listStyle', 'color', 'align',
-    'verticalAlign', 'textDirection', 'wordWrap', 'insetLeft', 'insetTop', 'insetRight', 'insetBottom',
+    'verticalAlign', 'textDirection', 'wordWrap', 'insetLeft', 'insetTop', 'insetRight', 'insetBottom', 'textRuns', 'paragraphs', 'lineSpacing',
   ]),
-  PptShape: new Set([...COMMON_COMPONENT_ATTRS, 'kind', 'type', 'fill', 'borderColor', 'borderWidth', 'radius']),
+  PptShape: new Set([...COMMON_COMPONENT_ATTRS, 'kind', 'type', 'fill', 'borderColor', 'borderWidth', 'radius', 'connectorPath']),
   PptImage: new Set([
     ...COMMON_COMPONENT_ATTRS,
     'src', 'alt', 'altText', 'fit', 'clipShape', 'cropLeft', 'cropTop', 'cropRight', 'cropBottom',
@@ -142,11 +147,11 @@ const COMPONENT_ATTRS: Record<NativeComponent['name'], Set<string>> = {
   PptVideo: new Set([...COMMON_COMPONENT_ATTRS, 'src', 'autoplay', 'loop', 'muted']),
   PptTable: new Set([
     ...COMMON_COMPONENT_ATTRS,
-    'headerRow', 'headerFill', 'bodyFill', 'textColor', 'borderColor', 'fontSize',
+    'headerRow', 'headerFill', 'headerTextColor', 'bodyFill', 'textColor', 'borderColor', 'fontSize',
   ]),
   PptChart: new Set([
     ...COMMON_COMPONENT_ATTRS,
-    'type', 'chartType', 'showLegend', 'showValue', 'title', 'colors', 'chartAreaFill',
+    'type', 'chartType', 'showLegend', 'showValue', 'displayBlanksAs', 'holeSize', 'title', 'colors', 'chartAreaFill',
     'plotAreaFill', 'categoryAxisLabelColor', 'valueAxisLabelColor', 'gridLineColor', 'dataLabelColor',
   ]),
 }
@@ -579,6 +584,80 @@ function compileMarkdownBlocks(source: string, context: ElementCompilerContext):
   return elements
 }
 
+function textStyleAttr(value: unknown): PresentationTextStyle {
+  if (!isRecord(value)) throw new TypeError('Text style must be an object')
+  const style: PresentationTextStyle = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (!PRESENTATION_TEXT_RUN_STYLE_KEYS.includes(key as keyof PresentationTextStyle)) throw new TypeError(`Unsupported textRuns style: ${key}`)
+    if (['italic', 'underline', 'strikethrough'].includes(key)) {
+      if (typeof entry !== 'boolean') throw new TypeError(`${key} must be a boolean`)
+    } else if (key === 'fontSize' || key === 'characterSpacing') {
+      if (typeof entry !== 'number' || !Number.isFinite(entry) || (key === 'fontSize' && entry <= 0)) throw new TypeError(`Invalid ${key}`)
+    } else if (key === 'fontWeight') {
+      if (typeof entry !== 'number' || ![400, 500, 600, 700].includes(entry)) throw new TypeError('Invalid fontWeight')
+    } else if (key === 'opacity') {
+      if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0 || entry > 1) throw new TypeError('Invalid run opacity')
+    } else if (key === 'baseline') {
+      if (typeof entry !== 'string' || !['normal', 'superscript', 'subscript'].includes(entry)) throw new TypeError('Invalid baseline')
+    } else if (typeof entry !== 'string') throw new TypeError(`${key} must be a string`)
+    Object.assign(style, { [key]: entry })
+  }
+  return style
+}
+
+function textRunsAttr(value: string, textLength: number): PresentationTextRun[] {
+  const parsed: unknown = JSON.parse(value)
+  if (!Array.isArray(parsed)) throw new TypeError('textRuns must be an array')
+  let previousEnd = 0
+  return parsed.map((run: unknown): PresentationTextRun => {
+    if (!isRecord(run) || !Number.isInteger(run.start) || !Number.isInteger(run.end)
+      || typeof run.start !== 'number' || typeof run.end !== 'number'
+      || run.start < previousEnd || run.end <= run.start || run.end > textLength || !isRecord(run.style)) {
+      throw new TypeError('textRuns must contain ordered, non-overlapping ranges inside the text')
+    }
+    previousEnd = run.end
+    const style = textStyleAttr(run.style)
+    return { start: run.start, end: run.end, style }
+  })
+}
+
+function paragraphsAttr(value: string, text: string): PresentationTextParagraph[] {
+  const parsed: unknown = JSON.parse(value)
+  if (!Array.isArray(parsed) || !parsed.length) throw new TypeError('paragraphs must be a non-empty array')
+  let expectedStart = 0
+  return parsed.map((paragraph: unknown, index): PresentationTextParagraph => {
+    if (!isRecord(paragraph) || !Number.isInteger(paragraph.start) || !Number.isInteger(paragraph.end)
+      || typeof paragraph.start !== 'number' || typeof paragraph.end !== 'number'
+      || paragraph.start !== expectedStart || paragraph.end < paragraph.start || paragraph.end > text.length
+      || (index < parsed.length - 1 ? text[paragraph.end] !== '\n' : paragraph.end !== text.length)
+      || !isRecord(paragraph.style)) {
+      throw new TypeError('paragraphs must partition the text at paragraph breaks')
+    }
+    expectedStart = paragraph.end + 1
+    const style: PresentationParagraphStyle = {}
+    for (const [key, entry] of Object.entries(paragraph.style)) {
+      if (key === 'align') {
+        if (typeof entry !== 'string' || !['left', 'center', 'right', 'justify'].includes(entry)) throw new TypeError('Invalid paragraph alignment')
+      } else if (key === 'listStyle') {
+        if (typeof entry !== 'string' || !['none', 'bullet', 'number'].includes(entry)) throw new TypeError('Invalid paragraph listStyle')
+      } else if (key === 'listStartAt') {
+        if (typeof entry !== 'number' || !Number.isInteger(entry) || entry < 1 || entry > 32767) throw new TypeError('Invalid paragraph listStartAt')
+      } else if (key === 'listNumberFormat') {
+        if (typeof entry !== 'string' || !PRESENTATION_NUMBER_FORMATS.has(entry)) throw new TypeError('Invalid paragraph listNumberFormat')
+      } else if (key === 'listBulletChar' || key === 'listMarkerFontFamily') {
+        if (typeof entry !== 'string' || !entry || entry.length > 128 || /[\r\n]/.test(entry)) throw new TypeError(`Invalid paragraph ${key}`)
+      } else if (['lineHeight', 'lineSpacing', 'spaceBefore', 'spaceAfter', 'indentLevel'].includes(key)) {
+        if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0 || (key === 'lineHeight' && entry === 0)
+          || (key === 'indentLevel' && (!Number.isInteger(entry) || entry > 8))) throw new TypeError(`Invalid paragraph ${key}`)
+      } else throw new TypeError(`Unsupported paragraph style: ${key}`)
+      Object.assign(style, { [key]: entry })
+    }
+    return { start: paragraph.start, end: paragraph.end, style,
+      ...(paragraph.endStyle === undefined ? {} : { endStyle: textStyleAttr(paragraph.endStyle) }),
+    }
+  })
+}
+
 function compileNativeComponent(component: NativeComponent, context: ElementCompilerContext): PresentationElement {
   const attrs = component.attrs
   for (const name of Object.keys(attrs)) {
@@ -589,7 +668,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptText') {
     const defaults = allocateBox(context, numberAttr(attrs.height, 80))
     const textColors = presentationThemeTextColors(context.existingDocument?.master.background ?? '#FFFFFF')
-    return withCommonAttrs({
+    const element = withCommonAttrs<PresentationTextElement>({
       ...defaults,
       id: reserveElementId(context, componentRef(attrs), 'text'),
       type: 'text',
@@ -604,6 +683,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
       ...(attrs.highlightColor ? { highlightColor: attrs.highlightColor } : {}),
       characterSpacing: numberAttr(attrs.characterSpacing, 0),
       lineHeight: numberAttr(attrs.lineHeight, 1.08),
+      ...(attrs.lineSpacing === undefined ? {} : { lineSpacing: positiveNumber(numberAttr(attrs.lineSpacing, 0), 0, 'lineSpacing') }),
       indentLevel: numberAttr(attrs.indentLevel, 0),
       listStyle: enumAttr(attrs.listStyle, new Set<NonNullable<PresentationTextElement['listStyle']>>(['none', 'bullet', 'number']), 'none'),
       color: attrs.color ?? textColors.secondary,
@@ -622,6 +702,23 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
         },
       } : {}),
     }, attrs)
+    const existing = context.existingDocument?.slides.find(slide => slide.id === context.slideId)?.elements.find(item => item.id === element.id)
+    const stylePatch: Partial<PresentationTextElement> = { text: element.text }
+    if (existing?.type === 'text') {
+      // Retain unchanged ranges when the Agent edits source text or frame geometry.
+      for (const key of [...PRESENTATION_TEXT_STYLE_KEYS, ...PRESENTATION_PARAGRAPH_STYLE_KEYS]) {
+        if (attrs[key] !== undefined && element[key] !== existing[key]) Object.assign(stylePatch, { [key]: element[key] })
+      }
+    }
+    for (const key of ['textRuns', 'paragraphs'] as const) {
+      if (attrs[key] === undefined || (existing?.type === 'text' && attrs[key] === JSON.stringify(existing[key]))) continue
+      Object.assign(stylePatch, { [key]: key === 'textRuns'
+        ? textRunsAttr(attrs[key], element.text.length) : paragraphsAttr(attrs[key], element.text) })
+    }
+    const richText = patchPresentationText(existing?.type === 'text' ? existing : element, stylePatch)
+    return { ...element, textRuns: richText.textRuns, paragraphs: richText.paragraphs,
+      ...('lineHeight' in stylePatch && !('lineSpacing' in stylePatch) ? { lineSpacing: undefined } : {}),
+    }
   }
   if (component.name === 'PptShape') {
     const kind = enumAttr(attrs.kind ?? attrs.type, SHAPE_TYPES, 'rect')
@@ -635,6 +732,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
       borderColor: attrs.borderColor ?? accent,
       borderWidth: numberAttr(attrs.borderWidth, 1),
       ...(attrs.radius === undefined ? {} : { radius: numberAttr(attrs.radius, 0) }),
+      ...(attrs.connectorPath ? { connectorPath: attrs.connectorPath } : {}),
     }, attrs)
   }
   if (component.name === 'PptImage') {
@@ -687,6 +785,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
       cells,
       headerRow: booleanAttr(attrs.headerRow, true),
       headerFill: attrs.headerFill ?? accent,
+      ...(attrs.headerTextColor ? { headerTextColor: attrs.headerTextColor } : {}),
       bodyFill: attrs.bodyFill ?? background,
       textColor: attrs.textColor ?? textColors.primary,
       borderColor: attrs.borderColor ?? '#B8BCC8',
@@ -705,6 +804,8 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
     series: chartData.series,
     showLegend: booleanAttr(attrs.showLegend, true),
     showValue: booleanAttr(attrs.showValue, false),
+    ...(attrs.displayBlanksAs ? { displayBlanksAs: enumAttr(attrs.displayBlanksAs, new Set<'gap' | 'zero' | 'span'>(['gap', 'zero', 'span']), 'gap') } : {}),
+    ...(attrs.holeSize === undefined ? {} : { holeSize: numberAttr(attrs.holeSize, 56) }),
     ...(attrs.title ? { title: attrs.title } : {}),
     colors: stringListAttr(attrs.colors, chartColors),
     ...(attrs.chartAreaFill ? { chartAreaFill: attrs.chartAreaFill } : {}),
@@ -976,10 +1077,10 @@ function parseChartData(body: string): Pick<PresentationChartElement, 'categorie
     if (!isRecord(value) || typeof value.name !== 'string' || !Array.isArray(value.values)) {
       throw new TypeError(`PptChart series[${index}] must contain name and values`)
     }
-    if (value.values.some((item) => typeof item !== 'number' || !Number.isFinite(item))) {
-      throw new TypeError(`PptChart series[${index}].values must contain finite numbers`)
+    if (value.values.some((item) => item !== null && (typeof item !== 'number' || !Number.isFinite(item)))) {
+      throw new TypeError(`PptChart series[${index}].values must contain finite numbers or null`)
     }
-    return { name: value.name, values: value.values as number[] }
+    return { name: value.name, values: value.values as Array<number | null> }
   })
   if (series.some((item) => item.values.length !== categories.length)) {
     throw new Error('Every PptChart series must match the categories length')
@@ -1066,6 +1167,9 @@ function decompileElement(element: PresentationElement): string {
       ...(element.highlightColor === undefined ? {} : { highlightColor: element.highlightColor }),
       ...(element.characterSpacing === undefined ? {} : { characterSpacing: element.characterSpacing }),
       ...(element.lineHeight === undefined ? {} : { lineHeight: element.lineHeight }),
+      ...(element.lineSpacing === undefined ? {} : { lineSpacing: element.lineSpacing }),
+      ...(element.textRuns?.length ? { textRuns: JSON.stringify(element.textRuns) } : {}),
+      ...(element.paragraphs?.length ? { paragraphs: JSON.stringify(element.paragraphs) } : {}),
       ...(element.indentLevel === undefined ? {} : { indentLevel: element.indentLevel }),
       ...(element.listStyle === undefined ? {} : { listStyle: element.listStyle }),
       color: element.color,
@@ -1110,6 +1214,7 @@ function decompileElement(element: PresentationElement): string {
       ...common,
       headerRow: element.headerRow,
       headerFill: element.headerFill,
+      ...(element.headerTextColor === undefined ? {} : { headerTextColor: element.headerTextColor }),
       bodyFill: element.bodyFill,
       textColor: element.textColor,
       borderColor: element.borderColor,
@@ -1122,6 +1227,8 @@ function decompileElement(element: PresentationElement): string {
       type: element.chartType,
       showLegend: element.showLegend,
       ...(element.showValue === undefined ? {} : { showValue: element.showValue }),
+      ...(element.displayBlanksAs === undefined ? {} : { displayBlanksAs: element.displayBlanksAs }),
+      ...(element.holeSize === undefined ? {} : { holeSize: element.holeSize }),
       ...(element.title === undefined ? {} : { title: element.title }),
       colors: element.colors.join(','),
       ...(element.chartAreaFill === undefined ? {} : { chartAreaFill: element.chartAreaFill }),
@@ -1139,6 +1246,7 @@ function decompileElement(element: PresentationElement): string {
     borderColor: element.borderColor,
     borderWidth: element.borderWidth,
     ...(element.radius === undefined ? {} : { radius: element.radius }),
+    ...(element.connectorPath === undefined ? {} : { connectorPath: element.connectorPath }),
   })
 }
 
@@ -1256,6 +1364,8 @@ function stringListAttr(value: string | undefined, fallback: string[]): string[]
 
 function decodeEntities(value: string): string {
   return value
+    .replace(/&#10;/g, '\n')
+    .replace(/&#13;/g, '\r')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&gt;/g, '>')
@@ -1268,5 +1378,6 @@ function escapeAttr(value: string): string {
 }
 
 function escapeText(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // Blank lines terminate Markdown HTML blocks. Encode authored breaks to keep one native component intact.
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;')
 }

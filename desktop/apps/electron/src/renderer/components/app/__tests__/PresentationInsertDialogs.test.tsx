@@ -72,6 +72,7 @@ describe('PresentationInsertDialogs helpers', () => {
       { name: 'Revenue', values: [12, 18] },
       { name: 'Cost', values: [7, 9] },
     ])
+    expect(parsePresentationChartSeries('Revenue: , 0, 12, , 18, ', 6)).toEqual([{ name: 'Revenue', values: [null, 0, 12, null, 18, null] }])
     expect(parsePresentationChartSeries('Revenue: 12', 2)).toBeNull()
     expect(parsePresentationChartSeries('Revenue: twelve, 18', 2)).toBeNull()
   })

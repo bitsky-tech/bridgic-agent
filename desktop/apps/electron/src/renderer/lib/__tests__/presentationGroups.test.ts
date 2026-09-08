@@ -5,6 +5,7 @@ import {
   getPresentationSelectionElements,
   removePresentationElements,
   resolvePresentationCanvasSelectionScope,
+  getPresentationElementBounds,
 } from '@/lib/presentationGroups'
 
 function shape(id: string, groupId?: string): PresentationShapeElement {
@@ -24,6 +25,14 @@ function shape(id: string, groupId?: string): PresentationShapeElement {
 }
 
 describe('presentation group selection', () => {
+  it('uses the painted bounds of rotated members for group selection and animation', () => {
+    const bounds = getPresentationElementBounds([{ ...shape('rotated'), x: 100, y: 50, width: 200, height: 40, rotation: 90 }])
+    expect(bounds.x).toBeCloseTo(60)
+    expect(bounds.y).toBeCloseTo(50)
+    expect(bounds.width).toBeCloseTo(40)
+    expect(bounds.height).toBeCloseTo(200)
+  })
+
   it('selects a group first and drills into a member on the next click', () => {
     const member = shape('heading', 'card')
 

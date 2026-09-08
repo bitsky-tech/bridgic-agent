@@ -1,12 +1,16 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import {
   PRESENTATION_PAGE_SIZES,
+  type PresentationElement,
+  type PresentationHyperlink,
   type PresentationPageSize,
   type PresentationSlide,
 } from '@/atoms/presentation'
 import {
   buildPresentationAnimationTimeline,
   createPresentationAnimationParts,
+  getPresentationAnimationDisplayStates,
+  getPresentationColorAnimations,
   PRESENTATION_ANIMATION_FINAL_HOLD_MS,
   type PresentationAnimationPartSpec,
 } from '@/lib/presentationAnimationPreview'
@@ -18,9 +22,12 @@ import {
 
 export interface PresentationAnimationPlayerProps {
   baseHiddenElementIds?: ReadonlySet<string>
+  completedTargetIds?: ReadonlySet<string>
   className?: string
   elementIds?: readonly string[]
   onComplete?: () => void
+  onActivateHyperlink?: (hyperlink: PresentationHyperlink) => void
+  suppressMediaPlayback?: boolean
   runKey: string | number
   pageSize?: PresentationPageSize
   slide: PresentationSlide
@@ -45,7 +52,7 @@ function applyFinalKeyframe(node: HTMLSpanElement, keyframes: Keyframe[]): void 
   if (final.clipPath !== undefined) node.style.clipPath = String(final.clipPath)
 }
 
-function PresentationAnimationPart({ pageSize, part, runKey }: { pageSize: PresentationPageSize; part: PresentationAnimationPartSpec; runKey: string | number }) {
+function PresentationAnimationPart({ elements, pageSize, part, runKey }: { elements: readonly PresentationElement[]; pageSize: PresentationPageSize; part: PresentationAnimationPartSpec; runKey: string | number }) {
   const layerRef = useRef<HTMLSpanElement>(null)
 
   useLayoutEffect(() => {
@@ -71,7 +78,7 @@ function PresentationAnimationPart({ pageSize, part, runKey }: { pageSize: Prese
       data-animation-part={part.id}
       style={{ ...partLayerStyle, width: pageSize.width, height: pageSize.height, ...part.style }}
     >
-      {part.elements.map((element) => (
+      {elements.map((element) => (
         <span key={element.id} data-animation-element-id={element.id}>
           <PresentationElementPreview element={element} interactive={false} suppressMediaPlayback />
         </span>
@@ -81,7 +88,8 @@ function PresentationAnimationPart({ pageSize, part, runKey }: { pageSize: Prese
 }
 
 /** PowerPoint-style element animation preview rendered independently from the editable Fabric canvas. */
-export function PresentationAnimationPlayer({ baseHiddenElementIds, className, elementIds, onComplete, pageSize = PRESENTATION_PAGE_SIZES.wide, runKey, slide, slideNumber, width }: PresentationAnimationPlayerProps) {
+export function PresentationAnimationPlayer({ baseHiddenElementIds, completedTargetIds, className, elementIds, onComplete, onActivateHyperlink, suppressMediaPlayback = true, pageSize = PRESENTATION_PAGE_SIZES.wide, runKey, slide, slideNumber, width }: PresentationAnimationPlayerProps) {
+  const animationStates = useMemo(() => completedTargetIds ? getPresentationAnimationDisplayStates(slide.elements, completedTargetIds) : undefined, [completedTargetIds, slide.elements])
   const requestedIds = useMemo(() => elementIds ? new Set(elementIds) : null, [elementIds])
   const elements = useMemo(() => {
     if (!requestedIds) return slide.elements
@@ -94,16 +102,33 @@ export function PresentationAnimationPlayer({ baseHiddenElementIds, className, e
     ))
   }, [requestedIds, slide.elements])
   const timeline = useMemo(() => buildPresentationAnimationTimeline(elements), [elements])
-  const parts = useMemo(() => timeline.flatMap((entry) => (
-    createPresentationAnimationParts(entry, pageSize).map((part) => ({ ...part, id: `${entry.id}-${part.id}` }))
-  )), [pageSize, timeline])
-  const hiddenElementIds = useMemo(() => new Set([
-    ...(baseHiddenElementIds ?? []),
-    ...timeline.flatMap((entry) => entry.elements.map((element) => element.id)),
-  ]), [baseHiddenElementIds, timeline])
+  const colorAnimations = useMemo(() => getPresentationColorAnimations(timeline, runKey), [runKey, timeline])
+  const elementReplacements = useMemo(() => {
+    const partsByElementId = new Map<string, PresentationAnimationPartSpec[]>()
+    for (const entry of timeline) {
+      const parts = createPresentationAnimationParts(entry, pageSize).map(part => ({ ...part, id: `${entry.id}-${part.id}` }))
+      if (!parts.length) continue
+      for (const element of entry.elements) partsByElementId.set(element.id, parts)
+    }
+    const replacements = new Map<string, ReactNode>()
+    // Share a layer for adjacent group members, while keeping interleaved objects in their authored order.
+    for (let index = 0; index < slide.elements.length; index++) {
+      const element = slide.elements[index]!
+      const parts = partsByElementId.get(element.id)
+      if (!parts) continue
+      let end = index + 1
+      while (end < slide.elements.length && partsByElementId.get(slide.elements[end]!.id) === parts) end++
+      const members = slide.elements.slice(index, end)
+      for (const member of members) replacements.set(member.id, null)
+      replacements.set(element.id, parts.map(part => (
+        <PresentationAnimationPart key={part.id} elements={members} pageSize={pageSize} part={part} runKey={runKey} />
+      )))
+      index = end - 1
+    }
+    return replacements
+  }, [pageSize, runKey, slide.elements, timeline])
   const onCompleteRef = useRef(onComplete)
   const totalDuration = timeline.reduce((maximum, entry) => Math.max(maximum, entry.endsAt), 0)
-  const scale = width / pageSize.width
 
   useLayoutEffect(() => {
     onCompleteRef.current = onComplete
@@ -111,8 +136,9 @@ export function PresentationAnimationPlayer({ baseHiddenElementIds, className, e
 
   useEffect(() => {
     if (timeline.length === 0) {
-      queueMicrotask(() => onCompleteRef.current?.())
-      return
+      let cancelled = false
+      queueMicrotask(() => { if (!cancelled) onCompleteRef.current?.() })
+      return () => { cancelled = true }
     }
     const timer = window.setTimeout(() => onCompleteRef.current?.(), totalDuration + PRESENTATION_ANIMATION_FINAL_HOLD_MS)
     return () => window.clearTimeout(timer)
@@ -121,25 +147,23 @@ export function PresentationAnimationPlayer({ baseHiddenElementIds, className, e
   return (
     <span
       className={cn('relative block overflow-hidden', className)}
-      data-testid="presentation-animation-player"
+      data-testid={timeline.length ? 'presentation-animation-player' : undefined}
       style={{ width, height: width * (pageSize.height / pageSize.width) }}
     >
       <PresentationSlidePreview
-        hiddenElementIds={hiddenElementIds}
+        animationStates={animationStates}
+        colorAnimations={colorAnimations}
+        hiddenElementIds={baseHiddenElementIds}
+        elementReplacements={elementReplacements}
         presentation
         selected={false}
         slide={slide}
         slideNumber={slideNumber}
-        suppressMediaPlayback
+        suppressMediaPlayback={suppressMediaPlayback}
+        onActivateHyperlink={onActivateHyperlink}
         width={width}
         pageSize={pageSize}
       />
-      <span
-        className="absolute left-0 top-0 block origin-top-left overflow-hidden"
-        style={{ width: pageSize.width, height: pageSize.height, transform: `scale(${scale})` }}
-      >
-        {parts.map((part) => <PresentationAnimationPart key={part.id} pageSize={pageSize} part={part} runKey={runKey} />)}
-      </span>
     </span>
   )
 }

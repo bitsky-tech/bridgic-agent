@@ -11,6 +11,7 @@ import {
   type PresentationTextElement,
   type PresentationTransition,
 } from '@/atoms/presentation'
+import { patchPresentationText, scalePresentationParagraphs } from '@/lib/presentationText'
 
 export type PresentationThemePresetId = 'lavender' | 'light' | 'midnight' | 'paper'
 
@@ -128,22 +129,27 @@ export function applyPresentationDesign(document: PresentationDocument, patch: P
     if (element.type === 'text') {
       const text = element as PresentationTextElement
       const title = text.fontWeight >= 600 || text.fontSize >= 30
-      return {
-        ...text,
+      return patchPresentationText(text, {
         ...(fontsChanged ? { fontFamily: title ? titleFontFamily : bodyFontFamily } : {}),
         ...(colorsChanged ? { color: title ? textColors.primary : textColors.secondary } : {}),
-      }
+      })
     }
     if (element.type === 'chart') {
       const chart = element as PresentationChartElement
-      return colorsChanged ? {
+      if (!colorsChanged) return chart
+      const chartBackground = chart.chartAreaFill === 'transparent' ? background : chart.chartAreaFill ?? '#FFFFFF'
+      const plotBackground = !chart.plotAreaFill || chart.plotAreaFill === 'transparent' ? chartBackground : chart.plotAreaFill
+      const chartTextColors = presentationThemeTextColors(chartBackground)
+      const plotTextColors = presentationThemeTextColors(plotBackground)
+      const colorCount = chart.chartType === 'pie' || chart.chartType === 'doughnut' ? chart.categories.length : chart.series.length
+      return {
         ...chart,
-        colors: accentColors.slice(0, Math.max(1, chart.series.length)),
-        categoryAxisLabelColor: textColors.secondary,
-        dataLabelColor: textColors.primary,
-        gridLineColor,
-        valueAxisLabelColor: textColors.secondary,
-      } : chart
+        colors: accentColors.slice(0, Math.max(1, colorCount)),
+        categoryAxisLabelColor: chartTextColors.secondary,
+        dataLabelColor: plotTextColors.primary,
+        gridLineColor: plotTextColors.primary === '#FFFFFF' ? '#4A4B60' : '#E0E1E8',
+        valueAxisLabelColor: chartTextColors.secondary,
+      }
     }
     if (element.type === 'table') {
       const table = element as PresentationTableElement
@@ -199,7 +205,15 @@ export function resizePresentationDocument(document: PresentationDocument, prese
       y: Math.round((element.y * scale) + offsetY),
     } as PresentationElement
     if (scaled.type === 'text') {
-      return { ...scaled, fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))) }
+      return patchPresentationText(scaled, {
+        fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))),
+        paragraphs: scalePresentationParagraphs(scaled.paragraphs, scale),
+        ...(scaled.lineSpacing ? { lineSpacing: scaled.lineSpacing * scale } : {}),
+        ...(scaled.textInsets ? { textInsets: {
+          left: scaled.textInsets.left * scale, right: scaled.textInsets.right * scale,
+          top: scaled.textInsets.top * scale, bottom: scaled.textInsets.bottom * scale,
+        } } : {}),
+      })
     }
     if (scaled.type === 'table') {
       return { ...scaled, fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))) }

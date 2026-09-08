@@ -16,10 +16,12 @@ import {
   normalizePresentationAnimation,
   type NormalizedPresentationAnimation,
 } from '@/lib/presentationAnimations'
+import { patchPresentationText } from '@/lib/presentationText'
 
 const LINEAR_EASING = 'linear'
 const MOTION_EASING = 'cubic-bezier(0.16, 1, 0.3, 1)'
 const EMPHASIS_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
+const EMPHASIS_SCALE = 1.5
 const BLIND_COUNT = 8
 const CHECKERBOARD_COLUMNS = 8
 const CHECKERBOARD_ROWS = 6
@@ -50,13 +52,72 @@ export interface PresentationAnimationPartSpec {
   }
 }
 
+export interface PresentationColorAnimation {
+  property: 'fill' | 'color'
+  color: string
+  options: KeyframeAnimationOptions
+  runKey: string | number
+}
+
+/** Animate each existing paint node instead of compositing duplicate translucent elements. */
+export function getPresentationColorAnimations(timeline: readonly PresentationAnimationTimelineEntry[], runKey: string | number): ReadonlyMap<string, PresentationColorAnimation> {
+  const animations = new Map<string, PresentationColorAnimation>()
+  for (const entry of timeline) {
+    const { animation } = entry
+    if (animation.effect !== 'fillColor' && animation.effect !== 'textColor') continue
+    const target = { ...entry, animationElement: entry.element }
+    for (const element of getPresentationAnimationAffectedElements(target, animation.effect)) {
+      animations.set(element.id, {
+        property: animation.effect === 'fillColor' ? 'fill' : 'color',
+        color: animation.color,
+        options: animationOptions(entry),
+        runKey,
+      })
+    }
+  }
+  return animations
+}
+
 export interface PresentationAnimationPlaybackStep {
   bounds: PresentationElementBounds
   elementIds: string[]
   id: string
   targetIds: string[]
-  trigger: NormalizedPresentationAnimation['trigger']
+  trigger: NormalizedPresentationAnimation['trigger'] | 'slideEnter'
   triggerElementId: string
+}
+
+export interface PresentationAnimationScale {
+  x: number
+  y: number
+  factor: number
+}
+
+export interface PresentationAnimationDisplayState {
+  element: PresentationElement
+  scale?: PresentationAnimationScale
+  textColor?: string
+}
+
+/** Keep emphasis results in the playback view without editing the authored slide. */
+export function getPresentationAnimationDisplayStates(elements: readonly PresentationElement[], completedTargetIds: ReadonlySet<string>): ReadonlyMap<string, PresentationAnimationDisplayState> {
+  const states = new Map<string, PresentationAnimationDisplayState>()
+  for (const target of getPresentationAnimationTargets(elements)) {
+    if (!completedTargetIds.has(target.id)) continue
+    const animation = normalizePresentationAnimation(target.animationElement)
+    if (animation.effect === 'zoom') {
+      const scale = { x: target.bounds.x + target.bounds.width / 2, y: target.bounds.y + target.bounds.height / 2, factor: EMPHASIS_SCALE }
+      for (const element of target.elements) states.set(element.id, { element, scale })
+    } else if (animation.effect === 'fillColor' || animation.effect === 'textColor') {
+      for (const element of getPresentationAnimationAffectedElements(target, animation.effect)) {
+        states.set(element.id, {
+          element: animationColorElement(animation, element),
+          ...(animation.effect === 'textColor' ? { textColor: animation.color } : {}),
+        })
+      }
+    }
+  }
+  return states
 }
 
 const entranceAnimationEffects = new Set<NormalizedPresentationAnimation['effect']>([
@@ -87,7 +148,9 @@ export function buildPresentationAnimationPlaybackSteps(elements: readonly Prese
         elementIds: [target.animationElement.id],
         id: `step:${target.id}`,
         targetIds: [target.id],
-        trigger: animation.trigger,
+        trigger: !current && animation.trigger === 'slideClick' && animation.start !== 'onClick'
+          ? 'slideEnter'
+          : animation.trigger,
         triggerElementId: target.animationElement.id,
       }
       steps.push(current)
@@ -251,12 +314,12 @@ function dissolveOrder(elementId: string): number[] {
   return rankByIndex
 }
 
-function animationColorElement(entry: PresentationAnimationTimelineEntry, element: PresentationElement): PresentationElement {
-  if (entry.animation.effect === 'fillColor' && isPresentationShapeElement(element)) {
-    return { ...element, fill: entry.animation.color }
+function animationColorElement(animation: NormalizedPresentationAnimation, element: PresentationElement): PresentationElement {
+  if (animation.effect === 'fillColor' && isPresentationShapeElement(element)) {
+    return { ...element, fill: animation.color }
   }
-  if (entry.animation.effect === 'textColor' && isPresentationTextElement(element)) {
-    return { ...element, color: entry.animation.color }
+  if (animation.effect === 'textColor' && isPresentationTextElement(element)) {
+    return patchPresentationText(element, { color: animation.color })
   }
   return element
 }
@@ -383,30 +446,10 @@ export function createPresentationAnimationParts(entry: PresentationAnimationTim
         elements,
         keyframes: [
           { transform: 'scale(1)', transformOrigin },
-          { transform: 'scale(1.5)', transformOrigin },
+          { transform: `scale(${EMPHASIS_SCALE})`, transformOrigin },
         ],
         options: animationOptions(entry, { easing: EMPHASIS_EASING }),
       }]
-    }
-    case 'fillColor':
-    case 'textColor': {
-      const affectedElements = getPresentationAnimationAffectedElements({
-        animationElement: element,
-        bounds,
-        elements,
-        id: entry.id,
-      }, animation.effect)
-      const colorElements = affectedElements.map((candidate) => animationColorElement(entry, candidate))
-      return [
-        { id: 'color-base', element, elements, keyframes: [] },
-        {
-          id: 'color-target',
-          element: colorElements[0] ?? element,
-          elements: colorElements,
-          keyframes: [{ opacity: 0 }, { opacity: 1 }],
-          options: animationOptions(entry),
-        },
-      ]
     }
     case 'disappear':
       return [{

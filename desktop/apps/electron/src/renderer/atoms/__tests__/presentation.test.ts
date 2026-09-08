@@ -95,6 +95,88 @@ describe('presentation atoms', () => {
     expect(stripPresentationTextFormatting(displayText, element)).toBe(element.text)
   })
 
+  it('aligns the complete vertical text block without pushing a left-aligned numeral into the next title', () => {
+    const element = {
+      id: 'template-section-number',
+      type: 'text' as const,
+      x: 621,
+      y: 122,
+      width: 179,
+      height: 116,
+      rotation: 0,
+      text: '壹',
+      fontSize: 88,
+      fontFamily: '方正行楷简体',
+      fontWeight: 400 as const,
+      color: '#000000',
+      align: 'left' as const,
+      textDirection: 'eastAsianVertical' as const,
+      textInsets: { left: 9.6, top: 4.8, right: 9.6, bottom: 4.8 },
+    }
+    const layout = layoutPresentationVerticalText(element)
+    const numeralRight = element.x + element.textInsets.left + layout.columnOffsets[0]! + element.fontSize
+    expect(numeralRight).toBeLessThan(728)
+
+    const centered = layoutPresentationVerticalText({ ...element, align: 'center' })
+    const rightAligned = layoutPresentationVerticalText({ ...element, align: 'right' })
+    expect(centered.columnOffsets[0]).toBeCloseTo(35.9)
+    expect(rightAligned.columnOffsets[0]).toBeCloseTo(71.8)
+  })
+
+  it.each(['eastAsianVertical', 'stacked'] as const)('keeps spaces, markers and rich-run offsets in %s text', (textDirection) => {
+    const element = { id: 'vertical', type: 'text' as const, x: 0, y: 0, width: 600, height: 400, rotation: 0,
+      text: '甲\n乙\n丙', fontSize: 40, fontFamily: 'Arial', fontWeight: 400 as const, color: '#111111', align: 'left' as const,
+      textDirection, wordWrap: false,
+      paragraphs: [{ start: 0, end: 3, style: { listStyle: 'bullet' as const, listBulletChar: '◆', listMarkerFontFamily: 'Georgia' } },
+        { start: 4, end: 5, style: { listStyle: 'number' as const, listNumberFormat: 'romanUcPeriod' } }],
+      textRuns: [{ start: 2, end: 3, style: { color: '#FF0000', fontSize: 60, opacity: 0.5 } }],
+    }
+    const layout = layoutPresentationVerticalText(element)
+    expect(layout.columns).toEqual(['◆ 甲', '乙', 'I. 丙'])
+    expect(layout.sourceOffsets).toEqual([[0, 0, 0], [2], [4, 4, 4, 4]])
+    expect(layout.glyphStyles[0]![0]!.fontFamily).toBe('Georgia')
+    expect(layout.glyphStyles[0]![2]!.fontFamily).toBe('Arial')
+    expect(layout.glyphStyles[1]![0]).toMatchObject({ fontSize: 60, color: '#FF0000', opacity: 0.5 })
+    expect(formatPresentationText(element).match(/◆/g)).toHaveLength(1)
+    for (const space of [' ', '　']) {
+      const spaced = layoutPresentationVerticalText({ ...element, text: `背${space}景`, paragraphs: undefined, textRuns: undefined })
+      expect(spaced.columns).toEqual([`背${space}景`])
+      expect(spaced.rowOffsets).toEqual([[0, 40, 80]])
+      expect(spaced.columnHeights).toEqual([120])
+      const wrapped = layoutPresentationVerticalText({ ...element, text: `背${space}景`, height: 80, wordWrap: true, paragraphs: undefined, textRuns: undefined })
+      expect(wrapped.columns).toEqual([`背${space}`, '景'])
+      expect(wrapped.sourceOffsets).toEqual([[0, 1], [2]])
+    }
+  })
+
+  it('keeps unwrapped vertical paragraphs intact and applies tracking along rows and line spacing across columns', () => {
+    const element = {
+      id: 'template-vertical-copy',
+      type: 'text' as const,
+      x: 0,
+      y: 0,
+      width: 124,
+      height: 80,
+      rotation: 0,
+      text: '请插入您的文本内容\n请插入您的文本内容\n请插入您的文本内容',
+      fontSize: 24,
+      fontFamily: '楷体',
+      fontWeight: 400 as const,
+      color: '#000000',
+      align: 'left' as const,
+      textDirection: 'eastAsianVertical' as const,
+      wordWrap: false,
+      lineHeight: 1.5,
+      characterSpacing: 250,
+    }
+    const layout = layoutPresentationVerticalText(element)
+    expect(layout.columns).toEqual(element.text.split('\n'))
+    expect(layout.rowAdvance).toBe(30)
+    expect(layout.columnAdvance).toBe(36)
+    expect(layout.columnOffsets).toEqual([72, 36, 0])
+    expect(layoutPresentationVerticalText({ ...element, wordWrap: true }).columns.length).toBeGreaterThan(3)
+  })
+
   it('wraps East Asian vertical text to the text-frame height instead of overflowing in paragraph columns', () => {
     const element = {
       id: 'vertical-poem',
@@ -127,6 +209,7 @@ describe('presentation atoms', () => {
       '明年如应律',
       '先发映春台',
     ])
+    expect(layout.columnOffsets[0]! + element.fontSize).toBeLessThanOrEqual(element.width - 19.2)
     expect(stripPresentationTextFormatting(formatPresentationText(element), element)).toBe(element.text)
   })
 

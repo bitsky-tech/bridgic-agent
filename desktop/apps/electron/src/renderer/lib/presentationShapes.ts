@@ -1,4 +1,30 @@
-import type { PresentationShapeType } from '@/atoms/presentation'
+import type { PresentationShapeElement, PresentationShapeType } from '@/atoms/presentation'
+
+export const PRESENTATION_CONNECTOR_NAMESPACE = 'urn:bridgic:presentation:connector:v1'
+
+/** Only absolute connector commands are accepted, so drawing and export share one geometry. */
+export function presentationConnectorCommands(path: string): Array<{ command: string; values: number[] }> | null {
+  if (path.length > 16_384 || /[^MLHVQCZ\d\s.,eE+\-]/.test(path)) return null
+  const sizes: Record<string, number> = { M: 2, L: 2, H: 1, V: 1, Q: 4, C: 6, Z: 0 }
+  const tokens = path.match(/[MLHVQCZ]|[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?/g) ?? []
+  const result: Array<{ command: string; values: number[] }> = []
+  for (let index = 0; index < tokens.length;) {
+    const command = tokens[index++]!
+    const count = sizes[command]
+    if (count === undefined || index + count > tokens.length) return null
+    const values = tokens.slice(index, index + count).map(Number)
+    if (values.some(value => !Number.isFinite(value))) return null
+    result.push({ command, values })
+    index += count
+  }
+  return result[0]?.command === 'M' ? result : null
+}
+
+export function getPresentationShapePath(element: PresentationShapeElement): string {
+  if (isPresentationLineShape(element.type) && element.connectorPath && presentationConnectorCommands(element.connectorPath)) return element.connectorPath
+  const definition = getPresentationShapeDefinition(element.type)
+  return definition.drawingPath ?? definition.path
+}
 
 export type PresentationShapeCategoryId = 'lines' | 'rectangles' | 'basic' | 'arrows' | 'equation' | 'flowchart'
 
@@ -7,6 +33,7 @@ export interface PresentationShapeDefinition {
   category: PresentationShapeCategoryId
   name: { en: string; zh: string }
   path: string
+  drawingPath?: string
   strokeOnly?: boolean
 }
 
@@ -34,7 +61,7 @@ function shape(type: PresentationShapeType, category: PresentationShapeCategoryI
 }
 
 const LINE_SHAPES: PresentationShapeDefinition[] = [
-  shape('line', 'lines', 'Line', '直线', 'M 7 86 L 93 14', true),
+  { ...shape('line', 'lines', 'Line', '直线', 'M 7 86 L 93 14', true), drawingPath: 'M 0 0 L 100 100' },
   shape('lineArrow', 'lines', 'Arrow', '箭头', 'M 7 86 L 88 19 M 68 18 L 88 19 L 85 39', true),
   shape('lineDoubleArrow', 'lines', 'Double arrow', '双箭头', 'M 12 81 L 88 19 M 12 81 L 15 61 M 12 81 L 32 82 M 88 19 L 85 39 M 88 19 L 68 18', true),
   shape('elbowConnector', 'lines', 'Elbow connector', '肘形连接符', 'M 10 18 H 53 V 82 H 92', true),

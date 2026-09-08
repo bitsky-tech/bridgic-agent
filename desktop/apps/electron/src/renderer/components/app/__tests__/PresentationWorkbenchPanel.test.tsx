@@ -12,6 +12,7 @@ const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom } = aw
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
+const { presentationTextStyleAt } = await import('@/lib/presentationText')
 const { installApiStub } = await import('@/lib/apiStub')
 const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
@@ -68,12 +69,37 @@ async function mountPanel(withTestContent = true, onClose?: () => void) {
         <PresentationWorkbenchPanel active={false} onClose={onClose} />
       </Provider>,
     )
+  })
+  // Flush initialization effects after React has committed the mounted panel.
+  await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
   })
   return { host, root, store }
 }
 
 describe('PresentationWorkbenchPanel', () => {
+  it('scales inline text styles and insets when the ribbon changes the slide ratio', async () => {
+    const { host, root, store } = await mountPanel()
+    try {
+      const current = store.get(currentPresentationDocumentAtom)
+      const text = { id: 'ratio-text', type: 'text' as const, text: '标题 English', x: 100, y: 100, width: 400, height: 200,
+        rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 700 as const, color: '#111111', align: 'left' as const,
+        textRuns: [{ start: 3, end: 10, style: { fontSize: 20, color: '#0088CC' } }], lineSpacing: 48,
+        textInsets: { left: 8, top: 4, right: 8, bottom: 4 },
+      }
+      await act(async () => store.set(currentPresentationDocumentAtom, { ...current, slides: current.slides.map(slide => ({ ...slide, elements: [text] })) }))
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-design"]')!.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-slide-ratio"]')!.click())
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="presentation-slide-ratio-standard"]')!.click())
+      const resized = store.get(currentPresentationDocumentAtom)
+      expect(resized.pageSize.width).toBe(960)
+      const element = resized.slides[0]!.elements[0]!
+      expect(element).toMatchObject({ width: 300, fontSize: 30, lineSpacing: 36, textInsets: { left: 6, right: 6, top: 3, bottom: 3 } })
+      if (element.type !== 'text') throw new Error('Expected text')
+      expect(presentationTextStyleAt(element, 3)).toMatchObject({ fontSize: 15, color: '#0088CC' })
+    } finally { await act(async () => root.unmount()) }
+  })
+
   it('selects a slide without advancing the document revision', async () => {
     const { host, root, store } = await mountPanel()
     const initial = store.get(currentPresentationDocumentAtom)
@@ -629,9 +655,9 @@ describe('PresentationWorkbenchPanel', () => {
       if (!host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.disabled) break
       await act(async () => new Promise((resolve) => setTimeout(resolve, 10)))
     }
-    if (host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')?.disabled) {
-      await addTextThroughMenu()
-    }
+    const sourceDocument = store.get(currentPresentationDocumentAtom)
+    const source = sourceDocument.slides.find((slide) => slide.id === sourceDocument.selectedSlideId)!.elements.at(-1)
+    expect(source).toMatchObject({ type: 'text', fontWeight: 700 })
     const formatPainter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')!
     expect(formatPainter.disabled).toBe(false)
     await act(async () => formatPainter.click())

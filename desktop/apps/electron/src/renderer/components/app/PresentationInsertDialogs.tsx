@@ -20,7 +20,7 @@ export interface PresentationInsertTableValue {
 
 export interface PresentationInsertChartSeries {
   name: string
-  values: number[]
+  values: Array<number | null>
 }
 
 export interface PresentationInsertChartValue {
@@ -93,9 +93,9 @@ export function parsePresentationChartSeries(text: string, categoryCount: number
     const separator = line.indexOf(':')
     if (separator <= 0) return null
     const name = line.slice(0, separator).trim()
-    const rawValues = splitCommaSeparated(line.slice(separator + 1))
-    const values = rawValues.map(Number)
-    if (!name || values.length !== categoryCount || values.some((value) => !Number.isFinite(value))) return null
+    const rawValues = line.slice(separator + 1).split(/[,，]/).map(value => value.trim())
+    const values = rawValues.map(value => value === '' ? null : Number(value))
+    if (!name || values.length !== categoryCount || values.some((value) => value !== null && !Number.isFinite(value))) return null
     parsed.push({ name, values })
   }
   return parsed
@@ -227,7 +227,7 @@ function ChartDialog({ initialValue, onClose, onSubmit }: {
   const pieSeriesInvalid = (chartType === 'pie' || chartType === 'doughnut') && series?.length !== 1
   const pieValuesInvalid = (chartType === 'pie' || chartType === 'doughnut')
     && Boolean(series?.length === 1)
-    && !series![0]!.values.some((value) => value > 0)
+    && !series![0]!.values.some((value) => value !== null && value > 0)
   const invalid = !series || pieSeriesInvalid || pieValuesInvalid
   let validationMessage = t('session.presentation.insertDialog.seriesError')
   if (pieSeriesInvalid) validationMessage = t('session.presentation.insertDialog.pieSeriesError')

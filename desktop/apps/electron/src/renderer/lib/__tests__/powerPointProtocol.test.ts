@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { createBlankPresentationDocument, type PresentationWorkspace } from '@/atoms/presentation'
 import { executePowerPointRequest } from '../powerPointProtocol'
+import { presentationTextStyleAt } from '../presentationText'
 
 function workspace(): PresentationWorkspace {
   const document = createBlankPresentationDocument('Quarterly review')
@@ -8,6 +9,157 @@ function workspace(): PresentationWorkspace {
 }
 
 describe('PowerPoint renderer protocol', () => {
+  it('respects explicit Agent run sizes alongside base formatting and retains numbering through later edits', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    slide.elements = [{ id: 'rich', type: 'text', text: '标题 English', x: 20, y: 20, width: 600, height: 120, rotation: 0,
+      fontSize: 40, fontFamily: 'Arial', fontWeight: 700, color: '#111111', align: 'left',
+      textRuns: [{ start: 3, end: 10, style: { fontSize: 20, fontWeight: 400, color: '#0088CC' } }],
+    }]
+    const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
+    const page = (read.result as { page: { markdown: string; revision: string } }).page
+    const runs = JSON.stringify([{ start: 3, end: 10, style: { fontSize: 40, fontWeight: 400, color: '#0088CC', opacity: 0.25 } }]).replaceAll('"', '&quot;')
+    const paragraphs = JSON.stringify([{ start: 0, end: 10, style: { listStyle: 'number', listStartAt: 9, listNumberFormat: 'romanUcPeriod' } }]).replaceAll('"', '&quot;')
+    const replacement = page.markdown.match(/<PptText\b[\s\S]*?<\/PptText>/)![0]
+      .replace('fontSize="40"', 'fontSize="80"').replace(/textRuns="[^"]*"/, `textRuns="${runs}" paragraphs="${paragraphs}"`)
+    const result = await executePowerPointRequest(initial, { method: 'edit_ppt_page', params: {
+      page_id: slide.id, ref: 'rich', expected_revision: page.revision, replacement,
+    } })
+    const text = result.workspace?.documents[0]?.slides[0]?.elements[0]
+    if (text?.type !== 'text') throw new Error(JSON.stringify(result.result))
+    expect(presentationTextStyleAt(text, 3)).toMatchObject({ fontSize: 40, fontWeight: 400, color: '#0088CC' })
+    expect(text.paragraphs?.[0]?.style.listStartAt).toBe(9)
+    expect(text.paragraphs?.[0]?.style.listNumberFormat).toBe('romanUcPeriod')
+    expect(presentationTextStyleAt(text, 3).opacity).toBe(0.25)
+    const updated = await executePowerPointRequest(result.workspace!, { method: 'get_ppt_page', params: { page_id: slide.id } })
+    expect((updated.result as { page: { markdown: string } }).page.markdown).toContain('listStartAt&quot;:9')
+  })
+  it('keeps middle run and paragraph formatting when the Agent changes several separated words', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    slide.elements = [{
+      id: 'rich', type: 'text', text: '标题 English 结尾\n正文', x: 20, y: 20, width: 500, height: 200, rotation: 0,
+      fontSize: 40, fontFamily: 'Arial', fontWeight: 700, color: '#111111', align: 'left', lineSpacing: 48,
+      textRuns: [{ start: 3, end: 10, style: { fontSize: 20, fontWeight: 400, color: '#0088CC' } }],
+      paragraphs: [{ start: 0, end: 13, style: { align: 'center', lineSpacing: 48 } },
+        { start: 14, end: 16, style: { align: 'right', lineSpacing: 28, spaceBefore: 12 } }],
+    }]
+    const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
+    const page = (read.result as { page: { markdown: string; revision: string } }).page
+    expect(page.markdown).toContain('paragraphs=')
+    for (const omitAttributes of [false, true]) {
+      let replacement = page.markdown.match(/<PptText\b[\s\S]*?<\/PptText>/)![0].replace('标题', '新标题').replace('结尾', '新结尾').replace('正文', '新正文')
+      if (omitAttributes) replacement = replacement.replace(/ (textRuns|paragraphs)="[^"]*"/g, '')
+      const edited = await executePowerPointRequest(initial, { method: 'edit_ppt_page', params: {
+        page_id: slide.id, ref: 'rich', expected_revision: page.revision, replacement,
+      } })
+      const text = edited.workspace?.documents[0]?.slides[0]?.elements[0]
+      if (text?.type !== 'text') throw new Error(JSON.stringify(edited.result))
+      expect(presentationTextStyleAt(text, 4)).toMatchObject({ fontSize: 20, fontWeight: 400, color: '#0088CC' })
+      expect(text.paragraphs).toEqual([
+        { start: 0, end: 15, style: expect.objectContaining({ align: 'center', lineSpacing: 48 }) },
+        { start: 16, end: 19, style: expect.objectContaining({ align: 'right', lineSpacing: 28, spaceBefore: 12 }) },
+      ])
+    }
+  })
+
+  it('retains authored blank-line size when the Agent edits the surrounding text', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    slide.elements = [{ id: 'blank-lines', type: 'text', text: 'Before\n\nAfter', x: 0, y: 0, width: 600, height: 400, rotation: 0,
+      fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left',
+      paragraphs: [{ start: 0, end: 6, style: {} }, { start: 7, end: 7, style: {}, endStyle: { fontSize: 128 } }, { start: 8, end: 13, style: {} }],
+    }]
+    const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
+    const page = (read.result as { page: { markdown: string; revision: string } }).page
+    for (const omitAttributes of [false, true]) {
+      let replacement = page.markdown.match(/<PptText\b[\s\S]*?<\/PptText>/)![0].replace('Before', 'New Before').replace('After', 'New After')
+      if (omitAttributes) replacement = replacement.replace(/ paragraphs="[^"]*"/g, '')
+      const edited = await executePowerPointRequest(initial, { method: 'edit_ppt_page', params: { page_id: slide.id, ref: 'blank-lines', expected_revision: page.revision, replacement } })
+      expect(edited.workspace?.documents[0]?.slides[0]?.elements[0]).toMatchObject({ text: 'New Before\n\nNew After',
+        paragraphs: [{ start: 0, end: 10 }, { start: 11, end: 11, endStyle: { fontSize: 128 } }, { start: 12, end: 21 }],
+      })
+    }
+  })
+
+  it('rejects malformed paragraph partitions and styles without mutating the document', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
+    for (const paragraphs of [[], [{ start: 1, end: 4, style: {} }], [{ start: 0, end: 99, style: {} }],
+      [{ start: 0, end: 4, style: { lineSpacing: -1 } }], [{ start: 0, end: 4, style: { align: 'invalid' } }],
+      [{ start: 0, end: 1, style: {} }, { start: 2, end: 4, style: {} }],
+      ...[null, { fontSize: -1 }, { opacity: 2 }, { fontFamily: 12 }].map(endStyle => [{ start: 0, end: 4, style: {}, endStyle }]),
+      ...[0, -1, 1.5, 32768, '5'].map(listStartAt => [{ start: 0, end: 4, style: { listStartAt } }])]) {
+      const serialized = JSON.stringify(paragraphs).replaceAll('"', '&quot;')
+      const result = await executePowerPointRequest(initial, { method: 'insert_ppt_element', params: {
+        page_id: slide.id, expected_revision: (read.result as { page: { revision: string } }).page.revision,
+        element: `<PptText paragraphs="${serialized}">Text</PptText>`,
+      } })
+      expect(result.result).toMatchObject({ status: 'invalid' })
+      expect(result.workspace).toBeUndefined()
+    }
+    expect(slide.elements).toEqual([])
+  })
+
+  it('preserves rich text through agent moves, source edits and explicit frame formatting', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    slide.elements = [{
+      id: 'rich-text', type: 'text', text: '标题 English', x: 20, y: 100, width: 400, height: 100, rotation: 0,
+      fontSize: 40, fontFamily: 'Arial', fontWeight: 700, color: '#111111', align: 'left', lineSpacing: 48,
+      textRuns: [{ start: 3, end: 10, style: { fontSize: 20, fontWeight: 400, color: '#0088CC' } }],
+    }]
+    const readPage = async (state: PresentationWorkspace) => {
+      const read = await executePowerPointRequest(state, { method: 'get_ppt_page', params: { page_id: slide.id } })
+      return (read.result as { page: { markdown: string; revision: string } }).page
+    }
+    const change = async (state: PresentationWorkspace, transform: (markdown: string) => string) => {
+      const page = await readPage(state)
+      const element = page.markdown.match(/<PptText\b[\s\S]*?<\/PptText>/)![0]
+      const result = await executePowerPointRequest(state, { method: 'edit_ppt_page', params: {
+        page_id: slide.id, ref: 'rich-text', expected_revision: page.revision, replacement: transform(element),
+      } })
+      expect(result.workspace).toBeDefined()
+      return result.workspace!
+    }
+    expect((await readPage(initial)).markdown).toContain('textRuns=')
+    const moved = await change(initial, markdown => markdown.replace('x="20"', 'x="35"'))
+    const movedText = moved.documents[0]!.slides[0]!.elements[0]!
+    expect(movedText).toMatchObject({ x: 35, lineSpacing: 48 })
+    if (movedText.type !== 'text') throw new Error('Expected text')
+    expect(presentationTextStyleAt(movedText, 3)).toMatchObject({ fontSize: 20, color: '#0088CC', fontWeight: 400 })
+    const edited = await change(moved, markdown => markdown.replace('标题 English', '新标题 English'))
+    const editedText = edited.documents[0]!.slides[0]!.elements[0]!
+    if (editedText.type !== 'text') throw new Error('Expected text')
+    expect(presentationTextStyleAt(editedText, 4)).toMatchObject({ fontSize: 20, color: '#0088CC', fontWeight: 400 })
+    const colored = await change(edited, markdown => markdown.replace('color="#111111"', 'color="#FF0000"'))
+    const coloredText = colored.documents[0]!.slides[0]!.elements[0]!
+    if (coloredText.type !== 'text') throw new Error('Expected text')
+    expect(presentationTextStyleAt(coloredText, 4)).toMatchObject({ fontSize: 20, color: '#FF0000' })
+    expect(slide.elements[0]).toMatchObject({ text: '标题 English', x: 20 })
+  })
+
+  it('rejects invalid inline style ranges without changing the document', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
+    for (const textRuns of [
+      [{ start: 0, end: 99, style: { fontSize: 20 } }],
+      [{ start: 0, end: 1, style: { fontSize: -1 } }],
+      [{ start: 0, end: 1, style: { unexpected: true } }],
+    ]) {
+      const serialized = JSON.stringify(textRuns).replaceAll('"', '&quot;')
+      const result = await executePowerPointRequest(initial, { method: 'insert_ppt_element', params: {
+        page_id: slide.id, expected_revision: (read.result as { page: { revision: string } }).page.revision,
+        element: `<PptText textRuns="${serialized}">Text</PptText>`,
+      } })
+      expect(result.result).toMatchObject({ status: 'invalid' })
+      expect(result.workspace).toBeUndefined()
+    }
+    expect(slide.elements).toEqual([])
+  })
+
   it('opens a new target with metadata and one blank page summary', async () => {
     const opened = await executePowerPointRequest(workspace(), {
       method: 'view_ppt',

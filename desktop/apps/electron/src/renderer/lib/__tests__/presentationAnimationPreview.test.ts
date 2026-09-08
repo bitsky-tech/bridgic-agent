@@ -9,6 +9,8 @@ import {
   buildPresentationAnimationTimeline,
   createPresentationAnimationParts,
   getPresentationAnimationHiddenElementIds,
+  getPresentationAnimationDisplayStates,
+  getPresentationColorAnimations,
 } from '@/lib/presentationAnimationPreview'
 
 function textElement(id: string, patch: Partial<PresentationTextElement> = {}): PresentationTextElement {
@@ -53,6 +55,35 @@ function singleEntry(element: PresentationElement) {
 }
 
 describe('presentation animation preview', () => {
+  it.each(['fillColor', 'textColor', 'zoom'] as const)('retains grouped %s results without changing source geometry or rich text', effect => {
+    const elements: PresentationElement[] = [
+      shapeElement('card', { groupId: 'card-group', animation: effect, animationColor: '#2266CC' }),
+      textElement('label', { groupId: 'card-group', x: 130, y: 180, width: 200, height: 60,
+        textRuns: [{ start: 0, end: 5, style: { color: '#CC2222', fontSize: 21, fontWeight: 700 } }],
+      }),
+      shapeElement('other', { fill: '#999999' }),
+    ]
+    const original = JSON.stringify(elements)
+    expect(getPresentationAnimationDisplayStates(elements, new Set()).size).toBe(0)
+    const completed = new Set(['group:card-group'])
+    const state = getPresentationAnimationDisplayStates(elements, completed)
+    expect(state.has('other')).toBe(false)
+    if (effect === 'fillColor') {
+      expect(state.size).toBe(1)
+      expect(state.get('card')!.element).toMatchObject({ fill: '#2266CC', borderColor: '#D7D8DE' })
+    } else if (effect === 'textColor') {
+      expect(state.size).toBe(1)
+      expect(state.get('label')!.element).toMatchObject({ color: '#2266CC', textRuns: [{ start: 0, end: 5, style: { color: '#2266CC', fontSize: 21, fontWeight: 700 } }] })
+    } else {
+      expect(state.size).toBe(2)
+      expect(state.get('card')!.scale).toEqual({ x: 300, y: 240, factor: 1.5 })
+      expect(state.get('label')!.scale).toEqual(state.get('card')!.scale)
+      expect(state.get('label')!.element).toBe(elements[1]!)
+    }
+    expect(getPresentationAnimationDisplayStates(elements, completed)).toEqual(state)
+    expect(JSON.stringify(elements)).toBe(original)
+  })
+
   it('collapses a grouped card into one animation target with union geometry', () => {
     const elements: PresentationElement[] = [
       shapeElement('card', {
@@ -159,20 +190,17 @@ describe('presentation animation preview', () => {
     expect(frames.some((frame) => 'left' in frame || 'top' in frame)).toBe(false)
   })
 
-  it('cross-fades to the requested fill and text colors', () => {
-    const fillParts = createPresentationAnimationParts(singleEntry(shapeElement('fill', {
-      animation: 'fillColor',
-      animationColor: '#F2B91F',
-    })))
-    const textParts = createPresentationAnimationParts(singleEntry(textElement('text', {
-      animation: 'textColor',
-      animationColor: '#2678E8',
-    })))
-
-    expect(fillParts).toHaveLength(2)
-    expect((fillParts[1]?.element as PresentationShapeElement).fill).toBe('#F2B91F')
-    expect((textParts[1]?.element as PresentationTextElement).color).toBe('#2678E8')
-    expect(fillParts[1]?.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }])
+  it('schedules fill and text colors on their original targets, including delayed grouped effects', () => {
+    const timeline = buildPresentationAnimationTimeline([
+      shapeElement('fill', { groupId: 'card', animation: 'fillColor', animationColor: '#F2B91F', animationDuration: 800, animationDelay: 200 }),
+      textElement('label', { groupId: 'card' }),
+      textElement('text', { animation: 'textColor', animationColor: '#2678E8', animationStart: 'afterPrevious', animationDelay: 100 }),
+    ])
+    const animations = getPresentationColorAnimations(timeline, 7)
+    expect([...animations.keys()]).toEqual(['fill', 'text'])
+    expect(animations.get('fill')).toMatchObject({ property: 'fill', color: '#F2B91F', runKey: 7, options: { delay: 200, duration: 800, fill: 'both' } })
+    expect(animations.get('text')).toMatchObject({ property: 'color', color: '#2678E8', options: { delay: 1100 } })
+    expect(timeline.flatMap(entry => createPresentationAnimationParts(entry))).toEqual([])
   })
 
   it('keeps dissolve ordering deterministic for stable visual previews', () => {

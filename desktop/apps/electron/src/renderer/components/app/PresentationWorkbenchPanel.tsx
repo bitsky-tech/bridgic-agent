@@ -1,3 +1,4 @@
+import { presentationChartValueTicks, presentationChartHoleSize, presentationChartValue, presentationChartLineSegments, presentationLineLabelY, presentationPieLabels } from '@/lib/presentationCharts'
 import {
   useCallback,
   useEffect,
@@ -18,6 +19,7 @@ import type {
   FabricObject,
   Group as FabricGroup,
   Point as FabricPoint,
+  TextStyle,
 } from 'fabric'
 import {
   ChevronLeft,
@@ -34,7 +36,6 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import {
-  PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
   createInitialPresentationDocument,
   createPresentationId,
@@ -48,6 +49,7 @@ import {
   presentationSessionIdAtom,
   stripPresentationTextFormatting,
   type PresentationAnimationEffect,
+  type PresentationChartElement,
   type PresentationComment,
   type PresentationDocument,
   type PresentationElement,
@@ -72,9 +74,11 @@ import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
+import { resizePresentationDocument } from '@/lib/presentationDesign'
 import {
   buildPresentationAnimationPlaybackSteps,
   getPresentationAnimationHiddenElementIds,
+  getPresentationAnimationDisplayStates,
 } from '@/lib/presentationAnimationPreview'
 import { buildPresentationTextRevealFrames } from '@/lib/presentationAgentTransition'
 import {
@@ -90,6 +94,15 @@ import {
 } from '@/lib/presentationCanvasSelection'
 import {
   presentationRenderingFontFamily,
+  presentationScriptMetrics,
+  presentationTextDisplaySegments,
+  presentationTextParagraphs,
+  scalePresentationParagraphs,
+  PRESENTATION_TEXT_LINE_METRICS,
+  presentationTextFrame,
+  presentationTextStyleAt,
+  presentationParagraphTextStyle,
+  patchPresentationText,
   shouldSplitPresentationTextByGrapheme,
 } from '@/lib/presentationText'
 import {
@@ -125,6 +138,7 @@ import {
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
 import {
+  getPresentationShapePath,
   getPresentationShapeDefinition,
   getPresentationShapeSize,
   isPresentationLineShape,
@@ -142,6 +156,9 @@ import {
   type PresentationViewOptions,
 } from './PresentationRibbon'
 import {
+  getPresentationPieSlices,
+  presentationPieSlicePath,
+  getPresentationChartLayout,
   getPresentationChartRange,
   getPresentationChartValueRatio,
   PresentationSlidePreview,
@@ -158,6 +175,7 @@ export interface PresentationWorkbenchPanelProps {
 }
 
 interface SlideshowTransitionRun {
+  previousCompletedTargetIds: ReadonlySet<string>
   direction: PresentationTransitionPlaybackDirection
   fromIndex: number
   runKey: number
@@ -994,6 +1012,22 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
   return runtime
 }
 
+function createFixedGraphicGroup(fabric: FabricModule, element: PresentationTableElement | PresentationChartElement, objects: FabricObject[], width = element.width, height = element.height): FabricGroup {
+  const frame = new fabric.Rect({ left: 0, top: 0, width, height, originX: 'left', originY: 'top', fill: 'transparent', strokeWidth: 0 })
+  const group = new fabric.Group([frame], {
+    left: 0, top: 0, width, height, originX: 'left', originY: 'top', strokeWidth: 0,
+    layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+    clipPath: new fabric.Rect({ width, height, originX: 'center', originY: 'center' }),
+    objectCaching: false,
+  })
+  // Labels must not change the chart/table frame or rescale its plotted geometry.
+  group.add(...objects)
+  group.set({ left: element.x, top: element.y, scaleX: element.width / width, scaleY: element.height / height,
+    flipX: element.flipHorizontal, flipY: element.flipVertical })
+  group.setCoords()
+  return group
+}
+
 function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
   const rows = Math.max(1, element.cells.length)
   const columns = Math.max(1, ...element.cells.map((row) => row.length))
@@ -1004,82 +1038,87 @@ function createTableFabricObject(fabric: FabricModule, element: PresentationTabl
     for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
       const header = element.headerRow && rowIndex === 0
       objects.push(new fabric.Rect({
+        originX: 'left',
+        originY: 'top',
         left: columnIndex * cellWidth,
         top: rowIndex * cellHeight,
-        width: cellWidth,
-        height: cellHeight,
+        width: cellWidth - 1,
+        height: cellHeight - 1,
+        strokeWidth: 1,
         fill: header ? element.headerFill : element.bodyFill,
         stroke: element.borderColor,
-        strokeWidth: 1,
       }))
-      objects.push(new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
+      const text = new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
+        originX: 'left',
+        originY: 'center',
+        strokeWidth: 0,
         left: (columnIndex * cellWidth) + 10,
-        top: (rowIndex * cellHeight) + Math.max(4, (cellHeight - element.fontSize * 1.25) / 2),
+        top: (rowIndex + 0.5) * cellHeight,
         width: Math.max(12, cellWidth - 20),
         height: Math.max(12, cellHeight - 8),
-        fill: header ? '#FFFFFF' : element.textColor,
-        fontFamily: 'Aptos',
+        fill: header ? element.headerTextColor ?? '#FFFFFF' : element.textColor,
+        fontFamily: presentationRenderingFontFamily('Aptos', element.cells[rowIndex]?.[columnIndex] ?? ''),
+        splitByGrapheme: shouldSplitPresentationTextByGrapheme(element.cells[rowIndex]?.[columnIndex] ?? ''),
         fontSize: element.fontSize,
         fontWeight: header ? 600 : 400,
         textAlign: 'left',
-      }))
+      })
+      const contentHeight = Math.max(0, cellHeight - 8)
+      // Clip each cell independently; overflowing text starts at the top of its own row.
+      text.set({
+        top: rowIndex * cellHeight + 4 + Math.max(contentHeight, text.height) / 2,
+        clipPath: new fabric.Rect({
+          width: Math.max(0, cellWidth - 20), height: contentHeight,
+          left: (cellWidth - 20 - text.width) / 2,
+          top: Math.min(0, (contentHeight - text.height) / 2),
+          originX: 'center', originY: 'center', strokeWidth: 0,
+        }),
+      })
+      objects.push(text)
     }
   }
-  return fitFabricGroupToElement(new fabric.Group(objects), element)
-}
-
-function chartPolarPoint(cx: number, cy: number, radius: number, angle: number): { x: number; y: number } {
-  const radians = (angle - 90) * (Math.PI / 180)
-  return { x: cx + (radius * Math.cos(radians)), y: cy + (radius * Math.sin(radians)) }
-}
-
-function chartPieSlicePath(cx: number, cy: number, radius: number, start: number, end: number, innerRadius: number): string {
-  const startPoint = chartPolarPoint(cx, cy, radius, end)
-  const endPoint = chartPolarPoint(cx, cy, radius, start)
-  const largeArc = end - start > 180 ? 1 : 0
-  if (innerRadius <= 0) {
-    return `M ${cx} ${cy} L ${startPoint.x} ${startPoint.y} A ${radius} ${radius} 0 ${largeArc} 0 ${endPoint.x} ${endPoint.y} Z`
-  }
-  const innerStart = chartPolarPoint(cx, cy, innerRadius, end)
-  const innerEnd = chartPolarPoint(cx, cy, innerRadius, start)
-  return `M ${startPoint.x} ${startPoint.y} A ${radius} ${radius} 0 ${largeArc} 0 ${endPoint.x} ${endPoint.y} L ${innerEnd.x} ${innerEnd.y} A ${innerRadius} ${innerRadius} 0 ${largeArc} 1 ${innerStart.x} ${innerStart.y} Z`
+  return createFixedGraphicGroup(fabric, element, objects)
 }
 
 function createChartFabricObject(fabric: FabricModule, element: Extract<PresentationElement, { type: 'chart' }>): FabricObject {
+  const { layoutWidth, layoutHeight, plot } = getPresentationChartLayout(element)
+  const { x: plotX, y: plotY, width: plotWidth, height: plotHeight } = plot
   const chartAreaFill = element.chartAreaFill ?? '#FFFFFF'
   const plotAreaFill = element.plotAreaFill ?? 'transparent'
   const categoryAxisLabelColor = element.categoryAxisLabelColor ?? '#666571'
   const gridLineColor = element.gridLineColor ?? '#E9EAF0'
   const dataLabelColor = element.dataLabelColor ?? '#20202B'
   const objects: FabricObject[] = [new fabric.Rect({
+    originX: 'left',
+    originY: 'top',
     left: 0,
     top: 0,
-    width: element.width,
-    height: element.height,
+    width: layoutWidth - 1,
+    height: layoutHeight - 1,
     fill: chartAreaFill,
     stroke: chartAreaFill === 'transparent' ? 'transparent' : '#E3E4EA',
     strokeWidth: 1,
   })]
-  const titleHeight = element.title ? 46 : 14
-  const legendHeight = element.showLegend ? 42 : 10
   if (element.title) {
     objects.push(new fabric.Textbox(element.title, {
+      originX: 'left',
+      originY: 'top',
+      strokeWidth: 0,
       left: 36,
       top: 10,
-      width: element.width - 72,
+      width: layoutWidth - 72,
       height: 30,
-      fill: '#20202B',
+      fill: element.categoryAxisLabelColor ?? '#20202B',
       fontFamily: 'Aptos Display',
       fontSize: 20,
       fontWeight: 600,
       textAlign: 'center',
     }))
   }
-  const plotX = element.chartType === 'bar' ? 110 : 54
-  const plotY = titleHeight
-  const plotWidth = Math.max(80, element.width - plotX - 28)
-  const plotHeight = Math.max(60, element.height - titleHeight - legendHeight - 34)
   objects.push(new fabric.Rect({
+    originX: 'left',
+    originY: 'top',
+    strokeWidth: 0,
     left: plotX,
     top: plotY,
     width: plotWidth,
@@ -1088,35 +1127,28 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
     stroke: 'transparent',
   }))
   if (element.chartType === 'pie' || element.chartType === 'doughnut') {
-    const values = element.series[0]?.values.map((value) => Math.max(0, value)) ?? []
-    const total = Math.max(1, values.reduce((sum, value) => sum + value, 0))
-    const radius = Math.min(plotWidth, plotHeight) * 0.42
-    const cx = plotX + (plotWidth / 2)
-    const cy = plotY + (plotHeight / 2)
-    const positiveValues = values.filter((value) => value > 0)
-    if (positiveValues.length === 1) {
-      const positiveIndex = values.findIndex((value) => value > 0)
-      objects.push(new fabric.Circle({
-        left: cx - radius,
-        top: cy - radius,
-        radius,
-        fill: element.colors[positiveIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+    const slices = getPresentationPieSlices(element.series[0]?.values ?? [])
+    const radius = Math.max(8, Math.min(plotWidth, plotHeight) * 0.43)
+    const cx = plotX + plotWidth / 2
+    const cy = plotY + plotHeight / 2
+    const holeSize = element.chartType === 'doughnut' ? presentationChartHoleSize(element.holeSize) : 0
+    for (const { index, start, end } of slices) {
+      objects.push(new fabric.Path(presentationPieSlicePath(cx, cy, radius, start, end, radius * holeSize / 100), {
+        originX: 'left', originY: 'top',
+        fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
+        fillRule: 'evenodd', stroke: slices.length > 1 ? '#FFFFFF' : undefined,
+        strokeWidth: slices.length > 1 ? 2 : 0,
       }))
-      if (element.chartType === 'doughnut') {
-        objects.push(new fabric.Circle({ left: cx - (radius * 0.56), top: cy - (radius * 0.56), radius: radius * 0.56, fill: plotAreaFill === 'transparent' ? chartAreaFill : plotAreaFill }))
-      }
-    } else if (positiveValues.length > 1) {
-      let angle = 0
-      values.forEach((value, index) => {
-        const start = angle
-        angle += (value / total) * 360
-        if (angle <= start) return
-        objects.push(new fabric.Path(chartPieSlicePath(cx, cy, radius, start, angle, element.chartType === 'doughnut' ? radius * 0.56 : 0), {
-          fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
-          stroke: '#FFFFFF',
-          strokeWidth: 2,
-        }))
-      })
+    }
+    for (const label of presentationPieLabels(element, slices, plot)) {
+      const originX = ({ middle: 'center', start: 'left', end: 'right' } as const)[label.anchor]
+      if (label.leader) objects.push(new fabric.Polyline(label.leader, {
+        fill: 'transparent', stroke: categoryAxisLabelColor, strokeWidth: 1,
+      }))
+      objects.push(new fabric.FabricText(label.text, {
+        left: label.x, top: label.y, originX,
+        originY: 'center', strokeWidth: 0, fontFamily: 'Aptos', fontSize: label.fontSize, fill: dataLabelColor,
+      }))
     }
   } else if (element.chartType === 'bar') {
     const categoryCount = Math.max(1, element.categories.length)
@@ -1125,10 +1157,22 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
     const valueX = (value: number) => plotX + (getPresentationChartValueRatio(value, range) * plotWidth)
     const zeroX = valueX(0)
     const groupHeight = plotHeight / categoryCount
-    const barHeight = Math.max(3, (groupHeight - 8) / seriesCount)
-    objects.push(new fabric.Line([zeroX, plotY, zeroX, plotY + plotHeight], { stroke: '#AEB0BA', strokeWidth: 1.5 }))
+    const barHeight = Math.max(2, (groupHeight - 8) / seriesCount)
+    for (const tick of presentationChartValueTicks(range, plotWidth, true)) {
+      const x = plotX + plotWidth * tick.ratio
+      const originX = tick.ratio === 0 ? 'left' : 'center'
+      objects.push(new fabric.Line([x, plotY, x, plotY + plotHeight], { originX: 'left', originY: 'top', stroke: gridLineColor, strokeWidth: 1 }))
+      objects.push(new fabric.FabricText(tick.label, {
+        left: x, top: plotY + plotHeight + 14, originX: tick.ratio === 1 ? 'right' : originX,
+        originY: 'center', strokeWidth: 0, fontFamily: 'Aptos', fontSize: tick.fontSize, fill: element.valueAxisLabelColor ?? '#666571',
+      }))
+    }
+    objects.push(new fabric.Line([zeroX, plotY, zeroX, plotY + plotHeight], { originX: 'left', originY: 'top', stroke: '#AEB0BA', strokeWidth: 1.5 }))
     element.categories.forEach((category, categoryIndex) => {
       objects.push(new fabric.Textbox(category, {
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
         left: 6,
         top: plotY + (categoryIndex * groupHeight) + (groupHeight / 2) - 9,
         width: plotX - 18,
@@ -1139,19 +1183,26 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
         textAlign: 'right',
       }))
       element.series.forEach((series, seriesIndex) => {
-        const value = series.values[categoryIndex] ?? 0
+        const value = presentationChartValue(series.values[categoryIndex], element.displayBlanksAs)
+        if (value === null) return
         const valuePosition = valueX(value)
         objects.push(new fabric.Rect({
+          originX: 'left',
+          originY: 'top',
+          strokeWidth: 0,
           left: Math.min(valuePosition, zeroX),
           top: plotY + (categoryIndex * groupHeight) + 4 + (seriesIndex * barHeight),
           width: Math.abs(valuePosition - zeroX),
-          height: Math.max(2, barHeight - 2),
+          height: Math.max(1, barHeight - 2),
           rx: 2,
           ry: 2,
           fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
         }))
         if (element.showValue) {
           objects.push(new fabric.Textbox(String(value), {
+            originX: 'left',
+            originY: 'top',
+            strokeWidth: 0,
             left: value >= 0 ? valuePosition + 4 : valuePosition - 38,
             top: plotY + (categoryIndex * groupHeight) + 2 + (seriesIndex * barHeight),
             width: 34,
@@ -1169,24 +1220,32 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
     const range = getPresentationChartRange(element.series)
     const valueY = (value: number) => plotY + ((1 - getPresentationChartValueRatio(value, range)) * plotHeight)
     const zeroY = valueY(0)
-    for (let gridIndex = 0; gridIndex <= 4; gridIndex += 1) {
-      const y = plotY + ((plotHeight / 4) * gridIndex)
-      objects.push(new fabric.Line([plotX, y, plotX + plotWidth, y], { stroke: gridLineColor, strokeWidth: 1 }))
+    for (const tick of presentationChartValueTicks(range, plotHeight)) {
+      const y = plotY + plotHeight * (1 - tick.ratio)
+      objects.push(new fabric.Line([plotX, y, plotX + plotWidth, y], { originX: 'left', originY: 'top', stroke: gridLineColor, strokeWidth: 1 }))
+      objects.push(new fabric.FabricText(tick.label, {
+        left: plotX - 10, top: y, originX: 'right', originY: 'center', strokeWidth: 0,
+        fontFamily: 'Aptos', fontSize: tick.fontSize, fill: element.valueAxisLabelColor ?? '#666571',
+      }))
     }
-    objects.push(new fabric.Line([plotX, zeroY, plotX + plotWidth, zeroY], { stroke: '#AEB0BA', strokeWidth: 1.5 }))
+    objects.push(new fabric.Line([plotX, zeroY, plotX + plotWidth, zeroY], { originX: 'left', originY: 'top', stroke: '#AEB0BA', strokeWidth: 1.5 }))
     if (element.chartType === 'line') {
       element.series.forEach((series, seriesIndex) => {
-        const points = element.categories.map((_, categoryIndex) => ({
-          x: plotX + ((categoryIndex + 0.5) / categoryCount) * plotWidth,
-          y: valueY(series.values[categoryIndex] ?? 0),
-        }))
-        objects.push(new fabric.Polyline(points, {
-          fill: 'transparent',
-          stroke: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
-          strokeWidth: 4,
-          strokeLineCap: 'round',
-          strokeLineJoin: 'round',
-        }))
+        const color = element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9'
+        for (const points of presentationChartLineSegments(element, series, plot, valueY)) {
+          if (points.length > 1) objects.push(new fabric.Polyline(points, {
+            originX: 'left', originY: 'top', fill: 'transparent', stroke: color,
+            strokeWidth: 4, strokeLineCap: 'round', strokeLineJoin: 'round',
+          }))
+          for (const point of points) {
+            objects.push(new fabric.Circle({ left: point.x, top: point.y, radius: 4, fill: color,
+              originX: 'center', originY: 'center', strokeWidth: 0 }))
+            if (element.showValue) objects.push(new fabric.FabricText(String(point.value), {
+              left: point.x, top: presentationLineLabelY(point.y, plotY), originX: 'center', originY: 'center',
+              strokeWidth: 0, fontFamily: 'Aptos', fontSize: 12, fill: dataLabelColor,
+            }))
+          }
+        }
       })
     } else {
       const groupWidth = plotWidth / categoryCount
@@ -1195,10 +1254,14 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
       const barWidth = Math.max(2, (groupWidth - (gap * 2)) / seriesCount)
       element.categories.forEach((_, categoryIndex) => {
         element.series.forEach((series, seriesIndex) => {
-          const value = series.values[categoryIndex] ?? 0
+          const value = presentationChartValue(series.values[categoryIndex], element.displayBlanksAs)
+          if (value === null) return
           const valuePosition = valueY(value)
           const height = Math.abs(valuePosition - zeroY)
           objects.push(new fabric.Rect({
+            originX: 'left',
+            originY: 'top',
+            strokeWidth: 0,
             left: plotX + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth),
             top: Math.min(valuePosition, zeroY),
             width: Math.max(1, barWidth - 2),
@@ -1209,6 +1272,9 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
           }))
           if (element.showValue) {
             objects.push(new fabric.Textbox(String(value), {
+              originX: 'left',
+              originY: 'top',
+              strokeWidth: 0,
               left: plotX + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth) - 4,
               top: value >= 0 ? valuePosition - 18 : valuePosition + 2,
               width: barWidth + 6,
@@ -1224,6 +1290,9 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
     }
     element.categories.forEach((category, categoryIndex) => {
       objects.push(new fabric.Textbox(category, {
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
         left: plotX + (categoryIndex * (plotWidth / categoryCount)),
         top: plotY + plotHeight + 7,
         width: plotWidth / categoryCount,
@@ -1239,12 +1308,15 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
     const labels = element.chartType === 'pie' || element.chartType === 'doughnut'
       ? element.categories
       : element.series.map((series) => series.name)
-    const itemWidth = Math.min(150, element.width / Math.max(1, labels.length))
-    const startX = (element.width - (labels.length * itemWidth)) / 2
+    const itemWidth = Math.min(150, layoutWidth / Math.max(1, labels.length))
+    const startX = (layoutWidth - (labels.length * itemWidth)) / 2
     labels.forEach((label, index) => {
       objects.push(new fabric.Rect({
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
         left: startX + (index * itemWidth),
-        top: element.height - 25,
+        top: layoutHeight - 25,
         width: 10,
         height: 10,
         rx: 2,
@@ -1252,8 +1324,11 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
         fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
       }))
       objects.push(new fabric.Textbox(label, {
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
         left: startX + (index * itemWidth) + 15,
-        top: element.height - 29,
+        top: layoutHeight - 29,
         width: itemWidth - 18,
         height: 18,
         fill: categoryAxisLabelColor,
@@ -1262,59 +1337,40 @@ function createChartFabricObject(fabric: FabricModule, element: Extract<Presenta
       }))
     })
   }
-  return fitFabricGroupToElement(new fabric.Group(objects), element)
+  return createFixedGraphicGroup(fabric, element, objects, layoutWidth, layoutHeight)
 }
 
 function createShapeFabricObject(fabric: FabricModule, element: PresentationShapeElement): FabricObject {
   const shadow = element.shadow
     ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 })
     : undefined
-  if (element.type === 'ellipse') {
-    return new fabric.Ellipse({
-      left: element.x,
-      top: element.y,
-      rx: element.width / 2,
-      ry: element.height / 2,
-      angle: element.rotation,
-      originX: 'left',
-      originY: 'top',
-      fill: element.fill,
-      stroke: element.borderColor,
-      strokeWidth: element.borderWidth,
-      opacity: element.opacity ?? 1,
-      flipX: element.flipHorizontal,
-      flipY: element.flipVertical,
-      shadow,
+  const frameShape = (shape: FabricObject) => {
+    const frame = new fabric.Rect({ left: 0, top: 0, width: element.width, height: element.height, originX: 'center', originY: 'center', fill: 'transparent', strokeWidth: 0 })
+    return new fabric.Group([frame, shape], {
+      left: element.x, top: element.y, width: element.width, height: element.height,
+      originX: 'left', originY: 'top', angle: element.rotation,
+      flipX: element.flipHorizontal, flipY: element.flipVertical,
+      opacity: element.opacity ?? 1, shadow, strokeWidth: 0,
+      // The fixed selection frame excludes centered strokes; do not clip paint to a frame-sized cache.
+      objectCaching: false,
+      layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
     })
   }
+  const shapeStyle = { left: 0, top: 0, originX: 'center', originY: 'center',
+    fill: element.fill, stroke: element.borderColor, strokeWidth: element.borderWidth,
+  } as const
+  if (element.type === 'ellipse') {
+    return frameShape(new fabric.Ellipse({ ...shapeStyle, rx: element.width / 2, ry: element.height / 2 }))
+  }
   if (element.type === 'rect' || element.type === 'roundRect') {
-    return new fabric.Rect({
-      left: element.x,
-      top: element.y,
-      width: element.width,
-      height: element.height,
-      rx: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
-      ry: element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0,
-      angle: element.rotation,
-      originX: 'left',
-      originY: 'top',
-      fill: element.fill,
-      stroke: element.borderColor,
-      strokeWidth: element.borderWidth,
-      opacity: element.opacity ?? 1,
-      flipX: element.flipHorizontal,
-      flipY: element.flipVertical,
-      shadow,
-    })
+    const radius = element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0
+    return frameShape(new fabric.Rect({ ...shapeStyle, width: element.width, height: element.height, rx: radius, ry: radius }))
   }
   const definition = getPresentationShapeDefinition(element.type)
   const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
-  const path = new fabric.Path(definition.path, {
-    left: element.x,
-    top: element.y,
-    angle: element.rotation,
-    originX: 'left',
-    originY: 'top',
+  const path = new fabric.Path(getPresentationShapePath(element), {
+    originX: 'center',
+    originY: 'center',
     fill: strokeOnly ? 'transparent' : element.fill,
     fillRule: 'evenodd',
     stroke: element.borderColor,
@@ -1322,16 +1378,15 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
     strokeUniform: true,
-    opacity: element.opacity ?? 1,
-    flipX: element.flipHorizontal,
-    flipY: element.flipVertical,
-    shadow,
   })
+  // Preset paths use a 100 x 100 viewBox, even when their painted bounds are a thin line.
   path.set({
-    scaleX: element.width / Math.max(1, path.width ?? 1),
-    scaleY: element.height / Math.max(1, path.height ?? 1),
+    left: (path.pathOffset.x - 50) * element.width / 100,
+    top: (path.pathOffset.y - 50) * element.height / 100,
+    scaleX: element.width / 100,
+    scaleY: element.height / 100,
   })
-  return path
+  return frameShape(path)
 }
 
 function createPresentationTextFabricOptions(fabric: FabricModule, element: PresentationTextElement, text: string) {
@@ -1362,6 +1417,219 @@ function createPresentationTextFabricOptions(fabric: FabricModule, element: Pres
   } as const
 }
 
+function presentationFabricRunStyle(fabric: FabricModule, element: PresentationTextElement, offset: number, style = presentationTextStyleAt(element, offset)) {
+  const color = element.hyperlink ? '#2563EB' : style.color ?? element.color
+  return {
+    ...presentationScriptMetrics(style),
+    fontFamily: presentationRenderingFontFamily(style.fontFamily ?? element.fontFamily, element.text),
+    fontWeight: style.fontWeight,
+    fontStyle: style.italic ? 'italic' as const : 'normal' as const,
+    fill: style.opacity === undefined ? color : new fabric.Color(color).setAlpha(style.opacity).toRgba(),
+    underline: Boolean(style.underline || element.hyperlink),
+    linethrough: Boolean(style.strikethrough),
+    textBackgroundColor: style.highlightColor ?? '',
+    presentationTracking: style.characterSpacing ?? 0,
+  }
+}
+
+function presentationTextObjectPosition(element: PresentationTextElement, width: number, height: number) {
+  const frame = presentationTextFrame(element)
+  let inlineOffset = 0
+  if (element.align === 'center') inlineOffset = Math.max(0, frame.width - width) / 2
+  else if (element.align === 'right') inlineOffset = Math.max(0, frame.width - width)
+  let blockOffset = 0
+  if (element.verticalAlign === 'middle') blockOffset = Math.max(0, frame.height - height) / 2
+  else if (element.verticalAlign === 'bottom') blockOffset = Math.max(0, frame.height - height)
+  const innerAngle = frame.rotation * Math.PI / 180
+  let centerX = frame.x + Math.cos(innerAngle) * (inlineOffset + width / 2) - Math.sin(innerAngle) * (blockOffset + height / 2)
+  let centerY = frame.y + Math.sin(innerAngle) * (inlineOffset + width / 2) + Math.cos(innerAngle) * (blockOffset + height / 2)
+  if (element.flipHorizontal) centerX = element.width - centerX
+  if (element.flipVertical) centerY = element.height - centerY
+  const angleOffset = (Boolean(element.flipHorizontal) !== Boolean(element.flipVertical) ? -1 : 1) * frame.rotation
+  const angle = (element.rotation + angleOffset) * Math.PI / 180
+  const outerAngle = element.rotation * Math.PI / 180
+  const left = element.x + Math.cos(outerAngle) * centerX - Math.sin(outerAngle) * centerY
+    - (Math.cos(angle) * width - Math.sin(angle) * height) / 2
+  const top = element.y + Math.sin(outerAngle) * centerX + Math.cos(outerAngle) * centerY
+    - (Math.sin(angle) * width + Math.cos(angle) * height) / 2
+  return { left, top, angleOffset }
+}
+
+const presentationTextObjectLayouts = new WeakMap<FabricObject, { width: number; angleOffset: number }>()
+
+/** Recover the authored frame after editing or transforming its rotated inner text object. */
+export function getPresentationTextFabricFramePatch(object: FabricObject, element: PresentationTextElement): Partial<PresentationTextElement> | null {
+  const layout = presentationTextObjectLayouts.get(object)
+  if (!layout) return null
+  const scaleX = object.scaleX ?? 1
+  const scaleY = object.scaleY ?? 1
+  const rotated = Math.abs(layout.angleOffset) === 90
+  const frameScaleX = rotated ? scaleY : scaleX
+  const frameScaleY = rotated ? scaleX : scaleY
+  const rotation = (object.angle ?? 0) - layout.angleOffset
+  const angle = rotation * Math.PI / 180
+  const widthChange = element.wordWrap === false ? 0 : object.width - layout.width
+  const frameWidth = element.width + (rotated ? 0 : widthChange)
+  const frameHeight = element.height + (rotated ? widthChange : 0)
+  const offset = presentationTextObjectPosition({ ...element, x: 0, y: 0, rotation: 0, width: frameWidth, height: frameHeight }, object.width, object.height)
+  return {
+    x: object.left - Math.cos(angle) * offset.left * frameScaleX + Math.sin(angle) * offset.top * frameScaleY,
+    y: object.top - Math.sin(angle) * offset.left * frameScaleX - Math.cos(angle) * offset.top * frameScaleY,
+    rotation,
+    width: Math.max(8, frameWidth * frameScaleX),
+    height: Math.max(8, frameHeight * frameScaleY),
+    ...(scaleY !== 1 ? { fontSize: element.fontSize * scaleY, paragraphs: scalePresentationParagraphs(element.paragraphs, scaleY), ...(element.lineSpacing ? { lineSpacing: element.lineSpacing * scaleY } : {}) } : {}),
+    ...(element.textInsets && (scaleX !== 1 || scaleY !== 1) ? { textInsets: {
+      left: element.textInsets.left * frameScaleX, right: element.textInsets.right * frameScaleX,
+      top: element.textInsets.top * frameScaleY, bottom: element.textInsets.bottom * frameScaleY,
+    } } : {}),
+  }
+}
+
+/** Lay out an editable text object inside its authored frame before applying frame transforms. */
+export function createPresentationTextFabricObject(fabric: FabricModule, element: PresentationTextElement, onTextEdit: (object: FabricObject) => void = () => undefined) {
+  const frame = presentationTextFrame(element)
+  const segments = presentationTextDisplaySegments(element)
+  const text = segments.map(segment => segment.text).join('')
+  const styles: TextStyle = {}
+  let line = 0
+  let character = 0
+  for (const segment of segments) {
+    let offset = segment.start
+    for (const glyph of fabric.Text.prototype.graphemeSplit(segment.text)) {
+      if (glyph === '\n') { line++; character = 0 }
+      else {
+        styles[line] ??= {}
+        styles[line]![character++] = presentationFabricRunStyle(fabric, element, offset, segment.style)
+      }
+      if (segment.end > segment.start) offset += glyph.length
+    }
+  }
+  let paragraphLine = 0
+  for (const paragraph of presentationTextParagraphs(element)) {
+    if (!paragraph.text) styles[paragraphLine] = { 0: presentationFabricRunStyle(fabric, element, paragraph.start, presentationParagraphTextStyle(element, paragraph)) }
+    paragraphLine += paragraph.text.split('\n').length
+  }
+  const options = { ...createPresentationTextFabricOptions(fabric, element, text), styles,
+    _fontSizeMult: PRESENTATION_TEXT_LINE_METRICS.height, _fontSizeFraction: PRESENTATION_TEXT_LINE_METRICS.descent,
+  }
+  const textbox = (() => {
+    if (element.wordWrap === false) {
+      const object = new fabric.IText(text, options)
+      object.on('editing:exited', () => onTextEdit(object))
+      return object
+    }
+    const object = new fabric.Textbox(text, { ...options, width: frame.width })
+    object.on('editing:exited', () => onTextEdit(object))
+    return object
+  })()
+  if (segments.some(segment => segment.style.characterSpacing)) {
+    // Fabric exposes tracking at object level; measure each run with its own font-size-relative tracking.
+    const getGraphemeBox = textbox._getGraphemeBox.bind(textbox)
+    let measuringSpacing = 0
+    textbox.charSpacing = 1
+    textbox._getWidthOfCharSpacing = () => measuringSpacing
+    textbox._getGraphemeBox = (...args) => {
+      const style = textbox._getStyleDeclaration(args[1], args[2]) as { presentationTracking?: number }
+      const fontSize = textbox.getValueOfPropertyAt(args[1], args[2], 'fontSize')
+      measuringSpacing = (style.presentationTracking ?? 0) * fontSize / 1_000
+      try { return getGraphemeBox(...args) } finally { measuringSpacing = 0 }
+    }
+    textbox.initDimensions()
+  }
+  if (element.paragraphs?.length || element.lineSpacing || element.lineHeight || element.textRuns?.length) {
+    let paragraphs = presentationTextParagraphs(element)
+    let logicalParagraphs = paragraphs.flatMap(paragraph => paragraph.text.split('\n').map(() => paragraph))
+    const paragraphAt = (index: number) => {
+      const logicalLine = textbox instanceof fabric.Textbox ? textbox._styleMap[index]?.line ?? index : index
+      return logicalParagraphs[logicalLine] ?? paragraphs[paragraphs.length - 1]!
+    }
+    if (textbox instanceof fabric.Textbox) {
+      const wrapLine = textbox._wrapLine.bind(textbox)
+      textbox._wrapLine = (lineIndex, desiredWidth, data, reservedSpace) => (
+        wrapLine(lineIndex, Math.max(1, desiredWidth - (logicalParagraphs[lineIndex]?.style.indentLevel ?? 0) * 16), data, reservedSpace)
+      )
+    }
+    const shouldJustify = (index: number) => paragraphAt(index).style.align === 'justify' && !textbox.isEndOfWrapping(index)
+    textbox.enlargeSpaces = () => {
+      for (let index = 0; index < textbox.textLines.length; index++) {
+        const line = textbox._textLines[index]!
+        const spaces = line.filter(glyph => /[ \t]/.test(glyph)).length
+        const remaining = textbox.width - (paragraphAt(index).style.indentLevel ?? 0) * 16 - textbox.getLineWidth(index)
+        if (!shouldJustify(index) || !spaces || remaining <= 0) continue
+        let shift = 0
+        for (let character = 0; character <= line.length; character++) {
+          const bound = textbox.__charBounds[index]![character]!
+          bound.left += shift
+          if (character < line.length && /[ \t]/.test(line[character]!)) {
+            bound.width += remaining / spaces
+            bound.kernedWidth += remaining / spaces
+            shift += remaining / spaces
+          }
+        }
+      }
+    }
+    const renderChars = textbox._renderChars.bind(textbox)
+    textbox._renderChars = (...args) => {
+      const align = textbox.textAlign
+      textbox.textAlign = shouldJustify(args[5]) ? 'justify' : paragraphAt(args[5]).style.align ?? align
+      try { renderChars(...args) } finally { textbox.textAlign = align }
+    }
+    const naturalLineHeight = textbox.getHeightOfLine.bind(textbox)
+    const baselineOffset = (index: number) => naturalLineHeight(index) / textbox.lineHeight * (1 - textbox._fontSizeFraction)
+    textbox.getHeightOfLine = (index: number) => {
+      const paragraph = paragraphAt(index)
+      const next = index + 1 < textbox.textLines.length ? paragraphAt(index + 1) : undefined
+      const natural = naturalLineHeight(index) / textbox.lineHeight
+      const ratio = paragraph.style.lineHeight ?? 1.08
+      // Proportional leading is shared by adjacent line boxes, including differently sized runs.
+      const proportional = next === paragraph
+        ? natural + (ratio - 1) * (natural + naturalLineHeight(index + 1) / textbox.lineHeight) / 2
+        : natural * ratio
+      const advance = paragraph.style.lineSpacing
+        ? paragraph.style.lineSpacing + (next ? baselineOffset(index) - baselineOffset(index + 1) : 0)
+        : proportional
+      return advance + (next && next !== paragraph ? (paragraph.style.spaceAfter ?? 0) + (next.style.spaceBefore ?? 0) : 0)
+    }
+    const naturalHeight = textbox.calcTextHeight.bind(textbox)
+    textbox.calcTextHeight = () => naturalHeight() + (paragraphs[0]!.style.spaceBefore ?? 0) + (paragraphs[paragraphs.length - 1]!.style.spaceAfter ?? 0)
+    const naturalTop = textbox._getTopOffset.bind(textbox)
+    textbox._getTopOffset = () => naturalTop() + (paragraphs[0]!.style.spaceBefore ?? 0)
+    const naturalLeft = textbox._getLineLeftOffset.bind(textbox)
+    textbox._getLineLeftOffset = (index: number) => {
+      const align = textbox.textAlign
+      const paragraph = paragraphAt(index)
+      const width = textbox.width
+      const indent = (paragraph.style.indentLevel ?? 0) * 16
+      textbox.textAlign = paragraph.style.align ?? element.align
+      textbox.width = Math.max(1, width - indent)
+      try { return naturalLeft(index) + indent } finally { textbox.textAlign = align; textbox.width = width }
+    }
+    const initDimensions = textbox.initDimensions.bind(textbox)
+    let measuredText = textbox.text
+    textbox.initDimensions = () => {
+      if (textbox.text !== measuredText) {
+        const text = stripPresentationTextFormatting(textbox.text, element)
+        paragraphs = presentationTextParagraphs(patchPresentationText(element, { text }))
+        logicalParagraphs = paragraphs.flatMap(paragraph => paragraph.text.split('\n').map(() => paragraph))
+        measuredText = textbox.text
+      }
+      const align = textbox.textAlign
+      textbox.textAlign = 'left'
+      try {
+        initDimensions()
+        if (element.wordWrap === false && element.paragraphs?.length) textbox.width = frame.width
+        textbox.enlargeSpaces()
+      } finally { textbox.textAlign = align }
+    }
+    textbox.initDimensions()
+  }
+  const { left, top, angleOffset } = presentationTextObjectPosition(element, textbox.width, textbox.height)
+  textbox.set({ left, top, angle: element.rotation + angleOffset })
+  presentationTextObjectLayouts.set(textbox, { width: textbox.width, angleOffset })
+  return textbox
+}
+
 /** Compose PowerPoint vertical text in Fabric's center-based group coordinate plane. */
 export function createPresentationVerticalTextFabricObject(fabric: FabricModule, element: PresentationTextElement): FabricGroup {
   const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
@@ -1377,18 +1645,18 @@ export function createPresentationVerticalTextFabricObject(fabric: FabricModule,
     fill: 'rgba(0,0,0,0)',
     strokeWidth: 0,
   })
-  const contentWidth = Math.max(element.fontSize, element.width - insets.left - insets.right)
   const glyphs = layout.columns.flatMap((column, columnIndex) => {
-    const columnLeft = insets.left + contentWidth - element.fontSize - (columnIndex * layout.columnAdvance)
-    const columnHeight = element.fontSize + ((Math.max(1, Array.from(column).length) - 1) * layout.rowAdvance)
+    const columnLeft = insets.left + layout.columnOffsets[columnIndex]!
+    const columnHeight = layout.columnHeights[columnIndex]!
     const availableHeight = Math.max(0, element.height - insets.top - insets.bottom - columnHeight)
     let alignmentOffset = 0
     if (element.verticalAlign === 'bottom') alignmentOffset = availableHeight
     else if (element.verticalAlign === 'middle') alignmentOffset = availableHeight / 2
     return Array.from(column).map((glyph, rowIndex) => new fabric.Text(glyph, {
       ...textOptions,
+      ...presentationFabricRunStyle(fabric, element, layout.sourceOffsets[columnIndex]![rowIndex]!, layout.glyphStyles[columnIndex]![rowIndex]!),
       left: columnLeft - (element.width / 2),
-      top: insets.top + alignmentOffset + (rowIndex * layout.rowAdvance) - (element.height / 2),
+      top: insets.top + alignmentOffset + layout.rowOffsets[columnIndex]![rowIndex]! - (element.height / 2),
       angle: 0,
       lineHeight: 1,
       opacity: 1,
@@ -1431,32 +1699,16 @@ export function createPresentationImageFabricClipPath(fabric: FabricModule, elem
   })
 }
 
-async function createPresentationFabricObject(
+export async function createPresentationFabricObject(
   fabric: FabricModule,
   element: PresentationElement,
   onTextEdit: (object: FabricObject) => void,
 ): Promise<FabricObject> {
   if (isPresentationTextElement(element)) {
-    const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
-    const text = formatPresentationText(element)
     if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') {
       return createPresentationVerticalTextFabricObject(fabric, element)
     }
-    const textOptions = createPresentationTextFabricOptions(fabric, element, text)
-    const textbox = element.wordWrap === false
-      ? new fabric.IText(text, textOptions)
-      : new fabric.Textbox(text, {
-          ...textOptions,
-          width: Math.max(1, element.width - insets.left - insets.right),
-        })
-    if (element.baseline === 'superscript') textbox.setSuperscript(0, textbox.text.length)
-    if (element.baseline === 'subscript') textbox.setSubscript(0, textbox.text.length)
-    if (element.verticalAlign && element.verticalAlign !== 'top') {
-      const freeHeight = Math.max(0, element.height - (textbox.height ?? 0))
-      textbox.set({ top: element.y + (element.verticalAlign === 'middle' ? freeHeight / 2 : freeHeight) })
-    }
-    textbox.on('editing:exited', () => onTextEdit(textbox))
-    return textbox
+    return createPresentationTextFabricObject(fabric, element, onTextEdit)
   }
   if (isPresentationShapeElement(element)) return createShapeFabricObject(fabric, element)
   if (isPresentationImageElement(element)) {
@@ -1723,12 +1975,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         footer: { ...master.footer },
         elements: slide.elements.map((element): PresentationElement => (
           isPresentationTextElement(element)
-            ? {
-                ...element,
+            ? patchPresentationText(element, {
                 fontFamily: element.fontWeight >= 600 || element.fontSize >= 30
                   ? master.titleFontFamily
                   : master.bodyFontFamily,
-              }
+              })
             : element
         )),
       })),
@@ -1753,7 +2004,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         background,
         elements: slide.elements.map((element, index): PresentationElement => {
           if (isPresentationTextElement(element)) {
-            return { ...element, color: element.fontWeight >= 600 || element.fontSize >= 30 ? primaryText : secondaryText }
+            return patchPresentationText(element, { color: element.fontWeight >= 600 || element.fontSize >= 30 ? primaryText : secondaryText })
           }
           if (isPresentationShapeElement(element) && element.fill !== 'transparent') {
             const accent = colors[index % colors.length] ?? element.fill
@@ -1779,7 +2030,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       ? new Set(getPresentationElementGroup(slide.elements, target).map((element) => element.id))
       : null
     const nextElements = slide.elements.map((element): PresentationElement => {
-      if (element.id === target.id) return { ...element, ...patch } as PresentationElement
+      if (element.id === target.id) return isPresentationTextElement(element)
+        ? patchPresentationText(element, patch as Partial<PresentationTextElement>)
+        : { ...element, ...patch } as PresentationElement
       if (groupedIds?.has(element.id)) return clearPresentationAnimation(element)
       return element
     })
@@ -1808,13 +2061,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       }
       if ('text' in object && typeof object.text === 'string') {
         if (isPresentationTextElement(element)) {
-          const frameHeight = Math.max(8, element.height * scaleY)
-          const renderedHeight = Math.max(0, (object.height ?? 0) * scaleY)
-          let alignmentFactor = 0
-          if (element.verticalAlign === 'bottom') alignmentFactor = 1
-          else if (element.verticalAlign === 'middle') alignmentFactor = 0.5
-          patch.y = Math.round(object.top - (Math.max(0, frameHeight - renderedHeight) * alignmentFactor))
-          patch.height = Math.round(frameHeight)
+          Object.assign(patch, getPresentationTextFabricFramePatch(object, element))
         }
         const text = element.type === 'text'
           ? stripPresentationTextFormatting(object.text, element)
@@ -1826,7 +2073,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     if (patches.size === 0) return
     const nextElements = slide.elements.map((element) => {
         const patch = patches.get(element.id)
-        return patch ? { ...element, ...patch } as PresentationElement : element
+        if (!patch) return element
+        return isPresentationTextElement(element)
+          ? patchPresentationText(element, patch as Partial<PresentationTextElement>)
+          : { ...element, ...patch } as PresentationElement
       })
     replaceCurrentSlide({
       ...slide,
@@ -2419,7 +2669,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [activateFabricElement, active, deleteSelectedElement, redo, slideshowOpen, transitionPreviewRun, undo])
 
-  const goToSlideshowIndex = useCallback((requestedIndex: number) => {
+  const goToSlideshowIndex = useCallback((requestedIndex: number, completedTargetIds: ReadonlySet<string> = new Set()) => {
     if (slideshowTransition) return
     const slides = documentRef.current.slides
     const toIndex = Math.max(0, Math.min(slides.length - 1, requestedIndex))
@@ -2431,6 +2681,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     }
     transitionRunIdRef.current += 1
     setSlideshowTransition({
+      previousCompletedTargetIds: completedTargetIds,
       direction: toIndex > slideshowIndex ? 'forward' : 'backward',
       fromIndex: slideshowIndex,
       runKey: transitionRunIdRef.current,
@@ -2438,10 +2689,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     })
   }, [setSlideshowIndex, setSlideshowTransition, slideshowIndex, slideshowTransition])
 
-  const activateSlideshowHyperlink = useCallback((hyperlink: PresentationHyperlink) => {
+  const activateSlideshowHyperlink = useCallback((hyperlink: PresentationHyperlink, completedTargetIds?: ReadonlySet<string>) => {
     if (hyperlink.type === 'slide') {
       const index = documentRef.current.slides.findIndex((slide) => slide.id === hyperlink.slideId)
-      if (index >= 0) goToSlideshowIndex(index)
+      if (index >= 0) goToSlideshowIndex(index, completedTargetIds)
       return
     }
     void requestExternalLink(hyperlink.url).then((open) => {
@@ -2939,40 +3190,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
 
   const changePageSize = (preset: PresentationPageSizePreset) => {
     const current = documentRef.current
-    const previousSize = getPresentationPageSize(current)
-    const nextSize = PRESENTATION_PAGE_SIZES[preset]
-    if (previousSize.preset === preset && previousSize.width === nextSize.width && previousSize.height === nextSize.height) return
-    const scale = Math.min(nextSize.width / previousSize.width, nextSize.height / previousSize.height)
-    const offsetX = (nextSize.width - (previousSize.width * scale)) / 2
-    const offsetY = (nextSize.height - (previousSize.height * scale)) / 2
-    const scaleElement = (element: PresentationElement): PresentationElement => {
-      const scaled = {
-        ...element,
-        x: Math.round((element.x * scale) + offsetX),
-        y: Math.round((element.y * scale) + offsetY),
-        width: Math.max(8, Math.round(element.width * scale)),
-        height: Math.max(8, Math.round(element.height * scale)),
-      } as PresentationElement
-      if (isPresentationTextElement(scaled)) {
-        return { ...scaled, fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))) }
-      }
-      if (isPresentationShapeElement(scaled)) {
-        return {
-          ...scaled,
-          borderWidth: Number((scaled.borderWidth * scale).toFixed(2)),
-          radius: scaled.radius === undefined ? undefined : Number((scaled.radius * scale).toFixed(1)),
-        }
-      }
-      if (isPresentationTableElement(scaled)) {
-        return { ...scaled, fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))) }
-      }
-      return scaled
-    }
-    commitDocument({
-      ...current,
-      pageSize: { ...nextSize },
-      slides: current.slides.map((slide) => ({ ...slide, elements: slide.elements.map(scaleElement) })),
-    })
+    commitDocument(resizePresentationDocument(current, preset))
   }
 
   const applyCurrentTransitionToAll = () => {
@@ -3627,8 +3845,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
             setSlideshowOpen(false)
             setSlideshowTransition(null)
           }}
-          onNext={() => goToSlideshowIndex(slideshowIndex + 1)}
-          onPrevious={() => goToSlideshowIndex(slideshowIndex - 1)}
+          onNext={(completed) => goToSlideshowIndex(slideshowIndex + 1, completed)}
+          onPrevious={(completed) => goToSlideshowIndex(slideshowIndex - 1, completed)}
           onTransitionComplete={() => {
             if (!slideshowTransition) return
             setSlideshowIndex(slideshowTransition.toIndex)
@@ -3753,10 +3971,10 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
 
 function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, total, transitionRun }: {
   current: number
-  onActivateHyperlink: (hyperlink: PresentationHyperlink) => void
+  onActivateHyperlink: (hyperlink: PresentationHyperlink, completedTargetIds: ReadonlySet<string>) => void
   onClose: () => void
-  onNext: () => void
-  onPrevious: () => void
+  onNext: (completedTargetIds: ReadonlySet<string>) => void
+  onPrevious: (completedTargetIds: ReadonlySet<string>) => void
   onTransitionComplete: () => void
   pageSize: PresentationPageSize
   slide: PresentationSlide
@@ -3805,8 +4023,18 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
       startStep(nextStep)
       return
     }
-    onNext()
+    onNext(completedTargetIds)
   }, [completedTargetIds, onNext, runningStepId, startStep, steps, transitionRun])
+
+  useEffect(() => {
+    const automaticStep = steps.find((step) => (
+      step.trigger === 'slideEnter' && step.targetIds.some((targetId) => !completedTargetIds.has(targetId))
+    ))
+    if (!automaticStep) return
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) startStep(automaticStep) })
+    return () => { cancelled = true }
+  }, [completedTargetIds, startStep, steps])
 
   useEffect(() => {
     const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight })
@@ -3830,12 +4058,14 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
       } else if (action === 'previous') {
         event.preventDefault()
         revealControls()
-        onPrevious()
+        onPrevious(completedTargetIds)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [advance, onClose, onPrevious, revealControls])
+  }, [advance, completedTargetIds, onClose, onPrevious, revealControls])
+
+  const activateHyperlink = useCallback((hyperlink: PresentationHyperlink) => onActivateHyperlink(hyperlink, completedTargetIds), [completedTargetIds, onActivateHyperlink])
 
   const completeRunningStep = () => {
     if (!runningStep) return
@@ -3847,8 +4077,21 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
   if (transitionRun) {
     slideshowContent = (
       <PresentationTransitionPlayer
-        previous={<PresentationSlidePreview pageSize={pageSize} slide={transitionRun.previousSlide} slideNumber={transitionRun.fromIndex + 1} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={onActivateHyperlink} />}
-        current={<PresentationSlidePreview pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={onActivateHyperlink} />}
+        previous={(
+          <PresentationSlidePreview
+            pageSize={pageSize}
+            animationStates={getPresentationAnimationDisplayStates(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
+            hiddenElementIds={getPresentationAnimationHiddenElementIds(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
+            slide={transitionRun.previousSlide}
+            slideNumber={transitionRun.fromIndex + 1}
+            width={slideshowWidth}
+            selected={false}
+            presentation
+            suppressMediaPlayback
+            onActivateHyperlink={activateHyperlink}
+          />
+        )}
+        current={<PresentationSlidePreview pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
         transition={transitionRun.transition}
         runKey={transitionRun.runKey}
         direction={transitionRun.direction}
@@ -3856,13 +4099,17 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
         className="size-full"
       />
     )
-  } else if (runningStep) {
+  } else {
+    // Keep the base slide mounted between animation steps so unrelated media keeps playing.
     slideshowContent = (
       <PresentationAnimationPlayer
         baseHiddenElementIds={hiddenElementIds}
+        completedTargetIds={completedTargetIds}
         className="size-full"
-        elementIds={runningStep.elementIds}
-        onComplete={completeRunningStep}
+        elementIds={runningStep?.elementIds ?? []}
+        onComplete={runningStep ? completeRunningStep : undefined}
+        onActivateHyperlink={activateHyperlink}
+        suppressMediaPlayback={false}
         pageSize={pageSize}
         runKey={animationRunKey}
         slide={slide}
@@ -3870,8 +4117,6 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
         width={slideshowWidth}
       />
     )
-  } else {
-    slideshowContent = <PresentationSlidePreview pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={slide} slideNumber={current} width={slideshowWidth} selected={false} presentation onActivateHyperlink={onActivateHyperlink} />
   }
 
   return (
@@ -3916,7 +4161,7 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
           style={{ width: slideshowWidth, height: slideshowHeight }}
           data-testid="presentation-slideshow-frame"
           onClick={(event) => {
-            const target = event.target instanceof HTMLElement ? event.target : null
+            const target = event.target instanceof Element ? event.target : null
             if (target?.closest('button, a, audio, video')) return
             advance()
           }}
@@ -3958,7 +4203,7 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
           <button
             type="button"
             disabled={current <= 1 || Boolean(transitionRun)}
-            onClick={onPrevious}
+            onClick={() => onPrevious(completedTargetIds)}
             aria-label={t('session.presentation.previousSlide')}
             className="flex size-9 items-center justify-center rounded-full text-white/75 transition-colors hover:bg-white/12 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-default disabled:text-white/20"
           >
