@@ -133,6 +133,21 @@ export const IPC = {
   word: {
     readDocument: 'word:read-document',
   },
+  wordHost: {
+    snapshot: 'word-host:snapshot',
+    ensureSession: 'word-host:ensureSession',
+    openFile: 'word-host:openFile',
+    closeSession: 'word-host:closeSession',
+    activateSession: 'word-host:activateSession',
+    setBounds: 'word-host:setBounds',
+    setVisible: 'word-host:setVisible',
+    getConfig: 'word-host:getConfig',
+    reportState: 'word-host:reportState',
+    requestHide: 'word-host:requestHide',
+    setExpanded: 'word-host:setExpanded',
+    completeOpenFile: 'word-host:completeOpenFile',
+    completeFlush: 'word-host:completeFlush',
+  },
   // Bridgic Agent Python daemon coordination — the live backend
   // control plane (discover / spawn / stop / clients). The renderer chats with
   // the daemon directly over HTTP+WS; these channels are the main-process
@@ -230,6 +245,12 @@ export const IPC = {
     excelHostChanged: 'excel-host-changed',
     excelHostConfigChanged: 'excel-host-config-changed',
     excelWorkbookOpenRequested: 'excel-workbook-open-requested',
+    wordHostChanged: 'word-host-changed',
+    wordHostHideRequested: 'word-host-hide-requested',
+    wordHostExpandedChanged: 'word-host-expanded-changed',
+    wordHostConfigChanged: 'word-host-config-changed',
+    wordHostOpenFileRequested: 'word-host-open-file-requested',
+    wordHostFlushRequested: 'word-host-flush-requested',
     // A watched session-file directory changed on disk → renderer re-reads it.
     fsChanged: 'fs-changed',
   },

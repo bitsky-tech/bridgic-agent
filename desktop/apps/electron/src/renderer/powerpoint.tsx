@@ -6,8 +6,9 @@ import {
   currentPresentationWorkspaceAtom,
   presentationAgentChangeAtom,
   powerPointSessionIdOverrideAtom,
-  type PresentationWorkspace,
+  presentationWorkspaceFamily,
 } from './atoms/presentation'
+import { showToastAtom } from './atoms/toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ToastHost } from './components/amphi/ToastHost'
 import { PresentationWorkbenchPanel } from './components/app/PresentationWorkbenchPanel'
@@ -17,14 +18,11 @@ import { installApiStub } from './lib/apiStub'
 import { i18n } from './lib/i18n'
 import { rlog } from './lib/logger'
 import { createPresentationPptx } from './lib/presentationPptx'
+import { createPresentationPersistence } from './lib/presentationPersistence'
 import { useApplyTheme } from './hooks/useTheme'
 import { useSettingsBridge } from './hooks/useSettingsBridge'
-import {
-  POWERPOINT_PROTOCOL_VERSION,
-  PowerPointProtocolError,
-  executePowerPointRequest,
-  type PowerPointRequest,
-} from './lib/powerPointProtocol'
+import { POWERPOINT_PROTOCOL_VERSION } from './lib/powerPointProtocol'
+import { createPresentationWorkspaceRuntime } from './lib/presentationWorkspaceRuntime'
 
 installApiStub()
 
@@ -34,80 +32,60 @@ const sessionId: string = requestedSessionId
 
 const store = createStore()
 store.set(powerPointSessionIdOverrideAtom, sessionId)
+const workspaceAtom = presentationWorkspaceFamily(sessionId)
+const workspaceRuntime = createPresentationWorkspaceRuntime({
+  sessionId,
+  read: () => store.get(workspaceAtom),
+  write: (workspace) => store.set(workspaceAtom, workspace),
+})
+store.sub(workspaceAtom, () => workspaceRuntime.runtime.publish())
 
-let activeTarget: string | null = null
 let activeFileName = 'Untitled.pptx'
 let agentChangeId = 0
-let persistenceQueue = Promise.resolve()
-let lastPersistenceKey: string | null = null
+const persistence = createPresentationPersistence({
+  sessionId,
+  encode: createPresentationPptx,
+  write: (target, bytes) => window.api.fs.writePresentation(target, bytes),
+})
+let closing: Promise<void> | null = null
 
-function persistenceKey(workspace: PresentationWorkspace): string | null {
-  const document = workspace.documents.find((item) => item.id === workspace.activeDocumentId)
-  return activeTarget && document ? `${activeTarget}\u0000${document.id}\u0000${document.version}` : null
+function closePowerPoint(): Promise<void> {
+  if (closing) return closing
+  closing = (async () => {
+    await workspaceRuntime.runtime.whenIdle()
+    await persistence.checkpoint(() => store.get(workspaceAtom))
+    await window.api.powerpoint.requestClose(sessionId)
+  })().catch((error) => {
+    rlog.error('[powerpoint.close]', error)
+    store.set(showToastAtom, i18n.t('session.presentation.closeSaveFailed'))
+  }).finally(() => { closing = null })
+  return closing
 }
 
-async function persistWorkspace(workspace: PresentationWorkspace) {
-  const target = activeTarget
-  const document = workspace.documents.find((item) => item.id === workspace.activeDocumentId)
-  if (!target || !document) return
-  const key = persistenceKey(workspace)
-  if (!key || key === lastPersistenceKey) return
-  lastPersistenceKey = key
-  const persist = async () => {
-    await window.api.fs.writePresentation(target, await createPresentationPptx(document))
-  }
-  persistenceQueue = persistenceQueue.then(persist, persist)
-  try {
-    await persistenceQueue
-  } catch (error) {
-    if (lastPersistenceKey === key) lastPersistenceKey = null
-    throw error
-  }
-}
-
-async function dispatchPowerPointRequest(request: PowerPointRequest) {
-  try {
-    const dispatched = await executePowerPointRequest(
-      store.get(currentPresentationWorkspaceAtom),
-      request,
-      { currentTarget: activeTarget, fileName: activeFileName },
-    )
-    if (dispatched.target) {
-      activeTarget = dispatched.target
-      activeFileName = dispatched.target.split(/[\\/]/).at(-1) || activeFileName
-    }
-    if (dispatched.workspace && dispatched.target && !dispatched.persist) {
-      lastPersistenceKey = persistenceKey(dispatched.workspace)
-    }
-    if (dispatched.agentChange) {
-      store.set(presentationAgentChangeAtom, {
-        ...dispatched.agentChange,
-        changeId: ++agentChangeId,
-      })
-    }
-    if (dispatched.workspace) store.set(currentPresentationWorkspaceAtom, dispatched.workspace)
-    if (dispatched.persist) await persistWorkspace(dispatched.workspace ?? store.get(currentPresentationWorkspaceAtom))
-    return { ok: true as const, value: dispatched.result }
-  } catch (error) {
-    return {
-      ok: false as const,
-      error: error instanceof Error ? error.message : String(error),
-      ...(error instanceof PowerPointProtocolError ? { code: error.code } : {}),
-    }
-  }
-}
-
-let dispatchQueue: Promise<void> = Promise.resolve()
 window.__bridgicPowerPoint = {
   protocolVersion: POWERPOINT_PROTOCOL_VERSION,
   sessionId,
-  dispatch(request: PowerPointRequest) {
-    // Parallel Agent calls may prepare independently, but native model commits
-    // and persistence stay ordered so one write cannot publish a stale snapshot.
-    const result = dispatchQueue.then(() => dispatchPowerPointRequest(request))
-    dispatchQueue = result.then(() => undefined, () => undefined)
-    return result
-  },
+  dispatch: (request) => workspaceRuntime.dispatchProtocol(
+    request,
+    () => ({ currentTarget: persistence.targetFor(store.get(workspaceAtom)), fileName: activeFileName }),
+    async (dispatched) => {
+      if (dispatched.target) {
+        activeFileName = dispatched.target.split(/[\\/]/).at(-1) || activeFileName
+      }
+      if (dispatched.workspace && dispatched.target) {
+        persistence.bindTarget(dispatched.target, dispatched.workspace, !dispatched.persist)
+      }
+      if (dispatched.agentChange) {
+        store.set(presentationAgentChangeAtom, {
+          ...dispatched.agentChange,
+          changeId: ++agentChangeId,
+        })
+      }
+      if (dispatched.workspace) store.set(currentPresentationWorkspaceAtom, dispatched.workspace)
+      if (dispatched.persist) await persistence.persist(dispatched.workspace ?? store.get(currentPresentationWorkspaceAtom))
+    },
+    (request) => persistence.prepareProtocol(request, () => store.get(workspaceAtom), (workspace) => store.set(workspaceAtom, workspace)),
+  ),
 }
 
 window.addEventListener('error', (event) => {
@@ -130,8 +108,8 @@ function PowerPointRuntime() {
   }, [locale.resolved])
 
   useEffect(() => {
-    if (!activeTarget || documentVersion === undefined) return
-    void persistWorkspace(workspace).catch((error) => rlog.error('[powerpoint.autosave]', error))
+    if (documentVersion === undefined) return
+    void persistence.persist(workspace).catch((error) => rlog.error('[powerpoint.autosave]', error))
   }, [documentVersion, workspace])
 
   return (
@@ -139,9 +117,8 @@ function PowerPointRuntime() {
       <main className="h-screen w-screen overflow-hidden bg-bg-app">
         <PresentationWorkbenchPanel
           active
-          onClose={() => {
-            void window.api.powerpoint.requestClose(sessionId)
-          }}
+          workspaceRuntime={workspaceRuntime}
+          onClose={() => { void closePowerPoint() }}
           onExpandedChange={(expanded) => {
             void window.api.powerpoint.setExpanded(expanded)
           }}

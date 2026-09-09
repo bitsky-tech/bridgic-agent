@@ -1,35 +1,20 @@
 import { atom } from 'jotai'
+import type { WordHostOpenRequest, WordHostSnapshot } from '@shared/types'
 import { isDocxFileName } from '@/lib/fileTypes'
 import { setRightPanelCollapsedAtom } from './layout'
 import { viewedSessionIdAtom } from './navigation'
 import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workbench'
 
-type WordStateUpdate<T> = T | ((current: T) => T)
+export const wordHostSnapshotAtom = atom<WordHostSnapshot>({ sessions: [] })
 
-const expandedWordSessionsAtom = atom<ReadonlySet<string>>(new Set<string>())
-const wordDocumentCountsAtom = atom<ReadonlyMap<string, number>>(new Map())
-
-/** Include blank documents and keep the rail scoped to the viewed Session. */
-export const wordHasOpenDocumentsAtom = atom((get) => {
+export const activeWordHostSessionAtom = atom((get) => {
   const sessionId = get(viewedSessionIdAtom)
-  return sessionId !== null && (get(wordDocumentCountsAtom).get(sessionId) ?? 0) > 0
+  return get(wordHostSnapshotAtom).sessions.find((entry) => entry.sessionId === sessionId) ?? null
 })
 
-export const setWordDocumentCountAtom = atom(null, (get, set, update: { sessionId: string; count: number }) => {
-  const current = get(wordDocumentCountsAtom)
-  if ((current.get(update.sessionId) ?? 0) === update.count) return
-  const next = new Map(current)
-  if (update.count > 0) next.set(update.sessionId, update.count)
-  else next.delete(update.sessionId)
-  set(wordDocumentCountsAtom, next)
-})
-
-export interface WordFileOpenRequest {
-  id: string
-  name: string
-  path: string
-  sessionId: string
-}
+export const wordDocumentCountAtom = atom((get) => get(activeWordHostSessionAtom)?.documentCount ?? null)
+export const wordExpandedAtom = atom((get) => get(activeWordHostSessionAtom)?.expanded ?? false)
+export type WordFileOpenRequest = WordHostOpenRequest
 
 const wordFileOpenRequestsAtom = atom<ReadonlyMap<string, WordFileOpenRequest>>(new Map())
 
@@ -60,43 +45,20 @@ export const requestWordFileOpenAtom = atom(
   },
 )
 
-export const completeWordFileOpenAtom = atom(null, (get, set, requestId: string) => {
-  const sessionId = get(viewedSessionIdAtom)
-  if (!sessionId) return
-  const current = get(wordFileOpenRequestsAtom).get(sessionId)
-  if (current?.id !== requestId) return
+/** Complete the original Session request even if the user has since navigated elsewhere. */
+export const completeWordFileOpenAtom = atom(null, (get, set, request: { sessionId: string; requestId: string }) => {
+  const current = get(wordFileOpenRequestsAtom).get(request.sessionId)
+  if (current?.id !== request.requestId) return
   const requests = new Map(get(wordFileOpenRequestsAtom))
-  requests.delete(sessionId)
+  requests.delete(request.sessionId)
   set(wordFileOpenRequestsAtom, requests)
 })
 
-/** Whether Word owns the complete center + right work area for the viewed Session. */
-export const wordExpandedAtom = atom(
-  (get) => {
-    const sessionId = get(viewedSessionIdAtom)
-    return sessionId ? get(expandedWordSessionsAtom).has(sessionId) : false
-  },
-  (get, set, update: WordStateUpdate<boolean>) => {
-    const sessionId = get(viewedSessionIdAtom)
-    if (!sessionId) return
-    const current = get(expandedWordSessionsAtom)
-    const nextValue = typeof update === 'function' ? update(current.has(sessionId)) : update
-    if (nextValue === current.has(sessionId)) return
-    const next = new Set(current)
-    if (nextValue) next.add(sessionId)
-    else next.delete(sessionId)
-    set(expandedWordSessionsAtom, next)
-  },
-)
-
-/** Release the transient renderer projection after an Agent Session is deleted. */
+/** Release only the deleted Session's renderer projections. */
 export const purgeWordStateAtom = atom(null, (get, set, sessionId: string) => {
-  set(setWordDocumentCountAtom, { sessionId, count: 0 })
-  const current = get(expandedWordSessionsAtom)
-  if (current.has(sessionId)) {
-    const next = new Set(current)
-    next.delete(sessionId)
-    set(expandedWordSessionsAtom, next)
+  const snapshot = get(wordHostSnapshotAtom)
+  if (snapshot.sessions.some((entry) => entry.sessionId === sessionId)) {
+    set(wordHostSnapshotAtom, { sessions: snapshot.sessions.filter((entry) => entry.sessionId !== sessionId) })
   }
   const requests = get(wordFileOpenRequestsAtom)
   if (requests.has(sessionId)) {

@@ -665,22 +665,27 @@ export const presentationSessionIdAtom = atom((get) => (
   get(powerPointSessionIdOverrideAtom) ?? get(viewedSessionIdAtom)
 ))
 
-/** Every open presentation tab owned by the viewed Session. */
-export const currentPresentationWorkspaceAtom = atom(
-  (get) => {
-    const sessionId = get(presentationSessionIdAtom)
-    return sessionId
-      ? get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace
-      : fallbackPresentationWorkspace
-  },
+/** Explicit Session ownership for commands that can outlive a navigation change. */
+export const presentationWorkspaceFamily = atomFamily((sessionId: string) => atom(
+  (get) => get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace,
   (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
-    const sessionId = get(presentationSessionIdAtom)
-    if (!sessionId) return
-    const current = get(currentPresentationWorkspaceAtom)
+    const current = get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace
     const next = typeof update === 'function' ? update(current) : update
     const workspaces = new Map(get(presentationWorkspacesBySessionAtom))
     workspaces.set(sessionId, next)
     set(presentationWorkspacesBySessionAtom, workspaces)
+  },
+))
+
+/** Every open presentation tab owned by the viewed Session. */
+export const currentPresentationWorkspaceAtom = atom(
+  (get) => {
+    const sessionId = get(presentationSessionIdAtom)
+    return sessionId ? get(presentationWorkspaceFamily(sessionId)) : fallbackPresentationWorkspace
+  },
+  (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
+    const sessionId = get(presentationSessionIdAtom)
+    if (sessionId) set(presentationWorkspaceFamily(sessionId), update)
   },
 )
 
@@ -728,6 +733,7 @@ export const presentationExpandedAtom = atom(
 
 /** Drop presentation state when its owning Session is deleted. */
 export const purgePresentationSessionAtom = atom(null, (get, set, sessionId: string) => {
+  presentationWorkspaceFamily.remove(sessionId)
   presentationPaneViewFamily.remove(sessionId)
   const workspaces = get(presentationWorkspacesBySessionAtom)
   if (workspaces.has(sessionId)) {

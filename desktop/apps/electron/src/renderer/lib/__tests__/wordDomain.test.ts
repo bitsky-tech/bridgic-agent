@@ -303,7 +303,7 @@ describe('Word renderer domain', () => {
   it('validates editor commands and returns the registered Session adapter result', async () => {
     const store = createWordDomainStore(createWordWorkspace('session-word', 'Untitled document'), { defaultTitle: 'Untitled document' })
     const commands: unknown[] = []
-    store.registerEditorCommandHandler(async (command) => {
+    store.registerEditorCommandHandler(store.getSnapshot().activeDocumentId, async (command) => {
       commands.push(command)
       return true
     })
@@ -318,7 +318,7 @@ describe('Word renderer domain', () => {
       { type: 'editor.insert', kind: 'table', rows: 3, cols: 4, withHeaderRow: true },
     ])
 
-    store.registerEditorCommandHandler(async () => false)
+    store.registerEditorCommandHandler(store.getSnapshot().activeDocumentId, async () => false)
     const rejected = await store.api.dispatch({ type: 'editor.format', action: 'paste' })
     expect(rejected.ok).toBe(false)
     if (!rejected.ok) expect(rejected.error.code).toBe('editor_command_failed')

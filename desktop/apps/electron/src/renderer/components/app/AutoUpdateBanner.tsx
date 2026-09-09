@@ -112,6 +112,8 @@ function refusalKey(reason: Exclude<UpdateInstallResult, { ok: true }>['reason']
       return 'update.disabled'
     case 'unsaved-workbooks':
       return 'update.unsavedWorkbooks'
+    case 'unsaved-documents':
+      return 'update.unsavedDocuments'
     default:
       return 'update.errorTitle'
   }

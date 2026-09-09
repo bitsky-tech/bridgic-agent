@@ -47,9 +47,9 @@ describe('DOCX file-open routing', () => {
     store.set(requestFileOpenAtom, target)
     expect(store.get(wordFileOpenRequestAtom)?.id).toBe(first?.id)
 
-    store.set(completeWordFileOpenAtom, 'different-request')
+    store.set(completeWordFileOpenAtom, { sessionId: 'session-docx', requestId: 'different-request' })
     expect(store.get(wordFileOpenRequestAtom)?.id).toBe(first?.id)
-    store.set(completeWordFileOpenAtom, first!.id)
+    store.set(completeWordFileOpenAtom, { sessionId: 'session-docx', requestId: first!.id })
     expect(store.get(wordFileOpenRequestAtom)).toBeNull()
   })
 })

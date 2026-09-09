@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNativeOfficeSurface, type NativeOfficeSurfacePolicy } from '@/hooks/useNativeOfficeSurface'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
-import type { EmbeddedBrowserBounds, ExcelHostConfig } from '@shared/types'
+import type { ExcelHostConfig } from '@shared/types'
 import {
   activeExcelHostSessionAtom,
   consumeExcelWorkbookOpenRequestAtom,
@@ -20,6 +21,12 @@ import { Icons } from '@/components/amphi/Icons'
 import { rlog } from '@/lib/logger'
 import { OfficeAppHeader, OfficePanelControls } from './OfficeWorkbenchChrome'
 
+const excelSurfacePolicy: NativeOfficeSurfacePolicy = {
+  publishBoundsBeforeApply: true,
+  deactivateOnDetach: true,
+  onError: (error) => rlog.warn('[excel-host] native surface sync failed', error),
+}
+
 type ExcelLaunchState =
   | { status: 'idle' | 'creating' | 'ready' }
   | { status: 'error'; message: string }
@@ -37,6 +44,7 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
   const consumeWorkbookOpenRequest = useSetAtom(consumeExcelWorkbookOpenRequestAtom)
   const showToast = useSetAtom(showToastAtom)
+  const publishSurfaceRect = useSetAtom(setNativeSurfaceRectAtom)
   const viewportRef = useRef<HTMLDivElement>(null)
   const openingWorkbookRequestRef = useRef<number | null>(null)
   const [hostError, setHostError] = useState<{ sessionId: string; message: string } | null>(null)
@@ -101,7 +109,13 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
     && hostSession?.ready === true
     && !hostSession.crashed
     && !surfaceBlocked
-  useNativeExcelSurface(viewportRef, nativeVisible ? sessionId : null)
+  useNativeOfficeSurface({
+    client: window.api.excelHost,
+    policy: excelSurfacePolicy,
+    viewportRef,
+    sessionId: nativeVisible ? sessionId : null,
+    publishBounds: publishSurfaceRect,
+  })
 
   if (!sessionId || !config) return null
   if (!hostSession) return <ExcelLaunchEmptyState config={config} sessionId={sessionId} />
@@ -210,119 +224,4 @@ function ExcelLaunchEmptyState({ config, sessionId }: {
       </div>
     </section>
   )
-}
-
-function useNativeExcelSurface(viewportRef: RefObject<HTMLDivElement>, sessionId: string | null): void {
-  const publishSurfaceRect = useSetAtom(setNativeSurfaceRectAtom)
-  const revisionRef = useRef(0)
-
-  useLayoutEffect(() => {
-    const revision = revisionRef.current + 1
-    revisionRef.current = revision
-    const viewport = viewportRef.current
-    let disposed = false
-    let frame = 0
-    let lastBounds: EmbeddedBrowserBounds | null = null
-    let applying = false
-    let pending = false
-
-    const current = () => !disposed && revisionRef.current === revision
-    const hide = async () => {
-      await window.api.excelHost.setVisible(false)
-      if (current()) publishSurfaceRect(null)
-    }
-    const readBounds = (): EmbeddedBrowserBounds | null => {
-      if (!viewport) return null
-      const rect = viewport.getBoundingClientRect()
-      const clip = viewport.closest<HTMLElement>('[data-browser-dock-clip]')?.getBoundingClientRect()
-      const left = clip ? Math.max(rect.left, clip.left) : rect.left
-      const right = clip ? Math.min(rect.right, clip.right) : rect.right
-      return {
-        x: left,
-        y: rect.top,
-        width: Math.max(0, right - left),
-        height: rect.height,
-      }
-    }
-    const apply = async () => {
-      if (applying || !current()) return
-      applying = true
-      try {
-        while (pending && current()) {
-          pending = false
-          if (!sessionId || !viewport) {
-            await hide()
-            continue
-          }
-          const bounds = readBounds()
-          if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
-            await hide()
-            continue
-          }
-          lastBounds = bounds
-          publishSurfaceRect(bounds)
-          await window.api.excelHost.setBounds(bounds)
-          if (!current()) return
-          await window.api.excelHost.activateSession(sessionId)
-          if (!current()) return
-          await window.api.excelHost.setVisible(true)
-        }
-      } catch (cause) {
-        rlog.warn('[excel-host] native surface sync failed', cause)
-        if (current()) publishSurfaceRect(null)
-      } finally {
-        applying = false
-        if (pending && current()) void apply()
-      }
-    }
-    const schedule = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        const bounds = readBounds()
-        if (!sameBounds(lastBounds, bounds)) {
-          lastBounds = bounds
-          pending = true
-          void apply()
-        }
-      })
-    }
-
-    if (!sessionId || !viewport) {
-      pending = true
-      void apply()
-      return () => {
-        disposed = true
-        if (revisionRef.current === revision) revisionRef.current += 1
-      }
-    }
-
-    const observer = new ResizeObserver(schedule)
-    observer.observe(viewport)
-    let ancestor: HTMLElement | null = viewport.parentElement
-    while (ancestor && ancestor !== document.body) {
-      observer.observe(ancestor)
-      ancestor = ancestor.parentElement
-    }
-    window.addEventListener('resize', schedule)
-    window.addEventListener('scroll', schedule, true)
-    pending = true
-    void apply()
-    return () => {
-      disposed = true
-      if (revisionRef.current === revision) revisionRef.current += 1
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-      window.removeEventListener('resize', schedule)
-      window.removeEventListener('scroll', schedule, true)
-      publishSurfaceRect(null)
-      void window.api.excelHost.setVisible(false)
-      void window.api.excelHost.activateSession(null)
-    }
-  }, [publishSurfaceRect, sessionId, viewportRef])
-}
-
-function sameBounds(left: EmbeddedBrowserBounds | null, right: EmbeddedBrowserBounds | null): boolean {
-  return left !== null && right !== null
-    && left.x === right.x && left.y === right.y
-    && left.width === right.width && left.height === right.height
 }

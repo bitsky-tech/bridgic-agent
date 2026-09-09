@@ -11,7 +11,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type {
   Canvas as FabricCanvas,
@@ -25,9 +25,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Grid2X2,
-  Maximize2,
   MessageSquareText,
-  Minimize2,
   MonitorPlay,
   Play,
   Rows3,
@@ -37,7 +35,6 @@ import {
 } from 'lucide-react'
 import {
   createBlankPresentationSlide,
-  createInitialPresentationDocument,
   createPresentationId,
   currentPresentationDocumentAtom,
   currentPresentationWorkspaceAtom,
@@ -47,6 +44,7 @@ import {
   presentationAgentChangeAtom,
   presentationExpandedAtom,
   presentationSessionIdAtom,
+  presentationWorkspaceFamily,
   stripPresentationTextFormatting,
   type PresentationAnimationEffect,
   type PresentationChartElement,
@@ -137,6 +135,9 @@ import {
   supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
+import { createPresentationWorkspaceRuntime, type PresentationWorkspaceRuntime } from '@/lib/presentationWorkspaceRuntime'
+import { createOfficeEditorBinding, type OfficeEditorBinding, type OfficeEditorLease } from '@/lib/office/officeEditorBinding'
+import { bindPresentationNativeEdit, createPresentationEditorDriver, type PresentationEditingObject } from '@/lib/presentationEditorDriver'
 import {
   getPresentationShapePath,
   getPresentationShapeDefinition,
@@ -148,6 +149,7 @@ import {
   type PresentationInsertDialogKind,
   type PresentationInsertDialogValue,
 } from './PresentationInsertDialogs'
+import { OfficeAppHeader, OfficeDocumentTabs, OfficePanelControls } from './OfficeWorkbenchChrome'
 import { PresentationAnimationPlayer } from './PresentationAnimationPlayer'
 import {
   PresentationRibbon,
@@ -170,6 +172,7 @@ import {
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
+  workspaceRuntime?: PresentationWorkspaceRuntime
   onClose?: () => void
   onExpandedChange?: (expanded: boolean) => void
 }
@@ -1825,12 +1828,25 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
 }
 
 /** A focused PowerPoint-style editor embedded in the Session workbench. */
-export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }: PresentationWorkbenchPanelProps) {
+export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, workspaceRuntime }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
   const sessionId = useAtomValue(presentationSessionIdAtom)
   const agentChange = useAtomValue(presentationAgentChangeAtom)
-  const [workspace, setWorkspace] = useAtom(currentPresentationWorkspaceAtom)
-  const [document, setDocument] = useAtom(currentPresentationDocumentAtom)
+  const workspace = useAtomValue(currentPresentationWorkspaceAtom)
+  const document = useAtomValue(currentPresentationDocumentAtom)
+  const store = useStore()
+  const presentationRuntime = useMemo(() => {
+    if (workspaceRuntime) return workspaceRuntime
+    const workspaceAtom = presentationWorkspaceFamily(sessionId ?? '')
+    return createPresentationWorkspaceRuntime({
+      sessionId: sessionId ?? '',
+      read: () => store.get(workspaceAtom),
+      write: (next) => store.set(workspaceAtom, next),
+    })
+  }, [sessionId, store, workspaceRuntime])
+  useEffect(() => store.sub(presentationWorkspaceFamily(sessionId ?? ''), () => {
+    presentationRuntime.runtime.publish()
+  }), [presentationRuntime, sessionId, store])
   const pageSize = getPresentationPageSize(document)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
@@ -1872,6 +1888,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   const mediaRuntimeRef = useRef<PresentationMediaRuntime | null>(null)
   const objectIdsRef = useRef(new WeakMap<FabricObject, string>())
   const documentRef = useRef(document)
+  const editorBindingRef = useRef<OfficeEditorBinding<PresentationDocument> | null>(null)
+  const nativeCommitRef = useRef<(next: PresentationDocument) => void>(() => undefined)
+  const flushNativeEditRef = useRef<(() => void) | null>(null)
+  const pendingCanvasEditRef = useRef<(() => void) | null>(null)
   const pageSizeRef = useRef(pageSize)
   const viewOptionsRef = useRef(viewOptions)
   const selectedElementIdRef = useRef<string | null>(null)
@@ -1911,6 +1931,13 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
 
   const commitDocument = useCallback((next: PresentationDocument, recordHistory = true) => {
     const current = documentRef.current
+    let versionedNext: PresentationDocument
+    try {
+      versionedNext = presentationRuntime.commitDocument(current, next)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+      return
+    }
     if (recordHistory) {
       const entry = createPresentationHistoryEntry(current)
       // An oversized state is an undo barrier. Keeping older entries would make
@@ -1920,14 +1947,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         : []
       futureRef.current = []
     }
-    const versionedNext = next.id === current.id ? { ...next, version: current.version + 1 } : next
     documentRef.current = versionedNext
-    setDocument(versionedNext)
     setHistoryStatus({
       canUndo: pastRef.current.length > 0,
       canRedo: futureRef.current.length > 0,
     })
-  }, [setDocument])
+  }, [presentationRuntime, showToast])
 
   const replaceCurrentSlide = useCallback((nextSlide: PresentationSlide) => {
     const current = documentRef.current
@@ -2039,9 +2064,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     replaceCurrentSlide({ ...slide, elements: nextElements })
   }, [replaceCurrentSlide])
 
-  const syncFabricObjectsRef = useRef<(objects: readonly FabricObject[], detachMovedMembers?: boolean) => void>(() => undefined)
-  const syncFabricObjects = useCallback((objects: readonly FabricObject[], detachMovedMembers = false) => {
+  const syncFabricObjectsRef = useRef<(objects: readonly FabricObject[], detachMovedMembers?: boolean, lease?: OfficeEditorLease) => void>(() => undefined)
+  const syncFabricObjects = useCallback((objects: readonly FabricObject[], detachMovedMembers = false, lease = editorBindingRef.current?.capture()) => {
+    const binding = editorBindingRef.current
+    if (!binding || !lease?.isCurrent()) return
     const current = documentRef.current
+    if (current.id !== lease.identity.documentId) return
     const slide = current.slides.find((item) => item.id === current.selectedSlideId)
     if (!slide) return
     const patches = new Map<string, Partial<PresentationElement>>()
@@ -2078,19 +2106,21 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
           ? patchPresentationText(element, patch as Partial<PresentationTextElement>)
           : { ...element, ...patch } as PresentationElement
       })
-    replaceCurrentSlide({
+    const nextSlide = {
       ...slide,
       elements: detachMovedMembers
         ? detachPresentationElementsOutsideGroups(slide.elements, nextElements, new Set(patches.keys()))
         : nextElements,
-    })
-  }, [replaceCurrentSlide])
+    }
+    binding.publishChange({ ...current, slides: current.slides.map((item) => item.id === slide.id ? nextSlide : item) }, lease)
+  }, [])
 
-  const syncFabricObjectRef = useRef<(object: FabricObject) => void>(() => undefined)
-  const syncFabricObject = useCallback((object: FabricObject) => syncFabricObjects([object]), [syncFabricObjects])
+  const syncFabricObjectRef = useRef<(object: FabricObject, lease?: OfficeEditorLease) => void>(() => undefined)
+  const syncFabricObject = useCallback((object: FabricObject, lease?: OfficeEditorLease) => syncFabricObjects([object], false, lease), [syncFabricObjects])
 
   useLayoutEffect(() => {
     documentRef.current = document
+    editorBindingRef.current?.bindDocument(document.id)
     const previous = fileInsertionTargetRef.current
     const targetChanged = previous.sessionId !== sessionId
       || previous.documentId !== document.id
@@ -2102,6 +2132,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       slideId: document.selectedSlideId,
     }
   }, [document, sessionId])
+
+  useLayoutEffect(() => { nativeCommitRef.current = commitDocument }, [commitDocument])
 
   useEffect(() => () => {
     fileInsertionTargetRef.current = {
@@ -2261,9 +2293,17 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
 
   useEffect(() => {
     if (!active || !canvasElementRef.current) return
-    let cancelled = false
+    const binding = createOfficeEditorBinding<PresentationDocument>({
+      appKind: 'presentation', sessionId: sessionId ?? '', documentId: documentRef.current.id,
+      onChange: (next, identity) => {
+        if (identity.documentId !== presentationRuntime.runtime.getSnapshot().activeDocumentId) return
+        nativeCommitRef.current(next)
+      },
+    })
+    editorBindingRef.current = binding
+    let unregisterEditor: (() => void) | undefined
     void import('fabric').then((fabric) => {
-      if (cancelled || !canvasElementRef.current) return
+      if (binding.getStatus() === 'disposed' || !canvasElementRef.current) return
       const canvas = new fabric.Canvas(canvasElementRef.current, {
         width: pageSizeRef.current.width,
         height: pageSizeRef.current.height,
@@ -2371,9 +2411,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         if (event.target instanceof fabric.ActiveSelection) {
           const selection = event.target
           const objects = [...selection.getObjects()]
+          const lease = binding.capture()
+          const slideId = documentRef.current.selectedSlideId
           if (canvasSelectionFrameRef.current !== null) window.cancelAnimationFrame(canvasSelectionFrameRef.current)
-          canvasSelectionFrameRef.current = window.requestAnimationFrame(() => {
-            canvasSelectionFrameRef.current = null
+          const commitSelection = bindPresentationNativeEdit(lease, slideId, () => documentRef.current, () => {
             if (canvasRef.current !== canvas) return
             suppressCanvasSelectionRef.current = true
             try {
@@ -2383,7 +2424,14 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
             }
             isolatedElementIdRef.current = null
             activeGroupIdRef.current = null
-            syncFabricObjectsRef.current(objects)
+            syncFabricObjectsRef.current(objects, false, lease)
+          })
+          pendingCanvasEditRef.current = commitSelection
+          canvasSelectionFrameRef.current = window.requestAnimationFrame(() => {
+            canvasSelectionFrameRef.current = null
+            if (pendingCanvasEditRef.current !== commitSelection) return
+            pendingCanvasEditRef.current = null
+            commitSelection()
           })
           return
         }
@@ -2415,33 +2463,58 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
         if (!isPresentationTableElement(element) && !isPresentationChartElement(element)) return
         setInsertDialog({ kind: element.type, elementId: element.id })
       })
+      const driver = createPresentationEditorDriver({
+        readSnapshot: () => store.get(presentationWorkspaceFamily(sessionId ?? '')).documents
+          .find((item) => item.id === binding.capture().identity.documentId) ?? null,
+        readEditingObject: () => canvas.getActiveObject() as (FabricObject & PresentationEditingObject) | null,
+        flushPendingEdit: () => {
+          const pending = pendingCanvasEditRef.current
+          if (!pending) return
+          pendingCanvasEditRef.current = null
+          if (canvasSelectionFrameRef.current !== null) {
+            window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+            canvasSelectionFrameRef.current = null
+          }
+          pending()
+        },
+        dispose: () => {
+          if (canvasRef.current === canvas) {
+            canvasRef.current = null
+            fabricModuleRef.current = null
+            flushNativeEditRef.current = null
+            pendingCanvasEditRef.current = null
+            if (canvasSelectionFrameRef.current !== null) {
+              window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+              canvasSelectionFrameRef.current = null
+            }
+            objectIdsRef.current = new WeakMap()
+            activeGroupIdRef.current = null
+            drillIntoElementOnClickRef.current = false
+            pointerDownSelectionContextRef.current = { groupId: null, isolatedId: null }
+          }
+          if (mediaRuntimeRef.current === mediaRuntime) mediaRuntimeRef.current = null
+          mediaRuntime.dispose()
+          void canvas.dispose()
+        },
+      })
+      if (!binding.attach(driver)) return
+      flushNativeEditRef.current = () => { void driver.flush(binding.capture()) }
+      unregisterEditor = presentationRuntime.bindEditor(binding)
       setCanvasGeneration((value) => value + 1)
     })
     return () => {
-      cancelled = true
-      const canvas = canvasRef.current
-      canvasRef.current = null
-      fabricModuleRef.current = null
-      if (canvasSelectionFrameRef.current !== null) {
-        window.cancelAnimationFrame(canvasSelectionFrameRef.current)
-        canvasSelectionFrameRef.current = null
-      }
-      const mediaRuntime = mediaRuntimeRef.current
-      mediaRuntimeRef.current = null
-      objectIdsRef.current = new WeakMap()
-      activeGroupIdRef.current = null
-      drillIntoElementOnClickRef.current = false
-      pointerDownSelectionContextRef.current = { groupId: null, isolatedId: null }
-      mediaRuntime?.dispose()
-      if (canvas) void canvas.dispose()
+      unregisterEditor?.()
+      binding.dispose()
+      if (editorBindingRef.current === binding) editorBindingRef.current = null
     }
-  }, [activateFabricElement, active])
+  }, [activateFabricElement, active, presentationRuntime, sessionId, store])
 
   useEffect(() => {
     const canvas = canvasRef.current
     const fabric = fabricModuleRef.current
     const mediaRuntime = mediaRuntimeRef.current
     if (!active || !canvas || !fabric || !mediaRuntime || !currentSlide) return
+    const lease = editorBindingRef.current?.capture()
     let cancelled = false
     const revealFrameIds = new Set<number>()
     const visibleAgentChange = agentChange
@@ -2531,9 +2604,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       void createPresentationFabricObject(
         fabric,
         element,
-        (object) => syncFabricObjectRef.current(object),
+        lease ? bindPresentationNativeEdit(lease, currentSlide.id, () => documentRef.current, (object) => {
+          if (!cancelled) syncFabricObjectRef.current(object, lease)
+        }) : () => undefined,
       ).then((object) => {
-        if (cancelled || canvasRef.current !== canvas) return
+        if (cancelled || !lease?.isCurrent() || canvasRef.current !== canvas) return
         let hoverCursor = 'move'
         if (isPresentationMediaElement(element)) hoverCursor = 'default'
         else if (element.hyperlink && supportsPresentationElementHyperlink(element)) hoverCursor = 'pointer'
@@ -2701,6 +2776,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
   }, [goToSlideshowIndex, requestExternalLink])
 
   const selectSlide = (slideId: string) => {
+    try {
+      flushNativeEditRef.current?.()
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+      return
+    }
     isolatedElementIdRef.current = null
     selectedElementIdRef.current = null
     setSelectedElementId(null)
@@ -2709,37 +2790,42 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
     const current = documentRef.current
     if (current.selectedSlideId === slideId) return
     const selected = { ...current, selectedSlideId: slideId }
-    documentRef.current = selected
-    setDocument(selected)
+    try {
+      documentRef.current = presentationRuntime.commitDocument(current, selected, false)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+    }
   }
 
   const selectPresentationDocument = (documentId: string) => {
-    if (workspace.activeDocumentId === documentId) return
-    setWorkspace({ ...workspace, activeDocumentId: documentId })
+    void presentationRuntime.activateDocument(documentId).then((result) => {
+      if (!result.ok) showToast(result.error.message)
+    })
   }
 
   const createPresentationDocument = () => {
-    const nextDocument = createInitialPresentationDocument()
-    setWorkspace({
-      activeDocumentId: nextDocument.id,
-      documents: [...workspace.documents, nextDocument],
+    void presentationRuntime.createDocument().then((result) => {
+      if (!result.ok) showToast(result.error.message)
     })
   }
 
   const closePresentationDocument = (documentId: string) => {
-    if (workspace.documents.length <= 1) {
+    void presentationRuntime.closeDocument(documentId).then((result) => {
+      if (!result.ok) showToast(result.error.message)
+      else if (result.value.closeSurface) {
+        setExpanded(false)
+        if (onClose) onClose()
+        else setRightCollapsed(true)
+      }
+    })
+  }
+
+  const closePresentationPanel = () => {
+    void presentationRuntime.flushEditor().then(() => {
       setExpanded(false)
       if (onClose) onClose()
       else setRightCollapsed(true)
-      return
-    }
-    const closingIndex = workspace.documents.findIndex((item) => item.id === documentId)
-    if (closingIndex < 0) return
-    const documents = workspace.documents.filter((item) => item.id !== documentId)
-    const activeDocumentId = workspace.activeDocumentId === documentId
-      ? documents[Math.min(closingIndex, documents.length - 1)]!.id
-      : workspace.activeDocumentId
-    setWorkspace({ activeDocumentId, documents })
+    }).catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
   const addSlide = () => {
@@ -3436,106 +3522,48 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange }
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-bg-app text-text-primary"
       data-testid="presentation-workbench-panel"
     >
-      <div
-        className="flex h-12 shrink-0 items-center gap-3 border-b border-border-subtle/70 bg-bg-surface/95 px-3"
-        data-testid="presentation-app-header"
+      <OfficeAppHeader
+        icon={<PresentationMark />}
+        iconClassName="bg-[#FFF3E4] text-[#D97706] dark:bg-[#4A331C] dark:text-[#F2A64A]"
+        subtitle={t('session.presentation.sessionTargetReady', { target: sessionTarget })}
+        testId="presentation-app-header"
+        title={t('session.presentation.applicationName')}
       >
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#FFF3E4] text-[#D97706] dark:bg-[#4A331C] dark:text-[#F2A64A]">
-          <PresentationMark />
-        </div>
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-sm font-semibold text-text-primary">
-            {t('session.presentation.applicationName')}
-          </div>
-          <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
-            {t('session.presentation.sessionTargetReady', { target: sessionTarget })}
-          </div>
-        </div>
-        <HeaderButton
-          label={t(expanded ? 'session.presentation.restore' : 'session.presentation.expand')}
-          onClick={() => {
+        <OfficePanelControls
+          closeLabel={t('session.presentation.closePanel')}
+          expanded={expanded}
+          expandLabel={t(expanded ? 'session.presentation.restore' : 'session.presentation.expand')}
+          onClose={closePresentationPanel}
+          onToggleExpanded={() => {
             const next = !expanded
             setExpanded(next)
             onExpandedChange?.(next)
           }}
-          pressed={expanded}
-          testId="presentation-toggle-expanded"
-        >
-          {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-        </HeaderButton>
-        <HeaderButton
-          label={t('session.presentation.closePanel')}
-          onClick={() => {
-            setExpanded(false)
-            if (onClose) onClose()
-            else setRightCollapsed(true)
-          }}
-          testId="presentation-close-panel"
-        >
-          <X className="size-4" />
-        </HeaderButton>
-      </div>
+          testIdPrefix="presentation"
+          tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
+        />
+      </OfficeAppHeader>
 
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-subtle/70 bg-bg-app px-2">
-        <div
-          role="tablist"
-          aria-label={t('session.presentation.documentTabs')}
-          className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto"
-          data-testid="presentation-document-tabs"
-        >
-          {workspace.documents.map((item) => {
-            const fileName = documentFileName(item)
-            const selected = item.id === workspace.activeDocumentId
-            return (
-              <div
-                key={item.id}
-                className={cn(
-                  'group flex h-8 min-w-[132px] max-w-[240px] shrink-0 items-center rounded-lg border px-1 text-text-primary',
-                  selected
-                    ? 'border-border-subtle bg-bg-surface shadow-sm'
-                    : 'border-transparent bg-transparent hover:bg-bg-hover',
-                )}
-              >
-                <PresentationControlTooltip content={fileName} placement="bottom">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    onClick={() => selectPresentationDocument(item.id)}
-                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-1 text-left text-xs font-medium"
-                    data-testid="presentation-document-tab"
-                  >
-                    <span className="shrink-0 text-[#D97706]"><PresentationMark /></span>
-                    <span className="truncate">{fileName}</span>
-                  </button>
-                </PresentationControlTooltip>
-                <PresentationControlTooltip content={t('session.presentation.closeDocument', { name: fileName })} placement="bottom">
-                  <button
-                    type="button"
-                    aria-label={t('session.presentation.closeDocument', { name: fileName })}
-                    onClick={() => closePresentationDocument(item.id)}
-                    className="flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary opacity-65 hover:bg-bg-hover hover:text-text-primary hover:opacity-100"
-                    data-testid="presentation-close-document"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </PresentationControlTooltip>
-              </div>
-            )
-          })}
-          <PresentationControlTooltip content={t('session.presentation.newPresentation')} placement="bottom">
-            <button
-              type="button"
-              aria-label={t('session.presentation.newPresentation')}
-              onClick={createPresentationDocument}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
-              data-testid="presentation-new-document"
-            >
-              <PlusIcon />
-            </button>
-          </PresentationControlTooltip>
-        </div>
-      </div>
+      <OfficeDocumentTabs
+        activeId={workspace.activeDocumentId}
+        icon={<span className="shrink-0 text-[#D97706]"><PresentationMark /></span>}
+        label={t('session.presentation.documentTabs')}
+        newIcon={<PlusIcon />}
+        newLabel={t('session.presentation.newPresentation')}
+        onClose={closePresentationDocument}
+        onCreate={createPresentationDocument}
+        onSelect={selectPresentationDocument}
+        tabs={workspace.documents.map((item) => {
+          const fileName = documentFileName(item)
+          return {
+            id: item.id,
+            label: fileName,
+            closeLabel: t('session.presentation.closeDocument', { name: fileName }),
+          }
+        })}
+        testIdPrefix="presentation"
+        tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
+      />
 
       <PresentationRibbon
         activeTab={ribbonTab}
@@ -3914,34 +3942,6 @@ function PresentationMasterDialog({ master, onApply, onClose }: {
         </div>
       </form>
     </div>
-  )
-}
-
-function HeaderButton({ children, disabled, label, onClick, pressed, testId }: {
-  children: ReactNode
-  disabled?: boolean
-  label: string
-  onClick: () => void
-  pressed?: boolean
-  testId?: string
-}) {
-  return (
-    <PresentationControlTooltip content={label} placement="bottom">
-      <button
-        type="button"
-        aria-label={label}
-        aria-pressed={pressed}
-        disabled={disabled}
-        onClick={onClick}
-        data-testid={testId}
-        className={cn(
-          'flex size-7 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30',
-          pressed && 'bg-brand-purple/10 text-brand-purple',
-        )}
-      >
-        {children}
-      </button>
-    </PresentationControlTooltip>
   )
 }
 

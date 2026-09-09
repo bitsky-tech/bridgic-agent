@@ -126,7 +126,7 @@ const {
 } = await import('@/atoms/layout')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { i18n } = await import('@/lib/i18n')
-const { createWordWorkspace } = await import('@/lib/wordDomain')
+const { wordHostSnapshotAtom } = await import('@/atoms/word')
 const {
   BrowserAttentionAnnouncer,
   FilesAttentionAnnouncer,
@@ -152,6 +152,13 @@ afterEach(() => {
 afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
+
+function wordSnapshot(sessionId: string, documentCount: number) {
+  return { sessions: [{
+    sessionId, targetId: `word-${sessionId}`, webContentsId: 51, loading: false, crashed: false,
+    documentCount, persistenceStatus: 'saved' as const, expanded: false,
+  }] }
+}
 
 function browserSnapshot(sessionId: string, tab: EmbeddedBrowserTabInfo = emptyTab) {
   return {
@@ -283,7 +290,7 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="workflow-results-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="schedule-workbench-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
 
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
@@ -297,9 +304,8 @@ describe('SessionResourcePanel', () => {
     await act(async () => word.click())
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Word)
     expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('false')
-    expect(window.__bridgicWord?.sessionId).toBe('session-tools')
-    expect((await window.__bridgicWord?.dispatch({ type: 'workspace.get' }))?.ok).toBe(true)
-    expect(host.querySelector('[data-testid="word-create-document"]')).not.toBeNull()
+    expect(window.__bridgicWord).toBeUndefined()
+    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
 
     await act(async () => word.click())
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
@@ -318,19 +324,16 @@ describe('SessionResourcePanel', () => {
     try {
       expect(indicator()).toBeNull()
       await act(async () => {
-        expect((await window.__bridgicWord?.dispatch({ type: 'document.create' }))?.ok).toBe(true)
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 1))
       })
       expect(indicator()?.dataset.state).toBe('background-open')
       expect(indicator()?.dataset.appearance).toBe('icon-tile')
       expect(word.getAttribute('aria-busy')).toBeNull()
       expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
 
-      const first = await window.__bridgicWord?.dispatch({ type: 'workspace.get' })
-      if (!first?.ok) throw new Error('Word workspace is unavailable')
-      expect(first.state.documents).toHaveLength(1)
       await act(async () => {
-        await window.__bridgicWord?.dispatch({ type: 'document.create' })
-        await window.__bridgicWord?.dispatch({ type: 'document.close', documentId: first.state.activeDocumentId })
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 2))
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 1))
       })
       expect(indicator()?.dataset.state).toBe('background-open')
 
@@ -340,10 +343,8 @@ describe('SessionResourcePanel', () => {
       expect(store.get(rightPanelCollapsedAtom)).toBe(true)
       expect(indicator()?.dataset.state).toBe('background-open')
 
-      const remaining = await window.__bridgicWord?.dispatch({ type: 'workspace.get' })
-      if (!remaining?.ok) throw new Error('Word workspace is unavailable')
       await act(async () => {
-        await window.__bridgicWord?.dispatch({ type: 'document.close', documentId: remaining.state.activeDocumentId })
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 0))
       })
       expect(indicator()).toBeNull()
     } finally {
@@ -353,10 +354,9 @@ describe('SessionResourcePanel', () => {
 
   it('restores the Word background marker for the viewed Session without leaking it across Sessions', async () => {
     const sessionId = 'session-word-restored'
-    const storageKey = `bridgic.word.workspace.${sessionId}`
-    window.localStorage.setItem(storageKey, JSON.stringify(createWordWorkspace(sessionId, 'Blank document')))
     const store = createStore()
     store.set(activeSessionIdAtom, sessionId)
+    store.set(wordHostSnapshotAtom, wordSnapshot(sessionId, 1))
     const { host, root } = await mountPanel(store)
     const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-workbench-word-status-indicator"]')
     try {
@@ -373,7 +373,6 @@ describe('SessionResourcePanel', () => {
       expect(indicator()?.dataset.state).toBe('background-open')
     } finally {
       await act(async () => root.unmount())
-      window.localStorage.removeItem(storageKey)
     }
   })
 

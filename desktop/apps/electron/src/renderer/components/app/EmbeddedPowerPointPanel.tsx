@@ -5,7 +5,8 @@ import { Icons } from '@/components/amphi/Icons'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import { useNativeOfficeSurface, type NativeOfficeSurfacePolicy } from '@/hooks/useNativeOfficeSurface'
 import { useTranslation } from 'react-i18next'
 import { SESSION_STATUS_BAR_HEIGHT_PX } from './SessionStatusBar'
 
@@ -13,11 +14,12 @@ export interface EmbeddedPowerPointPanelProps {
   active: boolean
 }
 
-interface PowerPointViewportBounds {
-  x: number
-  y: number
-  width: number
-  height: number
+const powerPointSurfacePolicy: NativeOfficeSurfacePolicy = {
+  prepareSession: (sessionId) => window.api.powerpoint.ensureSession(sessionId),
+  initialSync: 'animation-frame',
+  focusHostOnDetach: true,
+  clearBoundsAfterDetach: true,
+  onError: (error) => rlog.warn('[embedded-powerpoint] native surface sync failed', error),
 }
 
 /** Renderer placeholder whose rectangle is occupied by the native Session PPT view. */
@@ -31,112 +33,14 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
   const publishSurfaceRect = useSetAtom(setNativePowerPointSurfaceRectAtom)
   const viewportRef = useRef<HTMLDivElement>(null)
 
-  useLayoutEffect(() => {
-    const viewport = viewportRef.current
-    const powerpoint = window.api.powerpoint
-    if (!powerpoint) {
-      publishSurfaceRect(null)
-      return
-    }
-    if (!active || surfaceBlocked || !sessionId || !powerPointSurfaceKey || !viewport) {
-      void powerpoint.setVisible(false)
-      publishSurfaceRect(null)
-      return
-    }
-    let disposed = false
-    let frame = 0
-    let syncing = false
-    let pending = true
-    let attached = false
-    let visible = false
-    let lastBounds: PowerPointViewportBounds | null = null
-
-    const readBounds = () => {
-      const rect = viewport.getBoundingClientRect()
-      const clip = viewport.closest<HTMLElement>('[data-browser-dock-clip]')
-        ?.getBoundingClientRect()
-      const left = clip ? Math.max(rect.left, clip.left) : rect.left
-      const right = clip ? Math.min(rect.right, clip.right) : rect.right
-      return {
-        x: left,
-        y: rect.y,
-        width: Math.max(0, right - left),
-        height: rect.height,
-      }
-    }
-
-    const sync = async () => {
-      if (syncing || disposed || !pending) return
-      syncing = true
-      pending = false
-      try {
-        const rect = readBounds()
-        if (rect.width <= 0 || rect.height <= 0) {
-          if (visible) await powerpoint.setVisible(false)
-          visible = false
-          lastBounds = null
-          publishSurfaceRect(null)
-          return
-        }
-        if (!attached) {
-          await powerpoint.ensureSession(sessionId)
-          if (disposed) return
-        }
-        if (!sameBounds(lastBounds, rect)) {
-          await powerpoint.setBounds(rect)
-          if (disposed) return
-          lastBounds = rect
-          publishSurfaceRect(rect)
-        }
-        if (!attached) {
-          await powerpoint.activateSession(sessionId)
-          if (disposed) return
-          attached = true
-        }
-        if (!visible) {
-          await powerpoint.setVisible(true)
-          visible = true
-        }
-      } catch (error) {
-        publishSurfaceRect(null)
-        rlog.warn('[embedded-powerpoint] native surface sync failed', error)
-      } finally {
-        syncing = false
-        if (pending && !disposed) void sync()
-      }
-    }
-    const schedule = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        pending = true
-        void sync()
-      })
-    }
-    const observer = new ResizeObserver(schedule)
-    observer.observe(viewport)
-    let ancestor = viewport.parentElement
-    while (ancestor && ancestor !== document.body) {
-      observer.observe(ancestor)
-      ancestor = ancestor.parentElement
-    }
-    window.addEventListener('resize', schedule)
-    window.addEventListener('scroll', schedule, true)
-    schedule()
-    return () => {
-      disposed = true
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-      window.removeEventListener('resize', schedule)
-      window.removeEventListener('scroll', schedule, true)
-      void powerpoint.setVisible(false, true).finally(() => publishSurfaceRect(null))
-    }
-  }, [
-    active,
-    powerPointSurfaceKey,
-    publishSurfaceRect,
-    sessionId,
-    surfaceBlocked,
-  ])
+  useNativeOfficeSurface({
+    client: window.api.powerpoint,
+    policy: powerPointSurfacePolicy,
+    viewportRef,
+    sessionId: active && !surfaceBlocked && powerPointSurfaceKey ? sessionId : null,
+    surfaceKey: powerPointSurfaceKey,
+    publishBounds: publishSurfaceRect,
+  })
 
   if (!sessionId) return null
   if (!powerPointSession) return <PowerPointLaunchEmptyState sessionId={sessionId} />
@@ -148,11 +52,6 @@ export function EmbeddedPowerPointPanel({ active }: EmbeddedPowerPointPanelProps
       data-testid="embedded-powerpoint-viewport"
     />
   )
-}
-
-function sameBounds(left: PowerPointViewportBounds | null, right: PowerPointViewportBounds): boolean {
-  return left !== null && left.x === right.x && left.y === right.y
-    && left.width === right.width && left.height === right.height
 }
 
 type PowerPointLaunchState = 'creating' | 'error' | 'idle' | 'ready'

@@ -8,7 +8,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider } = await import('jotai')
-const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom } = await import('@/atoms/presentation')
+const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom, presentationExpandedAtom } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
@@ -54,7 +54,7 @@ afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
 
-async function mountPanel(withTestContent = true, onClose?: () => void) {
+async function mountPanel(withTestContent = true, onClose?: () => void, onExpandedChange?: (expanded: boolean) => void) {
   const store = createStore()
   const settings = store.get(settingsAtom)
   store.set(settingsAtom, { ...settings, ui: { ...settings.ui, lastNav: 'home' } })
@@ -66,7 +66,7 @@ async function mountPanel(withTestContent = true, onClose?: () => void) {
   await act(async () => {
     root.render(
       <Provider store={store}>
-        <PresentationWorkbenchPanel active={false} onClose={onClose} />
+        <PresentationWorkbenchPanel active={false} onClose={onClose} onExpandedChange={onExpandedChange} />
       </Provider>,
     )
   })
@@ -152,6 +152,32 @@ describe('PresentationWorkbenchPanel', () => {
     expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(1)
 
     await act(async () => root.unmount())
+  })
+
+  it('keeps expansion and panel closing separate from the open presentation documents', async () => {
+    let closeCalls = 0
+    const expansionChanges: boolean[] = []
+    const { host, root, store } = await mountPanel(false, () => { closeCalls += 1 }, (expanded) => { expansionChanges.push(expanded) })
+    const workspace = store.get(currentPresentationWorkspaceAtom)
+    try {
+      const toggle = host.querySelector<HTMLButtonElement>('[data-testid="presentation-toggle-expanded"]')!
+      await act(async () => toggle.click())
+      expect(store.get(presentationExpandedAtom)).toBe(true)
+      expect(toggle.getAttribute('aria-pressed')).toBe('true')
+      expect(expansionChanges).toEqual([true])
+
+      await act(async () => toggle.click())
+      expect(store.get(presentationExpandedAtom)).toBe(false)
+      expect(expansionChanges).toEqual([true, false])
+
+      await act(async () => toggle.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-close-panel"]')!.click())
+      expect(closeCalls).toBe(1)
+      expect(store.get(presentationExpandedAtom)).toBe(false)
+      expect(store.get(currentPresentationWorkspaceAtom)).toBe(workspace)
+    } finally {
+      await act(async () => root.unmount())
+    }
   })
 
   it('collapses the filmstrip and exposes Office-style text formatting controls', async () => {

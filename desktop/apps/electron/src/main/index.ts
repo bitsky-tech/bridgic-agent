@@ -18,6 +18,7 @@ import {
   WindowManager,
   buildExcelPreloadPath,
   buildExcelRendererIndexHtml,
+  buildWordPreloadPath,
   buildPreloadPath,
   buildRendererIndexHtml,
 } from './window-manager'
@@ -111,6 +112,7 @@ mainLog.info(
 const devServerUrl = process.env.VITE_DEV_SERVER_URL
 const preloadPath = buildPreloadPath()
 const excelPreloadPath = buildExcelPreloadPath()
+const wordPreloadPath = buildWordPreloadPath()
 const rendererIndexHtml = buildRendererIndexHtml()
 const excelRendererHtml = buildExcelRendererIndexHtml()
 
@@ -182,6 +184,7 @@ onTelemetryConsentChanged((consented) => {
 const windowManager = new WindowManager({
   preloadPath,
   excelPreloadPath,
+  wordPreloadPath,
   devServerUrl,
   rendererIndexHtml,
   excelRendererHtml,
@@ -201,6 +204,7 @@ const shutdownEmbeddedBrowser = async () => {
     await windowManager.getEmbeddedBrowser().shutdown()
     windowManager.getEmbeddedPowerPoint().closeAll()
     windowManager.getExcelHost().shutdown()
+    windowManager.getWordHost().closeAll()
   }
 }
 let telemetryShutdownComplete = false
@@ -214,6 +218,7 @@ const shutdownUsageTelemetry = (): Promise<void> => {
 }
 const shutdownBeforeQuit = async () => {
   if (!await windowManager.getExcelHost().confirmClose()) return false
+  if (!await windowManager.flushWordDocuments()) return false
   await shutdownUsageTelemetry()
   await shutdownEmbeddedBrowser()
   return true

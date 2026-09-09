@@ -1,27 +1,4 @@
-import {
-  LocaleType,
-  LogLevel,
-  Univer,
-  mergeLocales,
-  type IDocumentData,
-  type IUniverConfig,
-  type Plugin,
-  type PluginCtor,
-} from '@univerjs/core'
-import { FUniver } from '@univerjs/core/facade'
-import { UniverDocsCorePreset } from '@univerjs/preset-docs-core'
-import docsCoreEnUS from '@univerjs/preset-docs-core/locales/en-US'
-import docsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN'
-import { UniverDocsDrawingPreset } from '@univerjs/preset-docs-drawing'
-import docsDrawingEnUS from '@univerjs/preset-docs-drawing/locales/en-US'
-import docsDrawingZhCN from '@univerjs/preset-docs-drawing/locales/zh-CN'
-import { UniverDocsHyperLinkPreset } from '@univerjs/preset-docs-hyper-link'
-import docsHyperLinkEnUS from '@univerjs/preset-docs-hyper-link/locales/en-US'
-import docsHyperLinkZhCN from '@univerjs/preset-docs-hyper-link/locales/zh-CN'
-import { ReplaceSnapshotCommand, SetDocZoomRatioCommand } from '@univerjs/docs-ui'
-import '@univerjs/preset-docs-core/lib/index.css'
-import '@univerjs/preset-docs-drawing/lib/index.css'
-import '@univerjs/preset-docs-hyper-link/lib/index.css'
+import type { IDocumentData } from '@univerjs/core'
 
 import {
   useEffect,
@@ -41,7 +18,6 @@ import { OfficeAppHeader, OfficeDocumentTabs, OfficePanelControls } from '@/comp
 import { cn } from '@/lib/cn'
 import type {
   WordDomainStore,
-  WordEditorCommand,
   WordFormattingCommand,
   WordHeaderFooterSettings,
   WordPageSettings,
@@ -53,15 +29,10 @@ import {
   getUniverHeadings,
   getUniverPageCount,
   getUniverWordCount,
-  snapshotSignature,
 } from '@/lib/wordUniverModel'
-import {
-  executeUniverWordCommand,
-  isUniverSelectionInsideTable,
-  type WordUniverCommandContext,
-  type WordUniverDocumentFacade,
-  type WordUniverSelection,
-} from '@/lib/wordUniverAdapter'
+import { createWordEditorAdapter, type WordEditorRuntime } from '@/lib/wordEditorAdapter'
+
+export { replaceUniverSnapshotWithRetry, shouldCommitUniverCommand } from '@/lib/wordEditorAdapter'
 
 import { WordRibbon, type WordRibbonTab } from './WordRibbon'
 
@@ -69,61 +40,21 @@ export interface StructuredWordEditorProps {
   expanded: boolean
   onClose?: () => void
   onSaveRequested?: () => void
+  onFlushHandlerChange?: (flush: (() => Promise<void>) | null) => void
   onToggleExpanded: () => void
   persistenceStatus?: WordPersistenceStatus
   showExpandControl?: boolean
   store: WordDomainStore
 }
 
-interface UniverRuntime {
-  documentId: string
-  document: WordUniverDocumentFacade
-  univerAPI: FUniver
-}
-
-interface OpenSourcePreset {
-  plugins: Array<PluginCtor<Plugin> | [PluginCtor<Plugin>, ConstructorParameters<PluginCtor<Plugin>>[0]]>
-}
-
-interface UniverCommandExecutor {
-  executeCommand(id: string, params?: object): Promise<boolean>
-}
-
 type WordZoomMode = 'fit' | 'manual'
-
-const NON_PERSISTED_UNIVER_COMMAND_IDS = new Set([
-  'doc.operation.set-selections',
-  'univer.command.copy',
-  ReplaceSnapshotCommand.id,
-  SetDocZoomRatioCommand.id,
-])
-
-export function shouldCommitUniverCommand(commandId: string): boolean {
-  return !NON_PERSISTED_UNIVER_COMMAND_IDS.has(commandId)
-}
-
-export async function replaceUniverSnapshotWithRetry(executor: UniverCommandExecutor, documentId: string, snapshot: IDocumentData, attempts = 2): Promise<boolean> {
-  for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
-    try {
-      if (await executor.executeCommand(ReplaceSnapshotCommand.id, {
-        unitId: documentId,
-        snapshot,
-        // Univer skips metadata-only snapshot changes when textRanges is truthy, including an empty array.
-        textRanges: undefined,
-        options: { noHistory: true },
-      })) return true
-    } catch {
-      // Retry transient renderer command failures before surfacing the editor error state.
-    }
-  }
-  return false
-}
 
 /** Univer OSS-backed Word frontend shared by the right dock and Session-owned renderer target. */
 export function StructuredWordEditor({
   expanded,
   onClose,
   onSaveRequested = () => undefined,
+  onFlushHandlerChange,
   onToggleExpanded,
   persistenceStatus = 'saved',
   showExpandControl = true,
@@ -140,7 +71,7 @@ export function StructuredWordEditor({
   const [tableActive, setTableActive] = useState(false)
   const [zoom, setZoom] = useState(expanded ? 100 : 75)
   const [zoomMode, setZoomMode] = useState<WordZoomMode>('fit')
-  const [runtime, setRuntime] = useState<UniverRuntime | null>(null)
+  const [runtime, setRuntime] = useState<WordEditorRuntime | null>(null)
 
   useLayoutEffect(() => {
     if (zoomMode !== 'fit') return
@@ -172,7 +103,7 @@ export function StructuredWordEditor({
   }
 
   const flushActiveSnapshot = () => {
-    if (runtime?.documentId === activeDocument.id) store.commitEditorSnapshot(activeDocument.id, runtime.document.getSnapshot())
+    if (runtime?.documentId === activeDocument.id) runtime.commit()
   }
 
   const runEditingCommand = (command: WordFormattingCommand, value?: string) => {
@@ -223,8 +154,9 @@ export function StructuredWordEditor({
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file || !file.type.startsWith('image/') || file.size > 8 * 1024 * 1024) return
+    const documentId = activeDocument.id
     void readFileAsDataUrl(file)
-      .then((src) => store.dispatch({ type: 'editor.insert', kind: 'image', src, alt: file.name, title: file.name }))
+      .then((src) => store.dispatch({ type: 'editor.insert', documentId, kind: 'image', src, alt: file.name, title: file.name }))
       .catch(() => undefined)
   }
 
@@ -325,6 +257,7 @@ export function StructuredWordEditor({
           onRuntimeChange={setRuntime}
           onTableActiveChange={setTableActive}
           snapshot={activeDocument.snapshot}
+          onFlushHandlerChange={onFlushHandlerChange}
           store={store}
           zoom={zoom}
         />
@@ -359,177 +292,73 @@ function WordRuler({ page, zoom }: { page: WordPageSettings; zoom: number }) {
   )
 }
 
-function UniverDocumentSurface({ documentId, editorLabel, errorLabel, language, onRuntimeChange, onTableActiveChange, snapshot, store, zoom }: {
+function UniverDocumentSurface({ documentId, editorLabel, errorLabel, language, onFlushHandlerChange, onRuntimeChange, onTableActiveChange, snapshot, store, zoom }: {
   documentId: string
   editorLabel: string
   errorLabel: string
   language: string
-  onRuntimeChange: (runtime: UniverRuntime | null) => void
+  onFlushHandlerChange?: (flush: (() => Promise<void>) | null) => void
+  onRuntimeChange: (runtime: WordEditorRuntime | null) => void
   onTableActiveChange: (active: boolean) => void
   snapshot: IDocumentData
   store: WordDomainStore
   zoom: number
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const runtimeRef = useRef<UniverRuntime | null>(null)
-  const lastSnapshotSignatureRef = useRef(snapshotSignature(snapshot))
-  const snapshotSyncQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const adapterRef = useRef<ReturnType<typeof createWordEditorAdapter> | null>(null)
   const snapshotRef = useRef(snapshot)
   const zoomRef = useRef(zoom)
+  const languageRef = useRef(language)
   const [initializationError, setInitializationError] = useState(false)
 
-  useEffect(() => { snapshotRef.current = snapshot }, [snapshot])
-  useEffect(() => { zoomRef.current = zoom }, [zoom])
+  useLayoutEffect(() => { snapshotRef.current = snapshot }, [snapshot])
+  useLayoutEffect(() => { zoomRef.current = zoom; adapterRef.current?.setZoom(zoom) }, [zoom])
+  useLayoutEffect(() => { languageRef.current = language; adapterRef.current?.setLanguage(language) }, [language])
 
   useEffect(() => {
     const container = hostRef.current
     if (!container || !canvasIsAvailable()) return
-    let disposed = false
-    let commitTimer: ReturnType<typeof setTimeout> | null = null
-    let commitEditorSnapshot: (() => void) | null = null
-    let activeSelection: WordUniverSelection | null = null
-    let disposeRuntime: (() => void) | null = null
-    let focusTimer: ReturnType<typeof setTimeout> | null = null
+    let adapter: ReturnType<typeof createWordEditorAdapter> | null = null
     const initializationTimer = setTimeout(() => {
-      if (disposed) return
       try {
-        const locale = language.toLocaleLowerCase().startsWith('zh') ? LocaleType.ZH_CN : LocaleType.EN_US
-        const { univer, univerAPI } = createOpenSourceUniver({
-          locale,
-          locales: {
-            [LocaleType.ZH_CN]: mergeLocales(docsCoreZhCN, docsDrawingZhCN, docsHyperLinkZhCN),
-            [LocaleType.EN_US]: mergeLocales(docsCoreEnUS, docsDrawingEnUS, docsHyperLinkEnUS),
-          },
-          presets: [
-            UniverDocsCorePreset({ container, header: false, toolbar: false, footer: false, contextMenu: true }),
-            UniverDocsDrawingPreset(),
-            UniverDocsHyperLinkPreset(),
-          ],
+        adapter = createWordEditorAdapter({
+          container,
+          documentId,
+          language: languageRef.current,
+          onTableActiveChange,
+          snapshot: snapshotRef.current,
+          store,
+          zoom: zoomRef.current,
         })
-        const document = univerAPI.createUniverDoc(snapshotRef.current)
-        const runtime = { documentId, document, univerAPI }
-        lastSnapshotSignatureRef.current = snapshotSignature(snapshotRef.current)
-        snapshotSyncQueueRef.current = Promise.resolve()
-        runtimeRef.current = runtime
-        onRuntimeChange(runtime)
-        onTableActiveChange(false)
-
-        commitEditorSnapshot = () => {
-          if (disposed) return
-          const nextSnapshot = document.getSnapshot()
-          const signature = snapshotSignature(nextSnapshot)
-          if (signature === lastSnapshotSignatureRef.current) return
-          lastSnapshotSignatureRef.current = signature
-          store.commitEditorSnapshot(documentId, nextSnapshot)
-        }
-
-        const focusInitialCaret = async (attempt = 0) => {
-          if (disposed) return
-          const editorInput = container.querySelector<HTMLElement>('[data-u-comp="editor"]')
-          const selectionLayer = editorInput?.parentElement?.parentElement
-          const selectionBounds = selectionLayer?.getBoundingClientRect()
-          const caretIsReady = window.document.activeElement === editorInput
-            && selectionBounds !== undefined
-            && selectionBounds.left > -1_000
-            && selectionBounds.top > -1_000
-          if (caretIsReady) return
-
-          await univerAPI.executeCommand(SetDocZoomRatioCommand.id, { documentId, zoomRatio: zoomRef.current / 100 }).catch(() => undefined)
-          if (disposed) return
-          const activeElement = window.document.activeElement
-          if (activeElement instanceof HTMLElement && !container.contains(activeElement)) activeElement.blur()
-          const dataStreamLength = document.getSnapshot().body?.dataStream.length ?? 2
-          const caretOffset = Math.max(0, dataStreamLength - 2)
-          document.setSelection(caretOffset, caretOffset)
-          if (attempt < 20) focusTimer = setTimeout(() => { void focusInitialCaret(attempt + 1) }, 50)
-        }
-        void focusInitialCaret()
-
-        const commandSubscription = univerAPI.onCommandExecuted((commandInfo) => {
-          if (commandInfo.id === 'doc.operation.set-selections') {
-            const params = commandInfo.params as { ranges?: Array<Partial<WordUniverSelection> & { isActive?: boolean }> }
-            const range = params.ranges?.find((item) => item.isActive) ?? params.ranges?.[0]
-            if (typeof range?.startOffset === 'number' && typeof range.endOffset === 'number') {
-              activeSelection = {
-                startOffset: range.startOffset,
-                endOffset: range.endOffset,
-                ...(range.rangeType ? { rangeType: range.rangeType } : {}),
-                ...(range.startNodePosition !== undefined ? { startNodePosition: range.startNodePosition } : {}),
-              }
-              onTableActiveChange(isUniverSelectionInsideTable(activeSelection))
-            }
-          }
-          if (disposed || !shouldCommitUniverCommand(commandInfo.id)) return
-          if (commitTimer) clearTimeout(commitTimer)
-          commitTimer = setTimeout(() => commitEditorSnapshot?.(), 40)
-        })
-
-        const unregisterCommandHandler = store.registerEditorCommandHandler(async (command) => {
-          const applied = await executeUniverWordCommand({
-            document,
-            getSelection: () => activeSelection,
-            unitId: documentId,
-            univerAPI,
-            onReferenceCommand: (referenceCommand) => dispatchReferenceCommand(store, documentId, referenceCommand),
-          } satisfies WordUniverCommandContext, command)
-          if (applied && command.type !== 'editor.reference.remove' && command.type !== 'editor.reference.update') {
-            commitEditorSnapshot?.()
-          }
-          return applied
-        })
-
-        disposeRuntime = () => {
-          unregisterCommandHandler()
-          commandSubscription.dispose()
-          onRuntimeChange(null)
-          onTableActiveChange(false)
-          if (runtimeRef.current === runtime) runtimeRef.current = null
-          // Univer owns a nested React root. Dispose it after the parent commit finishes.
-          queueMicrotask(() => univer.dispose())
-        }
+        adapterRef.current = adapter
+        onRuntimeChange(adapter.runtime)
+        onFlushHandlerChange?.(adapter.flush)
+        setInitializationError(false)
       } catch {
-        if (!disposed) setInitializationError(true)
+        adapter?.dispose()
+        setInitializationError(true)
         onRuntimeChange(null)
       }
     }, 0)
-
     return () => {
       clearTimeout(initializationTimer)
-      if (focusTimer) clearTimeout(focusTimer)
-      if (disposeRuntime) {
-        if (commitTimer) clearTimeout(commitTimer)
-        commitEditorSnapshot?.()
-        disposeRuntime()
-      }
-      disposed = true
+      if (!adapter) return
+      adapter.dispose()
+      if (adapterRef.current === adapter) adapterRef.current = null
+      onFlushHandlerChange?.(null)
+      onRuntimeChange(null)
     }
-  }, [documentId, language, onRuntimeChange, onTableActiveChange, store])
+  }, [documentId, onFlushHandlerChange, onRuntimeChange, onTableActiveChange, store])
 
   useEffect(() => {
-    const runtime = runtimeRef.current
-    if (!runtime) return
-    const signature = snapshotSignature(snapshot)
-    if (signature === lastSnapshotSignatureRef.current) return
+    const adapter = adapterRef.current
+    if (!adapter) return
     let cancelled = false
-    const synchronize = async () => {
-      const applied = await replaceUniverSnapshotWithRetry(runtime.univerAPI, documentId, snapshot)
-      if (cancelled || runtimeRef.current !== runtime) return
-      if (applied) {
-        lastSnapshotSignatureRef.current = signature
-        setInitializationError(false)
-      } else {
-        setInitializationError(true)
-      }
-    }
-    snapshotSyncQueueRef.current = snapshotSyncQueueRef.current.then(synchronize, synchronize)
+    void adapter.reconcile(snapshot).then((applied) => {
+      if (!cancelled) setInitializationError(!applied)
+    }).catch(() => { if (!cancelled) setInitializationError(true) })
     return () => { cancelled = true }
-  }, [documentId, snapshot])
-
-  useEffect(() => {
-    const runtime = runtimeRef.current
-    if (!runtime) return
-    void runtime.univerAPI.executeCommand(SetDocZoomRatioCommand.id, { documentId, zoomRatio: zoom / 100 }).catch(() => undefined)
-  }, [documentId, zoom])
+  }, [documentId, snapshot, store])
 
   return (
     <div className="size-full">
@@ -537,39 +366,6 @@ function UniverDocumentSurface({ documentId, editorLabel, errorLabel, language, 
       {initializationError ? <div className="absolute inset-0 grid place-items-center text-sm text-text-tertiary">{errorLabel}</div> : null}
     </div>
   )
-}
-
-/** Register only the explicitly supplied OSS presets, avoiding Univer's all-presets umbrella. */
-function createOpenSourceUniver({ locale, locales, presets }: {
-  locale: LocaleType
-  locales: IUniverConfig['locales']
-  presets: OpenSourcePreset[]
-}) {
-  const univer = new Univer({ locale, locales, logLevel: LogLevel.WARN })
-  const registrations = new Map<string, OpenSourcePreset['plugins'][number]>()
-  for (const preset of presets) {
-    for (const registration of preset.plugins) {
-      const plugin = Array.isArray(registration) ? registration[0] : registration
-      if (registrations.has(plugin.pluginName)) registrations.delete(plugin.pluginName)
-      registrations.set(plugin.pluginName, registration)
-    }
-  }
-  for (const registration of registrations.values()) {
-    if (Array.isArray(registration)) univer.registerPlugin(registration[0], registration[1])
-    else univer.registerPlugin(registration)
-  }
-  return { univer, univerAPI: FUniver.newAPI(univer) }
-}
-
-async function dispatchReferenceCommand(store: WordDomainStore, documentId: string, command: Extract<WordEditorCommand, { type: 'editor.reference.remove' | 'editor.reference.update' }>): Promise<boolean> {
-  if (command.type === 'editor.reference.remove') {
-    const result = command.kind === 'footnote'
-      ? await store.dispatch({ type: 'document.footnote.remove', documentId, footnoteId: command.id })
-      : await store.dispatch({ type: 'document.citation.remove', documentId, citationId: command.id })
-    return result.ok
-  }
-  if (command.kind === 'footnote') return (await store.dispatch({ type: 'document.footnote.update', documentId, footnoteId: command.id, text: command.text })).ok
-  return (await store.dispatch({ type: 'document.citation.update', documentId, citationId: command.id, text: command.text })).ok
 }
 
 function FooterButton({ children, label, onClick }: { children: ReactNode; label: string; onClick: () => void }) {

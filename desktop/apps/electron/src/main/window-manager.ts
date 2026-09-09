@@ -25,6 +25,7 @@ import { pickZoomDelta } from './zoom-keys'
 import { EmbeddedBrowserManager } from './embedded-browser-manager'
 import { EmbeddedPowerPointManager } from './embedded-powerpoint-manager'
 import { ExcelHost } from './excel-host'
+import { WordHost } from './word-host'
 import { embeddedBrowserProfileDir } from './paths'
 import { isNativeWindowForeground, MainWindowVisibilityLatch } from './window-visibility'
 
@@ -63,6 +64,7 @@ export class WindowManager {
   private readonly embeddedBrowser: EmbeddedBrowserManager
   private readonly embeddedPowerPoint: EmbeddedPowerPointManager
   private readonly excelHost: ExcelHost
+  private readonly wordHost: WordHost
   private readonly preloadPath: string
   private readonly devServerUrl: string | undefined
   private readonly rendererIndexHtml: string
@@ -79,9 +81,41 @@ export class WindowManager {
 
   // Phase 3 — close intercept state
   private pendingCloseTimeout: NodeJS.Timeout | null = null
+  private closeGeneration = 0
+  private closingWindow: Promise<void> | null = null
+  private wordFlush: Promise<boolean> | null = null
   private keyboardCloseIntent = false
   private keyboardCloseIntentTimeout: NodeJS.Timeout | null = null
   private isAppQuitting = false
+
+  /** Preserve application shortcuts while focus moves into a trusted editor view. */
+  private handleWindowShortcut(event: Electron.Event, input: Electron.Input): void {
+    if (input.type !== 'keyDown') return
+    const isCmdOrCtrl = process.platform === 'darwin' ? !!input.meta : !!input.control
+    if (!isCmdOrCtrl) return
+
+    // **Supplementary** key bindings for zoom. The menu only registers
+    // CmdOrCtrl+Plus / +- / +0 (see main/index.ts): `+` requires Shift on
+    // most keyboards, so what users actually press is `=` without Shift; the
+    // numeric keypad's +/- are also common. These can't be covered by hidden
+    // menu items — acceleratorWorksWhenHidden is macOS-only. They're
+    // mutually exclusive with the menu bindings, so nothing fires twice.
+    const zoomDelta = pickZoomDelta(input.key, input.code, input.shift)
+    if (zoomDelta !== null) {
+      event.preventDefault()
+      stepZoomLevel(zoomDelta)
+      return
+    }
+
+    // Phase 3 — Cmd/Ctrl+W intent tracking (500ms TTL)
+    if (input.key?.toLowerCase() !== 'w') return
+    this.keyboardCloseIntent = true
+    if (this.keyboardCloseIntentTimeout) clearTimeout(this.keyboardCloseIntentTimeout)
+    this.keyboardCloseIntentTimeout = setTimeout(() => {
+      this.keyboardCloseIntent = false
+      this.keyboardCloseIntentTimeout = null
+    }, 500)
+  }
 
   private openExternal(url: string, source: string): void {
     let parsed: URL
@@ -108,6 +142,7 @@ export class WindowManager {
   constructor(opts: {
     preloadPath: string
     excelPreloadPath: string
+    wordPreloadPath: string
     devServerUrl?: string
     rendererIndexHtml: string
     excelRendererHtml: string
@@ -164,7 +199,37 @@ export class WindowManager {
         }
       },
     )
-    onGuiSettingsChanged((settings) => this.embeddedPowerPoint.applySettings(settings))
+    this.wordHost = new WordHost(
+      (options) => {
+        const view = new WebContentsView({
+          ...options,
+          webPreferences: { ...options.webPreferences, preload: opts.wordPreloadPath },
+        })
+        view.webContents.on('before-input-event', (event, input) => this.handleWindowShortcut(event, input))
+        return view
+      },
+      async (view, sessionId) => {
+        view.webContents.setZoomLevel(clampZoomLevel(getGuiSettings().zoomLevel))
+        if (this.devServerUrl) {
+          const base = this.devServerUrl.endsWith('/') ? this.devServerUrl : `${this.devServerUrl}/`
+          const url = new URL('word.html', base)
+          url.searchParams.set('sessionId', sessionId)
+          await view.webContents.loadURL(url.toString())
+        } else {
+          await view.webContents.loadFile(join(dirname(this.rendererIndexHtml), 'word.html'), { query: { sessionId } })
+        }
+      },
+      (snapshot) => {
+        const win = this.mainWindow
+        if (win && !win.isDestroyed()) win.webContents.send(IPC.events.wordHostChanged, snapshot)
+      },
+      (url) => this.openExternal(url, 'word'),
+    )
+    this.wordHost.applySettings(getGuiSettings())
+    onGuiSettingsChanged((settings) => {
+      this.embeddedPowerPoint.applySettings(settings)
+      this.wordHost.applySettings(settings)
+    })
     this.excelHost = new ExcelHost(
       (options) => new WebContentsView(options),
       opts.excelPreloadPath,
@@ -210,6 +275,9 @@ export class WindowManager {
 
   getExcelHost(): ExcelHost {
     return this.excelHost
+  }
+  getWordHost(): WordHost {
+    return this.wordHost
   }
 
   private createEmbeddedBrowserSession(): Session {
@@ -356,6 +424,7 @@ export class WindowManager {
     this.embeddedBrowser.attachHost(win)
     this.embeddedPowerPoint.attachHost(win)
     this.excelHost.attachHost(win)
+    this.wordHost.attachHost(win)
     try {
       this.onMainWindowCreated?.(win)
     } catch (error) {
@@ -405,36 +474,7 @@ export class WindowManager {
       }
     })
 
-    // Cmd/Ctrl chords: supplementary zoom key bindings + Cmd/Ctrl+W
-    // close-intent tracking (500ms TTL, used to tell a keyboard-shortcut close
-    // from a window-button close).
-    win.webContents.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown') return
-      const isCmdOrCtrl = process.platform === 'darwin' ? !!input.meta : !!input.control
-      if (!isCmdOrCtrl) return
-
-      // **Supplementary** key bindings for zoom. The menu only registers
-      // CmdOrCtrl+Plus / +- / +0 (see main/index.ts): `+` requires Shift on
-      // most keyboards, so what users actually press is `=` without Shift; the
-      // numeric keypad's +/- are also common. These can't be covered by hidden
-      // menu items — acceleratorWorksWhenHidden is macOS-only. They're
-      // mutually exclusive with the menu bindings, so nothing fires twice.
-      const zoomDelta = pickZoomDelta(input.key, input.code, input.shift)
-      if (zoomDelta !== null) {
-        event.preventDefault()
-        stepZoomLevel(zoomDelta)
-        return
-      }
-
-      // Phase 3 — Cmd/Ctrl+W intent tracking (500ms TTL)
-      if (input.key?.toLowerCase() !== 'w') return
-      this.keyboardCloseIntent = true
-      if (this.keyboardCloseIntentTimeout) clearTimeout(this.keyboardCloseIntentTimeout)
-      this.keyboardCloseIntentTimeout = setTimeout(() => {
-        this.keyboardCloseIntent = false
-        this.keyboardCloseIntentTimeout = null
-      }, 500)
-    })
+    win.webContents.on('before-input-event', (event, input) => this.handleWindowShortcut(event, input))
 
     // External links open in the user's default browser, not a new BrowserWindow.
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -505,11 +545,11 @@ export class WindowManager {
 
       win.webContents.send(IPC.events.windowCloseRequested, { source } satisfies WindowCloseRequest)
 
-      // 3-second force-close fallback: if IPC deadlocks or the renderer has died, the window won't get stuck in a "fake close"
+      // Retry the normal close path if the main renderer cannot reply; child checkpoints still apply.
       this.clearPendingCloseTimeout()
       this.pendingCloseTimeout = setTimeout(() => {
         this.pendingCloseTimeout = null
-        if (!win.isDestroyed()) win.destroy()
+        if (!win.isDestroyed()) void this.confirmClose()
       }, 3000)
     })
 
@@ -525,6 +565,7 @@ export class WindowManager {
       this.embeddedBrowser.detachHost(win)
       this.embeddedPowerPoint.detachHost(win)
       this.excelHost.detachHost(win)
+      this.wordHost.detachHost(win)
       if (this.mainWindow === win) {
         this.mainWindow = null
         this.visibility.reset()
@@ -657,10 +698,46 @@ export class WindowManager {
    * method intentionally tracks the singleton main window because it owns
    * the close-intercept state machine.
    */
-  confirmClose(): void {
+  confirmClose(): Promise<void> {
     this.clearPendingCloseTimeout()
+    if (this.closingWindow) return this.closingWindow
     const win = this.mainWindow
-    if (win && !win.isDestroyed()) win.destroy()
+    const generation = this.closeGeneration
+    const closing = (async () => {
+      if (!await this.flushWordDocuments()) return
+      if (generation !== this.closeGeneration || win !== this.mainWindow) return
+      if (win && !win.isDestroyed()) win.destroy()
+    })()
+    this.closingWindow = closing
+    void closing.finally(() => {
+      if (this.closingWindow === closing) this.closingWindow = null
+    }).catch((error) => windowLog.warn('[window] close failed', error))
+    return closing
+  }
+
+  /** A native child must finish its checkpoint before the host window can destroy it. */
+  flushWordDocuments(): Promise<boolean> {
+    if (this.wordFlush) return this.wordFlush
+    const flush = (async () => {
+      try {
+        if (await this.wordHost.flushAll()) return true
+        const win = this.mainWindow
+        const options = {
+          type: 'error' as const,
+          title: mt('main.wordSaveFailed.title'),
+          message: mt('main.wordSaveFailed.message'),
+          buttons: [mt('common.confirm')],
+        }
+        if (win && !win.isDestroyed()) await dialog.showMessageBox(win, options)
+        else await dialog.showMessageBox(options)
+      } catch (error) {
+        windowLog.warn('[window] Word checkpoint failed; keeping the window open', error)
+      }
+      return false
+    })()
+    this.wordFlush = flush
+    void flush.finally(() => { if (this.wordFlush === flush) this.wordFlush = null })
+    return flush
   }
 
   /**
@@ -671,6 +748,8 @@ export class WindowManager {
    * needed — `cancelClose` only cancels state, doesn't touch the window).
    */
   cancelClose(): void {
+    this.closeGeneration += 1
+    this.closingWindow = null
     this.clearPendingCloseTimeout()
   }
 
@@ -714,6 +793,9 @@ export function buildPreloadPath(): string {
 
 export function buildExcelPreloadPath(): string {
   return join(__dirname, 'excel-host-preload.cjs')
+}
+export function buildWordPreloadPath(): string {
+  return join(__dirname, 'word-host-preload.cjs')
 }
 
 export function buildRendererIndexHtml(): string {

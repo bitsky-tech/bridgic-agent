@@ -43,7 +43,7 @@ import type {
  */
 export type UpdateInstallResult =
   | { ok: true }
-  | { ok: false; reason: 'no-update-staged' | 'daemon-busy' | 'update-disabled' | 'unsaved-workbooks'; detail?: string }
+  | { ok: false; reason: 'no-update-staged' | 'daemon-busy' | 'update-disabled' | 'unsaved-workbooks' | 'unsaved-documents'; detail?: string }
 
 /**
  * Why a manual check did or did not start.
@@ -376,6 +376,53 @@ export interface WordDocumentReadResult {
   mtimeMs: number
 }
 
+export interface WordHostOpenRequest {
+  id: string
+  name: string
+  path: string
+  sessionId: string
+}
+
+export interface WordHostRendererState {
+  documentCount: number
+  persistenceStatus: 'saving' | 'saved' | 'error'
+}
+
+export interface WordHostSessionInfo {
+  sessionId: string
+  targetId: string | null
+  webContentsId: number
+  loading: boolean
+  crashed: boolean
+  documentCount: number | null
+  persistenceStatus: WordHostRendererState['persistenceStatus'] | null
+  expanded: boolean
+}
+
+export interface WordHostSnapshot {
+  sessions: WordHostSessionInfo[]
+}
+
+export interface WordHostExpandedEvent {
+  sessionId: string
+  expanded: boolean
+}
+
+/** Available only in the trusted Word renderer; all mutations are bound to its owning Session. */
+export interface WordHostPreloadAPI {
+  getConfig(): Promise<GuiSettings>
+  readDocument(path: string): Promise<WordDocumentReadResult>
+  reportState(state: WordHostRendererState): Promise<void>
+  requestHide(): Promise<void>
+  setExpanded(expanded: boolean): Promise<void>
+  onExpandedChanged(callback: (event: WordHostExpandedEvent) => void): () => void
+  onConfigChanged(callback: (settings: GuiSettings) => void): () => void
+  onOpenFileRequested(callback: (request: WordHostOpenRequest) => void): () => void
+  completeOpenFile(requestId: string, error?: string): Promise<void>
+  onFlushRequested(callback: (requestId: string) => void): () => void
+  completeFlush(requestId: string, success: boolean): Promise<void>
+}
+
 /**
  * The shape exposed on `window.api` by the preload script.
  * Imported by both renderer and preload so the contract stays in sync.
@@ -499,6 +546,16 @@ export interface ElectronAPI {
     /** Read one explicitly opened .docx file for renderer-side conversion. */
     readDocument(path: string): Promise<WordDocumentReadResult>
   }
+  wordHost: {
+    snapshot(): Promise<WordHostSnapshot>
+    ensureSession(sessionId: string): Promise<WordHostSessionInfo>
+    openFile(sessionId: string, request: WordHostOpenRequest): Promise<void>
+    /** Release a deleted Session; hiding a panel must not call this. */
+    closeSession(sessionId: string): Promise<void>
+    activateSession(sessionId: string | null): Promise<void>
+    setBounds(bounds: EmbeddedBrowserBounds): Promise<void>
+    setVisible(visible: boolean, focusHost?: boolean): Promise<void>
+  }
   excelHost: {
     snapshot(): Promise<ExcelHostSnapshot>
     ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo>
@@ -600,6 +657,9 @@ export interface ElectronAPI {
     onPowerPointCloseRequested(callback: (sessionId: string) => void): () => void
     onPowerPointExpandedChanged(callback: (expanded: boolean) => void): () => void
     onExcelHostChanged(callback: (snapshot: ExcelHostSnapshot) => void): () => void
+    onWordHostChanged(callback: (snapshot: WordHostSnapshot) => void): () => void
+    onWordHostHideRequested(callback: (sessionId: string) => void): () => void
+    onWordHostExpandedChanged(callback: (event: WordHostExpandedEvent) => void): () => void
     /** A watched session-file directory changed on disk — re-read that level. */
     onFsChanged(callback: (event: FsChangedEvent) => void): () => void
   }
@@ -610,6 +670,7 @@ declare global {
     api: ElectronAPI
     /** Available only to the dedicated Excel WebContentsView renderer. */
     excelHostApi?: ExcelHostPreloadAPI
+    wordHostApi?: WordHostPreloadAPI
     /** Startup-only capability exposed by preload to the trusted top-level
      * renderer. It is absent in plain-browser previews and child frames. */
     __localResourceToken__?: string

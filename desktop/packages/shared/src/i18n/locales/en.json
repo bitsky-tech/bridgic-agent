@@ -675,6 +675,10 @@
         "unhealthy": "⚠ Gateway unhealthy, reconnecting…"
       },
       "stopGateway": "Stop Gateway"
+    },
+    "wordSaveFailed": {
+      "message": "The window was kept open because Word could not finish saving. Reopen Word and retry.",
+      "title": "Word changes have not been saved"
     }
   },
   "markdown": {
@@ -1760,6 +1764,7 @@
       "closeDocument": "Close {{name}}",
       "closePane": "Close pane",
       "closePanel": "Close PPT panel",
+      "closeSaveFailed": "Could not save the presentation. The editor is still open; please retry.",
       "closeSlideshow": "Exit slideshow",
       "collapseRibbon": "Collapse ribbon",
       "collapseSlides": "Hide slide thumbnails",
@@ -2615,6 +2620,7 @@
     "restartNow": "Restart and update",
     "scheduledDescription": "Restarts and installs {{version}} once every agent task has finished.",
     "scheduledTitle": "Update scheduled",
+    "unsavedDocuments": "Word could not finish saving. Reopen Word and retry the update.",
     "unsavedWorkbooks": "The update was not installed because Excel has unsaved changes. Save or close those workbooks, then try again.",
     "updateWhenIdle": "Update when idle"
   },
@@ -2728,6 +2734,8 @@
     "headerPrompt": "Header text",
     "highlightColor": "Text highlight color",
     "horizontalRule": "Horizontal line",
+    "hostFailed": "Word could not be opened.",
+    "hostLoading": "Opening Word…",
     "image": "Picture",
     "increaseIndent": "Increase indent",
     "italic": "Italic",
@@ -2761,8 +2769,11 @@
     },
     "portrait": "Portrait",
     "quote": "Quote",
+    "recoveryFailed": "Could not restore Word documents.",
+    "recoveryFailedDescription": "Your saved workspace has been kept. Try again to restore it.",
     "redo": "Redo",
     "resetZoom": "Reset to 100%",
+    "retry": "Retry",
     "ribbonTabs": "Word ribbon tabs",
     "ruler": "Ruler",
     "save": "Save",

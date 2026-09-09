@@ -77,7 +77,7 @@ export const setBrowserSurfaceBlockerAtom = atom(
 )
 
 type NativeSurfaceRectState = {
-  owner: 'browser' | 'powerpoint'
+  owner: 'browser' | 'powerpoint' | 'word'
   rect: EmbeddedBrowserBounds
 }
 
@@ -126,6 +126,17 @@ function sameNativeSurfaceRect(left: EmbeddedBrowserBounds, right: EmbeddedBrows
   return left.x === right.x && left.y === right.y
     && left.width === right.width && left.height === right.height
 }
+
+/** Word uses a separate owner so delayed Browser/Excel cleanup cannot erase its bounds. */
+export const setNativeWordSurfaceRectAtom = atom(null, (get, set, rect: EmbeddedBrowserBounds | null) => {
+  const current = get(nativeSurfaceRect)
+  if (rect === null) {
+    if (current?.owner === 'word') set(nativeSurfaceRect, null)
+    return
+  }
+  if (current?.owner === 'word' && sameNativeSurfaceRect(current.rect, rect)) return
+  set(nativeSurfaceRect, { owner: 'word', rect })
+})
 
 /** The browser surface belonging to the Agent Session the user is viewing. */
 export const activeEmbeddedBrowserSessionAtom = atom((get) => {

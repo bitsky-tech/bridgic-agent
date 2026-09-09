@@ -90,7 +90,7 @@ export function SessionSurfaceContent({
         labelledBy="session-workbench-word-tab"
         testId="session-workbench-word-content"
       >
-        <WordWorkbenchPanel />
+        <WordWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Word)} />
       </WorkbenchSurface>
       <WorkbenchSurface
         isActive={excelActive}

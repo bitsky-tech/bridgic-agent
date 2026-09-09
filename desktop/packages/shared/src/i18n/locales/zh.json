@@ -675,6 +675,10 @@
         "unhealthy": "⚠ 网关不健康，正在重连…"
       },
       "stopGateway": "停止网关"
+    },
+    "wordSaveFailed": {
+      "message": "Word 未能完成保存，窗口已保留。请重新打开 Word 后重试。",
+      "title": "Word 更改尚未保存"
     }
   },
   "markdown": {
@@ -1760,6 +1764,7 @@
       "closeDocument": "关闭 {{name}}",
       "closePane": "关闭面板",
       "closePanel": "关闭 PPT 面板",
+      "closeSaveFailed": "PPT 未能保存，已保留编辑器，请重试。",
       "closeSlideshow": "退出放映",
       "collapseRibbon": "收起功能区",
       "collapseSlides": "收起幻灯片缩略图",
@@ -2615,6 +2620,7 @@
     "restartNow": "重启更新",
     "scheduledDescription": "所有 Agent 任务结束后自动重启并安装 {{version}}。",
     "scheduledTitle": "已安排更新",
+    "unsavedDocuments": "Word 未能完成保存。请重新打开 Word 后重试更新。",
     "unsavedWorkbooks": "Excel 中还有未保存的更改，因此尚未安装更新。请先保存或关闭这些工作簿，然后重试。",
     "updateWhenIdle": "空闲时更新"
   },
@@ -2728,6 +2734,8 @@
     "headerPrompt": "请输入页眉文字",
     "highlightColor": "文本突出显示颜色",
     "horizontalRule": "分隔线",
+    "hostFailed": "Word 编辑器暂时无法打开。",
+    "hostLoading": "正在打开 Word…",
     "image": "图片",
     "increaseIndent": "增加缩进",
     "italic": "斜体",
@@ -2761,8 +2769,11 @@
     },
     "portrait": "纵向",
     "quote": "引用",
+    "recoveryFailed": "无法恢复 Word 文档。",
+    "recoveryFailedDescription": "已保留原有文档，请重试恢复。",
     "redo": "重做",
     "resetZoom": "重置为 100%",
+    "retry": "重试",
     "ribbonTabs": "Word 功能区标签",
     "ruler": "标尺",
     "save": "保存",

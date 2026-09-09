@@ -1,5 +1,7 @@
 import type { IDocumentData } from '@univerjs/core'
 
+import { createOfficeWorkspaceRuntime, OfficeOperationError, type OfficeWorkspaceReader } from './office/officeWorkspaceRuntime'
+
 import {
   appendTextBlockToSnapshot,
   applyHeaderFooterToSnapshot,
@@ -10,6 +12,7 @@ import {
   insertReferenceInSnapshot,
   normalizeUniverDocumentSnapshot,
   removeReferenceFromSnapshot,
+  snapshotSignature,
   updateReferenceInSnapshot,
 } from './wordUniverModel'
 
@@ -176,7 +179,13 @@ export type WordRendererResult =
 
 export interface BridgicWordRendererApi {
   readonly sessionId: string
+  readonly workspace: OfficeWorkspaceReader
   dispatch(command: unknown): Promise<WordRendererResult>
+}
+
+export interface WordEditorOperationContext {
+  assertCurrent(): void
+  applyReferenceCommand(command: Extract<WordEditorCommand, { type: 'editor.reference.remove' | 'editor.reference.update' }>): boolean
 }
 
 export interface WordDomainStore {
@@ -184,7 +193,9 @@ export interface WordDomainStore {
   commitEditorSnapshot(documentId: string, snapshot: IDocumentData): boolean
   dispatch(command: unknown): Promise<WordRendererResult>
   getSnapshot(): WordWorkspaceState
-  registerEditorCommandHandler(handler: (command: WordEditorCommand) => Promise<boolean>): () => void
+  registerEditorCommandHandler(documentId: string, handler: (command: WordEditorCommand, context: WordEditorOperationContext) => Promise<boolean>, flush?: () => Promise<void>): () => void
+  whenIdle(): Promise<void>
+  dispose(): void
   subscribe(listener: () => void): () => void
 }
 
@@ -261,45 +272,163 @@ export function restoreWordWorkspace(value: unknown, sessionId: string, defaultT
   return { version: WORD_DOMAIN_VERSION, sessionId, activeDocumentId, documents }
 }
 
+export const WORD_WORKSPACE_CAPABILITIES = Object.freeze([
+  'workspace.get',
+  'document.create', 'document.open', 'document.activate', 'document.update', 'document.close',
+  'document.page.update', 'document.headerFooter.update', 'document.append',
+  'document.footnote.add', 'document.footnote.update', 'document.footnote.remove',
+  'document.citation.add', 'document.citation.update', 'document.citation.remove',
+  'editor.format', 'editor.insert', 'editor.reference.remove', 'editor.reference.update', 'editor.table',
+] as const)
+
 export function createWordDomainStore(initialState: WordWorkspaceState, options: WordDomainOptions): WordDomainStore {
   let state = restoreWordWorkspace(initialState, initialState.sessionId, options.defaultTitle)
-  let editorCommandHandler: ((command: WordEditorCommand) => Promise<boolean>) | null = null
+  let editorBinding: {
+    documentId: string
+    handler: (command: WordEditorCommand, context: WordEditorOperationContext) => Promise<boolean>
+    flush?: () => Promise<void>
+  } | null = null
+  let disposed = false
   const listeners = new Set<() => void>()
+  const documentRevisions = new Map(state.documents.map((document) => [document.id, 0]))
+  const runtime = createOfficeWorkspaceRuntime({
+    appKind: 'word',
+    sessionId: state.sessionId,
+    capabilities: WORD_WORKSPACE_CAPABILITIES,
+    read: () => ({
+      activeDocumentId: state.activeDocumentId || null,
+      documents: state.documents.map((document) => ({
+        id: document.id,
+        title: document.title,
+        revision: documentRevisions.get(document.id) ?? 0,
+        // Durability belongs to the existing workspace persister, not individual tabs.
+        dirty: null,
+      })),
+    }),
+  })
 
   const publish = (nextState: WordWorkspaceState) => {
     if (nextState === state) return
+    const previousDocuments = new Map(state.documents.map((document) => [document.id, document]))
+    for (const document of nextState.documents) {
+      const previous = previousDocuments.get(document.id)
+      if (previous !== document) documentRevisions.set(document.id, previous ? (documentRevisions.get(document.id) ?? 0) + 1 : 0)
+    }
+    for (const document of state.documents) {
+      if (!nextState.documents.some((next) => next.id === document.id)) documentRevisions.delete(document.id)
+    }
     state = nextState
+    runtime.publish()
     options.onChange?.(state)
     for (const listener of listeners) listener()
   }
 
-  const dispatch = async (command: unknown): Promise<WordRendererResult> => {
-    if (isRecord(command) && typeof command.type === 'string' && command.type.startsWith('editor.')) {
-      const editorCommand = validateWordEditorCommand(command)
-      if (!editorCommand) return failure('invalid_editor_command', 'Unsupported or malformed Word editor command.')
-      if (!editorCommandHandler) return failure('editor_unavailable', 'The Session Word editor is not ready.')
-      try {
-        if (!await editorCommandHandler(editorCommand)) return failure('editor_command_failed', 'The Word editor could not apply the requested command.')
-      } catch {
-        return failure('editor_command_failed', 'The Word editor could not apply the requested command.')
-      }
-      return { ok: true, state }
-    }
+  const applyDomainCommand = (command: unknown): WordRendererResult => {
     const result = reduceWordCommand(state, command, options.defaultTitle)
     if (!result.ok) return result
     publish(result.state)
     return { ok: true, state }
   }
 
-  const api: BridgicWordRendererApi = { sessionId: state.sessionId, dispatch }
+  const dispatch = async (input: unknown): Promise<WordRendererResult> => {
+    if (!isRecord(input) || typeof input.type !== 'string') return failure('invalid_command', 'Word commands must be objects with a string type.')
+    if (!WORD_WORKSPACE_CAPABILITIES.includes(input.type as typeof WORD_WORKSPACE_CAPABILITIES[number])) {
+      return failure('unsupported_command', `Unsupported Word command: ${input.type}`)
+    }
+    if (input.sessionId !== undefined && typeof input.sessionId !== 'string') return failure('invalid_session_id', 'Session id must be a string.')
+    if (input.documentId !== undefined && (typeof input.documentId !== 'string' || !input.documentId)) return failure('invalid_document_id', 'Document id must be a non-empty string.')
+    for (const key of ['expectedRevision', 'expectedDocumentRevision'] as const) {
+      if (input[key] !== undefined && (typeof input[key] !== 'number' || !Number.isSafeInteger(input[key]) || input[key] < 0)) {
+        return failure('invalid_revision', 'Expected revisions must be non-negative integers.')
+      }
+    }
+    let command: Record<string, unknown>
+    try { command = structuredClone(input) } catch { return failure('invalid_command', 'Word commands must contain serializable data.') }
+    const isEditorCommand = input.type.startsWith('editor.')
+    const editorCommand = isEditorCommand ? validateWordEditorCommand(command) : null
+    if (isEditorCommand && !editorCommand) return failure('invalid_editor_command', 'Unsupported or malformed Word editor command.')
+    const targetsDocument = isEditorCommand || (input.type.startsWith('document.') && input.type !== 'document.create' && input.type !== 'document.open')
+    // Resolve omitted targets at submission, before another queued command can switch tabs.
+    if ((input.type === 'document.activate' || input.type === 'document.close') && input.documentId === undefined) {
+      return failure('invalid_document_id', 'This Word command requires an explicit document id.')
+    }
+    const requestedDocumentId = typeof input.documentId === 'string' ? input.documentId : state.activeDocumentId
+    const documentId = targetsDocument ? requestedDocumentId : undefined
+    if (targetsDocument && !documentId) return failure('document_not_found', 'The requested Word document does not exist in this Session.')
+    if (targetsDocument) command.documentId = documentId
+    const binding = isEditorCommand ? editorBinding : null
+    const operation = {
+      sessionId: typeof input.sessionId === 'string' ? input.sessionId : state.sessionId,
+      capability: input.type,
+      documentId,
+      expectedRevision: input.expectedRevision as number | undefined,
+      expectedDocumentRevision: input.expectedDocumentRevision as number | undefined,
+    }
+    const result = await runtime.execute(operation, async (context) => {
+      if (editorCommand) {
+        if (!binding || binding.documentId !== documentId || editorBinding !== binding || state.activeDocumentId !== documentId) {
+          return failure('editor_unavailable', 'The requested Word document editor is not ready.')
+        }
+        const assertEditorAvailable = () => {
+          runtime.assertCurrent({ sessionId: operation.sessionId, capability: operation.capability, documentId })
+          if (editorBinding !== binding || state.activeDocumentId !== documentId) throw new OfficeOperationError('editor_unavailable', 'The requested Word document editor is no longer active.')
+        }
+        const assertCurrent = () => {
+          context.assertCurrent()
+          assertEditorAvailable()
+        }
+        try {
+          const applied = await binding.handler(editorCommand, {
+            assertCurrent,
+            applyReferenceCommand: (reference) => {
+              assertCurrent()
+              const type = reference.type === 'editor.reference.remove' ? 'remove' : 'update'
+              const referenceId = reference.kind === 'footnote' ? { footnoteId: reference.id } : { citationId: reference.id }
+              return applyDomainCommand({
+                type: `document.${reference.kind}.${type}`,
+                documentId,
+                ...referenceId,
+                ...(reference.type === 'editor.reference.update' ? { text: reference.text } : {}),
+              }).ok
+            },
+          })
+          assertEditorAvailable()
+          if (!applied) return failure('editor_command_failed', 'The Word editor could not apply the requested command.')
+        } catch (error) {
+          if (error instanceof OfficeOperationError) throw error
+          return failure('editor_command_failed', 'The Word editor could not apply the requested command.')
+        }
+        return { ok: true, state } as const
+      }
+      if (command.type !== 'workspace.get') {
+        const currentBinding = editorBinding
+        if (currentBinding?.flush && currentBinding.documentId === state.activeDocumentId) {
+          await currentBinding.flush()
+          context.assertCurrent()
+        }
+      }
+      return applyDomainCommand(command)
+    })
+    return result.ok ? result.value : result
+  }
+
+  const api: BridgicWordRendererApi = {
+    sessionId: state.sessionId,
+    workspace: Object.freeze({ getSnapshot: runtime.getSnapshot, subscribe: runtime.subscribe, supports: runtime.supports }),
+    dispatch,
+  }
   return {
     api,
     dispatch,
     getSnapshot: () => state,
+    whenIdle: runtime.whenIdle,
+    dispose: () => { disposed = true; editorBinding = null; listeners.clear(); runtime.dispose() },
     commitEditorSnapshot: (documentId, snapshot) => {
+      if (disposed) return false
       const document = state.documents.find((item) => item.id === documentId)
       if (!document) return false
       const normalized = normalizeUniverDocumentSnapshot(snapshot, document.id, document.title, document.page, document.headerFooter)
+      if (snapshotSignature(normalized) === snapshotSignature(document.snapshot)) return true
       const references = extractWordReferences(normalized)
       publish({
         ...state,
@@ -313,9 +442,10 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
       })
       return true
     },
-    registerEditorCommandHandler: (handler) => {
-      editorCommandHandler = handler
-      return () => { if (editorCommandHandler === handler) editorCommandHandler = null }
+    registerEditorCommandHandler: (documentId, handler, flush) => {
+      const binding = { documentId, handler, flush }
+      editorBinding = binding
+      return () => { if (editorBinding === binding) editorBinding = null }
     },
     subscribe: (listener) => {
       listeners.add(listener)

@@ -1,9 +1,10 @@
-import { expect, it } from 'bun:test'
+import { expect, it, spyOn } from 'bun:test'
 import type { BrowserWindow, Rectangle, WebContentsView } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EmbeddedPowerPointManager } from '../embedded-powerpoint-manager'
+import { windowLog } from '../logger'
 
 class FakeDebugger {
   attached = false
@@ -48,6 +49,9 @@ class FakeContents {
     this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener])
   }
   once(event: string, listener: () => void): void { this.on(event, listener) }
+  emit(event: string): void {
+    for (const listener of this.listeners.get(event) ?? []) listener()
+  }
   close(): void {
     this.destroyed = true
     for (const listener of this.listeners.get('destroyed') ?? []) listener()
@@ -124,4 +128,71 @@ it('owns exactly one CDP target per Session and presents only the active one', a
   manager.closeSession('session-b')
   expect(children).toHaveLength(1)
   expect(manager.snapshot().sessions.map((item) => item.sessionId)).toEqual(['session-a'])
+})
+
+it('shares one pending PPT initialization and rejects it if the Session closes before load completes', async () => {
+  const views: FakeView[] = []
+  const children = new Set<WebContentsView>()
+  let completeLoad!: () => void
+  const manager = new EmbeddedPowerPointManager(
+    () => {
+      const view = new FakeView(views.length + 1)
+      views.push(view)
+      return view as unknown as WebContentsView
+    },
+    () => new Promise<void>((resolve) => { completeLoad = resolve }),
+  )
+  manager.attachHost({
+    isDestroyed: () => false,
+    contentView: {
+      addChildView: (view: WebContentsView) => children.add(view),
+      removeChildView: (view: WebContentsView) => children.delete(view),
+    },
+  } as unknown as BrowserWindow)
+  const first = manager.ensureSession('session-a')
+  const second = manager.ensureSession('session-a')
+  expect(views).toHaveLength(1)
+  const results = Promise.allSettled([first, second])
+  const warn = spyOn(windowLog, 'warn').mockImplementation(() => {})
+  try {
+    manager.closeSession('session-a')
+    completeLoad()
+    expect(await results).toEqual([
+      { status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('closed during creation') }) },
+      { status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('closed during creation') }) },
+    ])
+  } finally {
+    warn.mockRestore()
+  }
+  expect(children.size).toBe(0)
+  expect(manager.snapshot().sessions).toEqual([])
+})
+
+it('recreates a crashed PPT target without changing its Session or losing active presentation', async () => {
+  const views: FakeView[] = []
+  const manager = new EmbeddedPowerPointManager(
+    () => {
+      const view = new FakeView(views.length + 1)
+      views.push(view)
+      return view as unknown as WebContentsView
+    },
+    async () => {},
+  )
+  manager.attachHost({
+    isDestroyed: () => false,
+    contentView: { addChildView: () => {}, removeChildView: () => {} },
+  } as unknown as BrowserWindow)
+  const before = await manager.ensureSession('session-a')
+  manager.activateSession('session-a')
+  manager.setVisible(true)
+  views[0]!.webContents.emit('render-process-gone')
+  expect(manager.sessionInfo('session-a')?.crashed).toBe(true)
+  expect(manager.sessionInfo('session-a')?.targetId).toBeNull()
+  const after = await manager.ensureSession('session-a')
+  expect(after.sessionId).toBe(before.sessionId)
+  expect(after.targetId).not.toBe(before.targetId)
+  expect(after.crashed).toBe(false)
+  expect(views[0]!.webContents.isDestroyed()).toBe(true)
+  expect(views[1]!.visible).toBe(true)
+  manager.closeAll()
 })

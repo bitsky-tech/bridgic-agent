@@ -342,6 +342,9 @@ export const removeSessionAtom = atom(null, (get, set, id: string) => {
   void closeExcelTarget?.catch((err: unknown) => {
     rlog.warn('[sessions] Excel target cleanup failed', { id, err })
   })
+  void window.api.wordHost?.closeSession(id).catch((err: unknown) => {
+    rlog.warn('[sessions] Word target cleanup failed', { id, err })
+  })
   // Daemon is the source of truth — DELETE the daemon session. Drafts never
   // reached the daemon (no POST /sessions yet), so skip.
   if (!wasDraft) {

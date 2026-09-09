@@ -19,6 +19,7 @@ import { registerSystemHandlers } from './system'
 import { registerUpdateHandlers } from './update'
 import { registerWindowHandlers } from './window'
 import { registerWordHandlers } from './word'
+import { registerWordHostHandlers } from './word-host'
 
 export function registerAllHandlers(windowManager: WindowManager, quitApp: () => Promise<void>): void {
   registerAppHandlers(quitApp)
@@ -45,12 +46,16 @@ export function registerAllHandlers(windowManager: WindowManager, quitApp: () =>
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   })
   registerWordHandlers()
+  registerWordHostHandlers(windowManager.getWordHost(), (channel, value) => {
+    const window = windowManager.getMainWindow()
+    if (window && !window.isDestroyed()) window.webContents.send(channel, value)
+  })
   registerExcelHostHandlers(windowManager.getExcelHost(), windowManager.getEmbeddedBrowser())
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after
   // the backend handlers because it drives pythonClient during the handover.
-  registerUpdateHandlers(windowManager.getExcelHost())
+  registerUpdateHandlers(windowManager.getExcelHost(), () => windowManager.getWordHost().flushAll())
   registerSystemHandlers()
   registerIssueReportHandlers()
   // Native toasts for daemon `schedule.notify` frames (relayed by the renderer).

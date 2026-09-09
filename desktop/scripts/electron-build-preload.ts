@@ -13,11 +13,17 @@ const OUTPUT = join(DIST_DIR, 'bootstrap-preload.cjs')
 const ENTRY = join(ELECTRON_DIR, 'src/preload/bootstrap.ts')
 const EXCEL_OUTPUT = join(DIST_DIR, 'excel-host-preload.cjs')
 const EXCEL_ENTRY = join(ELECTRON_DIR, 'src/preload/excel-host.ts')
+const WORD_OUTPUT = join(DIST_DIR, 'word-host-preload.cjs')
+const WORD_ENTRY = join(ELECTRON_DIR, 'src/preload/word-host.ts')
 
 export async function buildPreload(): Promise<void> {
   if (!existsSync(DIST_DIR)) mkdirSync(DIST_DIR, { recursive: true })
 
   await Promise.all([
+    esbuild.build({
+      entryPoints: [WORD_ENTRY], bundle: true, platform: 'node', format: 'cjs',
+      outfile: WORD_OUTPUT, external: ['electron'], sourcemap: true, logLevel: 'info',
+    }),
     esbuild.build({
       entryPoints: [ENTRY],
       bundle: true,
@@ -46,9 +52,13 @@ export async function buildPreload(): Promise<void> {
   if (!existsSync(EXCEL_OUTPUT) || statSync(EXCEL_OUTPUT).size === 0) {
     throw new Error(`preload build did not produce output at ${EXCEL_OUTPUT}`)
   }
+  if (!existsSync(WORD_OUTPUT) || statSync(WORD_OUTPUT).size === 0) {
+    throw new Error(`preload build did not produce output at ${WORD_OUTPUT}`)
+  }
   console.log(
     `✔ preloads: bootstrap ${(statSync(OUTPUT).size / 1024).toFixed(1)} KB · `
-    + `Excel host ${(statSync(EXCEL_OUTPUT).size / 1024).toFixed(1)} KB`,
+    + `Excel host ${(statSync(EXCEL_OUTPUT).size / 1024).toFixed(1)} KB · `
+    + `Word host ${(statSync(WORD_OUTPUT).size / 1024).toFixed(1)} KB`,
   )
 }
 

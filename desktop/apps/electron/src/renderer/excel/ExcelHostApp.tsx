@@ -1,196 +1,29 @@
 import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
+  useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
 } from 'react'
-import {
-  BorderStyleTypes,
-  BorderType,
-  CommandType,
-  Dimension,
-  ImageSourceType,
-  InterceptorEffectEnum,
-  LocaleType,
-  LogLevel,
-  ThemeService,
-  Univer,
-  mergeLocales,
-  type IRange,
-  type IWorkbookData,
-} from '@univerjs/core'
-import { FUniver } from '@univerjs/core/lib/facade'
-import { FormulaResultStatus, RegisterOtherFormulaService } from '@univerjs/engine-formula'
-import {
-  INTERCEPTOR_POINT,
-  SheetInterceptorService,
-} from '@univerjs/sheets'
-import {
-  OpenConditionalFormattingOperator,
-  UniverSheetsConditionalFormattingPreset,
-} from '@univerjs/preset-sheets-conditional-formatting'
-import conditionalFormattingEnUS from '@univerjs/preset-sheets-conditional-formatting/locales/en-US'
-import conditionalFormattingZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN'
-import {
-  InsertColMutation,
-  InsertRowMutation,
-  RemoveColMutation,
-  RemoveRowMutation,
-  SetBoldCommand,
-  SetItalicCommand,
-  SetStrikeThroughCommand,
-  SetUnderlineCommand,
-  UniverSheetsCorePreset,
-} from '@univerjs/preset-sheets-core'
-import coreEnUS from '@univerjs/preset-sheets-core/locales/en-US'
-import coreZhCN from '@univerjs/preset-sheets-core/locales/zh-CN'
-import {
-  UniverSheetsDataValidationPreset,
-} from '@univerjs/preset-sheets-data-validation'
-import dataValidationEnUS from '@univerjs/preset-sheets-data-validation/locales/en-US'
-import dataValidationZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN'
-import {
-  InsertFloatImageCommand,
-  UniverSheetsDrawingPreset,
-} from '@univerjs/preset-sheets-drawing'
-import drawingEnUS from '@univerjs/preset-sheets-drawing/locales/en-US'
-import drawingZhCN from '@univerjs/preset-sheets-drawing/locales/zh-CN'
-import { UniverSheetsFilterPreset } from '@univerjs/preset-sheets-filter'
-import filterEnUS from '@univerjs/preset-sheets-filter/locales/en-US'
-import filterZhCN from '@univerjs/preset-sheets-filter/locales/zh-CN'
-import { UniverSheetsHyperLinkPreset } from '@univerjs/preset-sheets-hyper-link'
-import hyperLinkEnUS from '@univerjs/preset-sheets-hyper-link/locales/en-US'
-import hyperLinkZhCN from '@univerjs/preset-sheets-hyper-link/locales/zh-CN'
-import { UniverSheetsSortPreset } from '@univerjs/preset-sheets-sort'
-import sortEnUS from '@univerjs/preset-sheets-sort/locales/en-US'
-import sortZhCN from '@univerjs/preset-sheets-sort/locales/zh-CN'
-import '@univerjs/preset-sheets-conditional-formatting/lib/index.css'
-import '@univerjs/preset-sheets-core/lib/index.css'
-import '@univerjs/preset-sheets-data-validation/lib/index.css'
-import '@univerjs/preset-sheets-drawing/lib/index.css'
-import '@univerjs/preset-sheets-filter/lib/index.css'
-import '@univerjs/preset-sheets-hyper-link/lib/index.css'
-import '@univerjs/preset-sheets-sort/lib/index.css'
-import { defaultTheme } from '@univerjs/themes'
-import type {
-  ExcelDocumentHandle,
-  ExcelHostConfig,
-  ExcelWorkbookOpenTicket,
-} from '../../shared/types'
+import type { IWorkbookData } from '@univerjs/core'
+import type { ExcelDocumentHandle, ExcelHostConfig, ExcelWorkbookOpenTicket } from '../../shared/types'
 import { Icons } from '../components/amphi/Icons'
 import { OfficeDocumentTabs } from '../components/app/OfficeWorkbenchChrome'
+import { completeExcelWorkbookSave, createExcelWorkspace, type ExcelWorkspaceTab } from '../lib/office/excelWorkspace'
+import { createExcelRecoveryPersistence, writeExcelWorkbookSource } from '../lib/office/excelPersistence'
+import { OfficeOperationError, type OfficeOperationContext } from '../lib/office/officeWorkspaceRuntime'
 import {
-  EXCEL_SHOW_ZEROS_CUSTOM_KEY,
-  clearUnsupportedWorkbookFeatures,
-  createEmptyWorkbook,
-  excelSheetShowsZeros,
-  exportXlsx,
-  importXlsx,
-  unsupportedWorkbookFeatures,
+  clearUnsupportedWorkbookFeatures, createEmptyWorkbook, exportXlsx, importXlsx, unsupportedWorkbookFeatures,
 } from '../lib/excelWorkbook'
-import {
-  ExcelRibbon,
-  type ExcelHighlightMode,
-  type ExcelRibbonAction,
-  type ExcelRibbonTab,
-  type ExcelViewState,
-} from './ExcelRibbon'
-import {
-  ExcelDataOperationError,
-  detectTableFooterRows,
-  detectTableHeaderOffset,
-  excelDataOperationMessage,
-  resolveFilterTarget,
-  resolveSortTarget,
-} from './excelDataOperations'
-import {
-  ExcelHyperlinkDialog,
-  ExcelPivotTableDialog,
-} from './ExcelInsertDialogs'
+import { ExcelRibbon, type ExcelRibbonAction, type ExcelRibbonTab, type ExcelViewState } from './ExcelRibbon'
+import { excelDataOperationMessage } from './excelDataOperations'
+import { ExcelHyperlinkDialog, ExcelPivotTableDialog } from './ExcelInsertDialogs'
 import { ExcelFormulaWizardDialog } from './ExcelFormulaWizardDialog'
 import { rememberFormula } from './excelFormulaCatalog'
-import { formulaPreviewResult, type ExcelFormulaPreviewResult } from './excelFormulaWizard'
-import {
-  contiguousDataStart,
-  quickFormulaExpression,
-  quickFormulaTargets,
-  type ExcelQuickFormulaName,
-} from './excelQuickFormula'
-import {
-  buildChartSvg,
-  buildEmptyChartSvg,
-  buildPivotTable,
-  excelInsertValidationMessage,
-  svgDataUrl,
-  type ExcelChartType,
-  type ExcelCellValue,
-  type ExcelHyperlinkOptions,
-  type ExcelInsertContext,
-  type ExcelPivotOptions,
-  type ExcelPivotResult,
-  type ExcelRibbonActionValue,
-} from './excelInsert'
-import {
-  rangesIntersect,
-  readLiveAnalysis,
-  updateLiveAnalysisForStructureChange,
-  upsertLiveBinding,
-  withLiveAnalysis,
-  type ExcelLiveAnalysisBinding,
-  type ExcelLivePivotBinding,
-  type ExcelLiveStructureChange,
-} from './excelLiveAnalysis'
-import { adjustDecimalPlaces } from './excelNumberFormat'
-import {
-  EXCEL_OPEN_SOURCE_FEATURES,
-  EXCEL_SHEETS_UI_CONFIG,
-  type ExcelOpenSourceFeature,
-} from './excelUiConfig'
+import { excelInsertValidationMessage, type ExcelInsertContext, type ExcelRibbonActionValue } from './excelInsert'
+import { UniverSheetEditor } from './UniverSheetEditor'
+import { univerLocale, type ExcelViewPreferences, type SheetEditorHandle, type SheetSelectionState } from './excelUniverAdapter'
 
-interface WorkbookTab {
-  tabId: string
-  documentId: string | null
-  fileName: string
-  snapshot: IWorkbookData
-  mtimeMs: number | null
-  dirty: boolean
-  changeVersion: number
-  revision: number
-}
-
-interface ExcelRecoveryState {
-  version: 1
-  tabs: WorkbookTab[]
-  activeTabId: string | null
-  nextWorkbookOrdinal: number
-}
-
-interface SheetEditorHandle {
-  insertContext(expandDataRegion: boolean): ExcelInsertContext | null
-  previewFormula(sheetId: string, address: string, formula: string): Promise<ExcelFormulaPreviewResult>
-  run(action: ExcelRibbonAction, value?: ExcelRibbonActionValue): Promise<void>
-  selectRange(address: string): void
-  setFormulaAt(sheetId: string, address: string, formula: string): void
-  setFormulaBarValue(value: string): void
-  snapshot(): IWorkbookData | null
-}
-
-interface SheetSelectionState {
-  address: string
-  sheetId: string
-  sheetName: string
-  targetAddress: string
-  value: string
-}
-
-type ExcelViewPreferences = Pick<ExcelViewState, 'highlightMode'>
+type WorkbookTab = ExcelWorkspaceTab<IWorkbookData>
 
 type BusyAction = 'opening' | 'saving' | null
-type InsertDialogState = { kind: 'hyperlink' | 'pivot'; context: ExcelInsertContext } | null
+type InsertDialogState = { kind: 'hyperlink' | 'pivot'; context: ExcelInsertContext; tabId: string } | null
 interface FormulaDialogState {
   initialFormula: string
   sheetId: string
@@ -199,6 +32,7 @@ interface FormulaDialogState {
   targetAddress: string
 }
 type OperationNotice = { id: number; message: string } | null
+type RecoveryFailure = { kind: 'restore' | 'write'; message: string } | null
 const RECENT_FORMULAS_STORAGE_KEY = 'bridgic.excel.recent-formulas'
 
 function loadRecentFormulas(): string[] {
@@ -221,6 +55,9 @@ interface Copy {
   new: string
   open: string
   openFailed: string
+  recoveryReadFailed: string
+  recoveryWriteFailed: string
+  retryRecovery: string
   saveAs: string
   saveConflict: string
   saveFailed: string
@@ -242,6 +79,9 @@ const COPY: Record<ExcelHostConfig['locale'], Copy> = {
     new: 'New',
     open: 'Open',
     openFailed: 'Could not open this workbook',
+    recoveryReadFailed: 'Could not restore the workbooks.',
+    recoveryWriteFailed: 'Could not update workbook recovery state.',
+    retryRecovery: 'Retry',
     saveAs: 'Save as',
     saveConflict: 'The file changed on disk. Use Save as to keep both versions.',
     saveFailed: 'Could not save this workbook',
@@ -261,6 +101,9 @@ const COPY: Record<ExcelHostConfig['locale'], Copy> = {
     new: '新建',
     open: '打开',
     openFailed: '无法打开此工作簿',
+    recoveryReadFailed: '无法恢复工作簿。',
+    recoveryWriteFailed: '无法保存工作簿恢复状态。',
+    retryRecovery: '重试',
     saveAs: '另存为',
     saveConflict: '磁盘中的文件已被修改。请使用“另存为”保留两个版本。',
     saveFailed: '无法保存此工作簿',
@@ -276,831 +119,6 @@ function readConfig(): ExcelHostConfig {
   const locale = params.get('locale') === 'zh-CN' ? 'zh-CN' : 'en-US'
   const theme = params.get('theme') === 'dark' ? 'dark' : 'light'
   return { sessionId: params.get('sessionId') || 'unknown', locale, theme }
-}
-
-function univerLocale(config: ExcelHostConfig): LocaleType {
-  return config.locale === 'zh-CN' ? LocaleType.ZH_CN : LocaleType.EN_US
-}
-
-type SheetsPreset = ReturnType<typeof UniverSheetsCorePreset>
-
-const openSourcePresetFactories: Record<ExcelOpenSourceFeature, () => SheetsPreset> = {
-  filter: UniverSheetsFilterPreset,
-  sort: UniverSheetsSortPreset,
-  'conditional-formatting': UniverSheetsConditionalFormattingPreset,
-  'data-validation': () => UniverSheetsDataValidationPreset({
-    showEditOnDropdown: true,
-    showSearchOnDropdown: true,
-  }),
-  drawing: UniverSheetsDrawingPreset,
-  hyperlink: UniverSheetsHyperLinkPreset,
-}
-
-function createSheetsUniver(presets: SheetsPreset[], config: ConstructorParameters<typeof Univer>[0]) {
-  const univer = new Univer({ logLevel: LogLevel.WARN, ...config })
-  for (const preset of presets) {
-    for (const plugin of preset.plugins) {
-      if (Array.isArray(plugin)) univer.registerPlugin(plugin[0], plugin[1])
-      else univer.registerPlugin(plugin)
-    }
-  }
-  return { univer, univerAPI: FUniver.newAPI(univer) }
-}
-
-type SheetsUniverApi = ReturnType<typeof createSheetsUniver>['univerAPI']
-type SheetsWorkbook = NonNullable<ReturnType<SheetsUniverApi['getActiveWorkbook']>>
-type SheetsWorksheet = ReturnType<SheetsWorkbook['getActiveSheet']>
-type SheetsRange = ReturnType<SheetsWorksheet['getRange']>
-const ADD_DATA_VALIDATION_AND_OPEN_COMMAND_ID = 'data-validation.command.addRuleAndOpen'
-const CREATE_CONDITIONAL_FORMAT_RULE = 1
-const CHART_TYPES = new Set<ExcelChartType>(['column', 'bar', 'line', 'area', 'pie', 'doughnut', 'scatter'])
-
-class SheetViewController {
-  private highlightDisposable: { dispose(): void } | null = null
-  private highlightMode: ExcelHighlightMode
-  private showZeros: boolean
-  private readonly zeroValueDisposable: { dispose(): void }
-
-  constructor(
-    private readonly univer: Univer,
-    private readonly univerAPI: SheetsUniverApi,
-    preferences: ExcelViewPreferences,
-    private readonly onStateChange: (state: ExcelViewState) => void,
-    private readonly onSnapshotChange: (snapshot: IWorkbookData) => void,
-  ) {
-    this.highlightMode = preferences.highlightMode
-    this.showZeros = this.readShowZeros()
-    this.zeroValueDisposable = univer.__getInjector().get(SheetInterceptorService).intercept(
-      INTERCEPTOR_POINT.CELL_CONTENT,
-      {
-        effect: InterceptorEffectEnum.Style,
-        priority: 100,
-        handler: (cell, _location, next) => {
-          const resolved = next(cell)
-          if (this.showZeros || resolved?.v !== 0) return resolved
-          return {
-            ...resolved,
-            fontRenderExtension: {
-              ...resolved.fontRenderExtension,
-              isSkip: true,
-            },
-          }
-        },
-      },
-    )
-  }
-
-  dispose() {
-    this.highlightDisposable?.dispose()
-    this.highlightDisposable = null
-    this.zeroValueDisposable.dispose()
-  }
-
-  publish() {
-    const sheet = this.univerAPI.getActiveWorkbook()?.getActiveSheet()
-    if (!sheet) return
-    this.showZeros = this.readShowZeros()
-    this.onStateChange({
-      darkMode: this.univer.__getInjector().get(ThemeService).darkMode,
-      gridlines: !sheet.hasHiddenGridLines(),
-      highlightMode: this.highlightMode,
-      showZeros: this.showZeros,
-      zoom: sheet.getZoom(),
-    })
-  }
-
-  selectionChanged() {
-    this.showZeros = this.readShowZeros()
-    this.renderHighlight()
-    this.publish()
-  }
-
-  setHighlightMode(mode: ExcelHighlightMode) {
-    this.highlightMode = mode
-    this.renderHighlight()
-    this.publish()
-  }
-
-  toggleZeroValues() {
-    const workbook = this.univerAPI.getActiveWorkbook()
-    const sheet = workbook?.getActiveSheet()
-    if (!workbook || !sheet) return
-    this.showZeros = !this.readShowZeros()
-    const current = sheet.getCustomMetadata()
-    const custom = current && typeof current === 'object' && !Array.isArray(current) ? { ...current } : {}
-    if (this.showZeros) delete custom[EXCEL_SHOW_ZEROS_CUSTOM_KEY]
-    else custom[EXCEL_SHOW_ZEROS_CUSTOM_KEY] = false
-    sheet.setCustomMetadata(Object.keys(custom).length > 0 ? custom : undefined)
-    sheet.refreshCanvas()
-    this.onSnapshotChange(workbook.getSnapshot())
-    this.publish()
-  }
-
-  private readShowZeros(): boolean {
-    return excelSheetShowsZeros(this.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getCustomMetadata())
-  }
-
-  private renderHighlight() {
-    this.highlightDisposable?.dispose()
-    this.highlightDisposable = null
-    if (this.highlightMode === 'none') return
-    const workbook = this.univerAPI.getActiveWorkbook()
-    const sheet = workbook?.getActiveSheet()
-    const range = workbook?.getActiveRange()
-    if (!sheet || !range) return
-    const ranges = []
-    if (this.highlightMode === 'row' || this.highlightMode === 'both') {
-      ranges.push(sheet.getRange(range.getRow(), 0, 1, sheet.getMaxColumns()))
-    }
-    if (this.highlightMode === 'column' || this.highlightMode === 'both') {
-      ranges.push(sheet.getRange(0, range.getColumn(), sheet.getMaxRows(), 1))
-    }
-    this.highlightDisposable = sheet.highlightRanges(ranges, {
-      fill: 'rgba(59, 130, 246, 0.08)',
-      stroke: 'rgba(59, 130, 246, 0.22)',
-      strokeWidth: 1,
-    })
-  }
-}
-
-function insertQuickFormula(sheet: SheetsWorksheet, selectedRange: SheetsRange, formulaName: ExcelQuickFormulaName) {
-  const selection = selectedRange.getRange()
-  const isSingleCell = selection.startRow === selection.endRow && selection.startColumn === selection.endColumn
-  if (isSingleCell && selectedRange.isBlank()) {
-    const row = selection.startRow
-    const column = selection.startColumn
-    if (row > 0) {
-      const valuesAbove = sheet.getRange(0, column, row, 1).getValues().map((values) => values[0])
-      const startRow = contiguousDataStart(valuesAbove)
-      if (startRow !== null) {
-        const source = sheet.getRange(startRow, column, row - startRow, 1)
-        selectedRange.setFormula(quickFormulaExpression(formulaName, source.getA1Notation()))
-        sheet.setActiveRange(selectedRange)
-        return
-      }
-    }
-    if (column > 0) {
-      const valuesLeft = sheet.getRange(row, 0, 1, column).getValues()[0] ?? []
-      const startColumn = contiguousDataStart(valuesLeft)
-      if (startColumn !== null) {
-        const source = sheet.getRange(row, startColumn, 1, column - startColumn)
-        selectedRange.setFormula(quickFormulaExpression(formulaName, source.getA1Notation()))
-        sheet.setActiveRange(selectedRange)
-        return
-      }
-    }
-    selectedRange.setFormula(quickFormulaExpression(formulaName, ''))
-    sheet.setActiveRange(selectedRange)
-    return
-  }
-
-  const targets = quickFormulaTargets(selection)
-  const lastTargetRow = Math.max(...targets.map((target) => target.target.endRow))
-  const lastTargetColumn = Math.max(...targets.map((target) => target.target.endColumn))
-  if (lastTargetRow >= sheet.getMaxRows()) {
-    sheet.insertRowsAfter(sheet.getMaxRows() - 1, lastTargetRow - sheet.getMaxRows() + 1)
-  }
-  if (lastTargetColumn >= sheet.getMaxColumns()) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns() - 1, lastTargetColumn - sheet.getMaxColumns() + 1)
-  }
-  for (const target of targets) {
-    const source = sheet.getRange(
-      target.source.startRow,
-      target.source.startColumn,
-      target.source.endRow - target.source.startRow + 1,
-      target.source.endColumn - target.source.startColumn + 1,
-    )
-    sheet.getRange(target.target.startRow, target.target.startColumn)
-      .setFormula(quickFormulaExpression(formulaName, source.getA1Notation()))
-  }
-  const first = targets[0]!.target
-  const last = targets.at(-1)!.target
-  sheet.setActiveRange(sheet.getRange(
-    first.startRow,
-    first.startColumn,
-    last.endRow - first.startRow + 1,
-    last.endColumn - first.startColumn + 1,
-  ))
-}
-
-async function calculateFormulaPreview(
-  univer: Univer,
-  univerAPI: SheetsUniverApi,
-  sheetId: string,
-  address: string,
-  formula: string,
-): Promise<ExcelFormulaPreviewResult> {
-  const workbook = univerAPI.getActiveWorkbook()
-  const sheet = workbook?.getSheetBySheetId(sheetId)
-  if (!workbook || !sheet) return { errorCode: '#REF!' }
-  const selected = sheet.getRange(address).getRange()
-  const target = {
-    startRow: selected.startRow,
-    endRow: selected.startRow,
-    startColumn: selected.startColumn,
-    endColumn: selected.startColumn,
-  }
-  const service = univer.__getInjector().get(RegisterOtherFormulaService)
-  const formulaId = service.registerFormulaWithRange(
-    workbook.getId(),
-    sheetId,
-    formula,
-    [target],
-    undefined,
-    undefined,
-    'excel-formula-preview',
-  )
-  let timeout: number | null = null
-  try {
-    const result = await Promise.race([
-      service.getFormulaValue(workbook.getId(), sheetId, formulaId),
-      new Promise<null>((resolve) => {
-        timeout = window.setTimeout(() => resolve(null), 2500)
-      }),
-    ])
-    if (!result || result.status !== FormulaResultStatus.SUCCESS) return { errorCode: '#ERROR!' }
-    return formulaPreviewResult(result.result?.[0]?.[0])
-  } finally {
-    if (timeout !== null) window.clearTimeout(timeout)
-    service.deleteFormula(workbook.getId(), sheetId, [formulaId])
-  }
-}
-
-function insertContext(univerAPI: SheetsUniverApi, expandDataRegion: boolean): ExcelInsertContext | null {
-  const workbook = univerAPI.getActiveWorkbook()
-  const sheet = workbook?.getActiveSheet()
-  if (!workbook || !sheet) return null
-  const selection = workbook.getActiveRange() ?? sheet.getRange('A1')
-  const range = expandDataRegion
-    && selection.getRow() === selection.getLastRow()
-    && selection.getColumn() === selection.getLastColumn()
-    ? selection.getDataRegion()
-    : selection
-  const values = range.getValues().map((row) => row.map((cell): ExcelCellValue => {
-    if (cell === null || typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean') return cell
-    return String(cell)
-  }))
-  return { address: range.getA1Notation(), values }
-}
-
-async function chartPng(svg: string): Promise<string> {
-  const image = new window.Image()
-  image.src = svgDataUrl(svg)
-  await image.decode()
-  const canvas = document.createElement('canvas')
-  canvas.width = 720
-  canvas.height = 420
-  const context = canvas.getContext('2d')
-  if (!context) throw new Error('Chart rendering is unavailable in this window.')
-  context.drawImage(image, 0, 0, canvas.width, canvas.height)
-  return canvas.toDataURL('image/png')
-}
-
-function isHyperlinkOptions(value: ExcelRibbonActionValue | undefined): value is ExcelHyperlinkOptions {
-  return Boolean(value && typeof value === 'object'
-    && 'url' in value && typeof value.url === 'string'
-    && 'label' in value && typeof value.label === 'string')
-}
-
-function isPivotOptions(value: ExcelRibbonActionValue | undefined): value is ExcelPivotOptions {
-  return Boolean(value && typeof value === 'object'
-    && 'sourceAddress' in value && typeof value.sourceAddress === 'string'
-    && 'rowField' in value && typeof value.rowField === 'number'
-    && 'valueField' in value && typeof value.valueField === 'number'
-    && 'aggregate' in value && typeof value.aggregate === 'string')
-}
-
-function uniqueSheetName(workbook: NonNullable<ReturnType<SheetsUniverApi['getActiveWorkbook']>>, base: string): string {
-  const names = new Set(workbook.getSheets().map((sheet) => sheet.getSheetName()))
-  if (!names.has(base)) return base
-  let ordinal = 2
-  while (names.has(`${base} ${ordinal}`)) ordinal += 1
-  return `${base} ${ordinal}`
-}
-
-interface LiveAnalysisController {
-  dispose(): void
-  register(binding: ExcelLiveAnalysisBinding): void
-  schedule(changes: Array<{ range: IRange; sheetId: string }>): void
-  structureChanged(change: ExcelLiveStructureChange): void
-}
-
-function liveStructureChange(commandId: string, params: unknown): ExcelLiveStructureChange | null {
-  if (!params || typeof params !== 'object' || Array.isArray(params)) return null
-  const candidate = params as { range?: Partial<IRange>; subUnitId?: unknown }
-  const range = candidate.range
-  if (!range || typeof candidate.subUnitId !== 'string') return null
-  let axis: ExcelLiveStructureChange['axis']
-  let kind: ExcelLiveStructureChange['kind']
-  if (commandId === InsertRowMutation.id) {
-    axis = 'row'
-    kind = 'insert'
-  } else if (commandId === RemoveRowMutation.id) {
-    axis = 'row'
-    kind = 'remove'
-  } else if (commandId === InsertColMutation.id) {
-    axis = 'column'
-    kind = 'insert'
-  } else if (commandId === RemoveColMutation.id) {
-    axis = 'column'
-    kind = 'remove'
-  } else return null
-  const start = axis === 'row' ? range.startRow : range.startColumn
-  const end = axis === 'row' ? range.endRow : range.endColumn
-  if (!Number.isInteger(start) || !Number.isInteger(end) || Number(start) < 0 || Number(end) < Number(start)) return null
-  return {
-    axis,
-    kind,
-    range: {
-      startRow: Number(range.startRow ?? 0),
-      endRow: Number(range.endRow ?? 0),
-      startColumn: Number(range.startColumn ?? 0),
-      endColumn: Number(range.endColumn ?? 0),
-    },
-    sheetId: candidate.subUnitId,
-  }
-}
-
-function rangeValues(sheet: SheetsWorksheet, address: string): ExcelCellValue[][] {
-  return sheet.getRange(address).getValues().map((row) => row.map((cell): ExcelCellValue => {
-    if (cell === null || typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean') return cell
-    return String(cell)
-  }))
-}
-
-function ensureSheetSize(sheet: SheetsWorksheet, rowCount: number, columnCount: number) {
-  if (rowCount > sheet.getMaxRows()) {
-    sheet.insertRowsAfter(sheet.getMaxRows() - 1, rowCount - sheet.getMaxRows())
-  }
-  if (columnCount > sheet.getMaxColumns()) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns() - 1, columnCount - sheet.getMaxColumns())
-  }
-}
-
-function renderPivotResult(target: SheetsWorksheet, pivot: ExcelPivotResult, previousRows: number, previousColumns: number) {
-  const rowCount = pivot.values.length
-  const columnCount = Math.max(...pivot.values.map((row) => row.length))
-  ensureSheetSize(target, Math.max(previousRows, rowCount), Math.max(previousColumns, columnCount))
-  target.getRange(0, 0, Math.max(previousRows, rowCount), Math.max(previousColumns, columnCount)).clear()
-  const targetRange = target.getRange(0, 0, rowCount, columnCount)
-  targetRange.setValues(pivot.values.map((row) => row.map((cell) => cell ?? '')))
-  targetRange.setBorder(BorderType.ALL, BorderStyleTypes.THIN, '#dfe3e8')
-  target.getRange(0, 0, 1, columnCount)
-    .setBackgroundColor('#DDF4EA')
-    .setFontColor('#165C46')
-    .setFontWeight('bold')
-  target.getRange(rowCount - 1, 0, 1, columnCount)
-    .setBackgroundColor('#F1F5F4')
-    .setFontWeight('bold')
-  target.getRange(1, 0, Math.max(1, rowCount - 2), 1).setFontWeight('bold')
-  if (columnCount > pivot.numericStartColumn) {
-    target.getRange(1, pivot.numericStartColumn, Math.max(1, rowCount - 1), columnCount - pivot.numericStartColumn)
-      .setNumberFormat('#,##0.00')
-  }
-  target.setColumnWidth(0, 150)
-  if (columnCount > 1) target.setColumnWidths(1, columnCount - 1, 96)
-  target.setRowHeight(0, 28)
-  return { columnCount, rowCount, targetRange }
-}
-
-function renderPivotMessage(target: SheetsWorksheet, message: string, previousRows: number, previousColumns: number) {
-  ensureSheetSize(target, Math.max(1, previousRows), Math.max(1, previousColumns))
-  target.getRange(0, 0, Math.max(1, previousRows), Math.max(1, previousColumns)).clear()
-  target.getRange('A1')
-    .setValue(message)
-    .setBackgroundColor('#FFF7E6')
-    .setFontColor('#8A5A00')
-    .setFontWeight('bold')
-  target.setColumnWidth(0, 360)
-}
-
-function createLiveAnalysisController(
-  univerAPI: SheetsUniverApi,
-  locale: ExcelHostConfig['locale'],
-  onFailure: (cause: unknown) => void,
-): LiveAnalysisController | null {
-  const workbook = univerAPI.getActiveWorkbook()
-  if (!workbook) return null
-  let state = readLiveAnalysis(workbook.getCustomMetadata())
-  let timeout: number | null = null
-  let disposed = false
-  let refreshing = false
-  const pending = new Set<string>()
-
-  const persist = () => {
-    workbook.setCustomMetadata(withLiveAnalysis(workbook.getCustomMetadata(), state))
-  }
-  const refreshBinding = async (binding: ExcelLiveAnalysisBinding): Promise<ExcelLiveAnalysisBinding | null> => {
-    const source = workbook.getSheetBySheetId(binding.sourceSheetId)
-    const target = workbook.getSheetBySheetId(binding.targetSheetId)
-    if (!source || !target) return null
-    if (binding.kind === 'chart') {
-      const image = target.getImageById(binding.drawingId)
-      if (!image) return null
-      let svg: string
-      try {
-        svg = buildChartSvg(rangeValues(source, binding.sourceAddress), binding.chartType)
-      } catch (cause) {
-        const message = excelInsertValidationMessage(cause, locale)
-        if (!message) throw cause
-        svg = buildEmptyChartSvg(message)
-      }
-      image.setSource(await chartPng(svg), ImageSourceType.BASE64)
-      return binding
-    }
-    try {
-      const pivot = buildPivotTable(rangeValues(source, binding.sourceAddress), binding.options)
-      const rendered = renderPivotResult(target, pivot, binding.renderedRows, binding.renderedColumns)
-      return { ...binding, renderedColumns: rendered.columnCount, renderedRows: rendered.rowCount }
-    } catch (cause) {
-      const message = excelInsertValidationMessage(cause, locale)
-      if (!message) throw cause
-      renderPivotMessage(target, message, binding.renderedRows, binding.renderedColumns)
-      return { ...binding, renderedColumns: 1, renderedRows: 1 }
-    }
-  }
-  const flush = async () => {
-    timeout = null
-    if (disposed || refreshing || pending.size === 0) return
-    refreshing = true
-    const ids = new Set(pending)
-    pending.clear()
-    try {
-      const next: ExcelLiveAnalysisBinding[] = []
-      for (const binding of state.bindings) {
-        if (!ids.has(binding.id)) {
-          next.push(binding)
-          continue
-        }
-        try {
-          const refreshed = await refreshBinding(binding)
-          if (refreshed) next.push(refreshed)
-        } catch (cause) {
-          next.push(binding)
-          onFailure(cause)
-        }
-      }
-      state = { version: 1, bindings: next }
-      persist()
-    } finally {
-      refreshing = false
-      if (pending.size > 0 && !disposed) timeout = window.setTimeout(() => void flush(), 220)
-    }
-  }
-  const requestFlush = () => {
-    if (pending.size === 0) return
-    if (timeout !== null) window.clearTimeout(timeout)
-    timeout = window.setTimeout(() => void flush(), 220)
-  }
-
-  return {
-    dispose: () => {
-      disposed = true
-      if (timeout !== null) window.clearTimeout(timeout)
-    },
-    register: (binding) => {
-      state = upsertLiveBinding(state, binding)
-      persist()
-    },
-    schedule: (changes) => {
-      for (const binding of state.bindings) {
-        const source = workbook.getSheetBySheetId(binding.sourceSheetId)
-        if (!source) continue
-        const sourceRange = source.getRange(binding.sourceAddress).getRange()
-        if (changes.some((change) => change.sheetId === binding.sourceSheetId
-          && rangesIntersect(sourceRange, change.range))) pending.add(binding.id)
-      }
-      requestFlush()
-    },
-    structureChanged: (change) => {
-      const result = updateLiveAnalysisForStructureChange(state, change)
-      if (result.bindingIds.length === 0) return
-      state = result.state
-      result.bindingIds.forEach((id) => pending.add(id))
-      persist()
-      requestFlush()
-    },
-  }
-}
-
-async function runSheetAction(
-  univerAPI: SheetsUniverApi,
-  action: ExcelRibbonAction,
-  value?: ExcelRibbonActionValue,
-  liveAnalysis?: LiveAnalysisController | null,
-  view?: SheetViewController | null,
-) {
-  if (action === 'undo') {
-    await univerAPI.undo()
-    return
-  }
-  if (action === 'redo') {
-    await univerAPI.redo()
-    return
-  }
-  const workbook = univerAPI.getActiveWorkbook()
-  const sheet = workbook?.getActiveSheet()
-  if (!workbook || !sheet) return
-  const range = workbook.getActiveRange() ?? sheet.getRange('A1')
-
-  switch (action) {
-    case 'font-family':
-      range.setFontFamily(String(value))
-      break
-    case 'font-size':
-      range.setFontSize(Number(value))
-      break
-    case 'bold':
-      await univerAPI.executeCommand(SetBoldCommand.id)
-      break
-    case 'italic':
-      await univerAPI.executeCommand(SetItalicCommand.id)
-      break
-    case 'underline':
-      await univerAPI.executeCommand(SetUnderlineCommand.id)
-      break
-    case 'strikethrough':
-      await univerAPI.executeCommand(SetStrikeThroughCommand.id)
-      break
-    case 'font-color':
-      range.setFontColor(String(value))
-      break
-    case 'fill-color':
-      range.setBackgroundColor(String(value))
-      break
-    case 'borders':
-      range.setBorder(BorderType.ALL, BorderStyleTypes.THIN, '#d1d5db')
-      break
-    case 'align-left':
-      range.setHorizontalAlignment('left')
-      break
-    case 'align-center':
-      range.setHorizontalAlignment('center')
-      break
-    case 'align-right':
-      range.setHorizontalAlignment('normal')
-      break
-    case 'align-top':
-      range.setVerticalAlignment('top')
-      break
-    case 'align-middle':
-      range.setVerticalAlignment('middle')
-      break
-    case 'align-bottom':
-      range.setVerticalAlignment('bottom')
-      break
-    case 'rotate-text':
-      range.setTextRotation(45)
-      break
-    case 'wrap':
-      range.setWrap(!range.getWrap())
-      break
-    case 'merge-center':
-      range.merge()
-      range.setHorizontalAlignment('center')
-      break
-    case 'merge-cells':
-      range.merge()
-      break
-    case 'merge-across':
-      range.mergeAcross()
-      break
-    case 'unmerge':
-      range.breakApart()
-      break
-    case 'number-format':
-      range.setNumberFormat(String(value))
-      break
-    case 'percent':
-      range.setNumberFormat('0.00%')
-      break
-    case 'currency':
-      range.setNumberFormat('$#,##0.00')
-      break
-    case 'thousands-separator':
-      range.setNumberFormat('#,##0.00')
-      break
-    case 'increase-decimal':
-      range.setNumberFormat(adjustDecimalPlaces(range.getNumberFormat(), 1))
-      break
-    case 'decrease-decimal':
-      range.setNumberFormat(adjustDecimalPlaces(range.getNumberFormat(), -1))
-      break
-    case 'clear-format':
-      range.clearFormat()
-      break
-    case 'insert-row-above':
-      sheet.insertRowsBefore(range.getRow(), 1)
-      break
-    case 'insert-row-below':
-      sheet.insertRowsAfter(range.getLastRow(), 1)
-      break
-    case 'insert-column-left':
-      sheet.insertColumnsBefore(range.getColumn(), 1)
-      break
-    case 'insert-column-right':
-      sheet.insertColumnsAfter(range.getLastColumn(), 1)
-      break
-    case 'insert-cells-right':
-      range.insertCells(Dimension.COLUMNS)
-      break
-    case 'insert-cells-down':
-      range.insertCells(Dimension.ROWS)
-      break
-    case 'insert-sheet':
-      workbook.insertSheet()
-      break
-    case 'insert-image':
-      await univerAPI.executeCommand(InsertFloatImageCommand.id)
-      break
-    case 'insert-hyperlink':
-      if (!isHyperlinkOptions(value)) throw new Error('Hyperlink details are required.')
-      if (!await range.setHyperLink(value.url, value.label)) throw new Error('The hyperlink could not be inserted.')
-      break
-    case 'insert-chart': {
-      if (typeof value !== 'string' || !CHART_TYPES.has(value as ExcelChartType)) throw new Error('Choose a supported chart type.')
-      const source = insertContext(univerAPI, true)
-      if (!source) return
-      const png = await chartPng(buildChartSvg(source.values, value as ExcelChartType))
-      const image = await sheet.newOverGridImage()
-        .setSource(png, ImageSourceType.BASE64)
-        .setColumn(range.getColumn())
-        .setRow(Math.min(sheet.getMaxRows() - 1, range.getLastRow() + 2))
-        .setWidth(540)
-        .setHeight(315)
-        .buildAsync()
-      sheet.insertImages([image])
-      liveAnalysis?.register({
-        id: crypto.randomUUID(),
-        kind: 'chart',
-        sourceAddress: source.address,
-        sourceSheetId: sheet.getSheetId(),
-        targetSheetId: sheet.getSheetId(),
-        drawingId: image.drawingId,
-        chartType: value as ExcelChartType,
-      })
-      break
-    }
-    case 'insert-pivot-table': {
-      if (!isPivotOptions(value)) throw new Error('Pivot table fields are required.')
-      const source = sheet.getRange(value.sourceAddress).getValues().map((row) => row.map((cell): ExcelCellValue => {
-        if (cell === null || typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean') return cell
-        return String(cell)
-      }))
-      const pivot = buildPivotTable(source, value)
-      const target = workbook.insertSheet(uniqueSheetName(workbook, 'PivotTable'))
-      const rendered = renderPivotResult(target, pivot, 0, 0)
-      const binding: ExcelLivePivotBinding = {
-        id: crypto.randomUUID(),
-        kind: 'pivot',
-        sourceAddress: value.sourceAddress,
-        sourceSheetId: sheet.getSheetId(),
-        targetSheetId: target.getSheetId(),
-        options: value,
-        renderedColumns: rendered.columnCount,
-        renderedRows: rendered.rowCount,
-      }
-      liveAnalysis?.register(binding)
-      target.activate()
-      target.setActiveRange(rendered.targetRange)
-      break
-    }
-    case 'toggle-filter': {
-      const selection = range.getRange()
-      const dataRegion = range.getDataRegion().getRange()
-      const base = resolveFilterTarget(selection, dataRegion)
-      const baseRange = sheet.getRange(base.startRow, base.startColumn, base.rowCount, base.columnCount)
-      if (baseRange.isBlank()) throw new ExcelDataOperationError('filter-range-required')
-      const target = resolveFilterTarget(selection, dataRegion, detectTableHeaderOffset(baseRange.getValues()))
-      const filter = sheet.getFilter()
-      const targetRange = sheet.getRange(target.startRow, target.startColumn, target.rowCount, target.columnCount)
-      if (filter?.getRange().getA1Notation() === targetRange.getA1Notation()) break
-      filter?.remove()
-      if (!targetRange.createFilter()) throw new ExcelDataOperationError('filter-range-required')
-      break
-    }
-    case 'clear-filter': {
-      const filter = sheet.getFilter()
-      if (!filter) throw new ExcelDataOperationError('filter-not-active')
-      filter.removeFilterCriteria()
-      break
-    }
-    case 'remove-filter': {
-      const filter = sheet.getFilter()
-      if (!filter) throw new ExcelDataOperationError('filter-not-active')
-      filter.remove()
-      break
-    }
-    case 'sort-ascending':
-    case 'sort-descending': {
-      const filterRange = sheet.getFilter()?.getRange().getRange()
-      const selection = range.getRange()
-      const dataRegion = range.getDataRegion().getRange()
-      const base = filterRange ?? resolveFilterTarget(selection, dataRegion)
-      const values = sheet.getRange(
-        base.startRow,
-        base.startColumn,
-        base.endRow - base.startRow + 1,
-        base.endColumn - base.startColumn + 1,
-      ).getValues()
-      const target = resolveSortTarget(
-        selection,
-        dataRegion,
-        filterRange,
-        filterRange ? 0 : detectTableHeaderOffset(values),
-        detectTableFooterRows(values),
-      )
-      sheet.getRange(target.startRow, target.startColumn, target.rowCount, target.columnCount).sort({
-        column: target.sortColumn,
-        ascending: action === 'sort-ascending',
-      })
-      break
-    }
-    case 'data-validation':
-      await univerAPI.executeCommand(ADD_DATA_VALIDATION_AND_OPEN_COMMAND_ID)
-      break
-    case 'conditional-formatting':
-      await univerAPI.executeCommand(OpenConditionalFormattingOperator.id, {
-        value: CREATE_CONDITIONAL_FORMAT_RULE,
-      })
-      break
-    case 'formula-sum':
-    case 'formula-average':
-    case 'formula-count':
-    case 'formula-max':
-    case 'formula-min': {
-      const formulaNames = {
-        'formula-sum': 'SUM',
-        'formula-average': 'AVERAGE',
-        'formula-count': 'COUNT',
-        'formula-max': 'MAX',
-        'formula-min': 'MIN',
-      } as const
-      insertQuickFormula(sheet, range, formulaNames[action])
-      break
-    }
-    case 'toggle-gridlines':
-      sheet.setHiddenGridlines(!sheet.hasHiddenGridLines())
-      view?.publish()
-      break
-    case 'toggle-zero-values':
-      view?.toggleZeroValues()
-      break
-    case 'highlight-row-column':
-      view?.setHighlightMode('both')
-      break
-    case 'highlight-row':
-      view?.setHighlightMode('row')
-      break
-    case 'highlight-column':
-      view?.setHighlightMode('column')
-      break
-    case 'highlight-none':
-      view?.setHighlightMode('none')
-      break
-    case 'set-row-height': {
-      const height = Number(value)
-      if (!Number.isFinite(height) || height < 8 || height > 409) return
-      sheet.setRowHeights(range.getRow(), range.getLastRow() - range.getRow() + 1, height)
-      break
-    }
-    case 'set-column-width': {
-      const width = Number(value)
-      if (!Number.isFinite(width) || width < 8 || width > 1024) return
-      sheet.setColumnWidths(range.getColumn(), range.getLastColumn() - range.getColumn() + 1, width)
-      break
-    }
-    case 'auto-fit-rows':
-      sheet.autoResizeRows(range.getRow(), range.getLastRow() - range.getRow() + 1)
-      break
-    case 'auto-fit-columns':
-      sheet.autoResizeColumns(range.getColumn(), range.getLastColumn() - range.getColumn() + 1)
-      break
-    case 'set-zoom': {
-      const zoom = Number(value)
-      if (!Number.isFinite(zoom) || zoom < 0.1 || zoom > 4) return
-      sheet.zoom(zoom)
-      view?.publish()
-      break
-    }
-    case 'freeze-selection':
-      sheet.setFrozenRows(range.getRow())
-      sheet.setFrozenColumns(range.getColumn())
-      break
-    case 'freeze-first-row':
-      sheet.setFrozenRows(1)
-      break
-    case 'freeze-first-column':
-      sheet.setFrozenColumns(1)
-      break
-    case 'unfreeze':
-      sheet.setFrozenRows(0)
-      sheet.setFrozenColumns(0)
-      break
-    case 'toggle-dark-mode':
-      // Theme changes are handled by the host so the ribbon and canvas switch together.
-      break
-  }
 }
 
 function newWorkbookTab(config: ExcelHostConfig, ordinal: number): WorkbookTab {
@@ -1134,26 +152,6 @@ function isPristineInitialWorkbook(tab: WorkbookTab): boolean {
   return tab.documentId === null && !tab.dirty && tab.changeVersion === 0
 }
 
-function recoveryState(value: unknown): ExcelRecoveryState | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const candidate = value as Partial<ExcelRecoveryState>
-  if (candidate.version !== 1 || !Array.isArray(candidate.tabs)) return null
-  if (!candidate.tabs.every((tab) => tab
-    && typeof tab === 'object'
-    && typeof tab.tabId === 'string'
-    && typeof tab.fileName === 'string'
-    && tab.snapshot
-    && typeof tab.snapshot === 'object')) return null
-  return {
-    version: 1,
-    tabs: candidate.tabs,
-    activeTabId: typeof candidate.activeTabId === 'string' ? candidate.activeTabId : null,
-    nextWorkbookOrdinal: Number.isInteger(candidate.nextWorkbookOrdinal)
-      ? Math.max(1, candidate.nextWorkbookOrdinal!)
-      : candidate.tabs.length + 1,
-  }
-}
-
 /** Workbook tabs for one Agent Session, all inside this single CDP target. */
 export function ExcelHostApp() {
   const api = window.excelHostApi
@@ -1161,9 +159,28 @@ export function ExcelHostApp() {
   const [config, setConfig] = useState(readConfig)
   const [editorTheme, setEditorTheme] = useState<ExcelHostConfig['theme']>(config.theme)
   const nextWorkbookOrdinal = useRef(2)
-  const [tabs, setTabs] = useState<WorkbookTab[]>(() => [newWorkbookTab(readConfig(), 1)])
-  const [activeTabId, setActiveTabId] = useState<string | null>(() => tabs[0]?.tabId ?? null)
+  const [workspace] = useState(() => {
+    const tab = newWorkbookTab(readConfig(), 1)
+    return createExcelWorkspace({ sessionId: config.sessionId, tabs: [tab], activeTabId: tab.tabId })
+  })
+  const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getState)
+  const { activate: setActiveTabId, updateTab, runtime } = workspace
+  const workspaceLifetimeRef = useRef(0)
   const [recoveryLoaded, setRecoveryLoaded] = useState(false)
+  const [recoveryFailure, setRecoveryFailure] = useState<RecoveryFailure>(null)
+  const [recoveryAttempt, setRecoveryAttempt] = useState(0)
+  const [recoveryRestoring, setRecoveryRestoring] = useState(true)
+  const [recovery] = useState(() => createExcelRecoveryPersistence<IWorkbookData>({
+    sessionId: config.sessionId,
+    api,
+    onStatusChange: (state) => {
+      if (state.status === 'error') {
+        setRecoveryFailure({ kind: 'write', message: state.error?.message ?? 'Recovery write failed.' })
+      } else if (state.status === 'saved') {
+        setRecoveryFailure((current) => current?.kind === 'write' ? null : current)
+      }
+    },
+  }))
   const [ribbonTab, setRibbonTab] = useState<ExcelRibbonTab>('home')
   const [selection, setSelection] = useState<SheetSelectionState>({
     address: 'A1', sheetId: '', sheetName: 'Sheet1', targetAddress: 'A1', value: '',
@@ -1194,6 +211,38 @@ export function ExcelHostApp() {
     [activeTabId, tabs],
   )
   const effectiveConfig = useMemo(() => ({ ...config, theme: editorTheme }), [config, editorTheme])
+  const executeWorkspaceOperation = useCallback((
+    capability: string,
+    documentId: string | null,
+    apply: (context: OfficeOperationContext) => void | Promise<void>,
+  ) => runtime.execute({ sessionId: config.sessionId, capability, documentId }, apply).then((result) => {
+    if (!result.ok && result.error.code !== 'runtime_disposed') setError(result.error.message)
+    return result
+  }), [config.sessionId, runtime])
+  const flushActiveEditor = useCallback(async (assertCurrent: () => void) => {
+    const activeId = workspace.getState().activeTabId
+    const editor = editorRef.current
+    if (!activeId || !editor || editor.documentId !== activeId) return
+    await editor.flush()
+    assertCurrent()
+    if (workspace.getState().activeTabId !== activeId || editorRef.current !== editor) {
+      throw new OfficeOperationError('document_not_ready', 'The workbook editor was replaced while committing its current cell.')
+    }
+  }, [workspace])
+
+  useEffect(() => {
+    const lifetime = ++workspaceLifetimeRef.current
+    const currentLifetime = workspaceLifetimeRef
+    return () => {
+      // StrictMode replays effects without replacing the Session workspace.
+      queueMicrotask(() => {
+        if (currentLifetime.current === lifetime) {
+          runtime.dispose()
+          recovery.dispose()
+        }
+      })
+    }
+  }, [recovery, runtime])
 
   useEffect(() => api.onConfigChanged((next) => {
     if (next.sessionId === config.sessionId) {
@@ -1208,25 +257,26 @@ export function ExcelHostApp() {
 
   useEffect(() => {
     let disposed = false
-    void api.getRecoveryState().then((value) => {
+    void recovery.restore().then((result) => {
       if (disposed) return
-      const recovered = recoveryState(value)
-      if (recovered) {
-        setTabs(recovered.tabs)
-        setActiveTabId(recovered.tabs.some((tab) => tab.tabId === recovered.activeTabId)
-          ? recovered.activeTabId
-          : recovered.tabs[0]?.tabId ?? null)
+      if (result.status === 'failed') {
+        setRecoveryFailure({ kind: 'restore', message: result.error.message })
+        return
+      }
+      if (result.status === 'restored') {
+        const recovered = result.value
+        workspace.replace(recovered.tabs, recovered.activeTabId)
         nextWorkbookOrdinal.current = recovered.nextWorkbookOrdinal
       }
-    }).catch((cause) => {
-      if (!disposed) setError(errorMessage(cause))
+      setRecoveryFailure(null)
+      setRecoveryLoaded(true)
     }).finally(() => {
-      if (!disposed) setRecoveryLoaded(true)
+      if (!disposed) setRecoveryRestoring(false)
     })
     return () => {
       disposed = true
     }
-  }, [api])
+  }, [recovery, recoveryAttempt, workspace])
 
   useEffect(() => {
     document.documentElement.dataset.theme = editorTheme
@@ -1254,21 +304,20 @@ export function ExcelHostApp() {
 
   useEffect(() => {
     if (!recoveryLoaded) return
-    const timeout = window.setTimeout(() => {
-      const state: ExcelRecoveryState = {
+    const scheduleRecovery = () => {
+      const state = workspace.getState()
+      recovery.schedule({
         version: 1,
-        tabs,
-        activeTabId,
+        tabs: state.tabs,
+        activeTabId: state.activeTabId,
         nextWorkbookOrdinal: nextWorkbookOrdinal.current,
-      }
-      void api.setRecoveryState(state).catch((cause) => setError(errorMessage(cause)))
-    }, 250)
-    return () => window.clearTimeout(timeout)
-  }, [activeTabId, api, recoveryLoaded, tabs])
-
-  const updateTab = useCallback((tabId: string, update: (current: WorkbookTab) => WorkbookTab) => {
-    setTabs((current) => current.map((tab) => tab.tabId === tabId ? update(tab) : tab))
-  }, [])
+      })
+    }
+    const unsubscribe = workspace.subscribe(scheduleRecovery)
+    scheduleRecovery()
+    // The native child can synchronously publish its last accepted mutation during cleanup.
+    return () => { queueMicrotask(unsubscribe) }
+  }, [recovery, recoveryLoaded, workspace])
 
   const markDirty = useCallback((tabId: string, snapshot: IWorkbookData) => {
     updateTab(tabId, (current) => ({
@@ -1285,43 +334,52 @@ export function ExcelHostApp() {
   const importOpenedWorkbook = useCallback(async (
     document: ExcelDocumentHandle,
     replaceInitialBlank: boolean,
+    assertCurrent: () => void,
   ) => {
     const snapshot = await importXlsx(document.bytes, univerLocale(config))
+    assertCurrent()
+    await flushActiveEditor(assertCurrent)
     const tab = openedWorkbookTab(document, snapshot)
-    setTabs((current) => (
+    const current = workspace.getState().tabs
+    workspace.replace(
       replaceInitialBlank
       && current.length === 1
       && current[0] !== undefined
       && isPristineInitialWorkbook(current[0])
         ? [tab]
-        : [...current, tab]
-    ))
-    setActiveTabId(tab.tabId)
-  }, [config])
+        : [...current, tab],
+      tab.tabId,
+    )
+  }, [config, flushActiveEditor, workspace])
 
   const addBlankTab = () => {
-    setFormulaDialog(null)
-    const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
-    nextWorkbookOrdinal.current += 1
-    setTabs((current) => [...current, tab])
-    setActiveTabId(tab.tabId)
-    setError(null)
+    void executeWorkspaceOperation('document.create', null, async (context) => {
+      await flushActiveEditor(context.assertCurrent)
+      setFormulaDialog(null)
+      setInsertDialog(null)
+      const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
+      nextWorkbookOrdinal.current += 1
+      workspace.replace([...workspace.getState().tabs, tab], tab.tabId)
+      setError(null)
+    })
   }
 
-  const openWorkbook = async () => {
+  const openWorkbook = () => executeWorkspaceOperation('document.open', null, async (context) => {
     setFormulaDialog(null)
+    setInsertDialog(null)
     setBusy('opening')
     setError(null)
     try {
       const result = await api.open()
       if (result.canceled) return
-      await importOpenedWorkbook(result.document, false)
+      await importOpenedWorkbook(result.document, false, context.assertCurrent)
     } catch (cause) {
-      setError(`${copy.openFailed}: ${errorMessage(cause)}`)
+      if (cause instanceof OfficeOperationError) throw cause
+      throw new Error(`${copy.openFailed}: ${errorMessage(cause)}`)
     } finally {
       setBusy(null)
     }
-  }
+  })
 
 
   useEffect(() => {
@@ -1331,105 +389,130 @@ export function ExcelHostApp() {
     externalWorkbookOpenPendingRef.current = true
     queueMicrotask(() => {
       setPendingWorkbookOpenTickets((current) => current.slice(1))
-      setFormulaDialog(null)
-      setBusy('opening')
-      setError(null)
-      void api.openRequestedWorkbook(ticket.requestId).then(async (result) => {
-        if (!result.canceled) await importOpenedWorkbook(result.document, ticket.replaceInitialBlank)
-      }).catch((cause) => {
-        setError(`${copy.openFailed}: ${errorMessage(cause)}`)
+      void executeWorkspaceOperation('document.open', null, async (context) => {
+        setFormulaDialog(null)
+        setInsertDialog(null)
+        setBusy('opening')
+        setError(null)
+        try {
+          const result = await api.openRequestedWorkbook(ticket.requestId)
+          if (!result.canceled) await importOpenedWorkbook(result.document, ticket.replaceInitialBlank, context.assertCurrent)
+        } catch (cause) {
+          if (cause instanceof OfficeOperationError) throw cause
+          throw new Error(`${copy.openFailed}: ${errorMessage(cause)}`)
+        } finally {
+          setBusy(null)
+        }
       }).finally(() => {
         externalWorkbookOpenPendingRef.current = false
-        setBusy(null)
       })
     })
   }, [
     api,
     busy,
     copy.openFailed,
+    executeWorkspaceOperation,
     importOpenedWorkbook,
     pendingWorkbookOpenTickets,
     recoveryLoaded,
   ])
 
-  const persistWorkbook = useCallback(async (tab: WorkbookTab, saveAs: boolean) => {
-    const snapshot = tab.tabId === activeTabId
-      ? editorRef.current?.snapshot() ?? tab.snapshot
-      : tab.snapshot
-    const savedChangeVersion = tab.changeVersion
-    setBusy('saving')
-    setError(null)
-    try {
-      const incompatible = unsupportedWorkbookFeatures(snapshot)
-      const featureList = incompatible.join(', ')
-      if (incompatible.length > 0 && !saveAs) {
-        setError(copy.lossyOverwrite.replace('{features}', featureList))
-        return
-      }
-      if (incompatible.length > 0 && saveAs
-        && !window.confirm(copy.lossySaveAs.replace('{features}', featureList))) return
-      const bytes = await exportXlsx(snapshot, { allowLossy: saveAs })
-      const result = saveAs || !tab.documentId || tab.mtimeMs === null
-        ? await api.saveAs({ bytes, suggestedName: tab.fileName })
-        : await api.save({
-          documentId: tab.documentId,
-          bytes,
-          expectedMtimeMs: tab.mtimeMs,
+  const persistWorkbook = useCallback((requestedTab: WorkbookTab, saveAs: boolean) => (
+    executeWorkspaceOperation(saveAs ? 'document.saveAs' : 'document.save', requestedTab.tabId, async (context) => {
+      if (workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
+      const state = workspace.getState()
+      const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)!
+      const snapshot = tab.tabId === state.activeTabId && editorRef.current?.documentId === tab.tabId
+        ? editorRef.current?.snapshot() ?? tab.snapshot
+        : tab.snapshot
+      const savedChangeVersion = tab.changeVersion
+      setBusy('saving')
+      setError(null)
+      try {
+        const incompatible = unsupportedWorkbookFeatures(snapshot)
+        const outcome = await writeExcelWorkbookSource({
+          api,
+          tab,
+          saveAs,
+          conflictMessage: copy.saveConflict,
+          assertCurrent: context.assertCurrent,
+          prepare: async () => {
+            const featureList = incompatible.join(', ')
+            if (incompatible.length > 0 && !saveAs) {
+              throw new OfficeOperationError('unsupported_format', copy.lossyOverwrite.replace('{features}', featureList))
+            }
+            if (incompatible.length > 0 && saveAs
+              && !window.confirm(copy.lossySaveAs.replace('{features}', featureList))) return null
+            return exportXlsx(snapshot, { allowLossy: saveAs })
+          },
         })
-      if (!result.ok) {
-        if (result.reason === 'conflict') setError(copy.saveConflict)
-        return
-      }
-      updateTab(tab.tabId, (current) => {
-        const changedWhileSaving = current.changeVersion !== savedChangeVersion
-        const savedSnapshot = incompatible.length > 0 && saveAs
-          ? clearUnsupportedWorkbookFeatures(snapshot)
-          : snapshot
-        return {
-          ...current,
+        if (outcome.status === 'canceled') return
+        if (outcome.status === 'conflict') throw new OfficeOperationError('source_conflict', outcome.message)
+        if (outcome.status === 'failed') {
+          const message = outcome.error.code === 'unsupported_format'
+            ? outcome.error.message
+            : `${copy.saveFailed}: ${outcome.error.message}`
+          throw new OfficeOperationError(outcome.error.code, message)
+        }
+        const result = outcome.value
+        context.assertCurrent()
+        updateTab(tab.tabId, (current) => completeExcelWorkbookSave(current, {
+          changeVersion: savedChangeVersion,
           documentId: result.documentId,
           fileName: result.fileName,
-          snapshot: changedWhileSaving ? current.snapshot : savedSnapshot,
           mtimeMs: result.mtimeMs,
-          dirty: changedWhileSaving,
-        }
-      })
-    } catch (cause) {
-      setError(`${copy.saveFailed}: ${errorMessage(cause)}`)
-    } finally {
-      setBusy(null)
-    }
-  }, [
-    activeTabId,
+          snapshot: incompatible.length > 0 && saveAs
+            ? clearUnsupportedWorkbookFeatures(snapshot)
+            : snapshot,
+        }))
+      } catch (cause) {
+        if (cause instanceof OfficeOperationError) throw cause
+        throw new Error(`${copy.saveFailed}: ${errorMessage(cause)}`)
+      } finally {
+        setBusy(null)
+      }
+    })
+  ), [
     api,
     copy.lossyOverwrite,
     copy.lossySaveAs,
     copy.saveConflict,
     copy.saveFailed,
+    executeWorkspaceOperation,
+    flushActiveEditor,
     updateTab,
+    workspace,
   ])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 's' || !activeTab) return
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 's' || !activeTab || !recoveryLoaded) return
       event.preventDefault()
       void persistWorkbook(activeTab, event.shiftKey)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [activeTab, persistWorkbook])
+  }, [activeTab, persistWorkbook, recoveryLoaded])
 
-  const closeTab = (tab: WorkbookTab) => {
-    if (tab.dirty && !window.confirm(copy.closeUnsaved)) return
-    setFormulaDialog(null)
-    if (tabs.length === 1) {
-      void api.closeSession().catch((cause) => setError(errorMessage(cause)))
-      return
-    }
-    const index = tabs.findIndex((candidate) => candidate.tabId === tab.tabId)
-    const nextActive = tabs[index + 1] ?? tabs[index - 1] ?? null
-    setTabs((current) => current.filter((candidate) => candidate.tabId !== tab.tabId))
-    if (activeTabId === tab.tabId) setActiveTabId(nextActive?.tabId ?? null)
+  const closeTab = (requestedTab: WorkbookTab) => {
+    void executeWorkspaceOperation('document.close', requestedTab.tabId, async (context) => {
+      if (workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
+      const state = workspace.getState()
+      const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)!
+      if (tab.dirty && !window.confirm(copy.closeUnsaved)) return
+      setFormulaDialog(null)
+      setInsertDialog(null)
+      if (state.tabs.length === 1) {
+        await api.closeSession()
+        return
+      }
+      const index = state.tabs.findIndex((candidate) => candidate.tabId === tab.tabId)
+      const nextActive = state.tabs[index + 1] ?? state.tabs[index - 1] ?? null
+      workspace.replace(
+        state.tabs.filter((candidate) => candidate.tabId !== tab.tabId),
+        state.activeTabId === tab.tabId ? nextActive?.tabId ?? null : state.activeTabId,
+      )
+    })
   }
 
   const reportActionFailure = useCallback((cause: unknown) => {
@@ -1443,6 +526,31 @@ export function ExcelHostApp() {
     }
     setError(errorMessage(cause))
   }, [config.locale])
+  const runEditorOperation = useCallback((
+    apply: (editor: SheetEditorHandle) => void | Promise<void>,
+    capability = 'document.edit',
+    documentId = workspace.getState().activeTabId,
+  ) => {
+    let failure: unknown
+    return workspace.executeEditor({
+      capability,
+      documentId,
+      getEditor: () => editorRef.current,
+      apply: async (editor) => {
+        try {
+          await apply(editor)
+        } catch (cause) {
+          failure = cause
+          throw cause
+        }
+      },
+    }).then((result) => {
+      if (!result.ok && result.error.code !== 'runtime_disposed') {
+        reportActionFailure(failure ?? new OfficeOperationError(result.error.code, result.error.message))
+      }
+      return result
+    })
+  }, [reportActionFailure, workspace])
   const rememberRecentFunction = useCallback((name: string) => {
     setRecentFunctions((current) => {
       const next = rememberFormula(current, name)
@@ -1485,25 +593,21 @@ export function ExcelHostApp() {
     if ((action === 'insert-pivot-table' || action === 'insert-hyperlink') && value === undefined) {
       const context = editorRef.current?.insertContext(action === 'insert-pivot-table')
       if (!context) return
-      setInsertDialog({ kind: action === 'insert-pivot-table' ? 'pivot' : 'hyperlink', context })
+      if (!activeTabId) return
+      setInsertDialog({ kind: action === 'insert-pivot-table' ? 'pivot' : 'hyperlink', context, tabId: activeTabId })
       return
     }
-    void editorRef.current?.run(action, value).catch(reportActionFailure)
-  }, [activeTabId, reportActionFailure, selection])
+    void runEditorOperation(
+      (editor) => editor.run(action, value),
+      action === 'undo' || action === 'redo' ? `document.${action}` : 'document.edit',
+    )
+  }, [activeTabId, runEditorOperation, selection])
   const selectFormulaRange = useCallback((address: string) => {
-    try {
-      editorRef.current?.selectRange(address)
-    } catch (cause) {
-      setError(errorMessage(cause))
-    }
-  }, [])
+    void runEditorOperation((editor) => editor.selectRange(address))
+  }, [runEditorOperation])
   const setFormulaBarValue = useCallback((value: string) => {
-    try {
-      editorRef.current?.setFormulaBarValue(value)
-    } catch (cause) {
-      setError(errorMessage(cause))
-    }
-  }, [])
+    void runEditorOperation((editor) => editor.setFormulaBarValue(value))
+  }, [runEditorOperation])
 
   return (
     <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-bg-surface text-text-primary">
@@ -1511,7 +615,7 @@ export function ExcelHostApp() {
         activeId={activeTabId}
         icon={<span className="flex shrink-0 text-emerald-600 dark:text-emerald-400">{Icons.spreadsheet(16)}</span>}
         label={copy.documentTabs}
-        newDisabled={busy !== null}
+        newDisabled={!recoveryLoaded || busy !== null}
         newLabel={copy.new}
         onClose={(id) => {
           const tab = tabs.find((item) => item.tabId === id)
@@ -1519,10 +623,14 @@ export function ExcelHostApp() {
         }}
         onCreate={addBlankTab}
         onSelect={(id) => {
-          setFormulaDialog(null)
-          setActiveTabId(id)
+          void executeWorkspaceOperation('document.activate', id, async (context) => {
+            if (workspace.getState().activeTabId !== id) await flushActiveEditor(context.assertCurrent)
+            setFormulaDialog(null)
+            setInsertDialog(null)
+            setActiveTabId(id)
+          })
         }}
-        tabs={tabs.map((tab) => ({
+        tabs={(recoveryLoaded ? tabs : []).map((tab) => ({
           id: tab.tabId,
           label: tab.fileName,
           closeLabel: `${copy.close}: ${tab.fileName}`,
@@ -1534,7 +642,7 @@ export function ExcelHostApp() {
       {activeTab ? (
         <ExcelRibbon
           activeTab={ribbonTab}
-          disabled={busy !== null}
+          disabled={!recoveryLoaded || busy !== null}
           locale={config.locale}
           onAction={runRibbonAction}
           onActiveTabChange={setRibbonTab}
@@ -1554,6 +662,32 @@ export function ExcelHostApp() {
         </div>
       ) : null}
 
+      {recoveryFailure ? (
+        <div className="flex shrink-0 items-start gap-2 border-b border-status-error/20 bg-status-error/10 px-3 py-2 text-xs text-status-error" role="alert">
+          <span className="min-w-0 flex-1 break-words">
+            {recoveryFailure.kind === 'restore' ? copy.recoveryReadFailed : copy.recoveryWriteFailed}
+          </span>
+          <button
+            className="shrink-0 font-medium underline underline-offset-2 disabled:opacity-40"
+            disabled={recoveryRestoring}
+            onClick={() => {
+              if (recoveryFailure.kind === 'restore') {
+                setRecoveryRestoring(true)
+                setRecoveryAttempt((attempt) => attempt + 1)
+                return
+              }
+              setRecoveryRestoring(true)
+              void recovery.flush().catch((cause) => {
+                setRecoveryFailure({ kind: 'write', message: errorMessage(cause) })
+              }).finally(() => setRecoveryRestoring(false))
+            }}
+            type="button"
+          >
+            {copy.retryRecovery}
+          </button>
+        </div>
+      ) : null}
+
       {notice ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-12 z-[9998] flex justify-center px-4" role="status">
           <div className="pointer-events-auto flex max-w-sm items-center gap-2 rounded-lg border border-status-warning/25 bg-bg-surface px-3 py-2 text-[11px] text-text-secondary shadow-xl">
@@ -1564,11 +698,12 @@ export function ExcelHostApp() {
         </div>
       ) : null}
 
-      {activeTab ? (
+      {activeTab && recoveryLoaded ? (
         <UniverSheetEditor
           key={`${activeTab.tabId}:${activeTab.revision}`}
           ref={editorRef}
           config={effectiveConfig}
+          documentId={activeTab.tabId}
           onActionFailure={reportActionFailure}
           onChange={handleEditorChange}
           onSelectionChange={setSelection}
@@ -1576,7 +711,8 @@ export function ExcelHostApp() {
           snapshot={activeTab.snapshot}
           viewPreferences={viewPreferences}
         />
-      ) : (
+      ) : null}
+      {!activeTab && recoveryLoaded ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
           <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600">{Icons.spreadsheet(30)}</span>
           <h1 className="text-sm font-semibold">{copy.emptyTitle}</h1>
@@ -1586,7 +722,7 @@ export function ExcelHostApp() {
             <HostButton label={copy.open} onClick={() => void openWorkbook()}>{Icons.folder(13)} {copy.open}</HostButton>
           </div>
         </div>
-      )}
+      ) : null}
 
       {insertDialog?.kind === 'hyperlink' ? (
         <ExcelHyperlinkDialog
@@ -1595,7 +731,7 @@ export function ExcelHostApp() {
           onCancel={() => setInsertDialog(null)}
           onConfirm={(options) => {
             setInsertDialog(null)
-            void editorRef.current?.run('insert-hyperlink', options).catch(reportActionFailure)
+            void runEditorOperation((editor) => editor.run('insert-hyperlink', options), 'document.edit', insertDialog.tabId)
           }}
         />
       ) : null}
@@ -1606,7 +742,7 @@ export function ExcelHostApp() {
           onCancel={() => setInsertDialog(null)}
           onConfirm={(options) => {
             setInsertDialog(null)
-            void editorRef.current?.run('insert-pivot-table', options).catch(reportActionFailure)
+            void runEditorOperation((editor) => editor.run('insert-pivot-table', options), 'document.edit', insertDialog.tabId)
           }}
         />
       ) : null}
@@ -1617,7 +753,9 @@ export function ExcelHostApp() {
           onCancel={() => setFormulaDialog(null)}
           onConfirm={(formula, name) => {
             if (formulaDialog.tabId !== activeTabId) return
-            editorRef.current?.setFormulaAt(formulaDialog.sheetId, formulaDialog.targetAddress, formula)
+            void runEditorOperation((editor) => {
+              editor.setFormulaAt(formulaDialog.sheetId, formulaDialog.targetAddress, formula)
+            }, 'document.edit', formulaDialog.tabId)
             rememberRecentFunction(name)
             setFormulaDialog(null)
           }}
@@ -1638,216 +776,6 @@ export function ExcelHostApp() {
     </main>
   )
 }
-
-const UniverSheetEditor = forwardRef<SheetEditorHandle, {
-  config: ExcelHostConfig
-  onActionFailure: (cause: unknown) => void
-  onChange: (snapshot: IWorkbookData) => void
-  onSelectionChange: (selection: SheetSelectionState) => void
-  onViewStateChange: (state: ExcelViewState) => void
-  snapshot: IWorkbookData
-  viewPreferences: ExcelViewPreferences
-}>(function UniverSheetEditor({ config, onActionFailure, onChange, onSelectionChange, onViewStateChange, snapshot, viewPreferences }, ref) {
-  const hostRef = useRef<HTMLDivElement>(null)
-  const univerRef = useRef<Univer | null>(null)
-  const apiRef = useRef<ReturnType<typeof createSheetsUniver>['univerAPI'] | null>(null)
-  const liveAnalysisRef = useRef<LiveAnalysisController | null>(null)
-  const sheetViewRef = useRef<SheetViewController | null>(null)
-  const formulaPreviewDepthRef = useRef(0)
-  const snapshotRef = useRef(snapshot)
-  const viewPreferencesRef = useRef(viewPreferences)
-  const configRef = useRef(config)
-
-  useEffect(() => {
-    configRef.current = config
-  }, [config])
-
-  useEffect(() => {
-    snapshotRef.current = snapshot
-  }, [snapshot])
-
-  useEffect(() => {
-    viewPreferencesRef.current = viewPreferences
-  }, [viewPreferences])
-
-  useEffect(() => {
-    apiRef.current?.toggleDarkMode(config.theme === 'dark')
-    sheetViewRef.current?.publish()
-  }, [config.theme])
-
-  useImperativeHandle(ref, () => ({
-    insertContext: (expandDataRegion) => {
-      const univerAPI = apiRef.current
-      return univerAPI ? insertContext(univerAPI, expandDataRegion) : null
-    },
-    previewFormula: (sheetId, address, formula) => {
-      const univer = univerRef.current
-      const univerAPI = apiRef.current
-      if (!univer || !univerAPI) return Promise.resolve({ errorCode: '#ERROR!' })
-      formulaPreviewDepthRef.current += 1
-      return calculateFormulaPreview(univer, univerAPI, sheetId, address, formula).finally(() => {
-        window.setTimeout(() => {
-          formulaPreviewDepthRef.current = Math.max(0, formulaPreviewDepthRef.current - 1)
-        }, 0)
-      })
-    },
-    run: (action, value) => {
-      const univerAPI = apiRef.current
-      if (!univerAPI) return Promise.resolve()
-      return runSheetAction(univerAPI, action, value, liveAnalysisRef.current, sheetViewRef.current)
-    },
-    selectRange: (address) => {
-      const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet()
-      if (!sheet || !address) return
-      sheet.setActiveRange(sheet.getRange(address))
-    },
-    setFormulaAt: (sheetId, address, formula) => {
-      const workbook = apiRef.current?.getActiveWorkbook()
-      const sheet = workbook?.getSheetBySheetId(sheetId)
-      if (!sheet) return
-      const selected = sheet.getRange(address)
-      const target = sheet.getRange(selected.getRow(), selected.getColumn())
-      sheet.activate()
-      target.setFormula(formula)
-      sheet.setActiveRange(target)
-    },
-    setFormulaBarValue: (value) => {
-      const workbook = apiRef.current?.getActiveWorkbook()
-      const sheet = workbook?.getActiveSheet()
-      if (!workbook || !sheet) return
-      const range = workbook.getActiveRange() ?? sheet.getRange('A1')
-      if (value.startsWith('=')) range.setFormula(value)
-      else {
-        const trimmed = value.trim()
-        const numericValue = trimmed === '' ? null : Number(trimmed)
-        range.setValue(numericValue !== null && Number.isFinite(numericValue) ? numericValue : value)
-      }
-    },
-    snapshot: () => apiRef.current?.getActiveWorkbook()?.getSnapshot() ?? snapshotRef.current,
-  }), [])
-
-  useEffect(() => {
-    const container = hostRef.current
-    if (!container) return
-    const currentConfig = configRef.current
-    const locale = univerLocale(currentConfig)
-    const { univer, univerAPI } = createSheetsUniver([
-      UniverSheetsCorePreset({
-        container,
-        ...EXCEL_SHEETS_UI_CONFIG,
-      }),
-      ...EXCEL_OPEN_SOURCE_FEATURES.map((feature) => openSourcePresetFactories[feature]()),
-    ], {
-      darkMode: currentConfig.theme === 'dark',
-      locale,
-      locales: {
-        [LocaleType.EN_US]: mergeLocales(
-          coreEnUS,
-          filterEnUS,
-          sortEnUS,
-          conditionalFormattingEnUS,
-          dataValidationEnUS,
-          drawingEnUS,
-          hyperLinkEnUS,
-        ),
-        [LocaleType.ZH_CN]: mergeLocales(
-          coreZhCN,
-          filterZhCN,
-          sortZhCN,
-          conditionalFormattingZhCN,
-          dataValidationZhCN,
-          drawingZhCN,
-          hyperLinkZhCN,
-        ),
-      },
-      theme: defaultTheme,
-    })
-    univerRef.current = univer
-    apiRef.current = univerAPI
-    univerAPI.createWorkbook(snapshotRef.current)
-    const liveAnalysis = createLiveAnalysisController(univerAPI, currentConfig.locale, onActionFailure)
-    const sheetView = new SheetViewController(
-      univer,
-      univerAPI,
-      viewPreferencesRef.current,
-      onViewStateChange,
-      onChange,
-    )
-    liveAnalysisRef.current = liveAnalysis
-    sheetViewRef.current = sheetView
-    let disposed = false
-    let snapshotPending = false
-    const publishSelection = () => {
-      const workbook = univerAPI.getActiveWorkbook()
-      const sheet = workbook?.getActiveSheet()
-      const range = workbook?.getActiveRange() ?? sheet?.getRange('A1')
-      if (!sheet || !range) return
-      const formula = range.getFormula()
-      const value = range.getValue()
-      onSelectionChange({
-        address: range.getA1Notation(),
-        sheetId: sheet.getSheetId(),
-        sheetName: sheet.getSheetName(),
-        targetAddress: sheet.getRange(range.getRow(), range.getColumn()).getA1Notation(),
-        value: formula || (value === null ? '' : String(value)),
-      })
-      sheetView.selectionChanged()
-    }
-    const publishSnapshot = () => {
-      if (snapshotPending) return
-      snapshotPending = true
-      queueMicrotask(() => {
-        snapshotPending = false
-        if (disposed) return
-        const current = univerAPI.getActiveWorkbook()?.getSnapshot()
-        if (current) onChange(current)
-      })
-    }
-    queueMicrotask(publishSelection)
-    const selectionChanged = univerAPI.addEvent(univerAPI.Event.SelectionChanged, publishSelection)
-    const activeSheetChanged = univerAPI.addEvent(univerAPI.Event.ActiveSheetChanged, publishSelection)
-    const zoomChanged = univerAPI.addEvent(univerAPI.Event.SheetZoomChanged, () => {
-      sheetView.publish()
-      publishSnapshot()
-    })
-    const valuesChanged = univerAPI.addEvent(univerAPI.Event.SheetValueChanged, (event) => {
-      liveAnalysis?.schedule(event.effectedRanges.map((range) => ({
-        range: range.getRange(),
-        sheetId: range.getSheetId(),
-      })))
-      publishSelection()
-      publishSnapshot()
-    })
-    const workbookChanged = univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
-      const structureChange = liveStructureChange(event.id, event.params)
-      if (structureChange) liveAnalysis?.structureChanged(structureChange)
-      if (event.type === CommandType.MUTATION && formulaPreviewDepthRef.current === 0) publishSnapshot()
-    })
-    const observer = new ResizeObserver(() => {
-      univerAPI.getActiveWorkbook()?.getActiveSheet()?.refreshCanvas()
-    })
-    observer.observe(container)
-    return () => {
-      disposed = true
-      observer.disconnect()
-      activeSheetChanged.dispose()
-      selectionChanged.dispose()
-      zoomChanged.dispose()
-      valuesChanged.dispose()
-      workbookChanged.dispose()
-      liveAnalysis?.dispose()
-      liveAnalysisRef.current = null
-      sheetView.dispose()
-      sheetViewRef.current = null
-      univerRef.current = null
-      apiRef.current = null
-      univer.dispose()
-      container.replaceChildren()
-    }
-  }, [config.locale, onActionFailure, onChange, onSelectionChange, onViewStateChange])
-
-  return <div className="min-h-0 min-w-0 flex-1 overflow-hidden" ref={hostRef} data-testid="excel-univer-host" />
-})
 
 function HostButton({ children, disabled, label, onClick }: {
   children: ReactNode

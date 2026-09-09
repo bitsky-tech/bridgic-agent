@@ -15,17 +15,12 @@ import type {
 import { clampZoomLevel, type GuiSettings } from '@app/shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { windowLog } from './logger'
+import { OfficeSessionContainer, type OfficeSessionRecord } from './office-session-container'
 
-const DEFAULT_OPERATIONAL_BOUNDS: Rectangle = { x: 0, y: 0, width: 1280, height: 800 }
 const MAX_OPEN_PRESENTATION_BYTES = 250 * 1024 * 1024
 
-interface EmbeddedPowerPointSurface {
-  sessionId: string
-  view: WebContentsView
-  targetId: string | null
+interface EmbeddedPowerPointSurface extends OfficeSessionRecord {
   loading: boolean
-  crashed: boolean
-  ready: Promise<void>
   openingFilesByPath: Map<string, Promise<EmbeddedPowerPointOpenFileResult>>
 }
 
@@ -34,49 +29,53 @@ type ViewLoader = (view: WebContentsView, sessionId: string) => Promise<void>
 
 /** Owns one PowerPoint renderer/CDP target for every Agent Session. */
 export class EmbeddedPowerPointManager {
-  private host: BrowserWindow | null = null
-  private readonly surfaces = new Map<string, EmbeddedPowerPointSurface>()
-  private activeSessionId: string | null = null
-  private bounds: Rectangle = { ...DEFAULT_OPERATIONAL_BOUNDS }
-  private surfaceVisible = false
+  private readonly container: OfficeSessionContainer<EmbeddedPowerPointSurface>
 
   constructor(
     private readonly createView: ViewFactory,
     private readonly loadView: ViewLoader,
     private readonly onStateChanged: (snapshot: EmbeddedPowerPointSnapshot) => void = () => undefined,
-  ) {}
+  ) {
+    this.container = new OfficeSessionContainer({
+      label: 'PowerPoint',
+      onStateChanged: () => this.onStateChanged(this.snapshot()),
+      onError: (error, surface) => {
+        windowLog.warn(`[embedded-powerpoint] creation failed session=${surface.sessionId}`, error)
+      },
+    })
+  }
 
   snapshot(): EmbeddedPowerPointSnapshot {
-    return { sessions: [...this.surfaces.values()].map((surface) => this.infoFor(surface)) }
+    return { sessions: [...this.container.values()].map((surface) => this.infoFor(surface)) }
   }
 
   attachHost(host: BrowserWindow): void {
-    if (this.host === host) return
-    if (this.host) this.closeAll()
-    this.host = host
+    this.container.attachHost(host)
   }
 
   detachHost(host: BrowserWindow): void {
-    if (this.host !== host) return
-    this.closeAll()
-    this.host = null
+    this.container.detachHost(host)
   }
 
   async ensureSession(sessionId: string): Promise<EmbeddedPowerPointSessionInfo> {
     const id = this.normalizeSessionId(sessionId)
-    let surface = this.surfaces.get(id)
-    if (surface && (surface.crashed || surface.view.webContents.isDestroyed())) {
-      this.surfaces.delete(id)
-      this.disposeSurface(surface)
-      surface = undefined
-    }
-    if (!surface) surface = this.createSurface(id)
+    const surface = this.container.ensure(
+      id,
+      () => this.createSurface(id),
+      async (record) => {
+        await this.loadView(record.view, record.sessionId)
+        if (this.container.owns(record) && !record.view.webContents.isDestroyed()) {
+          record.loading = record.view.webContents.isLoading()
+        }
+      },
+      (record) => record.crashed,
+    )
     await surface.ready
     return this.infoFor(surface)
   }
 
   sessionInfo(sessionId: string): EmbeddedPowerPointSessionInfo | null {
-    const surface = this.surfaces.get(this.normalizeSessionId(sessionId))
+    const surface = this.container.get(this.normalizeSessionId(sessionId))
     return surface ? this.infoFor(surface) : null
   }
 
@@ -96,7 +95,7 @@ export class EmbeddedPowerPointManager {
       throw new Error('PowerPoint file is too large to open')
     }
     await this.ensureSession(id)
-    const surface = this.surfaces.get(id)
+    const surface = this.container.get(id)
     if (!surface) throw new Error(`PowerPoint Session is unavailable: ${id}`)
     const pending = surface.openingFilesByPath.get(canonicalPath)
     if (pending) return pending
@@ -112,57 +111,30 @@ export class EmbeddedPowerPointManager {
   }
 
   activateSession(sessionId: string | null): void {
-    if (sessionId === null) {
-      if (this.activeSessionId === null) return
-      this.activeSessionId = null
-      this.syncVisibility()
-      return
-    }
-    const id = this.normalizeSessionId(sessionId)
-    if (!this.surfaces.has(id)) throw new Error(`PowerPoint Session is unavailable: ${id}`)
-    if (this.activeSessionId === id) return
-    this.activeSessionId = id
-    this.syncVisibility()
+    this.container.activateSession(sessionId === null ? null : this.normalizeSessionId(sessionId))
   }
 
   closeSession(sessionId: string): void {
-    const id = this.normalizeSessionId(sessionId)
-    const surface = this.surfaces.get(id)
-    if (!surface) return
-    this.surfaces.delete(id)
-    if (this.activeSessionId === id) this.activeSessionId = null
-    this.disposeSurface(surface)
-    this.publishState()
+    this.container.closeSession(this.normalizeSessionId(sessionId))
   }
 
   setBounds(bounds: EmbeddedPowerPointBounds): void {
-    const next = this.normalizeBounds(bounds)
-    if (next.width === 0 || next.height === 0) return
-    if (sameRectangle(this.bounds, next)) return
-    this.bounds = next
-    this.syncVisibility()
+    this.container.setBounds(this.normalizeBounds(bounds))
   }
 
   setVisible(visible: boolean): void {
     if (typeof visible !== 'boolean') throw new TypeError('PowerPoint visible must be a boolean')
-    if (this.surfaceVisible === visible) return
-    this.surfaceVisible = visible
-    this.syncVisibility()
+    this.container.setVisible(visible)
   }
 
   closeAll(): void {
-    const surfaces = [...this.surfaces.values()]
-    this.surfaces.clear()
-    this.activeSessionId = null
-    this.surfaceVisible = false
-    for (const surface of surfaces) this.disposeSurface(surface)
-    this.publishState()
+    this.container.closeAll()
   }
 
   /** Keep dedicated PPT renderers aligned with the main App theme, locale, and zoom. */
   applySettings(settings: GuiSettings): void {
     const zoomLevel = clampZoomLevel(settings.zoomLevel)
-    for (const surface of this.surfaces.values()) {
+    for (const surface of this.container.values()) {
       const contents = surface.view.webContents
       if (contents.isDestroyed()) continue
       contents.setZoomLevel(zoomLevel)
@@ -171,8 +143,6 @@ export class EmbeddedPowerPointManager {
   }
 
   private createSurface(sessionId: string): EmbeddedPowerPointSurface {
-    const host = this.host
-    if (!host || host.isDestroyed()) throw new Error('main window is unavailable')
     const view = this.createView({
       webPreferences: {
         contextIsolation: true,
@@ -195,73 +165,21 @@ export class EmbeddedPowerPointManager {
       ready: Promise.resolve(),
       openingFilesByPath: new Map(),
     }
-    this.surfaces.set(sessionId, surface)
-    view.setBounds(this.bounds)
-    view.setVisible(false)
-    host.contentView.addChildView(view)
     view.webContents.setBackgroundThrottling(false)
     view.webContents.on('did-start-loading', () => {
+      if (!this.container.owns(surface)) return
       surface.loading = true
       this.publishState()
     })
     view.webContents.on('did-stop-loading', () => {
+      if (!this.container.owns(surface)) return
       surface.loading = false
       this.publishState()
     })
     view.webContents.on('render-process-gone', () => {
-      surface.crashed = true
-      this.publishState()
+      this.container.invalidate(surface)
     })
-    view.webContents.once('destroyed', () => {
-      if (this.surfaces.get(sessionId) !== surface) return
-      this.surfaces.delete(sessionId)
-      if (this.activeSessionId === sessionId) this.activeSessionId = null
-      this.publishState()
-    })
-    surface.ready = this.initializeSurface(surface)
-    void surface.ready.catch((error) => {
-      windowLog.warn(`[embedded-powerpoint] creation failed session=${sessionId}`, error)
-    })
-    this.publishState()
     return surface
-  }
-
-  private async initializeSurface(surface: EmbeddedPowerPointSurface): Promise<void> {
-    try {
-      await this.loadView(surface.view, surface.sessionId)
-      surface.targetId = await this.resolveTargetId(surface.view)
-      surface.loading = surface.view.webContents.isLoading()
-      if (
-        this.surfaces.get(surface.sessionId) !== surface
-        || surface.view.webContents.isDestroyed()
-      ) throw new Error(`PowerPoint Session closed during creation: ${surface.sessionId}`)
-      this.publishState()
-    } catch (error) {
-      if (this.surfaces.get(surface.sessionId) === surface) {
-        this.surfaces.delete(surface.sessionId)
-        this.disposeSurface(surface)
-        this.publishState()
-      }
-      throw error
-    }
-  }
-
-  private async resolveTargetId(view: WebContentsView): Promise<string> {
-    const contents = view.webContents
-    const attachedHere = !contents.debugger.isAttached()
-    if (attachedHere) contents.debugger.attach('1.3')
-    try {
-      const result = await contents.debugger.sendCommand('Target.getTargetInfo') as {
-        targetInfo?: { targetId?: unknown }
-      }
-      const targetId = result.targetInfo?.targetId
-      if (typeof targetId !== 'string' || !targetId) {
-        throw new Error('PowerPoint renderer returned no CDP target id')
-      }
-      return targetId
-    } finally {
-      if (attachedHere && contents.debugger.isAttached()) contents.debugger.detach()
-    }
   }
 
   private async openFileInSurface(
@@ -322,32 +240,6 @@ export class EmbeddedPowerPointManager {
     return response.value
   }
 
-  private syncVisibility(): void {
-    const host = this.host
-    for (const surface of this.surfaces.values()) {
-      const visible = Boolean(
-        host
-        && !host.isDestroyed()
-        && this.surfaceVisible
-        && this.activeSessionId === surface.sessionId,
-      )
-      if (visible) surface.view.setBounds(this.bounds)
-      surface.view.setVisible(visible)
-    }
-  }
-
-  private disposeSurface(surface: EmbeddedPowerPointSurface): void {
-    const host = this.host
-    if (host && !host.isDestroyed()) {
-      try {
-        host.contentView.removeChildView(surface.view)
-      } catch {
-        // The view may already have been removed with its native host.
-      }
-    }
-    if (!surface.view.webContents.isDestroyed()) surface.view.webContents.close()
-  }
-
   private infoFor(surface: EmbeddedPowerPointSurface): EmbeddedPowerPointSessionInfo {
     return {
       sessionId: surface.sessionId,
@@ -378,12 +270,6 @@ export class EmbeddedPowerPointManager {
   }
 
   private publishState(): void {
-    this.syncVisibility()
-    this.onStateChanged(this.snapshot())
+    this.container.publish()
   }
-}
-
-function sameRectangle(left: Rectangle, right: Rectangle): boolean {
-  return left.x === right.x && left.y === right.y
-    && left.width === right.width && left.height === right.height
 }

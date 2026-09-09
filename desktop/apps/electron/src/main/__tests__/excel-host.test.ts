@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events'
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, spyOn } from 'bun:test'
 import type { BrowserWindow, Rectangle, WebContentsView } from 'electron'
 import { ExcelHost } from '../excel-host'
 import { IPC } from '../../shared/ipc-channels'
+import { windowLog } from '../logger'
 
 class FakeDebugger {
   private attached = false
@@ -267,5 +268,43 @@ describe('ExcelHost Session target ownership', () => {
 
     expect(views[0]?.webContents.windowOpenHandler?.({ url: 'https://example.com/report' })).toEqual({ action: 'deny' })
     expect(opened).toEqual(['https://example.com/report'])
+  })
+
+  it('parks the hidden active Excel target and hides it when the Session is deactivated', async () => {
+    const { manager, views } = setup()
+    await manager.ensureSession('session-a', { sessionId: 'session-a', locale: 'en-US', theme: 'light' })
+    manager.setBounds({ x: 401.2, y: 49.5, width: 699.4, height: 600.2 })
+    manager.setVisible(true)
+    expect(views[0]!.boundsHistory.at(-1)).toEqual({ x: 401, y: 49, width: 700, height: 601 })
+    manager.setVisible(false)
+    expect(views[0]!.visibilityHistory.at(-1)).toBe(true)
+    expect(views[0]!.boundsHistory.at(-1)).toEqual({ x: -699, y: -600, width: 700, height: 601 })
+    manager.activateSession(null)
+    expect(views[0]!.visibilityHistory.at(-1)).toBe(false)
+    expect(manager.snapshot().sessions).toHaveLength(1)
+    manager.closeAll()
+  })
+
+  it('does not restore a recovery that finishes after its Session was closed and reopened', async () => {
+    const { manager, views } = setup()
+    const config = { sessionId: 'session-a', locale: 'en-US', theme: 'light' } as const
+    await manager.ensureSession('session-a', config)
+    let finishRecovery!: () => void
+    views[0]!.webContents.loadURL = () => new Promise<void>((resolve) => { finishRecovery = resolve })
+    views[0]!.webContents.emit('render-process-gone')
+    const recovering = manager.ensureSession('session-a', config)
+    manager.closeSession('session-a')
+    const reopened = await manager.ensureSession('session-a', config)
+    const warn = spyOn(windowLog, 'warn').mockImplementation(() => {})
+    try {
+      finishRecovery()
+      await expect(recovering).rejects.toThrow('closed during creation')
+    } finally {
+      warn.mockRestore()
+    }
+    expect(reopened.targetId).toBe('excel-target-2')
+    expect(manager.snapshot().sessions).toEqual([reopened])
+    expect(views[1]!.webContents.isDestroyed()).toBe(false)
+    manager.closeAll()
   })
 })

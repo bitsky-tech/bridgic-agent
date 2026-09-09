@@ -15,8 +15,8 @@ import type {
 } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { windowLog } from './logger'
+import { OfficeSessionContainer, type OfficeSessionRecord } from './office-session-container'
 
-const DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1280, height: 800 }
 const EXCEL_RENDERER_PATHNAME = '/excel.html'
 
 const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPreferences']> = {
@@ -34,27 +34,18 @@ const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPrefere
   backgroundThrottling: false,
 }
 
-interface ExcelHostRecord {
-  sessionId: string
+interface ExcelHostRecord extends OfficeSessionRecord {
   config: ExcelHostConfig
-  view: WebContentsView
-  targetId: string | null
-  crashed: boolean
   dirty: boolean
   recoveryState: unknown | null
   workbookOpenRequests: Map<string, string>
-  ready: Promise<void>
 }
 
 type ViewFactory = (options: WebContentsViewConstructorOptions) => WebContentsView
 
 /** Owns exactly one trusted Excel WebContentsView (and CDP target) per Agent Session. */
 export class ExcelHost {
-  private host: BrowserWindow | null = null
-  private readonly records = new Map<string, ExcelHostRecord>()
-  private activeSessionId: string | null = null
-  private bounds: Rectangle = { ...DEFAULT_BOUNDS }
-  private surfaceVisible = false
+  private readonly container: OfficeSessionContainer<ExcelHostRecord>
 
   constructor(
     private readonly createView: ViewFactory,
@@ -64,37 +55,45 @@ export class ExcelHost {
     private readonly onStateChanged: (snapshot: ExcelHostSnapshot) => void = () => undefined,
     private readonly confirmDiscardDirty: (count: number) => Promise<boolean> = async () => false,
     private readonly openExternal: (url: string) => void = () => undefined,
-  ) {}
+  ) {
+    this.container = new OfficeSessionContainer({
+      label: 'Excel',
+      visibility: 'park-active',
+      closeOptions: { waitForBeforeUnload: false },
+      onStateChanged: () => this.onStateChanged(this.snapshot()),
+      onError: (error, record) => {
+        windowLog.warn(`[excel-host] initialization failed session=${record.sessionId}`, error)
+      },
+    })
+  }
 
   snapshot(): ExcelHostSnapshot {
     return {
-      sessions: [...this.records.values()]
+      sessions: [...this.container.values()]
         .filter((record) => !record.view.webContents.isDestroyed())
         .map((record) => this.infoFor(record)),
     }
   }
 
   attachHost(host: BrowserWindow): void {
-    if (this.host === host) return
-    if (this.host) this.closeAll()
-    this.host = host
+    this.container.attachHost(host)
   }
 
   detachHost(host: BrowserWindow): void {
-    if (this.host !== host) return
-    this.closeAll()
-    this.host = null
+    this.container.detachHost(host)
   }
 
   /** Create the Session target once; subsequent calls only refresh presentation config. */
   async ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo> {
     const id = this.normalizeSessionId(sessionId)
     const nextConfig = this.normalizeConfig(id, config)
-    let record = this.records.get(id)
-    if (!record) record = this.createRecord(id, nextConfig)
-    else this.updateConfig(record, nextConfig)
-    if (this.activeSessionId === null) this.activeSessionId = id
-    this.syncVisibility()
+    const record = this.container.ensure(
+      id,
+      () => this.createRecord(id, nextConfig),
+      (current) => current.view.webContents.loadURL(this.rendererUrl(current.config)),
+    )
+    this.updateConfig(record, nextConfig)
+    if (this.container.activeSessionId === null) this.container.activateSession(id)
     await record.ready
     return this.infoFor(record)
   }
@@ -108,7 +107,7 @@ export class ExcelHost {
     const id = this.normalizeSessionId(sessionId)
     const normalizedRequest = this.normalizeWorkbookOpenRequest(request)
     await this.ensureSession(id, config)
-    const record = this.records.get(id)
+    const record = this.container.get(id)
     if (!record || record.view.webContents.isDestroyed()) {
       throw new Error(`Excel Session does not exist: ${id}`)
     }
@@ -134,21 +133,12 @@ export class ExcelHost {
   }
 
   closeSession(sessionId: string): void {
-    const id = this.normalizeSessionId(sessionId)
-    const record = this.records.get(id)
-    if (!record) return
-    this.records.delete(id)
-    if (this.activeSessionId === id) this.activeSessionId = null
-    this.disposeRecord(record)
-    this.syncVisibility()
-    this.publishState()
+    this.container.closeSession(this.normalizeSessionId(sessionId))
   }
 
   /** Close only the Session target owned by the requesting child renderer. */
   closeCurrentSession(webContentsId: number): void {
-    const record = [...this.records.values()].find(
-      (candidate) => candidate.view.webContents.id === webContentsId,
-    )
+    const record = this.container.forWebContents(webContentsId)
     if (!record) return
     this.closeSession(record.sessionId)
   }
@@ -178,42 +168,27 @@ export class ExcelHost {
   }
 
   async confirmClose(): Promise<boolean> {
-    const count = [...this.records.values()].filter((record) => record.dirty).length
+    const count = [...this.container.values()].filter((record) => record.dirty).length
     return count === 0 || this.confirmDiscardDirty(count)
   }
 
   activateSession(sessionId: string | null): void {
-    if (sessionId === null) {
-      this.activeSessionId = null
-      this.syncVisibility()
-      return
-    }
-    const id = this.normalizeSessionId(sessionId)
-    if (!this.records.has(id)) throw new Error(`Excel Session does not exist: ${id}`)
-    this.activeSessionId = id
-    this.syncVisibility()
+    const id = sessionId === null ? null : this.normalizeSessionId(sessionId)
+    if (id !== null && !this.container.get(id)) throw new Error(`Excel Session does not exist: ${id}`)
+    this.container.activateSession(id)
   }
 
   setBounds(bounds: EmbeddedBrowserBounds): void {
-    const next = this.normalizeBounds(bounds)
-    if (next.width === 0 || next.height === 0) return
-    this.bounds = next
-    this.syncVisibility()
+    this.container.setBounds(this.normalizeBounds(bounds))
   }
 
   setVisible(visible: boolean): void {
     if (typeof visible !== 'boolean') throw new TypeError('Excel surface visible must be a boolean')
-    this.surfaceVisible = visible
-    this.syncVisibility()
+    this.container.setVisible(visible)
   }
 
   closeAll(): void {
-    const records = [...this.records.values()]
-    this.records.clear()
-    this.activeSessionId = null
-    this.surfaceVisible = false
-    for (const record of records) this.disposeRecord(record)
-    this.publishState()
+    this.container.closeAll()
   }
 
   shutdown(): void {
@@ -221,8 +196,6 @@ export class ExcelHost {
   }
 
   private createRecord(sessionId: string, config: ExcelHostConfig): ExcelHostRecord {
-    const host = this.host
-    if (!host || host.isDestroyed()) throw new Error('main window is unavailable')
     const view = this.createView({
       webPreferences: { ...WEB_PREFERENCES, preload: this.preloadPath },
     })
@@ -237,39 +210,8 @@ export class ExcelHost {
       workbookOpenRequests: new Map(),
       ready: Promise.resolve(),
     }
-    this.records.set(sessionId, record)
     this.configureView(record)
-    view.setBounds(this.bounds)
-    view.setVisible(false)
-    host.contentView.addChildView(view)
-    view.webContents.once('destroyed', () => this.onDestroyed(record))
-    record.ready = this.initializeRecord(record)
-    void record.ready.catch((error) => {
-      windowLog.warn(`[excel-host] creation failed session=${sessionId}`, error)
-    })
-    this.syncVisibility()
-    this.publishState()
     return record
-  }
-
-  private async initializeRecord(record: ExcelHostRecord): Promise<void> {
-    try {
-      await record.view.webContents.loadURL(this.rendererUrl(record.config))
-      record.targetId = await this.resolveTargetId(record.view)
-      if (this.records.get(record.sessionId) !== record || record.view.webContents.isDestroyed()) {
-        throw new Error(`Excel Session closed during creation: ${record.sessionId}`)
-      }
-      record.crashed = false
-      this.publishState()
-    } catch (error) {
-      if (this.records.get(record.sessionId) === record) {
-        this.records.delete(record.sessionId)
-        if (this.activeSessionId === record.sessionId) this.activeSessionId = null
-        this.disposeRecord(record)
-        this.publishState()
-      }
-      throw error
-    }
   }
 
   private configureView(record: ExcelHostRecord): void {
@@ -291,14 +233,11 @@ export class ExcelHost {
       this.publishIfLive(record)
     })
     contents.on('render-process-gone', () => {
-      if (this.records.get(record.sessionId) !== record || contents.isDestroyed()) return
-      record.crashed = true
-      record.targetId = null
-      this.publishIfLive(record)
-      record.ready = this.initializeRecord(record)
-      void record.ready.catch((error) => {
-        windowLog.warn(`[excel-host] recovery failed session=${record.sessionId}`, error)
-      })
+      if (!this.container.owns(record) || contents.isDestroyed()) return
+      this.container.invalidate(record)
+      void this.container.reload(record, (current) => (
+        current.view.webContents.loadURL(this.rendererUrl(current.config))
+      ))
     })
   }
 
@@ -334,50 +273,6 @@ export class ExcelHost {
     }
   }
 
-  private onDestroyed(record: ExcelHostRecord): void {
-    if (this.records.get(record.sessionId) !== record) return
-    this.records.delete(record.sessionId)
-    if (this.activeSessionId === record.sessionId) this.activeSessionId = null
-    const host = this.host
-    if (host && !host.isDestroyed()) host.contentView.removeChildView(record.view)
-    this.syncVisibility()
-    this.publishState()
-  }
-
-  private disposeRecord(record: ExcelHostRecord): void {
-    record.view.setVisible(false)
-    const host = this.host
-    if (host && !host.isDestroyed()) host.contentView.removeChildView(record.view)
-    if (!record.view.webContents.isDestroyed()) {
-      record.view.webContents.close({ waitForBeforeUnload: false })
-    }
-  }
-
-  private syncVisibility(): void {
-    const operational = this.activeSessionId
-      ? this.records.get(this.activeSessionId) ?? null
-      : null
-    for (const record of this.records.values()) {
-      if (record.view.webContents.isDestroyed()) continue
-      if (record !== operational) {
-        record.view.setVisible(false)
-        record.view.setBounds(this.bounds)
-      }
-    }
-    if (!operational || operational.view.webContents.isDestroyed()) return
-    operational.view.setBounds(this.surfaceVisible ? this.bounds : this.parkedBounds())
-    operational.view.setVisible(true)
-  }
-
-  private parkedBounds(): Rectangle {
-    return {
-      x: 1 - this.bounds.width,
-      y: 1 - this.bounds.height,
-      width: this.bounds.width,
-      height: this.bounds.height,
-    }
-  }
-
   private infoFor(record: ExcelHostRecord): ExcelHostSessionInfo {
     const contents = record.view.webContents
     return {
@@ -391,35 +286,15 @@ export class ExcelHost {
   }
 
   private publishIfLive(record: ExcelHostRecord): void {
-    if (this.records.get(record.sessionId) === record) this.publishState()
+    if (this.container.owns(record)) this.publishState()
   }
 
   private publishState(): void {
-    this.onStateChanged(this.snapshot())
+    this.container.publish()
   }
 
   private recordForWebContents(webContentsId: number): ExcelHostRecord | null {
-    return [...this.records.values()].find(
-      (record) => record.view.webContents.id === webContentsId,
-    ) ?? null
-  }
-
-  private async resolveTargetId(view: WebContentsView): Promise<string> {
-    const debug = view.webContents.debugger
-    const attachedHere = !debug.isAttached()
-    if (attachedHere) debug.attach('1.3')
-    try {
-      const response = await debug.sendCommand('Target.getTargetInfo') as {
-        targetInfo?: { targetId?: unknown }
-      }
-      const targetId = response.targetInfo?.targetId
-      if (typeof targetId !== 'string' || targetId.length === 0) {
-        throw new Error('Electron did not return an Excel DevTools target id')
-      }
-      return targetId
-    } finally {
-      if (attachedHere && debug.isAttached()) debug.detach()
-    }
+    return this.container.forWebContents(webContentsId)
   }
 
   private normalizeConfig(sessionId: string, config: ExcelHostConfig): ExcelHostConfig {

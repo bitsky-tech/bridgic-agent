@@ -26,7 +26,7 @@ const {
 const { settingsAtom } = await import('@/atoms/settings')
 const { excelExpandedAtom } = await import('@/atoms/excel')
 const { materializeSessionAtom, newSessionAtom } = await import('@/atoms/sessions')
-const { wordExpandedAtom } = await import('@/atoms/word')
+const { wordHostSnapshotAtom } = await import('@/atoms/word')
 const { AppWorkspaceLayout } = await import('../AppWorkspaceLayout')
 
 describe('AppWorkspaceLayout Session dock composition', () => {
@@ -61,7 +61,10 @@ describe('AppWorkspaceLayout Session dock composition', () => {
 
     await act(async () => {
       store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Word)
-      store.set(wordExpandedAtom, true)
+      store.set(wordHostSnapshotAtom, { sessions: [{
+        sessionId, targetId: 'word-a', webContentsId: 3, loading: false, crashed: false,
+        documentCount: 1, persistenceStatus: 'saved', expanded: true,
+      }] })
     })
 
     expect(host.querySelector('[data-testid="workspace-center"]')?.parentElement?.className)

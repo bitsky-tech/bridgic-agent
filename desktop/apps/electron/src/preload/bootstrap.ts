@@ -117,6 +117,15 @@ const api: ElectronAPI = {
   word: {
     readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
   },
+  wordHost: {
+    snapshot: () => ipcRenderer.invoke(IPC.wordHost.snapshot),
+    ensureSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.ensureSession, sessionId),
+    openFile: (sessionId, request) => ipcRenderer.invoke(IPC.wordHost.openFile, sessionId, request),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.wordHost.setBounds, bounds),
+    setVisible: (visible, focusHost) => ipcRenderer.invoke(IPC.wordHost.setVisible, visible, focusHost),
+  },
   excelHost: {
     snapshot: () => ipcRenderer.invoke(IPC.excelHost.snapshot),
     ensureSession: (sessionId, config) =>
@@ -194,6 +203,9 @@ const api: ElectronAPI = {
       subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
     onExcelHostChanged: (callback) =>
       subscribe<ExcelHostSnapshot>(IPC.events.excelHostChanged, callback),
+    onWordHostChanged: (callback) => subscribe(IPC.events.wordHostChanged, callback),
+    onWordHostHideRequested: (callback) => subscribe(IPC.events.wordHostHideRequested, callback),
+    onWordHostExpandedChanged: (callback) => subscribe(IPC.events.wordHostExpandedChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },
 }
