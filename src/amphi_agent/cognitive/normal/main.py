@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
-from bridgic.amphibious import ActionStepResult, StepToolCall
+from bridgic.amphibious import ActionStepResult, OTARecord, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -19,7 +19,10 @@ from ...tools.powerpoint import RequestPresentation
 from ...tools.workflow import EditWorkflow, RequestRunWorkflow
 from ...tools.build import RequestBuild
 from ....amphi_service.i18n import backend_i18n
-from ..base import BaseThink
+from ....amphi_store import SessionTurnRecord, TurnStatus
+from ..base import BaseThink, render_input
+from ..build.base import BuildThink
+from ..workflow.base import WorkflowRunThink
 from ...security import Permission
 from ..register import cognitive_stage
 from ..presentation.base import PresentationThink
@@ -34,6 +37,285 @@ class MainThink(BaseThink):
     """Run ordinary conversation with the Main persona and entry policies."""
 
     persona: str = PERSONA
+
+    ############################################################################
+    # The agent design
+    ############################################################################
+    async def init_state(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_turn: Optional[SessionTurnRecord], agent: "AmphiAgent") -> None:
+        """Resolve entry confirmations and unfinished-work choices owned by Main."""
+        if previous_turn is None or previous_turn.status is not TurnStatus.AWAITING_HUMAN:
+            await super().init_state(ota_context, context, previous_turn, agent)
+            return
+        dump = previous_turn.ota_context_dump()
+        interaction = (dump.get("state") or {}).get("interaction") or {}
+        if not (
+            interaction.get("build_confirm") is True
+            or interaction.get("build_conflict") is True
+            or interaction.get("workflow_run_choice") is True
+        ):
+            await super().init_state(ota_context, context, previous_turn, agent)
+            return
+        rounds = dump.get("ota_record") or []
+        original_user_input = agent._renderable_user_input(previous_turn.user_input)
+
+        async def resume_build_confirm() -> None:
+            """Resume Main after the user accepts or declines a Build proposal."""
+            def field(name: str) -> Any:
+                if isinstance(ota_context.user_input, dict):
+                    return ota_context.user_input.get(name)
+                return getattr(ota_context.user_input, name, None)
+
+            pending = AwaitingBuildConfirm.model_validate(previous_turn.agent_state.get("interaction") or {})
+            ota_context.ota_record = [OTARecord.model_validate(record) for record in previous_turn.ota_records]
+            request = ota_context.ota_record[-1].action_result["results"][0]
+            input_type = field("type")
+            if input_type not in {None, "chat", "build_confirm"}:
+                raise RuntimeError("This Session is waiting for a Build confirmation.")
+            if input_type != "build_confirm":
+                user_message = render_input(ota_context.user_input).strip()
+                payload = request.get("tool_result")
+                payload = dict(payload) if isinstance(payload, dict) else pending.model_dump()
+                payload.update({
+                    "status": "not_answered",
+                    "user_message": user_message,
+                    "message": (
+                        "The user replied to the entire Build confirmation card instead "
+                        f"of choosing an action: {user_message}"
+                    ),
+                })
+                request["tool_result"] = payload
+                ota_context.transition_interaction(None)
+                context.session = context.session.without_last()
+                ota_context.user_input = original_user_input
+                return
+            if field("request_id") != pending.request_id:
+                raise RuntimeError("This Build confirmation does not match the pending request.")
+
+            confirmed = field("action") == "confirm"
+            message = (
+                "The user chose to keep this as a one-off task. Continue the original request in Main."
+            )
+            if confirmed:
+                ota_context.transition_think(BuildStageState(stage="clarify"))
+                await BuildThink.sync_build_space(ota_context, context, create=True)
+                message = (
+                    "The user confirmed that this task should become a reusable Workflow. "
+                    "A new Build was created; clarify the Workflow definition."
+                )
+            request["tool_result"].update({
+                "status": "confirmed" if confirmed else "cancelled",
+                "message": message,
+            })
+
+            ota_context.transition_interaction(None)
+            context.session = context.session.without_last()
+            ota_context.user_input = original_user_input
+
+        async def resume_build_conflict() -> None:
+            """Apply a Build-domain choice or fold a free-form reply into Build Think."""
+            workspace = context.workspace
+            if workspace is None:
+                raise RuntimeError("Cannot resolve a Build conflict without a Workspace.")
+            ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
+
+            selected_action = self._choice_selection(
+                ota_context.user_input,
+                request_id=conflict.request_id,
+                questions=conflict.questions,
+                allowed={"keep", "merge", "replace_edit", "replace_new"},
+            )
+            user_message = (
+                self._option_label(conflict.questions, selected_action)
+                if selected_action is not None
+                else self._choice_reply_text(ota_context.user_input, conflict.questions)
+            )
+            if selected_action == "keep":
+                ota_context.transition_think(BuildStageState(
+                    stage=conflict.existing_stage,
+                    workflow_id=conflict.existing_workflow_id,
+                ))
+                await BuildThink.sync_build_space(ota_context, context)
+                action = "keep"
+                message = (
+                    "The user chose to continue the existing unfinished Build. Ignore the "
+                    "competing Build request that triggered this choice."
+                )
+            elif selected_action == "merge":
+                ota_context.transition_think(BuildStageState(
+                    stage="clarify",
+                    workflow_id=conflict.existing_workflow_id,
+                ))
+                await BuildThink.sync_build_space(ota_context, context)
+                action = "merge"
+                message = (
+                    "The user chose to merge the latest requirements into the unfinished "
+                    "Build. Clarify the combined task while preserving the existing Build files as context."
+                )
+            elif selected_action == "replace_edit":
+                await workspace.discard_build()
+                ota_context.transition_think(BuildStageState(
+                    stage="clarify",
+                    workflow_id=conflict.requested_workflow_id,
+                ))
+                await BuildThink.sync_build_space(ota_context, context, create=True)
+                action = "replace"
+                message = (
+                    "The user chose to discard the unfinished Build and restore the selected "
+                    "Workflow as the new editable Build."
+                )
+            elif selected_action == "replace_new":
+                ota_context.transition_think(BuildStageState(stage="clarify"))
+                await BuildThink.sync_build_space(ota_context, context, create=True)
+                action = "replace"
+                message = (
+                    "The user chose to discard the unfinished Build and start a clean Build "
+                    "from the latest request."
+                )
+            else:
+                ota_context.transition_think(BuildStageState(
+                    stage=conflict.existing_stage,
+                    workflow_id=conflict.existing_workflow_id,
+                ))
+                await BuildThink.sync_build_space(ota_context, context)
+                action = "not_answered"
+                message = (
+                    "The user replied to the entire unfinished-Build choice instead of "
+                    f"selecting an action: {user_message}"
+                )
+
+            request = None
+            for record in reversed(ota_context.ota_record):
+                steps = (record.action_result or {}).get("results") or []
+                request = next(
+                    (
+                        step
+                        for step in reversed(steps)
+                        if step.get("tool_name") == "request_build"
+                    ),
+                    None,
+                )
+                if request is not None:
+                    break
+            if request is not None:
+                payload = request.get("tool_result")
+                payload = dict(payload) if isinstance(payload, dict) else conflict.model_dump(mode="json")
+                payload.update({
+                    "status": "resolved" if action != "not_answered" else "not_answered",
+                    "action": action,
+                    "message": message,
+                    "response": user_message,
+                    **({"user_message": user_message} if action == "not_answered" else {}),
+                })
+                request["tool_result"] = payload
+            else:
+                ota_context.ota_record.append(OTARecord(observation_result=f"[build] {message}"))
+
+            ota_context.transition_interaction(None)
+            context.session = context.session.without_last()
+            ota_context.user_input = original_user_input
+
+        async def resume_workflow_run_choice() -> None:
+            """Apply the user's Run choice or fold a free-form reply back into Main."""
+            answer_input = ota_context.user_input
+            ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
+            context.session = context.session.without_last()
+            ota_context.user_input = original_user_input
+
+            selected_action = self._choice_selection(
+                answer_input,
+                request_id=choice.request_id,
+                questions=choice.questions,
+                allowed={"resume", "restart"},
+            )
+            user_message = (
+                self._option_label(choice.questions, selected_action)
+                if selected_action is not None
+                else self._choice_reply_text(answer_input, choice.questions)
+            )
+            action = "not_answered"
+            message = (
+                "The user replied to the unfinished-Run choice without selecting an "
+                f"action: {user_message}"
+            )
+            result_fields: Dict[str, Any] = {}
+            selected_workflow_id = (
+                choice.existing_workflow_id
+                if selected_action == "resume"
+                else choice.requested_workflow_id
+            )
+
+            if selected_action is not None:
+                try:
+                    source, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
+                        ota_context,
+                        context,
+                        selected_workflow_id,
+                        selected_action,
+                    )
+                    action = selected_action
+                    message = (
+                        "The user chose to resume the existing pinned Workflow Run."
+                        if selected_action == "resume"
+                        else (
+                            "The user chose to discard the unfinished Run and start a "
+                            "fresh Run from the currently saved Workflow."
+                        )
+                    )
+                    result_fields = {
+                        "workflow_id": source.workflow_id,
+                        "workflow_name": source.name,
+                        **WorkflowRunThink._workflow_sections(source),
+                        "resolved_action": resolved_action,
+                    }
+                except (RuntimeError, ValueError) as exc:
+                    action = "failed"
+                    message = (
+                        f"The selected Workflow Run action could not be applied: {exc}. "
+                        "The original unfinished Run was preserved."
+                    )
+                    ota_context.transition_think(NormalStageState())
+                    WorkflowRunThink._close_run_workflow_bindings(context)
+
+            request = None
+            for record in reversed(ota_context.ota_record):
+                steps = (record.action_result or {}).get("results") or []
+                request = next(
+                    (
+                        step
+                        for step in reversed(steps)
+                        if step.get("tool_name") == "request_run_workflow"
+                    ),
+                    None,
+                )
+                if request is not None:
+                    break
+            if request is not None:
+                payload = request.get("tool_result")
+                payload = dict(payload) if isinstance(payload, dict) else choice.model_dump(mode="json")
+                payload.update({
+                    "status": "resolved" if action in {"resume", "restart"} else action,
+                    "action": action,
+                    "message": message,
+                    "response": user_message,
+                    **result_fields,
+                    **({"user_message": user_message} if action == "not_answered" else {}),
+                })
+                request["tool_result"] = payload
+            else:
+                ota_context.ota_record.append(OTARecord(
+                    observation_result=f"[workflow re-entry] {message}",
+                ))
+
+            ota_context.transition_interaction(None)
+
+        if interaction.get("build_confirm") is True:
+            await resume_build_confirm()
+        elif interaction.get("build_conflict") is True:
+            conflict = AwaitingBuildConflict.model_validate(interaction)
+            await resume_build_conflict()
+        elif interaction.get("workflow_run_choice") is True:
+            choice = AwaitingWorkflowRunChoice.model_validate(interaction)
+            await resume_workflow_run_choice()
 
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Enter the requested specialized workflow from normal conversation."""
@@ -104,7 +386,7 @@ class MainThink(BaseThink):
                         "multiSelect": False,
                     }],
                 )
-                agent._close_build_bindings(context)
+                BuildThink.close_build_bindings(context)
                 return conflict
 
             result = step.tool_result
@@ -115,7 +397,7 @@ class MainThink(BaseThink):
                         stage="clarify",
                         workflow_id=workflow_id,
                     ))
-                    await agent._sync_build_space(ota_context, context, create=True)
+                    await BuildThink.sync_build_space(ota_context, context, create=True)
                     step.tool_result = {
                         "mode": "start",
                         "goal": result.goal,
@@ -243,7 +525,7 @@ class MainThink(BaseThink):
                 else:
                     workspace = context.workspace
                     retained = workspace.run_workflow_checkpoint() if workspace is not None else None
-                    source, resolved_action = await agent._enter_or_resume_run_workflow(
+                    source, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
                         ota_context,
                         context,
                         result.workflow_id,
@@ -252,7 +534,7 @@ class MainThink(BaseThink):
                     step.tool_result = {
                         "workflow_id": source.workflow_id,
                         "workflow_name": source.name,
-                        **agent._workflow_sections(source),
+                        **WorkflowRunThink._workflow_sections(source),
                         "status": resolved_action,
                         "reason": result.reason,
                     }
@@ -273,16 +555,16 @@ class MainThink(BaseThink):
                 return None
             if not workspace.has_build:
                 ota_context.transition_think(BuildStageState(stage="clarify", workflow_id=workflow_id))
-                await agent._sync_build_space(ota_context, context, create=True)
+                await BuildThink.sync_build_space(ota_context, context, create=True)
                 return None
 
             build = await workspace.prepare_build_space("resume")
             existing = BuildStageState(stage=build.stage, workflow_id=build.workflow_id)
             if existing.workflow_id != workflow_id:
-                agent._close_build_bindings(context)
+                BuildThink.close_build_bindings(context)
                 return existing
             ota_context.transition_think(existing)
-            await agent._sync_build_space(ota_context, context)
+            await BuildThink.sync_build_space(ota_context, context)
             return existing
 
         for step in getattr(ota_context.action_result, "results", None) or []:

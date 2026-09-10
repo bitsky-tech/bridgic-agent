@@ -30,6 +30,7 @@ from src.amphi_agent._state import (
     WorkflowStageState,
 )
 from src.amphi_agent._workspace import Workspace
+from src.amphi_agent._error import AgentResumeError
 from src.amphi_agent.tools.build import (
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
@@ -642,7 +643,7 @@ async def test_build_entry(orchestration: _Harness, legacy_pending: bool) -> Non
     Checks:
     1. An explicit reusable request enters Clarify and creates its durable Build workspace.
     2. A competing request becomes a user choice without replacing the retained Build.
-    3. Keeping the existing Build resolves the card and rebinds the retained workspace.
+    3. Main resolves its card; a legacy Build-owned card is rejected without changing retained work.
     """
     start = AmphiOTAContext(user_input="Create a reusable report workflow")
     entered = await _execute_call(orchestration, start, _call(
@@ -695,6 +696,16 @@ async def test_build_entry(orchestration: _Harness, legacy_pending: bool) -> Non
         "request_id": ask.interaction_status.request_id,
         "answers": [{"index": 0, "option_id": "keep"}],
     })
+    if legacy_pending:
+        checkpoint = orchestration.workspace.build_checkpoint()
+        with pytest.raises(AgentResumeError):
+            await orchestration.agent.init_state(resolved, orchestration.context)
+        assert resolved.think_status == BuildStageState(stage="clarify")
+        assert orchestration.context.session.get_all() == [pending]
+        assert orchestration.workspace.build_checkpoint() == checkpoint
+        assert retained_task.read_text(encoding="utf-8") == "# Task\n\nRetain this Build.\n"
+        assert _payload(ask, "request_build")["status"] == "pending"
+        return
     await orchestration.agent.init_state(resolved, orchestration.context)
 
     # Check 3: Keeping the first intent clears the conflict and resumes its durable stage.
@@ -1108,7 +1119,7 @@ async def test_run_entry(orchestration: _Harness, legacy_pending: bool, choice_a
 
     Checks:
     1. Starting a saved Workflow creates a pinned private Run and enters its first section.
-    2. Current and previously persisted cards resume the original input or restart with the initiating request.
+    2. Main resolves its card; legacy Run-owned cards are rejected without replacing the retained Run.
     """
     saved = await _save_workflow(orchestration, "run-entry")
     original_input = UserInput(
@@ -1158,6 +1169,16 @@ async def test_run_entry(orchestration: _Harness, legacy_pending: bool, choice_a
         "request_id": choice.request_id,
         "answers": [{"index": 0, "option_id": choice_action}],
     })
+    if legacy_pending:
+        checkpoint = orchestration.workspace.run_workflow_checkpoint()
+        with pytest.raises(AgentResumeError):
+            await orchestration.agent.init_state(resumed, orchestration.context)
+        assert resumed.think_status == started.think_status
+        assert orchestration.context.session.get_all() == [pending]
+        assert orchestration.workspace.run_workflow_checkpoint() == checkpoint
+        assert partial.read_text(encoding="utf-8") == "Retain this attempt unless restarted.\n"
+        assert _payload(ask, "request_run_workflow")["status"] == "pending"
+        return
     await orchestration.agent.init_state(resumed, orchestration.context)
 
     # Check 2: Resume retains the original input; Restart uses the request that opened the card.

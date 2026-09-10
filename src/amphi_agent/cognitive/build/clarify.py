@@ -1,15 +1,17 @@
 """Cognitive worker for clarifying Workflow Build requirements."""
 
 import re
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
-from bridgic.amphibious import StepToolCall
+from bridgic.amphibious import OTARecord, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
 from ...security import Permission
 from ..register import cognitive_stage
 from .base import BuildThink
+from ..base import render_input
+from ....amphi_store import SessionTurnRecord, TurnStatus
 from ..._tools import TOOL_LIBRARY
 from ..._state import CallVerdict, AwaitingTaskConfirm, BuildStageState
 from ...tools.build import RequestHumanTaskConfirm
@@ -39,6 +41,117 @@ class ClarifyThink(BuildThink):
     ############################################################################
     # The agent design
     ############################################################################
+    async def init_state(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_turn: Optional[SessionTurnRecord], agent: "AmphiAgent") -> None:
+        """Restore the Build and apply this stage's task-definition confirmation."""
+        if previous_turn is None or previous_turn.status is not TurnStatus.AWAITING_HUMAN:
+            await super().init_state(ota_context, context, previous_turn, agent)
+            return
+
+        interaction = (previous_turn.agent_state or {}).get("interaction") or {}
+        if "task_confirm" not in interaction:
+            await super().init_state(ota_context, context, previous_turn, agent)
+            return
+
+        await self.sync_build_space(ota_context, context)
+
+        async def _resume_task_confirm(ota_context: AmphiOTAContext, context: AmphiContext, pending_turn: SessionTurnRecord, original_user_input: Any) -> None:
+            """Resume Clarify after the user reviews the persisted task definition.
+
+            Parameters
+            ----------
+            ota_context : AmphiOTAContext
+                Current attempt carrying the dedicated confirmation response.
+            context : AmphiContext
+                Hydrated Session and Build workspace.
+            pending_turn : SessionTurnRecord
+                Awaiting Clarify Turn containing the original confirmation tool call.
+            original_user_input : Any
+                User input restored when the parked Turn resumes.
+            """
+            def field(name: str) -> Any:
+                if isinstance(ota_context.user_input, dict):
+                    return ota_context.user_input.get(name)
+                return getattr(ota_context.user_input, name, None)
+
+            pending = (pending_turn.agent_state.get("interaction") or {})["task_confirm"]
+            input_type = field("type")
+            if input_type not in {None, "chat", "task_confirm"}:
+                raise RuntimeError("This Session is waiting for a task confirmation.")
+            direct_reply = input_type != "task_confirm"
+            if not direct_reply and field("request_id") != pending["request_id"]:
+                raise RuntimeError("This task confirmation does not match the pending request.")
+            workspace = context.workspace
+            build = workspace.build if workspace is not None else None
+            if build is not None:
+                build.record_task_confirmation(
+                    str(pending["request_id"]),
+                    str(pending.get("task_markdown") or ""),
+                )
+
+            confirmed = not direct_reply and field("action") == "confirm"
+            feedback = (
+                render_input(ota_context.user_input).strip()
+                if direct_reply
+                else str(field("feedback") or "").strip()
+            )
+            if direct_reply:
+                message = (
+                    "The user replied to the entire task confirmation card instead "
+                    f"of choosing an action: {feedback}\n\n"
+                    "Incorporate the feedback directly into task.md and request task "
+                    "confirmation again."
+                )
+            elif confirmed:
+                message = (
+                    "The user confirmed task.md as the workflow's task definition. "
+                    "Continue to Explore."
+                )
+            elif feedback:
+                message = (
+                    f"The user requested these task.md revisions:\n\n{feedback}\n\n"
+                    "Incorporate the feedback directly and request task confirmation again."
+                )
+            else:
+                message = (
+                    "The user requested revisions to task.md without specific feedback. "
+                    "Ask what should change in the task definition before rewriting task.md."
+                )
+
+            ota_context.ota_record = [OTARecord.model_validate(record) for record in pending_turn.ota_records]
+            for record in reversed(ota_context.ota_record):
+                steps = (record.action_result or {}).get("results") or []
+                confirm = next((step for step in steps if step.get("tool_name") == "request_human_task_confirm"), None)
+                if confirm is not None:
+                    payload = confirm.get("tool_result")
+                    payload = dict(payload) if isinstance(payload, dict) else dict(pending)
+                    payload.update({
+                        "status": (
+                            "not_answered"
+                            if direct_reply
+                            else ("confirmed" if confirmed else "revision_requested")
+                        ),
+                        "feedback": feedback or None,
+                        **({"user_message": feedback} if direct_reply else {}),
+                        "message": message,
+                    })
+                    confirm["tool_result"] = payload
+                    break
+
+            if confirmed:
+                current = ota_context.think_status
+                next_status = (
+                    current.model_copy(update={"stage": "explore"})
+                    if isinstance(current, BuildStageState)
+                    else BuildStageState(stage="explore")
+                )
+                ota_context.transition_think(next_status)
+                await self.sync_build_space(ota_context, context)
+            ota_context.transition_interaction(None)
+            context.session = context.session.without_last()
+            ota_context.user_input = original_user_input
+
+        await _resume_task_confirm(ota_context, context, previous_turn, agent._renderable_user_input(previous_turn.user_input))
+
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Prepare this stage's confirmation payload and park for user review."""
         await super().handle_action_result(ota_context, context, agent)

@@ -4,7 +4,7 @@ import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall, ToolArgument
 from bridgic.amphibious._type import ThinkResult
 
-from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
 from src.amphi_agent._state import (
     AwaitingPresentationOutlineConfirm,
     AwaitingPresentationTemplateSelection,
@@ -32,6 +32,7 @@ from src.amphi_service.protocol import (
     StageEvent,
 )
 from src.amphi_service.runtime._session_events import SessionEventBroker
+from src.amphi_store import SessionTurnRecord, TurnStatus, UserInput
 from tests.agent.cognitive._harness import legality_reason
 
 
@@ -109,8 +110,27 @@ async def test_presentation_pipeline_switches_and_resumes() -> None:
             pass
         assert ota_context.think_status == expected
 
-    agent._resume_think_stage(ota_context, {"mode": "presentation", "stage": "ppt_review"})
-    assert ota_context.think_status == PresentationStageState(stage="ppt_review")
+    review = PresentationStageState(stage="ppt_review", goal="Explain the strategy", step_index=1)
+    ota_context.transition_think(review)
+    previous_turn = SessionTurnRecord(
+        id="presentation-review-turn",
+        user_id="local",
+        session_id="presentation-session",
+        session_ordinal=0,
+        user_input=UserInput.from_runtime("Review the strategy presentation."),
+        ota_records=[record.model_dump(mode="json") for record in ota_context.ota_record],
+        agent_state=ota_context.state.model_dump(mode="json"),
+        status=TurnStatus.COMPLETED,
+    )
+    context.session = Session(turns=[previous_turn])
+    resumed = AmphiOTAContext(user_input="Continue reviewing the remaining slides.")
+
+    await agent.init_state(resumed, context)
+
+    assert resumed.think_status == review
+    assert resumed.user_input == "Continue reviewing the remaining slides."
+    assert resumed.ota_record == []
+    assert context.session.get_all() == [previous_turn]
 
 
 def test_presentation_continue_prompt_matches_the_current_cursor() -> None:

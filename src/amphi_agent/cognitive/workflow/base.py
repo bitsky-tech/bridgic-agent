@@ -1,6 +1,8 @@
 """Shared context, tools, and legality checks for saved Workflow stages."""
 
 import json
+from pathlib import Path
+from uuid import uuid4
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from bridgic.amphibious import StepToolCall
@@ -16,7 +18,8 @@ from ..._state import CallVerdict, NormalStageState, WorkflowStageState
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 from ...tools.workflow import WorkflowStepReport
-from ....amphi_store import WorkflowRunStatus
+from ..._workspace import RunWorkflowState
+from ....amphi_store import SessionTurnRecord, UserInput, WorkflowRunStatus
 
 if TYPE_CHECKING:
     from ..._agent import AmphiAgent
@@ -31,6 +34,17 @@ class WorkflowRunThink(BaseThink):
     ############################################################################
     # The agent design
     ############################################################################
+    async def init_state(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_turn: Optional[SessionTurnRecord], agent: "AmphiAgent") -> None:
+        """Restore the durable Run cursor before resuming its parked interaction."""
+        if isinstance(ota_context.think_status, WorkflowStageState):
+            projected = await self._hydrate_run_workflow(ota_context.think_status, context)
+            if projected is None:
+                ota_context.transition_think(NormalStageState())
+            else:
+                ota_context.transition_think(projected)
+                await self._settle_workflow_boundary(ota_context, context, agent)
+        await super().init_state(ota_context, context, previous_turn, agent)
+
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Apply a Workflow section report or an explicit exit from its active Run."""
         await super().handle_action_result(ota_context, context, agent)
@@ -49,13 +63,13 @@ class WorkflowRunThink(BaseThink):
                     )
                 ota_context.transition_think(NormalStageState())
                 agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
-                agent._close_run_workflow_bindings(context)
+                self._close_run_workflow_bindings(context)
 
             elif step.tool_name == "report_workflow_step":
                 result = step.tool_result
                 current_status = ota_context.think_status
                 if isinstance(result, WorkflowStepReport) and isinstance(current_status, WorkflowStageState):
-                    source = agent._workflow_source(current_status, context)
+                    source = self._workflow_source(current_status, context)
                     stage_steps = source.steps(current_status.stage)
                     current_step = stage_steps[current_status.step_index]
                     workspace = context.workspace
@@ -106,12 +120,12 @@ class WorkflowRunThink(BaseThink):
                         "step_number": current_step.index,
                         "step_count": len(stage_steps),
                         "title": current_step.title,
-                        **agent._workflow_sections(source),
+                        **self._workflow_sections(source),
                         "status": result.status,
                         "summary": reported_summary,
                         "evidence": result.evidence,
                     }
-                    agent._publish_workflow_progress(
+                    self._publish_workflow_progress(
                         ota_context,
                         context,
                         current_status,
@@ -126,7 +140,7 @@ class WorkflowRunThink(BaseThink):
                             f"(`{current_step.title}`): {reported_summary}"
                         )
                         try:
-                            published = await agent._publish_workflow_run(
+                            published = await self._publish_workflow_run(
                                 context,
                                 current_status,
                                 status=WorkflowRunStatus.FAILED,
@@ -149,10 +163,11 @@ class WorkflowRunThink(BaseThink):
                             "created_at": published.created_at.isoformat(),
                             "published_result_dir": str(published.result_dir.resolve()),
                         }
-                        await agent._finish_workflow_run(
+                        await self._finish_workflow_run(
                             ota_context,
                             context,
                             current_status,
+                            agent,
                             generation=current_status.generation,
                             summary=terminal_summary,
                             published=published,
@@ -165,7 +180,7 @@ class WorkflowRunThink(BaseThink):
                             step_index=state.step_index,
                         )
                         ota_context.transition_think(next_status)
-                        published = await agent._settle_workflow_boundary(ota_context, context)
+                        published = await self._settle_workflow_boundary(ota_context, context, agent)
                         if published is not None:
                             step.tool_result = {
                                 **step.tool_result,
@@ -174,6 +189,398 @@ class WorkflowRunThink(BaseThink):
                                 "created_at": published.created_at.isoformat(),
                                 "published_result_dir": str(published.result_dir.resolve()),
                             }
+
+    @staticmethod
+    def _close_run_workflow_bindings(context: AmphiContext) -> None:
+        """Unbind the Run Space and its active Run and Workflow package."""
+        if context.workspace is not None:
+            context.workspace.close_run_workflow_space()
+        if context.workflow_runs is not None:
+            context.workflow_runs.close_run_workflow()
+        if context.workflows is not None:
+            context.workflows.close_package()
+
+    @classmethod
+    async def _open_run_workflow(cls, context: AmphiContext) -> Any:
+        """Bind the active Space, Run artifacts, and pinned Workflow package."""
+        workspace = context.workspace
+        workflows = context.workflows
+        workflow_runs = context.workflow_runs
+        if workspace is None or workflows is None or workflow_runs is None:
+            raise RuntimeError("No Workflow runtime context is available.")
+        space = await workspace.prepare_run_workflow_space("resume")
+        try:
+            run = workflow_runs.open_run_workflow(space.root)
+            workflows.open_package(
+                run.source_dir,
+                workflow_id=space.workflow_id,
+                name=space.workflow_name,
+                validate=True,
+            )
+        except BaseException:
+            cls._close_run_workflow_bindings(context)
+            raise
+        return space
+
+    @classmethod
+    def _workflow_source(cls, status: WorkflowStageState, context: AmphiContext) -> Any:
+        """Return the pinned package addressed by a Workflow cognitive state."""
+        workspace = context.workspace
+        workflows = context.workflows
+        workflow_runs = context.workflow_runs
+        state = workspace.run_workflow if workspace is not None else None
+        if state is None or workflows is None or workflow_runs is None:
+            raise RuntimeError("No active Workflow Run is bound to this cognitive mode.")
+        run = workflow_runs.require_run_workflow(state.root)
+        source = workflows.require_package(run.source_dir)
+        if (
+            state.workflow_id != status.workflow_id
+            or state.generation != status.generation
+            or state.stage != status.stage
+            or state.step_index != status.step_index
+        ):
+            raise RuntimeError("Workflow cognitive state does not match `.run/.state.json`.")
+        return source
+
+    @classmethod
+    async def _enter_or_resume_run_workflow(
+        cls,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        workflow_id: str,
+        action: str,
+    ) -> tuple[Any, str]:
+        """Enter, resume, or atomically restart the Workspace-owned Run."""
+        if context.session.is_child:
+            raise RuntimeError("Child Sessions cannot control Workflow Runs.")
+        workflows = context.workflows
+        workflow_runs = context.workflow_runs
+        workspace = context.workspace
+        if (
+            workflows is None
+            or workflow_runs is None
+            or workspace is None
+            or not context.session.id
+        ):
+            raise RuntimeError("No Workflow runtime context is available.")
+
+        async def create() -> Any:
+            stored_input = UserInput.from_runtime(ota_context.user_input)
+            await workflow_runs.require_completed_references(stored_input)
+            async with workflows.guarded_source(workflow_id) as saved:
+                if saved.workflow_id is None:
+                    raise ValueError("A saved Workflow requires a stable id")
+                initial_state = RunWorkflowState(
+                    workflow_id=saved.workflow_id,
+                    generation=uuid4().hex,
+                    workflow_name=(saved.name or saved.workflow_id).strip(),
+                    workflow_input=stored_input,
+                )
+
+                def populate(root: Path) -> None:
+                    workflow_runs.populate_run_workflow(root, saved.root)
+
+                await workspace.prepare_run_workflow_space(
+                    "create",
+                    initial_state=initial_state,
+                    populate=populate,
+                )
+            await cls._open_run_workflow(context)
+            return workflows.require_package()
+
+        active = workspace.run_workflow_checkpoint()
+        if active is None:
+            if action != "start":
+                raise ValueError(
+                    f"This Session has no unfinished Workflow Run for action `{action}`; "
+                    "use `start`."
+                )
+            source = await create()
+            resolved_action = "started"
+        else:
+            if action == "start":
+                raise ValueError(
+                    "This Session already owns an unfinished Workflow Run; "
+                    "use `resume` or `restart`."
+                )
+            if action == "resume":
+                if active.workflow_id != workflow_id:
+                    raise ValueError(
+                        f"Cannot resume `{workflow_id}` because the unfinished Run belongs "
+                        f"to `{active.workflow_id}`."
+                    )
+                await cls._open_run_workflow(context)
+                source = workflows.require_package()
+                resolved_action = "resumed"
+            elif action == "restart":
+                source = await create()
+                resolved_action = "restarted"
+            else:
+                raise ValueError(f"Unsupported Workflow Run action: {action!r}")
+
+        state = workspace.run_workflow
+        if state is None:
+            raise RuntimeError("Workflow Run space was not bound after entering the Run.")
+        await workflows.associate_session(context.session.id, state.workflow_id)
+        await workflow_runs.load_referenced(state.workflow_input)
+        ota_context.transition_think(WorkflowStageState(
+            workflow_id=state.workflow_id,
+            generation=state.generation,
+            stage=state.stage,
+            step_index=state.step_index,
+        ))
+        return source, resolved_action
+
+    @classmethod
+    async def _hydrate_run_workflow(cls, status: WorkflowStageState, context: AmphiContext) -> Optional[WorkflowStageState]:
+        """Project the authoritative `.run/.state.json` cursor into cognition."""
+        workspace = context.workspace
+        workflows = context.workflows
+        workflow_runs = context.workflow_runs
+        if workflows is None or workflow_runs is None or workspace is None:
+            raise RuntimeError("No Workflow runtime context is available.")
+        if not workspace.has_run_workflow:
+            cls._close_run_workflow_bindings(context)
+            return None
+        try:
+            state = await cls._open_run_workflow(context)
+            source = workflows.require_package()
+            if (
+                status.workflow_id != state.workflow_id
+                or status.generation != state.generation
+            ):
+                raise RuntimeError("Workflow cognitive state does not match the active Run.")
+            steps = source.steps(state.stage)
+            if state.step_index > len(steps):
+                raise RuntimeError(
+                    f"Workflow Run state points outside {state.stage} sections."
+                )
+        except BaseException:
+            cls._close_run_workflow_bindings(context)
+            raise
+        await workflow_runs.load_referenced(state.workflow_input)
+        return WorkflowStageState(
+            workflow_id=state.workflow_id,
+            generation=state.generation,
+            stage=state.stage,
+            step_index=state.step_index,
+        )
+
+    @classmethod
+    def _workflow_remaining_units(cls, status: Any, context: AmphiContext) -> int:
+        """Return the remaining section count for the per-turn dispatch budget."""
+        if not isinstance(status, WorkflowStageState):
+            return 0
+        try:
+            source = cls._workflow_source(status, context)
+        except (RuntimeError, ValueError):
+            return 0
+        remaining = len(source.steps(status.stage)) - status.step_index
+        return max(remaining + 1, 1)
+
+    @classmethod
+    def _publish_workflow_progress(
+        cls,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        status: WorkflowStageState,
+        progress: str,
+        summary: Optional[str] = None,
+        *,
+        source: Optional[Any] = None,
+    ) -> None:
+        """Publish the current section through the typed Session event channel."""
+        stream = getattr(ota_context, "stream", None)
+        if stream is None:
+            return
+        source = source or cls._workflow_source(status, context)
+        steps = source.steps(status.stage)
+        if status.step_index == len(steps):
+            return
+        step = steps[status.step_index]
+        stream.publish(
+            "workflow_progress",
+            workflow_id=source.workflow_id,
+            generation=status.generation,
+            workflow_name=source.name,
+            phase=status.stage,
+            step_index=status.step_index,
+            step_count=len(steps),
+            title=step.title,
+            **cls._workflow_sections(source),
+            status=progress,
+            summary=summary,
+        )
+
+    @staticmethod
+    def _workflow_sections(source: Any) -> Dict[str, List[str]]:
+        """Return the serialized execution section titles."""
+        return {
+            "execution_steps": [step.title for step in source.execution_steps],
+        }
+
+    @classmethod
+    async def _publish_workflow_run(cls, context: AmphiContext, expected: WorkflowStageState, *, status: WorkflowRunStatus) -> Any:
+        """Validate an active terminal boundary and publish its immutable result."""
+        workflow_runs = context.workflow_runs
+        workspace = context.workspace
+        space = workspace.run_workflow if workspace is not None else None
+        if workflow_runs is None or space is None:
+            raise RuntimeError("Cannot save a Workflow Run without its result library.")
+        source = cls._workflow_source(expected, context)
+        run = workflow_runs.require_run_workflow(space.root)
+        if (
+            space.workflow_id != expected.workflow_id
+            or space.generation != expected.generation
+            or space.stage != expected.stage
+            or space.step_index != expected.step_index
+        ):
+            raise RuntimeError("Workflow cognitive state does not match `.run/.state.json`.")
+
+        if status is WorkflowRunStatus.FAILED:
+            failure = run.result_dir / "failure.md"
+            if failure.is_symlink() or not failure.is_file():
+                raise ValueError("Failed Run Workflow requires a durable failure report")
+        elif space.step_index != len(source.execution_steps):
+            raise ValueError("Run Workflow execution has not reached its completion boundary")
+
+        return await workflow_runs.publish_run_workflow(
+            result_id=workflow_runs.terminal_result_id(
+                context.session.id,
+                space.generation,
+            ),
+            workflow_id=space.workflow_id,
+            workflow_name=space.workflow_name,
+            source_session_id=context.session.id,
+            workflow_input=space.workflow_input,
+            status=status,
+        )
+
+    @classmethod
+    async def _settle_workflow_boundary(cls, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> Optional[Any]:
+        """Advance or publish a Workflow whose durable cursor is at a boundary.
+
+        Returns
+        -------
+        WorkflowRun, optional
+            The published terminal Run when this call completed it.
+
+        Notes
+        -----
+        The durable ``.run/.state.json`` cursor is authoritative. This method
+        therefore also settles Runs left at an execution completion boundary
+        when terminal publication is interrupted.
+        """
+        status = ota_context.think_status
+        if not isinstance(status, WorkflowStageState):
+            return None
+        source = cls._workflow_source(status, context)
+        steps = source.steps(status.stage)
+        if status.step_index < len(steps):
+            return None
+        if status.step_index > len(steps):
+            raise RuntimeError(
+                f"Workflow Run state points outside {status.stage} sections."
+            )
+
+        published = await cls._publish_workflow_run(
+            context,
+            status,
+            status=WorkflowRunStatus.COMPLETED,
+        )
+        terminal_summary = (
+            f"Workflow `{published.workflow_name}` completed all execution sections successfully."
+        )
+        await cls._finish_workflow_run(
+            ota_context,
+            context,
+            status,
+            agent,
+            generation=status.generation,
+            summary=terminal_summary,
+            published=published,
+        )
+        return published
+
+    @staticmethod
+    def _stamp_workflow_result(ota_context: AmphiOTAContext, summary: str, published: Any, result_file_count: int) -> None:
+        """Add one structured Workflow terminal result to the persisted trace."""
+        record = ota_context._current_record()
+        existing = getattr(record, "observation_result", None)
+        note = f"{summary} Saved result id: `{published.run_id}`."
+        record.observation_result = f"{existing}\n[workflow] {note}" if existing else f"[workflow] {note}"
+        record.workflow_result = {
+            "run_id": published.run_id,
+            "workflow_id": published.workflow_id,
+            "workflow_name": published.workflow_name,
+            "status": published.status.value,
+            "created_at": published.created_at.isoformat(),
+            "result_file_count": result_file_count,
+            "summary": summary,
+        }
+
+    @classmethod
+    async def _finish_workflow_run(
+        cls,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        status: WorkflowStageState,
+        agent: "AmphiAgent",
+        *,
+        generation: str,
+        summary: str,
+        published: Any,
+    ) -> None:
+        """Close one already-persisted Run and return cognition to Main."""
+        workspace = context.workspace
+        if workspace is None:
+            raise RuntimeError("Cannot close a Workflow Run without its Workspace.")
+        deleted = await workspace.discard_run_workflow(
+            expected_generation=generation,
+        )
+        if not deleted and workspace.has_run_workflow:
+            raise RuntimeError(
+                "The saved Workflow Run was replaced before its active snapshot could be removed."
+            )
+        # Intermediate work files are published for inspection and recovery, but
+        # the terminal card's result count remains the final-deliverable count.
+        result_file_count = len(published.result_files)
+        cls._stamp_workflow_result(
+            ota_context,
+            summary,
+            published,
+            result_file_count,
+        )
+        agent._stamp_published_directory_handoff(
+            ota_context,
+            publication=(
+                "The artifacts under .run/result and .run/background/work "
+                "were published under"
+            ),
+            published_directory=published.root,
+            relative_paths="Paths relative to .run are unchanged.",
+            temporary_workspace=".run",
+        )
+        stream = getattr(ota_context, "stream", None)
+        if stream is not None:
+            stream.publish(
+                "workflow_result",
+                run_id=published.run_id,
+                workflow_id=published.workflow_id,
+                workflow_name=published.workflow_name,
+                status=published.status.value,
+                created_at=published.created_at.isoformat(),
+                result_file_count=result_file_count,
+                summary=summary,
+            )
+        agent._stamp_mode_exit(
+            ota_context,
+            status,
+            summary,
+            retained=False,
+        )
+        cls._close_run_workflow_bindings(context)
+        ota_context.transition_think(NormalStageState())
 
     ############################################################################
     # Dynamic prompt assembly

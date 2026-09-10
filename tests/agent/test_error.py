@@ -8,6 +8,7 @@ import pytest
 from src.amphi_agent._error import (
     AgentEmptyAnswerError,
     AgentException,
+    AgentResumeError,
     ContextWindowExceededError,
     ImageProviderResponseError,
     PublicAgentError,
@@ -42,6 +43,42 @@ def test_agent_empty_answer_has_a_specific_safe_public_error() -> None:
         action="retry",
     )
     assert str(error) not in public.message
+
+
+@pytest.mark.parametrize("locale", ["en", "zh"])
+@pytest.mark.parametrize("wrapper_kind", ["direct", "cause", "original_exception", "group"])
+def test_resume_error_preserves_safe_localized_guidance_through_wrappers(locale: str, wrapper_kind: str) -> None:
+    error = AgentResumeError("Worker private-stage cannot resume request private-request-id")
+    if wrapper_kind == "cause":
+        wrapped = RuntimeError("Framework invocation failed")
+        wrapped.__cause__ = error
+    elif wrapper_kind == "original_exception":
+        wrapped = RuntimeError("Worker invocation failed")
+        wrapped.original_exception = error
+    elif wrapper_kind == "group":
+        wrapped = ExceptionGroup("Task group failed", [error])
+    else:
+        wrapped = error
+
+    with use_locale(locale):
+        public = PublicAgentError.from_exception(wrapped)
+
+    assert isinstance(error, AgentException)
+    assert public == PublicAgentError(
+        code="resume_unavailable",
+        message=backend_i18n.text("agent.error.resume_unavailable", locale=locale),
+        retryable=True,
+        action="retry",
+    )
+    assert "private-stage" not in public.message
+    assert "private-request-id" not in public.message
+
+
+def test_resume_error_classification_does_not_capture_io_failures() -> None:
+    public = PublicAgentError.from_exception(OSError("Cannot resume interaction: private file is unreadable"))
+
+    assert public.code == "internal_error"
+    assert "private file" not in public.message
 
 
 def test_context_limit_unwraps_framework_error_without_exposing_provider_details() -> None:
@@ -191,6 +228,7 @@ def test_all_localized_agent_errors_avoid_internal_jargon() -> None:
     message_ids = (
         "agent.error.context_too_large",
         "agent.error.empty_answer",
+        "agent.error.resume_unavailable",
         "agent.error.image_input_invalid",
         "agent.error.model_not_found",
         "agent.error.quota_exhausted",

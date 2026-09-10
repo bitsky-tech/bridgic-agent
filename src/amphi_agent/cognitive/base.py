@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from bridgic.amphibious import CognitiveWorker, StepToolCall
+from bridgic.amphibious import CognitiveWorker, OTARecord, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -28,7 +28,7 @@ from .._context import (
     ContextUsageSnapshot,
     _view,
 )
-from .._error import ContextWindowExceededError
+from .._error import AgentResumeError, ContextWindowExceededError
 from ..prompts.compaction import (
     COMPACTION_SYSTEM_PROMPT,
     render_session_compaction_prompt,
@@ -41,6 +41,7 @@ from .._state import (
     AwaitingFeedback,
     AwaitingSubAgent,
     SubAgentCall,
+    SubAgentsCompleted,
     CallVerdict,
     ContextCompactionState,
     TurnCompactionState,
@@ -249,6 +250,108 @@ class BaseThink(CognitiveWorker):
     ############################################################################
     # The agent design
     ############################################################################
+    async def init_state(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_turn: Optional[SessionTurnRecord], agent: "AmphiAgent") -> None:
+        """Resume shared requests or reject an unsupported pending interaction.
+
+        Specialized workers handle their own interactions before delegating here.
+        """
+        if previous_turn is None or previous_turn.status.is_terminal:
+            return
+        if previous_turn.status is TurnStatus.AWAITING_PERMISSION:
+            return
+        dump = previous_turn.ota_context_dump()
+        state = dump.get("state") or {}
+        rounds = dump.get("ota_record") or []
+        original_user_input = agent._renderable_user_input(previous_turn.user_input)
+        if previous_turn.status is TurnStatus.AWAITING_SUBAGENTS:
+            subagent_state = state.get("subagents") or {}
+            if not isinstance(ota_context.user_input, SubAgentsCompleted):
+                raise RuntimeError("This Session is waiting for its Child Agents to finish.")
+            if not isinstance(subagent_state, dict) or not subagent_state:
+                raise RuntimeError("The pending Child Agent Turn has no Child Agent state.")
+            if not rounds:
+                raise RuntimeError("The pending Child Agent Turn has no resumable trace.")
+
+            def resume_subagents() -> None:
+                """Fold a settled Child batch into its held parent tool calls."""
+                def value(item: Any, name: str) -> Any:
+                    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+                def set_value(item: Any, name: str, value_: Any) -> None:
+                    if isinstance(item, dict):
+                        item[name] = value_
+                    else:
+                        setattr(item, name, value_)
+
+                awaiting = AwaitingSubAgent.model_validate(subagent_state)
+                completed = SubAgentsCompleted.model_validate(ota_context.user_input)
+
+                ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
+                steps_by_id = {}
+                for record in ota_context.ota_record:
+                    action = value(record, "action_result")
+                    for step in value(action, "results") or []:
+                        if value(step, "tool_name") == "run_subagent" and value(step, "tool_id"):
+                            steps_by_id[str(value(step, "tool_id"))] = step
+
+                results = {result.tool_call_id: result for result in completed.results}
+                if len(results) != len(completed.results):
+                    raise RuntimeError("Child completion results contain duplicate tool call ids.")
+                expected_call_ids = {call.tool_call_id for call in awaiting.calls}
+                if set(results) != expected_call_ids:
+                    raise RuntimeError("Child completion results do not match the pending Child calls.")
+                for call in awaiting.calls:
+                    step = steps_by_id.get(call.tool_call_id)
+                    result = results[call.tool_call_id]
+                    if step is None:
+                        raise RuntimeError(f"Child result for tool call {call.tool_call_id!r} has no held tool call.")
+                    if result.status == "completed":
+                        detail = result.answer or "(The sub-agent completed without an answer.)"
+                        tool_result = f"Sub-agent completed successfully.\n\n{detail}"
+                    else:
+                        detail = result.error or "No error details were provided."
+                        tool_result = f"Sub-agent ended with status `{result.status}`: {detail}"
+                    set_value(step, "tool_result", tool_result)
+                    set_value(step, "success", result.status == "completed")
+                    set_value(step, "error", result.error)
+
+                ota_context.transition_subagents(None)
+                context.session = context.session.without_last()
+                ota_context.user_input = original_user_input
+
+            resume_subagents()
+        elif previous_turn.status is TurnStatus.AWAITING_HUMAN and isinstance(ota_context.interaction_status, AwaitingFeedback):
+            interaction = state.get("interaction") or {}
+
+            def resume_human_choice() -> None:
+                ota_context.ota_record = [OTARecord.model_validate(r) for r in rounds]
+                questions = [q for q in interaction.get("questions") or [] if isinstance(q, dict)]
+                if self._input_value(ota_context.user_input, "type") == "choice_answer":
+                    expected_id = str(interaction.get("request_id") or "")
+                    if self._input_value(ota_context.user_input, "request_id") != expected_id:
+                        raise RuntimeError("This choice answer does not match the pending request.")
+                    reply = self._choice_reply_text(ota_context.user_input, questions)
+                else:
+                    reply = render_input(ota_context.user_input)
+                for rec in reversed(ota_context.ota_record):
+                    steps = (rec.action_result or {}).get("results") or []
+                    ask = next((s for s in steps if s.get("tool_name") == "request_human_choice"), None)
+                    if ask is not None:
+                        ask["tool_result"] = reply
+                        ota_context.transition_interaction(None)  # the held request human choice is resolved; clear it
+                        break
+                else:
+                    raise AgentResumeError("The pending human interaction has no matching request_human_choice call.")
+                context.session = context.session.without_last()
+                ota_context.user_input = original_user_input
+
+            resume_human_choice()
+        else:
+            raise AgentResumeError(
+                f"{type(self).__name__} cannot resume the pending "
+                f"{type(ota_context.interaction_status).__name__} interaction."
+            )
+
     async def thinking(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Dict[str, Any]], str]:
         # Persist the source cognitive scope before this round can switch state.
         status = ota_context.think_status
@@ -1683,5 +1786,88 @@ class BaseThink(CognitiveWorker):
             return mode, stage
         legacy_build_stage = str(_view(record, "build_stage") or "").strip()
         return ("build", legacy_build_stage) if legacy_build_stage else None
+
+    @staticmethod
+    def _input_value(user_input: Any, name: str) -> Any:
+        """Read one field from a dict or typed runtime input."""
+        if isinstance(user_input, dict):
+            return user_input.get(name)
+        return getattr(user_input, name, None)
+
+    @staticmethod
+    def _option_label(questions: List[dict], option_id: str) -> str:
+        """Return the persisted card's display label for ``option_id`` (or the id)."""
+        for question in questions:
+            if not isinstance(question, dict):
+                continue
+            for option in question.get("options") or []:
+                if isinstance(option, dict) and str(option.get("id") or "") == option_id:
+                    return str(option.get("label") or "") or option_id
+        return option_id
+
+    @classmethod
+    def _choice_selection(
+        cls,
+        user_input: Any,
+        *,
+        request_id: str,
+        questions: List[dict],
+        allowed: set[str],
+    ) -> Optional[str]:
+        """Return a structured ``choice_answer``'s stable option id, or ``None``.
+
+        Ids are the only channel that resolves to an action: a chat reply — even
+        one that quotes an option label or echoes the card question — always
+        returns ``None`` so the caller folds it back to the model instead of
+        guessing. Free-typed "other" text on the card (an answer without an
+        ``option_id``) is free-form too. A stale ``request_id`` or an option the
+        card never offered is a client bug and raises.
+        """
+        if cls._input_value(user_input, "type") != "choice_answer":
+            return None
+        if cls._input_value(user_input, "request_id") != request_id:
+            raise RuntimeError("This choice answer does not match the pending request.")
+        option_id = ""
+        for answer in cls._input_value(user_input, "answers") or []:
+            option_id = str(cls._input_value(answer, "option_id") or "")
+            if option_id:
+                break
+        if not option_id:
+            return None
+        offered = {
+            str(option.get("id") or "")
+            for question in questions
+            if isinstance(question, dict)
+            for option in question.get("options") or []
+            if isinstance(option, dict)
+        }
+        if option_id not in offered or option_id not in allowed:
+            raise RuntimeError(f"Option {option_id!r} is not offered by the pending card.")
+        return option_id
+
+    @classmethod
+    def _choice_reply_text(cls, user_input: Any, questions: List[dict]) -> str:
+        """Render a free-form card reply for fold-back to the model.
+
+        A chat reply renders as-is; a structured answer without option ids
+        renders its typed text, prefixed with the question for multi-question
+        asks so the question → answer mapping stays readable for the model.
+        """
+        if cls._input_value(user_input, "type") != "choice_answer":
+            return render_input(user_input).strip()
+        lines: List[str] = []
+        for answer in cls._input_value(user_input, "answers") or []:
+            option_id = str(cls._input_value(answer, "option_id") or "")
+            if option_id:
+                text = cls._option_label(questions, option_id)
+            else:
+                text = str(cls._input_value(answer, "text") or "").strip()
+            if not text:
+                continue
+            index = cls._input_value(answer, "index")
+            question = questions[index] if isinstance(index, int) and 0 <= index < len(questions) else None
+            prompt = str(question.get("question") or "").strip() if isinstance(question, dict) else ""
+            lines.append(f"{prompt}: {text}" if prompt else text)
+        return "\n".join(lines)
 
 __all__ = ["BaseThink", "render_input"]

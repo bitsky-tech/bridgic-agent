@@ -36,6 +36,10 @@ class AgentException(RuntimeError):
     """Base class for recognized failures produced by the Agent runtime."""
 
 
+class AgentResumeError(AgentException):
+    """Raised when the selected worker cannot resume a parked interaction."""
+
+
 class ImageProviderResponseError(AgentException):
     """Image-provider response failure with metadata for safe classification."""
 
@@ -150,6 +154,9 @@ class PublicAgentError:
         """Create one bounded, localized public failure from any exception."""
         chain = tuple(cls._exception_chain(exc))
         errors = tuple(item for item in chain if isinstance(item, Exception))
+
+        if any(isinstance(item, AgentResumeError) for item in errors):
+            return cls._localized("resume_unavailable", "agent.error.resume_unavailable", True, "retry")
 
         if any(isinstance(item, AgentEmptyAnswerError) for item in errors):
             return cls._localized("empty_answer", "agent.error.empty_answer", True, "retry")
@@ -335,6 +342,7 @@ __all__ = [
     "AgentEmptyAnswerError",
     "AgentErrorAction",
     "AgentException",
+    "AgentResumeError",
     "ContextWindowExceededError",
     "ImageProviderResponseError",
     "PublicAgentError",

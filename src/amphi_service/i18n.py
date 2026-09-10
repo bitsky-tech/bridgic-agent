@@ -563,6 +563,10 @@ class BackendI18n:
             "zh": "抱歉，这次任务没有生成回复。请重新运行一次；如果仍然没有回复，可以换一个模型再试。",
             "en": "Sorry, no response was generated for this task. Run it again, or try another model if it still produces no response.",
         },
+        "agent.error.resume_unavailable": {
+            "zh": "这次交互已无法恢复。请发送“继续”，从已保存的进度接着执行。",
+            "en": "This interaction can no longer be resumed. Send “continue” to proceed from the saved progress.",
+        },
         "agent.error.image_input_unsupported": {
             "zh": "当前模型“{model_display}”不支持图片输入。请切换到支持图片/视觉输入的模型，或移除消息中的图片后重试。",
             "en": "The current model, {model_display}, does not support image input. Switch to a vision-capable model or remove the images and try again.",

@@ -9,6 +9,7 @@ from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
 from src.amphi_agent._state import AwaitingFeedback, AwaitingPermission, AwaitingSubAgent, BuildStageState, CallVerdict, RoundPermission
 from src.amphi_agent.cognitive.base import BaseThink
+from src.amphi_agent.cognitive.build.base import BuildThink
 from src.amphi_agent.tools._subagent import run_subagent
 from src.amphi_agent.tools.request_human import request_human_choice
 from src.amphi_store import SessionRecord
@@ -248,7 +249,7 @@ async def test_build_transition_failure_still_normalizes_executed_empty_results(
         assert result.results[0].tool_result is None
         raise failure
 
-    monkeypatch.setattr(agent, "_sync_build_space", fail_sync)
+    monkeypatch.setattr(BuildThink, "sync_build_space", staticmethod(fail_sync))
 
     with pytest.raises(OSError) as raised:
         async for _ in agent.after_action(ota_context, context):

@@ -15,6 +15,7 @@ from ..._state import CallVerdict, BuildStageState, NormalStageState
 from ..._tools import TOOL_LIBRARY
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
+from ....amphi_store import SessionTurnRecord
 
 if TYPE_CHECKING:
     from ..._agent import AmphiAgent
@@ -34,6 +35,81 @@ class BuildThink(BaseThink):
     ############################################################################
     # The agent design
     ############################################################################
+    async def init_state(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_turn: Optional[SessionTurnRecord], agent: "AmphiAgent") -> None:
+        """Bind Build resources before a shared reply can consume the pending Turn."""
+        await self.sync_build_space(ota_context, context)
+        await super().init_state(ota_context, context, previous_turn, agent)
+
+    @staticmethod
+    async def sync_build_space(ota_context: AmphiOTAContext, context: AmphiContext, *, create: bool = False) -> None:
+        """Project the resolved think state onto this turn's Workspace.
+
+        Parameters
+        ----------
+        ota_context : AmphiOTAContext
+            Turn state containing the active discriminated think state.
+        context : AmphiContext
+            Session context whose Workspace receives the Build-space projection.
+        create : bool
+            Create a new build directory instead of reopening an existing one.
+        """
+        workspace = context.workspace
+        if workspace is None:
+            return
+        workflows = context.workflows
+        think = ota_context.think_status
+        if isinstance(think, BuildStageState):
+            if workflows is None:
+                raise RuntimeError("No Workflow library is available for the active Build.")
+            if create:
+                workflows.close_package()
+            active = workspace.build
+            if create:
+                if think.workflow_id:
+                    async with workflows.guarded_source(think.workflow_id) as workflow:
+                        active = await workspace.prepare_build_space(
+                            "create",
+                            workflow_id=think.workflow_id,
+                            stage=think.stage,
+                        )
+                        try:
+                            await workflows.restore_source(workflow, active.root)
+                            task_baseline = workflow.task_markdown
+                            if task_baseline is None:
+                                raise RuntimeError(
+                                    "The saved Workflow has no task.md edit baseline."
+                                )
+                            active.record_edit_task_baseline(task_baseline)
+                        except BaseException:
+                            await workspace.discard_build()
+                            raise
+                else:
+                    active = await workspace.prepare_build_space(
+                        "create",
+                        stage=think.stage,
+                    )
+            elif active is None:
+                active = await workspace.prepare_build_space(
+                    "resume",
+                    stage=think.stage,
+                )
+            if active.workflow_id != think.workflow_id:
+                raise RuntimeError("The active Build does not match the current edit target.")
+            active.set_stage(think.stage, think.workflow_id)
+            workflows.open_package(active.root)
+            return
+        workspace.close_build_space()
+        if workflows is not None:
+            workflows.close_package()
+
+    @staticmethod
+    def close_build_bindings(context: AmphiContext) -> None:
+        """Unbind the Build Space and its active Workflow package."""
+        if context.workspace is not None:
+            context.workspace.close_build_space()
+        if context.workflows is not None:
+            context.workflows.close_package()
+
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Apply stage transitions within the current Build or return control to Main."""
         await super().handle_action_result(ota_context, context, agent)
@@ -56,10 +132,10 @@ class BuildThink(BaseThink):
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
                     agent._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
                 if isinstance(next_status, BuildStageState):
-                    await agent._sync_build_space(ota_context, context)
+                    await self.sync_build_space(ota_context, context)
                 elif isinstance(next_status, NormalStageState):
                     agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
-                    agent._close_build_bindings(context)
+                    self.close_build_bindings(context)
 
     ############################################################################
     # Dynamic prompt assembly

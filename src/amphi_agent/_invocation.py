@@ -12,6 +12,8 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
+from bridgic.amphibious import OTARecord
+
 from ._agent import AmphiAgent
 from ._browser import BrowserHost
 from ._powerpoint import PowerPointHost
@@ -818,6 +820,13 @@ class AgentInvocation:
                     )
                 )
 
+            pending_turn = (
+                previous_turns[-1]
+                if previous_turns and not previous_turns[-1].status.is_terminal
+                else None
+            )
+            pending_dump = pending_turn.ota_context_dump() if pending_turn is not None else {}
+
             # Run the agent turn logic
             try:
                 agent_result = await agent.arun(llm=llm, context=context, ota_context=ota_context)
@@ -845,7 +854,19 @@ class AgentInvocation:
                     await discard_prepared_children()
                 raise
             except Exception as exc:
-                error_message = self._error_message(exc)
+                public_error = PublicAgentError.from_exception(exc)
+                error_message = public_error.message
+                if public_error.code == "resume_unavailable" and pending_turn is not None:
+                    # Retire the old interaction without losing its original task or trace.
+                    # Keep the current Think, which may already reflect a durable cursor.
+                    ota_context.user_input = agent._renderable_user_input(pending_turn.user_input)
+                    ota_context.ota_record = [
+                        OTARecord.model_validate(value)
+                        for value in pending_dump.get("ota_record") or []
+                    ]
+                    ota_context.transition_interaction(None)
+                    ota_context.transition_subagents(None)
+                    context.session = Session(record, turns=previous_turns[:-1])
                 try:
                     await self._persist_turn_result(
                         user.id,
