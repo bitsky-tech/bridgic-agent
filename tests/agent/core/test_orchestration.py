@@ -526,24 +526,23 @@ async def test_presentation_template_retry_after_exhaustion_resets_exclusions(or
     assert resumed.template_excluded_ids == []
 
 
-async def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dedicated PPT handoff consumes a large shortlist before the 16K file fallback."""
+async def test_ppt_rag_preserves_full_candidates_until_after_action(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan retains the complete shortlist and compacts it only during result handling."""
     candidate = {
         "template_id": "template-large",
         "version": "sha256:test",
         "title": "Large candidate",
         "structural_evidence": {"overview": "x" * 20_000},
+        "materialize_ref": {"template_id": "template-large", "version": "sha256:test"},
     }
     state = PresentationStageState(
         stage="ppt_plan",
         step_index=2,
         outline_confirmed=True,
     )
-    result = ActionResult(results=[_step(
-        "ppt_rag",
-        json.dumps({"search_id": "search-large", "candidates": [candidate]}),
-    )])
-    ota_context = AmphiOTAContext()
+    payload = json.dumps({"search_id": "search-large", "candidates": [candidate]})
+    result = ActionResult(results=[_step("ppt_rag", payload)])
+    ota_context = AmphiOTAContext(ota_record=[OTARecord()])
     ota_context.transition_think(state)
 
     async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
@@ -552,26 +551,46 @@ async def test_ppt_rag_is_compacted_before_generic_large_result_spill(orchestrat
     monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
     executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
     assert executed is result
+    assert result.results[0].tool_result == payload
+    assert result.results[0].success is True
+    assert ota_context.think_status == state
+    assert ota_context.think_status.template_candidates == []
+    assert ota_context.interaction_status is None
     assert not orchestration.workspace.tool_result_dir.exists()
+
+    ota_context.action_result = executed
+    await _apply(orchestration, ota_context)
 
     receipt = result.results[0].tool_result
     assert isinstance(receipt, dict)
     assert receipt["status"] == "awaiting_template_selection"
     assert receipt["candidate_ids"] == ["template-large"]
     assert len(json.dumps(receipt)) < 16 * 1024
-    assert ota_context.think_status.template_candidates[0].template_id == "template-large"
+    retained = ota_context.think_status.template_candidates[0]
+    assert retained.model_dump(include=set(candidate)) == candidate
     assert isinstance(ota_context.interaction_status, AwaitingPresentationTemplateSelection)
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+    pending_state = ota_context.state.model_dump(mode="json")
+    original_receipt = dict(receipt)
+    await _apply(orchestration, ota_context)
+
+    assert ota_context.state.model_dump(mode="json") == pending_state
+    assert result.results[0].tool_result == original_receipt
+    assert result.results[0].success is True
+    assert not orchestration.workspace.tool_result_dir.exists()
 
 
-async def test_invalid_ppt_rag_payload_is_discarded_before_generic_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A malformed large result cannot remain attached after the step becomes failed."""
+async def test_invalid_ppt_rag_payload_is_rejected_after_action_without_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan rejects malformed data after execution and clears the failed payload."""
     state = PresentationStageState(
         stage="ppt_plan",
         step_index=2,
         outline_confirmed=True,
     )
-    result = ActionResult(results=[_step("ppt_rag", "{" + "x" * 20_000)])
-    ota_context = AmphiOTAContext()
+    payload = "{" + "x" * 20_000
+    result = ActionResult(results=[_step("ppt_rag", payload)])
+    ota_context = AmphiOTAContext(ota_record=[OTARecord()])
     ota_context.transition_think(state)
 
     async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
@@ -583,9 +602,31 @@ async def test_invalid_ppt_rag_payload_is_discarded_before_generic_spill(orchest
     assert not orchestration.workspace.tool_result_dir.exists()
 
     step = result.results[0]
+    assert step.success is True
+    assert step.tool_result == payload
+    assert step.error is None
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+
+    ota_context.action_result = executed
+    await _apply(orchestration, ota_context)
+
     assert step.success is False
     assert step.tool_result is None
     assert step.error is not None and "invalid JSON" in step.error
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+    original_error = step.error
+    await _apply(orchestration, ota_context)
+
+    assert step.success is False
+    assert step.tool_result is None
+    assert step.error == original_error
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+    assert not orchestration.workspace.tool_result_dir.exists()
 
 
 @pytest.mark.parametrize("legacy_pending", [False, True], ids=["main-card", "legacy-build-card"])

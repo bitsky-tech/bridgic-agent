@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from bridgic.amphibious import OTARecord, StepToolCall
 from bridgic.amphibious._type import ThinkResult
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
@@ -15,8 +17,9 @@ from src.amphi_store import SessionRecord
 from tests._support.sandbox import IsolatedPaths
 
 
-async def test_large_tool_result(test_sandbox: IsolatedPaths) -> None:
-    """Final ordinary-tool result:
+@pytest.mark.parametrize("failed_ppt_rag", [False, True], ids=["ordinary-result", "failed-ppt-rag"])
+async def test_large_tool_result(test_sandbox: IsolatedPaths, failed_ppt_rag: bool) -> None:
+    """Final oversized output or error:
 
     {
       "inline_result": "file pointer",
@@ -26,22 +29,26 @@ async def test_large_tool_result(test_sandbox: IsolatedPaths) -> None:
     }
 
     Checks:
-    1. An allowed ordinary tool executes successfully with an oversized output.
+    1. An ordinary output and a failed PPT retrieval error use the generic spill path.
     2. The model-visible result becomes a file reference inside the owning Session.
     3. The stored file is complete and the live event exposes only the bounded reference.
     """
     payload = "report-line\n" * 2000
 
     async def large_report() -> str:
+        if failed_ppt_rag:
+            raise RuntimeError(payload)
         return payload
 
+    tool_name = "ppt_rag" if failed_ppt_rag else "large_report"
+    large_report.__name__ = tool_name
     events: list[tuple[str, dict[str, object]]] = []
     stream = SimpleNamespace(
         publish=lambda event, **data: events.append((event, data)),
     )
     call = StepToolCall(
         call_id="call-large",
-        tool="large_report",
+        tool=tool_name,
         tool_arguments=[],
     )
     record = OTARecord(
@@ -83,14 +90,17 @@ async def test_large_tool_result(test_sandbox: IsolatedPaths) -> None:
 
     result = await AmphiAgent().action_tool_call(ota_context, context)
 
-    # Check 1: The admitted ordinary tool completes rather than being denied or truncated.
+    # Check 1: Execution preserves success or failure independently of the spill path.
     assert len(result.results) == 1
     step = result.results[0]
     assert step.tool_id == call.call_id
-    assert step.success is True
+    assert step.tool_name == tool_name
+    assert step.success is not failed_ppt_rag
+    if failed_ppt_rag:
+        assert step.tool_result is None
 
     # Check 2: The next model round receives a bounded pointer in this Session's directory.
-    pointer = str(step.tool_result)
+    pointer = str(step.error if failed_ppt_rag else step.tool_result)
     assert "Tool result exceeded inline limit" in pointer
     assert payload not in pointer
     path_line = next(line for line in pointer.splitlines() if line.startswith("Path: "))
@@ -101,5 +111,6 @@ async def test_large_tool_result(test_sandbox: IsolatedPaths) -> None:
     assert stored_path.read_text(encoding="utf-8") == payload
     result_events = [data for event, data in events if event == "tool_result"]
     assert len(result_events) == 1
-    assert result_events[0]["output"] == pointer
-    assert payload not in str(result_events[0]["output"])
+    assert result_events[0]["error" if failed_ppt_rag else "output"] == pointer
+    assert result_events[0]["success"] is not failed_ppt_rag
+    assert payload not in str(result_events[0])

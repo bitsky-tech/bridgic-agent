@@ -21,20 +21,16 @@ def _context(root: Path, session_id: str = "cognitive-actions") -> AmphiContext:
 
 
 async def test_custom_worker_receives_only_successful_results(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both worker hooks process successful results while failed steps retain their errors."""
+    """The result handler processes successful results while failed steps retain their errors."""
     events: list[tuple[str, str]] = []
 
     class CustomThink(BaseThink):
-        def prepare_action_step(self, step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: AmphiAgent) -> None:
-            events.append(("prepare", step.tool_id))
-            step.tool_result = {"prepared": step.tool_result}
-
         async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: AmphiAgent) -> None:
             await super().handle_action_result(ota_context, context, agent)
             for step in ota_context.action_result.results:
                 if step.success and step.tool_name == "custom_action":
                     events.append(("handle", step.tool_id))
-                    step.tool_result["handled"] = True
+                    step.tool_result = {"handled": step.tool_result}
 
     class CustomAgent(AmphiAgent):
         main = think_unit(CustomThink())
@@ -56,8 +52,8 @@ async def test_custom_worker_receives_only_successful_results(test_sandbox: Isol
     async for _ in agent.after_action(ota_context, context):
         pass
 
-    assert events == [("prepare", "allowed"), ("handle", "allowed")]
-    assert result.results[0].tool_result == {"prepared": "complete", "handled": True}
+    assert events == [("handle", "allowed")]
+    assert result.results[0].tool_result == {"handled": "complete"}
     assert result.results[1].success is False
     assert result.results[1].error == "Execution failed."
     assert result.results[1].tool_result is None
@@ -103,8 +99,8 @@ async def test_action_result_batch_keeps_its_original_worker(test_sandbox: Isola
     assert result.results[1].tool_result == {"owner": "original", "value": "source evidence"}
 
 
-async def test_permission_resume_uses_the_same_worker_action_hooks(test_sandbox: IsolatedPaths) -> None:
-    """Approved calls use the live execution pipeline and its selected worker's business hooks."""
+async def test_permission_resume_uses_the_same_worker_result_handler(test_sandbox: IsolatedPaths) -> None:
+    """Approved calls use the live execution pipeline and its selected worker's result handler."""
     events: list[tuple[str, BaseThink]] = []
     executions: list[str] = []
 
@@ -118,16 +114,12 @@ async def test_permission_resume_uses_the_same_worker_action_hooks(test_sandbox:
         def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[ToolSpec]:
             return [tool]
 
-        def prepare_action_step(self, step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: AmphiAgent) -> None:
-            events.append(("prepare", self))
-            step.tool_result = {"prepared": step.tool_result}
-
         async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: AmphiAgent) -> None:
             await super().handle_action_result(ota_context, context, agent)
             for step in ota_context.action_result.results:
                 if step.success and step.tool_name == "custom_action":
                     events.append(("handle", self))
-                    step.tool_result["handled"] = True
+                    step.tool_result = {"handled": step.tool_result}
 
     class CustomAgent(AmphiAgent):
         main = think_unit(CustomThink())
@@ -153,8 +145,8 @@ async def test_permission_resume_uses_the_same_worker_action_hooks(test_sandbox:
     async for _ in agent.after_action(direct, context):
         pass
     assert executions == ["executed"]
-    assert events == [("prepare", worker), ("handle", worker)]
-    assert direct.action_result.results[0].tool_result == {"prepared": "raw result", "handled": True}
+    assert events == [("handle", worker)]
+    assert direct.action_result.results[0].tool_result == {"handled": "raw result"}
 
     events.clear()
     executions.clear()
@@ -174,7 +166,7 @@ async def test_permission_resume_uses_the_same_worker_action_hooks(test_sandbox:
     await agent._resume_permission(resumed, context, permission, rounds, "Run the custom action.")
 
     assert executions == ["executed"]
-    assert events == [("prepare", worker), ("handle", worker)]
+    assert events == [("handle", worker)]
     assert resumed.action_result.results[0].success is True
     assert resumed.action_result.results[0].tool_result == direct.action_result.results[0].tool_result
     assert resumed.ota_record[-1].permission.reviewed is True

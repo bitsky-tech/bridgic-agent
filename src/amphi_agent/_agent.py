@@ -487,10 +487,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         for cv in gate.verdicts:
             if cv.verdict == Permission.DENY.value:
                 result.results.append(self._denied_step(cv))
-        worker = self._current_think_worker(ota_context, context)
-        for step in result.results:
-            if step.success:
-                worker.prepare_action_step(step, ota_context, context, self)
         self._save_large_tool_results(result, context)
         duration_ms = int((time.monotonic() - start) * 1000)
         ota_context._current_record().act_duration_ms = duration_ms
@@ -613,10 +609,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         try:
             await worker.handle_action_result(ota_context, context, self)
         finally:
-            # Normalize executed successes after cognitive handling, including errors.
-            # Keep the original success set even if mode handling rejects a result.
+            # Normalize successful empty outputs after handling, even if a handler raised.
+            # Results rejected by a cognitive worker retain their failure payload.
             for step in successful_steps:
-                if step.tool_result in (None, ""):
+                if step.success and step.tool_result in (None, ""):
                     step.tool_result = EMPTY_SUCCESS_TOOL_RESULT
 
         if False:  # the framework's template validator requires async-gen shape
@@ -3026,6 +3022,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         day_dir = base_dir / datetime.now().strftime("%Y-%m-%d")
         for step in getattr(result, "results", None) or []:
             failed = getattr(step, "success", True) is False
+            if not failed and step.tool_name == "ppt_rag":
+                # Plan consumes the complete shortlist in handle_action_result and
+                # replaces it with a compact template-selection receipt.
+                continue
             value = (
                 getattr(step, "error", None)
                 if failed

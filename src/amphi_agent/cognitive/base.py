@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from bridgic.amphibious import ActionStepResult, CognitiveWorker, StepToolCall
+from bridgic.amphibious import CognitiveWorker, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -309,10 +309,6 @@ class BaseThink(CognitiveWorker):
             setattr(record, key, value)
         return result.tool_calls, result.content
     
-    def prepare_action_step(self, step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
-        """Consume mode-owned results before generic spilling and tool-result events."""
-        return None
-
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Apply shared interactions and park the complete child batch."""
         gate = agent._get_current_ota_permission_status(ota_context)
