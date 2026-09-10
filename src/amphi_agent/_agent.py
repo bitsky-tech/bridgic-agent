@@ -3449,6 +3449,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         day_dir = base_dir / datetime.now().strftime("%Y-%m-%d")
         for step in getattr(result, "results", None) or []:
+            # File reads bound their own output; persisting it would make later
+            # reads paginate a copy of the presentation instead of the source.
+            if getattr(step, "tool_name", None) == "read_file":
+                continue
             failed = getattr(step, "success", True) is False
             value = (
                 getattr(step, "error", None)
