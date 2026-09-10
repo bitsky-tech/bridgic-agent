@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from src.amphi_agent import AgentInvocation, InvocationDisposition, InvocationTraceLimitError
+from src.amphi_agent import DEFAULT_MAX_ROUNDS, AgentInvocation, InvocationDisposition, InvocationTraceLimitError
 from src.amphi_agent._state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
 from src.amphi_agent.runtime._environment import AppCommandEnvironmentSnapshot, app_command_environment
 from src.amphi_service.runtime._session_events import SessionEventBroker
@@ -21,12 +21,76 @@ from src.amphi_store import (
     SubAgentMode,
     TurnStatus,
     UserInput,
+    UserRepository,
 )
 from tests._support.sandbox import IsolatedPaths
 from tests.service.flows._scripted_llm import ScriptedLlm
 
 
 USER_ID = "local"
+
+
+async def test_code_round_limit(agent_store: None, agent_model: str, test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real Invocation crosses 50 rounds and exhausts its first ThinkUnit at the code limit."""
+    class StaticLlms:
+        def __init__(self, llm: ScriptedLlm) -> None:
+            self._llm = llm
+
+        async def resolve(self, _user: Any, _model: str) -> ScriptedLlm:
+            return self._llm
+
+    environment = {
+        **test_sandbox.process_environment(),
+        "PATH": os.environ.get("PATH", ""),
+    }
+    snapshot = AppCommandEnvironmentSnapshot(
+        environment=MappingProxyType(environment),
+        managed_environment=MappingProxyType(dict(environment)),
+        uv_executable=None,
+        uv_version=None,
+        python_executable=Path(sys.executable),
+        python_version=sys.version.split()[0],
+        node_executable=None,
+        node_version=None,
+    )
+    monkeypatch.setattr(app_command_environment, "snapshot", lambda: snapshot)
+
+    await UserRepository().set_execution_mode(USER_ID, "full")
+    record = SessionRecord(
+        id="code-round-limit", user_id=USER_ID, title="Check the code round limit",
+        workspace_root=str(test_sandbox.sessions / "code-round-limit"),
+    )
+    await SessionRepository().save(record)
+    work_dir = Path(record.workspace_root) / ".work"
+    work_dir.mkdir(parents=True)
+    (work_dir / "input.txt").write_text("Read this line.\n", encoding="utf-8")
+    assert DEFAULT_MAX_ROUNDS == 200
+    llm = ScriptedLlm(model=agent_model)
+    for index in range(DEFAULT_MAX_ROUNDS + 1):
+        llm.enqueue_tool("read_file", {"file_path": "input.txt"}, call_id=f"read-{index}")
+    llm.enqueue_text("Finished after the code-controlled boundary.")
+    invocation = AgentInvocation(StaticLlms(llm), SessionEventBroker(), SystemEventBroker())
+    try:
+        result = await (await invocation.arun(record.id, "Exercise the configured loop limit."))
+        assert result.outcome.disposition is InvocationDisposition.COMPLETED
+        assert result.outcome.answer == "Finished after the code-controlled boundary."
+        assert len(llm.turn_calls) == DEFAULT_MAX_ROUNDS + 2
+        turn = await SessionTurnRepository().latest(record.id, USER_ID)
+        assert turn is not None
+        rounds = turn.ota_records or []
+        assert len(rounds) == DEFAULT_MAX_ROUNDS + 2
+        steps = [step for row in rounds for step in (row.get("action_result") or {}).get("results", [])]
+        assert len(steps) == DEFAULT_MAX_ROUNDS + 1
+        assert all(step["success"] for step in steps)
+        # Existing empty-answer recovery starts only after the complete 200-round unit.
+        recoveries = [
+            index + 1 for index, row in enumerate(rounds)
+            if "The previous round ended without a user-visible response." in (row.get("observation_result") or "")
+        ]
+        assert recoveries == [DEFAULT_MAX_ROUNDS]
+        llm.assert_finished()
+    finally:
+        await invocation.shutdown()
 
 
 async def test_cancel_parked_tree(agent_store: None, agent_model: str, test_sandbox: IsolatedPaths) -> None:

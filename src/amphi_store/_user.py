@@ -21,7 +21,6 @@ class User(SQLModel, table=True):
     api_key: Optional[str] = Field(default=None)
     base_url: Optional[str] = Field(default=None)
     current_model: str = Field(description="The model used when the user submits a chat.")
-    default_max_rounds: int = Field(default=50)
     default_temperature: float = Field(default=0.0)
     # NEW (Phase 2): which wire protocol the active LLM client should speak.
     # Mirrored from the active ``ProviderCredential.protocol`` so the

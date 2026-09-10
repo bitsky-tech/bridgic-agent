@@ -92,7 +92,7 @@ from ..amphi_service.protocol._ws_messages import (
 
 logger = logging.getLogger(__name__)
 
-# Constants
+# Each ThinkUnit invocation gets this many observe-think-act rounds.
 DEFAULT_MAX_ROUNDS = 200
 MAX_THINK_UNITS_PER_TURN = 50
 MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS = 3
@@ -149,9 +149,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
     Parameters
     ----------
-    max_rounds : int
-        Hard cap on the observe-think-act rounds per stage for one turn
-        (applied as each stage's ThinkUnit ``max_attempts`` in on_agent).
     verbose : bool
         When True, the framework prints its internal run summary.
     """
@@ -169,9 +166,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     # Saved Workflow runtime.
     execute = think_unit(WorkflowThink(), max_attempts=DEFAULT_MAX_ROUNDS)
 
-    def __init__(self, max_rounds: int = DEFAULT_MAX_ROUNDS, verbose: bool = False) -> None:
+    def __init__(self, verbose: bool = False) -> None:
         super().__init__(verbose=verbose)
-        self._max_rounds = max_rounds
         self._agent_result: Optional[AgentResult] = None
         self.no_display_tools = set([
             "switch",
@@ -257,7 +253,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
             answer = yield ThinkUnit(
                 current_stage,
-                max_attempts=self._max_rounds,
+                max_attempts=DEFAULT_MAX_ROUNDS,
                 until=lambda c, s=current_status: (
                     c.think_status != s
                     or c.interaction_status is not None
