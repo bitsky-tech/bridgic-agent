@@ -79,7 +79,7 @@ def _context(*, skills: SkillLibrary | None = None, child: bool = False) -> Amph
 
 def _prompt_tool_names(system: str) -> tuple[str, ...]:
     marker = "The tools currently available in this cognitive loop are: "
-    rendered = system.split(marker, maxsplit=1)[1].split(". Call them directly.", maxsplit=1)[0]
+    rendered = system.split(marker, maxsplit=1)[1].splitlines()[0]
     return tuple(re.findall(r"`([^`]+)`", rendered))
 
 

@@ -94,7 +94,7 @@ def detect_locale(*texts: str | None) -> Locale | None:
     """Infer the language the user is writing in, newest message first.
 
     This is what the product's display text follows: everything the model writes already
-    matches the user's input language (``prompts/main.py``'s CRITICAL language rule), so the
+    matches the user's input language (``prompts/shared.py``'s CRITICAL language rule), so the
     backend's own strings — security labels, conflict cards, tool returns — must key off
     the same signal or one approval card ends up mixing both languages.
 
@@ -350,6 +350,10 @@ class BackendI18n:
         "agent.workflow_run_choice.question": {
             "zh": "当前会话还有未完成的工作流运行。{reason}\n\n你希望继续原运行，还是丢弃它并从头运行{target}？",
             "en": "This session has an unfinished Workflow run. {reason}\n\nContinue it, or discard it and start {target} again?",
+        },
+        "agent.workflow_run_choice.question_resume_only": {
+            "zh": "当前会话还有工作流“{name}”的未完成运行。{reason}\n\n当前保存版本已不可用，无法从头重新运行。原运行的快照、输入和进度仍然保留，是否继续？",
+            "en": "This session has an unfinished run of Workflow “{name}”. {reason}\n\nThe saved version is unavailable, so a fresh run cannot be started. The original snapshot, input, and progress are preserved. Continue the existing run?",
         },
         "agent.workflow_run_choice.target_same": {
             "zh": "工作流“{name}”",

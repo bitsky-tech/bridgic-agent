@@ -972,7 +972,7 @@ class RunWorkflowSpace:
 
     @property
     def workflow_input(self) -> UserInput:
-        """The original structured input preserved across restart and resume."""
+        """The task input captured when this Run was created and retained when resumed."""
         return self._state.workflow_input.model_copy(deep=True)
 
     @property

@@ -23,8 +23,10 @@ from src.amphi_agent.prompts.build.clarify import CLARIFY_PERSONA
 from src.amphi_agent.prompts.build.explore import EXPLORE_PERSONA
 from src.amphi_agent.prompts.build.generate import GENERATE_PERSONA
 from src.amphi_agent.prompts.build.verify import VERIFY_PERSONA
-from src.amphi_agent.prompts.main import PERSONA, SUB_AGENT_PERSONA
-from src.amphi_agent.prompts.shared import _SUB_AGENT_GUIDANCE, TURN_FAILED_MESSAGE
+from src.amphi_agent.prompts.normal.main import PERSONA
+from src.amphi_agent.prompts.normal.subagent import SUB_AGENT_PERSONA
+from src.amphi_agent.prompts.shared import _SUB_AGENT_GUIDANCE
+from src.amphi_agent.prompts.turn_failed import TURN_FAILED_MESSAGE
 from src.amphi_agent.prompts.workflow.execute import WORKFLOW_PERSONA
 json.dump({
     "main": PERSONA,

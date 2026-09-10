@@ -92,8 +92,8 @@ def test_catalog_preserves_schemas_and_registration_order() -> None:
 
 
 @pytest.mark.parametrize("profile, expected", BASELINE["surfaces"].items())
-def test_stage_tool_visibility_and_order_are_unchanged(profile: str, expected: str) -> None:
-    """Each stage keeps its ordered tools under every lazy-load combination."""
+def test_stage_tool_visibility_and_order_match_the_contract(profile: str, expected: str) -> None:
+    """Each stage keeps its ordered tools, with Build and Run entry reserved for Main."""
     label, flags = profile.split(":")
     worker_type, state = CASES[label]
     context = AmphiContext(session=Session(SessionRecord(
@@ -108,6 +108,8 @@ def test_stage_tool_visibility_and_order_are_unchanged(profile: str, expected: s
     ):
         setattr(ota_context, flag, enabled == "1")
     names = [spec.tool_name for spec in worker_type().select_tools(ota_context, context)]
+    entry_tools = {"request_build", "request_run_workflow"}
+    assert entry_tools.intersection(names) == (entry_tools if label == "main" else set())
     assert _digest(names) == expected, names
 
 

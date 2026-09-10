@@ -96,12 +96,10 @@ async def test_one_human_call_runs_alone_in_every_stage(orchestration: _Harness,
     ("main", "edit_workflow"),
     ("main", "request_presentation"),
     ("main", "request_run_workflow"),
-    ("clarify", "request_build"),
     ("clarify", "request_human_task_confirm"),
     ("verify", "request_human_workflow_confirm"),
     ("ppt_plan", "ppt_rag"),
     ("ppt_compose", "report_presentation_step"),
-    ("execute", "request_run_workflow"),
     ("execute", "report_workflow_step"),
 ])
 async def test_stage_control_is_exclusive_across_inherited_rules(orchestration: _Harness, stage: str, tool: str) -> None:
@@ -118,13 +116,10 @@ async def test_stage_control_is_exclusive_across_inherited_rules(orchestration: 
     calls = [ordinary, control]
     ota_context = await _stage_round(orchestration, stage, calls)
     if tool in {"edit_workflow", "request_run_workflow"}:
-        workflow_id = (
-            ota_context.think_status.workflow_id if stage == "execute"
-            else (await _save_workflow(orchestration, "control-target")).workflow_id
-        )
+        workflow_id = (await _save_workflow(orchestration, "control-target")).workflow_id
         arguments = {"workflow_id": workflow_id}
         if tool == "request_run_workflow":
-            arguments["action"] = "resume" if stage == "execute" else "start"
+            arguments["action"] = "start"
         control = _call("control", tool, **arguments)
         calls = [ordinary, control]
         updated = _ota(calls, ota_context.tools)

@@ -4,32 +4,31 @@ from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
 
 async def switch(mode: str = "", stage: str = "", reason: str = "") -> Any:
-    """Move the active thinking pipeline.
+    """Move to another permitted stage, or leave the current task.
 
-    Set ``stage`` to hand off inside a model-controlled pipeline such as Build,
-    or set ``mode="normal"`` to return control to Main. Workflow Run stages
-    advance automatically after successful section reports and reject stage
-    switches. Plain text never changes a cognitive mode or stage.
+    Set ``stage`` to a stage permitted by the current task instructions, or set
+    ``mode="normal"`` to leave the task. Follow the current task's instructions
+    for when to pause, stop, or finish; this call does not verify completion.
+    Sections that advance automatically after successful reports do not allow
+    stage switches. Plain text alone does not switch stages or leave the task.
 
     Parameters
     ----------
     mode : str
-        Use ``"normal"`` to return to Main; omit it for a handoff inside the
-        current cognitive mode.
+        Use ``"normal"`` to leave the current task; omit when selecting a stage.
     stage : str
-        Target stage in a model-controlled mode; omit for Workflow Runs and
-        when only changing mode.
+        Target stage permitted by the current task instructions; omit when leaving.
     reason : str
-        For a Build stage handoff, provide a compact, self-contained summary
+        For a stage change, provide a compact, self-contained summary
         of the stage outcome, decisive findings and user decisions, relevant
         artifacts, unresolved risks, and what the target stage should do next.
-        For an exit to Main, provide a brief exit reason. The reason is kept in
-        the turn trace and shown to the next Think.
+        When leaving, include the reason and any new user request or unresolved
+        decision so the task can continue without relying on earlier dialogue.
 
     Returns
     -------
     Any
-        A switch signal consumed by the framework.
+        The requested mode, stage, and handoff reason.
     """
     return {"mode": mode or None, "stage": stage or None, "reason": reason or None}
 

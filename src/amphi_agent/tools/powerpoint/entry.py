@@ -13,12 +13,12 @@ class RequestPresentation:
 
 
 async def request_presentation(goal: str) -> RequestPresentation:
-    """Enter the dedicated presentation pipeline for an explicit deck request.
+    """Start creating or substantially rebuilding a PowerPoint presentation.
 
-    Use this from Main when the user asks to create or substantially rebuild a
-    PowerPoint presentation. Ordinary one-off questions about slides remain in
-    Main. The pipeline begins by clarifying the communication goal before it
-    plans, composes, and reviews the deck.
+    Use this when the user asks to create or substantially rebuild a deck.
+    Answer ordinary one-off questions about slides directly. Creation begins
+    by clarifying the communication goal, then planning, composing, and
+    reviewing the deck.
 
     Parameters
     ----------
@@ -28,7 +28,7 @@ async def request_presentation(goal: str) -> RequestPresentation:
     Returns
     -------
     RequestPresentation
-        Structured presentation entry request handled by the Agent.
+        The requested presentation goal.
 
     Raises
     ------

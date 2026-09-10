@@ -36,7 +36,7 @@ from ..prompts.compaction import (
 )
 from .._skills import Skill
 from ..prompts.render import time_in_local_tz
-from ..prompts.shared import TURN_FAILED_MESSAGE
+from ..prompts.turn_failed import TURN_FAILED_MESSAGE
 from .._state import (
     AwaitingFeedback,
     AwaitingSubAgent,

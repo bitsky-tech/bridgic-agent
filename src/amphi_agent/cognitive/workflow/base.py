@@ -2,9 +2,8 @@
 
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-from uuid import uuid4
 
-from bridgic.amphibious import ActionStepResult, StepToolCall
+from bridgic.amphibious import StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -13,111 +12,14 @@ from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ...security import Permission
 from ..._tools import TOOL_LIBRARY
-from ..._state import CallVerdict, AwaitingWorkflowRunChoice, NormalStageState, WorkflowStageState
+from ..._state import CallVerdict, NormalStageState, WorkflowStageState
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
-from ...tools.workflow import RequestRunWorkflow, WorkflowStepReport
+from ...tools.workflow import WorkflowStepReport
 from ....amphi_store import WorkflowRunStatus
-from ....amphi_service.i18n import backend_i18n
 
 if TYPE_CHECKING:
     from ..._agent import AmphiAgent
-
-
-async def handle_workflow_run_request(step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
-    """Resolve a Run request from normal conversation or an active Workflow stage."""
-    def workflow_run_request_interaction(context: AmphiContext, requested_workflow_id: str, reason: Optional[str]) -> AwaitingWorkflowRunChoice:
-        """Create the unfinished-Run interaction requested through ``request_run_workflow``."""
-        def card_option(prefix: str, option_id: str) -> dict:
-            """One choice-card option. Id, label and description all derive from the catalog
-            by naming convention (``{prefix}.option_{id}`` / ``{prefix}.desc_{id}``), so the
-            id ↔ copy coupling is structural — pairing an id with another option's label
-            can no longer happen by hand-copied dict drift."""
-            return {
-                "id": option_id,
-                "label": backend_i18n.text(f"{prefix}.option_{option_id}"),
-                "description": backend_i18n.text(f"{prefix}.desc_{option_id}"),
-            }
-
-        if context.session.is_child:
-            raise RuntimeError("Child Sessions cannot control Workflow Runs.")
-        workflows = context.workflows
-        workspace = context.workspace
-        if workflows is None or workspace is None or not context.session.id:
-            raise RuntimeError("Cannot request a Workflow Run choice without a Session.")
-        existing_state = workspace.run_workflow_checkpoint()
-        if existing_state is None:
-            raise RuntimeError("Cannot request a Workflow Run choice without an unfinished Run.")
-        requested = workflows.get(requested_workflow_id)
-        if requested is None:
-            raise RuntimeError(
-                f"Workflow `{requested_workflow_id}` is unavailable for restart."
-            )
-        same_workflow = existing_state.workflow_id == requested_workflow_id
-        target_text = (
-            backend_i18n.text(
-                "agent.workflow_run_choice.target_same",
-                name=existing_state.workflow_name,
-            )
-            if same_workflow
-            else backend_i18n.text(
-                "agent.workflow_run_choice.target_other",
-                name=requested.name,
-            )
-        )
-        question = backend_i18n.text(
-            "agent.workflow_run_choice.question",
-            reason=reason or backend_i18n.text("agent.workflow_run_choice.default_reason"),
-            target=target_text,
-        )
-        return AwaitingWorkflowRunChoice(
-            existing_workflow_id=existing_state.workflow_id,
-            requested_workflow_id=requested_workflow_id,
-            reason=reason,
-            request_id=f"workflow_run_choice_{uuid4().hex}",
-            questions=[{
-                "question": question,
-                "header": backend_i18n.text("agent.workflow_run_choice.header"),
-                "options": [
-                    card_option("agent.workflow_run_choice", "resume"),
-                    card_option("agent.workflow_run_choice", "restart"),
-                ],
-                "multiSelect": False,
-            }],
-        )
-
-    result = step.tool_result
-    if isinstance(result, RequestRunWorkflow):
-        step.tool_result = {
-            "workflow_id": result.workflow_id,
-            "action": result.action,
-            "reason": result.reason,
-        }
-        if result.action == "ask":
-            choice = workflow_run_request_interaction(
-                context,
-                result.workflow_id,
-                result.reason,
-            )
-            ota_context.transition_interaction(choice)
-            step.tool_result = {
-                **choice.model_dump(mode="json"),
-                "status": "pending",
-            }
-        else:
-            source, resolved_action = await agent._enter_or_resume_run_workflow(
-                ota_context,
-                context,
-                result.workflow_id,
-                result.action,
-            )
-            step.tool_result = {
-                "workflow_id": source.workflow_id,
-                "workflow_name": source.name,
-                **agent._workflow_sections(source),
-                "status": resolved_action,
-                "reason": result.reason,
-            }
 
 
 class WorkflowRunThink(BaseThink):
@@ -148,9 +50,6 @@ class WorkflowRunThink(BaseThink):
                 ota_context.transition_think(NormalStageState())
                 agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
                 agent._close_run_workflow_bindings(context)
-
-            elif step.tool_name == "request_run_workflow":
-                await handle_workflow_run_request(step, ota_context, context, agent)
 
             elif step.tool_name == "report_workflow_step":
                 result = step.tool_result
@@ -446,39 +345,10 @@ class WorkflowRunThink(BaseThink):
     async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
         """Validate controls against this stage's bound Run and pinned source."""
         resolved = await super().legality_check(ota_context, context, calls, verdicts)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_run_workflow", "report_workflow_step"})
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"report_workflow_step"})
 
         def reason_for_call(call: StepToolCall) -> Optional[str]:
             tool_name = getattr(call, "tool", None)
-            if tool_name == "request_run_workflow":
-                if ota_context is None:
-                    return "request_run_workflow rejected: no Workflow Run is active."
-                arguments = {
-                    _view(argument, "name"): _view(argument, "value")
-                    for argument in getattr(call, "tool_arguments", None) or []
-                }
-                workflow_id = str(arguments.get("workflow_id") or "").strip()
-                action = str(arguments.get("action") or "start")
-                workflows = context.workflows
-                workspace = context.workspace
-                active = workspace.run_workflow_checkpoint() if workspace is not None else None
-                if workflows is None or active is None:
-                    return "request_run_workflow rejected: no unfinished Workflow Run is active."
-                if action == "start":
-                    return (
-                        "request_run_workflow rejected: this Workflow stage already owns an unfinished Run; "
-                        "choose resume, restart, or ask."
-                    )
-                if action == "resume" and active.workflow_id != workflow_id:
-                    return (
-                        "request_run_workflow rejected: resume must target the active Workflow "
-                        f"`{active.workflow_id}`."
-                    )
-                try:
-                    workflows.source(workflow_id)
-                except ValueError as exc:
-                    return f"request_run_workflow rejected: {exc}."
-                return None
             if ota_context is None:
                 return (
                     "workflow control rejected: no Workflow run is active."
@@ -543,7 +413,6 @@ class WorkflowRunThink(BaseThink):
                 "remove_workflow",
                 "report_workflow_step",
                 "request_human_choice",
-                "request_run_workflow",
                 "run_subagent",
                 "start_subagent",
                 "update_schedule",

@@ -3,158 +3,21 @@
 import json
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-from uuid import uuid4
 
-from bridgic.amphibious import ActionStepResult, StepToolCall
+from bridgic.amphibious import StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 
 from ..base import BaseThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ...security import Permission
-from ..._state import CallVerdict, AwaitingBuildConfirm, AwaitingBuildConflict, BuildStageState, NormalStageState
+from ..._state import CallVerdict, BuildStageState, NormalStageState
 from ..._tools import TOOL_LIBRARY
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
-from ...tools.build import RequestBuild
-from ....amphi_service.i18n import backend_i18n
 
 if TYPE_CHECKING:
     from ..._agent import AmphiAgent
-
-
-def build_request_legality_reason(call: StepToolCall, context: AmphiContext) -> Optional[str]:
-    """Require a concrete reason when a Build proposal conflicts with retained work."""
-    if getattr(call, "tool", None) != "request_build":
-        return None
-    arguments = {
-        _view(argument, "name"): _view(argument, "value")
-        for argument in getattr(call, "tool_arguments", None) or []
-    }
-    if arguments.get("mode", "ask") != "ask":
-        return None
-    workspace = context.workspace
-    retained = workspace.build_checkpoint() if workspace is not None else None
-    if retained is not None and not str(arguments.get("reason") or "").strip():
-        return (
-            "request_build rejected: mode `ask` requires a concrete reason "
-            "when resolving an unfinished Build conflict."
-        )
-    return None
-
-
-async def handle_build_request(step: ActionStepResult, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
-    """Resolve a Build entry request from normal mode or an active Build stage."""
-    def requested_edit_workflow_id() -> Optional[str]:
-        """Return the most recent successful edit target from this Agent turn."""
-        def value(item: Any, name: str) -> Any:
-            return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
-
-        for record in reversed(ota_context.ota_record):
-            steps = value(value(record, "action_result"), "results") or []
-            for step in reversed(steps):
-                if value(step, "tool_name") != "edit_workflow" or not value(step, "success"):
-                    continue
-                result = value(step, "tool_result")
-                workflow_id = result.get("workflow_id") if isinstance(result, dict) else None
-                return str(workflow_id or "").strip() or None
-        return None
-
-    def build_request_interaction(context: AmphiContext, request: RequestBuild, *, requested_workflow_id: Optional[str] = None) -> AwaitingBuildConflict:
-        """Create the unfinished-Build interaction requested through ``request_build``."""
-        def card_option(prefix: str, option_id: str) -> dict:
-            """One choice-card option. Id, label and description all derive from the catalog
-            by naming convention (``{prefix}.option_{id}`` / ``{prefix}.desc_{id}``), so the
-            id ↔ copy coupling is structural — pairing an id with another option's label
-            can no longer happen by hand-copied dict drift."""
-            return {
-                "id": option_id,
-                "label": backend_i18n.text(f"{prefix}.option_{option_id}"),
-                "description": backend_i18n.text(f"{prefix}.desc_{option_id}"),
-            }
-
-        workspace = context.workspace
-        checkpoint = workspace.build_checkpoint() if workspace is not None else None
-        if checkpoint is None:
-            raise RuntimeError("Cannot ask about an unfinished Build when none is retained.")
-        reason = (request.reason or "").strip()
-        if not reason:
-            raise ValueError("request_build mode `ask` requires a conflict reason for an unfinished Build.")
-        existing_stage = checkpoint.stage
-        existing_workflow_id = checkpoint.workflow_id
-        if requested_workflow_id:
-            question = backend_i18n.text("agent.build_conflict.question_replace", reason=reason)
-            options = [
-                card_option("agent.build_conflict", "keep"),
-                card_option("agent.build_conflict", "replace_edit"),
-            ]
-        else:
-            question = backend_i18n.text("agent.build_conflict.question_new", reason=reason)
-            options = [
-                card_option("agent.build_conflict", "keep"),
-                card_option("agent.build_conflict", "merge"),
-                card_option("agent.build_conflict", "replace_new"),
-            ]
-        conflict = AwaitingBuildConflict(
-            existing_stage=existing_stage,
-            existing_workflow_id=existing_workflow_id,
-            requested_workflow_id=requested_workflow_id,
-            reason=reason,
-            request_id=request.request_id or f"build_conflict_{uuid4().hex}",
-            questions=[{
-                "question": question,
-                "header": backend_i18n.text("agent.build_conflict.header"),
-                "options": options,
-                "multiSelect": False,
-            }],
-        )
-        agent._close_build_bindings(context)
-        return conflict
-
-    result = step.tool_result
-    if isinstance(result, RequestBuild):
-        if result.mode == "start":
-            workflow_id = requested_edit_workflow_id()
-            ota_context.transition_think(BuildStageState(
-                stage="clarify",
-                workflow_id=workflow_id,
-            ))
-            await agent._sync_build_space(ota_context, context, create=True)
-            step.tool_result = {
-                "mode": "start",
-                "goal": result.goal,
-                **({"workflow_id": workflow_id} if workflow_id else {}),
-                "message": "The user's explicit Workflow request entered a new Build.",
-            }
-        else:
-            workspace = context.workspace
-            retained = workspace.build_checkpoint() if workspace is not None else None
-            if retained is None:
-                step.tool_result = {
-                    "mode": "ask",
-                    "request_id": result.request_id,
-                    "goal": result.goal,
-                    "reason": result.reason,
-                    "status": "pending",
-                }
-                ota_context.transition_interaction(AwaitingBuildConfirm(
-                    request_id=result.request_id,
-                    goal=result.goal,
-                    reason=result.reason,
-                ))
-            else:
-                conflict = build_request_interaction(
-                    context,
-                    result,
-                    requested_workflow_id=requested_edit_workflow_id(),
-                )
-                ota_context.transition_interaction(conflict)
-                step.tool_result = {
-                    "mode": "ask",
-                    "goal": result.goal,
-                    **conflict.model_dump(mode="json"),
-                    "status": "pending",
-                }
 
 
 class BuildThink(BaseThink):
@@ -172,16 +35,14 @@ class BuildThink(BaseThink):
     # The agent design
     ############################################################################
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
-        """Apply Build entry and stage transitions after an admitted tool succeeds."""
+        """Apply stage transitions within the current Build or return control to Main."""
         await super().handle_action_result(ota_context, context, agent)
 
         for step in getattr(ota_context.action_result, "results", None) or []:
             if not step.success:
                 continue
 
-            if step.tool_name == "request_build":
-                await handle_build_request(step, ota_context, context, agent)
-            elif step.tool_name == "switch":
+            if step.tool_name == "switch":
                 sig = step.tool_result
                 current_status = ota_context.think_status
                 target_mode = sig.get("mode") or current_status.mode
@@ -314,14 +175,13 @@ class BuildThink(BaseThink):
     # Legality check
     ############################################################################
     async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
-        """Validate Build entry proposals and explicit stage handoffs."""
+        """Validate explicit handoffs within the current Build."""
         resolved = await super().legality_check(ota_context, context, calls, verdicts)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_build"})
         for index, (call, verdict) in enumerate(zip(calls, resolved)):
             if verdict.verdict == Permission.DENY.value:
                 continue
-            reason = build_request_legality_reason(call, context)
-            if reason is None and getattr(call, "tool", None) == "switch" and ota_context is not None:
+            reason = None
+            if getattr(call, "tool", None) == "switch" and ota_context is not None:
                 arguments = {
                     _view(argument, "name"): _view(argument, "value")
                     for argument in getattr(call, "tool_arguments", None) or []
@@ -402,7 +262,6 @@ class BuildThink(BaseThink):
                 "list_workflow_runs",
                 "read_image",
                 "read_workflow_run",
-                "request_build",
                 "request_human_choice",
                 "run_subagent",
                 "web_fetch",

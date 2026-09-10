@@ -24,14 +24,14 @@ async def test_main_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.Mo
     """Final Main Workflow admission:
 
     {
-      "idle": {"known_start": "allowed", "unknown_or_resume": "blocked"},
-      "active": {"second_start": "blocked", "matching_resume": "allowed"},
+      "idle": {"known_start": "allowed", "unknown_or_ask": "blocked"},
+      "active": {"replacement_start": "allowed", "ask": "allowed"},
       "same_turn_repeat": "blocked_after_report"
     }
 
     Checks:
-    1. Main admits only known Workflow definitions and starts only from an idle Session.
-    2. An unfinished Run blocks replacement starts and permits only its own resume request.
+    1. Main admits only known Workflow definitions and requires a retained Run to ask.
+    2. An unfinished Run permits a replacement start or an explicit user choice.
     3. A Turn that already reported Workflow work cannot launch the Workflow again.
     """
     workflows = WorkflowLibrary(USER_ID)
@@ -50,7 +50,7 @@ async def test_main_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.Mo
         workspace=idle_workspace,
     )
 
-    # Check 1: Main admits only known Workflow definitions and starts only from an idle Session.
+    # Check 1: Main admits only known Workflow definitions and requires a retained Run to ask.
     assert await legality_reason(worker,
         tool_call("edit_workflow", workflow_id=WORKFLOW_ID),
         None,
@@ -70,7 +70,7 @@ async def test_main_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.Mo
     ) is None
     assert "requires an unfinished Run" in (
         await legality_reason(worker,
-            tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="resume"),
+            tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="ask", reason="Resolve the retained Run"),
             None,
             idle_context,
         ) or ""
@@ -94,26 +94,32 @@ async def test_main_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.Mo
         workspace=active_workspace,
     )
 
-    # Check 2: An unfinished Run blocks replacement starts and permits only its own resume request.
-    assert "already owns an unfinished Run" in (
+    # Check 2: An unfinished Run permits a replacement start or an explicit user choice.
+    assert await legality_reason(worker,
+        tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="start"),
+        None,
+        active_context,
+    ) is None
+    assert "unavailable" in (
         await legality_reason(worker,
-            tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="start"),
-            None,
-            active_context,
-        ) or ""
-    )
-    assert "must target the unfinished Workflow" in (
-        await legality_reason(worker,
-            tool_call("request_run_workflow", workflow_id="other", action="resume"),
+            tool_call("request_run_workflow", workflow_id="other", action="start"),
             None,
             active_context,
         ) or ""
     )
     assert await legality_reason(worker,
-        tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="resume"),
+        tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="ask", reason="Resolve the retained Run"),
         None,
         active_context,
     ) is None
+    for action in ("resume", "restart"):
+        assert "unsupported action" in (
+            await legality_reason(worker,
+                tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action=action),
+                None,
+                active_context,
+            ) or ""
+        )
 
     reported = AmphiOTAContext(
         user_input="Run the report",
@@ -128,7 +134,7 @@ async def test_main_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.Mo
     # Check 3: A Turn that already reported Workflow work cannot launch the Workflow again.
     assert "already ran the Workflow" in (
         await legality_reason(worker,
-            tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="resume"),
+            tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="start"),
             reported,
             active_context,
         ) or ""
@@ -140,16 +146,14 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
 
     {
       "execute_section": {"report": "allowed", "stage_jump": "blocked"},
-      "run_request": {"second_start": "blocked", "matching_resume": "allowed"},
       "completion_boundary": {"report": "blocked"},
       "cursor_mismatch": "all_workflow_controls_blocked"
     }
 
     Checks:
     1. Execute accepts a section report and only allows an explicit exit to normal mode.
-    2. The active stage rejects another start while allowing a resume of the same Workflow.
-    3. A completion boundary cannot be reported as another source section.
-    4. A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
+    2. A completion boundary cannot be reported as another source section.
+    3. A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
     """
     source_root = test_sandbox.root / "run-source"
     source_root.mkdir()
@@ -234,20 +238,6 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
         context,
     ) is None
 
-    # Check 2: The active stage rejects another start while allowing a resume of the same Workflow.
-    assert "already owns an unfinished Run" in (
-        await legality_reason(execute,
-            tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="start"),
-            execute_ota,
-            context,
-        ) or ""
-    )
-    assert await legality_reason(execute,
-        tool_call("request_run_workflow", workflow_id=WORKFLOW_ID, action="resume"),
-        execute_ota,
-        context,
-    ) is None
-
     run_space.checkpoint_cursor(
         expected_workflow_id=WORKFLOW_ID,
         expected_generation=GENERATION,
@@ -257,12 +247,12 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
         step_index=1,
     )
 
-    # Check 3: A completion boundary cannot be reported as another source section.
+    # Check 2: A completion boundary cannot be reported as another source section.
     assert "current section does not exist" in (
         await legality_reason(execute, report, ota("execute", 1), context) or ""
     )
 
-    # Check 4: A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
+    # Check 3: A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
     assert "does not match" in (
         await legality_reason(execute, report, ota("execute", 1, "stale-generation"), context) or ""
     )

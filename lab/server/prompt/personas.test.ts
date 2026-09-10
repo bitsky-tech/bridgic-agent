@@ -52,9 +52,10 @@ from src.amphi_agent.prompts.build.clarify import CLARIFY_PERSONA
 from src.amphi_agent.prompts.build.explore import EXPLORE_PERSONA
 from src.amphi_agent.prompts.build.generate import GENERATE_PERSONA
 from src.amphi_agent.prompts.build.verify import VERIFY_PERSONA
-from src.amphi_agent.prompts.main import PERSONA, SUB_AGENT_PERSONA
+from src.amphi_agent.prompts.normal.main import PERSONA
+from src.amphi_agent.prompts.normal.subagent import SUB_AGENT_PERSONA
 from src.amphi_agent.prompts.render import render_main_persona, render_stage_persona
-from src.amphi_agent.prompts.shared import TURN_FAILED_MESSAGE
+from src.amphi_agent.prompts.turn_failed import TURN_FAILED_MESSAGE
 from src.amphi_agent.prompts.workflow.execute import WORKFLOW_PERSONA
 with use_locale(locale):
     personas = {
@@ -86,6 +87,7 @@ describe("persona source snapshot", () => {
   });
 
   for (const toolNames of [
+    ["read_file"],
     ["read_file", "run_subagent"],
     ["read_file", "run_subagent", "start_subagent"],
   ]) {

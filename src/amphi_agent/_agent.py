@@ -664,7 +664,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # Initialize the agent turn context
         ########################
         # Display language: the connection's stated language is only the fallback. What the
-        # model writes already follows the user's input language (see prompts/main.py's CRITICAL
+        # model writes already follows the user's input language (see prompts/shared.py's CRITICAL
         # language rule), so the backend's own display text has to key off the same signal —
         # otherwise one approval card carries an English classifier reason beside a Chinese
         # security label. Resume frames and signal-less inputs keep the connection's value.
@@ -2134,8 +2134,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         ):
             raise RuntimeError("No Workflow runtime context is available.")
 
-        async def create(workflow_input: object) -> Any:
-            stored_input = UserInput.from_runtime(workflow_input)
+        async def create() -> Any:
+            stored_input = UserInput.from_runtime(ota_context.user_input)
             await workflow_runs.require_completed_references(stored_input)
             async with workflows.guarded_source(workflow_id) as saved:
                 if saved.workflow_id is None:
@@ -2165,7 +2165,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     f"This Session has no unfinished Workflow Run for action `{action}`; "
                     "use `start`."
                 )
-            source = await create(ota_context.user_input)
+            source = await create()
             resolved_action = "started"
         else:
             if action == "start":
@@ -2183,12 +2183,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 source = workflows.require_package()
                 resolved_action = "resumed"
             elif action == "restart":
-                workflow_input = (
-                    active.workflow_input
-                    if active.workflow_id == workflow_id
-                    else ota_context.user_input
-                )
-                source = await create(workflow_input)
+                source = await create()
                 resolved_action = "restarted"
             else:
                 raise ValueError(f"Unsupported Workflow Run action: {action!r}")

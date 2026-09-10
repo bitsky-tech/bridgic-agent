@@ -53,7 +53,7 @@ async def test_workflow_request() -> None:
     Checks:
     1. Direct Run actions preserve the selected Workflow and omit blank reasons.
     2. An ambiguous Run action carries the explanation needed by the user.
-    3. Missing identifiers, missing ask reasons, and oversized reasons are rejected.
+    3. Invalid arguments and former direct resume or restart actions are rejected.
     """
     # Check 1: Direct Run actions preserve the selected Workflow and omit blank reasons.
     direct = await request_run_workflow(" workflow-1 ", action="start")
@@ -63,13 +63,16 @@ async def test_workflow_request() -> None:
     ask = await request_run_workflow("workflow-1", action="ask", reason=" Continue the pinned run? ")
     assert (ask.action, ask.reason) == ("ask", "Continue the pinned run?")
 
-    # Check 3: Missing identifiers, missing ask reasons, and oversized reasons are rejected.
+    # Check 3: Invalid arguments and former direct resume or restart actions are rejected.
     with pytest.raises(RequestHumanRejection, match="workflow_id.*non-empty"):
         await request_run_workflow(" ")
-    with pytest.raises(RequestHumanRejection, match="reason.*ambiguous"):
+    with pytest.raises(RequestHumanRejection, match="reason.*unfinished Run choice"):
         await request_run_workflow("workflow-1", action="ask")
     with pytest.raises(RequestHumanRejection, match="exceeds 300"):
         await request_run_workflow("workflow-1", reason="x" * 301)
+    for action in ("resume", "restart"):
+        with pytest.raises(RequestHumanRejection, match="action"):
+            await request_run_workflow("workflow-1", action=action)
 
 
 async def test_presentation_request() -> None:

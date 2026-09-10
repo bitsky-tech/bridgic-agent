@@ -1,4 +1,4 @@
-"""Preserve prompt bytes and dependency boundaries while reorganizing modes."""
+"""Preserve reviewed prompt bytes and dependency boundaries between modes."""
 
 import ast
 import hashlib
@@ -14,8 +14,10 @@ from src.amphi_agent.prompts.render import render_main_persona, render_stage_per
 from src.amphi_service.i18n import use_locale
 
 
-# Captured before splitting the mode modules; whitespace is part of the contract.
+# Reviewed prompt snapshots; whitespace is part of the contract.
 BASELINE = json.loads((Path(__file__).parent / "fixtures" / "persona_hashes.json").read_text())
+# Snapshot groups remain stable when their source packages move.
+SNAPSHOT_PACKAGES = {"main": "normal"}
 TOOL_PROFILES = {
     "empty": [],
     "basic": ["read_file", "request_human_choice"],
@@ -25,23 +27,23 @@ TOOL_PROFILES = {
 
 
 @pytest.mark.parametrize("qualified_name, expected", BASELINE["templates"].items())
-def test_persona_templates_preserve_original_bytes(qualified_name: str, expected: str) -> None:
-    """All eleven personas retain their exact pre-refactor template text."""
+def test_persona_templates_match_reviewed_bytes(qualified_name: str, expected: str) -> None:
+    """All eleven personas retain their reviewed template text."""
     module_name, name = qualified_name.rsplit(".", 1)
-    module = importlib.import_module(f"{prompts.__name__}.{module_name}")
+    module = importlib.import_module(f"{prompts.__name__}.{SNAPSHOT_PACKAGES.get(module_name, module_name)}")
     persona = getattr(module, name)
     assert hashlib.sha256(persona.encode()).hexdigest() == expected
 
 
 @pytest.mark.parametrize("profile, expected", BASELINE["rendered"].items())
-def test_rendered_personas_preserve_original_bytes(profile: str, expected: str) -> None:
-    """Locale and tool-dependent rendering preserve all eighty-eight inputs."""
+def test_rendered_personas_match_reviewed_bytes(profile: str, expected: str) -> None:
+    """Locale and tool-dependent rendering match all eighty-eight reviewed inputs."""
     locale, tool_profile = profile.split(":")
     personas = {}
     with use_locale(locale):
         for qualified_name in BASELINE["templates"]:
             module_name, name = qualified_name.rsplit(".", 1)
-            module = importlib.import_module(f"{prompts.__name__}.{module_name}")
+            module = importlib.import_module(f"{prompts.__name__}.{SNAPSHOT_PACKAGES.get(module_name, module_name)}")
             render = render_main_persona if module_name == "main" else render_stage_persona
             personas[qualified_name] = render(TOOL_PROFILES[tool_profile], template=getattr(module, name))
     payload = json.dumps(personas, ensure_ascii=False, sort_keys=True)
@@ -49,6 +51,8 @@ def test_rendered_personas_preserve_original_bytes(profile: str, expected: str) 
 
 
 @pytest.mark.parametrize("mode, stage, name", [
+    ("normal", "main", "PERSONA"),
+    ("normal", "subagent", "SUB_AGENT_PERSONA"),
     ("build", "clarify", "CLARIFY_PERSONA"),
     ("build", "explore", "EXPLORE_PERSONA"),
     ("build", "generate", "GENERATE_PERSONA"),
@@ -72,15 +76,16 @@ def test_general_prompts_do_not_depend_on_mode_packages() -> None:
     mode_prefixes = tuple(
         f"{prompts.__name__}.{path.name}"
         for path in root.iterdir()
-        if path.is_dir() and (path / "__init__.py").is_file()
+        if path.name != "normal" and path.is_dir() and (path / "__init__.py").is_file()
     )
-    for path in root.glob("*.py"):
+    for path in [*root.glob("*.py"), *(root / "normal").rglob("*.py")]:
+        package = ".".join((prompts.__name__, *path.parent.relative_to(root).parts))
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
                 dependencies = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
                 origin = "." * node.level + (node.module or "")
-                module = importlib.util.resolve_name(origin, prompts.__name__)
+                module = importlib.util.resolve_name(origin, package)
                 dependencies = [module, *(f"{module}.{alias.name}" for alias in node.names)]
             else:
                 continue

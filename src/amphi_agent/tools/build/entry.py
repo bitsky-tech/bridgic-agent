@@ -19,13 +19,12 @@ class RequestBuild:
 
 
 async def request_build(goal: str, mode: Literal["ask", "start"] = "ask", reason: str = "") -> RequestBuild:
-    """Propose or immediately enter reusable Workflow Build.
+    """Start building a reusable Workflow or ask for confirmation.
 
-    In Main, use ``start`` for explicit new or replacement Build intent. Use
+    Use ``start`` when the user explicitly requests a new or replacement Workflow. Use
     ``ask`` when a reusable Workflow may help but was not requested, or when a
     retained Build requires the user to choose whether to keep, merge, or
-    replace it. In Build, use ``ask`` only for genuinely competing intents. Do
-    not use this tool for ordinary one-off work.
+    replace it. Do not use this tool for ordinary one-off work.
 
     Parameters
     ----------
@@ -39,7 +38,7 @@ async def request_build(goal: str, mode: Literal["ask", "start"] = "ask", reason
     Returns
     -------
     RequestBuild
-        Structured Build entry request handled by the Agent.
+        The requested Workflow goal and confirmation or start action.
 
     Raises
     ------

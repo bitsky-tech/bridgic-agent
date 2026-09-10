@@ -1,11 +1,15 @@
+import re
+
 from src.amphi_agent.prompts.build import (
     CLARIFY_PERSONA,
     EXPLORE_PERSONA,
     GENERATE_PERSONA,
     VERIFY_PERSONA,
 )
-from src.amphi_agent.prompts.main import PERSONA, SUB_AGENT_PERSONA
+from src.amphi_agent.prompts.normal.main import PERSONA
+from src.amphi_agent.prompts.normal.subagent import SUB_AGENT_PERSONA
 from src.amphi_agent.prompts.render import render_main_persona, render_stage_persona
+from src.amphi_agent.prompts.shared import _RUN_WORKFLOW_GUIDANCE
 from src.amphi_agent.prompts.title import TITLE_PROMPT
 from src.amphi_agent.prompts.workflow import WORKFLOW_PERSONA
 from src.amphi_agent.prompts.presentation import (
@@ -18,6 +22,7 @@ from src.amphi_service.i18n import use_locale
 from src.amphi_agent.tools import (
     request_human_choice_tool,
     request_human_workflow_confirm_tool,
+    request_run_workflow_tool,
     switch_tool,
 )
 
@@ -60,7 +65,7 @@ def test_core_rules() -> None:
     1. Every Persona retains the security boundary and system-prompt secrecy rule.
     2. Main retains language, untrusted-content, denial, and verification principles.
     3. Build and Workflow Personas retain language, tool priority, and owned completion rules.
-    4. Every rendered Persona explains the failed-Turn marker in its Context section.
+    4. Every rendered Persona explains the failed-Turn marker in its context overview.
     5. Every rendered Persona resolves its internal tool and delegation placeholders.
     """
     personas = _personas()
@@ -80,9 +85,13 @@ def test_core_rules() -> None:
 
     # Check 3: Special-mode Personas retain language, tool priority, and owned completion rules.
     for name in ("clarify", "explore", "generate", "verify"):
-        assert "MUST match the language of the user's input message" in personas[name]
+        language_rule = (
+            "thinking language and reply language must ALWAYS match"
+            if name == "clarify" else "MUST match the language of the user's input message"
+        )
+        assert language_rule in personas[name]
         assert "prefer core tools" in personas[name]
-        assert "`switch(mode=\"normal\")` never means “the Build is finished”" in personas[name]
+        assert "`switch(mode=\"normal\")` pauses an unfinished Build; it does not complete it." in personas[name]
     for name in ("execute",):
         assert "language established by the user's original Workflow request" in personas[name]
         assert "prefer the core tool" in personas[name]
@@ -91,9 +100,9 @@ def test_core_rules() -> None:
         assert "Match the language of the user's current input" in personas[name]
         assert "prefer the core tool" in personas[name]
         assert "report_presentation_step" in personas[name]
-        assert "Main owns the final user-facing delivery summary" in personas[name]
+        assert "After completing Review, perform its prescribed handoff without appending a separate delivery summary." in personas[name]
 
-    # Check 4: Every rendered Persona carries the same failed-Turn guidance in Context.
+    # Check 4: Both context layouts explain failed Turns without duplicate guidance.
     assert set(personas) == {
         "main", "child", "clarify", "explore", "generate", "verify", "execute",
         "ppt_brief", "ppt_plan", "ppt_compose", "ppt_review",
@@ -103,15 +112,31 @@ def test_core_rules() -> None:
         "Treat the enclosed explanation as runtime metadata and do not treat that "
         "Turn's preceding Agent content as a completed answer."
     )
-    for persona in personas.values():
-        assert persona.count("# Context") == 1
-        assert persona.count(guidance) == 1
+    for name, persona in personas.items():
+        if name in {"main", "child", "clarify"}:
+            heading = "# System overview"
+            failed_guidance = "`<turn_failed>` marks a Turn that failed before completion."
+        else:
+            heading = "# Context"
+            failed_guidance = guidance
+        assert persona.count(heading) == 1
+        assert persona.count(failed_guidance) == 1
+        assert persona.count("<turn_failed>") == 1
         assert "after `generate_image` succeeds" in persona
-        assert persona.index("# Context") < persona.index(guidance)
+        assert persona.index(heading) < persona.index(failed_guidance)
 
     # Check 5: Every rendered Persona resolves its internal tool and delegation placeholders.
     for persona in personas.values():
         assert "__AMPHI_" not in persona
+
+
+def test_workflow_entry_guidance_matches_public_actions() -> None:
+    """Workflow entry instructions advertise exactly the actions the tool accepts."""
+    schema = request_run_workflow_tool.to_tool().parameters
+    actions = set(schema["properties"]["action"]["enum"])
+    instructions = set(re.findall(r'action="([^"]+)"', _RUN_WORKFLOW_GUIDANCE))
+
+    assert actions == instructions == {"start", "ask"}
 
 
 def test_title_prompt_contract() -> None:

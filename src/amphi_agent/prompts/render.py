@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Collection
 
 from ...amphi_service.i18n import backend_i18n
-from .main import PERSONA
+from .normal.main import PERSONA
 from .shared import (
     _MAIN_TOOL_NAMES_PLACEHOLDER,
     _STAGE_TOOL_NAMES_PLACEHOLDER,
@@ -56,6 +56,11 @@ def _ui_language() -> str:
 def render_main_persona(tool_names: Collection[str], *, template: str = PERSONA) -> str:
     """Render Main's persona with the exact runtime-visible tool names."""
     guidance = _sub_agent_guidance(tool_names)
+    if not guidance:
+        template = "".join(
+            line for line in template.splitlines(keepends=True)
+            if line.strip() != _SUB_AGENT_GUIDANCE_PLACEHOLDER
+        )
     return (
         template.replace(_MAIN_TOOL_NAMES_PLACEHOLDER, _format_tool_names(tool_names))
         .replace(_SUB_AGENT_GUIDANCE_PLACEHOLDER, guidance)

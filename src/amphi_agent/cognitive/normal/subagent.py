@@ -7,7 +7,7 @@ from bridgic.core.agentic.tool_specs import ToolSpec
 from ..._context import AmphiContext, AmphiOTAContext
 from ..._state import NormalStageState
 from ..._tools import TOOL_LIBRARY
-from ...prompts.main import SUB_AGENT_PERSONA
+from ...prompts.normal.subagent import SUB_AGENT_PERSONA
 from ...tools import FILE_SYSTEM_TOOL_NAMES
 from ..register import cognitive_stage
 from .main import MainThink
