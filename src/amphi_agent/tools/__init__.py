@@ -1,9 +1,9 @@
 """This agent's own tool surface — owned here so we control their behavior.
 
-Common tools live in this directory; business tools live in ``build``,
-``workflow``, ``powerpoint``, and ``browser``. This module preserves the shared
-import surface. Registration order remains in ``ToolLibrary`` and visibility
-remains with the Think workers.
+Common tools and the technical ``browser`` and ``powerpoint`` tool modules
+live in this directory; business tools live in ``build``, ``workflow``, and
+``ppt``. This module preserves the shared import surface. Registration order
+remains in ``ToolLibrary`` and visibility remains with the Think workers.
 
 * filesystem (``read_file`` / ``write_file`` / ``edit_file`` / ``glob`` /
   ``grep``) — reimplemented (not the framework built-ins) so a path argument
@@ -51,14 +51,14 @@ from .browser import (
     BROWSER_TOOL_NAMES,
     browser_tool_specs,
 )
-from .powerpoint import (
+from .ppt import (
     PresentationStepReport,
     ppt_rag_tool,
     report_presentation_step,
     report_presentation_step_tool,
     request_presentation_tool,
 )
-from .powerpoint.ppt_rag import ppt_rag
+from .ppt.ppt_rag import ppt_rag
 from ._filesystem import (
     FILE_SYSTEM_TOOL_NAMES,
     edit_file_tool,
@@ -74,7 +74,7 @@ from .build import (
     request_human_task_confirm_tool,
     request_human_workflow_confirm_tool,
 )
-from .request_human import request_human_choice_tool
+from ._request_human import request_human_choice_tool
 from ._schedule import (
     create_schedule,
     create_schedule_tool,
@@ -109,9 +109,8 @@ from ._skills import (
 from ._switch import switch, switch_tool
 from ._web_fetch import web_fetch_tool
 from ._web_search import web_search_tool
-from .workflow import (
+from ._workflow import (
     EditWorkflow,
-    WorkflowStepReport,
     edit_workflow,
     edit_workflow_tool,
     list_workflow_runs,
@@ -120,6 +119,9 @@ from .workflow import (
     read_workflow_run_tool,
     remove_workflow,
     remove_workflow_tool,
+)
+from .workflow import (
+    WorkflowStepReport,
     report_workflow_step,
     report_workflow_step_tool,
     request_run_workflow_tool,

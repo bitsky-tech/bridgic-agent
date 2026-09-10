@@ -6,7 +6,7 @@ from typing import Any, Literal, Optional
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
-from .session import PowerPointPageView, PowerPointWriteResult, SessionPowerPoint
+from ..powerpoint import PowerPointPageView, PowerPointWriteResult, SessionPowerPoint
 
 _MAX_PAGE_MARKDOWN_BYTES = 64 * 1024
 

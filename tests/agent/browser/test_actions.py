@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.amphi_agent.tools.browser.session import SessionBrowser, _SessionBrowserClient
+from src.amphi_agent.browser import SessionBrowser, _SessionBrowserClient
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.browser._harness import BrowserHarness, FakeClient
 

@@ -15,7 +15,7 @@ from ..._state import CallVerdict, NormalStageState, PresentationStageState, Pre
 from ...prompts.render import render_stage_persona
 from ...security import Permission
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
-from ...tools.powerpoint import PresentationStepReport, parse_presentation_step_data
+from ...tools.ppt import PresentationStepReport, parse_presentation_step_data
 from ..base import BaseThink
 from .shared import PRESENTATION_STAGE_ARTIFACTS, PRESENTATION_STAGE_ORDER, PRESENTATION_STAGE_STEPS
 

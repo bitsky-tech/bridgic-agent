@@ -63,7 +63,7 @@ def _digest(value: Any) -> str:
 
 def test_ppt_rag_module_supports_dependency_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     """Dotted imports expose the module while the root tool API keeps its function."""
-    import src.amphi_agent.tools.powerpoint.ppt_rag as rag_module
+    import src.amphi_agent.tools.ppt.ppt_rag as rag_module
 
     assert isinstance(rag_module, ModuleType)
     assert tools.ppt_rag is rag_module.ppt_rag
@@ -71,7 +71,7 @@ def test_ppt_rag_module_supports_dependency_replacement(monkeypatch: pytest.Monk
 
     catalog = object()
     monkeypatch.setattr(
-        "src.amphi_agent.tools.powerpoint.ppt_rag.get_ppt_template_catalog",
+        "src.amphi_agent.tools.ppt.ppt_rag.get_ppt_template_catalog",
         lambda: catalog,
     )
     assert rag_module.get_ppt_template_catalog() is catalog

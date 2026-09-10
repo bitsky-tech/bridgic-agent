@@ -35,8 +35,9 @@ from src.amphi_agent.tools.build import (
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
 )
-from src.amphi_agent.tools.powerpoint import PresentationStepReport
-from src.amphi_agent.tools.workflow import EditWorkflow, RequestRunWorkflow, WorkflowStepReport
+from src.amphi_agent.tools.ppt import PresentationStepReport
+from src.amphi_agent.tools._workflow import EditWorkflow
+from src.amphi_agent.tools.workflow import RequestRunWorkflow, WorkflowStepReport
 from src.amphi_service.protocol import (
     WsPresentationOutlineConfirmMessage,
     WsPresentationTemplateSelectionMessage,

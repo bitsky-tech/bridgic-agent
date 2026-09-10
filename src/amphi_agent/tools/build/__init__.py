@@ -1,11 +1,9 @@
 """Build entry requests and stage-owned human confirmations."""
 
-from .entry import (
+from .request_human import (
     RequestBuild,
     request_build,
     request_build_tool,
-)
-from .request_human import (
     RequestHumanTaskConfirm,
     request_human_task_confirm,
     RequestHumanWorkflowConfirm,

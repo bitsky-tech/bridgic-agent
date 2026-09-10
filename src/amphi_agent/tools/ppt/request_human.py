@@ -2,7 +2,7 @@
 
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
-from ..request_human import RequestHumanRejection
+from .._request_human import RequestHumanRejection
 
 
 class RequestPresentation:

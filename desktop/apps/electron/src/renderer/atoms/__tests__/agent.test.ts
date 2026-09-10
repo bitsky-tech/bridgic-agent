@@ -759,7 +759,7 @@ describe('reducer: message lifecycle', () => {
 describe('reducer: tool calls', () => {
   it('treats only interactive Browser tools as user-visible Browser activity', () => {
     // Exhaustive partition of `browser_tool_specs` in
-    // `src/amphi_agent/tools/browser/operations.py`. Keep the catalog and this contract
+    // `src/amphi_agent/tools/browser.py`. Keep the catalog and this contract
     // synchronized when a Browser tool is added or renamed.
     const interactiveBrowserTools = [
       'browser_open',

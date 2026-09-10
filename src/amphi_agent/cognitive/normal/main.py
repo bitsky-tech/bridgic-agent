@@ -15,8 +15,9 @@ from ..._tools import TOOL_LIBRARY
 from ...prompts.normal.main import PERSONA
 from ...prompts.render import render_main_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES
-from ...tools.powerpoint import RequestPresentation
-from ...tools.workflow import EditWorkflow, RequestRunWorkflow
+from ...tools.ppt import RequestPresentation
+from ...tools._workflow import EditWorkflow
+from ...tools.workflow import RequestRunWorkflow
 from ...tools.build import RequestBuild
 from ....amphi_service.i18n import backend_i18n
 from ....amphi_store import SessionTurnRecord, TurnStatus

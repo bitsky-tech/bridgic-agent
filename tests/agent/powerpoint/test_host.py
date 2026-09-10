@@ -6,8 +6,7 @@ from typing import Any
 
 import pytest
 
-from src.amphi_agent._powerpoint import PowerPointHost
-from src.amphi_agent.tools.powerpoint.session import PowerPointIdentity, PowerPointOperationError
+from src.amphi_agent.powerpoint import PowerPointHost, PowerPointIdentity, PowerPointOperationError
 
 
 def _overview(page_ids: tuple[str, ...] = ("cover", "history")) -> dict[str, Any]:

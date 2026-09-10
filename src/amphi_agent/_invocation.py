@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 from bridgic.amphibious import OTARecord
 
 from ._agent import AmphiAgent
-from ._browser import BrowserHost
-from ._powerpoint import PowerPointHost
+from .browser import BrowserHost
+from .powerpoint import PowerPointHost
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._error import PublicAgentError
 from ._memory import Memory

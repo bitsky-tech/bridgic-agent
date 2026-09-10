@@ -18,7 +18,7 @@ from src.amphi_agent import (
     WorkflowLibrary,
     WorkflowRunLibrary,
 )
-from src.amphi_agent.tools.browser.session import SessionBrowserState, SessionBrowserTab
+from src.amphi_agent.browser import SessionBrowserState, SessionBrowserTab
 from src.amphi_agent.cognitive import SubAgentThink
 from src.amphi_agent.cognitive import (
     BaseThink,

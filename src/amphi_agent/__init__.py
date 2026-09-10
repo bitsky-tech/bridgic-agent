@@ -22,9 +22,8 @@ still built and cached by the service, then injected into the invocation entry.
 from __future__ import annotations
 
 from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
-from ._browser import BrowserHost
-from ._powerpoint import PowerPointHost
-from .tools.powerpoint.session import SessionPowerPoint
+from .browser import BrowserHost
+from .powerpoint import PowerPointHost, SessionPowerPoint
 from .cognitive import BaseThink, MainThink
 from .prompts.shared import AGENT_NAME
 from ._context import (

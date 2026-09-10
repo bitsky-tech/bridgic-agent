@@ -7,8 +7,8 @@ from typing import Any
 from bridgic.core.model.types import Message, Response, Role
 
 from src.amphi_agent._state import PresentationChapterOutline, PresentationSlideOutline, PresentationStageState
-from src.amphi_agent.tools.powerpoint.template_catalog import LocalPPTTemplateCatalog, build_ppt_search_profile, build_ppt_template_index
-from src.amphi_agent.tools.powerpoint.ppt_rag import ppt_rag
+from src.amphi_agent.tools.ppt.template_catalog import LocalPPTTemplateCatalog, build_ppt_search_profile, build_ppt_template_index
+from src.amphi_agent.tools.ppt.ppt_rag import ppt_rag
 from tests.agent.tools._harness import ToolHarness
 
 
@@ -138,7 +138,7 @@ def test_local_ppt_index_renders_representative_preview_pages(monkeypatch: Any, 
         renderable=True,
     )
 
-    monkeypatch.setattr("src.amphi_agent.tools.powerpoint.template_catalog.shutil.which", lambda command: f"/tools/{command}")
+    monkeypatch.setattr("src.amphi_agent.tools.ppt.template_catalog.shutil.which", lambda command: f"/tools/{command}")
 
     def fake_run(arguments: list[str], **_: Any) -> Any:
         class Result:
@@ -152,7 +152,7 @@ def test_local_ppt_index_renders_representative_preview_pages(monkeypatch: Any, 
             Path(arguments[-1]).with_suffix(".jpg").write_bytes(f"slide-{slide_number}".encode())
         return Result()
 
-    monkeypatch.setattr("src.amphi_agent.tools.powerpoint.template_catalog.subprocess.run", fake_run)
+    monkeypatch.setattr("src.amphi_agent.tools.ppt.template_catalog.subprocess.run", fake_run)
 
     payload = build_ppt_template_index(source, tmp_path / "index.json")
     previews = payload["templates"][0]["preview_paths"]

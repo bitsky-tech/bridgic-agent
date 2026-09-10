@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from bridgic.browser.utils import generate_page_id
 
-from src.amphi_agent.tools.browser.session import (
+from src.amphi_agent.browser import (
     EmbeddedBrowserUnavailableError,
     _EmbeddedBrowserController,
     _EmbeddedSessionTabs,
@@ -216,7 +216,7 @@ async def test_embedded_client_lifecycle(monkeypatch: pytest.MonkeyPatch) -> Non
     chromium = Chromium(connected_browser)
     playwright = Playwright(chromium)
     starter = Starter(playwright)
-    monkeypatch.setattr("src.amphi_agent.tools.browser.session.async_playwright", lambda: starter)
+    monkeypatch.setattr("src.amphi_agent.browser.async_playwright", lambda: starter)
     client = _SessionBrowserClient(cdp="http://127.0.0.1:9222", headless=False)
 
     await client.start_and_bind_embedded("target-report")

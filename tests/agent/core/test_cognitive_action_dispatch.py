@@ -11,7 +11,7 @@ from src.amphi_agent._state import AwaitingFeedback, AwaitingPermission, Awaitin
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.build.base import BuildThink
 from src.amphi_agent.tools._subagent import run_subagent
-from src.amphi_agent.tools.request_human import request_human_choice
+from src.amphi_agent.tools._request_human import request_human_choice
 from src.amphi_store import SessionRecord
 from tests._support.sandbox import IsolatedPaths
 

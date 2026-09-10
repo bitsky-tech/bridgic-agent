@@ -1,3 +1,5 @@
+"""Session-bound browser tools and their basic and advanced catalogs."""
+
 import os
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -5,7 +7,7 @@ from typing import Dict, List, Literal, Optional
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
-from .session import SessionBrowser
+from ..browser import SessionBrowser
 
 _BRIDGIC_BROWSER_METHOD_TO_TOOL_NAME = {
     "navigate_to": "browser_open",

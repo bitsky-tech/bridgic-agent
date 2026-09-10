@@ -48,7 +48,7 @@ from .._state import (
 )
 from .._thinking_debug import write_thinking_debug
 from ..security import Permission
-from ..tools.request_human import RequestHumanChoice
+from ..tools._request_human import RequestHumanChoice
 from ..tools._subagent import BackgroundSubagentRequest, SubagentRequest
 
 

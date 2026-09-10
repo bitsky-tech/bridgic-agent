@@ -973,7 +973,7 @@ export const currentStreamingAtom = atom((get) => {
 })
 
 /** Browser tools that visibly change the page, tab, or interaction state.
- * Keep this exhaustive subset aligned with `src/amphi_agent/tools/browser/operations.py`;
+ * Keep this exhaustive subset aligned with `src/amphi_agent/tools/browser.py`;
  * observation, export, recording, and invisible context-control tools do not
  * bring the Browser surface forward. */
 const BROWSER_ACTION_TOOL_NAMES = new Set([
