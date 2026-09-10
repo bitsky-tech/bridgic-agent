@@ -18,15 +18,10 @@ from src.amphi_agent._invocation import (
     InvocationDisposition,
     InvocationRunResult,
 )
-from src.amphi_agent._state import (
-    AgentState,
-    AwaitingBuildConfirm,
-    AwaitingBuildConflict,
-    AwaitingWorkflowConfirm,
-    AwaitingWorkflowRunChoice,
-    BuildStageState,
-    WorkflowStageState,
-)
+from src.amphi_agent.cognitive.state import AgentState
+from src.amphi_agent.cognitive.normal.state import AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice
+from src.amphi_agent.cognitive.build.state import AwaitingWorkflowConfirm, BuildStageState
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_agent._workflow_run import WorkflowRunLibrary
 from src.amphi_agent._workflows import WorkflowLibrary
 from src.amphi_agent._workspace import RunWorkflowState, Workspace

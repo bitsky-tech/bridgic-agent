@@ -11,7 +11,9 @@ from bridgic.core.model.types import Message, Role
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ..._tools import TOOL_LIBRARY
-from ..._state import CallVerdict, NormalStageState, PresentationStageState, PresentationStepRecord
+from ..state import CallVerdict
+from ..normal.state import NormalStageState
+from .state import PresentationStageState, PresentationStepRecord
 from ...prompts.render import render_stage_persona
 from ...security import Permission
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
@@ -228,9 +230,9 @@ class PresentationThink(BaseThink):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Keep one presentation control and validate its active production cursor."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
         resolved = self._exclusive_call_verdicts(calls, resolved, {"ppt_rag", "report_presentation_step"})
 
         def legality_reason(call: StepToolCall) -> Optional[str]:

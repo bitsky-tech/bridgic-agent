@@ -1,6 +1,6 @@
 import type { CognitiveModeDescriptor } from './cognitive-mode'
 
-export type LabModuleId = 'agent-loop' | 'file-import' | 'memory'
+export type LabModuleId = 'agent-loop' | 'experiments' | 'file-import' | 'memory'
 
 export type RunStatus = 'completed' | 'running' | 'attention'
 

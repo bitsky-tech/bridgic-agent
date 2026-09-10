@@ -1,0 +1,76 @@
+
+.experiment-trace-column { container: experiment-trace / inline-size; }
+.experiment-trace-column > .dbg-main { flex: 1; }
+.experiment-trace-header { min-width: 0; margin-bottom: 25px; }
+.experiment-trace-header h1 { display: flex; align-items: center; gap: 8px; margin: 7px 0 14px; font-size: 21px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.experiment-trace-task { display: flex; align-items: baseline; gap: 9px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle); }
+.experiment-trace-task > span { flex-shrink: 0; color: var(--text-tertiary); font-size: 10px; }
+.experiment-trace-task > p { min-width: 0; margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.experiment-trace-task > button { margin-left: auto; flex-shrink: 0; }
+.experiment-side-body button { cursor: pointer; font-family: inherit; }
+.experiment-side-body button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.experiment-side-body .run-link { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 0; border: 0; background: transparent; color: var(--brand-blue); font-size: 11px; line-height: 1.7; text-align: left; }
+.experiment-side-body .run-link:hover { color: var(--text-primary); }
+.experiment-side-body .run-link > svg { flex-shrink: 0; }
+.experiment-panel-intro { margin: 0 0 17px; font-size: 11px; color: var(--text-tertiary); line-height: 1.8; }
+.experiment-panel-list { display: flex; flex-direction: column; min-width: 0; }
+.experiment-record { display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; margin: 0 0 12px; padding: 14px; border: 1px solid var(--border-subtle); border-radius: 9px; background: transparent; color: var(--text-secondary); text-align: left; transition: background-color 120ms; }
+.experiment-record:hover { background: var(--bg-hover); border-color: var(--border-default); }
+.experiment-record-heading { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.experiment-record-heading strong { font-weight: 500; font-size: 13px; line-height: 1.6; color: var(--text-primary); overflow-wrap: anywhere; }
+.experiment-record-heading > svg { flex-shrink: 0; color: var(--text-tertiary); }
+.experiment-record-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; color: var(--text-tertiary); font-size: 10px; line-height: 1.7; }
+.experiment-record-summary { font-size: 11px; line-height: 1.85; overflow-wrap: anywhere; }
+.experiment-record-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
+.experiment-record-bottom code { color: var(--text-tertiary); font-size: 9px; overflow-wrap: anywhere; }
+.experiment-record-state { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; white-space: nowrap; }
+.experiment-record-state.is-answered { color: var(--status-success); }
+.experiment-record-state.is-waiting { color: var(--status-warning); }
+.experiment-record-state.is-historical { color: var(--text-tertiary); }
+.experiment-record-origin { margin: 0 0 16px; color: var(--text-tertiary); font-size: 10px; line-height: 1.8; }
+.experiment-record-origin > span { display: block; margin-top: 5px; }
+.experiment-file-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.experiment-file-title > svg { flex-shrink: 0; color: var(--brand-blue); }
+.experiment-artifact-path { color: var(--text-tertiary); font-size: 10px; overflow-wrap: anywhere; line-height: 1.8; }
+.experiment-panel-empty { padding: 60px 16px; text-align: center; color: var(--text-tertiary); font-size: 11px; line-height: 1.8; }
+.experiment-panel-empty p { font-size: 13px; color: var(--text-secondary); }
+.experiment-agent-content { padding: 4px; }
+.experiment-agent-content > h3 { margin: 8px 0 5px; font-size: 18px; font-weight: 600; }
+.experiment-agent-content > code { color: var(--phase-accent-text); font-size: 11px; }
+.experiment-agent-task { padding: 21px 0; margin: 20px 0 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+.experiment-agent-task h4 { font-size: 10px; color: var(--text-tertiary); font-weight: 500; margin: 0 0 9px; }
+.experiment-agent-task p { margin: 0 0 9px; font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.experiment-agent-task.is-followup { margin-top: 0; border-top: 0; }
+.experiment-agent-sample { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+.experiment-agent-sample h4 { margin: 0; color: var(--text-tertiary); font-size: 10px; font-weight: 500; }
+.experiment-agent-sample .experiment-panel-note { margin-top: 12px; }
+.experiment-agent-facts { margin: 16px 0; display: grid; gap: 10px; }
+.experiment-agent-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 11px; line-height: 1.8; }
+.experiment-agent-facts dt { color: var(--text-tertiary); }
+.experiment-agent-facts dd { margin: 0; color: var(--text-secondary); }
+.experiment-panel-note { color: var(--text-tertiary); font-size: 11px; line-height: 1.9; margin-top: 20px; }
+.run-interaction-body { min-width: 0; }
+.run-kind { display: inline-flex; align-items: center; max-width: 100%; padding: 0 5px; border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-tertiary); font-size: 9px; font-weight: 400; line-height: 1.6; overflow-wrap: anywhere; }
+.run-kind.is-specialized { border-color: color-mix(in srgb, var(--phase-accent-text) 20%, var(--border-subtle)); color: var(--phase-accent-text); }
+.run-dialog-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--text-tertiary); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.run-dialog-meta code { font-size: 10px; overflow-wrap: anywhere; }
+.run-interaction-prompt { margin: 13px 0 18px; color: var(--text-secondary); font-size: 12px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-question { padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+.run-question + .run-question { margin-top: 18px; }
+.run-question h3 { margin: 0; color: var(--text-tertiary); font-size: 10px; font-weight: 500; line-height: 1.7; overflow-wrap: anywhere; }
+.run-question > p:not(.run-recorded-answer) { margin: 5px 0 12px; color: var(--text-primary); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.run-question-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.run-question-options > span { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 7px 11px; border: 1px solid var(--border-default); border-radius: 5px; color: var(--text-secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.run-question-options > span > svg { flex-shrink: 0; }
+.run-question-options > span.is-chosen { border-color: color-mix(in srgb, var(--brand-blue) 50%, var(--border-default)); background: color-mix(in srgb, var(--brand-blue) 6%, var(--bg-surface)); color: var(--brand-blue); }
+.run-recorded-answer { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; margin: 12px 0 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.8; overflow-wrap: anywhere; }
+.run-recorded-answer strong { color: var(--text-primary); font-size: 11px; font-weight: 500; }
+.run-outline-request { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--border-subtle); }
+.run-outline-request > p { margin: 0 0 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+.run-outline-request > .run-recorded-answer { margin: 12px 0 0; color: var(--text-tertiary); font-size: 10px; }
+.run-outline-request > ol { display: grid; gap: 0; margin: 0 0 12px; padding-left: 21px; color: var(--text-tertiary); font-size: 11px; }
+.run-outline-request li { padding: 8px 0 8px 4px; border-bottom: 1px solid var(--border-subtle); line-height: 1.7; }
+.run-outline-request li > span { color: var(--text-primary); overflow-wrap: anywhere; }
+.run-outline-request li > small { margin-left: 12px; color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
+.run-interaction-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 18px; flex-shrink: 0; margin-top: 24px; padding: 12px 0; border-top: 1px solid var(--border-subtle); }
+.run-interaction-footer > span { flex: 1; min-width: 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.7; overflow-wrap: anywhere; }

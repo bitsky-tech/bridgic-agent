@@ -7,7 +7,14 @@ from bridgic.amphibious._type import ThinkResult
 from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
-from src.amphi_agent._state import AwaitingFeedback, AwaitingPermission, AwaitingSubAgent, BuildStageState, CallVerdict, RoundPermission
+from src.amphi_agent.cognitive.state import (
+    AwaitingFeedback,
+    AwaitingPermission,
+    AwaitingSubAgent,
+    CallVerdict,
+    RoundPermission,
+)
+from src.amphi_agent.cognitive.build.state import BuildStageState
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.build.base import BuildThink
 from src.amphi_agent.tools._subagent import run_subagent

@@ -5,16 +5,16 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepTo
 from bridgic.amphibious._type import ThinkResult
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
-from src.amphi_agent._state import (
+from src.amphi_agent.cognitive.presentation.state import (
     AwaitingPresentationOutlineConfirm,
     AwaitingPresentationTemplateSelection,
-    CallVerdict,
-    NormalStageState,
     PresentationChapterOutline,
     PresentationStageState,
     PresentationStepRecord,
     PresentationTemplateCandidate,
 )
+from src.amphi_agent.cognitive.state import CallVerdict
+from src.amphi_agent.cognitive.normal.state import NormalStageState
 from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.cognitive import (
@@ -327,7 +327,8 @@ async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
 
     calls = ota_context.think_result.tool_calls
     verdicts = [CallVerdict(id=call.call_id, tool=call.tool, verdict="allow") for call in calls]
-    resolved = await worker.legality_check(ota_context, context, calls, verdicts)
+    ota_context.tools = worker.select_tools(ota_context, context)
+    resolved = await worker.legality_check(ota_context, context, calls, verdicts, AmphiAgent())
 
     assert all(verdict.verdict == "deny" for verdict in resolved)
     assert all("control-flow rejected" in (verdict.reason or "") for verdict in resolved)

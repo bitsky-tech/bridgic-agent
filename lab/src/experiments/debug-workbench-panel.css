@@ -1,0 +1,112 @@
+.debug-workbench-panel { min-width: 0; color: var(--text-primary); font-size: 12px; line-height: 1.55; }
+.debug-workbench-panel button, .debug-workbench-panel input, .debug-workbench-panel textarea, .debug-workbench-panel select { font: inherit; }
+.debug-workbench-panel button { cursor: pointer; }
+.debug-workbench-panel button:disabled { cursor: default; opacity: .45; }
+.debug-workbench-panel button:focus-visible, .debug-workbench-panel input:focus-visible, .debug-workbench-panel select:focus-visible, .debug-workbench-panel textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.debug-list-toolbar { display: grid; gap: 9px; margin-bottom: 10px; }
+.debug-search { display: flex; gap: 8px; align-items: center; padding: 8px 10px; min-width: 0; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-hover); color: var(--text-tertiary); }
+.debug-search input { flex: 1; width: 0; min-width: 0; border: 0; outline: 0; color: var(--text-primary); background: transparent; }
+.debug-search input::placeholder { color: var(--text-tertiary); }
+.debug-filter-row { display: flex; gap: 8px; min-width: 0; }
+.debug-list-toolbar select { min-width: 0; padding: 7px 9px; color: var(--text-secondary); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 7px; }
+.debug-filter-row > select { flex: 1; width: 0; }
+.debug-tool-select { width: 100%; }
+.debug-list-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-tertiary); font-size: 11px; }
+.debug-list-caption > span:last-child { display: inline-flex; align-items: center; gap: 4px; }
+.debug-record-list { display: grid; gap: 9px; }
+.debug-record-card { display: block; width: 100%; min-width: 0; padding: 13px; text-align: left; color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 11px; background: var(--bg-surface); transition: background-color 120ms, border-color 120ms; }
+.debug-record-card:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.debug-record-card.is-highlighted { border-color: var(--phase-accent-text); background: color-mix(in srgb, var(--phase-accent-bg) 55%, var(--bg-surface)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--phase-accent-text) 12%, transparent); }
+.debug-record-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.debug-record-top > svg { flex-shrink: 0; color: var(--text-tertiary); }
+.debug-record-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 31px; height: 31px; border-radius: 9px; color: var(--text-secondary); background: var(--bg-hover); }
+.debug-record-icon.is-error { color: var(--status-error); background: var(--status-error-bg); }
+.debug-record-icon.is-success { color: var(--status-success); background: var(--status-success-bg); }
+.debug-record-heading { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.debug-record-heading > strong { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; line-height: 1.4; }
+.debug-record-heading > span { color: var(--text-tertiary); font-size: 10px; overflow-wrap: anywhere; }
+.debug-record-card > p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 10px 0; color: var(--text-secondary); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.debug-record-bottom { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding-top: 9px; border-top: 1px solid var(--border-subtle); font-size: 10px; }
+.debug-record-bottom > span:last-child { display: inline-flex; gap: 4px; align-items: center; color: var(--text-tertiary); }
+.debug-record-status { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
+.debug-record-status.is-success { color: var(--status-success); }
+.debug-record-status.is-error { color: var(--status-error); }
+.debug-record-status.is-running { color: var(--accent); }
+.debug-record-status.is-waiting, .debug-record-status.is-cancelled { color: var(--status-warning); }
+.debug-record-status.is-example { color: var(--text-tertiary); }
+.debug-round-number { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-width: 34px; min-height: 30px; padding: 4px 6px; color: var(--phase-accent-text); background: var(--phase-accent-bg); border-radius: 7px; font-family: var(--font-mono, monospace); font-size: 11px; font-weight: 500; }
+.debug-panel-empty { display: flex; align-items: center; flex-direction: column; padding: 34px 14px; text-align: center; gap: 10px; color: var(--text-tertiary); }
+.debug-panel-empty > strong { color: var(--text-secondary); font-weight: 500; }
+.debug-panel-empty > p { margin: 0; font-size: 11px; }
+.debug-back-button, .debug-text-button { display: inline-flex; align-items: center; justify-content: flex-start; gap: 5px; padding: 0; border: 0; background: transparent; color: var(--accent); text-align: left; }
+.debug-back-button { color: var(--text-secondary); margin-bottom: 17px; font-size: 11px !important; }
+.debug-back-button:hover, .debug-text-button:hover { color: var(--phase-accent-text); }
+.debug-detail-title h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; font-size: 14px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; outline: none; }
+.debug-detail-title h3 > svg { flex-shrink: 0; color: var(--phase-accent-text); }
+.debug-detail-title > p { margin: 9px 0 14px; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.debug-record-meta { display: grid; gap: 7px; padding: 12px; margin: 12px 0; border-radius: 8px; background: var(--bg-hover); font-size: 11px; }
+.debug-record-meta > div { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; }
+.debug-record-meta dt { color: var(--text-tertiary); flex-shrink: 0; }
+.debug-record-meta dd { text-align: right; margin: 0; overflow-wrap: anywhere; color: var(--text-secondary); }
+.debug-detail-links { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 13px 0 18px; font-size: 11px; }
+.debug-detail-section { margin-top: 21px; min-width: 0; }
+.debug-detail-section > header { display: flex; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 9px; }
+.debug-detail-section h4 { margin: 0; font-size: 12px; font-weight: 600; }
+.debug-detail-section > header > span { color: var(--text-tertiary); font-size: 10px; }
+.debug-json { max-width: 100%; padding: 12px; margin: 0; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-hover); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.75; tab-size: 2; }
+.debug-empty-value, .debug-panel-hint { margin: 8px 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.7; }
+.debug-tool-error { display: flex; align-items: flex-start; gap: 7px; padding: 10px; border-radius: 7px; margin-bottom: 9px; color: var(--status-error); background: var(--status-error-bg); font-size: 11px; overflow-wrap: anywhere; }
+.debug-tool-error > svg { flex-shrink: 0; margin-top: 2px; }
+.debug-editor { padding-top: 3px; }
+.debug-editor > label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 9px; font-weight: 600; font-size: 12px; }
+.debug-editor > label > span { color: var(--text-tertiary); font-size: 10px; font-weight: 400; }
+.debug-editor textarea { width: 100%; min-height: 170px; max-height: 480px; resize: vertical; padding: 12px; color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-hover); font: 11px/1.75 var(--font-mono, monospace); tab-size: 2; }
+.debug-editor textarea[aria-invalid='true'] { border-color: var(--status-error); }
+.debug-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; margin-top: 10px; }
+.debug-primary-button, .debug-secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--border-default); border-radius: 7px; font-size: 11px !important; color: var(--text-secondary); background: var(--bg-surface); }
+.debug-secondary-button:hover:not(:disabled) { background: var(--bg-hover); }
+.debug-primary-button { color: var(--phase-accent-text); border-color: color-mix(in srgb, var(--phase-accent-text) 36%, transparent); background: var(--phase-accent-bg); }
+.debug-primary-button:hover:not(:disabled) { border-color: var(--phase-accent-text); }
+.debug-validation-error { margin: 6px 0; color: var(--status-error); font-size: 11px; }
+.debug-preview-feedback { display: flex; gap: 6px; align-items: flex-start; margin-top: 9px; color: var(--phase-accent-text); font-size: 11px; line-height: 1.6; }
+.debug-preview-feedback:empty { display: none; }
+.debug-preview-feedback > svg { flex-shrink: 0; margin-top: 2px; }
+.debug-receipts, .debug-prompt-messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.debug-receipts details { padding: 10px; border: 1px solid var(--border-default); border-radius: 8px; }
+.debug-receipts summary, .debug-prompt-messages summary, .debug-tool-definitions summary, .debug-model-options summary { display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none; color: var(--text-secondary); font-size: 11px; }
+.debug-workbench-panel summary::-webkit-details-marker { display: none; }
+.debug-receipts summary > strong { flex: 1; font-weight: 500; }
+.debug-receipts summary > time { color: var(--text-tertiary); font-size: 10px; }
+.debug-receipts details > p { color: var(--text-tertiary); font-size: 11px; }
+.debug-receipts .debug-json { font-size: 10px; }
+.debug-round-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 13px; }
+.debug-round-tabs > button { flex: 1; min-width: 0; padding: 9px 3px; border: 0; border-bottom: 2px solid transparent; color: var(--text-tertiary); background: transparent; font-size: 11px; }
+.debug-round-tabs > button[aria-selected='true'] { border-bottom-color: var(--phase-accent-text); color: var(--phase-accent-text); font-weight: 600; }
+.debug-provenance { display: flex; align-items: flex-start; gap: 6px; padding: 10px; color: var(--text-tertiary); background: var(--bg-hover); border-radius: 7px; font-size: 10px; line-height: 1.7; }
+.debug-provenance > svg { flex-shrink: 0; margin-top: 2px; }
+.debug-prompt-messages details { border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden; }
+.debug-prompt-messages summary { padding: 10px; background: var(--bg-hover); }
+.debug-prompt-messages summary > strong { flex: 1; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.debug-prompt-messages summary > code { color: var(--phase-accent-text); font-size: 10px; }
+.debug-prompt-messages summary > span { color: var(--text-tertiary); font-size: 10px; }
+.debug-prompt-messages pre { margin: 0; padding: 11px; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 11px; line-height: 1.8; }
+.debug-tool-definitions { display: grid; gap: 7px; }
+.debug-tool-definitions details { padding: 10px; border: 1px solid var(--border-default); border-radius: 7px; }
+.debug-tool-definitions summary > code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.debug-tool-definitions details > p { color: var(--text-secondary); font-size: 11px; }
+.debug-model-options { margin-top: 16px; }
+.debug-model-options summary { justify-content: space-between; margin-bottom: 8px; }
+.debug-round-calls { display: grid; gap: 8px; }
+.debug-round-calls > button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 11px 9px; text-align: left; color: var(--text-secondary); background: var(--bg-hover); border: 1px solid var(--border-subtle); border-radius: 8px; }
+.debug-round-calls > button > svg { flex-shrink: 0; }
+.debug-round-calls > button > span:not(.debug-record-status) { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 4px; }
+.debug-round-calls strong { overflow-wrap: anywhere; color: var(--text-primary); font-size: 11px; font-weight: 500; }
+.debug-round-calls small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 10px; overflow-wrap: anywhere; color: var(--text-tertiary); }
+.debug-round-calls .debug-record-status { font-size: 9px; }
+.debug-decision { padding: 11px; margin: 0; color: var(--phase-accent-text); border-radius: 7px; background: var(--phase-accent-bg); font-size: 11px; line-height: 1.8; }
+.debug-evidence { padding-left: 18px; color: var(--text-secondary); font-size: 11px; line-height: 1.8; }
+.debug-evidence li + li { margin-top: 6px; }
+.debug-round-replay { padding-top: 17px; margin-top: 20px; border-top: 1px solid var(--border-subtle); }
+.debug-round-replay > button { width: 100%; }
+.debug-round-replay > .debug-editor { margin-top: 14px; }
+@media (prefers-reduced-motion: reduce) { .debug-record-card { transition: none; } }

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from src.amphi_agent import AgentInvocation, InvocationDisposition, InvocationTraceLimitError
-from src.amphi_agent._state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
+from src.amphi_agent.cognitive.state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
 from src.amphi_agent.runtime._environment import AppCommandEnvironmentSnapshot, app_command_environment
 from src.amphi_service.runtime._session_events import SessionEventBroker
 from src.amphi_service.runtime._system_events import SystemEventBroker

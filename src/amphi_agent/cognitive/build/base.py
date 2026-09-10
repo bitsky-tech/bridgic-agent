@@ -11,7 +11,9 @@ from ..base import BaseThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ...security import Permission
-from ..._state import CallVerdict, BuildStageState, NormalStageState
+from ..state import CallVerdict
+from .state import BuildStageState
+from ..normal.state import NormalStageState
 from ..._tools import TOOL_LIBRARY
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
@@ -250,9 +252,9 @@ class BuildThink(BaseThink):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Validate explicit handoffs within the current Build."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
         for index, (call, verdict) in enumerate(zip(calls, resolved)):
             if verdict.verdict == Permission.DENY.value:
                 continue

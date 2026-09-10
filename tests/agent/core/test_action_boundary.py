@@ -11,7 +11,8 @@ from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
 from src.amphi_agent._error import AgentEmptyAnswerError
-from src.amphi_agent._state import BuildStageState, CallVerdict, RoundPermission
+from src.amphi_agent.cognitive.build.state import BuildStageState
+from src.amphi_agent.cognitive.state import CallVerdict, RoundPermission
 from src.amphi_agent.security import Permission
 from src.amphi_agent.tools import request_human_choice_tool, run_subagent_tool, switch_tool
 from src.amphi_store import SessionRecord

@@ -10,7 +10,7 @@ from bridgic.amphibious._type import ThinkResult
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
-from src.amphi_agent._state import CallVerdict, RoundPermission
+from src.amphi_agent.cognitive.state import CallVerdict, RoundPermission
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.security import Permission
 from src.amphi_store import SessionRecord

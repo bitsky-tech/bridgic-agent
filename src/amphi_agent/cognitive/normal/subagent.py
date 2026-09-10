@@ -5,7 +5,7 @@ from typing import List
 from bridgic.core.agentic.tool_specs import ToolSpec
 
 from ..._context import AmphiContext, AmphiOTAContext
-from ..._state import NormalStageState
+from .state import NormalStageState
 from ..._tools import TOOL_LIBRARY
 from ...prompts.normal.subagent import SUB_AGENT_PERSONA
 from ...tools import FILE_SYSTEM_TOOL_NAMES

@@ -107,7 +107,7 @@ _TIMEOUT_SECONDS = _resolve_timeout()
 _VALID_VERDICTS = ("allow", "ask", "deny")
 
 # Cap on how many rounds of user requests are fed to the classifier. **Single source of truth**:
-# the injection side (``_agent._recent_user_messages``) reads it from here too. These used to be
+# the injection side (``cognitive.base.BaseThink._recent_user_messages``) reads it from here too. These used to be
 # two separate bare 5s, so raising the injection-side one had no effect — prompt assembly here cut
 # it back to 5, and "the user named it" is soft_deny's only unlock key, so tuning this is the first
 # thing you reach for when debugging "I named it earlier but it still prompts".

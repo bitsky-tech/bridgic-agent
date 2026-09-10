@@ -1,6 +1,6 @@
 """Cognitive worker for exploring a Workflow Build implementation plan."""
 
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from bridgic.amphibious import StepToolCall
 from bridgic.core.model.types import Message, Role
@@ -9,9 +9,13 @@ from ...security import Permission
 from ..register import cognitive_stage
 from .base import BuildThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
-from ..._state import CallVerdict
+from ..state import CallVerdict
 from ..._skills import Skill, SkillGroup
 from ...prompts.build.explore import EXPLORE_PERSONA
+
+
+if TYPE_CHECKING:
+    from ..._agent import AmphiAgent
 
 
 @cognitive_stage(mode="build", stage="explore", order=20)
@@ -69,9 +73,9 @@ class ExploreThink(BuildThink):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
 
         def reason_for_call(call: StepToolCall) -> Optional[str]:
             if getattr(call, "tool", None) != "switch":

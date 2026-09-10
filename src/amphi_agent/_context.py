@@ -10,13 +10,13 @@ from ._memory import Memory
 from ._llm_provider import LlmProvider
 from ._schedules import ScheduleLibrary
 from ._skills import SkillLibrary
-from ._state import AgentState
+from .cognitive.state import AgentState
 from ._workspace import Workspace
 from ._workflow_run import WorkflowRunLibrary
 from ._workflows import WorkflowLibrary
 
 if TYPE_CHECKING:
-    from ._state import AwaitingSubAgent, InStage, InteractionState
+    from .cognitive.state import AwaitingSubAgent, InStage, InteractionState
     from ._invocation import AgentInvocation
 else:
     AgentInvocation = Any

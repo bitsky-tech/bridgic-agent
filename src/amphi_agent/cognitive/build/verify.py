@@ -14,7 +14,9 @@ from .base import BuildThink
 from ..base import render_input
 from ....amphi_store import SessionTurnRecord, TurnStatus
 from ..._tools import TOOL_LIBRARY
-from ..._state import CallVerdict, AwaitingWorkflowConfirm, BuildStageState, NormalStageState
+from ..state import CallVerdict
+from .state import AwaitingWorkflowConfirm, BuildStageState
+from ..normal.state import NormalStageState
 from ...tools.build import RequestHumanWorkflowConfirm
 from ...tools import switch_tool
 from ..._context import AmphiContext, AmphiOTAContext
@@ -290,9 +292,9 @@ class VerifyThink(BuildThink):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
         resolved = self._exclusive_call_verdicts(calls, resolved, {"request_human_workflow_confirm"})
 
         def reason_for_call(call: StepToolCall) -> Optional[str]:

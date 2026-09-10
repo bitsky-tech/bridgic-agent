@@ -7,12 +7,7 @@ from uuid import uuid4
 from bridgic.amphibious import OTARecord
 
 from ..._context import AmphiContext, AmphiOTAContext
-from ..._state import (
-    AwaitingPresentationOutlineConfirm,
-    AwaitingPresentationTemplateSelection,
-    PresentationStageState,
-    PresentationTemplateCandidate,
-)
+from .state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection, PresentationStageState, PresentationTemplateCandidate
 from ...prompts.presentation.plan import PRESENTATION_PLAN_PERSONA
 
 from ..register import cognitive_stage

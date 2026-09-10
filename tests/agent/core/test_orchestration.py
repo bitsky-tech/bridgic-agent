@@ -16,19 +16,11 @@ from src.amphi_agent import (
     WorkflowLibrary,
     WorkflowRunLibrary,
 )
-from src.amphi_agent._state import (
-    AwaitingBuildConflict,
-    AwaitingPresentationOutlineConfirm,
-    AwaitingPresentationTemplateSelection,
-    AwaitingTaskConfirm,
-    AwaitingWorkflowConfirm,
-    AwaitingWorkflowRunChoice,
-    BuildStageState,
-    NormalStageState,
-    PresentationStageState,
-    RoundPermission,
-    WorkflowStageState,
-)
+from src.amphi_agent.cognitive.normal.state import AwaitingBuildConflict, AwaitingWorkflowRunChoice, NormalStageState
+from src.amphi_agent.cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection, PresentationStageState
+from src.amphi_agent.cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
+from src.amphi_agent.cognitive.state import RoundPermission
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent._error import AgentResumeError
 from src.amphi_agent.tools.build import (

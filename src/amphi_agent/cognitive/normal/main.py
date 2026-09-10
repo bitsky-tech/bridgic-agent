@@ -10,7 +10,10 @@ from bridgic.core.model.types import Message, Role
 
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
-from ..._state import CallVerdict, AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice, BuildStageState, NormalStageState, PresentationStageState
+from ..state import CallVerdict
+from .state import AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice, NormalStageState
+from ..build.state import BuildStageState
+from ..presentation.state import PresentationStageState
 from ..._tools import TOOL_LIBRARY
 from ...prompts.normal.main import PERSONA
 from ...prompts.render import render_main_persona
@@ -827,9 +830,9 @@ class MainThink(BaseThink):
         names = [tool.tool_name for tool in ota_context.tools]
         return render_main_persona(names, template=self.persona).strip()
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
         resolved = self._exclusive_call_verdicts(calls, resolved, {"edit_workflow", "request_build", "request_presentation", "request_run_workflow"})
 
         def reason_for_call(call: StepToolCall) -> Optional[str]:

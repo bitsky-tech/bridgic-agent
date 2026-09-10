@@ -1,9 +1,9 @@
-"""Cognitive workers for executing saved Workflows."""
+"""State models owned by saved Workflow execution."""
 
-from .base import WorkflowRunThink
-from .execute import WorkflowThink
+from .state import (
+    WorkflowStageState,
+)
 
 __all__ = [
-    "WorkflowRunThink",
-    "WorkflowThink",
+    "WorkflowStageState",
 ]

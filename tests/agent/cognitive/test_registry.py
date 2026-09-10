@@ -9,11 +9,12 @@ from bridgic.amphibious import AmphibiousAutoma, Context, OTAContext, RETURN, Th
 from bridgic.core.model.types import Message, Role
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session, cognitive
-from src.amphi_agent._state import NormalStageState
+from src.amphi_agent.cognitive.normal.state import NormalStageState
 from src.amphi_agent.cognitive import get_cognitive_stages
 from src.amphi_agent.cognitive import register as registration
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.register import cognitive_stage
+from src.amphi_agent.tools import edit_workflow_tool
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from tests.agent.cognitive._harness import legality_reason, tool_call
 
@@ -283,6 +284,9 @@ async def test_agent_owned_descriptors_run_with_fresh_workers(registry) -> None:
 async def test_registered_base_worker_runs_shared_thinking_without_main_policy(registry) -> None:
     @cognitive_stage(mode="custom", stage="custom_stage", order=10)
     class CustomThink(BaseThink):
+        def select_tools(self, ota_context, context):
+            return [edit_workflow_tool]
+
         async def assemble_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[Message]:
             ota_context.tools = self.select_tools(ota_context, context)
             return [
@@ -315,7 +319,7 @@ async def test_registered_base_worker_runs_shared_thinking_without_main_policy(r
     llm.stream_turn.assert_awaited_once()
     messages, tools = llm.stream_turn.call_args.args
     assert messages[0].content == "Follow the custom workflow."
-    assert tools is None
+    assert [tool.name for tool in tools] == ["edit_workflow"]
     assert ota_context.context_usage.input_tokens == 13
     assert ota_context.context_usage.output_tokens == 4
 

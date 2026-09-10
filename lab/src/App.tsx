@@ -11,6 +11,7 @@ import {
   Database,
   Download,
   FileInput,
+  FlaskConical,
   GitBranch,
   Languages,
   Moon,
@@ -56,6 +57,7 @@ import {
   comparePromptReconstructions,
 } from './prompt-compare'
 import type { LabModuleId, RoundTrace, RunStatus, SessionTrace } from './types'
+import { ExperimentWorkspace } from './experiments/ExperimentWorkspace'
 
 type InspectorTab = 'overview' | 'prompt' | 'tools'
 type Theme = 'dark' | 'light'
@@ -75,6 +77,13 @@ const modules: LabModule[] = [
     shortLabelKey: 'module.agentLoop.short',
     descriptionKey: 'module.agentLoop.description',
     icon: Activity,
+  },
+  {
+    id: 'experiments',
+    labelKey: 'module.experiments.label',
+    shortLabelKey: 'module.experiments.short',
+    descriptionKey: 'module.experiments.description',
+    icon: FlaskConical,
   },
   {
     id: 'file-import',
@@ -417,7 +426,7 @@ function PlatformHeader({
       </nav>
 
       <div className="header-actions">
-        <span className="local-indicator"><span className="local-dot" />{t('data.local')}</span>
+        <span className="local-indicator">{activeModule === 'experiments' ? <FlaskConical size={12} aria-hidden="true" /> : <span className="local-dot" />}{t(activeModule === 'experiments' ? 'data.sample' : 'data.local')}</span>
         <button
           type="button"
           className="language-button"
@@ -1899,6 +1908,7 @@ function ModulePlaceholder({ module }: { module: LabModule }) {
 
 function AppContent() {
   const [activeModule, setActiveModule] = useState<LabModuleId>('agent-loop')
+  const [experimentsOpened, setExperimentsOpened] = useState(false)
   const [theme, setTheme] = useState<Theme>('dark')
   const module = modules.find((candidate) => candidate.id === activeModule) ?? defaultModule
 
@@ -1910,14 +1920,18 @@ function AppContent() {
   }, [theme])
 
   return (
-    <div className="lab-app" data-theme={theme}>
+    <div className="lab-app" data-theme={theme} data-module={activeModule}>
       <PlatformHeader
         activeModule={activeModule}
-        onModuleChange={setActiveModule}
+        onModuleChange={nextModule => {
+          if (nextModule === 'experiments') setExperimentsOpened(true)
+          setActiveModule(nextModule)
+        }}
         theme={theme}
         onThemeChange={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
       />
-      {activeModule === 'agent-loop' ? <AgentLoopLab /> : <ModulePlaceholder module={module} />}
+      {activeModule !== 'experiments' && (activeModule === 'agent-loop' ? <AgentLoopLab /> : <ModulePlaceholder module={module} />)}
+      {experimentsOpened && <div hidden={activeModule !== 'experiments'} style={{ display: activeModule === 'experiments' ? 'grid' : 'none', minWidth: 0, minHeight: 0 }}><ExperimentWorkspace /></div>}
     </div>
   )
 }

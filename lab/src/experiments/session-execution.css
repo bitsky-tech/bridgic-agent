@@ -1,0 +1,104 @@
+.session-execution { min-width: 0; padding: 0 0 18px; }
+.session-execution-heading { display: flex; justify-content: space-between; gap: 20px; align-items: baseline; margin: 0 0 22px; }
+.session-execution-heading h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.session-execution-heading p { margin: 7px 0 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.8; }
+.session-execution-heading > span { flex-shrink: 0; color: var(--text-tertiary); font-size: 11px; }
+.session-turns, .session-stage-tree { margin: 0; padding: 0; list-style: none; min-width: 0; }
+.session-turn { min-width: 0; padding-bottom: 18px; }
+.session-turn + .session-turn { padding-top: 30px; }
+.session-user-message { width: fit-content; max-width: 85%; margin-left: auto; padding: 12px 17px; border-radius: 16px 16px 5px 16px; background: color-mix(in srgb, var(--brand-blue) 13%, var(--bg-surface)); border: 1px solid color-mix(in srgb, var(--brand-blue) 15%, transparent); }
+.session-user-message header { display: flex; gap: 8px; align-items: center; color: var(--text-secondary); font-size: 11px; }
+.session-user-message header strong { font-weight: 600; color: var(--text-primary); }
+.session-user-message header > span { margin-left: auto; padding-left: 18px; color: var(--text-secondary); font-size: 10px; }
+.session-user-message p { margin: 8px 0 0; color: var(--text-primary); font-size: 13px; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
+.session-agent-message { min-width: 0; margin-top: 26px; }
+.session-agent-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; min-width: 0; }
+.session-agent-avatar { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 26px; height: 26px; }
+.session-agent-avatar img { display: block; user-select: none; }
+.session-agent-avatar .session-agent-logo-light, .lab-app[data-theme='light'] .session-agent-logo-dark { display: none; }
+.lab-app[data-theme='light'] .session-agent-logo-light { display: block; }
+.session-agent-heading h2 { margin: 0; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.session-agent-meta { color: var(--text-tertiary); font-size: 10px; }
+.session-agent-meta.is-running { color: var(--brand-blue); }
+.session-agent-meta.is-cancelled, .session-agent-meta.is-awaiting { color: var(--status-warning); }
+.session-agent-body { min-width: 0; margin-left: 35px; }
+.session-turn-origin { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 16px; color: var(--text-tertiary); font-size: 11px; line-height: 1.9; }
+.session-turn-origin > svg { flex-shrink: 0; margin-top: 4px; color: var(--phase-accent-text); }
+.session-turn-origin p { margin: 0; }
+.session-initial-trace > .exec-tree { margin-top: 0; }
+.session-initial-trace .exec-tree-heading > div:first-child { display: none; }
+.session-initial-trace .exec-tree-heading { justify-content: flex-end; margin-bottom: 10px; }
+.session-stage-tree { margin-left: 7px; padding-left: 23px; }
+.session-stage { position: relative; min-width: 0; padding-bottom: 13px; }
+.session-stage::before { content: ''; position: absolute; top: 0; bottom: 0; left: -23px; width: 1px; background: var(--border-default); }
+.session-stage::after { content: ''; position: absolute; top: 22px; left: -23px; width: 17px; height: 1px; background: var(--border-default); }
+.session-stage:last-child::before { height: 22px; }
+.session-stage-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 8px 12px 0; background: transparent; border: none; text-align: left; }
+.session-stage-toggle > svg { flex-shrink: 0; color: var(--phase-accent-text); }
+.session-stage-toggle > svg:first-child { color: var(--text-tertiary); }
+.session-stage-toggle[aria-expanded='true'] > svg:first-child { transform: rotate(90deg); }
+.session-stage-toggle > span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+.session-stage-toggle strong { font-size: 12px; font-weight: 600; }
+.session-stage-toggle code { font-size: 10px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.session-stage-state { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; color: var(--text-tertiary); font-size: 10px; }
+.session-stage-state.is-completed { color: var(--status-success); }
+.session-stage-state.is-cancelled, .session-stage-state.is-awaiting { color: var(--status-warning); }
+.session-stage-state.is-running { color: var(--brand-blue); }
+.session-stage-body { margin-left: 20px; border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; background: var(--bg-surface); }
+.session-stage-body[hidden] { display: none; }
+.session-stage.is-focused > .session-stage-toggle strong { color: var(--brand-blue); }
+.session-stage-purpose, .session-stage-empty { padding: 11px 14px; margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.8; }
+.session-stage-empty { color: var(--text-tertiary); }
+.session-turn-end { display: flex; align-items: flex-start; gap: 9px; padding: 10px 0 0 28px; color: var(--text-tertiary); }
+.session-turn-end > span { display: flex; margin-top: 2px; }
+.session-turn-end strong { font-size: 11px; font-weight: 500; }
+.session-turn-end p { margin: 5px 0 0; font-size: 10px; line-height: 1.8; color: var(--text-tertiary); }
+.session-turn-end.is-cancelled > span, .session-turn-end.is-cancelled strong, .session-turn-end.is-awaiting > span, .session-turn-end.is-awaiting strong { color: var(--status-warning); }
+.session-turn-end.is-completed > span { color: var(--status-success); }
+.session-execution button:focus-visible, .session-execution summary:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 3px; border-radius: 3px; }
+.session-stage-record { min-width: 0; padding: 0 14px 12px; }
+.session-stage-record + .session-stage-record { padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+.session-round-summary, .session-round-decision { margin: 0 0 9px; color: var(--text-secondary); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.session-round-decision { display: flex; align-items: flex-start; gap: 7px; margin: 10px 0 0; }
+.session-round-decision > svg { flex-shrink: 0; margin-top: 4px; color: var(--phase-accent-text); }
+.session-compact-calls { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.session-compact-calls > li { min-width: 0; }
+.session-tool-link { display: flex; align-items: center; gap: 7px; min-width: 0; width: 100%; min-height: 34px; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); text-align: left; }
+.session-tool-link:hover:not(:disabled) { background: var(--bg-hover); }
+.session-tool-link > svg { flex-shrink: 0; color: var(--brand-blue); }
+.session-tool-link > svg:last-child { color: var(--text-tertiary); }
+.session-tool-link > code { min-width: 0; max-width: 42%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.session-call-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); font-size: 10px; }
+.session-call-status { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; white-space: nowrap; color: var(--text-tertiary); font-size: 10px; }
+.session-call-status.is-success { color: var(--status-success); }
+.session-call-status.is-error { color: var(--status-error); }
+.session-call-status.is-running { color: var(--brand-blue); }
+.session-call-status.is-cancelled, .session-call-status.is-waiting { color: var(--status-warning); }
+.session-round-link { display: inline-flex; align-items: center; gap: 6px; padding: 5px 0; margin-top: 7px; border: 0; background: transparent; color: var(--text-tertiary); font-size: 10px; }
+.session-round-link:hover:not(:disabled) { color: var(--brand-blue); }
+.session-round-link code { font-size: 9px; }
+.session-tool-link:disabled, .session-round-link:disabled { cursor: default; }
+.session-stage-body > .session-stop-note, .session-stage-body > .session-mock-note { margin: 0; padding: 0 14px 12px; color: var(--text-tertiary); font-size: 10px; line-height: 1.8; }
+.session-stage-body > .session-stop-note { color: var(--status-warning); }
+@container experiment-trace (max-width: 600px) {
+  .session-user-message { max-width: 90%; padding: 11px 14px; }
+  .session-agent-body { margin-left: 0; }
+  .session-agent-heading { column-gap: 7px; }
+  .session-stage-tree { margin-left: 4px; padding-left: 14px; }
+  .session-stage::before { left: -14px; }
+  .session-stage::after { left: -14px; width: 10px; }
+  .session-stage-toggle { gap: 5px; }
+  .session-stage-toggle > span { gap: 4px; }
+  .session-stage-toggle strong { font-size: 11px; }
+  .session-stage-toggle code { font-size: 9px; }
+  .session-stage-toggle > svg:nth-child(2) { display: none; }
+  .session-stage-state { font-size: 9px; }
+  .session-stage-body { margin-left: 5px; }
+  .session-turn-end { padding-left: 12px; }
+  .session-stage-record { padding-right: 10px; padding-left: 10px; }
+  .session-tool-link { display: grid; grid-template-columns: 13px minmax(0, 1fr) auto 12px; gap: 5px; padding: 6px; }
+  .session-tool-link > code { grid-column: 2; max-width: none; font-size: 9px; }
+  .session-call-summary { grid-column: 2 / -1; grid-row: 2; font-size: 9px; }
+  .session-call-status { grid-column: 3; grid-row: 1; font-size: 9px; }
+  .session-tool-link > svg:last-child { grid-column: 4; grid-row: 1; }
+}

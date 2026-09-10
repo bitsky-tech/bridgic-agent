@@ -22,7 +22,7 @@ from typing import List, Optional
 
 from src.amphi_service.i18n import backend_i18n
 
-from .._state import CallVerdict
+from ..cognitive.state import CallVerdict
 from ._audit import write_verdict_record
 from ._classifier import ClassifyItem, SafetyClassifier
 from ._classify import classify, label_text

@@ -2,8 +2,8 @@ from pathlib import Path
 
 from bridgic.amphibious import StepToolCall, ToolArgument
 
-from src.amphi_agent import AmphiContext, AmphiOTAContext, Session
-from src.amphi_agent._state import CallVerdict
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
+from src.amphi_agent.cognitive.state import CallVerdict
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_store import SessionRecord
@@ -48,7 +48,9 @@ async def legality_reason(worker: BaseThink, call: StepToolCall, ota_context: Am
         arguments={argument.name: argument.value for argument in call.tool_arguments},
         verdict="allow",
     )
-    resolved = await worker.legality_check(ota_context, context, [call], [verdict])
+    if ota_context is not None:
+        ota_context.tools = worker.select_tools(ota_context, context)
+    resolved = await worker.legality_check(ota_context, context, [call], [verdict], AmphiAgent())
     assert len(resolved) == 1
     if resolved[0].verdict == "allow":
         return None

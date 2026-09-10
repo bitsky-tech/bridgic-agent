@@ -9,7 +9,8 @@ from bridgic.amphibious._type import ThinkResult
 from bridgic.core.agentic.tool_specs import FunctionToolSpec, ToolSpec
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
-from src.amphi_agent._state import AwaitingFeedback, AwaitingPermission, BuildStageState
+from src.amphi_agent.cognitive.state import AwaitingFeedback, AwaitingPermission
+from src.amphi_agent.cognitive.build.state import BuildStageState
 from src.amphi_agent.cognitive import register as registration
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.register import cognitive_stage

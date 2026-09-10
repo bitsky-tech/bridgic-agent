@@ -1,6 +1,15 @@
-"""Normal conversation and focused Child Session cognitive workers."""
+"""State models owned by normal conversation and its mode-entry decisions."""
 
-from .main import MainThink
-from .subagent import SubAgentThink
+from .state import (
+    NormalStageState,
+    AwaitingBuildConfirm,
+    AwaitingBuildConflict,
+    AwaitingWorkflowRunChoice,
+)
 
-__all__ = ["MainThink", "SubAgentThink"]
+__all__ = [
+    "NormalStageState",
+    "AwaitingBuildConfirm",
+    "AwaitingBuildConflict",
+    "AwaitingWorkflowRunChoice",
+]

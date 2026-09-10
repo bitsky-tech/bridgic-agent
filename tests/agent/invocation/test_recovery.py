@@ -12,7 +12,7 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role
 
 from src.amphi_agent._invocation import AgentInvocation
-from src.amphi_agent._state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
+from src.amphi_agent.cognitive.state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
 from src.amphi_agent.runtime._environment import AppCommandEnvironmentSnapshot, app_command_environment
 from src.amphi_service.runtime._session_events import SessionEventBroker
 from src.amphi_service.runtime._system_events import SystemEventBroker

@@ -7,15 +7,10 @@ from bridgic.amphibious import StepToolCall
 
 from src.amphi_agent import AmphiOTAContext, Session
 from src.amphi_agent._invocation import AgentInvocation
-from src.amphi_agent._state import (
-    AwaitingFeedback,
-    AwaitingPermission,
-    AwaitingSubAgent,
-    BuildStageState,
-    NormalStageState,
-    PresentationStageState,
-    RoundPermission,
-)
+from src.amphi_agent.cognitive.state import AwaitingFeedback, AwaitingPermission, AwaitingSubAgent, RoundPermission
+from src.amphi_agent.cognitive.build.state import BuildStageState
+from src.amphi_agent.cognitive.normal.state import NormalStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
 from src.amphi_agent.security import PermissionEngine
 from tests.agent.core.test_action_boundary import _call, _invoke, _ota
 from tests.agent.core.test_orchestration import (

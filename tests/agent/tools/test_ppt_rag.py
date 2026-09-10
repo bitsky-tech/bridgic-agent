@@ -6,7 +6,7 @@ from typing import Any
 
 from bridgic.core.model.types import Message, Response, Role
 
-from src.amphi_agent._state import PresentationChapterOutline, PresentationSlideOutline, PresentationStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationChapterOutline, PresentationSlideOutline, PresentationStageState
 from src.amphi_agent.tools.ppt.template_catalog import LocalPPTTemplateCatalog, build_ppt_search_profile, build_ppt_template_index
 from src.amphi_agent.tools.ppt.ppt_rag import ppt_rag
 from tests.agent.tools._harness import ToolHarness

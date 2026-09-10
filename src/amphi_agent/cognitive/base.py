@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
@@ -37,7 +38,7 @@ from ..prompts.compaction import (
 from .._skills import Skill
 from ..prompts.render import time_in_local_tz
 from ..prompts.turn_failed import TURN_FAILED_MESSAGE
-from .._state import (
+from .state import (
     AwaitingFeedback,
     AwaitingSubAgent,
     SubAgentCall,
@@ -47,7 +48,10 @@ from .._state import (
     TurnCompactionState,
 )
 from .._thinking_debug import write_thinking_debug
-from ..security import Permission
+from ..security import LlmSafetyClassifier, Permission, PermissionEngine
+from ..security._classifier import MAX_USER_MESSAGES as _CLASSIFIER_MAX_USER_MESSAGES
+from ..security._classify import label_text
+from ..security._routing import read_user_decisions
 from ..tools._request_human import RequestHumanChoice
 from ..tools._subagent import BackgroundSubagentRequest, SubagentRequest
 
@@ -57,6 +61,45 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Context-injection boundary for the safety classifier (see BaseThink._recent_user_messages
+# / _current_reasoning / _session_approvals).
+# The cap on user requests comes from _classifier — do not write another literal here. The
+# prompt-assembly side must truncate to the same number, and having a 5 in each place makes
+# "raising the injection-side cap" completely ineffective (a debugging trap hit in practice).
+_MAX_CLASSIFIER_USER_MESSAGES = _CLASSIFIER_MAX_USER_MESSAGES  # cap on multi-round user requests fed to the classifier (trusted authorization evidence)
+_MAX_CLASSIFIER_REASONING_CHARS = 2000   # cap on the Agent reasoning slice to be verified (bounds prompt size + injection surface)
+_MAX_CLASSIFIER_APPROVALS = 8            # cap on this session's already-made decisions fed to the classifier (trusted, equivalent to the user naming them)
+_MAX_CLASSIFIER_NAMED_PATHS = 8          # cap on local paths the user named in the conversation (does not slide out with the message window)
+
+# **Absolute local paths** appearing in user messages. The policy's ALLOW entry 'project
+# directory named by the user' only recognises paths the user actually named, while the message
+# window keeps only the last 5 — once the naming message slides out, that exception silently
+# stops applying. So paths are extracted separately and accumulated.
+# The key is **the character before it**: a slash directly following a word character / ``.`` /
+# ``:`` / ``/`` is not the start of a path, which rules out slash-separated phrases like
+# CJK compounds joined by a slash (CJK counts as ``\w``), English "and/or", relative paths
+# "./x" and URLs "https://host/path"; the path itself may contain Unicode
+# (non-ASCII directory names are common). Windows drive paths accept
+# both ``\`` and ``/``; when a path contains spaces it must be delimited by markdown backticks
+# or ordinary quotes, so trailing prose is not swallowed into the path.
+_NAMED_PATH_RE = re.compile(
+    r"""(?x)
+    (?:
+        (?P<quote>[`'"])
+        (?P<quoted_windows>[A-Za-z]:[\\/][^`'"\r\n]+)
+        (?P=quote)
+      |
+        (?<![\w.:/])
+        (?P<plain>
+            ~?/[\w._~/@+-]{3,}
+          |
+            [A-Za-z]:[\\/][^\s<>:"|?*`'"]+
+        )
+    )
+    """
+)
+
 # Marker on ``Message.extras`` for the per-round <runtime_state> USER tail: live
 # state (changed files, browser tabs) that must stay OUT of the cacheable request
 # prefix. Adapters treat it specially (Anthropic: no cache breakpoint on or after
@@ -1656,9 +1699,41 @@ class BaseThink(CognitiveWorker):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
-        """Isolate shared control calls and validate their cognitive transitions."""
-        resolved = self._exclusive_call_verdicts(calls, verdicts, {"switch", "request_human_choice"})
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Check visible tools and routing, then isolate shared control calls."""
+        visible_tools = {spec.tool_name for spec in ota_context.tools or []} if ota_context is not None else set()
+        think_status = ota_context.think_status if ota_context is not None else None
+
+        def availability_reason(call: StepToolCall) -> Optional[str]:
+            if think_status is None:
+                return None
+            if call.tool not in visible_tools:
+                return (
+                    f"tool `{call.tool}` rejected: it is not available in this "
+                    "Session's current ToolSurface."
+                )
+            if call.tool == "switch":
+                arguments = agent._tool_args(call)
+                target_stage = arguments.get("stage")
+                if think_status.mode != "normal" and not arguments.get("mode") and target_stage:
+                    registered_stages = agent.thinking_modes.get(think_status.mode)
+                    unit = getattr(agent, str(target_stage), None)
+                    if registered_stages is None or target_stage not in registered_stages or unit is None:
+                        return (
+                            f"switch rejected: target stage `{target_stage}` is not registered "
+                            f"for mode `{think_status.mode}`."
+                        )
+            return None
+
+        resolved = list(verdicts)
+        for index, (call, verdict) in enumerate(zip(calls, verdicts)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = availability_reason(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
+
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"switch", "request_human_choice"})
 
         def switch_reason(call: StepToolCall) -> Optional[str]:
             if call.tool != "switch" or ota_context is None:
@@ -1715,6 +1790,248 @@ class BaseThink(CognitiveWorker):
             else verdict
             for call, verdict in zip(calls, verdicts)
         ]
+
+    ############################################################################
+    # Permission policy and classifier context
+    ############################################################################
+    async def permission_check(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        calls: List[StepToolCall],
+        agent: "AmphiAgent",
+        *,
+        execution_mode: Optional[str] = None,
+        additional_mount_roots: Optional[List[str]] = None,
+    ) -> List[CallVerdict]:
+        """Evaluate system permissions for the tool calls admitted by legality checks.
+
+        Parameters
+        ----------
+        ota_context : AmphiOTAContext
+            Active turn containing the proposed tool calls and current Think stage.
+        context : AmphiContext
+            Session workspace, execution mode, mounts, and safety classifier context.
+        calls : List[StepToolCall]
+            Tool calls that passed legality checks, in their original relative order.
+        agent : AmphiAgent
+            Active agent supplying the bound LLM and effective execution mode.
+        execution_mode : Optional[str]
+            Effective mode already resolved for this round; omitted to resolve it here.
+        additional_mount_roots : Optional[List[str]]
+            Extra roots owned by the specialized cognitive worker.
+
+        Returns
+        -------
+        List[CallVerdict]
+            Permission verdicts aligned one-to-one with the supplied tool calls.
+        """
+        execution_mode = execution_mode or agent._effective_execution_mode(ota_context, context)
+        workspace = context.workspace
+        root = (
+            str(workspace.work_dir)
+            if workspace is not None
+            else str(context.session.workspace_root or "")
+        )
+        # Merged from main: the real mount roots (this was mount_roots=[] with a TODO on the original
+        # branch). Mounted directories are judged by the engine as inside the boundary rather than
+        # always out of bounds; with no session (an edge case) it falls back to an empty list.
+        mount_roots = workspace.mount_roots() if workspace is not None else []
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None:
+            referenced_runs = workflow_runs.referenced_runs(ota_context.user_input)
+            mount_roots.extend(
+                str(path)
+                for run in referenced_runs
+                for path in (run.result_dir, run.background_work_dir)
+            )
+        mount_roots.extend(additional_mount_roots or [])
+        mount_roots = list(dict.fromkeys(mount_roots))
+        audit_dir = workspace.permission_dir if workspace is not None else None
+        engine = PermissionEngine(
+            root,
+            mount_roots=mount_roots,
+            mode=execution_mode,
+            classifier=LlmSafetyClassifier(agent.llm, audit_dir=audit_dir),
+            audit_dir=audit_dir,
+        )
+        verdicts = await engine.evaluate(
+            calls,
+            self._recent_user_messages(ota_context, context),
+            agent_reasoning=self._current_reasoning(ota_context),
+            session_approvals=self._session_approvals(context),
+            named_paths=self._named_paths(ota_context, context),
+        )
+        aligned: List[CallVerdict] = []
+        for c, verdict in zip(calls, verdicts):
+            cid = getattr(c, "call_id", None)
+            aligned.append(verdict.model_copy(update={"id": str(cid)}) if cid else verdict)
+        return aligned
+
+    @staticmethod
+    def _recent_user_messages(ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
+        """Recent USER request texts (prior turns + this turn) — the classifier's TRUSTED
+        intent signal and the ONLY authorization basis. User-provenance only; never assistant
+        reasoning or tool output.
+
+        Fixes the prior single-turn bug: the classifier's soft_deny unlock keys on "did the
+        user name this operation", which a one-message window couldn't see across a multi-step
+        turn where the naming happened in an earlier turn. History is best-effort — any failure
+        degrades to just the current turn, never breaks permission evaluation."""
+        messages: List[str] = []
+        try:
+            # Newest-first with an early break: this runs on every init_state and
+            # permission batch, and only the window's tail survives anyway — a
+            # 1000-turn session must not pay a full scan per resume.
+            for turn in reversed(context.session.get_all()):
+                if len(messages) >= _MAX_CLASSIFIER_USER_MESSAGES:
+                    break
+                text = getattr(getattr(turn, "user_input", None), "text", "") or ""
+                if isinstance(text, str) and text.strip():
+                    messages.append(text.strip())
+        except Exception:  # noqa: BLE001 — history is context, must not break the gate
+            pass
+        messages.reverse()
+        current = BaseThink._current_user_text(ota_context)
+        if current and (not messages or messages[-1] != current):
+            messages.append(current)
+        return messages[-_MAX_CLASSIFIER_USER_MESSAGES:]
+
+    @staticmethod
+    def _current_user_text(ota_context: AmphiOTAContext) -> str:
+        """This turn's user input as plain text (str input, or ``.input`` / ``.text`` field)."""
+        raw = getattr(ota_context, "user_input", "")
+        text = raw if isinstance(raw, str) else (getattr(raw, "input", "") or getattr(raw, "text", "") or "")
+        return text.strip() if isinstance(text, str) else ""
+
+    @staticmethod
+    def _permission_dir(context: Optional[AmphiContext], permission: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+        """The permissions directory of this session (where the audit trail and decision ledger
+        live). Returns ``None`` when it cannot be resolved, and callers skip silently.
+
+        The workspace is authoritative; when the workspace is unreachable it falls back to the
+        parent directory of the approval record — that record is written into the same directory,
+        so it is another way of obtaining the same fact."""
+        workspace = getattr(context, "workspace", None) if context is not None else None
+        perm_dir = getattr(workspace, "permission_dir", None)
+        if perm_dir is not None:
+            return perm_dir
+        audit_file = (permission or {}).get("audit_file")
+        return Path(audit_file).parent if audit_file else None
+
+    @staticmethod
+    def _approval_line(row: Dict[str, Any]) -> str:
+        """One row of the decision ledger → one line fed to the classifier. **It must carry the
+        concrete target**: what the classifier judges is "whether the operation under review is of
+        the same kind as an approved one", and ``summary`` is the plain-language text produced by
+        :mod:`_describe` (deliberately without paths or arguments), which alone cannot settle
+        "whether the write_file just approved and this edit_file are in the same repository".
+
+        The target is taken from ``command`` in the ledger (already processed by the keep-both-ends
+        policy on write, so the part of a heredoc that actually runs is not cut off). A missing or
+        malformed decision → an empty string (which the caller discards).
+
+        Everything this function renders itself is pinned to English: its only consumer is the
+        classifier's all-English system prompt, whose approved/denied recognition keys off these
+        lines — the same reason ``_engine.py`` pins judgement labels to en. The persisted
+        ``label`` text was rendered in the request locale at park time, so rows carry the label's
+        catalog id too and it is re-rendered in English here; ``summary``/legacy ``label`` text
+        stays as written."""
+        if not isinstance(row, dict):
+            return ""
+        decision = row.get("decision")
+        tool = str(row.get("tool") or "")
+        if decision not in ("allow", "deny") or not tool:
+            return ""
+        mark = backend_i18n.text(
+            "security.approval.allowed_mark"
+            if decision == "allow"
+            else "security.approval.denied_mark",
+            locale="en",
+        )
+        parts = [f"{mark} `{tool}`"]
+        target = str(row.get("command") or "").strip().replace("\n", " ")
+        if target:
+            parts.append(backend_i18n.text("security.approval.target", target=target, locale="en"))
+        summary = str(row.get("summary") or "").strip()
+        label_id = str(row.get("label_id") or "").strip()
+        if summary:
+            parts.append(summary)
+        elif label_id:
+            parts.append(label_text(label_id, locale="en"))
+        elif str(row.get("label") or "").strip():
+            parts.append(str(row.get("label") or "").strip())
+        return " — ".join(parts)
+
+    @staticmethod
+    def _session_approvals(context: Optional[AmphiContext] = None) -> List[str]:
+        """The allow/deny decisions the user made this session — **trusted context** (equivalent to
+        the user naming and authorising that operation), so an operation already decided on does not
+        raise another card.
+
+        The source of truth is the decision rows in
+        ``<session>/.internal/permissions/_routing.jsonl``
+        (:func:`~security._routing.read_user_decisions`). It is **not assembled from the session
+        object**, for three reasons, every one of them hit in practice:
+
+        * ``_resume_permission`` ends with ``session.without_last()``, which removes the parked
+          round, so this round's decision **never appears** in ``session.get_all()``;
+        * the ledger stores the **full command**, whereas assembling from items truncates the target
+          to 200 characters — and for a heredoc command (``python3 - <<'PY' … base64 …``) the first
+          200 characters are all wrapper, cutting away the actual intent at the end, so the
+          classifier cannot recognise "the same kind" and asks again;
+        * an append-only file is immune to object lifecycles, and the memory survives a daemon
+          restart.
+
+        Best-effort: if it cannot be read it returns empty and never interrupts the approval flow."""
+        rows = read_user_decisions(BaseThink._permission_dir(context))
+        lines = [BaseThink._approval_line(r) for r in rows]
+        # Deduplicate: when the same operation raises several dialogs in a row, duplicate rows must
+        # not eat the whole budget.
+        return list(dict.fromkeys(line for line in lines if line))[-_MAX_CLASSIFIER_APPROVALS:]
+
+    @staticmethod
+    def _named_paths(ota_context: AmphiOTAContext, context: Optional[AmphiContext] = None) -> List[str]:
+        """Absolute local paths the user named in their messages across **the whole session** — the
+        basis for the policy's ALLOW entry 'project directory named by the user'.
+
+        Why this is tracked separately: that exception only recognises paths the user actually
+        named, while ``_recent_user_messages`` keeps only the last 5 messages — once the naming
+        message is pushed out of the window by later "go on / ok" messages, the exception **silently
+        stops applying** and the same directory suddenly starts raising dialogs. Paths are small, so
+        they do not slide out with the message window and accumulate for the whole session. This
+        states only the fact that the user mentioned them; whether that authorises anything is still
+        judged by the classifier against the policy."""
+        texts: List[str] = []
+        session = getattr(context, "session", None) if context is not None else None
+        if session is not None:
+            try:
+                for turn in session.get_all():
+                    text = getattr(getattr(turn, "user_input", None), "text", "") or ""
+                    if isinstance(text, str):
+                        texts.append(text)
+            except Exception:  # noqa: BLE001 — context is best-effort; it must never interrupt the ruling
+                pass
+        texts.append(BaseThink._current_user_text(ota_context))
+        found: List[str] = []
+        for text in texts:
+            for match in _NAMED_PATH_RE.finditer(text):
+                path = match.group("quoted_windows") or match.group("plain") or ""
+                found.append(path.rstrip(".,;:!?。，、；：！？)]}】》`'\""))
+        return list(dict.fromkeys(p for p in found if len(p) > 3))[-_MAX_CLASSIFIER_NAMED_PATHS:]
+
+    @staticmethod
+    def _current_reasoning(ota_context: AmphiOTAContext) -> str:
+        """The Agent's reasoning behind THIS batch of tool calls (the think step's
+        ``step_content``) — fed to the classifier as an UNTRUSTED claim to CROSS-VERIFY against
+        the user's stated goals. Never authorization on its own (soft_deny still unlocks only on
+        user naming); tool execution results are still NOT fed. Truncated to bound prompt size
+        and prompt-injection surface."""
+        think = getattr(ota_context, "think_result", None)
+        text = getattr(think, "step_content", "") if think is not None else ""
+        if not isinstance(text, str):
+            return ""
+        return text.strip()[:_MAX_CLASSIFIER_REASONING_CHARS]
 
     ############################################################################
     # Tools and Skills selection

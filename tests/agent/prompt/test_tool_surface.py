@@ -9,7 +9,7 @@ from bridgic.core.model.types import Message
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session, SkillLibrary
 from src.amphi_agent._tools import TOOL_LIBRARY
-from src.amphi_agent._state import PresentationStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
 from src.amphi_agent.cognitive import (
     BaseThink,
     ClarifyThink,

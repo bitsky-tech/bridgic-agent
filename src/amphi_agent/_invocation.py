@@ -26,23 +26,18 @@ from ._session import Session
 from ._skills import SkillLibrary
 from ._workflows import WorkflowLibrary
 from ._workflow_run import WorkflowRunLibrary
-from ._state import (
+from .cognitive.state import (
     AgentResult,
-    AwaitingBuildConfirm,
-    AwaitingBuildConflict,
-    AwaitingWorkflowRunChoice,
     AwaitingFeedback,
     AwaitingPermission,
-    AwaitingPresentationOutlineConfirm,
-    AwaitingPresentationTemplateSelection,
-    AwaitingTaskConfirm,
-    AwaitingWorkflowConfirm,
     AwaitingSubAgent,
-    BuildStageState,
     SubAgentCall,
     SubAgentResult,
     SubAgentsCompleted,
 )
+from .cognitive.normal.state import AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice
+from .cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection
+from .cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
 from ._workspace import AppEnvironmentStatus, Workspace
 from ..amphi_service.protocol import (
     CancelledEvent,
@@ -67,7 +62,7 @@ from ..amphi_store import (
 )
 
 if TYPE_CHECKING:
-    from ._state import InteractionState
+    from .cognitive.state import InteractionState
     from ..amphi_service.runtime._session_events import SessionEventBroker
     from ..amphi_service.runtime._system_events import SystemEventBroker
 

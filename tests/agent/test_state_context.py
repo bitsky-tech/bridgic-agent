@@ -6,16 +6,11 @@ from bridgic.amphibious import OTARecord
 from pydantic import ValidationError
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, BrowserHost, ContextUsageSnapshot, PowerPointHost, Session
-from src.amphi_agent._state import (
-    AgentState,
-    AwaitingBuildConfirm,
-    AwaitingSubAgent,
-    BuildStageState,
-    ContextCompactionState,
-    PresentationStageState,
-    SubAgentCall,
-    WorkflowStageState,
-)
+from src.amphi_agent.cognitive.state import AgentState, AwaitingSubAgent, ContextCompactionState, SubAgentCall
+from src.amphi_agent.cognitive.normal.state import AwaitingBuildConfirm
+from src.amphi_agent.cognitive.build.state import BuildStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 
 

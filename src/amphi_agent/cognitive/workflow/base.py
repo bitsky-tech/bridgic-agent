@@ -14,7 +14,9 @@ from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ...security import Permission
 from ..._tools import TOOL_LIBRARY
-from ..._state import CallVerdict, NormalStageState, WorkflowStageState
+from ..state import CallVerdict
+from ..normal.state import NormalStageState
+from .state import WorkflowStageState
 from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 from ...tools.workflow import WorkflowStepReport
@@ -749,9 +751,9 @@ class WorkflowRunThink(BaseThink):
     ############################################################################
     # Legality check
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Validate controls against this stage's bound Run and pinned source."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts)
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
         resolved = self._exclusive_call_verdicts(calls, resolved, {"report_workflow_step"})
 
         def reason_for_call(call: StepToolCall) -> Optional[str]:
@@ -799,6 +801,39 @@ class WorkflowRunThink(BaseThink):
                 })
         return resolved
 
+
+    ############################################################################
+    # Permission policy and classifier context
+    ############################################################################
+    async def permission_check(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        calls: List[StepToolCall],
+        agent: "AmphiAgent",
+        *,
+        execution_mode: Optional[str] = None,
+        additional_mount_roots: Optional[List[str]] = None,
+    ) -> List[CallVerdict]:
+        """Extend common permission roots with the active Run's source and inputs."""
+        mount_roots = list(additional_mount_roots or [])
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None and isinstance(ota_context.think_status, WorkflowStageState):
+            source = self._workflow_source(ota_context.think_status, context)
+            mount_roots.append(str(source.source_root))
+            run_state = context.workspace.run_workflow
+            if run_state is None:
+                raise RuntimeError("Workflow Run space was not prepared for permission review.")
+            mount_roots.extend(
+                str(path)
+                for input_run in workflow_runs.referenced_runs(run_state.workflow_input)
+                for path in (input_run.result_dir, input_run.background_work_dir)
+            )
+        return await super().permission_check(
+            ota_context, context, calls, agent,
+            execution_mode=execution_mode,
+            additional_mount_roots=mount_roots,
+        )
 
     ############################################################################
     # Tools and Skills selection
