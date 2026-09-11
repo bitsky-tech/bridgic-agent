@@ -1,5 +1,6 @@
 """Regression contracts for Session-wide storage and stage-owned prompt views."""
 
+import asyncio
 import json
 from copy import deepcopy
 
@@ -7,8 +8,8 @@ import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import ToolCallBlock, ToolResultBlock
 
-from src.amphi_agent import AmphiAgent, AmphiOTAContext, MainThink
-from src.amphi_agent._cognitive import _covered_rounds, _project_rounds
+from src.amphi_agent import AmphiAgent, AmphiOTAContext, ContextWindowExceededError, MainThink
+from src.amphi_agent._cognitive import ClarifyThink, _covered_rounds, _project_rounds
 from src.amphi_agent._state import AgentState, BuildStageState, ContextCompactionState, NormalStageState
 from src.amphi_agent._tools import TOOL_LIBRARY
 from src.amphi_store import SessionTurnRecord, TurnStatus, UserInput
@@ -196,13 +197,219 @@ async def test_switch_restores_target_stage_without_reexpanding_foreign_rounds(t
     clarify = _serialized(await worker.assemble_messages(current, context))
     assert "CLARIFY SUMMARY" in clarify and "CLARIFY RECENT" in clarify
     assert "Need the missing decision" in clarify
-    assert "CLARIFY COVERED" not in clarify and "EXPLORE PRIVATE" not in clarify and "NORMAL PRIVATE" not in clarify
+    assert "NORMAL PRIVATE" in clarify
+    assert "CLARIFY COVERED" not in clarify and "EXPLORE PRIVATE" not in clarify
     current.transition_think(BuildStageState(stage="explore"))
     explore = _serialized(await worker.assemble_messages(current, context))
     assert "EXPLORE PRIVATE" in explore and "CLARIFY SUMMARY" not in explore
     current.transition_think(BuildStageState(stage="clarify"))
     assert _serialized(await worker.assemble_messages(current, context)) == clarify
     assert current.model_dump(mode="json", exclude={"tools"}) == before
+
+
+@pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
+@pytest.mark.parametrize("normal_boundary,clarify_boundary", [(0, 1), (1, 0)])
+async def test_clarify_reads_independently_compacted_normal_history(test_sandbox: IsolatedPaths, status: TurnStatus, normal_boundary: int, clarify_boundary: int) -> None:
+    """Both Session and Turn checkpoints remain source-owned across terminal Turns."""
+    state = AgentState.model_validate({
+        "think": {"mode": "build", "stage": "clarify"},
+        "context_compaction": {
+            "session": {
+                "normal": {"main": {"session_summary": "NORMAL SESSION SUMMARY", "session_through_ordinal": normal_boundary}},
+                "build": {"clarify": {"session_summary": "CLARIFY SESSION SUMMARY", "session_through_ordinal": clarify_boundary}},
+            },
+            "turn": {
+                "normal": {"main": {"turn_summary": "NORMAL TURN SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [1]}},
+                "build": {"clarify": {"turn_summary": "CLARIFY TURN SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [2]}},
+            },
+        },
+    })
+    turns = [_turn(index, [
+        _round("normal", "main", f"NORMAL PAST {index}"),
+        _round("build", "clarify", f"CLARIFY PAST {index}"),
+    ], AgentState()) for index in range(2)]
+    records = [
+        _round("normal", "main", "NORMAL COVERED"),
+        _round("build", "clarify", "CLARIFY COVERED"),
+        _round("normal", "main", "NORMAL RETAINED"),
+        _round("build", "clarify", "CLARIFY RETAINED"),
+        _round("build", "verify", "VERIFY PRIVATE"),
+    ]
+    for index, record in enumerate(records):
+        record.action_result.results[0].tool_id = f"stable-call-{index}"
+    current = AmphiOTAContext(user_input="Continue", state=state, ota_record=records)
+    context = _context(str(test_sandbox.sessions / "shared-normal"), turns, 200_000)
+    worker = ClarifyThink()
+    await worker.assemble_messages(current, context)
+    live = worker.turn_messages_block(current, context)
+    previous = _turn(2, records, state, status)
+    before = deepcopy(previous.model_dump(mode="json"))
+    next_context = _context(str(test_sandbox.sessions / "shared-normal"), [*turns, previous], 200_000)
+    next_turn = AmphiOTAContext(user_input="Continue again")
+    await AmphiAgent().init_state(next_turn, next_context)
+    await worker.assemble_messages(next_turn, next_context)
+    history = await worker.session_messages_block(next_turn, next_context)
+    text = _serialized(history)
+    for marker in ("NORMAL SESSION SUMMARY", "CLARIFY SESSION SUMMARY", "NORMAL TURN SUMMARY", "CLARIFY TURN SUMMARY", "NORMAL RETAINED", "CLARIFY RETAINED"):
+        assert marker in text
+    for marker in ("NORMAL PAST 0", "CLARIFY PAST 0", "NORMAL COVERED", "CLARIFY COVERED", "VERIFY PRIVATE"):
+        assert marker not in text
+    assert ("NORMAL PAST 1" in text) == (normal_boundary == 0)
+    assert ("CLARIFY PAST 1" in text) == (clarify_boundary == 0)
+    assert sum(message.content == "Request 1" for message in history) == 1
+    last_input = next(index for index, message in enumerate(history) if message.content == "Request 2")
+    assert [message.blocks for message in history[last_input + 1:last_input + 1 + len(live)]] == [message.blocks for message in live]
+    assert text.index("NORMAL RETAINED") < text.index("CLARIFY RETAINED")
+    assert 'owner="normal/main"' in text and 'owner="build/clarify"' in text
+    assert previous.model_dump(mode="json") == before
+    assert next_turn.state.context_compaction.session == state.context_compaction.session
+    assert next_turn.state.context_compaction.turn == {}
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_clarify_compacts_only_its_own_inputs_and_keeps_normal_unchanged(test_sandbox: IsolatedPaths, cancel: bool) -> None:
+    """Shared Normal Turns/Rounds never enter Clarify's retention window or summaries."""
+    turns = []
+    records = []
+    for index in range(6):
+        turns.extend([
+            _turn(index * 2, [_round("normal", "main", f"NORMAL SESSION {index} " * 100)], AgentState()),
+            _turn(index * 2 + 1, [_round("build", "clarify", f"CLARIFY SESSION {index} " * 100)], AgentState()),
+        ])
+        records.extend([
+            _round("normal", "main", f"NORMAL ROUND {index} " * 100),
+            _round("build", "clarify", f"CLARIFY ROUND {index} " * 100),
+        ])
+    current = AmphiOTAContext(user_input="Continue", ota_record=records, state={
+        "think": {"mode": "build", "stage": "clarify"},
+        "context_compaction": {
+            "session": {"normal": {"main": {"session_summary": "NORMAL SESSION CHECKPOINT", "session_through_ordinal": 0}}},
+            "turn": {"normal": {"main": {"turn_summary": "NORMAL TURN CHECKPOINT", "turn_through_round": 1, "turn_covered_rounds": [1]}}},
+        },
+    })
+    context = _context(str(test_sandbox.sessions / "shared-compaction"), turns, 200_000)
+    llm = SummaryLlm("CLARIFY SESSION SUMMARY", asyncio.CancelledError() if cancel else "CLARIFY TURN SUMMARY")
+    worker = ClarifyThink(llm)
+    original_state = current.state.model_dump(mode="json")
+    original_records = deepcopy([record.model_dump(mode="json") for record in records])
+    normal = current.model_copy(update={"state": current.state.model_copy(update={"think": NormalStageState()})})
+    normal_before = _serialized(await MainThink().assemble_messages(normal, context))
+    messages = await worker.assemble_messages(current, context)
+    if cancel:
+        with pytest.raises(asyncio.CancelledError):
+            await worker.compact_messages(messages, [], current, context, target=1)
+        assert current.state.model_dump(mode="json") == original_state
+    else:
+        rebuilt = await worker.compact_messages(messages, [], current, context, target=1)
+        compaction = current.state.context_compaction
+        assert compaction.session["build"]["clarify"].session_through_ordinal == 3
+        assert compaction.turn["build"]["clarify"].turn_covered_rounds == [2, 4]
+        assert compaction.session["normal"]["main"] == normal.state.context_compaction.session["normal"]["main"]
+        assert compaction.turn["normal"]["main"] == normal.state.context_compaction.turn["normal"]["main"]
+        text = _serialized(rebuilt)
+        assert "NORMAL SESSION 1" in text and "NORMAL ROUND 1" in text
+        assert "CLARIFY SESSION 0" not in text and "CLARIFY ROUND 0" not in text
+        assert "CLARIFY SESSION 2" in text and "CLARIFY ROUND 2" in text
+    assert len(llm.calls) == 2
+    assert all("NORMAL" not in _serialized(call) for call in llm.calls)
+    assert "CLARIFY SESSION 0" in _serialized(llm.calls[0])
+    assert "CLARIFY ROUND 0" in _serialized(llm.calls[1])
+    normal.state = current.state.model_copy(update={"think": NormalStageState()})
+    assert _serialized(await MainThink().assemble_messages(normal, context)) == normal_before
+    assert [record.model_dump(mode="json") for record in records] == original_records
+
+
+async def test_clarify_cannot_compact_normal_even_when_shared_history_exceeds_capacity(test_sandbox: IsolatedPaths) -> None:
+    current = AmphiOTAContext(user_input="Clarify", state={"think": {"mode": "build", "stage": "clarify"}}, ota_record=[
+        _round("normal", "main", f"NORMAL LARGE {index} " * 2_000) for index in range(8)
+    ])
+    context = _context(str(test_sandbox.sessions / "read-only-overflow"), [], 40_000)
+    llm = SummaryLlm()
+    worker = ClarifyThink(llm)
+    messages = await worker.assemble_messages(current, context)
+    with pytest.raises(ContextWindowExceededError):
+        await worker._prepare_context_window(messages, [], current, context)
+    assert not llm.calls
+    assert current.state.context_compaction is None
+
+
+@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "explore"), ("build", "generate"), ("build", "verify"), ("run_workflow", "execute")])
+async def test_clarify_sharing_does_not_change_other_stage_views(test_sandbox: IsolatedPaths, mode: str, stage: str) -> None:
+    records = [_round("normal", "main", "NORMAL ONLY"), _round("build", "clarify", "CLARIFY ONLY")]
+    context = _context(str(test_sandbox.sessions / "one-way-sharing"), [_turn(0, records, AgentState())], 100_000)
+    think = {"mode": mode, "stage": stage}
+    if mode == "run_workflow":
+        think.update(workflow_id="workflow", generation="generation")
+    current = AmphiOTAContext(user_input="Continue", ota_record=records, state={"think": think})
+    worker = MainThink()
+    text = _serialized([*await worker.session_messages_block(current, context), *worker.turn_messages_block(current, context)])
+    assert "CLARIFY ONLY" not in text
+    assert ("NORMAL ONLY" in text) == (mode == "normal")
+
+
+@pytest.mark.parametrize("compacted", [False, True])
+async def test_clarify_sharing_does_not_duplicate_or_reexpand_unscoped_legacy_rounds(test_sandbox: IsolatedPaths, compacted: bool) -> None:
+    record = OTARecord(action_result=ActionResult(results=[ActionStepResult(tool_id="legacy-call", tool_name="read_file", tool_arguments={"file_path": "old.txt"}, tool_result="LEGACY OUTPUT")]))
+    state = AgentState(think=BuildStageState(stage="clarify"))
+    if compacted:
+        state.context_compaction = ContextCompactionState(turn={"normal": {"main": {"turn_summary": "LEGACY SUMMARY", "turn_through_round": 1}}})
+    current = AmphiOTAContext(user_input="Continue", state=state, ota_record=[record])
+    context = _context(str(test_sandbox.sessions / "legacy-sharing"), [], 100_000)
+    messages = ClarifyThink().turn_messages_block(current, context)
+    calls = [block for message in messages for block in message.blocks if isinstance(block, ToolCallBlock)]
+    assert len(calls) == (0 if compacted else 1)
+    assert ("LEGACY OUTPUT" in _serialized(messages)) is not compacted
+    assert ("LEGACY SUMMARY" in _serialized(messages)) is compacted
+
+
+@pytest.mark.parametrize("summary_owner", [None, "normal", "clarify"])
+async def test_clarify_keeps_owned_handoff_alongside_shared_normal_result(test_sandbox: IsolatedPaths, summary_owner: str | None) -> None:
+    """Sharing adds the Normal view without replacing Clarify's existing handoff."""
+    record = _round("normal", "main", "NORMAL ENTRY")
+    record.action_result = ActionResult(results=[ActionStepResult(
+        tool_id="build-entry", tool_name="request_build", tool_arguments={"goal": "Create the report workflow", "mode": "start"},
+        tool_result={"mode": "start", "goal": "Create the report workflow", "message": "A new Build was created."},
+    )])
+    current = AmphiOTAContext(user_input="Build", state={"think": {"mode": "build", "stage": "clarify"}}, ota_record=[record])
+    if summary_owner:
+        mode, stage = ("normal", "main") if summary_owner == "normal" else ("build", "clarify")
+        current.state.context_compaction = ContextCompactionState(turn={mode: {stage: {
+            "turn_summary": "SOURCE SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [1],
+        }}})
+    worker = ClarifyThink()
+    context = _context(str(test_sandbox.sessions / "shared-handoff"), [], 100_000)
+    await worker.assemble_messages(current, context)
+    live = worker.turn_messages_block(current, context)
+    calls = [block for message in live for block in message.blocks if isinstance(block, ToolCallBlock)]
+    results = [block for message in live for block in message.blocks if isinstance(block, ToolResultBlock)]
+    assert len(calls) == len(results) == (0 if summary_owner == "normal" else 1)
+    assert sum("[stage handoff]" in message.content for message in live) == (0 if summary_owner == "clarify" else 1)
+    previous = _turn(0, [record], current.state)
+    context = _context(str(test_sandbox.sessions / "shared-handoff"), [previous], 100_000)
+    history = (await worker.session_messages_block(current, context))[1:]
+    assert [message.blocks for message in history] == [message.blocks for message in live]
+
+
+@pytest.mark.parametrize("legacy_checkpoint", [False, True])
+async def test_clarify_does_not_reopen_unscoped_turns_covered_by_normal_session_summary(test_sandbox: IsolatedPaths, legacy_checkpoint: bool) -> None:
+    record = OTARecord(think_result={"step_content": "COVERED LEGACY RAW", "tool_calls": []})
+    previous = _turn(0, [record], AgentState())
+    summary = {"session_summary": "NORMAL SESSION CHECKPOINT", "session_through_ordinal": 0}
+    compaction = summary if legacy_checkpoint else {"session": {"normal": {"main": summary}}}
+    current = AmphiOTAContext(user_input="Clarify", state={"think": {"mode": "build", "stage": "clarify"}, "context_compaction": compaction})
+    context = _context(str(test_sandbox.sessions / "legacy-session-sharing"), [previous], 100_000)
+    messages = await ClarifyThink().session_messages_block(current, context)
+    assert len(messages) == 1
+    assert "NORMAL SESSION CHECKPOINT" in messages[0].content
+    assert "COVERED LEGACY RAW" not in _serialized(messages)
+    assert "Request 0" not in _serialized(messages)
+    if not legacy_checkpoint:
+        # A known Clarify round in the same Turn still belongs to Clarify.
+        previous.ota_records.append(_round("build", "clarify", "CLARIFY RETAINED").model_dump(mode="json"))
+        messages = await ClarifyThink().session_messages_block(current, context)
+        assert "CLARIFY RETAINED" in _serialized(messages)
+        assert "COVERED LEGACY RAW" not in _serialized(messages)
+        assert sum(message.content == "Request 0" for message in messages) == 1
 
 
 async def test_normal_receives_build_exit_and_artifact_paths_not_build_logs(test_sandbox: IsolatedPaths) -> None:
@@ -320,3 +527,42 @@ def test_confirmed_build_entry_keeps_proposed_goal() -> None:
     text = str(_project_rounds([record], ("build", "clarify"))[0].record)
     assert "Turn the earlier task into a reusable workflow" in text
     assert "PRIVATE NORMAL TRACE" not in text
+
+
+@pytest.mark.parametrize("status,action,target_stage", [
+    ("resolved", "keep", "verify"),
+    ("resolved", "merge", "clarify"),
+    ("resolved", "replace", "clarify"),
+    ("not_answered", "not_answered", "verify"),
+    ("pending", None, None),
+    ("cancelled", None, None),
+])
+def test_build_entry_hands_resolved_choice_to_actual_stage(status: str, action: str | None, target_stage: str | None) -> None:
+    record = _round("normal", "main", "PRIVATE NORMAL TRACE")
+    record.action_result = {"results": [{
+        "tool_name": "request_build", "success": True,
+        "tool_result": {
+            "mode": "ask", "status": status, "action": action, "existing_stage": "verify",
+            "goal": "COMPETING WORKFLOW GOAL", "message": "The user resolved the Build request.",
+            "response": "the second option", "reason": "Choose how to handle the unfinished Build.",
+            "questions": [{"question": "How should the new request affect this Build?", "options": [
+                {"label": "Keep", "preview": "PRIVATE FULL CARD"}, {"label": "Merge requirements"}, {"label": "Replace"},
+            ]}],
+        },
+    }]}
+    before = record.model_dump(mode="json")
+    for stage in ("clarify", "explore", "generate", "verify"):
+        projected = _project_rounds([record], ("build", stage))
+        if stage != target_stage:
+            assert projected == []
+            continue
+        text = projected[0].record["think_result"]["step_content"]
+        assert "The user resolved the Build request." in text and "the second option" in text
+        assert ("COMPETING WORKFLOW GOAL" in text) == (action in {"merge", "replace"})
+        assert "PRIVATE NORMAL TRACE" not in text and "PRIVATE FULL CARD" not in text
+        if status == "not_answered":
+            assert "Context: Choose how to handle the unfinished Build." in text
+            assert "Question: How should the new request affect this Build?" in text
+            assert "Options: 1. Keep; 2. Merge requirements; 3. Replace" in text
+        assert "action_result" not in projected[0].record
+    assert record.model_dump(mode="json") == before

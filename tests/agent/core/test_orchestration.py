@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from src.amphi_agent import (
     WorkflowLibrary,
     WorkflowRunLibrary,
 )
+from src.amphi_agent._cognitive import ClarifyThink, GenerateThink
 from src.amphi_agent._state import (
     AwaitingBuildConflict,
     AwaitingTaskConfirm,
@@ -358,6 +360,115 @@ async def test_build_switch(orchestration: _Harness) -> None:
     assert "unfinished Build workspace was retained" in str(leave.ota_record[-1].observation_result)
 
 
+@pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
+@pytest.mark.parametrize("reply", ["second option", "Choose the delivery method: second option"])
+async def test_switch_carries_saved_human_outcomes(orchestration: _Harness, status: TurnStatus, reply: str) -> None:
+    """Carry shared human outcomes, including referential replies, without foreign logs."""
+    await _prepare_build(orchestration, "explore")
+    choice = _step("request_human_choice", reply)
+    choice.tool_arguments = {
+        "prompt": "Where should the report go?",
+        "questions": json.dumps([{
+            "question": "Choose the delivery method",
+            "options": [{"label": "Email result"}, {"label": "Local result"}],
+        }]),
+    }
+    approved = "Only generate a local report."
+    ignored = _step("request_human_choice", "FAILED CHOICE RESULT")
+    ignored.success = False
+    ignored.error = "The interaction did not complete."
+    historical = AmphiOTAContext(
+        user_input="Review the report requirements",
+        ota_record=[OTARecord(
+            think_scope={"mode": "build", "stage": "verify"},
+            think_result={"step_content": "PRIVATE VERIFY TRACE", "tool_calls": []},
+            action_result=ActionResult(results=[
+                _step("request_human_task_confirm", {
+                    "status": "confirmed", "message": approved,
+                    "task_markdown": "PRIVATE CONFIRMATION CARD",
+                }),
+                choice.model_copy(deep=True),
+                _step("request_human_task_confirm", {"status": "pending", "message": "PENDING CONFIRMATION"}),
+                ignored,
+                _step("exec_command", "PRIVATE TOOL OUTPUT"),
+            ]),
+        )],
+    )
+    saved = _turn(historical, "turn-saved-human-outcomes", status)
+    orchestration.context.session = Session(orchestration.record, [saved])
+    reason = "Exploration is complete; implement the report."
+    advance = _ota(
+        "Continue the report workflow",
+        _step("switch", {"mode": "build", "stage": "generate", "reason": reason}),
+        BuildStageState(stage="explore"),
+    )
+    advance.ota_record[0].think_scope = {"mode": "build", "stage": "explore"}
+    advance.ota_record.insert(0, OTARecord(
+        think_scope={"mode": "build", "stage": "explore"},
+        think_result={"step_content": "PRIVATE EXPLORE TRACE", "tool_calls": []},
+        action_result=ActionResult(results=[choice]),
+    ))
+
+    await _apply(orchestration, advance)
+
+    assert advance.think_status == BuildStageState(stage="generate")
+    handoff = _payload(advance, "switch")["reason"]
+    assert handoff.startswith(reason)
+    assert handoff.count("second option") == 1
+    assert f"- request_human_choice: Answer: {reply}" in handoff
+    assert "Question: Choose the delivery method Options: 1. Email result; 2. Local result" in handoff
+    assert not any(key in handoff for key in ('"reply":', '"questions":', '"status":', '"message":'))
+    persisted = _turn(advance, "turn-switched", TurnStatus.COMPLETED)
+    assert persisted.ota_records[-1]["action_result"]["results"][0]["tool_result"]["reason"] == handoff
+    messages = await GenerateThink().assemble_messages(advance, orchestration.context)
+    prompt = "\n".join(message.content for message in messages)
+    for expected in (reason, approved, "Where should the report go?", "Choose the delivery method", "Email result", "Local result", "second option"):
+        assert expected in handoff
+        assert expected in prompt
+    for excluded in ("PRIVATE VERIFY TRACE", "PRIVATE EXPLORE TRACE", "PRIVATE TOOL OUTPUT", "PRIVATE CONFIRMATION CARD", "PENDING CONFIRMATION", "FAILED CHOICE RESULT"):
+        assert excluded not in handoff
+        assert excluded not in prompt
+
+
+@pytest.mark.parametrize("context_size", [1_500, 19_500])
+async def test_switch_keeps_complete_prompt_and_distinct_decisions(orchestration: _Harness, context_size: int) -> None:
+    """Preserve prompt tails and deduplicate only identical contextual decisions."""
+    await _prepare_build(orchestration, "explore")
+    contexts = ["C" * context_size + suffix for suffix in (" Subject: file A.", " Subject: file B.")]
+    advance = _ota(
+        "Continue implementation",
+        _step("switch", {"mode": "build", "stage": "generate", "reason": "Implement the decisions."}),
+        BuildStageState(stage="explore"),
+    )
+    advance.ota_record[0].think_scope = {"mode": "build", "stage": "explore"}
+    choices = []
+    for prompt in contexts:
+        choice = _step("request_human_choice", "Proceed")
+        choice.tool_arguments = {
+            "prompt": prompt,
+            "questions": json.dumps([{"question": "Proceed?", "options": [{"label": "Proceed"}, {"label": "Cancel"}]}]),
+        }
+        choices.append(choice)
+    choices.append(choices[-1].model_copy(deep=True))
+    advance.ota_record.insert(0, OTARecord(
+        think_scope={"mode": "build", "stage": "explore"},
+        action_result=ActionResult(results=choices),
+    ))
+
+    await _apply(orchestration, advance)
+
+    handoff = _payload(advance, "switch")["reason"]
+    prompt = "\n".join(message.content for message in await GenerateThink().assemble_messages(advance, orchestration.context))
+    assert contexts[-1] in handoff and contexts[-1] in prompt
+    assert handoff.count(contexts[-1]) == 1
+    assert "[truncated;" not in handoff
+    if context_size == 1_500:
+        assert contexts[0] in handoff and handoff.count("- request_human_choice:") == 2
+    else:
+        assert contexts[0] not in handoff and handoff.count("- request_human_choice:") == 1
+        assert "Additional details omitted" in handoff
+
+
 async def test_terminal_rehydration(orchestration: _Harness) -> None:
     """Final state after a terminal Turn:
 
@@ -512,9 +623,15 @@ async def test_workflow_edit(orchestration: _Harness) -> None:
             "Edit the saved report Workflow",
             _step("edit_workflow", EditWorkflow(saved.workflow_id)),
         )
+        edit.ota_record[0].think_scope = {"mode": "normal", "stage": "main"}
+        edit.action_result.results[0].tool_arguments = {"workflow_id": saved.workflow_id}
         await _apply(orchestration, edit)
         assert edit.think_status == BuildStageState(stage="clarify", workflow_id=saved.workflow_id)
         assert orchestration.workspace.build is not None
+        messages = await ClarifyThink().assemble_messages(edit, orchestration.context)
+        rendered = str([message.model_dump(mode="json") for message in messages])
+        assert _payload(edit, "edit_workflow")["message"] in rendered
+        assert saved.workflow_id in rendered
         return orchestration.workspace.build.root / "workflow" / "WORKFLOW.md"
 
     async def publish(request_id: str, action: str, name: str) -> AmphiOTAContext:

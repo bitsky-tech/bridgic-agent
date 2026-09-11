@@ -212,7 +212,9 @@ async def test_build_confirm(interactions: _Harness) -> None:
     assert checkpoint.stage == "clarify"
 
 
-async def test_build_conflict(interactions: _Harness) -> None:
+@pytest.mark.parametrize("existing_stage", ["clarify", "verify"])
+@pytest.mark.parametrize("freeform", [False, True])
+async def test_build_conflict(interactions: _Harness, existing_stage: str, freeform: bool) -> None:
     """Final conflicting Build request:
 
     {
@@ -227,7 +229,9 @@ async def test_build_conflict(interactions: _Harness) -> None:
     """
     record = await interactions.create_session("build-conflict")
     workspace = await interactions.workspace(record)
-    build = await workspace.prepare_build_space("create", stage="clarify")
+    build = await workspace.prepare_build_space("create", stage=existing_stage)
+    if existing_stage == "verify":
+        _write_package(build.root)
     marker = build.root / "marker.txt"
     marker.write_text("original\n", encoding="utf-8")
     workspace.close_build_space()
@@ -253,11 +257,12 @@ async def test_build_conflict(interactions: _Harness) -> None:
         call_id="call-leave-retained-build",
     )
     interactions.llm.enqueue_text("I kept the original unfinished Build.")
-    completed = await interactions.run(record.id, {
+    answer = "the second option" if freeform else {
         "type": "choice_answer",
         "request_id": conflict.interaction.request_id,
         "answers": [{"index": 0, "option_id": "keep"}],
-    })
+    }
+    completed = await interactions.run(record.id, answer)
 
     # Check 2: The selected stable option resolves the held tool result and retained state.
     assert completed.outcome.disposition is InvocationDisposition.COMPLETED
@@ -266,9 +271,21 @@ async def test_build_conflict(interactions: _Harness) -> None:
     assert turns[0].status is TurnStatus.COMPLETED
     assert turns[0].session_ordinal == 0
     result = _tool_result(turns[0], "request_build")
-    assert (result["status"], result["action"]) == ("resolved", "keep")
+    assert (result["status"], result["action"]) == (("not_answered", "not_answered") if freeform else ("resolved", "keep"))
     assert marker.read_text(encoding="utf-8") == "original\n"
-    assert workspace.build_checkpoint() is not None
+    checkpoint = workspace.build_checkpoint()
+    assert checkpoint is not None and checkpoint.stage == existing_stage
+    # The very first model call after the choice receives the resolved tool outcome.
+    prompt = "\n".join(message.content for message in interactions.llm.turn_calls[1].messages)
+    assert f"# Current stage: {existing_stage}" in prompt
+    assert result["message"] in prompt and result["response"] in prompt
+    if freeform:
+        handoff = _tool_result(turns[0], "switch")["reason"]
+        question = conflict.interaction.questions[0]
+        for text in ("the second option", conflict.interaction.reason, question["question"], f"2. {question['options'][1]['label']}"):
+            assert text in prompt and text in handoff
+    else:
+        assert "Ignore the competing Build request that triggered this choice." in prompt
 
 
 async def test_workflow_confirm(interactions: _Harness, agent_model: str) -> None:

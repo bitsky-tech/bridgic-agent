@@ -5,6 +5,7 @@ import re
 import secrets
 import time
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -36,7 +37,7 @@ from ._cognitive import (
     WorkflowThink,
     render_input,
 )
-from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
+from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot, _view
 from ._describe import describe_commands
 from ._error import AgentEmptyAnswerError
 from ._prompt import TITLE_PROMPT
@@ -610,6 +611,80 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         model re-loops the stage blind to why a call was vetoed. (The permission PARK
         records no round permission, so it is untouched by this fold.)
         """
+        def _handoff_reason(reason: str) -> str:
+            """Append saved human-tool outcomes, without replaying execution traces."""
+            def outcomes():
+                history = (
+                    record for turn in reversed(context.session.get_all()) if turn.status.is_terminal
+                    for record in reversed(turn.ota_records or [])
+                )
+                for record in chain(reversed(ota_context.ota_record), history):
+                    for action in reversed(_view(_view(record, "action_result"), "results") or []):
+                        name, result = _view(action, "tool_name"), _view(action, "tool_result")
+                        if _view(action, "success") is False or _view(action, "error"):
+                            continue
+                        prompt, questions = "", []
+                        if name == "request_human_choice" and isinstance(result, str) and result.strip():
+                            lines = [f"Answer: {result.strip()}"]
+                            arguments = _view(action, "tool_arguments") or {}
+                            if isinstance(arguments, list):
+                                arguments = {_view(arg, "name"): _view(arg, "value") for arg in arguments}
+                            prompt = str(_view(arguments, "prompt") or "")
+                            questions = RequestHumanChoice.coerce_questions(_view(arguments, "questions"))
+                        elif name in {"request_build", "request_run_workflow", "request_human_task_confirm", "request_human_workflow_confirm"} and isinstance(result, dict):
+                            if result.get("status") not in {"confirmed", "cancelled", "resolved", "not_answered", "revision_requested", "save_failed", "failed"}:
+                                continue
+                            lines = []
+                            for key in ("message", "feedback", "user_message", "response"):
+                                text = str(result.get(key) or "").strip()
+                                if text and not any(text in line for line in lines):
+                                    lines.append(text)
+                            if not lines:
+                                lines.append(f"User decision: {str(result.get('action') or result['status']).replace('_', ' ')}.")
+                            if name == "request_build" and result.get("status") == "not_answered":
+                                prompt = str(result.get("reason") or "")
+                                questions = RequestHumanChoice.coerce_questions(result.get("questions"))
+                        else:
+                            continue
+                        # Free-form answers such as "the second option" need their question.
+                        for question in questions:
+                            text = str(_view(question, "question") or "").strip()
+                            if not text:
+                                continue
+                            options = "; ".join(
+                                f"{index}. {_view(option, 'label')}"
+                                for index, option in enumerate(_view(question, "options") or [], 1)
+                            )
+                            lines.append(f"Question: {text}" + (f" Options: {options}" if options else ""))
+                        yield f"- {name}: " + "\n  ".join(lines), prompt
+
+            items: List[str] = []
+            seen: set[tuple[str, str]] = set()
+            size = 0
+            omitted = False
+            for item, prompt in outcomes():
+                # Compare the original context, not a clipped rendering of different decisions.
+                if (item, prompt) in seen:
+                    continue
+                seen.add((item, prompt))
+                if len(item) > 1_000:
+                    item = item[:900] + " … [truncated; see the Session transcript]"
+                    omitted = True
+                if prompt:
+                    item += f"\n  Context: {prompt}"
+                # Keep the newest decision even when its complete prompt exceeds the soft budget.
+                if len(items) >= 8 or (items and size + len(item) > 4_000):
+                    omitted = True
+                    break
+                items.append(item)
+                size += len(item)
+            if not items:
+                return reason
+            note = "[user interaction outcomes; oldest to newest]\n" + "\n".join(reversed(items))
+            if omitted:
+                note += "\nAdditional details omitted; see the Session transcript."
+            return f"{reason}\n\n{note}" if reason else note
+
         gate = self._get_current_ota_permission_status(ota_context)
         effective_execution_mode = (
             gate.execution_mode or self._effective_execution_mode(ota_context, context)
@@ -641,6 +716,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                         target_mode,
                         sig.get("stage"),
                     )
+                sig["reason"] = _handoff_reason(sig.get("reason") or "")
                 ota_context.transition_think(next_status)
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
                     self._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])

@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 from copy import deepcopy
 from types import SimpleNamespace
@@ -18,7 +19,8 @@ from src.amphi_agent import (
     Session,
 )
 from src.amphi_agent._cognitive import ClarifyThink, ExploreThink, VerifyThink
-from src.amphi_agent._state import BuildStageState, NormalStageState, WorkflowStageState
+from src.amphi_agent._invocation import AgentInvocation
+from src.amphi_agent._state import BuildStageState, ContextCompactionState, NormalStageState, WorkflowStageState
 from src.amphi_agent.prompts.compaction import (
     render_session_compaction_prompt,
     render_turn_compaction_prompt,
@@ -327,6 +329,118 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
         ("context_compaction", {"active": True}),
         ("context_compaction", {"active": False}),
     ]
+
+
+@pytest.fixture(params=[False, True], ids=["fresh", "previous_summary"])
+async def compaction_attempt(request: pytest.FixtureRequest, test_sandbox: IsolatedPaths):
+    """Prepare both history scopes with optional previously committed summaries."""
+    content = "Historical task facts. " * 200
+    turns = [_turn("session-compaction-policy", index, content) for index in range(6)]
+    records = [OTARecord(think_result={"step_content": content, "tool_calls": []}) for _ in range(6)]
+    ota = AmphiOTAContext(user_input="Continue", ota_record=records, stream=EventStream())
+    if request.param:
+        ota.state.context_compaction = ContextCompactionState.model_validate({
+            "session": {"normal": {"main": {"session_summary": "Old Session summary", "session_through_ordinal": 0}}},
+            "turn": {"normal": {"main": {"turn_summary": "Old Turn summary", "turn_through_round": 1, "turn_covered_rounds": [1]}}},
+        })
+    context = _context(str(test_sandbox.sessions / "atomic-compaction"), turns, 200_000)
+    llm = SummaryLlm("New Session summary", "New Turn summary")
+    worker = MainThink(llm)
+    messages = await worker.assemble_messages(ota, context)
+    return worker, ota, context, messages
+
+
+@pytest.mark.parametrize("stop_at", ["session_summary", "turn_summary", "reassembly", "runtime_state"])
+async def test_compaction_stop_preserves_the_committed_state(compaction_attempt, monkeypatch: pytest.MonkeyPatch, stop_at: str) -> None:
+    """Stop at an actual await point; no candidate may leak into the cancellation checkpoint."""
+    worker, ota, context, messages = compaction_attempt
+    original = ota.state.context_compaction
+    checkpoint = AgentInvocation._ota_context_values(ota)
+    entered = asyncio.Event()
+    call_count = 0
+    if stop_at in {"session_summary", "turn_summary"}:
+        owner, method = worker._llm, "stream_turn"
+        stop_call = 1 if stop_at == "session_summary" else 2
+    else:
+        owner = worker
+        method = "assemble_messages" if stop_at == "reassembly" else "append_runtime_state"
+        stop_call = 1
+    original_method = getattr(owner, method)
+
+    async def pause(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == stop_call:
+            entered.set()
+            await asyncio.Future()
+        return await original_method(*args, **kwargs)
+
+    monkeypatch.setattr(owner, method, pause)
+    task = asyncio.create_task(worker.compact_messages(messages, [], ota, context, target=1))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert ota.state.context_compaction is original
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    saved = AgentInvocation._ota_context_values(ota)
+    assert saved["agent_state"] == checkpoint["agent_state"]
+    assert saved["ota_records"] == checkpoint["ota_records"]
+    assert ota.state.context_compaction is original
+    # Completed summary calls still incur usage even when their results are discarded.
+    completed_calls = len(worker._llm.calls)
+    assert ota.context_usage.input_tokens == completed_calls * 5
+    assert ota.context_usage.output_tokens == completed_calls * 2
+    assert ota.stream.events == [
+        ("context_compaction", {"active": True}),
+        ("context_compaction", {"active": False}),
+    ]
+
+
+@pytest.mark.parametrize("outcome", ["reassembly_error", "runtime_error", "no_reduction", "hard_capacity", "success"])
+async def test_compaction_commits_only_after_validation(compaction_attempt, monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
+    """Only a fully rebuilt, smaller, usable request can publish both summaries together."""
+    worker, ota, context, messages = compaction_attempt
+    original = ota.state.context_compaction
+    checkpoint = AgentInvocation._ota_context_values(ota)
+    if outcome in {"reassembly_error", "runtime_error", "no_reduction"}:
+        async def rebuild(*args, **kwargs):
+            if outcome == "no_reduction":
+                return messages
+            raise RuntimeError("Rebuild failed")
+
+        method = "append_runtime_state" if outcome == "runtime_error" else "assemble_messages"
+        monkeypatch.setattr(worker, method, rebuild)
+    elif outcome == "hard_capacity":
+        # The protected current input remains oversized even after both histories shrink.
+        ota.user_input = "X" * 500_000
+        messages = await worker.assemble_messages(ota, context)
+
+    if outcome in {"reassembly_error", "runtime_error", "hard_capacity"}:
+        error = ContextWindowExceededError if outcome == "hard_capacity" else RuntimeError
+        with pytest.raises(error):
+            await worker.compact_messages(messages, [], ota, context, target=1)
+    else:
+        rebuilt = await worker.compact_messages(messages, [], ota, context, target=1)
+        if outcome == "success":
+            state = ota.state.context_compaction
+            assert state is not original
+            assert state.session["normal"]["main"].session_summary == "New Session summary"
+            assert state.session["normal"]["main"].session_through_ordinal == 1
+            assert state.turn["normal"]["main"].turn_summary == "New Turn summary"
+            assert state.turn["normal"]["main"].turn_covered_rounds == [1, 2]
+            assert worker._estimate_request_tokens(rebuilt, []) < worker._estimate_request_tokens(messages, [])
+        else:
+            assert rebuilt == messages
+
+    saved = AgentInvocation._ota_context_values(ota)
+    if outcome != "success":
+        assert ota.state.context_compaction is original
+        assert saved["agent_state"] == checkpoint["agent_state"]
+    assert saved["ota_records"] == checkpoint["ota_records"]
+    assert ota.stream.events[-1] == ("context_compaction", {"active": False})
 
 
 async def test_turn_compaction_is_isolated_by_mode_and_stage(test_sandbox: IsolatedPaths) -> None:

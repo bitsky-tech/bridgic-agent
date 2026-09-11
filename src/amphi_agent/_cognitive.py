@@ -293,9 +293,39 @@ def _project_rounds(records: Sequence[Any], scope: _HistoryScope) -> List[_Histo
                 if (mode, stage) == scope:
                     reason = _view(result, "reason") or _view(arguments, "reason") or ""
                     notes.append(f"[stage handoff] to `{mode}/{stage}`\n{reason}")
-            elif name == "request_build" and scope == ("build", "clarify"):
-                if _view(result, "mode") == "start" or _view(result, "status") == "confirmed":
-                    notes.append(f"[stage handoff] to `build/clarify`\n{_view(result, 'goal') or ''}")
+            elif name == "request_build" and scope[0] == "build":
+                status, action = _view(result, "status"), _view(result, "action")
+                target_stage = None
+                if _view(result, "mode") == "start" or status == "confirmed":
+                    target_stage = "clarify"
+                elif status in {"resolved", "not_answered"}:
+                    if action in {"keep", "not_answered"}:
+                        target_stage = _view(result, "existing_stage")
+                    elif action in {"merge", "replace"}:
+                        target_stage = "clarify"
+                if scope[1] != target_stage:
+                    continue
+                lines = []
+                # A kept Build must not inherit the competing proposal as its goal.
+                if action not in {"keep", "not_answered"} and (goal := _view(result, "goal")):
+                    lines.append(f"Workflow goal: {goal}")
+                for key in ("message", "response", "user_message"):
+                    text = str(_view(result, key) or "").strip()
+                    if text and not any(text in line for line in lines):
+                        lines.append(text)
+                if status == "not_answered":
+                    if prompt := _view(result, "reason"):
+                        lines.append(f"Context: {prompt}")
+                    for question in _view(result, "questions") or []:
+                        text = str(_view(question, "question") or "").strip()
+                        if not text:
+                            continue
+                        options = "; ".join(
+                            f"{index}. {_view(option, 'label')}"
+                            for index, option in enumerate(_view(question, "options") or [], 1)
+                        )
+                        lines.append(f"Question: {text}" + (f" Options: {options}" if options else ""))
+                notes.append(f"[stage handoff] to `build/{target_stage}`\n" + "\n".join(lines))
             elif name == "request_run_workflow" and scope == ("run_workflow", "execute"):
                 status = _view(result, "status")
                 if status in {"started", "resumed", "restarted"}:
@@ -395,6 +425,32 @@ def _turn_has_scope(turn: Any, scope: _HistoryScope) -> bool:
         return True
     think = state.get("think") or {}
     return not turn.ota_records and (think.get("mode", "normal"), think.get("stage", "main")) == scope
+
+
+def _project_turn_history(records: Sequence[Any], compaction: Optional[ContextCompactionState], scopes: Sequence[_HistoryScope]) -> Tuple[List[Tuple[_HistoryScope, TurnCompactionState]], List[_HistoryRound]]:
+    """Merge read views in journal order, applying each owner's own Turn coverage."""
+    summaries = []
+    remaining: Dict[Tuple[int, str], _HistoryRound] = {}
+    covered_unscoped: set[int] = set()
+    for scope in scopes:
+        projection = compaction.turn.get(scope[0], {}).get(scope[1]) if compaction else None
+        covered = _covered_rounds(records, scope, projection)
+        if projection is not None and projection.turn_summary:
+            summaries.append((scope, projection))
+        # Legacy unscoped records can appear in both views. A summary already
+        # representing such a record must not cause it to expand via the other view.
+        covered_unscoped.update(
+            number for number in covered
+            if 0 < number <= len(records) and _record_scope(records[number - 1]) is None
+        )
+        for item in _project_rounds(records, scope):
+            if item.number in covered:
+                continue
+            # Keep a stage's natural-language handoff alongside the shared raw
+            # result, but replay overlapping native call/result pairs only once.
+            note = str(_view(_view(item.record, "think_result"), "step_content") or "") if _view(item.record, "history_handoff") else ""
+            remaining.setdefault((item.number, note), item)
+    return summaries, [remaining[key] for key in sorted(remaining) if key[0] not in covered_unscoped]
 
 
 def _node_environment_summary(workspace: Optional[Any]) -> str:
@@ -1014,7 +1070,7 @@ class MainThink(CognitiveWorker):
                     "state": projected_state,
                 })
                 payload = trim_text(
-                    serialize_messages(self.turn_messages_block(projected, context)),
+                    serialize_messages(self.turn_messages_block(projected, context, include_shared=False)),
                     unit_tokens,
                 )
                 units.append((
@@ -1040,25 +1096,26 @@ class MainThink(CognitiveWorker):
             })
             return True
 
-        async def reassemble() -> List[Message]:
-            rebuilt = await self.assemble_messages(ota_context, context)
-            return await self.append_runtime_state(rebuilt, ota_context, context)
-
         stream = getattr(ota_context, "stream", None)
         if stream is not None:
             stream.publish("context_compaction", active=True)
         try:
+            validated_context: Optional[AmphiOTAContext] = None
             session_changed = await compact_session_history()
             turn_changed = await compact_turn_history()
             if session_changed or turn_changed:
-                ota_context.state.context_compaction = candidate
-                compacted_messages = await reassemble()
+                # Rebuild privately so cancellation or failure cannot publish an unchecked candidate.
+                projected = ota_context.model_copy(update={
+                    "state": ota_context.state.model_copy(update={"context_compaction": candidate}),
+                })
+                compacted_messages = await self.assemble_messages(projected, context)
+                compacted_messages = await self.append_runtime_state(compacted_messages, projected, context)
                 compacted_tokens = self._estimate_request_tokens(compacted_messages, tools)
                 if compacted_tokens < before_tokens:
                     messages = compacted_messages
                     before_tokens = compacted_tokens
+                    validated_context = projected
                 else:
-                    ota_context.state.context_compaction = original_compaction
                     logger.warning(
                         "Discarded context compaction without a net token reduction: before=%s after=%s",
                         before_tokens,
@@ -1073,6 +1130,12 @@ class MainThink(CognitiveWorker):
                     before_tokens,
                     target,
                 )
+            if validated_context is not None:
+                # Commit both scopes and their assembly metadata together, with no intervening await.
+                ota_context.tools = validated_context.tools
+                ota_context.selected_skill_dirs = validated_context.selected_skill_dirs
+                ota_context.prompt_time = validated_context.prompt_time
+                ota_context.state.context_compaction = candidate
             return messages
         finally:
             if stream is not None:
@@ -1623,33 +1686,31 @@ class MainThink(CognitiveWorker):
         return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
 
     async def session_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Replay only the active stage's Session summary and compacted historical Turns."""
+        """Clarify also reads Normal; every source retains its own Session boundary."""
         turns = context.session.get_all()
         think = ota_context.think_status
         scope = (think.mode, think.stage)
-        compaction = _session_projection(ota_context.state.context_compaction, turns, scope)
-        if not compaction.session_summary:
-            return self._session_messages(turns, context, scope, ota_context.tools)
-        remaining = [
-            turn
-            for turn in turns
-            if turn.session_ordinal > compaction.session_through_ordinal
-        ]
-        return [
-            self._compaction_summary_message(
-                "session_history",
-                compaction.session_summary,
-                "through_ordinal",
-                compaction.session_through_ordinal,
-            ),
-            *self._session_messages(remaining, context, scope, ota_context.tools),
-        ]
+        scopes = [("normal", "main"), scope] if scope == ("build", "clarify") else [scope]
+        projections = {
+            source: _session_projection(ota_context.state.context_compaction, turns, source)
+            for source in scopes
+        }
+        messages = []
+        for source, projection in projections.items():
+            if projection.session_summary:
+                messages.append(self._compaction_summary_message(
+                    "session_history", projection.session_summary, "through_ordinal", projection.session_through_ordinal,
+                    owner=source if len(scopes) > 1 else None,
+                ))
+        messages.extend(self._session_messages(turns, context, scope, ota_context.tools, session_projections=projections))
+        return messages
 
     @staticmethod
-    def _compaction_summary_message(scope: str, summary: str, through_name: str, through: int) -> Message:
+    def _compaction_summary_message(scope: str, summary: str, through_name: str, through: int, owner: Optional[_HistoryScope] = None) -> Message:
         """Render one persisted summary as low-authority Assistant history."""
+        owner_attribute = f' owner="{owner[0]}/{owner[1]}"' if owner else ""
         content = (
-            f"<{scope}_summary {through_name}=\"{through}\">\n"
+            f"<{scope}_summary {through_name}=\"{through}\"{owner_attribute}>\n"
             f"{summary.strip()}\n"
             f"</{scope}_summary>"
         )
@@ -1661,29 +1722,45 @@ class MainThink(CognitiveWorker):
         context: AmphiContext,
         scope: _HistoryScope = ("normal", "main"),
         tools: Sequence[ToolSpec] = (),
+        *,
+        session_projections: Optional[Dict[_HistoryScope, SessionCompactionState]] = None,
     ) -> List[Message]:
-        """Project a stage's historical Turns without importing another stage's execution history."""
+        """Merge requested read views; compaction callers request only their own scope."""
+        projections = session_projections if session_projections is not None else {scope: SessionCompactionState()}
         messages: List[Message] = []
         for turn in turns:
-            if not _turn_has_scope(turn, scope):
+            scopes = [
+                source for source, projection in projections.items()
+                if (not projection.session_summary or turn.session_ordinal > projection.session_through_ordinal)
+                and _turn_has_scope(turn, source)
+            ]
+            if not scopes:
                 continue
             ota = turn.ota_context_dump()
             records = ota.get("ota_record") or []
+            data = (turn.agent_state or {}).get("context_compaction")
+            compaction = ContextCompactionState.model_validate(data) if data else None
+            summaries, remaining = _project_turn_history(records, compaction, scopes)
+            if len(projections) > 1 and any(
+                projection.session_summary and turn.session_ordinal <= projection.session_through_ordinal
+                for projection in projections.values()
+            ):
+                # Unscoped legacy rounds covered by a shared Session summary
+                # must not reopen through the other source's retention window.
+                remaining = [item for item in remaining if _record_scope(item.record) is not None]
+                if records and not summaries and not remaining:
+                    continue
             messages.append(self._user_message(
                 turn.user_input,
                 self._render_user_input(turn.user_input, context),
                 context,
                 reject_unsupported=False,
             ))
-            data = (turn.agent_state or {}).get("context_compaction")
-            compaction = ContextCompactionState.model_validate(data) if data else None
-            projection = compaction.turn.get(scope[0], {}).get(scope[1]) if compaction else None
-            covered = _covered_rounds(records, scope, projection)
-            if projection is not None and projection.turn_summary:
+            for source, projection in summaries:
                 messages.append(self._compaction_summary_message(
                     "turn_history", projection.turn_summary, "through_round", projection.turn_through_round,
+                    owner=source if len(projections) > 1 else None,
                 ))
-            remaining = [item for item in _project_rounds(records, scope) if item.number not in covered]
             ota["ota_record"] = [item.record for item in remaining]
             messages.extend(self._ota_messages(ota, turn.session_ordinal, [item.number for item in remaining], tools))
             if turn.status == TurnStatus.FAILED:
@@ -1829,13 +1906,15 @@ class MainThink(CognitiveWorker):
             reject_unsupported=True,
         )
 
-    def turn_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
+    def turn_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext, *, include_shared: bool = True) -> List[Message]:
         """Render this turn's completed rounds for the next model call.
 
         Calls with complete, bounded arguments remain native AI/TOOL pairs. A
         round containing large omitted values or missing required arguments is
         rendered as an AI text summary so replay never teaches the model an
-        invalid tool-call shape. Observations remain trailing USER notes::
+        invalid tool-call shape. Clarify additionally reads Normal's compacted
+        view, unless the caller is collecting only its own compaction inputs.
+        Observations remain trailing USER notes::
 
             AI    "<thought>" + ToolCallBlock(id, name, args)…  (a round that acted)
             TOOL  ToolResultBlock(id, "<result>")               (one per call, paired by id)
@@ -1845,14 +1924,10 @@ class MainThink(CognitiveWorker):
         records = ota_context.ota_record
         compaction = ota_context.state.context_compaction
         think = ota_context.think_status
-        turn_compaction = (
-            compaction.turn.get(think.mode, {}).get(think.stage)
-            if compaction is not None
-            else None
-        )
         scope = (think.mode, think.stage)
-        covered = _covered_rounds(records, scope, turn_compaction)
-        projected_records = [item for item in _project_rounds(records, scope) if item.number not in covered]
+        # Sharing changes only the read view. The compactor explicitly opts out.
+        scopes = [("normal", "main"), scope] if include_shared and scope == ("build", "clarify") else [scope]
+        summaries, projected_records = _project_turn_history(records, compaction, scopes)
         records = [item.record for item in projected_records]
 
         def reasoning_extras(record: Any, mode: Optional[str]) -> Dict[str, Any]:
@@ -1886,12 +1961,13 @@ class MainThink(CognitiveWorker):
                 break
 
         messages: List[Message] = []
-        if turn_compaction is not None and turn_compaction.turn_summary:
+        for source, turn_compaction in summaries:
             messages.append(self._compaction_summary_message(
                 "turn_history",
                 turn_compaction.turn_summary,
                 "through_round",
                 turn_compaction.turn_through_round,
+                owner=source if len(scopes) > 1 else None,
             ))
         for item in projected_records:
             index, record = item.number - 1, item.record
@@ -2582,7 +2658,7 @@ class BuildThink(MainThink):
 
 
 class ClarifyThink(BuildThink):
-    """Clarify requirements and maintain this build's task definition."""
+    """Clarify requirements, reading Normal's history without owning its compaction."""
 
     persona: str = CLARIFY_PERSONA
     allowed_tools = BuildThink.allowed_tools | {
@@ -2624,9 +2700,11 @@ class ClarifyThink(BuildThink):
             SYSTEM  clarify persona
                     + <context> containing transcript, skills, artifacts, memory,
                       Build workspace, and Session workspace
-            ...     persisted session messages in their native roles
+            ...     Normal and Clarify Session summaries and retained history,
+                    merged in journal order with independent coverage
             USER    current user input
-            ...     current-Clarify assistant and tool-result messages
+            ...     Normal and Clarify Turn summaries and retained rounds,
+                    each governed by its owner's compaction
 
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
