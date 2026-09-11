@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { AgentMessageToolCall, MessageBlock } from '@/atoms/agent'
+import type { SessionTurnRecord } from '@shared/types'
 import { sessionTurnsToMessages, resolveWorkflowStepMetadata } from '@/lib/sessionTurns'
 
 GlobalRegistrator.register()
@@ -968,6 +969,54 @@ describe('Pipeline', () => {
     expect(contents[1]?.textContent).not.toContain('FIRST_STEP_PROCESS_ONLY')
     expect(contents[1]?.textContent?.trim()).not.toBe('')
 
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('keeps the answered stage grouped after Workflow exits to Main', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const main = { mode: 'normal', stage: 'main' }
+    const scope = { mode: 'run_workflow', stage: 'execute' }
+    const input: SessionTurnRecord = {
+      id: 'exit-turn', session_id: 'exit-session', session_ordinal: 0, user_id: 'local',
+      user_input: { text: 'Run workflow', blocks: [] }, status: 'completed', agent_state: { think: main },
+      final_answer: null, error: null, execution_mode: 'auto', model: null, max_rounds: null,
+      browser_tool_loaded: false, workspace_tools_loaded: false, skills_tool_loaded: false,
+      context_usage: {}, created_at: '2026-09-11T00:00:00Z', ota_records: [
+        { think_scope: main, reasoning_content: 'ENTRY_CONTENT', action_result: { results: [{
+          tool_name: 'request_run_workflow', tool_result: { status: 'started', workflow_id: 'wf', workflow_name: 'Directory', execution_steps: ['Choose directory'] },
+        }] } },
+        { think_scope: scope, reasoning_content: 'STAGE_CONTENT', action_result: { results: [{
+          tool_name: 'request_human_choice', tool_arguments: { questions: [{ question: 'Which directory?' }] }, tool_result: 'Exit workflow',
+        }] } },
+        { think_scope: scope, action_result: { results: [{ tool_name: 'switch', tool_result: { mode: 'normal' } }] } },
+        { think_scope: main, reasoning_content: 'MAIN_CONTENT' },
+      ],
+    }
+    await act(async () => root.render(
+      <Provider store={store}><Pipeline session={{ id: input.session_id, messages: sessionTurnsToMessages([input]), pending: false }} /></Provider>,
+    ))
+    const heading = host.querySelector<HTMLElement>('[data-testid="workflow-stage-header"]')!
+    const content = host.querySelector<HTMLElement>('[data-testid="workflow-stage-content"]')!
+    expect(heading.textContent).toContain('执行 1/1')
+    expect(heading.textContent).toContain('Choose directory')
+    expect(heading.textContent).not.toContain('执行中')
+    expect(content.textContent).toContain('STAGE_CONTENT')
+    expect(content.textContent).toContain('已与您确认')
+    expect(content.textContent).not.toContain('MAIN_CONTENT')
+    expect(content.textContent).not.toContain('ENTRY_CONTENT')
+    expect(host.textContent).toContain('MAIN_CONTENT')
+    const missingPreviousPage = { ...input, session_ordinal: 1, ota_records: input.ota_records!.slice(1) }
+    await act(async () => root.render(
+      <Provider store={store}><Pipeline session={{ id: input.session_id, messages: sessionTurnsToMessages([missingPreviousPage]), pending: false }} /></Provider>,
+    ))
+    const unresolvedHeading = host.querySelector<HTMLElement>('[data-testid="workflow-stage-header"]')!
+    expect(unresolvedHeading.textContent).toContain('执行')
+    expect(unresolvedHeading.textContent).not.toContain('执行 0')
+    expect(unresolvedHeading.textContent).not.toContain('执行 1')
     await act(async () => root.unmount())
     host.remove()
   })

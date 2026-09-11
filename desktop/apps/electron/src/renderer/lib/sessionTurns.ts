@@ -4,6 +4,7 @@ import { i18n } from './i18n'
 
 type Data = Record<string, unknown>
 type WorkflowStep = Extract<MessageBlock, { type: 'workflow_step' }>
+type WorkflowMetadata = NonNullable<AgentMessage['workflowMetadata']>[number]
 export interface SessionTurnChild {
   session_id: string
   title: string
@@ -19,6 +20,11 @@ const array = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const string = (value: unknown): string => value == null ? '' : String(value)
 const terminal = (turn: SessionTurnRecord) => ['completed', 'failed', 'cancelled'].includes(turn.status)
 const phaseKey = (workflowId: string, generation: string, phase: WorkflowStep['phase']) => JSON.stringify([workflowId, generation, phase])
+const cursorStep = (position: Data): WorkflowStep | null => position.mode === 'run_workflow'
+  && (position.stage === 'execute' || position.stage === 'validate') && position.workflow_id ? {
+    type: 'workflow_step', workflowId: string(position.workflow_id), generation: string(position.generation),
+    workflowName: '', phase: position.stage, stepIndex: Number(position.step_index ?? 0), stepCount: 0, title: '', status: 'running',
+  } : null
 
 /** Older tool arguments sometimes contain Python literals instead of JSON. No evaluation. */
 function storedValue(value: unknown): unknown {
@@ -88,7 +94,16 @@ export function sessionTurnsToMessages(turns: SessionTurnRecord[], context: Turn
         return []
       }), toolCalls: [], done: true, createdAt: turn.session_ordinal * 2,
     }
-    const blocks = turnBlocks(turn, { ...context, showPendingInteraction: index === turns.length - 1 && context.showPendingInteraction })
+    const previousTurn = turns[index - 1]
+    const previousThink = previousTurn?.session_id === turn.session_id && previousTurn.session_ordinal + 1 === turn.session_ordinal
+      ? object(previousTurn.agent_state?.think) : {}
+    const { blocks, workflowMetadata } = turnBlocks(turn, { ...context, showPendingInteraction: index === turns.length - 1 && context.showPendingInteraction }, previousThink)
+    if (workflowMetadata.length) user.workflowMetadata = workflowMetadata
+    const cursor = cursorStep(object(turn.agent_state?.think))
+    user.workflowTurn = {
+      sessionId: turn.session_id, ordinal: turn.session_ordinal,
+      cursor: cursor ? { workflowId: cursor.workflowId, generation: cursor.generation, phase: cursor.phase, stepIndex: cursor.stepIndex } : null,
+    }
     if (!blocks.length && turn.final_answer) blocks.push({ type: 'text', text: turn.final_answer })
     if (!blocks.length && !turn.error && turn.status !== 'cancelled') return [user]
     const duration = [...(turn.ota_records ?? [])].reverse().find((round) => round.turn_duration_ms != null)?.turn_duration_ms
@@ -108,8 +123,9 @@ export function sessionTurnsToMessages(turns: SessionTurnRecord[], context: Turn
   })
 }
 
-function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): MessageBlock[] {
+function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, previousThink: Data): { blocks: MessageBlock[]; workflowMetadata: WorkflowMetadata[] } {
   const blocks: MessageBlock[] = []
+  const workflowMetadata: WorkflowMetadata[] = []
   const spans: { start: number; marker: number }[] = []
   const state = turn.agent_state ?? {}
   const think = object(state.think)
@@ -123,12 +139,22 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
   let hasRunScope = false
   let workflowEntry: Data | null = null
   let entryGeneration: string | null = null
+  let entryMetadata: WorkflowMetadata | null = null
+  let workflowCursor = cursorStep(previousThink)
+  let workflowSection = 0
+  const inheritedStep = (phase: WorkflowStep['phase']): WorkflowStep => ({
+    type: 'workflow_step', workflowId: entryMetadata?.workflowId ?? '',
+    generation: entryMetadata?.generation ?? `history:${turn.session_id}:${turn.session_ordinal}:initial`,
+    workflowName: entryMetadata?.workflowName ?? '', phase, stepIndex: -1, stepCount: 0, title: '', status: 'running', inheritedCursor: true,
+  })
 
   const addStep = (step: WorkflowStep) => {
+    if (workflowSection > 0) step = { ...step, historySection: workflowSection }
     // Entry results have no generation. Bind them only inside their Run segment,
     // using its first report or the Turn's own unfinished cursor.
     if (workflowEntry?.workflow_id === step.workflowId && (entryGeneration === null || entryGeneration === step.generation)) {
       entryGeneration = step.generation
+      if (entryMetadata) entryMetadata.generation = step.generation
       const titles = array(workflowEntry[step.phase === 'execute' ? 'execution_steps' : 'validation_steps']).map(string)
       step = {
         ...step, workflowName: step.workflowName || string(workflowEntry.workflow_name),
@@ -139,13 +165,27 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
     }
     const existing = blocks.findIndex((block) => block.type === 'workflow_step'
       && block.workflowId === step.workflowId && block.generation === step.generation
-      && block.phase === step.phase && block.stepIndex === step.stepIndex)
+      && block.phase === step.phase && block.stepIndex === step.stepIndex
+      && (block.historySection ?? 0) === workflowSection)
     if (existing >= 0) {
-      if (step.status !== 'running') blocks[existing] = step
+      if (step.status === 'success' || step.status === 'failure') blocks[existing] = step
       return
     }
     spans.push({ start: workflowStart ?? fallbackStart, marker: blocks.length })
     blocks.push(step)
+  }
+  const closeWorkflow = () => {
+    if (workflowCursor && workflowStart !== null && workflowStart < blocks.length) {
+      addStep({ ...workflowCursor, status: 'neutral', summary: null })
+    }
+    workflowStart = null
+    workflowCursor = null
+    workflowEntry = null
+    entryMetadata = null
+    entryGeneration = null
+    hasRunScope = false
+    fallbackStart = blocks.length
+    workflowSection += 1
   }
   const removeQuestion = (question: string) => {
     for (let index = blocks.length - 1; index >= 0; index -= 1) {
@@ -165,24 +205,25 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
     return true
   }
 
-  for (const round of turn.ota_records ?? []) {
+  for (const [roundIndex, round] of (turn.ota_records ?? []).entries()) {
     const scope = object(round.think_scope)
+    const leavesWorkflow = scope.mode && scope.mode !== 'run_workflow' && hasRunScope
+    if (leavesWorkflow) closeWorkflow()
     if (round.think_scope || 'build_stage' in round) {
       let nextBuild = string(round.build_stage) || null
       if (round.think_scope) nextBuild = scope.mode === 'build' ? string(scope.stage) || null : null
       if (nextBuild !== buildStage) blocks.push({ type: 'build_stage', stage: nextBuild })
       buildStage = nextBuild
       // A Main/Build round closes an unfinished Run segment as well.
-      if (scope.mode && scope.mode !== 'run_workflow' && hasRunScope) {
-        if (nextBuild === null) blocks.push({ type: 'build_stage', stage: null })
-        hasRunScope = false
-        workflowEntry = null
-        entryGeneration = null
-      }
+      if (leavesWorkflow && nextBuild === null) blocks.push({ type: 'build_stage', stage: null })
     }
     if (scope.mode === 'run_workflow') {
       hasRunScope = true
       workflowStart ??= blocks.length
+      workflowCursor ??= inheritedStep(scope.stage === 'validate' ? 'validate' : 'execute')
+      if (workflowCursor && (scope.stage === 'execute' || scope.stage === 'validate') && scope.stage !== workflowCursor.phase) {
+        workflowCursor = { ...workflowCursor, phase: scope.stage, stepIndex: 0, stepCount: 0, title: '' }
+      }
     }
     const reasoning = typeof round.reasoning_content === 'string' && round.reasoning_content.trim()
       ? round.reasoning_content
@@ -197,22 +238,31 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
     let entered = false
     let reported = false
     let reportTerminal = false
+    let exited = false
     for (const value of array(object(round.action_result).results)) {
       const action = object(value)
       const name = string(action.tool_name)
       const arguments_ = object(action.tool_arguments)
       const payload = object(action.tool_result)
-      if (['switch', 'complete_run_workflow'].includes(name)) continue
+      if (name === 'switch') {
+        exited ||= action.success !== false && payload.mode === 'normal'
+        continue
+      }
+      if (name === 'complete_run_workflow') continue
       if (name === 'report_workflow_step') {
         if (payload.workflow_id) {
-          addStep({
+          const step: WorkflowStep = {
             type: 'workflow_step', workflowId: string(payload.workflow_id), generation: string(payload.generation),
             workflowName: string(payload.workflow_name), phase: payload.phase === 'validate' ? 'validate' : 'execute', stepIndex: Number(payload.step_index ?? 0),
             stepCount: Number(payload.step_count ?? 0), title: string(payload.title),
             status: payload.status === 'success' ? 'success' : 'failure', summary: string(payload.summary) || null,
             ...(Array.isArray(payload.execution_steps) ? { executionSteps: payload.execution_steps.map(string) } : {}),
             ...(Array.isArray(payload.validation_steps) ? { validationSteps: payload.validation_steps.map(string) } : {}),
-          })
+          }
+          addStep(step)
+          workflowCursor = {
+            ...step, stepIndex: step.stepIndex + (step.status === 'success' ? 1 : 0), title: '', status: 'running', summary: null,
+          }
           reported = true
           reportTerminal = Boolean(payload.run_id)
         }
@@ -238,6 +288,23 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
           if (entered) {
             workflowEntry = payload
             entryGeneration = null
+            entryMetadata = {
+              workflowId: string(payload.workflow_id), generation: `history:${turn.session_id}:${turn.session_ordinal}:${roundIndex}`,
+              workflowName: string(payload.workflow_name), executionSteps: array(payload.execution_steps).map(string),
+              validationSteps: array(payload.validation_steps).map(string),
+            }
+            if (entryMetadata.workflowId) workflowMetadata.push(entryMetadata)
+            const entryAction = string(payload.resolved_action || payload.action || (['started', 'restarted', 'resumed'].includes(status) ? status : arguments_.action))
+            const startsAtFirstStep = ['started', 'restarted', 'start', 'restart'].includes(entryAction)
+            if (startsAtFirstStep && entryMetadata.workflowId) {
+              workflowCursor = {
+                type: 'workflow_step', workflowId: entryMetadata.workflowId, generation: entryMetadata.generation,
+                workflowName: entryMetadata.workflowName, phase: 'execute', stepIndex: 0, stepCount: entryMetadata.executionSteps.length,
+                title: entryMetadata.executionSteps[0] || '', status: 'running', executionSteps: entryMetadata.executionSteps,
+              }
+            } else if (workflowCursor?.workflowId !== entryMetadata.workflowId) {
+              workflowCursor = inheritedStep('execute')
+            }
           }
         }
         const response = string(payload.response || payload.user_message).trim()
@@ -321,8 +388,13 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
       workflowStart = reportTerminal ? null : blocks.length
     } else if (entered) workflowStart = fallbackStart = blocks.length
     if (reportTerminal) {
+      workflowCursor = null
       workflowEntry = null
+      entryMetadata = null
       entryGeneration = null
+    } else if (exited && (hasRunScope || workflowEntry || (!round.think_scope && workflowCursor))) {
+      closeWorkflow()
+      blocks.push({ type: 'build_stage', stage: null })
     }
   }
   if (showPending && interaction.permission) {
@@ -334,12 +406,14 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
   // Legacy Turns predate per-round scope recording; their cursor still owns the unreported tail.
   if (workflowStart === null && !(turn.ota_records ?? []).some((round) => round.think_scope)) workflowStart = fallbackStart
   // The Turn's own cursor identifies its unfinished section, even after later Turns advance the Run.
-  if (think.mode === 'run_workflow' && (think.stage === 'execute' || think.stage === 'validate') && think.workflow_id && workflowStart !== null && workflowStart < blocks.length) {
-    addStep({
-      type: 'workflow_step', workflowId: string(think.workflow_id), generation: string(think.generation),
-      workflowName: '', phase: think.stage, stepIndex: Number(think.step_index ?? 0), stepCount: 0, title: '',
-      status: 'running',
-    })
+  const tailCursor = cursorStep(think)
+  if (tailCursor && entryMetadata?.workflowId === tailCursor.workflowId && (entryGeneration === null || entryGeneration === tailCursor.generation)) {
+    entryMetadata.generation = tailCursor.generation
+  }
+  if (tailCursor && workflowStart !== null && workflowStart < blocks.length) {
+    addStep(tailCursor)
+  } else if (!tailCursor && (hasRunScope || workflowEntry)) {
+    closeWorkflow()
   }
   const ordered: MessageBlock[] = []
   let cursor = 0
@@ -349,16 +423,42 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
     cursor = marker + 1
   }
   ordered.push(...blocks.slice(cursor))
-  return ordered.filter((block) => block.type !== 'text' || block.text).map((block) =>
+  return { workflowMetadata, blocks: ordered.filter((block) => block.type !== 'text' || block.text).map((block) =>
     terminal(turn) && block.type === 'workflow_step' && block.status === 'running'
       ? { ...block, status: turn.status === 'failed' ? 'failure' : 'neutral' }
       : block,
-  )
+  ) }
 }
 
 /** Share labels within a Run generation and phase, never its outcome or current step position across Turns. */
 export function resolveWorkflowStepMetadata(messages: AgentMessage[], run?: WorkflowRunState | null): AgentMessage[] {
+  const turnById = new Map(messages.filter((message) => message.workflowTurn).map((message) => [message.turnId, message.workflowTurn!]))
+  const cursorByOrdinal = new Map([...turnById.values()].map((turn) => [JSON.stringify([turn.sessionId, turn.ordinal]), turn.cursor]))
+  messages = messages.map((message) => {
+    const turn = turnById.get(message.turnId)
+    const previous = turn && cursorByOrdinal.get(JSON.stringify([turn.sessionId, turn.ordinal - 1]))
+    if (!previous) return message
+    return { ...message, blocks: message.blocks?.map((block) => {
+      if (block.type !== 'workflow_step' || !block.inheritedCursor || (block.workflowId && block.workflowId !== previous.workflowId)) return block
+      const { inheritedCursor: _inherited, ...step } = block
+      return {
+        ...step, workflowId: previous.workflowId, generation: previous.generation,
+        stepIndex: block.phase === previous.phase ? previous.stepIndex : 0,
+      }
+    }) }
+  })
   const metadata = new Map<string, { name: string; titles: string[]; count: number }>()
+  for (const message of messages) for (const run of message.workflowMetadata ?? []) {
+    for (const phase of ['execute', 'validate'] as const) {
+      const titles = phase === 'execute' ? run.executionSteps : run.validationSteps
+      const key = phaseKey(run.workflowId, run.generation, phase)
+      const previous = metadata.get(key)
+      metadata.set(key, {
+        name: run.workflowName || previous?.name || '', titles: titles.length ? [...titles] : previous?.titles ?? [],
+        count: Math.max(titles.length, previous?.count ?? 0),
+      })
+    }
+  }
   for (const message of messages) for (const block of message.blocks ?? []) {
     if (block.type !== 'workflow_step') continue
     const key = phaseKey(block.workflowId, block.generation, block.phase)

@@ -174,6 +174,10 @@ export type MessageBlock =
       summary?: string | null
       executionSteps?: string[]
       validationSteps?: string[]
+      /** The first historical section may need its preceding Turn's cursor. */
+      inheritedCursor?: boolean
+      /** Distinguish separate visits to the same stage within one historical Turn. */
+      historySection?: number
     }
   | {
       type: 'workflow_result'
@@ -246,6 +250,20 @@ export const AgentRole = {
 export type AgentRole = (typeof AgentRole)[keyof typeof AgentRole]
 
 export interface AgentMessage {
+  /** Renderer-owned Turn boundary for resolving separately loaded history pages. */
+  workflowTurn?: {
+    sessionId: string
+    ordinal: number
+    cursor: Pick<Extract<MessageBlock, { type: 'workflow_step' }>, 'workflowId' | 'generation' | 'phase' | 'stepIndex'> | null
+  }
+  /** Renderer-owned Run labels, retained even when a Turn stops immediately after entry. */
+  workflowMetadata?: {
+    workflowId: string
+    generation: string
+    workflowName: string
+    executionSteps: string[]
+    validationSteps: string[]
+  }[]
   id: string
   /** Durable Session Turn identity. Live-only messages omit it until hydration. */
   turnId?: string

@@ -6,6 +6,12 @@ import { AmphiClient } from '../amphiClient'
 const scope = { mode: 'run_workflow', stage: 'execute' }
 const run: WorkflowRunState = { workflowId: 'wf', generation: 'gen', workflowName: 'Directory', sourceSessionId: 'session', phase: 'execute', stepIndex: 0, executionSteps: ['Choose directory', 'Scan directory'] }
 const cursor = { ...scope, workflow_id: 'wf', generation: 'gen', step_index: 0 }
+const workflowEntry = {
+  think_scope: { mode: 'normal', stage: 'main' }, reasoning_content: 'Starting workflow', action_result: { results: [{
+    tool_name: 'request_run_workflow', success: true,
+    tool_result: { status: 'started', workflow_id: 'wf', workflow_name: 'Directory', execution_steps: run.executionSteps },
+  }] },
+}
 const report = (stepIndex: number) => ({ tool_name: 'report_workflow_step', tool_result: {
   workflow_id: 'wf', generation: 'gen', workflow_name: 'Directory', phase: 'execute', step_index: stepIndex,
   step_count: 2, title: run.executionSteps[stepIndex], execution_steps: run.executionSteps, status: 'success', summary: 'Done',
@@ -67,6 +73,113 @@ describe('Session Turn display projection', () => {
   it('does not create an empty next section after a report', () => {
     const message = assistant(sessionTurnsToMessages([turn({ agent_state: { think: { ...cursor, step_index: 1 } }, ota_records: [{ think_scope: scope, reasoning_content: 'Work', action_result: { results: [report(0)] } }] })]))
     expect(headings(message).map((step) => step.stepIndex)).toEqual([0])
+  })
+  for (const scoped of [false, true]) for (const mainRound of [false, true]) {
+    it(`retains the unreported stage when a human reply exits Workflow (scoped=${scoped}, mainRound=${mainRound})`, () => {
+      const rounds: Record<string, unknown>[] = [workflowEntry, {
+        think_scope: scope, reasoning_content: 'Original stage reasoning', action_result: { results: [{
+          tool_name: 'request_human_choice', tool_arguments: { questions: [{ question: 'Which directory?' }] }, tool_result: 'Exit workflow',
+        }] },
+      }, {
+        think_scope: scope, reasoning_content: 'Leaving the stage', action_result: { results: [{
+          tool_name: 'switch', success: true, tool_result: { mode: 'normal', stage: null },
+        }] },
+      }]
+      if (mainRound) rounds.push({ think_scope: { mode: 'normal', stage: 'main' }, reasoning_content: 'Main reasoning' })
+      const input = turn({ status: 'completed', agent_state: { think: { mode: 'normal', stage: 'main' } },
+        ota_records: rounds.map((round) => scoped ? round : Object.fromEntries(Object.entries(round).filter(([key]) => key !== 'think_scope'))),
+      })
+      const original = structuredClone(input)
+      const message = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([input]), { ...run, generation: 'new-gen', executionSteps: ['Unrelated new title'] }))
+      expect(headings(message)).toHaveLength(1)
+      expect(message.blocks!.slice(1, 6).map((block) => block.type)).toEqual(['workflow_step', 'thinking', 'confirmation', 'thinking', 'build_stage'])
+      expect(headings(message)[0]).toMatchObject({ title: 'Choose directory', stepCount: 2, status: 'neutral' })
+      if (mainRound) expect(message.blocks!.at(-1)).toEqual({ type: 'thinking', text: 'Main reasoning' })
+      expect(input).toEqual(original)
+    })
+  }
+  it('keeps a reported stage successful and closes only the unfinished next stage on exit', () => {
+    const message = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([turn({
+      status: 'failed', error: 'Later Main failure', agent_state: { think: { mode: 'normal', stage: 'main' } }, ota_records: [
+        workflowEntry, { think_scope: scope, reasoning_content: 'First stage', action_result: { results: [report(0)] } },
+        { think_scope: scope, reasoning_content: 'Second stage', action_result: { results: [{ tool_name: 'switch', tool_result: { mode: 'normal' } }] } },
+        { think_scope: { mode: 'normal', stage: 'main' }, reasoning_content: 'Main failure' },
+      ],
+    })])))
+    expect(headings(message).map(({ title, status }) => [title, status])).toEqual([['Choose directory', 'success'], ['Scan directory', 'neutral']])
+    expect(message.blocks!.map((block) => block.type)).toEqual(['thinking', 'workflow_step', 'thinking', 'workflow_step', 'thinking', 'build_stage', 'thinking'])
+  })
+  it('uses the preceding Turn cursor when an automatically resumed stage exits without a report', () => {
+    const before = turn({ status: 'cancelled', agent_state: { think: { ...cursor, step_index: 1 } }, ota_records: [
+      workflowEntry, { think_scope: scope, action_result: { results: [report(0)] } },
+    ] })
+    const after = turn({ id: 'after', session_ordinal: 1, status: 'completed', agent_state: { think: { mode: 'normal', stage: 'main' } }, ota_records: [
+      { think_scope: scope, reasoning_content: 'Resumed stage', action_result: { results: [{ tool_name: 'switch', tool_result: { mode: 'normal' } }] } },
+    ] })
+    const message = resolveWorkflowStepMetadata(sessionTurnsToMessages([before, after])).at(-1)!
+    expect(headings(message)[0]).toMatchObject({ generation: 'gen', stepIndex: 1, title: 'Scan directory', status: 'neutral' })
+    expect(message.blocks![1]).toEqual({ type: 'thinking', text: 'Resumed stage' })
+    const paged = resolveWorkflowStepMetadata([...sessionTurnsToMessages([before]), ...sessionTurnsToMessages([after])]).at(-1)!
+    expect(headings(paged)).toEqual(headings(message))
+    const missingPage = assistant(sessionTurnsToMessages([after]))
+    expect(headings(missingPage)[0]).toMatchObject({ stepIndex: -1, title: '', status: 'neutral' })
+    const otherGeneration = turn({ ...before, session_ordinal: -1, agent_state: { think: { ...cursor, generation: 'other' } } })
+    const separated = resolveWorkflowStepMetadata([...sessionTurnsToMessages([otherGeneration]), ...sessionTurnsToMessages([after])]).at(-1)!
+    expect(headings(separated)[0]).toMatchObject({ stepIndex: -1, title: '' })
+  })
+  it('does not turn a reported failure neutral when exiting after terminal publication fails', () => {
+    const failedReport = report(0)
+    const message = assistant(sessionTurnsToMessages([turn({
+      status: 'completed', agent_state: { think: { mode: 'normal', stage: 'main' } }, ota_records: [
+        workflowEntry,
+        { think_scope: scope, action_result: { results: [{ ...failedReport, success: false, tool_result: { ...failedReport.tool_result, status: 'save_failed' } }] } },
+        { think_scope: scope, reasoning_content: 'Exit after the failed publication', action_result: { results: [{ tool_name: 'switch', tool_result: { mode: 'normal' } }] } },
+      ],
+    })]))
+    expect(headings(message)).toHaveLength(1)
+    expect(headings(message)[0]).toMatchObject({ status: 'failure', title: 'Choose directory' })
+  })
+  it('keeps two visits to the same stage separate when a Turn exits and resumes before its first report', () => {
+    const previous = turn({ status: 'cancelled', ota_records: [workflowEntry] })
+    const resumed = turn({ id: 'resumed', session_ordinal: 1, status: 'completed', agent_state: { think: { mode: 'normal', stage: 'main' } }, ota_records: [
+      { think_scope: scope, reasoning_content: 'Before exit', action_result: { results: [{ tool_name: 'switch', tool_result: { mode: 'normal' } }] } },
+      { think_scope: { mode: 'normal', stage: 'main' }, reasoning_content: 'Main work', action_result: { results: [{
+        tool_name: 'request_run_workflow', tool_result: { status: 'resumed', workflow_id: 'wf', workflow_name: 'Directory', execution_steps: run.executionSteps },
+      }] } },
+      { think_scope: scope, reasoning_content: 'After resume', action_result: { results: [{ ...report(0), tool_result: { ...report(0).tool_result, run_id: 'result' } }] } },
+    ] })
+    const message = resolveWorkflowStepMetadata(sessionTurnsToMessages([previous, resumed])).at(-1)!
+    expect(headings(message).map(({ stepIndex, status }) => [stepIndex, status])).toEqual([[0, 'neutral'], [0, 'success']])
+    expect(headings(message)[0]?.historySection).not.toBe(headings(message)[1]?.historySection)
+    expect(message.blocks!.map((block) => block.type)).toEqual(['workflow_step', 'thinking', 'build_stage', 'thinking', 'workflow_step', 'thinking'])
+  })
+  for (const status of ['cancelled', 'failed'] as const) {
+    it(`retains entry-only ${status} Turn labels across pages after a new generation starts`, () => {
+      const entered = turn({ status, ota_records: [workflowEntry] })
+      const resumed = turn({ id: 'resumed', session_ordinal: 1, status: 'cancelled', ota_records: [{ think_scope: scope, reasoning_content: 'First execution OTA' }] })
+      const changed = { ...run, generation: 'new', workflowName: 'New workflow', executionSteps: ['New title'] }
+      const entryPage = sessionTurnsToMessages([entered])
+      expect(headings(assistant(entryPage))).toHaveLength(0)
+      expect(entryPage[0]!.workflowMetadata?.[0]).toMatchObject({ generation: 'gen', executionSteps: run.executionSteps })
+      const laterPage = resolveWorkflowStepMetadata(sessionTurnsToMessages([resumed]), changed)
+      const merged = resolveWorkflowStepMetadata([...entryPage, ...laterPage], changed)
+      expect(headings(merged.at(-1)!)[0]).toMatchObject({ generation: 'gen', workflowName: 'Directory', title: 'Choose directory', stepCount: 2, status: 'neutral' })
+      expect(headings(resolveWorkflowStepMetadata(sessionTurnsToMessages([entered, resumed]), changed).at(-1)!)).toEqual(headings(merged.at(-1)!))
+    })
+  }
+  it('isolates unreported exits and entry metadata from a later restart in the same Turn', () => {
+    const input = turn({ status: 'cancelled', agent_state: { think: { ...cursor, generation: 'new' } }, ota_records: [
+      workflowEntry,
+      { think_scope: scope, reasoning_content: 'Old stage content', action_result: { results: [{ tool_name: 'switch', tool_result: { mode: 'normal' } }] } },
+      { think_scope: { mode: 'normal', stage: 'main' }, reasoning_content: 'Restart from Main', action_result: { results: [{
+        tool_name: 'request_run_workflow', tool_result: { status: 'restarted', workflow_id: 'wf', workflow_name: 'Changed workflow', execution_steps: ['New step'] },
+      }] } },
+      { think_scope: scope, reasoning_content: 'New stage content' },
+    ] })
+    const message = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([input])))
+    expect(headings(message).map(({ title, stepCount }) => [title, stepCount])).toEqual([['Choose directory', 2], ['New step', 1]])
+    expect(headings(message)[0]!.generation).not.toBe(headings(message)[1]!.generation)
+    expect(message.blocks!.map((block) => block.type)).toEqual(['thinking', 'workflow_step', 'thinking', 'build_stage', 'thinking', 'workflow_step', 'thinking'])
   })
   for (const status of ['cancelled', 'failed'] as const) for (const entryStatus of ['started', 'resumed', 'resolved']) {
     it(`restores ${status} stage labels from the ${entryStatus} entry after a restart`, () => {

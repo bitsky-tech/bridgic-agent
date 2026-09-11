@@ -85,7 +85,7 @@ export function ProcessTimeline({ blocks, streaming = false, active = streaming,
       flushLooseBlocks()
       activeSection = {
         type: 'workflow',
-        key: `${block.workflowId}:${block.generation}:${block.phase}:${block.stepIndex}`,
+        key: `${block.workflowId}:${block.generation}:${block.phase}:${block.stepIndex}:${block.historySection ?? 0}`,
         step: block,
         blocks: [],
       }
@@ -236,14 +236,16 @@ function WorkflowStageSection({
   const phase = step.phase === 'execute'
     ? t('session.timeline.phase.execute')
     : t('session.timeline.phase.verify')
+  let eyebrow = phase
+  if (step.stepIndex >= 0) {
+    eyebrow = step.stepCount > 0
+      ? t('session.timeline.eyebrow.workflow', { phase, index: step.stepIndex + 1, count: step.stepCount })
+      : `${phase} ${step.stepIndex + 1}`
+  }
   return (
     <TimelineStageSection
       testIdPrefix="workflow-stage"
-      eyebrow={step.stepCount > 0 ? t('session.timeline.eyebrow.workflow', {
-        phase,
-        index: step.stepIndex + 1,
-        count: step.stepCount,
-      }) : `${phase} ${step.stepIndex + 1}`}
+      eyebrow={eyebrow}
       title={step.title}
       status={step.status === 'running' && !active ? 'neutral' : step.status}
       summary={step.summary}

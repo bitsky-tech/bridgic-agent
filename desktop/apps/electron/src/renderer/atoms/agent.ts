@@ -615,16 +615,20 @@ function appendDelta(
 function appendBuildStageMarker(blocks: MessageBlock[], position: ThinkPosition): MessageBlock[] {
   const stage = position.mode === 'build' ? position.stage : null
   let latest: Extract<MessageBlock, { type: 'build_stage' }> | undefined
+  let workflowOpen = false
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index]
-    if (block?.type === 'workflow_step') break
+    if (block?.type === 'workflow_step') {
+      workflowOpen = true
+      break
+    }
     if (block?.type === 'build_stage') {
       latest = block
       break
     }
   }
   if (latest?.stage === stage) return blocks
-  if (stage === null && latest === undefined) return blocks
+  if (stage === null && latest === undefined && (!workflowOpen || position.mode === 'run_workflow')) return blocks
   return [...blocks, { type: 'build_stage', stage }]
 }
 
@@ -1496,7 +1500,9 @@ export const applyAgentEventAtom = atom(
         const cur = get(streamingFamily(sessionId))
         if (!cur) return
         let found = false
-        const blocks = cur.blocks.map((block) => {
+        const boundary = cur.blocks.findLastIndex((block) => block.type === 'build_stage')
+        let historySection = 0
+        const blocks = cur.blocks.map((block, index) => {
           if (
             block.type !== 'workflow_step' ||
             block.workflowId !== event.workflowId ||
@@ -1504,6 +1510,8 @@ export const applyAgentEventAtom = atom(
             block.phase !== event.phase ||
             block.stepIndex !== event.stepIndex
           ) return block
+          historySection = Math.max(historySection, (block.historySection ?? 0) + 1)
+          if (index <= boundary) return block
           found = true
           return {
             ...block,
@@ -1528,6 +1536,7 @@ export const applyAgentEventAtom = atom(
             title: event.title,
             status: event.status,
             summary: event.summary ?? null,
+            ...(historySection ? { historySection } : {}),
             ...(event.executionSteps ? { executionSteps: event.executionSteps } : {}),
           }],
         })
@@ -1966,7 +1975,8 @@ export const applyAgentEventAtom = atom(
         }
         const cur = get(streamingFamily(sessionId))
         if (cur) {
-          const nextBlocks = appendBuildStageMarker(cur.blocks, event.position)
+          const settled = event.position.mode !== 'run_workflow' ? settleWorkflowSteps(cur.blocks, false) : cur.blocks
+          const nextBlocks = appendBuildStageMarker(settled, event.position)
           if (nextBlocks !== cur.blocks) {
             set(streamingFamily(sessionId), { ...cur, blocks: nextBlocks })
           }
