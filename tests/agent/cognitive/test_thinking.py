@@ -244,6 +244,7 @@ async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox:
     assert ota_context.context_usage.output_tokens == 0
     assert ota_context.context_usage.occupied_input_tokens == events[0]["input_tokens"]
     assert ota_context.context_usage.occupied_output_tokens == events[0]["output_tokens"]
+    assert ota_context.context_usage.stage_references == {}
 
 
 @pytest.mark.parametrize(("source", "estimate", "target"), [
@@ -280,6 +281,11 @@ async def test_context_threshold_enters_the_compaction_hook(test_sandbox: Isolat
             "source": "provider",
             "used_tokens": estimate,
             "estimated_occupied_tokens": estimate,
+            "stage_references": {"normal": {"main": {
+                "model_id": "small-model",
+                "input_tokens": estimate,
+                "estimated_input_tokens": estimate,
+            }}},
         }
         if source == "provider"
         else {}

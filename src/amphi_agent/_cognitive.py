@@ -23,6 +23,7 @@ from ._context import (
     AmphiContext,
     AmphiOTAContext,
     ContextUsageBreakdown,
+    ContextUsageReference,
     ContextUsageSnapshot,
     _view,
 )
@@ -751,14 +752,26 @@ class MainThink(CognitiveWorker):
         )
 
     def _project_context_usage(self, ota_context: AmphiOTAContext, request_estimate: int, model_id: str) -> Tuple[int, str]:
-        """Combine the last measured occupancy with newly estimated prompt growth."""
-        previous = ota_context.context_usage
-        if previous.used_tokens <= 0 or previous.model_id != model_id:
+        """Calibrate this request using only the active stage's same-model reference.
+
+        Never infer ownership from a legacy global snapshot: the stage may have
+        switched after its model call. Scaling the current estimate allows both
+        prompt growth and shrinkage without retaining an old absolute high-water mark.
+        """
+        think = ota_context.think_status
+        reference = ota_context.context_usage.stage_references.get(think.mode, {}).get(think.stage)
+        if (
+            reference is None
+            or reference.model_id != model_id
+            or reference.input_tokens <= 0
+            or reference.estimated_input_tokens <= 0
+        ):
             return request_estimate, "estimated"
-        growth = max(0, request_estimate - previous.estimated_occupied_tokens)
-        scale = max(1.0, previous.used_tokens / max(1, previous.estimated_occupied_tokens))
-        projected = previous.used_tokens + math.ceil(growth * scale)
-        return max(request_estimate, projected), previous.source
+        # Integer ceiling avoids rounding an unchanged reference over its threshold.
+        projected = (
+            request_estimate * reference.input_tokens + reference.estimated_input_tokens - 1
+        ) // reference.estimated_input_tokens
+        return max(request_estimate, projected), "provider"
 
     async def _prepare_context_window(self, messages: List[Message], tools: List[Any], ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Message], int]:
         """Run the shared preflight after every worker has assembled its final request."""
@@ -803,13 +816,8 @@ class MainThink(CognitiveWorker):
         """Compact both growing history scopes with bounded rolling summaries."""
         before_tokens = self._estimate_request_tokens(messages, tools)
         input_capacity = context.llm_provider.input_capacity()
-        previous_usage = ota_context.context_usage
-        measured_over_target = (
-            previous_usage.model_id == context.llm_provider.model_id
-            and previous_usage.source == "provider"
-            and previous_usage.used_tokens > target
-        )
-        if before_tokens <= target and not measured_over_target:
+        projected_tokens, _ = self._project_context_usage(ota_context, before_tokens, context.llm_provider.model_id)
+        if projected_tokens <= target:
             return messages
 
         summary_input_tokens = (
@@ -1129,6 +1137,16 @@ class MainThink(CognitiveWorker):
             round(used_tokens / usable_tokens * 100, 1)
             if usable_tokens is not None else None
         )
+        # Keep compaction calibration separate from the latest UI snapshot and
+        # cumulative billing totals. Auxiliary summary calls do not update it.
+        references = {mode: dict(stages) for mode, stages in previous.stage_references.items()}
+        if has_provider_input and request_estimate > 0:
+            think = ota_context.think_status
+            references.setdefault(think.mode, {})[think.stage] = ContextUsageReference(
+                model_id=context.llm_provider.model_id,
+                input_tokens=provider_input_tokens,
+                estimated_input_tokens=request_estimate,
+            )
         snapshot = ContextUsageSnapshot(
             model_id=context.llm_provider.model_id,
             input_tokens=total_input_tokens,
@@ -1142,6 +1160,7 @@ class MainThink(CognitiveWorker):
             source=source,
             estimated_occupied_tokens=request_estimate,
             breakdown=scale_breakdown(input_tokens),
+            stage_references=references,
         )
         ota_context.context_usage = snapshot
         stream = getattr(ota_context, "stream", None)
