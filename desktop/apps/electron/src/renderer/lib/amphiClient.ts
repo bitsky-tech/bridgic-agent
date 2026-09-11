@@ -434,7 +434,6 @@ export interface MeProfile {
   display_name: string | null
   current_model: string | null
   base_url: string | null
-  default_max_rounds: number
   default_temperature: number
   api_key_set: boolean
   protocol: 'openai' | 'anthropic' | 'openai-codex'
