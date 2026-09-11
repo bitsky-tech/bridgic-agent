@@ -80,11 +80,13 @@ def test_context_compaction_round_trip() -> None:
     state = AgentState(context_compaction=ContextCompactionState(
         session_summary="Earlier Session work",
         session_through_ordinal=4,
+        session={"build": {"verify": {"session_summary": "Verify history", "session_through_ordinal": 7}}},
         turn={
             "build": {
                 "clarify": {
                     "turn_summary": "Earlier rounds in this Turn",
                     "turn_through_round": 3,
+                    "turn_covered_rounds": [1, 3, 5],
                 },
             },
         },

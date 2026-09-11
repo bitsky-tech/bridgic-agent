@@ -226,7 +226,8 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     ]
     assert "Past request" in clarify_contents
     assert "Past answer" in clarify_contents
-    assert "Explore needs clarification" in clarify_contents
+    assert "Explore needs clarification" not in clarify_contents
+    assert any("A required decision is missing" in content for content in clarify_contents)
     assert "Clarify progress" in clarify_contents
 
     generate_ota = AmphiOTAContext(
@@ -258,27 +259,16 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     generate_contents = [message.content for message in generate_messages]
     assert "Earlier generation history" in generate_contents
     assert "Verification intermediate work" not in generate_contents
-    assert "Verification history" in generate_contents
+    assert "Verification history" not in generate_contents
     assert any("mishandles empty input" in content for content in generate_contents)
     assert any("user confirmed" in content for content in generate_contents)
     assert any("input-normalization branch" in content for content in generate_contents)
     assert any("No other verified path" in content for content in generate_contents)
     assert "Generate retry progress" in generate_contents
-    switch_call = next(
-        block
-        for message in generate_messages
-        for block in message.blocks
-        if getattr(block, "id", None) == "call-verify-to-generate"
+    assert not any(
+        getattr(block, "id", None) == "call-verify-to-generate"
+        for message in generate_messages for block in message.blocks
     )
-    assert switch_call.id == "call-verify-to-generate"
-    assert switch_call.arguments == {"stage": "generate", "reason": switch_reason}
-    switch_result = next(
-        block
-        for message in generate_messages
-        for block in message.blocks
-        if getattr(block, "id", None) == "call-verify-to-generate" and hasattr(block, "content")
-    )
-    assert switch_reason in switch_result.content
 
     generation_handoff = switch_record(
         "generate",
@@ -303,7 +293,8 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     assert "Verification intermediate work" in verify_again_contents
     assert "Verification history" in verify_again_contents
     assert "Generate retry progress" not in verify_again_contents
-    assert "Generate retry completed" in verify_again_contents
+    assert "Generate retry completed" not in verify_again_contents
+    assert any("The corrected implementation is ready" in content for content in verify_again_contents)
     assert "Second verification progress" in verify_again_contents
 
 
