@@ -206,6 +206,14 @@ function appendMessage(get: Getter, set: Setter, sessionId: string, msg: AgentMe
   markHydrated(get, set, sessionId)
 }
 
+/** Settle unfinished headings without changing the outcome of reported sections. */
+function settleWorkflowSteps(blocks: MessageBlock[], failed: boolean): MessageBlock[] {
+  const latest = [...blocks].reverse().find((block) => block.type === 'workflow_step')
+  return blocks.map((block) => block.type === 'workflow_step' && block.status === 'running'
+    ? { ...block, status: failed && block === latest ? 'failure' : 'neutral' }
+    : block)
+}
+
 /** Commit the streaming state into a single assistant message. A non-empty error =
  *  marked as failed; finalAnswer comes from the daemon `final` frame (the authoritative
  *  final answer, empty string = this turn has no visible answer). */
@@ -224,7 +232,7 @@ function finalizeStreaming(
     text: s.content,
     thinking: s.thinking,
     toolCalls: s.toolCalls,
-    blocks: s.blocks,
+    blocks: error !== undefined ? settleWorkflowSteps(s.blocks, true) : s.blocks,
     done: true,
     createdAt: s.startedAt,
     ...completion,
@@ -1733,7 +1741,11 @@ export const applyAgentEventAtom = atom(
           if (index >= 0) {
             set(messageFamily(sessionId), [
               ...msgs.slice(0, index),
-              { ...msgs[index]!, stopped: true },
+              {
+                ...msgs[index]!,
+                stopped: true,
+                ...(msgs[index]!.blocks ? { blocks: settleWorkflowSteps(msgs[index]!.blocks!, false) } : {}),
+              },
               ...msgs.slice(index + 1),
             ])
           } else {

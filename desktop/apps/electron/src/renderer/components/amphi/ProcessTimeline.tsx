@@ -240,7 +240,7 @@ function WorkflowStageSection({
         count: step.stepCount,
       })}
       title={step.title}
-      status={step.status}
+      status={step.status === 'running' && !streaming ? 'neutral' : step.status}
       summary={step.summary}
     >
       {blocks.map((block, index) => (

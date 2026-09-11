@@ -12,7 +12,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
 const { AgentRole } = await import('@shared/types')
-const { applyAgentEventAtom, messageFamily, streamingFamily, thinkingModeFamily } = await import('@/atoms/agent')
+const { applyAgentEventAtom, messageFamily, prepareInteractionContinuationAtom, streamingFamily, thinkingModeFamily } = await import('@/atoms/agent')
 const { setHumanRequestAtom } = await import('@/atoms/human-request')
 const { issueReportRequestAtom } = await import('@/atoms/issue-report')
 const { composerQuotesAtom } = await import('@/atoms/composer-quote')
@@ -748,6 +748,136 @@ describe('Pipeline', () => {
     expect(continuedHeading.getAttribute('aria-expanded')).toBe('false')
     expect(continuedContent.textContent).toContain('已与您确认')
     expect(continuedContent.textContent).toContain('收到答复后继续检查。')
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('keeps a reloaded Workflow heading above the answered card when execution resumes', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const sessionId = 'workflow-interaction-resume'
+    const progress = {
+      workflowId: 'wf-directory', generation: 'run-directory', workflowName: '目录统计',
+      phase: 'execute' as const, stepIndex: 0, stepCount: 2, title: '确认目标目录',
+    }
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(messageFamily(sessionId), [{
+      id: 'parked-workflow', role: AgentRole.Assistant, text: '', toolCalls: [],
+      blocks: [
+        { type: 'text', text: '准备运行目录统计工作流。' },
+        { type: 'workflow_step', ...progress, status: 'running' },
+        { type: 'thinking', text: '确认要统计的目录。' },
+      ],
+      done: true, finalAnswer: '', createdAt: 1,
+    }])
+    store.set(setHumanRequestAtom, {
+      sessionId, kind: 'choose', requestId: 'choose-directory',
+      questions: [{ question: '统计哪个目录？', options: [{ label: 'project' }] }],
+    })
+    await act(async () => root.render(<Provider store={store}><Pipeline /></Provider>))
+
+    const initialContent = host.querySelector<HTMLElement>('[data-testid="workflow-stage-content"]')!
+    expect(initialContent.textContent).toContain('确认要统计的目录。')
+    expect(initialContent.textContent).not.toContain('准备运行目录统计工作流。')
+
+    await act(async () => {
+      store.set(prepareInteractionContinuationAtom, {
+        sessionId, confirmation: { question: '统计哪个目录？', response: 'project' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId, event: { type: 'message_start', messageId: 'resumed-workflow', role: 'assistant' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId, event: { type: 'workflow_progress', ...progress, status: 'running' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId, event: { type: 'thinking_delta', messageId: 'resumed-workflow', text: '检查目录是否存在。' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId, event: { type: 'workflow_progress', ...progress, status: 'success', summary: '目标目录已确认。' },
+      })
+    })
+
+    expect(host.querySelectorAll('[data-testid="workflow-stage-header"]')).toHaveLength(1)
+    const content = host.querySelector<HTMLElement>('[data-testid="workflow-stage-content"]')!
+    expect(content.textContent).toContain('确认要统计的目录。')
+    expect(content.textContent).toContain('已与您确认')
+    expect(content.textContent).toContain('project')
+    expect(content.textContent).toContain('检查目录是否存在。')
+    expect(content.textContent).not.toContain('准备运行目录统计工作流。')
+    expect(store.get(streamingFamily(sessionId))?.blocks.map((block) => block.type)).toEqual([
+      'text', 'workflow_step', 'thinking', 'confirmation', 'thinking',
+    ])
+
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it.each(['cancelled', 'failed'] as const)('settles %s Workflow headings and reactivates the original section on resume', async (outcome) => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const sessionId = `workflow-${outcome}`
+    const progress = {
+      workflowId: 'wf-directory', generation: 'run-directory', workflowName: '目录统计',
+      phase: 'execute' as const, stepIndex: 1, stepCount: 2, title: '扫描目录',
+    }
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(applyAgentEventAtom, {
+      sessionId, event: { type: 'message_start', messageId: 'workflow-message', role: 'assistant' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId, event: { type: 'workflow_progress', ...progress, stepIndex: 0, title: '确认目录', status: 'success' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId, event: { type: 'workflow_progress', ...progress, status: 'running' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId, event: { type: 'thinking_delta', messageId: 'workflow-message', text: '检查目录内容。' },
+    })
+    await act(async () => root.render(<Provider store={store}><Pipeline /></Provider>))
+    expect(host.querySelectorAll('[data-testid="workflow-stage-header"] .animate-pulse')).toHaveLength(1)
+
+    await act(async () => {
+      if (outcome === 'cancelled') {
+        store.set(applyAgentEventAtom, {
+          sessionId, event: { type: 'message_stop', messageId: 'workflow-message', reason: 'cancelled' },
+        })
+        store.set(applyAgentEventAtom, {
+          sessionId, event: { type: 'done', messageId: 'workflow-message', reason: 'cancelled' },
+        })
+      } else {
+        store.set(applyAgentEventAtom, { sessionId, event: { type: 'error', message: '模型调用失败' } })
+      }
+    })
+    const messages = store.get(messageFamily(sessionId))
+    const headings = messages[0]!.blocks!.filter((block) => block.type === 'workflow_step')
+    expect(headings.map((block) => block.status)).toEqual(['success', outcome === 'cancelled' ? 'neutral' : 'failure'])
+    expect(host.querySelectorAll('[data-testid="workflow-stage-header"]')).toHaveLength(2)
+    expect(host.querySelector('[data-testid="workflow-stage-header"] .animate-pulse')).toBeNull()
+    expect(host.textContent).toContain('检查目录内容。')
+
+    await act(async () => store.set(messageFamily(sessionId), structuredClone(messages)))
+    expect(host.querySelector('[data-testid="workflow-stage-header"] .animate-pulse')).toBeNull()
+
+    await act(async () => {
+      store.set(prepareInteractionContinuationAtom, { sessionId })
+      store.set(applyAgentEventAtom, {
+        sessionId, event: { type: 'message_start', messageId: 'resumed-workflow', role: 'assistant' },
+      })
+      store.set(applyAgentEventAtom, {
+        sessionId, event: { type: 'workflow_progress', ...progress, status: 'running' },
+      })
+    })
+    expect(host.querySelectorAll('[data-testid="workflow-stage-header"]')).toHaveLength(2)
+    expect(host.querySelectorAll('[data-testid="workflow-stage-header"] .animate-pulse')).toHaveLength(1)
+    expect(host.textContent).toContain('检查目录内容。')
+    expect(store.get(streamingFamily(sessionId))?.blocks.filter((block) => block.type === 'workflow_step')
+      .map((block) => block.status)).toEqual(['success', 'running'])
 
     await act(async () => root.unmount())
     host.remove()

@@ -146,7 +146,8 @@ export type MessageBlock =
       stepIndex: number
       stepCount: number
       title: string
-      status: 'running' | 'success' | 'failure'
+      /** Unfinished sections become neutral when execution stops without a report. */
+      status: 'neutral' | 'running' | 'success' | 'failure'
       summary?: string | null
       executionSteps?: string[]
     }
