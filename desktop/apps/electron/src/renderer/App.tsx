@@ -59,8 +59,9 @@ import {
 } from './components/app/SessionResourcePanel'
 import { SidebarContainer } from './components/app/SidebarContainer'
 import { AppWorkspaceLayout } from './components/app/AppWorkspaceLayout'
+import type { DesktopAppExtensions } from './components/app/DesktopAppExtensions'
 
-export default function App() {
+export default function App({ extensions }: { extensions?: DesktopAppExtensions } = {}) {
   // Cross-cutting bridges + first-mount lifecycle. All side-effecting; each
   // hook owns its own atoms + effect (see hooks/use-*.ts). App stays a pure
   // view orchestrator below.
@@ -106,8 +107,8 @@ export default function App() {
       <GatewayBootGate>
         <AppWorkspaceLayout
           left={<SidebarContainer />}
-          center={<CenterView />}
-          right={<SessionResourcePanel />}
+          center={<CenterView ConversationHistory={extensions?.ConversationHistory} />}
+          right={<SessionResourcePanel extensions={extensions?.sessionSurfaces} />}
         />
         <ActiveModalHost />
         <ScheduleOverlays />

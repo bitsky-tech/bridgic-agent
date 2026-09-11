@@ -32,6 +32,7 @@ import {
   clearRightPanelCollapseRequestAtom,
   rightPanelCollapseRequestAtom,
   rightPanelCollapsedAtom,
+  requestRightPanelCollapseAtom,
   setRightPanelCollapsedAtom,
 } from '@/atoms/layout'
 import { presentationExpandedAtom } from '@/atoms/presentation'
@@ -60,7 +61,17 @@ import { isOfficeAppKind } from '@/lib/office/officeSurfaceStatus'
 import { rlog } from '@/lib/logger'
 import { SessionSurfaceRail } from './SessionSurfaceChrome'
 import { SessionSurfaceContent } from './SessionSurfaceContent'
-import { SessionSurfaceRailTabs } from './SessionSurfaceRailTabs'
+import { SessionExtensionRailTabs, SessionSurfaceRailTabs } from './SessionSurfaceRailTabs'
+import {
+  consumeSessionWorkbenchSurfaceOpenRequestAtom,
+  resolveSessionWorkbenchSurface,
+  sessionWorkbenchSurfaceOpenRequestAtom,
+} from '@/atoms/workbench'
+import { EMPTY_SESSION_EXTENSIONS, type SessionWorkbenchExtension } from './DesktopAppExtensions'
+
+interface SessionResourcePanelProps {
+  extensions?: readonly SessionWorkbenchExtension[]
+}
 
 type PendingBrowserExit = {
   action: 'collapse' | 'mode' | 'surface'
@@ -72,12 +83,13 @@ export { SURFACE_ACTIVITY_SETTLE_MS }
 export const BROWSER_ACTIVITY_SETTLE_MS = SURFACE_ACTIVITY_SETTLE_MS
 
 /** Unified right dock: exactly one foreground surface plus a permanent Bridgic/tool rail. */
-export function SessionResourcePanel() {
+export function SessionResourcePanel({ extensions = EMPTY_SESSION_EXTENSIONS }: SessionResourcePanelProps = {}) {
   const viewedSessionId = useAtomValue(viewedSessionIdAtom)
   return (
     <SessionResourcePanelForSession
       key={viewedSessionId ?? 'no-session'}
       viewedSessionId={viewedSessionId}
+      extensions={extensions}
     />
   )
 }
@@ -202,10 +214,20 @@ export function FilesAttentionAnnouncer() {
   )
 }
 
-function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: string | null }) {
+function SessionResourcePanelForSession({ viewedSessionId, extensions }: {
+  viewedSessionId: string | null
+  extensions: readonly SessionWorkbenchExtension[]
+}) {
   const { t } = useTranslation()
   const store = useStore()
-  const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
+  const storedWorkbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
+  const agentExtensions = extensions.filter((extension) => extension.placement === 'agent')
+  const workbenchSurface = resolveSessionWorkbenchSurface(storedWorkbenchSurface, extensions)
+  const surfaceOpenRequest = useAtomValue(sessionWorkbenchSurfaceOpenRequestAtom)
+  const consumeSurfaceOpenRequest = useSetAtom(consumeSessionWorkbenchSurfaceOpenRequestAtom)
+  const requestCollapse = useSetAtom(requestRightPanelCollapseAtom)
+  const extensionsRef = useRef(extensions)
+  useLayoutEffect(() => { extensionsRef.current = extensions }, [extensions])
   const modeSurface = useAtomValue(sessionModeSurfaceAtom)
   const selectedModeSurface = useAtomValue(selectedSessionModeSurfaceAtom)
   const modeExitCollapseRequest = useAtomValue(currentSessionModeExitCollapseRequestAtom)
@@ -259,6 +281,15 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
   }) ?? (() => undefined), [setPresentationExpanded])
 
   const contentOpen = selectedModeSurface !== null || !rightCollapsed
+
+  useLayoutEffect(() => {
+    if (storedWorkbenchSurface !== workbenchSurface) setWorkbenchSurface(workbenchSurface)
+  }, [setWorkbenchSurface, storedWorkbenchSurface, workbenchSurface])
+
+  useEffect(() => () => {
+    const request = store.get(sessionWorkbenchSurfaceOpenRequestAtom)
+    if (request?.sessionId === viewedSessionId) consumeSurfaceOpenRequest(request)
+  }, [consumeSurfaceOpenRequest, store, viewedSessionId])
 
   useLayoutEffect(() => {
     if (!viewedSessionId) return
@@ -352,7 +383,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
 
   const commitToolSelection = (surface: SessionWorkbenchSurface) => {
     setFocusPane(null)
-    setWorkbenchSurface(surface)
+    setWorkbenchSurface(resolveSessionWorkbenchSurface(surface, extensionsRef.current))
     setRightCollapsed(false)
     setSettledModeHandoffKey(null)
   }
@@ -376,7 +407,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
     setPendingBrowserExit(exit)
   }
 
-  const selectTool = (surface: SessionWorkbenchSurface) => {
+  const selectTool = (surface: SessionWorkbenchSurface, toggle = true) => {
     if (excelExitPending) return
     if (surface === SessionWorkbenchSurface.Browser && viewedSessionId) {
       setBrowserNeedsAttention({ sessionId: viewedSessionId, needsAttention: false })
@@ -403,7 +434,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
       }
       return
     }
-    if (selectedModeSurface === null && workbenchSurface === surface && contentOpen) {
+    if (toggle && selectedModeSurface === null && workbenchSurface === surface && contentOpen) {
       if (
         surface === SessionWorkbenchSurface.Browser
         && browserHasNativeSurface
@@ -446,6 +477,23 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
     clearCollapseRequest()
     if (viewedSessionId) consumeModeExitCollapseRequest(viewedSessionId)
     commitToolSelection(surface)
+  }
+
+  // Requests from the history reveal a tool, whereas a second rail click toggles it.
+  // Keep this at the dock boundary so native surfaces finish their existing handoff.
+  useLayoutEffect(() => {
+    if (!surfaceOpenRequest || excelExitPending) return
+    consumeSurfaceOpenRequest(surfaceOpenRequest)
+    if (surfaceOpenRequest.sessionId !== viewedSessionId) return
+    const surface = resolveSessionWorkbenchSurface(surfaceOpenRequest.surface, extensionsRef.current)
+    selectTool(surface, false)
+  })
+
+  const closeExtension = (surface: SessionWorkbenchExtension['id']) => {
+    if (store.get(viewedSessionIdAtom) !== viewedSessionId) return
+    if (store.get(sessionWorkbenchSurfaceAtom) !== surface) return
+    if (store.get(selectedSessionModeSurfaceAtom) !== null) return
+    requestCollapse()
   }
 
   useEffect(() => {
@@ -668,6 +716,9 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
       data-testid="session-resource-panel"
     >
       <SessionSurfaceContent
+        extensions={extensions}
+        sessionId={viewedSessionId}
+        onCloseExtension={closeExtension}
         isBrowserActive={browserActive}
         isNativeHandoffPending={nativeHandoffPending}
         isToolActive={selectedToolActive}
@@ -679,6 +730,15 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
       />
 
       <SessionSurfaceRail
+        agentTabs={agentExtensions.length ? (
+          <SessionExtensionRailTabs
+            extensions={agentExtensions}
+            isContentOpen={contentOpen}
+            isModeSelected={selectedModeSurface !== null}
+            selectedSurface={workbenchSurface}
+            onSelect={selectTool}
+          />
+        ) : undefined}
         isAgentActive={selectedModeSurface !== null}
         isContentOpen={contentOpen}
         isModeAvailable={modeSurface !== null}
@@ -688,6 +748,7 @@ function SessionResourcePanelForSession({ viewedSessionId }: { viewedSessionId: 
         railRef={railRef}
       >
         <SessionSurfaceRailTabs
+          extensions={extensions}
           browserAriaLabel={browserAriaLabel}
           browserLabel={browserLabel}
           browserNeedsAttention={browserNeedsAttention}

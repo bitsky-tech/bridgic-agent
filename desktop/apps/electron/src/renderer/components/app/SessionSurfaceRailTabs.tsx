@@ -6,8 +6,10 @@ import { Icons } from '@/components/amphi/Icons'
 import { OFFICE_APP_KINDS, type OfficeAppKind, type OfficeSurfaceStatuses } from '@/lib/office/officeSurfaceStatus'
 import { OfficeSurfaceRailButton, type OfficeRailLabels } from './OfficeSurfaceRailButton'
 import { SurfaceRailButton } from './SessionSurfaceChrome'
+import { EMPTY_SESSION_EXTENSIONS, extensionSurfaceTestId, type SessionWorkbenchExtension } from './DesktopAppExtensions'
 
 export interface SessionSurfaceRailTabsProps {
+  extensions?: readonly SessionWorkbenchExtension[]
   browserAriaLabel: string
   browserLabel: string
   browserNeedsAttention: boolean
@@ -25,6 +27,7 @@ export interface SessionSurfaceRailTabsProps {
 
 /** Office entries share one status contract; other tools keep their own domain adapters. */
 export function SessionSurfaceRailTabs({
+  extensions = EMPTY_SESSION_EXTENSIONS,
   browserAriaLabel,
   browserLabel,
   browserNeedsAttention,
@@ -82,7 +85,7 @@ export function SessionSurfaceRailTabs({
     },
   ] as const
 
-  return tools.map((tool) => {
+  const builtInTabs = tools.map((tool) => {
     const isBrowser = tool.surface === SessionWorkbenchSurface.Browser
     const isFiles = tool.surface === SessionWorkbenchSurface.Files
     const isSelected = !isModeSelected && selectedSurface === tool.surface
@@ -120,6 +123,45 @@ export function SessionSurfaceRailTabs({
         isSelected={isSelected}
         testId={tool.testId}
         onClick={() => onSelect(tool.surface)}
+      />
+    )
+  })
+  return (
+    <>
+      {builtInTabs}
+      <SessionExtensionRailTabs
+        extensions={extensions.filter((extension) => extension.placement !== 'agent')}
+        isContentOpen={isContentOpen}
+        isModeSelected={isModeSelected}
+        selectedSurface={selectedSurface}
+        onSelect={onSelect}
+      />
+    </>
+  )
+}
+
+/** Extension placement changes the rail order, never selection or native handoff behavior. */
+export function SessionExtensionRailTabs({
+  extensions = EMPTY_SESSION_EXTENSIONS,
+  isContentOpen,
+  isModeSelected,
+  selectedSurface,
+  onSelect,
+}: Pick<SessionSurfaceRailTabsProps, 'extensions' | 'isContentOpen' | 'isModeSelected' | 'selectedSurface' | 'onSelect'>) {
+  return extensions.map((extension) => {
+    const isSelected = !isModeSelected && selectedSurface === extension.id
+    const testId = extensionSurfaceTestId(extension.id)
+    return (
+      <SurfaceRailButton
+        key={extension.id}
+        isActive={isContentOpen && isSelected}
+        isSelected={isSelected}
+        ariaLabel={extension.label}
+        controls={`${testId}-content`}
+        icon={extension.icon}
+        label={extension.label}
+        testId={testId}
+        onClick={() => onSelect(extension.id)}
       />
     )
   })

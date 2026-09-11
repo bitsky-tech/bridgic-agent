@@ -13,7 +13,7 @@
  * according to the backend-authoritative finalAnswer. Pure Q&A streaming is unaffected (no container, the answer streams outside as usual).
  */
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
-import { ProcessTimeline } from './ProcessTimeline'
+import { ProcessTimeline, type ProcessTimelineProps } from './ProcessTimeline'
 import { isPersistentWorkflowCard, splitProcessAndAnswer } from '@/lib/qaSegments'
 import type { MessageBlock } from '@/atoms/agent'
 import { BuildConfirmCard } from './BuildConfirmCard'
@@ -37,6 +37,8 @@ export interface MessageContentProps {
   waitingForSubagent?: boolean
   /** The latest Agent Turn is parked on a separate human interaction card. */
   waitingForHumanRequest?: boolean
+  /** Embed process blocks without a second aggregate header when the parent supplies one. */
+  processPresentation?: ProcessTimelineProps['presentation']
 }
 
 export function MessageContent({
@@ -46,6 +48,7 @@ export function MessageContent({
   sessionId,
   waitingForSubagent = false,
   waitingForHumanRequest = false,
+  processPresentation,
 }: MessageContentProps) {
   const hasProcess = blocks.some(
     (b) =>
@@ -90,6 +93,7 @@ export function MessageContent({
     <div className="flex flex-col gap-4">
       {process.length > 0 && (
         <ProcessTimeline
+          presentation={processPresentation}
           blocks={process}
           streaming={streaming}
           defaultOpen={

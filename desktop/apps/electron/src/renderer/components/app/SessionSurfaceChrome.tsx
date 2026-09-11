@@ -172,6 +172,7 @@ export function SurfaceRailButton({
 
 export interface SessionSurfaceRailProps {
   children: ReactNode
+  agentTabs?: ReactNode
   isAgentActive: boolean
   isContentOpen: boolean
   modeAriaLabel: string
@@ -184,6 +185,7 @@ export interface SessionSurfaceRailProps {
 /** Frame the permanent Bridgic entry and tool tablist at the far right of a Session. */
 export function SessionSurfaceRail({
   children,
+  agentTabs,
   isAgentActive,
   isContentOpen,
   modeAriaLabel,
@@ -192,6 +194,7 @@ export function SessionSurfaceRail({
   railAriaLabel,
   railRef,
 }: SessionSurfaceRailProps) {
+  const divider = <div className="mx-1.5 my-1 h-px shrink-0 bg-border-strong" data-testid="session-agent-divider" />
   return (
     <div
       ref={railRef}
@@ -225,8 +228,10 @@ export function SessionSurfaceRail({
           modeAriaLabel={modeAriaLabel}
           onOpenMode={onOpenMode}
         />
-        <div className="mx-1.5 my-1 h-px shrink-0 bg-border-strong" data-testid="session-agent-divider" />
+        {!agentTabs ? divider : null}
         <div role="tablist" aria-orientation="vertical" aria-label={railAriaLabel}>
+          {agentTabs}
+          {agentTabs ? divider : null}
           {children}
         </div>
       </div>

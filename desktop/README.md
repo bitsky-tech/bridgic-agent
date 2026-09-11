@@ -94,11 +94,37 @@ running, you should land in **ready** in well under 200 ms — the
 PythonClient just probes `amphi server status` and adopts the
 endpoint. Click "New Session", optionally pick a workspace, then chat.
 
+## Debug conversation
+
+Run `bun run debug` from `desktop/` to open the same app with an execution view
+and two additional Session panels: **Tool calls** and **Agent rounds**. The
+normal `bun run dev` command always opens the product UI. Both modes use the
+same settings, sessions, daemon, browser and Office hosts; stop one development
+instance before switching modes.
+
+The execution view groups recorded model responses by cognitive stage and keeps
+Desktop Markdown, Thinking, message actions and interaction cards. Tool rows and
+round details open the corresponding right-side inspector. Inspectors support
+tool-name/status filtering, raw arguments/results, recorded usage, and navigation
+back to older conversation messages. The conversation view remains available in
+the debug header for comparison.
+
+Debug starts a loopback read-only SQLite service inside the existing Bun
+launcher. It reads `~/.bridgic/AmphiAgent/state.db` (or
+`BRIDGIC_AGENT_STATE_DB`) and refreshes while a Turn runs. No mock records or
+reconstructed model requests are presented as captured data: missing Prompt,
+duration and usage fields remain unavailable. Tool replay is not implemented.
+
+The renderer's debug entry is enabled only by the explicit debug launcher.
+Production builds fix the flag to false and exclude debug modules and styles,
+even if the build environment contains debug variables.
+
 ## Common commands
 
 | Command | What it does |
 |---|---|
 | `bun run dev` | Start the app in dev mode (Vite + Electron + HMR). |
+| `bun run debug` | Start the same Desktop with execution traces and read-only inspectors. |
 | `bun run dev:resources` | Validate/fetch host uv, Python, and Node resources without starting Electron. |
 | `bun run typecheck` | Strict TS check across all workspaces. |
 | `bun run lint` | ESLint over apps/packages/scripts. |

@@ -17,8 +17,8 @@
  * Refactored to Tailwind className per §1.22.
  */
 
-import { useAtomValue, useSetAtom } from 'jotai'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/cn'
 import { messageActionText } from '@/lib/messageActions'
@@ -43,6 +43,7 @@ import {
   hydratedSessionIdsAtom,
   isBrowserAgentActionToolName,
   isPowerPointAgentActionToolName,
+  messageFamily,
   transcriptPagingFamily,
   type AgentMessage,
   type AgentMessageToolCall,
@@ -110,7 +111,19 @@ export interface Message {
   waitingForHumanRequest?: boolean
 }
 
+export interface PipelineRevealRequest {
+  sessionId: string
+  turnId: string
+  targetId?: string
+  nonce: number
+}
+
 export interface PipelineProps {
+  /** Optional presentation of persisted Assistant bodies; message actions remain shared. */
+  renderAssistantBody?: (message: Message, defaultBody: ReactNode) => ReactNode
+  /** Reveal a durable Turn, paging older history and mounting hidden rows first. */
+  revealRequest?: PipelineRevealRequest | null
+  onRevealFailed?: () => void
   /** Legacy fallback — Task 5+ reads `currentMessagesAtom` when present. */
   messages?: Message[]
   /** Explicit Session source used by embedded conversation views. */
@@ -125,7 +138,8 @@ export interface PipelineProps {
   enableMessageActions?: boolean
 }
 
-export function Pipeline({ messages: legacyMessages, session, enableMessageActions }: PipelineProps) {
+export function Pipeline({ messages: legacyMessages, session, enableMessageActions, renderAssistantBody, revealRequest, onRevealFailed }: PipelineProps) {
+  const store = useStore()
   const { t } = useTranslation()
   // Read live messages + streaming state from atoms. Fall back to the
   // legacy `messages` prop only when both are empty (preserves backward
@@ -158,6 +172,7 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
   const stickRef = useRef(true)
   const programmaticRef = useRef(false)
   const lastScrollTopRef = useRef(0)
+  const sendScrollFrameRef = useRef<number | null>(null)
   // Floating scroll button: hidden by default, fades in while scrolling (when the content is long
   // enough) and fades out after a moment of idling. The direction comes from nextScrollIntent based on
   // "accumulated displacement in the same direction", with the accumulator kept in a ref (it changes on
@@ -361,6 +376,16 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
   const paging = useAtomValue(transcriptPagingFamily(ownerSessionId ?? '__none__'))
   const fetchOlder = useSetAtom(fetchOlderTranscriptAtom)
   const serverHasMore = !session && ownerSessionId != null && paging.hasMore
+  const olderPageRequestsRef = useRef(new Map<string, Promise<boolean>>())
+  const fetchOlderPage = useCallback((sessionId: string) => {
+    const pending = olderPageRequestsRef.current.get(sessionId)
+    if (pending) return pending
+    const request = fetchOlder(sessionId).finally(() => {
+      olderPageRequestsRef.current.delete(sessionId)
+    })
+    olderPageRequestsRef.current.set(sessionId, request)
+    return request
+  }, [fetchOlder])
 
   const pendingAnchorRef = useRef<number | null>(null)
   // useInfiniteScrollSentinel reads the latest callback through a ref internally, so a dependency change does not remount the observer.
@@ -378,13 +403,13 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
       // If nothing was actually prepended (in-flight dedupe / no more / network failure) clear the anchor —
       // a leftover anchor would be consumed by mistake by a later, unrelated tail append and yank the
       // reader's viewport away.
-      void fetchOlder(ownerSessionId).then((prepended) => {
+      void fetchOlderPage(ownerSessionId).then((prepended) => {
         if (!prepended) pendingAnchorRef.current = null
       })
     } else {
       pendingAnchorRef.current = null
     }
-  }, [hiddenCount, serverHasMore, ownerSessionId, fetchOlder])
+  }, [hiddenCount, serverHasMore, ownerSessionId, fetchOlderPage])
   const topSentinelRef = useInfiniteScrollSentinel(
     revealOlderMessages,
     hiddenCount > 0 || serverHasMore,
@@ -408,12 +433,72 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
     prevLastUserIdRef.current = lastUserMessageId
     stickRef.current = true
     scrollToBottom()
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    sendScrollFrameRef.current = requestAnimationFrame(() => {
+      sendScrollFrameRef.current = requestAnimationFrame(() => {
+        sendScrollFrameRef.current = null
         scrollToBottom()
       })
     })
+    return () => {
+      if (sendScrollFrameRef.current !== null) cancelAnimationFrame(sendScrollFrameRef.current)
+      sendScrollFrameRef.current = null
+    }
   }, [lastUserMessageId, scrollToBottom])
+
+  useEffect(() => {
+    if (!revealRequest || revealRequest.sessionId !== ownerSessionId || !ownerSessionId) return
+    if (transcriptPending && liveMessages.length === 0) return
+    let cancelled = false
+    let frame = 0
+    const isCurrent = () => !cancelled && (session !== undefined || store.get(activeSessionIdAtom) === ownerSessionId)
+    stickRef.current = false
+    programmaticRef.current = false
+    pendingAnchorRef.current = null
+    if (sendScrollFrameRef.current !== null) cancelAnimationFrame(sendScrollFrameRef.current)
+    sendScrollFrameRef.current = null
+    const reveal = async () => {
+      while (isCurrent()) {
+        const loaded = session ? session.messages : store.get(messageFamily(ownerSessionId))
+        const index = loaded.findIndex((message) => message.role === 'assistant' && message.turnId === revealRequest.turnId)
+        if (index >= 0) {
+          setTailWindow((state) => state.sessionId === ownerSessionId
+            ? { ...state, initAtCount: loaded.length, hidden: Math.min(state.hidden, Math.max(0, index - 1)) }
+            : state)
+          frame = requestAnimationFrame(() => {
+            if (!isCurrent()) return
+            frame = requestAnimationFrame(() => {
+              if (!isCurrent()) return
+              const container = scrollRef.current
+              const row = Array.from(container?.querySelectorAll<HTMLElement>('[data-message-turn]') ?? [])
+                .find((element) => element.dataset.messageTurn === revealRequest.turnId && element.dataset.messageRole === 'ai')
+              const round = revealRequest.targetId
+                ? Array.from(row?.querySelectorAll<HTMLElement>('[id]') ?? []).find((element) => element.id === revealRequest.targetId)
+                : null
+              const target = round ?? row
+              if (!target || !container) { onRevealFailed?.(); return }
+              for (let parent: HTMLElement | null = target; parent && parent !== container; parent = parent.parentElement) {
+                if (parent instanceof HTMLDetailsElement) parent.open = true
+              }
+              const previousTop = container.scrollTop
+              target.scrollIntoView({ block: 'start', behavior: 'auto' })
+              programmaticRef.current = container.scrollTop !== previousTop
+              lastScrollTopRef.current = container.scrollTop
+              target.focus({ preventScroll: true })
+            })
+          })
+          return
+        }
+        if (session || !store.get(transcriptPagingFamily(ownerSessionId)).hasMore) break
+        if (!await fetchOlderPage(ownerSessionId)) break
+      }
+      if (isCurrent()) onRevealFailed?.()
+    }
+    void reveal()
+    return () => { cancelled = true; cancelAnimationFrame(frame) }
+    // A request is an explicit navigation action; transcript/streaming updates must not replay it.
+    // The pending flag only retries a request made before the first transcript hydration.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealRequest, ownerSessionId, session, store, fetchOlderPage, onRevealFailed, transcriptPending])
 
   // Clear the scroll button's fade-out timer on unmount to prevent setState-on-unmounted.
   useEffect(
@@ -469,6 +554,7 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
                 <MessageBubble
                   key={m.messageId ?? messageIndex}
                   {...m}
+                  renderBody={m.role === 'ai' && renderAssistantBody ? (body) => renderAssistantBody(m, body) : undefined}
                   animateEnter={!m.messageId || !animatedIds.has(m.messageId)}
                   sessionId={ownerSessionId}
                   enableActions={messageActionsEnabled}
@@ -667,6 +753,7 @@ function MessageStopped() {
 }
 
 interface MessageBubbleProps extends Message {
+  renderBody?: (defaultBody: ReactNode) => ReactNode
   enableActions?: boolean
   relatedUserMessage?: Message
   reportProviderId?: string
@@ -704,6 +791,7 @@ export function MessageBubble({
   reportProviderId,
   reportThinking,
   animateEnter = true,
+  renderBody,
 }: MessageBubbleProps) {
   const { t } = useTranslation()
   const isUser = role === 'user'
@@ -738,8 +826,25 @@ export function MessageBubble({
     if (latestBlock?.type === 'text' || content) return { label: t('session.pipeline.activity.generating') }
     return { label: t('session.pipeline.activity.thinking') }
   })()
+  const defaultBody = type === 'text' ? (
+    <TextMessageBody
+      isUser={isUser}
+      content={content}
+      blocks={blocks}
+      streaming={streaming}
+      thinking={thinking}
+      toolCalls={toolCalls}
+      finalAnswer={finalAnswer}
+      sessionId={sessionId}
+      waitingForSubagent={waitingForSubagent}
+      waitingForHumanRequest={waitingForHumanRequest}
+    />
+  ) : null
   return (
     <div
+      data-message-turn={turnId}
+      data-message-role={role}
+      tabIndex={-1}
       className={cn(
         'group/message flex gap-2.5 items-start',
         animateEnter && 'animate-fade',
@@ -775,20 +880,7 @@ export function MessageBubble({
               : 'w-full bg-transparent py-0.5',
           )}
         >
-          {type === 'text' && (
-            <TextMessageBody
-              isUser={isUser}
-              content={content}
-              blocks={blocks}
-              streaming={streaming}
-              thinking={thinking}
-              toolCalls={toolCalls}
-              finalAnswer={finalAnswer}
-              sessionId={sessionId}
-              waitingForSubagent={waitingForSubagent}
-              waitingForHumanRequest={waitingForHumanRequest}
-            />
-          )}
+          {renderBody && !isUser && !streaming ? renderBody(defaultBody) : defaultBody}
           {(streaming || waitingForSubagent || waitingForHumanRequest) && !isUser && (
             <div className="mt-2 flex min-h-7 min-w-0 flex-wrap items-center gap-2 text-xs text-text-tertiary">
               <ActiveTurnIndicator retry={retry} activity={activity} startedAt={startedAt} />

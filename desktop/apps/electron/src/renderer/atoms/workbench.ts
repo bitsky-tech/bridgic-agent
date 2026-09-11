@@ -31,8 +31,44 @@ export const SessionWorkbenchSurface = {
   Excel: 'excel',
   Browser: 'browser',
 } as const
+export type SessionWorkbenchExtensionId = `extension:${string}`
 export type SessionWorkbenchSurface =
-  (typeof SessionWorkbenchSurface)[keyof typeof SessionWorkbenchSurface]
+  | (typeof SessionWorkbenchSurface)[keyof typeof SessionWorkbenchSurface]
+  | SessionWorkbenchExtensionId
+
+/** An entry point without a previously selected extension restores the file tool. */
+export function resolveSessionWorkbenchSurface(
+  surface: SessionWorkbenchSurface,
+  extensions: readonly { id: SessionWorkbenchExtensionId }[],
+): SessionWorkbenchSurface {
+  if (!surface.startsWith('extension:') || extensions.some(({ id }) => id === surface)) return surface
+  return SessionWorkbenchSurface.Files
+}
+
+interface SessionWorkbenchSurfaceOpenRequest {
+  sessionId: string
+  surface: SessionWorkbenchSurface
+}
+
+const pendingSurfaceOpenRequestAtom = atom<SessionWorkbenchSurfaceOpenRequest | null>(null)
+export const sessionWorkbenchSurfaceOpenRequestAtom = atom((get) => get(pendingSurfaceOpenRequestAtom))
+
+/** Ask the dock to reveal a tool through the same native handoff as a rail click. */
+export const requestSessionWorkbenchSurfaceOpenAtom = atom(
+  null,
+  (get, set, request: SessionWorkbenchSurfaceOpenRequest) => {
+    if (!request.sessionId || get(viewedSessionIdAtom) !== request.sessionId) return
+    set(pendingSurfaceOpenRequestAtom, { ...request })
+  },
+)
+
+/** Consume only the observed request; a newer click must survive an older handoff. */
+export const consumeSessionWorkbenchSurfaceOpenRequestAtom = atom(
+  null,
+  (get, set, request: SessionWorkbenchSurfaceOpenRequest) => {
+    if (get(pendingSurfaceOpenRequestAtom) === request) set(pendingSurfaceOpenRequestAtom, null)
+  },
+)
 
 const workbenchSurfacesBySessionAtom = atom<ReadonlyMap<string, SessionWorkbenchSurface>>(
   new Map(),
@@ -120,6 +156,9 @@ export const notifySessionWorkbenchActivityAtom = atom(
 
 /** Drop a deleted Session's durable workbench selection. */
 export const purgeSessionWorkbenchStateAtom = atom(null, (get, set, sessionId: string) => {
+  if (get(pendingSurfaceOpenRequestAtom)?.sessionId === sessionId) {
+    set(pendingSurfaceOpenRequestAtom, null)
+  }
   const current = get(workbenchSurfacesBySessionAtom)
   if (!current.has(sessionId)) return
   const next = new Map(current)

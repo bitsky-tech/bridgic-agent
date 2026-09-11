@@ -3,10 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { debugViteSettings } from '../../scripts/debug/startup'
 
 const configDir = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({
+const rendererConfig = defineConfig({
   plugins: [
     react({
       babel: {
@@ -55,4 +56,22 @@ export default defineConfig({
     strictPort: true,
     open: false,
   },
+})
+
+export default defineConfig(({ command }) => {
+  const debug = debugViteSettings(command, process.env)
+  return {
+    ...rendererConfig,
+    define: { __DESKTOP_DEBUG__: JSON.stringify(debug.enabled) },
+    server: {
+      ...rendererConfig.server,
+      ...(debug.enabled ? { proxy: {
+        '/__debug-api': {
+          target: debug.target,
+          changeOrigin: true,
+          headers: { authorization: `Bearer ${debug.token}` },
+        },
+      } } : {}),
+    },
+  }
 })

@@ -1,7 +1,8 @@
 /**
  * Dev orchestrator: vite dev + esbuild --watch for main/preload + spawn Electron.
  *
- *   bun run dev
+ *   bun run dev   — ordinary Desktop
+ *   bun run debug — Desktop with read-only trace inspection
  *
  * Layout:
  *   1. Read .env (for VITE_DEV_SERVER_URL, APP_*).
@@ -39,7 +40,9 @@ import * as esbuild from 'esbuild'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { ensureRuntimeResources } from './ensure-runtime-resources'
+import { clearDebugStartupEnvironment, DEBUG_API_URL_ENV, DEBUG_STARTUP_TOKEN_ENV, isDebugStartup } from './debug/startup'
 
 const ROOT_DIR = join(import.meta.dir, '..')
 const ELECTRON_DIR = join(ROOT_DIR, 'apps/electron')
@@ -96,7 +99,8 @@ function loadEnvFile(): void {
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1)
     }
-    process.env[key] = value
+    // Explicit environment overrides take precedence over local defaults.
+    process.env[key] ??= value
   }
   console.log('📄 loaded .env')
 }
@@ -261,6 +265,8 @@ async function main(): Promise<void> {
   console.log('🚀 starting electron dev environment\n')
 
   loadEnvFile()
+  clearDebugStartupEnvironment(process.env)
+  const debugStartup = isDebugStartup(process.argv.slice(2))
   ensureRuntimeResources()
 
   if (existsSync(join(ELECTRON_DIR, 'node_modules/.vite'))) {
@@ -286,6 +292,7 @@ async function main(): Promise<void> {
   const procs: Subprocess[] = []
   const contexts: esbuild.BuildContext[] = []
   let electronProcess: Subprocess | null = null
+  let debugServer: { stop: () => unknown } | null = null
 
   // Idempotent: SIGINT twice, or Electron exiting while a signal is in flight,
   // must not run the teardown concurrently with itself.
@@ -303,6 +310,7 @@ async function main(): Promise<void> {
       for (const p of procs) {
         try { p.kill() } catch { /* dead */ }
       }
+      await debugServer?.stop()
     })()
     return cleanupPromise
   }
@@ -314,6 +322,15 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown(0))
 
   try {
+    if (debugStartup) {
+      const { startDebugTraceServer } = await import('./debug/trace-server')
+      const token = randomBytes(32).toString('hex')
+      const service = startDebugTraceServer({ token, origin: `http://localhost:${vitePort}` })
+      debugServer = service
+      process.env[DEBUG_STARTUP_TOKEN_ENV] = token
+      process.env[DEBUG_API_URL_ENV] = service.url
+      console.log('🔎 Desktop debug trace access enabled (read-only)')
+    }
     // ONE context per bundle. `rebuild()` is awaited to completion before
     // `watch()` registers, so nothing else is writing these files while
     // Electron boots — see the ordering invariant in the file header.

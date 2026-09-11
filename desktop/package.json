@@ -23,7 +23,8 @@
     "sharp"
   ],
   "scripts": {
-    "dev": "bun run scripts/electron-dev.ts",
+    "dev": "bun run scripts/electron-dev.ts --normal",
+    "debug": "bun run scripts/electron-dev.ts --debug",
     "dev:resources": "bun run scripts/ensure-runtime-resources.ts",
     "build": "bun run scripts/electron-build.ts && bun run licenses",
     "licenses": "bun run scripts/gen-third-party-licenses.ts",

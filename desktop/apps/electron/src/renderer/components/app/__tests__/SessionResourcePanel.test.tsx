@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, jest, mock } fro
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ElectronAPI, EmbeddedBrowserTabInfo } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@app/shared/types'
+import type { SessionWorkbenchExtension, SessionWorkbenchExtensionProps } from '../DesktopAppExtensions'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -104,7 +105,7 @@ const {
   setEmbeddedBrowserSnapshotAtom,
   setSessionWorkbenchSurfaceAtom,
 } = await import('@/atoms/browser')
-const { notifySessionWorkbenchActivityAtom } = await import('@/atoms/workbench')
+const { notifySessionWorkbenchActivityAtom, requestSessionWorkbenchSurfaceOpenAtom } = await import('@/atoms/workbench')
 const { setEmbeddedPowerPointSnapshotAtom } = await import('@/atoms/powerpoint')
 const {
   filesNeedsAttentionFamily,
@@ -226,25 +227,231 @@ function deferredFailure() {
   return { promise, reject }
 }
 
-async function mountPanel(store: ReturnType<typeof createStore>) {
+async function mountPanel(store: ReturnType<typeof createStore>, extensions?: readonly SessionWorkbenchExtension[]) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  await act(async () => {
+  const render = async (nextExtensions = extensions) => act(async () => {
     root.render(
       <Provider store={store}>
         <BrowserAttentionAnnouncer />
         <FilesAttentionAnnouncer />
         <PowerPointAttentionAnnouncer />
-        <SessionResourcePanel />
+        <SessionResourcePanel extensions={nextExtensions} />
       </Provider>,
     )
     await Promise.resolve()
   })
-  return { host, root }
+  await render()
+  return { host, root, render }
 }
 
 describe('SessionResourcePanel', () => {
+  const toolExtension: SessionWorkbenchExtension = {
+    id: 'extension:debug-tools',
+    label: 'Developer tools',
+    icon: <span>T</span>,
+    Content: ({ sessionId, active, onClose }: SessionWorkbenchExtensionProps) => (
+      <div data-testid="extension-tools" data-session-id={sessionId} data-active={active}>
+        <input aria-label="Tool filter" defaultValue="" />
+        <button onClick={onClose}>Close tools</button>
+      </div>
+    ),
+  }
+  const extensionPanel = (host: HTMLElement) => host.querySelector('[data-testid="extension-tools"]')!
+
+  it('groups Agent extensions below Bridgic before the divider and preserves one keyboard tablist', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'agent-extension-placement')
+    const agentTools: SessionWorkbenchExtension = { ...toolExtension, placement: 'agent' }
+    const agentRounds: SessionWorkbenchExtension = { ...toolExtension, id: 'extension:debug-rounds', label: 'Agent rounds', placement: 'agent' }
+    const ordinaryExtension: SessionWorkbenchExtension = { ...toolExtension, id: 'extension:other', label: 'Other tool' }
+    const { host, root } = await mountPanel(store, [ordinaryExtension, agentTools, agentRounds])
+    const dock = host.querySelector('[data-testid="session-tool-dock"]')!
+    const ordered = [...dock.querySelectorAll('[data-testid="session-agent-launcher"], [data-testid="session-agent-divider"], [role="tab"]')]
+      .map((element) => element.getAttribute('data-testid'))
+    expect(ordered).toEqual([
+      'session-agent-launcher',
+      'session-workbench-extension:debug-tools',
+      'session-workbench-extension:debug-rounds',
+      'session-agent-divider',
+      'session-workbench-files',
+      'session-workbench-workflows',
+      'session-workbench-results',
+      'session-workbench-presentation',
+      'session-workbench-word',
+      'session-workbench-excel',
+      'session-workbench-browser',
+      'session-workbench-extension:other',
+    ])
+    expect(dock.querySelectorAll('[role="tablist"]')).toHaveLength(1)
+    expect(new Set(ordered).size).toBe(ordered.length)
+    const rounds = dock.querySelector<HTMLButtonElement>('[data-testid="session-workbench-extension:debug-rounds"]')!
+    const files = dock.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
+    await act(async () => rounds.click())
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(agentRounds.id)
+    await act(async () => rounds.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    expect(document.activeElement).toBe(files)
+    await act(async () => files.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(agentRounds.id)
+    expect(document.activeElement).toBe(rounds)
+    await act(async () => root.unmount())
+  })
+
+  it('uses the shared rail and keeps extension input while switching tools, with Session-owned state', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'extension-session-a')
+    const { host, root } = await mountPanel(store, [toolExtension])
+    const tab = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-extension:debug-tools"]')!
+    expect(tab.getAttribute('aria-label')).toBe('Developer tools')
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+
+    await act(async () => tab.click())
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Tool filter"]')!
+    input.value = 'retained filter'
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!.click())
+    await act(async () => tab.click())
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Tool filter"]')!.value).toBe('retained filter')
+    await act(async () => extensionPanel(host).querySelector('button')!.click())
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+
+    await act(async () => store.set(activeSessionIdAtom, 'extension-session-b'))
+    expect(extensionPanel(host).getAttribute('data-session-id')).toBe('extension-session-b')
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Tool filter"]')!.value).toBe('')
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    await act(async () => root.unmount())
+  })
+
+  it('opens an extension from history without toggling and ignores a background Session request', async () => {
+    const store = createStore()
+    const sessionId = 'extension-open-request'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { host, root } = await mountPanel(store, [toolExtension])
+
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId: 'background', surface: toolExtension.id }))
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    for (let index = 0; index < 2; index += 1) {
+      await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+      expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+      expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    }
+    await act(async () => root.unmount())
+  })
+
+  it('restores the Files tool when an entry point no longer supplies the selected extension', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'extension-removed')
+    store.set(setSessionWorkbenchSurfaceAtom, toolExtension.id)
+    const { host, root, render } = await mountPanel(store, [toolExtension])
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    await render([])
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
+    expect(host.querySelector('[data-testid="extension-tools"]')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('waits for native Browser hide before a history request reveals an extension', async () => {
+    const hidden = deferred()
+    browserApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'browser-to-extension'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Browser)
+    store.set(embeddedBrowserSnapshotAtom, browserSnapshot(sessionId))
+    const { host, root } = await mountPanel(store, [toolExtension])
+
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Browser)
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+    await act(async () => { hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(toolExtension.id)
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    await act(async () => root.unmount())
+  })
+
+  it('does not apply an old native handoff or extension close callback to a new Session', async () => {
+    const hidden = deferred()
+    browserApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    let oldClose: (() => void) | undefined
+    const extension = {
+      ...toolExtension,
+      Content: ({ sessionId, onClose }: SessionWorkbenchExtensionProps) => {
+        if (sessionId === 'extension-source') oldClose = onClose
+        return <div />
+      },
+    }
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'extension-source')
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Browser)
+    store.set(embeddedBrowserSnapshotAtom, browserSnapshot('extension-source'))
+    const { root } = await mountPanel(store, [extension])
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId: 'extension-source', surface: extension.id }))
+    await act(async () => store.set(activeSessionIdAtom, 'extension-destination'))
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId: 'extension-destination', surface: extension.id }))
+    await act(async () => { oldClose?.(); hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(extension.id)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    await act(async () => root.unmount())
+  })
+
+  it('keeps the latest history request while waiting for the native Excel hide acknowledgement', async () => {
+    const hidden = deferred()
+    excelHostApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'excel-to-debug-surface'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(excelHostSnapshotAtom, {
+      sessions: [{ sessionId, targetId: 'excel-debug-target', webContentsId: 50, ready: true, crashed: false, dirty: false }],
+    })
+    const roundsExtension: SessionWorkbenchExtension = {
+      ...toolExtension,
+      id: 'extension:debug-rounds',
+      label: 'Debug rounds',
+      Content: ({ active }: SessionWorkbenchExtensionProps) => <div data-testid="debug-rounds" data-active={active} />,
+    }
+    const { host, root } = await mountPanel(store, [toolExtension, roundsExtension])
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: roundsExtension.id }))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(host.querySelector('[data-testid="debug-rounds"]')?.getAttribute('data-active')).toBe('false')
+    await act(async () => { hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(roundsExtension.id)
+    expect(host.querySelector('[data-testid="debug-rounds"]')?.getAttribute('data-active')).toBe('true')
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+    await act(async () => root.unmount())
+  })
+
+  it('resolves an extension removed during native Browser hide to Files', async () => {
+    const hidden = deferred()
+    browserApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'extension-removed-during-handoff'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Browser)
+    store.set(embeddedBrowserSnapshotAtom, browserSnapshot(sessionId))
+    const { host, root, render } = await mountPanel(store, [toolExtension])
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+    await render([])
+    await act(async () => { hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
+    await act(async () => root.unmount())
+  })
+
   it('keeps one permanent Bridgic launcher above five undivided independent tools', async () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-tools')

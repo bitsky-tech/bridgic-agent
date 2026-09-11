@@ -17,8 +17,12 @@ import { WorkflowRunDetailsPane } from './WorkflowRunDetailsPane'
 import { WordWorkbenchPanel } from './WordWorkbenchPanel'
 import { ExcelWorkbenchPanel } from './ExcelWorkbenchPanel'
 import { cn } from '@/lib/cn'
+import { EMPTY_SESSION_EXTENSIONS, extensionSurfaceTestId, type SessionWorkbenchExtension } from './DesktopAppExtensions'
 
 export interface SessionSurfaceContentProps {
+  extensions?: readonly SessionWorkbenchExtension[]
+  sessionId?: string | null
+  onCloseExtension?: (surface: SessionWorkbenchExtension['id']) => void
   isBrowserActive: boolean
   isNativeHandoffPending: boolean
   isToolActive: (surface: SessionWorkbenchSurface) => boolean
@@ -31,6 +35,9 @@ export interface SessionSurfaceContentProps {
 
 /** Keep workbench tools mounted while presenting one tool or Agent mode surface. */
 export function SessionSurfaceContent({
+  extensions = EMPTY_SESSION_EXTENSIONS,
+  sessionId,
+  onCloseExtension,
   isBrowserActive,
   isNativeHandoffPending,
   isToolActive,
@@ -117,6 +124,21 @@ export function SessionSurfaceContent({
           onPresentationHideFailed={isNativeHandoffPending ? onNativeHideFailed : undefined}
         />
       </div>
+
+      {sessionId ? extensions.map(({ id, Content }) => {
+        const active = isToolActive(id)
+        const testId = extensionSurfaceTestId(id)
+        return (
+          <WorkbenchSurface
+            key={id}
+            isActive={active}
+            labelledBy={`${testId}-tab`}
+            testId={`${testId}-content`}
+          >
+            <Content sessionId={sessionId} active={active} onClose={() => onCloseExtension?.(id)} />
+          </WorkbenchSurface>
+        )
+      }) : null}
 
       {selectedModeSurface !== null ? (
         <ModeSurfaceGate
