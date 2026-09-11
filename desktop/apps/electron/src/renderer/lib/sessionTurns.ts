@@ -77,6 +77,7 @@ function permissionItems(permission: Data) {
 
 /** One durable Turn owns one user message and one logical assistant reply, including all interaction resumes. */
 export function sessionTurnsToMessages(turns: SessionTurnRecord[], context: TurnProjectionContext = {}): AgentMessage[] {
+  let retainedCursor: WorkflowStep | null | undefined
   return turns.flatMap((turn, index) => {
     const prefix = `${turn.session_id}:${turn.session_ordinal}`
     const user: AgentMessage = {
@@ -95,14 +96,17 @@ export function sessionTurnsToMessages(turns: SessionTurnRecord[], context: Turn
       }), toolCalls: [], done: true, createdAt: turn.session_ordinal * 2,
     }
     const previousTurn = turns[index - 1]
-    const previousThink = previousTurn?.session_id === turn.session_id && previousTurn.session_ordinal + 1 === turn.session_ordinal
-      ? object(previousTurn.agent_state?.think) : {}
-    const { blocks, workflowMetadata } = turnBlocks(turn, { ...context, showPendingInteraction: index === turns.length - 1 && context.showPendingInteraction }, previousThink)
+    if (previousTurn?.session_id !== turn.session_id || previousTurn.session_ordinal + 1 !== turn.session_ordinal) retainedCursor = undefined
+    const projection = turnBlocks(turn, { ...context, showPendingInteraction: index === turns.length - 1 && context.showPendingInteraction }, retainedCursor)
+    const { blocks, workflowMetadata } = projection
+    retainedCursor = projection.retainedCursor
     if (workflowMetadata.length) user.workflowMetadata = workflowMetadata
-    const cursor = cursorStep(object(turn.agent_state?.think))
     user.workflowTurn = {
       sessionId: turn.session_id, ordinal: turn.session_ordinal,
-      cursor: cursor ? { workflowId: cursor.workflowId, generation: cursor.generation, phase: cursor.phase, stepIndex: cursor.stepIndex } : null,
+      cursor: retainedCursor ? {
+        workflowId: retainedCursor.workflowId, generation: retainedCursor.generation, phase: retainedCursor.phase,
+        stepIndex: retainedCursor.stepIndex, ...(retainedCursor.inheritedCursor ? { inheritedCursor: true } : {}),
+      } : retainedCursor,
     }
     if (!blocks.length && turn.final_answer) blocks.push({ type: 'text', text: turn.final_answer })
     if (!blocks.length && !turn.error && turn.status !== 'cancelled') return [user]
@@ -123,7 +127,7 @@ export function sessionTurnsToMessages(turns: SessionTurnRecord[], context: Turn
   })
 }
 
-function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, previousThink: Data): { blocks: MessageBlock[]; workflowMetadata: WorkflowMetadata[] } {
+function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, previousCursor: WorkflowStep | null | undefined): { blocks: MessageBlock[]; workflowMetadata: WorkflowMetadata[]; retainedCursor: WorkflowStep | null | undefined } {
   const blocks: MessageBlock[] = []
   const workflowMetadata: WorkflowMetadata[] = []
   const spans: { start: number; marker: number }[] = []
@@ -140,12 +144,15 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
   let workflowEntry: Data | null = null
   let entryGeneration: string | null = null
   let entryMetadata: WorkflowMetadata | null = null
-  let workflowCursor = cursorStep(previousThink)
+  let workflowCursor = previousCursor
   let workflowSection = 0
+  let workflowHasOTA = false
+  let canInheritCursor = true
   const inheritedStep = (phase: WorkflowStep['phase']): WorkflowStep => ({
     type: 'workflow_step', workflowId: entryMetadata?.workflowId ?? '',
     generation: entryMetadata?.generation ?? `history:${turn.session_id}:${turn.session_ordinal}:initial`,
-    workflowName: entryMetadata?.workflowName ?? '', phase, stepIndex: -1, stepCount: 0, title: '', status: 'running', inheritedCursor: true,
+    workflowName: entryMetadata?.workflowName ?? '', phase, stepIndex: -1, stepCount: 0, title: '', status: 'running',
+    ...(canInheritCursor ? { inheritedCursor: true } : {}),
   })
 
   const addStep = (step: WorkflowStep) => {
@@ -175,11 +182,12 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
     blocks.push(step)
   }
   const closeWorkflow = () => {
-    if (workflowCursor && workflowStart !== null && workflowStart < blocks.length) {
+    if (workflowCursor && workflowStart !== null && (workflowHasOTA || workflowStart < blocks.length)) {
       addStep({ ...workflowCursor, status: 'neutral', summary: null })
     }
     workflowStart = null
-    workflowCursor = null
+    // Closing a display section retains the unfinished Run's cursor for resume.
+    workflowHasOTA = false
     workflowEntry = null
     entryMetadata = null
     entryGeneration = null
@@ -219,11 +227,14 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
     }
     if (scope.mode === 'run_workflow') {
       hasRunScope = true
+      workflowHasOTA = true
       workflowStart ??= blocks.length
       workflowCursor ??= inheritedStep(scope.stage === 'validate' ? 'validate' : 'execute')
       if (workflowCursor && (scope.stage === 'execute' || scope.stage === 'validate') && scope.stage !== workflowCursor.phase) {
-        workflowCursor = { ...workflowCursor, phase: scope.stage, stepIndex: 0, stepCount: 0, title: '' }
+        workflowCursor = { ...workflowCursor, phase: scope.stage, stepIndex: workflowCursor.inheritedCursor ? -1 : 0, stepCount: 0, title: '' }
       }
+    } else if (!round.think_scope && (workflowStart !== null || workflowCursor || cursorStep(think))) {
+      workflowHasOTA = true
     }
     const reasoning = typeof round.reasoning_content === 'string' && round.reasoning_content.trim()
       ? round.reasoning_content
@@ -238,6 +249,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
     let entered = false
     let reported = false
     let reportTerminal = false
+    let entryTerminal = false
     let exited = false
     for (const value of array(object(round.action_result).results)) {
       const action = object(value)
@@ -296,6 +308,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
             if (entryMetadata.workflowId) workflowMetadata.push(entryMetadata)
             const entryAction = string(payload.resolved_action || payload.action || (['started', 'restarted', 'resumed'].includes(status) ? status : arguments_.action))
             const startsAtFirstStep = ['started', 'restarted', 'start', 'restart'].includes(entryAction)
+            if (startsAtFirstStep) canInheritCursor = false
             if (startsAtFirstStep && entryMetadata.workflowId) {
               workflowCursor = {
                 type: 'workflow_step', workflowId: entryMetadata.workflowId, generation: entryMetadata.generation,
@@ -305,6 +318,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
             } else if (workflowCursor?.workflowId !== entryMetadata.workflowId) {
               workflowCursor = inheritedStep('execute')
             }
+            entryTerminal = Boolean(payload.run_id)
           }
         }
         const response = string(payload.response || payload.user_message).trim()
@@ -386,9 +400,15 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
     if (reported) {
       fallbackStart = blocks.length
       workflowStart = reportTerminal ? null : blocks.length
-    } else if (entered) workflowStart = fallbackStart = blocks.length
-    if (reportTerminal) {
+      workflowHasOTA = false
+    } else if (entered) {
+      workflowStart = fallbackStart = blocks.length
+      workflowHasOTA = false
+    }
+    if (reportTerminal || entryTerminal || result.run_id) {
+      if (!reported) closeWorkflow()
       workflowCursor = null
+      canInheritCursor = false
       workflowEntry = null
       entryMetadata = null
       entryGeneration = null
@@ -410,7 +430,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
   if (tailCursor && entryMetadata?.workflowId === tailCursor.workflowId && (entryGeneration === null || entryGeneration === tailCursor.generation)) {
     entryMetadata.generation = tailCursor.generation
   }
-  if (tailCursor && workflowStart !== null && workflowStart < blocks.length) {
+  if (tailCursor && workflowStart !== null && (workflowHasOTA || workflowStart < blocks.length)) {
     addStep(tailCursor)
   } else if (!tailCursor && (hasRunScope || workflowEntry)) {
     closeWorkflow()
@@ -423,7 +443,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
     cursor = marker + 1
   }
   ordered.push(...blocks.slice(cursor))
-  return { workflowMetadata, blocks: ordered.filter((block) => block.type !== 'text' || block.text).map((block) =>
+  return { workflowMetadata, retainedCursor: tailCursor ?? workflowCursor, blocks: ordered.filter((block) => block.type !== 'text' || block.text).map((block) =>
     terminal(turn) && block.type === 'workflow_step' && block.status === 'running'
       ? { ...block, status: turn.status === 'failed' ? 'failure' : 'neutral' }
       : block,
@@ -433,18 +453,27 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
 /** Share labels within a Run generation and phase, never its outcome or current step position across Turns. */
 export function resolveWorkflowStepMetadata(messages: AgentMessage[], run?: WorkflowRunState | null): AgentMessage[] {
   const turnById = new Map(messages.filter((message) => message.workflowTurn).map((message) => [message.turnId, message.workflowTurn!]))
-  const cursorByOrdinal = new Map([...turnById.values()].map((turn) => [JSON.stringify([turn.sessionId, turn.ordinal]), turn.cursor]))
+  type Cursor = NonNullable<AgentMessage['workflowTurn']>['cursor']
+  const cursorByOrdinal = new Map<string, Cursor>()
+  const inheritCursor = <T extends NonNullable<Cursor>>(cursor: T, previous: Cursor): T => {
+    if (!cursor.inheritedCursor || !previous || previous.inheritedCursor || (cursor.workflowId && cursor.workflowId !== previous.workflowId)) return cursor
+    const { inheritedCursor: _inherited, ...resolved } = cursor
+    return { ...resolved, workflowId: previous.workflowId, generation: previous.generation,
+      stepIndex: cursor.phase === previous.phase ? previous.stepIndex : 0 } as T
+  }
+  // Carry retained Run positions through consecutive Main Turns, including pages
+  // whose preceding cursor only becomes available after older history is loaded.
+  for (const turn of turnById.values()) {
+    const previous = cursorByOrdinal.get(JSON.stringify([turn.sessionId, turn.ordinal - 1]))
+    const cursor = turn.cursor === undefined ? previous : turn.cursor && inheritCursor(turn.cursor, previous)
+    cursorByOrdinal.set(JSON.stringify([turn.sessionId, turn.ordinal]), cursor)
+  }
   messages = messages.map((message) => {
     const turn = turnById.get(message.turnId)
     const previous = turn && cursorByOrdinal.get(JSON.stringify([turn.sessionId, turn.ordinal - 1]))
     if (!previous) return message
     return { ...message, blocks: message.blocks?.map((block) => {
-      if (block.type !== 'workflow_step' || !block.inheritedCursor || (block.workflowId && block.workflowId !== previous.workflowId)) return block
-      const { inheritedCursor: _inherited, ...step } = block
-      return {
-        ...step, workflowId: previous.workflowId, generation: previous.generation,
-        stepIndex: block.phase === previous.phase ? previous.stepIndex : 0,
-      }
+      return block.type === 'workflow_step' ? inheritCursor(block, previous) : block
     }) }
   })
   const metadata = new Map<string, { name: string; titles: string[]; count: number }>()

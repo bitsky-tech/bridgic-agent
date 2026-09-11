@@ -174,7 +174,7 @@ export type MessageBlock =
       summary?: string | null
       executionSteps?: string[]
       validationSteps?: string[]
-      /** The first historical section may need its preceding Turn's cursor. */
+      /** This section inherits the retained Run from before its Turn, without a local restart. */
       inheritedCursor?: boolean
       /** Distinguish separate visits to the same stage within one historical Turn. */
       historySection?: number
@@ -254,7 +254,8 @@ export interface AgentMessage {
   workflowTurn?: {
     sessionId: string
     ordinal: number
-    cursor: Pick<Extract<MessageBlock, { type: 'workflow_step' }>, 'workflowId' | 'generation' | 'phase' | 'stepIndex'> | null
+    /** Retained Run position, even after exiting to Main. Undefined inherits; null ends the Run. */
+    cursor?: Pick<Extract<MessageBlock, { type: 'workflow_step' }>, 'workflowId' | 'generation' | 'phase' | 'stepIndex' | 'inheritedCursor'> | null
   }
   /** Renderer-owned Run labels, retained even when a Turn stops immediately after entry. */
   workflowMetadata?: {

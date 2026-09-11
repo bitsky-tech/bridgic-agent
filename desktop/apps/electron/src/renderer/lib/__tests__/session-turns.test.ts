@@ -74,6 +74,124 @@ describe('Session Turn display projection', () => {
     const message = assistant(sessionTurnsToMessages([turn({ agent_state: { think: { ...cursor, step_index: 1 } }, ota_records: [{ think_scope: scope, reasoning_content: 'Work', action_result: { results: [report(0)] } }] })]))
     expect(headings(message).map((step) => step.stepIndex)).toEqual([0])
   })
+  for (const scoped of [false, true]) it(`retains a stage whose first OTA only asks a human question (scoped=${scoped})`, () => {
+    const questions = [{ question: 'Which directory?', options: [{ label: 'Project' }, { label: 'Downloads' }] }]
+    const choice = { tool_name: 'request_human_choice', success: true,
+      tool_arguments: { questions: JSON.stringify({ questions }), prompt: 'Choose the directory to scan.' }, tool_result: questions,
+    }
+    const records = [workflowEntry, { think_scope: scope, action_result: { results: [choice] } }]
+      .map((round) => scoped ? round : Object.fromEntries(Object.entries(round).filter(([key]) => key !== 'think_scope')))
+    const pending = turn({ ota_records: records, agent_state: { think: cursor, interaction: { questions } } })
+    const message = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([pending], { showPendingInteraction: true }), run))
+    expect(message.blocks!.map((block) => block.type)).toEqual(['thinking', 'workflow_step'])
+    expect(headings(message)[0]).toMatchObject({ stepIndex: 0, stepCount: 2, title: 'Choose directory', status: 'running' })
+    const answered = structuredClone(pending)
+    answered.ota_records![1]!.action_result = { results: [{ ...choice, tool_result: 'Project' }] }
+    const resumed = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([answered]), run))
+    expect(headings(resumed)).toEqual(headings(message))
+    expect(resumed.blocks![2]).toMatchObject({ type: 'confirmation', response: 'Project' })
+  })
+
+  describe('retained Run positions', () => {
+    const main = { mode: 'normal', stage: 'main' }
+    const exitRound = { think_scope: scope, action_result: { results: [{ tool_name: 'switch', success: true, tool_result: { mode: 'normal' } }] } }
+    const entry = (status: 'resumed' | 'restarted') => ({ ...workflowEntry, action_result: { results: [{
+      tool_name: 'request_run_workflow', success: true,
+      tool_result: { status, workflow_id: 'wf', workflow_name: 'Directory', execution_steps: run.executionSteps },
+    }] } })
+    const exited = turn({ status: 'completed', agent_state: { think: main }, ota_records: [
+      workflowEntry, { think_scope: scope, action_result: { results: [report(0)] } }, exitRound,
+    ] })
+    const resumed = (ordinal: number) => turn({ id: `resumed-${ordinal}`, session_ordinal: ordinal,
+      status: 'completed', agent_state: { think: main }, ota_records: [entry('resumed'), exitRound],
+    })
+    // Load newest pages first, resolving each merge just like transcript paging.
+    const paged = (records: SessionTurnRecord[], pageMask: number) => {
+      const pages: SessionTurnRecord[][] = [[]]
+      records.forEach((record, index) => {
+        if (index && pageMask & (1 << (index - 1))) pages.push([])
+        pages.at(-1)!.push(record)
+      })
+      return pages.reduceRight((messages, page) => resolveWorkflowStepMetadata([...sessionTurnsToMessages(page), ...messages]), [] as AgentMessage[])
+    }
+
+    it('keeps the retained step across exits, Main Turns and every history page boundary', () => {
+      const records = [exited,
+        turn({ id: 'main', session_ordinal: 1, status: 'completed', agent_state: { think: main }, ota_records: [{ think_scope: main, reasoning_content: 'Unrelated conversation' }] }),
+        resumed(2), resumed(3),
+      ]
+      const original = structuredClone(records)
+      const whole = resolveWorkflowStepMetadata(sessionTurnsToMessages(records))
+      for (let mask = 0; mask < 8; mask += 1) {
+        const messages = paged(records, mask)
+        for (const ordinal of [2, 3]) {
+          const message = messages.find((row) => row.id === `session:${ordinal}`)!
+          expect(headings(message)).toEqual(headings(whole.find((row) => row.id === message.id)!))
+          expect(headings(message)[0]).toMatchObject({ generation: 'gen', stepIndex: 1, title: 'Scan directory', stepCount: 2, status: 'neutral' })
+        }
+        expect(resolveWorkflowStepMetadata(messages)).toEqual(messages)
+      }
+      expect(records).toEqual(original)
+    })
+
+    it('does not inherit across a missing Turn or another Session', () => {
+      const missing = resolveWorkflowStepMetadata([...sessionTurnsToMessages([exited]), ...sessionTurnsToMessages([resumed(2)])])
+      expect(headings(missing.at(-1)!)[0]).toMatchObject({ stepIndex: -1, title: '' })
+      const other = resolveWorkflowStepMetadata([...sessionTurnsToMessages([{ ...exited, session_id: 'other' }]), ...sessionTurnsToMessages([resumed(1)])])
+      expect(headings(other.at(-1)!)[0]).toMatchObject({ stepIndex: -1, title: '' })
+    })
+
+    it('resolves a retained legacy validation step without first assigning the wrong title', () => {
+      const validationSteps = ['Check format', 'Check totals']
+      const before = turn({ status: 'cancelled', agent_state: { think: { ...cursor, stage: 'validate', step_index: 1 } } })
+      const after = turn({ id: 'validation', session_ordinal: 1, status: 'completed', agent_state: { think: main }, ota_records: [
+        { think_scope: main, action_result: { results: [{ ...entry('resumed').action_result.results[0],
+          tool_result: { ...entry('resumed').action_result.results[0]!.tool_result, validation_steps: validationSteps },
+        }] } },
+        { ...exitRound, think_scope: { ...scope, stage: 'validate' } },
+      ] })
+      const missing = assistant(sessionTurnsToMessages([after]))
+      expect(headings(missing)[0]).toMatchObject({ phase: 'validate', stepIndex: -1, title: '' })
+      const merged = paged([before, after], 1).at(-1)!
+      expect(headings(merged)[0]).toMatchObject({ phase: 'validate', stepIndex: 1, title: 'Check totals' })
+      expect(headings(merged)).toEqual(headings(paged([before, after], 0).at(-1)!))
+    })
+
+    it('resumes the locally restarted first step without inheriting the old generation', () => {
+      const previous = turn({ ...exited, status: 'cancelled', agent_state: { think: { ...cursor, step_index: 1 } }, ota_records: exited.ota_records!.slice(0, 2) })
+      const restarted = turn({ id: 'restart', session_ordinal: 1, status: 'completed', agent_state: { think: main }, ota_records: [
+        exitRound, entry('restarted'), exitRound, entry('resumed'), exitRound,
+      ] })
+      const records = [previous, restarted, resumed(2)]
+      for (let mask = 0; mask < 4; mask += 1) {
+        const messages = paged(records, mask)
+        const stages = headings(messages.find((row) => row.id === 'session:1')!)
+        expect(stages.map(({ stepIndex, title }) => [stepIndex, title])).toEqual([[1, 'Scan directory'], [0, 'Choose directory'], [0, 'Choose directory']])
+        expect(stages[1]!.generation).not.toBe('gen')
+        expect(stages[2]!.generation).toBe(stages[1]!.generation)
+        expect(stages[2]!.inheritedCursor).toBeUndefined()
+        expect(stages[1]!.historySection).not.toBe(stages[2]!.historySection)
+        expect(headings(messages.at(-1)!)[0]).toMatchObject({ generation: stages[1]!.generation, stepIndex: 0, title: 'Choose directory' })
+      }
+    })
+
+    for (const terminalKind of ['report', 'entry', 'result'] as const) it(`clears the retained cursor at ${terminalKind} publication`, () => {
+      const result = { run_id: 'result', workflow_id: 'wf', workflow_name: 'Directory', status: 'completed', created_at: '2026-09-11T00:00:00Z' }
+      const terminalRounds = {
+        report: { think_scope: scope, action_result: { results: [{
+          ...report(1), tool_result: { ...report(1).tool_result, run_id: 'result' },
+        }] } },
+        entry: { think_scope: main, action_result: { results: [{
+          ...entry('resumed').action_result.results[0], tool_result: { ...entry('resumed').action_result.results[0]!.tool_result, run_id: 'result' },
+        }] } },
+        result: { workflow_result: result },
+      }
+      const terminalRound = terminalRounds[terminalKind]
+      const ended = turn({ id: 'ended', session_ordinal: 1, status: 'completed', agent_state: { think: main }, ota_records: [terminalRound] })
+      const messages = paged([exited, ended], 1)
+      expect(messages.find((row) => row.id === 'session:u1')!.workflowTurn!.cursor).toBeNull()
+    })
+  })
   for (const scoped of [false, true]) for (const mainRound of [false, true]) {
     it(`retains the unreported stage when a human reply exits Workflow (scoped=${scoped}, mainRound=${mainRound})`, () => {
       const rounds: Record<string, unknown>[] = [workflowEntry, {

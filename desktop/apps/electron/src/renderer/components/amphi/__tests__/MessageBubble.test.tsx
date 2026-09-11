@@ -973,6 +973,48 @@ describe('Pipeline', () => {
     host.remove()
   })
 
+  it('keeps a question-only stage heading visible after hydration and after the answer', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const scope = { mode: 'run_workflow', stage: 'execute' }
+    const questions = [{ question: 'Which directory?', options: [{ label: 'Project' }, { label: 'Downloads' }] }]
+    const choice = { tool_name: 'request_human_choice', success: true,
+      tool_arguments: { questions: JSON.stringify({ questions }), prompt: 'Choose the directory to scan.' }, tool_result: questions,
+    }
+    const input: SessionTurnRecord = {
+      id: 'question-turn', session_id: 'question-session', session_ordinal: 0, user_id: 'local',
+      user_input: { text: 'Run workflow', blocks: [] }, status: 'awaiting_human',
+      agent_state: { think: { ...scope, workflow_id: 'wf', generation: 'gen', step_index: 0 }, interaction: { questions } },
+      final_answer: null, error: null, execution_mode: 'auto', model: null, max_rounds: null,
+      browser_tool_loaded: false, workspace_tools_loaded: false, skills_tool_loaded: false,
+      context_usage: {}, created_at: '2026-09-11T00:00:00Z', ota_records: [
+        { think_scope: { mode: 'normal', stage: 'main' }, action_result: { results: [{
+          tool_name: 'request_run_workflow', tool_result: { status: 'started', workflow_id: 'wf', workflow_name: 'Directory', execution_steps: ['Choose directory', 'Scan directory'] },
+        }] } },
+        { think_scope: scope, action_result: { results: [choice] } },
+      ],
+    }
+    store.set(setHumanRequestAtom, { sessionId: input.session_id, kind: 'choose', requestId: 'choice', questions })
+    const render = async () => act(async () => root.render(
+      <Provider store={store}><Pipeline session={{ id: input.session_id, messages: sessionTurnsToMessages([input], { showPendingInteraction: true }), pending: false }} /></Provider>,
+    ))
+    await render()
+    const heading = host.querySelector<HTMLElement>('[data-testid="workflow-stage-header"]')!
+    expect(heading.textContent).toContain('执行 1/2')
+    expect(heading.textContent).toContain('Choose directory')
+    expect(host.textContent).toContain('等待你的回答')
+    expect(host.querySelector('[data-testid="workflow-stage-content"]')!.textContent).not.toContain('已与您确认')
+    input.ota_records![1]!.action_result = { results: [{ ...choice, tool_result: 'Project' }] }
+    await render()
+    expect(host.querySelector('[data-testid="workflow-stage-header"]')).toBe(heading)
+    expect(host.querySelector('[data-testid="workflow-stage-content"]')!.textContent).toContain('已与您确认')
+    expect(host.querySelector('[data-testid="workflow-stage-content"]')!.textContent).toContain('Project')
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   it('keeps the answered stage grouped after Workflow exits to Main', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
