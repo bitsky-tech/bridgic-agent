@@ -146,11 +146,12 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
 
     state = ota_context.state.context_compaction
     assert state is not None
-    assert state.session_summary == "Compacted Session facts"
-    assert state.session_through_ordinal == 1
+    assert state.session["normal"]["main"].session_summary == "Compacted Session facts"
+    assert state.session["normal"]["main"].session_through_ordinal == 1
     turn_state = state.turn["normal"]["main"]
     assert turn_state.turn_summary == "Compacted current-Turn progress"
     assert turn_state.turn_through_round == 2
+    assert turn_state.turn_covered_rounds == [1, 2]
     assert len(llm.calls) == 2
     assert all(call[0].content.startswith("You turn historical agent context") for call in llm.calls)
     assert all("substantially shorter" in call[0].content for call in llm.calls)
@@ -213,6 +214,7 @@ async def test_turn_compaction_is_isolated_by_mode_and_stage(test_sandbox: Isola
     explore_state = compaction.turn["build"]["explore"]
     assert explore_state.turn_summary == "Compacted Explore history"
     assert explore_state.turn_through_round == 2
+    assert explore_state.turn_covered_rounds == [7, 8]
 
     ota_context.ota_record.append(record("clarify", 6))
     ota_context.transition_think(BuildStageState(stage="clarify"))
@@ -264,8 +266,9 @@ async def test_initial_build_stage_compaction_boundary_survives_stage_reentry(te
     compaction = ota_context.state.context_compaction
     assert compaction is not None
     clarify_state = compaction.turn["build"]["clarify"]
-    assert clarify_state.turn_through_round == 3
-    assert "normal/main round 0" in llm.calls[0][1].content
+    assert clarify_state.turn_through_round == 2
+    assert clarify_state.turn_covered_rounds == [2, 3]
+    assert "normal/main round 0" not in llm.calls[0][1].content
 
     handoff = record("build", "explore", 0)
     handoff.action_result = ActionResult(results=[ActionStepResult(
@@ -281,7 +284,8 @@ async def test_initial_build_stage_compaction_boundary_survives_stage_reentry(te
     contents = [message.content for message in messages]
     assert any("Compacted Clarify history" in content for content in contents)
     assert not any("build/clarify round 0" in content for content in contents)
-    assert any("build/explore round 0" in content for content in contents)
+    assert not any("build/explore round 0" in content for content in contents)
+    assert any("[stage handoff]" in content for content in contents)
     assert any("build/clarify round 2" in content for content in contents)
 
 
@@ -307,7 +311,7 @@ async def test_summary_input_is_bounded_when_one_atomic_turn_is_huge(test_sandbo
     assert worker._estimate_request_tokens(llm.calls[0], []) <= 10_000
     assert "bytes omitted during compaction" in llm.calls[0][1].content
     assert ota_context.state.context_compaction is not None
-    assert ota_context.state.context_compaction.session_through_ordinal == 0
+    assert ota_context.state.context_compaction.session["normal"]["main"].session_through_ordinal == 0
 
 
 async def test_summary_failure_uses_a_bounded_fallback_and_advances(test_sandbox: IsolatedPaths) -> None:
@@ -326,8 +330,8 @@ async def test_summary_failure_uses_a_bounded_fallback_and_advances(test_sandbox
 
     state = ota_context.state.context_compaction
     assert state is not None
-    assert state.session_through_ordinal == 0
-    assert state.session_summary
+    assert state.session["normal"]["main"].session_through_ordinal == 0
+    assert state.session["normal"]["main"].session_summary
     assert worker._estimate_request_tokens(compacted, []) < worker._estimate_request_tokens(original, [])
 
 

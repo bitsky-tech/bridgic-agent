@@ -9,7 +9,7 @@ __all__ = [
     "AwaitingWorkflowConfirm", "AwaitingBuildConfirm",
     "AwaitingBuildConflict", "AwaitingWorkflowRunChoice",
     "SubAgentCall", "AwaitingSubAgent", "SubAgentResult", "SubAgentsCompleted", "AgentResult",
-    "AgentState", "ContextCompactionState", "TurnCompactionState",
+    "AgentState", "ContextCompactionState", "TurnCompactionState", "SessionCompactionState",
     "CallVerdict", "RoundPermission",
 ]
 
@@ -273,13 +273,22 @@ class TurnCompactionState(BaseModel):
 
     turn_summary: str = ""
     turn_through_round: int = Field(default=0, ge=0)
+    turn_covered_rounds: Optional[List[int]] = Field(default=None, description="One-based positions in the durable Turn, not stage-local offsets.")
 
 
-class ContextCompactionState(BaseModel):
-    """Persisted prompt projection for compacted Session and current-Turn history."""
+class SessionCompactionState(BaseModel):
+    """One stage's summary of its historical Turns in this Session."""
 
     session_summary: str = ""
     session_through_ordinal: int = Field(default=-1, ge=-1)
+
+
+class ContextCompactionState(BaseModel):
+    """Stage-owned Session/current-Turn summaries; flat Session fields are legacy read-only data."""
+
+    session_summary: str = ""
+    session_through_ordinal: int = Field(default=-1, ge=-1)
+    session: Dict[str, Dict[str, SessionCompactionState]] = Field(default_factory=dict)
     turn: Dict[str, Dict[str, TurnCompactionState]] = Field(default_factory=dict)
 
 

@@ -50,6 +50,7 @@ from ._state import (
     BuildStageState,
     ContextCompactionState,
     NormalStageState,
+    SessionCompactionState,
     TurnCompactionState,
     WorkflowStageState,
 )
@@ -62,7 +63,6 @@ from .tools import (
     WORKSPACE_ADVANCED_TOOL_NAMES,
     switch_tool,
 )
-from .tools._request_human import RequestHumanChoice
 
 __all__ = [
     "BuildThink",
@@ -129,6 +129,271 @@ class ToolSurface:
     def names(self) -> Tuple[str, ...]:
         """Return prompt-ready names derived from the runtime specs."""
         return tuple(spec.tool_name for spec in self.specs)
+
+
+def _tool_round_messages(record: Any, tools: Sequence[ToolSpec], id_prefix: str, extras: Optional[Dict[str, Any]] = None) -> List[Message]:
+    """Replay completed tool activity identically within and across Turns.
+
+    Executed steps, not the original proposed calls, own the replayed arguments.
+    Large or invalid calls become text as a whole round; native calls always
+    keep their paired results. Only current-Turn callers supply reasoning extras.
+    """
+    MAX_ARG_VALUE_CHARS = 1200
+
+    def step_call(step: Any, step_index: int) -> Tuple[Dict[str, Any], Dict[str, int], List[str]]:
+        """Render one historical tool call and report why native replay may be unsafe."""
+        name = _view(step, "tool_name") or ""
+        args = _view(step, "tool_arguments")
+        provided = set(args) if isinstance(args, dict) else set()
+        omitted: Dict[str, int] = {}
+        if isinstance(args, dict):
+            replay_args: Dict[str, Any] = {}
+            for key, value in args.items():
+                if isinstance(value, str):
+                    rendered = value
+                else:
+                    try:
+                        rendered = json.dumps(value, ensure_ascii=False, default=str)
+                    except (TypeError, ValueError):
+                        rendered = str(value)
+                if len(rendered) > MAX_ARG_VALUE_CHARS:
+                    omitted[str(key)] = len(rendered)
+                else:
+                    replay_args[key] = value
+            args = replay_args
+        spec = next((tool for tool in tools if tool.tool_name == name), None)
+        required = set((getattr(spec, "tool_parameters", None) or {}).get("required") or [])
+        missing = sorted(str(key) for key in required - provided)
+        call = {
+            "id": _view(step, "tool_id") or f"{id_prefix}_{step_index}",
+            "name": name,
+            "arguments": args or {},
+        }
+        return call, omitted, missing
+
+    def step_result(step: Any) -> str:
+        """Render one historical tool result."""
+        error = _view(step, "error")
+        if error or _view(step, "success") is False:
+            return f"failed: {error or 'tool failed'}"
+        result = _view(step, "tool_result")
+        if result is None:
+            return "(no output)"
+        if result == "":
+            return "(awaiting the user's answer)"
+        return str(result)
+
+    def step_summary(call: Dict[str, Any], step: Any, omitted: Dict[str, int], missing: List[str]) -> str:
+        """Summarize a call that must not be replayed as a native tool example."""
+        facts: List[str] = []
+        arguments = call.get("arguments") or {}
+        if arguments:
+            retained = ", ".join(
+                f"`{name}`: {json.dumps(value, ensure_ascii=False, default=str)}"
+                for name, value in arguments.items()
+            )
+            facts.append(f"retained arguments {retained}")
+        if omitted:
+            details = ", ".join(
+                f"`{name}` ({count} characters)" for name, count in omitted.items()
+            )
+            facts.append(f"large arguments not replayed: {details}")
+        if missing:
+            facts.append("missing required arguments: " + ", ".join(f"`{name}`" for name in missing))
+        failed = bool(_view(step, "error")) or _view(step, "success") is False
+        facts.append(f"status: {'failed' if failed else 'succeeded'}")
+        facts.append(f"result: {json.dumps(step_result(step), ensure_ascii=False)}")
+        return f"- `{call['name']}` — " + "; ".join(facts)
+
+    think = _view(_view(record, "think_result"), "step_content") or ""
+    steps = _view(_view(record, "action_result"), "results") or []
+    rendered_steps = [step_call(step, i) for i, step in enumerate(steps)]
+    extras = dict(extras or {})
+    signatures = extras.pop("thought_signatures", None)
+    messages: List[Message] = []
+    if any(omitted or missing for _, omitted, missing in rendered_steps):
+        activity = "\n".join(
+            step_summary(call, step, omitted, missing)
+            for (call, omitted, missing), step in zip(rendered_steps, steps)
+        )
+        summary = (
+            "Completed historical tool activity is summarized as text because "
+            "native replay would contain omitted or invalid arguments:\n"
+            f"{activity}\nInspect current files or `<transcript>` when the original tool "
+            "output is needed."
+        )
+        messages.append(Message.from_text(
+            f"{think}\n\n{summary}" if think else summary,
+            role=Role.AI,
+            extras=extras,
+        ))
+    else:
+        calls = [call for call, _, _ in rendered_steps]
+        if signatures and len(signatures) == len(calls):
+            extras = {**extras, "thought_signatures": list(signatures)}
+        messages.append(Message.from_tool_call(
+            tool_calls=calls, text=think or None,
+            extras=extras,
+        ))
+        for (call, _, _), step in zip(rendered_steps, steps):
+            messages.append(Message.from_tool_result(
+                tool_id=call["id"],
+                content=step_result(step),
+            ))
+    return messages
+
+
+_HistoryScope = Tuple[str, str]
+
+
+@dataclass(frozen=True)
+class _HistoryRound:
+    """One projected round, retaining its one-based position in the durable Turn."""
+
+    number: int
+    record: Any
+
+
+def _record_scope(record: Any) -> Optional[_HistoryScope]:
+    scope = _view(record, "think_scope")
+    mode = str(_view(scope, "mode") or "").strip()
+    stage = str(_view(scope, "stage") or "").strip()
+    if mode and stage:
+        return mode, stage
+    legacy = str(_view(record, "build_stage") or "").strip()
+    return ("build", legacy) if legacy else None
+
+
+def _project_rounds(records: Sequence[Any], scope: _HistoryScope) -> List[_HistoryRound]:
+    """Select owned rounds plus explicit incoming handoffs, never a foreign raw trace."""
+    def incoming_handoff(record: Any) -> str:
+        observation = str(_view(record, "observation_result") or "")
+        header = re.search(r"\[stage handoff\] `[^`]+` → `([^`]+)`", observation)
+        if header and header.group(1) == "/".join(scope):
+            return observation
+        if scope == ("normal", "main") and (
+            "[mode transition]" in observation and "returned control to Main" in observation
+            or "[artifact publication]" in observation
+        ):
+            return observation
+        notes = []
+        for step in _view(_view(record, "action_result"), "results") or []:
+            if _view(step, "success") is False or _view(step, "error"):
+                continue
+            name = _view(step, "tool_name")
+            arguments = _view(step, "tool_arguments") or {}
+            if isinstance(arguments, list):
+                arguments = {_view(arg, "name"): _view(arg, "value") for arg in arguments}
+            result = _view(step, "tool_result") or {}
+            if name == "switch":
+                source = _record_scope(record)
+                mode = str(_view(result, "mode") or _view(arguments, "mode") or (source or scope)[0])
+                stage = "main" if mode == "normal" else str(_view(result, "stage") or _view(arguments, "stage") or "")
+                if (mode, stage) == scope:
+                    reason = _view(result, "reason") or _view(arguments, "reason") or ""
+                    notes.append(f"[stage handoff] to `{mode}/{stage}`\n{reason}")
+            elif name == "request_build" and scope == ("build", "clarify"):
+                if _view(result, "mode") == "start" or _view(result, "status") == "confirmed":
+                    notes.append(f"[stage handoff] to `build/clarify`\n{_view(result, 'goal') or ''}")
+            elif name == "request_run_workflow" and scope == ("run_workflow", "execute"):
+                status = _view(result, "status")
+                if status in {"started", "resumed", "restarted"}:
+                    notes.append(
+                        f"[stage handoff] to `run_workflow/execute`\n"
+                        f"Workflow `{_view(result, 'workflow_id') or ''}` {status}.\n"
+                        f"{_view(result, 'reason') or _view(arguments, 'reason') or ''}"
+                    )
+        return "\n\n".join(notes)
+
+    projected = []
+    for index, record in enumerate(records):
+        owner = _record_scope(record)
+        # Pre-scope traces cannot be classified reliably. Keep them rather than
+        # silently discarding user work; all new rounds persist their owner.
+        if owner is None or owner == scope:
+            projected.append(_HistoryRound(index + 1, record))
+        elif note := incoming_handoff(record):
+            projected.append(_HistoryRound(index + 1, {
+                "think_scope": {"mode": scope[0], "stage": scope[1]},
+                "think_result": {"step_content": note, "tool_calls": []},
+                "history_handoff": True,
+            }))
+    return projected
+
+
+def _covered_rounds(records: Sequence[Any], scope: _HistoryScope, projection: Optional[TurnCompactionState]) -> set[int]:
+    """Resolve exact coverage, or migrate an old stage-local prefix without changing its coordinates."""
+    if projection is None or not projection.turn_summary:
+        return set()
+    if projection.turn_covered_rounds is not None:
+        return set(projection.turn_covered_rounds)
+    mode, stage = scope
+    scopes = [_record_scope(record) for record in records]
+    indexes = list(range(len(records)))
+    if mode == "build":
+        mode_indexes = [index for index, owner in enumerate(scopes) if owner and owner[0] == mode]
+        selected = set(indexes) if not mode_indexes else set()
+        if mode_indexes and scopes[mode_indexes[0]] == scope:
+            selected.update(range(mode_indexes[0]))
+        for index, record in enumerate(records):
+            if scopes[index] == scope:
+                selected.add(index)
+            for step in _view(_view(record, "action_result"), "results") or []:
+                if _view(step, "tool_name") != "switch" or _view(step, "success") is False:
+                    continue
+                result = _view(step, "tool_result") or {}
+                arguments = _view(step, "tool_arguments") or {}
+                if str(_view(result, "stage") or _view(arguments, "stage") or "") == stage:
+                    selected.add(index)
+            next_scope = scopes[index + 1] if index + 1 < len(scopes) else scope
+            if next_scope == scope and (scopes[index] is None or scopes[index][0] != mode):
+                selected.add(index)
+        indexes = sorted(selected)
+    elif mode == "run_workflow":
+        visits = []
+        last_target = None
+        for index, owner in enumerate(scopes):
+            if owner and owner[0] == mode:
+                if not visits or visits[-1] != owner[1]:
+                    visits.append(owner[1])
+                if owner == scope:
+                    last_target = index
+        if visits.count(stage) > 1 or (visits and last_target is None):
+            return set()
+        end = len(records) if last_target is None else last_target + 1
+        boundary = max((index for index, owner in enumerate(scopes[:end]) if owner and owner[0] == mode and owner != scope), default=-1)
+        indexes = list(range(boundary + 1, end))
+    return {index + 1 for index in indexes[:projection.turn_through_round]}
+
+
+def _session_projection(compaction: Optional[ContextCompactionState], turns: Sequence[Any], scope: _HistoryScope) -> SessionCompactionState:
+    """Do not apply a legacy mixed-mode Session summary to a narrowed stage view."""
+    if compaction is None:
+        return SessionCompactionState()
+    projection = compaction.session.get(scope[0], {}).get(scope[1])
+    if projection is not None:
+        return projection
+    if scope == ("normal", "main") and compaction.session_summary and all(
+        _record_scope(record) in (None, scope)
+        for turn in turns if turn.session_ordinal <= compaction.session_through_ordinal
+        for record in turn.ota_records or []
+    ):
+        return SessionCompactionState(
+            session_summary=compaction.session_summary,
+            session_through_ordinal=compaction.session_through_ordinal,
+        )
+    return SessionCompactionState()
+
+
+def _turn_has_scope(turn: Any, scope: _HistoryScope) -> bool:
+    """Count only historical Turns belonging to this stage's retention window."""
+    if _project_rounds(turn.ota_records or [], scope):
+        return True
+    state = turn.agent_state or {}
+    if (state.get("context_compaction") or {}).get("turn", {}).get(scope[0], {}).get(scope[1], {}).get("turn_summary"):
+        return True
+    think = state.get("think") or {}
+    return not turn.ota_records and (think.get("mode", "normal"), think.get("stage", "main")) == scope
 
 
 def _node_environment_summary(workspace: Optional[Any]) -> str:
@@ -324,7 +589,7 @@ class MainThink(CognitiveWorker):
         ota_context._current_record().think_scope = {
             "mode": status.mode,
             "stage": status.stage,
-            "session_history": "all_stages",
+            "session_history": "stage_scoped_v2",
         }
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
@@ -689,14 +954,17 @@ class MainThink(CognitiveWorker):
             return summary, through
 
         async def compact_session_history() -> bool:
-            turns = context.session.get_all()
+            think = ota_context.think_status
+            scope = (think.mode, think.stage)
+            projection = _session_projection(candidate, context.session.get_all(), scope)
+            turns = [turn for turn in context.session.get_all() if _turn_has_scope(turn, scope)]
             raw_prefix = turns[:max(0, len(turns) - CONTEXT_COMPACTION_KEEP_SESSION_TURNS)]
             units: List[Tuple[int, str]] = []
             for turn in raw_prefix:
-                if turn.session_ordinal <= candidate.session_through_ordinal:
+                if turn.session_ordinal <= projection.session_through_ordinal:
                     continue
                 payload = trim_text(
-                    serialize_messages(self._session_messages([turn], context)),
+                    serialize_messages(self._session_messages([turn], context, scope, ota_context.tools)),
                     unit_tokens,
                 )
                 units.append((
@@ -708,30 +976,33 @@ class MainThink(CognitiveWorker):
             def render(previous: str, history: str) -> str:
                 return render_session_compaction_prompt(previous, history)
 
-            summary, through = await roll_summary(candidate.session_summary, units, render)
-            if through is None or through <= candidate.session_through_ordinal:
+            summary, through = await roll_summary(projection.session_summary, units, render)
+            if through is None or through <= projection.session_through_ordinal:
                 return False
-            candidate.session_summary = summary
-            candidate.session_through_ordinal = through
+            candidate.session.setdefault(think.mode, {})[think.stage] = projection.model_copy(update={
+                "session_summary": summary,
+                "session_through_ordinal": through,
+            })
             return True
 
         async def compact_turn_history() -> bool:
             think = ota_context.think_status
             mode = think.mode
             stage = think.stage
-            turn_context, _ = self._stage_turn_context(ota_context, mode, stage)
-            records = turn_context.ota_record
+            records = _project_rounds(ota_context.ota_record, (mode, stage))
             turn_compaction = candidate.turn.get(mode, {}).get(
                 stage,
                 TurnCompactionState(),
             )
             prefix_end = max(0, len(records) - CONTEXT_COMPACTION_KEEP_TURN_ROUNDS)
-            start = min(turn_compaction.turn_through_round, len(records))
+            covered = _covered_rounds(ota_context.ota_record, (mode, stage), turn_compaction)
             projected_state = ota_context.state.model_copy(update={"context_compaction": None})
             units: List[Tuple[int, str]] = []
-            for index in range(start, prefix_end):
-                projected = turn_context.model_copy(update={
-                    "ota_record": [records[index]],
+            for index in range(prefix_end):
+                if records[index].number in covered:
+                    continue
+                projected = ota_context.model_copy(update={
+                    "ota_record": [records[index].record],
                     "state": projected_state,
                 })
                 payload = trim_text(
@@ -752,11 +1023,12 @@ class MainThink(CognitiveWorker):
                 )
 
             summary, through = await roll_summary(turn_compaction.turn_summary, units, render)
-            if through is None or through <= turn_compaction.turn_through_round:
+            if through is None:
                 return False
             candidate.turn.setdefault(mode, {})[stage] = turn_compaction.model_copy(update={
                 "turn_summary": summary,
                 "turn_through_round": through,
+                "turn_covered_rounds": sorted(covered | {record.number for record in records[:through]}),
             })
             return True
 
@@ -990,21 +1262,6 @@ class MainThink(CognitiveWorker):
         messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(ota_context, context)
         return messages
-
-    @staticmethod
-    def _record_think_scope(record: Any) -> Optional[Tuple[str, str]]:
-        """Return one round's cognitive mode and stage, including legacy Build records."""
-        scope = _view(record, "think_scope")
-        mode = str(_view(scope, "mode") or "").strip()
-        stage = str(_view(scope, "stage") or "").strip()
-        if mode and stage:
-            return mode, stage
-        legacy_build_stage = str(_view(record, "build_stage") or "").strip()
-        return ("build", legacy_build_stage) if legacy_build_stage else None
-
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Return the full current-Turn trace unless a specialized worker projects it."""
-        return ota_context, None
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
         """Render Main context from the most stable prefix to live round state."""
@@ -1347,11 +1604,13 @@ class MainThink(CognitiveWorker):
         return f"<transcript>\n{os.path.join(root, 'history.md')}\n</transcript>"
 
     async def session_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Replay the persisted Session summary followed by uncovered raw Turns."""
+        """Replay only the active stage's Session summary and compacted historical Turns."""
         turns = context.session.get_all()
-        compaction = ota_context.state.context_compaction
-        if compaction is None or not compaction.session_summary:
-            return self._session_messages(turns, context)
+        think = ota_context.think_status
+        scope = (think.mode, think.stage)
+        compaction = _session_projection(ota_context.state.context_compaction, turns, scope)
+        if not compaction.session_summary:
+            return self._session_messages(turns, context, scope, ota_context.tools)
         remaining = [
             turn
             for turn in turns
@@ -1364,7 +1623,7 @@ class MainThink(CognitiveWorker):
                 "through_ordinal",
                 compaction.session_through_ordinal,
             ),
-            *self._session_messages(remaining, context),
+            *self._session_messages(remaining, context, scope, ota_context.tools),
         ]
 
     @staticmethod
@@ -1377,149 +1636,80 @@ class MainThink(CognitiveWorker):
         )
         return Message.from_text(content, role=Role.AI)
 
-    def _session_messages(self, turns: Sequence[SessionTurnRecord], context: AmphiContext) -> List[Message]:
-        """Replay persisted Turns oldest-first, reusing only the global normal-mode projection."""
+    def _session_messages(
+        self,
+        turns: Sequence[SessionTurnRecord],
+        context: AmphiContext,
+        scope: _HistoryScope = ("normal", "main"),
+        tools: Sequence[ToolSpec] = (),
+    ) -> List[Message]:
+        """Project a stage's historical Turns without importing another stage's execution history."""
         messages: List[Message] = []
         for turn in turns:
+            if not _turn_has_scope(turn, scope):
+                continue
             ota = turn.ota_context_dump()
+            records = ota.get("ota_record") or []
             messages.append(self._user_message(
                 turn.user_input,
                 self._render_user_input(turn.user_input, context),
                 context,
                 reject_unsupported=False,
             ))
-            compaction_data = (turn.agent_state or {}).get("context_compaction")
-            compaction = (
-                ContextCompactionState.model_validate(compaction_data)
-                if compaction_data
-                else None
-            )
-            turn_compaction = (
-                compaction.turn.get("normal", {}).get("main")
-                if compaction is not None
-                else None
-            )
-            if turn_compaction is not None and turn_compaction.turn_summary:
+            data = (turn.agent_state or {}).get("context_compaction")
+            compaction = ContextCompactionState.model_validate(data) if data else None
+            projection = compaction.turn.get(scope[0], {}).get(scope[1]) if compaction else None
+            covered = _covered_rounds(records, scope, projection)
+            if projection is not None and projection.turn_summary:
                 messages.append(self._compaction_summary_message(
-                    "turn_history",
-                    turn_compaction.turn_summary,
-                    "through_round",
-                    turn_compaction.turn_through_round,
+                    "turn_history", projection.turn_summary, "through_round", projection.turn_through_round,
                 ))
-                ota["ota_record"] = (
-                    ota.get("ota_record") or []
-                )[turn_compaction.turn_through_round:]
-            messages.extend(self._ota_messages(ota, turn.session_ordinal))
+            remaining = [item for item in _project_rounds(records, scope) if item.number not in covered]
+            ota["ota_record"] = [item.record for item in remaining]
+            messages.extend(self._ota_messages(ota, turn.session_ordinal, [item.number for item in remaining], tools))
             if turn.status == TurnStatus.FAILED:
                 messages.append(Message.from_text(TURN_FAILED_MESSAGE, role=Role.AI))
         return messages
 
-    def _ota_messages(self, ota: Dict[str, Any], turn_index: int) -> List[Message]:
-        """One persisted OTA dump as AI/tool messages; intentionally separate from
-        ``turn_messages_block`` because session replay is whole-OTA and driven by
-        ``think_result.tool_calls``.
+    def _ota_messages(
+        self,
+        ota: Dict[str, Any],
+        turn_index: int,
+        round_numbers: Optional[Sequence[int]] = None,
+        tools: Sequence[ToolSpec] = (),
+    ) -> List[Message]:
+        """Replay a persisted Turn with the same bounded tool activity as the live loop.
 
-        Native tool replay is atomic: every call must have a persisted result.
-        Interrupted rounds fall back to their visible text so a cancelled Turn
-        cannot leave a dangling tool call in the next model request.
+        Only completed action steps become native pairs, even after interruption.
+        Session replay drops provider reasoning and collapses intermediate text,
+        but never re-expands original tool arguments from Think proposals.
         """
-        def tool_call_args(call: Any) -> Dict[str, Any]:
-            args = _view(call, "tool_arguments")
-            if isinstance(args, list):
-                return {
-                    _view(arg, "name"): _view(arg, "value")
-                    for arg in args
-                    if _view(arg, "name")
-                }
-            direct = _view(call, "arguments")
-            return direct if isinstance(direct, dict) else {}
-
-        def tool_call_name(call: Any) -> str:
-            return str(_view(call, "tool") or _view(call, "name") or "")
-
-        def tool_result_content(step: Any) -> str:
-            error = _view(step, "error")
-            if error or _view(step, "success") is False:
-                return f"failed: {error or 'tool failed'}"
-            result = _view(step, "tool_result")
-            if result is None:
-                return "(no output)"
-            if result == "":
-                return "(awaiting the user's answer)"
-            return str(result)
-
-        def asked_choice() -> str:
-            questions: Any = None
-            for record in ota.get("ota_record") or []:
-                for step in (_view(_view(record, "action_result"), "results") or []):
-                    if _view(step, "tool_name") != "request_human_choice":
-                        continue
-                    args = _view(step, "tool_arguments") or []
-                    if isinstance(args, list):
-                        values = {
-                            _view(arg, "name"): _view(arg, "value")
-                            for arg in args
-                        }
-                        questions = values.get("questions") or values.get("prompt") or questions
-                    elif isinstance(args, dict):
-                        questions = args.get("questions") or args.get("prompt") or questions
-            if not questions:
-                return ""
-            lines: List[str] = []
-            for q in RequestHumanChoice.coerce_questions(questions):
-                if not isinstance(q, dict):
-                    continue
-                text = (q.get("question") or "").strip()
-                if text:
-                    lines.append(text)
-                for opt in q.get("options") or []:
-                    if isinstance(opt, dict) and opt.get("label"):
-                        desc = (opt.get("description") or "").strip()
-                        lines.append(f"  - {opt['label']}" + (f": {desc}" if desc else ""))
-            return "\n".join(lines)
 
         messages: List[Message] = []
         final_answer = ""
         for record_index, record in enumerate(ota.get("ota_record") or []):
+            source_index = round_numbers[record_index] - 1 if round_numbers is not None else record_index
             think = _view(record, "think_result") or {}
             content = str(_view(think, "step_content") or "")
             calls = _view(think, "tool_calls") or []
             steps = _view(_view(record, "action_result"), "results") or []
-            if calls and len(calls) == len(steps):
-                rendered_calls: List[Dict[str, Any]] = []
-                for call_index, call in enumerate(calls):
-                    step = steps[call_index]
-                    rendered_calls.append({
-                        "id": (
-                            _view(step, "tool_id")
-                            or f"hist_call_{turn_index}_{record_index}_{call_index}"
-                        ),
-                        "name": tool_call_name(call),
-                        "arguments": tool_call_args(call),
-                    })
-                messages.append(Message.from_tool_call(
-                    tool_calls=rendered_calls,
-                    text=content or None,
-                ))
-                for call, step in zip(rendered_calls, steps):
-                    messages.append(Message.from_tool_result(
-                        tool_id=call["id"],
-                        content=tool_result_content(step),
-                    ))
+            if steps:
+                messages.extend(_tool_round_messages(record, tools, f"hist_call_{turn_index}_{source_index}"))
                 final_answer = ""
             elif calls:
                 if content:
                     messages.append(Message.from_text(content, role=Role.AI))
+                final_answer = ""
+            elif content and _view(record, "history_handoff"):
+                if final_answer:
+                    messages.append(Message.from_text(final_answer, role=Role.AI))
+                messages.append(Message.from_text(content, role=Role.AI))
                 final_answer = ""
             elif content:
                 final_answer = content
 
         if final_answer:
             messages.append(Message.from_text(final_answer, role=Role.AI))
-        else:
-            question = asked_choice()
-            if question:
-                messages.append(Message.from_text(question, role=Role.AI))
         return messages
 
     def _render_user_input(self, user_input: Any, context: AmphiContext) -> str:
@@ -1634,7 +1824,6 @@ class MainThink(CognitiveWorker):
             USER  "<observation>"                               (a stamped nudge, if any)
         """
         records = ota_context.ota_record
-        round_offset = 0
         compaction = ota_context.state.context_compaction
         think = ota_context.think_status
         turn_compaction = (
@@ -1642,75 +1831,10 @@ class MainThink(CognitiveWorker):
             if compaction is not None
             else None
         )
-        if turn_compaction is not None and turn_compaction.turn_summary:
-            round_offset = turn_compaction.turn_through_round
-            records = records[round_offset:]
-        MAX_ARG_VALUE_CHARS = 1200
-
-        def step_call(step: Any, round_index: int, step_index: int) -> Tuple[Dict[str, Any], Dict[str, int], List[str]]:
-            """Render one historical tool call and report why native replay may be unsafe."""
-            name = _view(step, "tool_name") or ""
-            args = _view(step, "tool_arguments")
-            provided = set(args) if isinstance(args, dict) else set()
-            omitted: Dict[str, int] = {}
-            if isinstance(args, dict):
-                replay_args: Dict[str, Any] = {}
-                for key, value in args.items():
-                    if isinstance(value, str):
-                        rendered = value
-                    else:
-                        try:
-                            rendered = json.dumps(value, ensure_ascii=False, default=str)
-                        except (TypeError, ValueError):
-                            rendered = str(value)
-                    if len(rendered) > MAX_ARG_VALUE_CHARS:
-                        omitted[str(key)] = len(rendered)
-                    else:
-                        replay_args[key] = value
-                args = replay_args
-            spec = next((tool for tool in ota_context.tools if tool.tool_name == name), None)
-            required = set((getattr(spec, "tool_parameters", None) or {}).get("required") or [])
-            missing = sorted(str(key) for key in required - provided)
-            call = {
-                "id": _view(step, "tool_id") or f"call_{round_index}_{step_index}",
-                "name": name,
-                "arguments": args or {},
-            }
-            return call, omitted, missing
-
-        def step_result(step: Any) -> str:
-            """Render one historical tool result."""
-            error = _view(step, "error")
-            if error or _view(step, "success") is False:
-                return f"failed: {error or 'tool failed'}"
-            result = _view(step, "tool_result")
-            if result is None:
-                return "(no output)"
-            if result == "":
-                return "(awaiting the user's answer)"
-            return str(result)
-
-        def step_summary(call: Dict[str, Any], step: Any, omitted: Dict[str, int], missing: List[str]) -> str:
-            """Summarize a call that must not be replayed as a native tool example."""
-            facts: List[str] = []
-            arguments = call.get("arguments") or {}
-            if arguments:
-                retained = ", ".join(
-                    f"`{name}`: {json.dumps(value, ensure_ascii=False, default=str)}"
-                    for name, value in arguments.items()
-                )
-                facts.append(f"retained arguments {retained}")
-            if omitted:
-                details = ", ".join(
-                    f"`{name}` ({count} characters)" for name, count in omitted.items()
-                )
-                facts.append(f"large arguments not replayed: {details}")
-            if missing:
-                facts.append("missing required arguments: " + ", ".join(f"`{name}`" for name in missing))
-            failed = bool(_view(step, "error")) or _view(step, "success") is False
-            facts.append(f"status: {'failed' if failed else 'succeeded'}")
-            facts.append(f"result: {json.dumps(step_result(step), ensure_ascii=False)}")
-            return f"- `{call['name']}` — " + "; ".join(facts)
+        scope = (think.mode, think.stage)
+        covered = _covered_rounds(records, scope, turn_compaction)
+        projected_records = [item for item in _project_rounds(records, scope) if item.number not in covered]
+        records = [item.record for item in projected_records]
 
         def reasoning_extras(record: Any, mode: Optional[str]) -> Dict[str, Any]:
             """This round's captured reasoning as ``Message.extras`` for replay — an
@@ -1750,11 +1874,11 @@ class MainThink(CognitiveWorker):
                 "through_round",
                 turn_compaction.turn_through_round,
             ))
-        for index, record in enumerate(records, start=round_offset):
+        for item in projected_records:
+            index, record = item.number - 1, item.record
             think = _view(_view(record, "think_result"), "step_content") or ""
             steps = _view(_view(record, "action_result"), "results") or []
             if steps:
-                rendered_steps = [step_call(step, index, i) for i, step in enumerate(steps)]
                 extras = reasoning_extras(record, reasoning_mode)
                 reasoning_items = _view(record, "reasoning_items")
                 if reasoning_items:
@@ -1764,36 +1888,10 @@ class MainThink(CognitiveWorker):
                 reasoning_details = _view(record, "reasoning_details")
                 if reasoning_details:
                     extras = {**extras, "reasoning_details": reasoning_details}
-                if any(omitted or missing for _, omitted, missing in rendered_steps):
-                    activity = "\n".join(
-                        step_summary(call, step, omitted, missing)
-                        for (call, omitted, missing), step in zip(rendered_steps, steps)
-                    )
-                    summary = (
-                        "Completed historical tool activity is summarized as text because "
-                        "native replay would contain omitted or invalid arguments:\n"
-                        f"{activity}\nInspect current files or `<transcript>` when the original tool "
-                        "output is needed."
-                    )
-                    messages.append(Message.from_text(
-                        f"{think}\n\n{summary}" if think else summary,
-                        role=Role.AI,
-                        extras=extras,
-                    ))
-                else:
-                    calls = [call for call, _, _ in rendered_steps]
-                    signatures = _view(record, "thought_signatures")
-                    if signatures and len(signatures) == len(calls):
-                        extras = {**extras, "thought_signatures": list(signatures)}
-                    messages.append(Message.from_tool_call(
-                        tool_calls=calls, text=think or None,
-                        extras=extras,
-                    ))
-                    for (call, _, _), step in zip(rendered_steps, steps):
-                        messages.append(Message.from_tool_result(
-                            tool_id=call["id"],
-                            content=step_result(step),
-                        ))
+                signatures = _view(record, "thought_signatures")
+                if signatures:
+                    extras = {**extras, "thought_signatures": list(signatures)}
+                messages.extend(_tool_round_messages(record, ota_context.tools, f"call_{index}", extras))
             elif think:
                 reasoning_items = _view(record, "reasoning_items")
                 extras = {"reasoning_items": list(reasoning_items)} if reasoning_items else {}
@@ -2006,24 +2104,6 @@ class WorkflowRunThink(MainThink):
         | {"report_workflow_step"}
     )
 
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Keep only the active automatic Workflow stage's trace."""
-        boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (scope := self._record_think_scope(ota_context.ota_record[index]))
-                is not None
-                and scope[0] == mode
-                and scope[1] != stage
-            )
-        ), None)
-        if boundary is None:
-            return ota_context, None
-        return ota_context.model_copy(update={
-            "ota_record": list(ota_context.ota_record[boundary + 1:]),
-        }), boundary
-
     async def assemble_messages(
         self,
         ota_context: AmphiOTAContext,
@@ -2040,15 +2120,10 @@ class WorkflowRunThink(MainThink):
             umbrella,
         )
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "run_workflow",
-            self.workflow_stage,
-        )
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
@@ -2321,55 +2396,6 @@ class BuildThink(MainThink):
         })
     )
 
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Project one stable Build-stage trace with its entry and switch context."""
-        def switches_to_target(record: Any) -> bool:
-            steps = _view(_view(record, "action_result"), "results") or []
-            for step in steps:
-                if _view(step, "tool_name") != "switch" or _view(step, "success") is False:
-                    continue
-                arguments = _view(step, "tool_arguments") or {}
-                result = _view(step, "tool_result") or {}
-                if str(_view(result, "stage") or _view(arguments, "stage") or "") == stage:
-                    return True
-            return False
-
-        records = ota_context.ota_record
-        scopes = [self._record_think_scope(record) for record in records]
-        target_scope = (mode, stage)
-        mode_indexes = [
-            index for index, scope in enumerate(scopes)
-            if scope is not None and scope[0] == mode
-        ]
-        # The first Build stage owns the pre-Build entry prefix. Keeping that
-        # prefix on later stage re-entry makes persisted compaction boundaries
-        # refer to the same projected-round coordinates for the whole Turn.
-        selected = set(range(len(records))) if not mode_indexes else set()
-        if mode_indexes and scopes[mode_indexes[0]] == target_scope:
-            selected.update(range(mode_indexes[0]))
-        transitions: List[int] = []
-        for index, (record, scope) in enumerate(zip(records, scopes)):
-            if scope == target_scope:
-                selected.add(index)
-            if switches_to_target(record):
-                selected.add(index)
-                transitions.append(index)
-                continue
-            next_scope = scopes[index + 1] if index + 1 < len(scopes) else target_scope
-            if next_scope == target_scope and scope != target_scope:
-                transitions.append(index)
-                # A later cross-mode entry can carry the request that reopened
-                # Build, so retain its immediate handoff round as well.
-                if scope is None or scope[0] != mode:
-                    selected.add(index)
-        projected = [record for index, record in enumerate(records) if index in selected]
-        turn_context = (
-            ota_context
-            if len(projected) == len(records)
-            else ota_context.model_copy(update={"ota_record": projected})
-        )
-        return turn_context, transitions[-1] if transitions else None
-
     def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
         """Render the Build-stage persona with its exact current ToolSurface."""
         tools = self.select_tools(ota_context, context)
@@ -2598,16 +2624,10 @@ class ClarifyThink(BuildThink):
             umbrella,
         )
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "clarify",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     async def legality_check(
@@ -2840,16 +2860,10 @@ class ExploreThink(BuildThink):
             umbrella,
         )
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "explore",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     async def legality_check(
@@ -2941,16 +2955,10 @@ class GenerateThink(BuildThink):
             umbrella,
         )
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "generate",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     async def legality_check(
@@ -3035,16 +3043,10 @@ class VerifyThink(BuildThink):
             umbrella,
         )
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "verify",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     async def legality_check(
