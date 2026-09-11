@@ -138,7 +138,7 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
     setReveal({ sessionId, turnId: round.turnId, targetId: debugRoundElementId(round.id), nonce: ++interactionNonce.current })
   }, [sessionId, records, store])
   const revealFailed = useCallback(() => {
-    if (sessionId) setNotice({ sessionId, text: text('暂时无法定位到这条消息，请刷新后重试。', 'Unable to locate this message. Refresh and try again.') })
+    if (sessionId) setNotice({ sessionId, text: text('暂时无法定位到这条消息，请稍后重试。', 'Unable to locate this message. Try again shortly.') })
   }, [sessionId, text])
 
   return <Context.Provider value={{

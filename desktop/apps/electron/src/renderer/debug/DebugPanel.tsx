@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Crosshair, ExternalLink, RefreshCw, Repeat2, Wrench, X } from 'lucide-react'
+import { ArrowLeft, Crosshair, ExternalLink, Repeat2, Wrench, X } from 'lucide-react'
 import type { SessionWorkbenchExtensionProps } from '@/components/app/DesktopAppExtensions'
 import { WorkbenchToolHeader, WorkbenchToolScrollArea, WorkbenchToolSurface, WorkbenchSearchField } from '@/components/app/WorkbenchToolPrimitives'
 import { useDebugSession, useDebugText, type DebugPanelKind } from './DebugSessionProvider'
@@ -119,7 +119,7 @@ function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & 
   return <WorkbenchToolSurface testId={`desktop-debug-${kind}`}>
     <WorkbenchToolHeader title={tools ? text('工具调用', 'Tool calls') : text('Agent 循环', 'Agent rounds')}
       icon={tools ? <Wrench size={16} /> : <Repeat2 size={16} />}
-      actions={<><button type="button" aria-label={text('刷新记录', 'Refresh records')} onClick={debug.refresh}><RefreshCw size={15} className={debug.loading ? 'animate-spin' : ''} /></button><button type="button" aria-label={text('关闭面板', 'Close panel')} onClick={onClose}><X size={16} /></button></>} />
+      actions={<button type="button" aria-label={text('关闭面板', 'Close panel')} onClick={onClose}><X size={16} /></button>} />
     <WorkbenchToolScrollArea className="debug-panel">
       {debug.error ? <p role="alert" className="debug-notice">{text('读取失败', 'Read failed')} · {debug.error}</p> : null}
       {selectedCall || selectedRound ? <>

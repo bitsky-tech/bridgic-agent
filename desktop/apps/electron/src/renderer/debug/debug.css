@@ -11,15 +11,16 @@
 .debug-stage-heading { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; font-size: 12px; color: var(--text-secondary); }
 .debug-stage-heading svg { color: var(--text-accent-purple); }
 .debug-stage-heading code { color: var(--text-tertiary); font-size: 11px; }
-.debug-stage-rounds { display: grid; gap: 8px; padding-left: 12px; border-left: 1px solid var(--border-subtle); }
-.debug-round-card { min-width: 0; scroll-margin-block: 16px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--bg-surface); }
+.debug-stage-rounds { display: grid; gap: 8px; padding-left: 12px; border-left: 1px solid var(--border-default); }
+.debug-round-card { min-width: 0; scroll-margin-block: 16px; border: 1px solid color-mix(in srgb, var(--border-strong) 65%, var(--border-default)); border-radius: 9px; background: var(--bg-surface); box-shadow: var(--shadow-sm); }
 .debug-round-card:focus { outline: 1px solid var(--text-accent-purple); outline-offset: 1px; }
-.debug-round-card > summary { list-style: none; display: flex; align-items: center; gap: 7px; padding: 8px 10px; color: var(--text-tertiary); font-size: 11px; cursor: pointer; }
+.debug-round-card > summary { list-style: none; display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-radius: 8px; background: var(--bg-hover); color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+.debug-round-card[open] > summary { border-radius: 8px 8px 0 0; border-bottom: 1px solid var(--border-default); }
 .debug-round-card > summary::-webkit-details-marker { display: none; }
 .debug-round-card:not([open]) > summary > svg { transform: rotate(-90deg); }
 .debug-round-card > summary button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .debug-round-card > summary button:hover, .debug-detail-actions button:hover { color: var(--text-accent-purple); }
-.debug-round-body { padding: 0 10px 6px; }
+.debug-round-body { padding: 8px 10px 6px; }
 .debug-response { min-width: 0; overflow-wrap: anywhere; }
 .debug-response > div { font-size: 13px; }
 .debug-thinking { margin-bottom: 8px; }

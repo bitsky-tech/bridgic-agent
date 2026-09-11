@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useAtomValue } from 'jotai'
-import { ChevronDown, ExternalLink, FlaskConical, Layers3, RefreshCw } from 'lucide-react'
+import { ChevronDown, ExternalLink, FlaskConical, Layers3 } from 'lucide-react'
 import { Pipeline, type Message } from '@/components/amphi/Pipeline'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
 import { MessageContent } from '@/components/amphi/MessageContent'
@@ -81,7 +81,6 @@ export function DebugConversation({ sessionId }: ConversationHistoryProps) {
         <button type="button" aria-pressed={executionView} onClick={() => setExecutionView(true)}>{text('执行视图', 'Execution')}</button>
         <button type="button" aria-pressed={!executionView} onClick={() => setExecutionView(false)}>{text('对话视图', 'Conversation')}</button>
       </div>
-      <button type="button" onClick={debug.refresh} aria-label={text('刷新执行记录', 'Refresh trace')}><RefreshCw size={13} className={debug.loading ? 'animate-spin' : ''} /></button>
     </header>
     {debug.error || debug.notice ? <div role="status" className="debug-notice">{debug.notice ?? text('执行记录读取失败，聊天仍可正常使用。', 'Trace unavailable. Chat remains available.')} {debug.error}</div> : null}
     {debug.hasMore ? <button className="debug-load-earlier" type="button" disabled={debug.loading} onClick={debug.loadMore}>{text('加载更早的执行记录', 'Load earlier execution records')}</button> : null}
