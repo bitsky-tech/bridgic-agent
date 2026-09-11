@@ -4,6 +4,7 @@ import zipfile
 from datetime import datetime
 
 import httpx
+import pytest
 
 
 def _workflow_archive(name: str) -> bytes:
@@ -145,6 +146,72 @@ async def test_import(service_client: httpx.AsyncClient) -> None:
             "description": "Build a deterministic report",
             "domain": "reporting",
         }
+
+
+@pytest.mark.parametrize("format_version", [1, 2])
+async def test_legacy_archive_round_trip(service_client: httpx.AsyncClient, format_version: int) -> None:
+    """Import and export old packages without deleting or promoting validation source."""
+    with zipfile.ZipFile(io.BytesIO(_workflow_archive("Legacy report"))) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    manifest = json.loads(files["manifest.json"])
+    manifest["format_version"] = format_version
+    files["manifest.json"] = json.dumps(manifest).encode()
+    files["workflow/VALIDATE.md"] = b"# Old document\nRun scripts/missing_legacy_check.py\n\xff"
+    files["workflow/scripts/validate_htmls.py"] = b"def obsolete(:\n"
+    files["workflow/assets/data.bin"] = b"\x00\xff\x80\xfe"
+    files["workflow/node_modules/unused.txt"] = b"Optional extra content."
+    files["workflow/WORKFLOW.md"] = files["workflow/WORKFLOW.md"].replace(
+        b"name: report-workflow", b"name: Report Workflow\nextra_field: preserved",
+    ).replace(b"# Produce the report", b"# Section 1")
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+        archive.writestr("extra-notes.txt", "Optional archive notes.")
+
+    response = await service_client.put(
+        "/workflows", files={"file": ("legacy.amphi-workflow", output.getvalue())},
+    )
+    assert response.status_code == 201, response.text
+    workflow_id = response.json()["id"]
+    exported = await service_client.get(f"/workflows/{workflow_id}", params={"archive": True})
+    assert exported.status_code == 200, exported.text
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+        assert set(archive.namelist()) == set(files)
+        for name, content in files.items():
+            if name != "manifest.json":
+                assert archive.read(name) == content
+        assert json.loads(archive.read("manifest.json"))["format_version"] == 2
+
+
+@pytest.mark.parametrize("missing", ["task.md", "explore.md", "verify.md", "workflow/WORKFLOW.md"])
+async def test_import_requires_package_documents(service_client: httpx.AsyncClient, missing: str) -> None:
+    """Extra files are allowed, but they cannot replace required package documents."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(_workflow_archive("Incomplete"))) as original:
+        with zipfile.ZipFile(output, "w") as archive:
+            for name in original.namelist():
+                if name != missing:
+                    archive.writestr(name, original.read(name))
+            archive.writestr("workflow/extra.md", "Extra material.")
+    response = await service_client.put(
+        "/workflows", files={"file": ("incomplete.amphi-workflow", output.getvalue())},
+    )
+    assert response.status_code == 400
+    assert (await service_client.get("/workflows")).json() == []
+
+
+@pytest.mark.parametrize("unsafe", ["../outside.txt", "extra/../../outside.txt", "/absolute/extra.txt"])
+async def test_import_rejects_unsafe_extra_paths(service_client: httpx.AsyncClient, unsafe: str) -> None:
+    """Ignoring extra files must not bypass the archive's traversal protection."""
+    output = io.BytesIO(_workflow_archive("Unsafe extras"))
+    with zipfile.ZipFile(output, "a") as archive:
+        archive.writestr(unsafe, "Unsafe archive path.")
+    response = await service_client.put(
+        "/workflows", files={"file": ("unsafe.amphi-workflow", output.getvalue())},
+    )
+    assert response.status_code == 400
+    assert (await service_client.get("/workflows")).json() == []
 
 
 async def test_rename_delete(service_client: httpx.AsyncClient) -> None:

@@ -17,7 +17,7 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     {
       "clarify": {
         "missing_task": "blocked",
-        "malformed_diagram": "blocked",
+        "malformed_optional_diagram": "allowed",
         "reviewed_task": "confirmable"
       },
       "explore": {"missing_plan": "blocked", "written_plan": "generate_allowed"},
@@ -26,10 +26,10 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     }
 
     Checks:
-    1. Clarify requires a structurally valid task before confirmation.
+    1. Clarify requires a readable task before confirmation without policing optional diagrams.
     2. Explore hands off only after a valid implementation plan exists.
     3. Generate hands off only after the Workflow package is executable and validatable.
-    4. Verify requests final confirmation only after a valid report ends in PASS.
+    4. Verify requires an explicit PASS verdict and allows additional notes afterward.
     """
     workspace = make_workspace(test_sandbox, "build-gates")
     build = await workspace.prepare_build_space("create", stage="clarify")
@@ -61,9 +61,7 @@ Input -->
 ```
 """,
     )
-    assert "connector without nodes" in (
-        await clarify.legality_check(confirm_task, None, context) or ""
-    )
+    assert await clarify.legality_check(confirm_task, None, context) is None
     write(
         "task.md",
         """# Report workflow
@@ -100,6 +98,9 @@ A report containing the requested summary.
 
 ## Steps
 Read the input, create the report, and validate its contents.
+
+# Extra notes
+Additional headings and content are allowed.
 """,
     )
     assert await explore.legality_check(generate, None, context) is None
@@ -111,6 +112,10 @@ Read the input, create the report, and validate its contents.
         await generate_worker.legality_check(verify, None, context) or ""
     )
     write_workflow_source(build.root)
+    source = build.root / "workflow"
+    (source / "scripts").mkdir()
+    (source / "scripts" / "unused.py").write_text("def obsolete(:\n", encoding="utf-8")
+    (source / "VALIDATE.md").write_bytes(b"Unused scripts/missing.py\n\xff")
     assert await generate_worker.legality_check(verify, None, context) is None
 
     # Check 4: Verify requests final confirmation only after a valid report ends in PASS.
@@ -129,7 +134,7 @@ The isolated checks completed, but one Workflow check failed.
 FAIL
 """,
     )
-    assert "followed by `PASS`" in (
+    assert "explicit overall `PASS`" in (
         await verify_worker.legality_check(confirm_workflow, None, context) or ""
     )
     write(
@@ -140,6 +145,13 @@ The isolated checks completed successfully.
 
 ## Overall verdict
 PASS
+
+# Additional details
+These notes must not invalidate a successful verdict.
+
+```text
+FAIL
+```
 """,
     )
     assert await verify_worker.legality_check(confirm_workflow, None, context) is None

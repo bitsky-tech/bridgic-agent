@@ -1172,6 +1172,46 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             if isinstance(ota_context.think_status, BuildStageState) and not confirming_workflow:
                 await self._sync_build_space(ota_context, context)
             elif isinstance(ota_context.think_status, WorkflowStageState):
+                if think.get("stage") == "validate":
+                    # Consume the parked Turn before settlement can publish a result
+                    # or fail. Persistence must replace it with its original trace.
+                    approval_answers = self._permission_answers(ota_context.user_input)
+                    if latest_turn.status is TurnStatus.AWAITING_SUBAGENTS:
+                        self._resume_subagents(ota_context, context, subagent_state, rounds, original_user_input)
+                    elif latest_turn.status is TurnStatus.AWAITING_HUMAN:
+                        self._resume_human_choice(ota_context, context, interaction, rounds, original_user_input)
+                    else:
+                        ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
+                        context.session = context.session.without_last()
+                        ota_context.user_input = original_user_input
+
+                    note = "Skipped the retired Workflow validation phase; its pending tools must not be replayed."
+                    if not ota_context.ota_record:
+                        ota_context.ota_record.append(OTARecord())
+                    held = ota_context.ota_record[-1]
+                    if latest_turn.status is TurnStatus.AWAITING_PERMISSION:
+                        permission = interaction.get("permission") or {}
+                        results = ActionResult.model_validate(held.action_result or {"results": []})
+                        recorded_ids = {step.tool_id for step in results.results}
+                        for raw_call in permission.get("calls") or []:
+                            call = StepToolCall.model_validate(raw_call)
+                            if call.call_id not in recorded_ids:
+                                results.results.append(ActionStepResult(
+                                    tool_id=call.call_id,
+                                    tool_name=call.tool,
+                                    tool_arguments=self._tool_args(call),
+                                    tool_result=note,
+                                    success=False,
+                                    error=note,
+                                ))
+                        held.action_result = results.model_dump(mode="json")
+                        for _, instruction in approval_answers.values():
+                            if instruction:
+                                note += f"\nUser approval note: {instruction}"
+                    held.observation_result = f"{held.observation_result}\n{note}" if held.observation_result else note
+                    ota_context.transition_interaction(None)
+                    ota_context.transition_subagents(None)
+
                 projected = await self._hydrate_run_workflow(
                     ota_context.think_status,
                     context,
@@ -1181,6 +1221,11 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 else:
                     ota_context.transition_think(projected)
                     await self._settle_workflow_boundary(ota_context, context)
+
+                if think.get("stage") == "validate":
+                    # The retired phase has settled (or its Run is already gone).
+                    # Do not replay pending validation tools or approvals.
+                    return
 
         # Resume the parked state selected by the durable Turn status
         if latest_turn.status is TurnStatus.AWAITING_SUBAGENTS:
@@ -1240,6 +1285,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         if think.get("mode") == "build":
             ota_context.transition_think(BuildStageState.model_validate(think))
         elif think.get("mode") == "run_workflow":
+            if think.get("stage") == "validate":
+                # Only restore identity here; hydration below replaces the cursor
+                # with the completion boundary projected from the pinned source.
+                think = {**think, "stage": "execute"}
             ota_context.transition_think(WorkflowStageState.model_validate(think))
 
     async def _enter_or_resume_build(self, ota_context: AmphiOTAContext, context: AmphiContext, workflow_id: Optional[str] = None) -> Optional[BuildStageState]:
