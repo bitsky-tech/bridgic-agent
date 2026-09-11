@@ -29,10 +29,13 @@ async def test_seeded(initialized_store: None) -> None:
     user = await repository.load(USER_ID)
     assert user is not None
     assert user.id == USER_ID
+    async with repository._engine.connect() as connection:
+        columns = (await connection.exec_driver_sql("PRAGMA table_info(users)")).all()
+    assert "default_max_rounds" not in {column[1] for column in columns}
 
     # Check 2: The local User starts with safe model, execution, and credential defaults.
     assert user.current_model == ""
-    assert user.default_max_rounds == 50
+    assert "default_max_rounds" not in user.model_dump()
     assert user.default_temperature == 0.0
     assert user.execution_mode == "auto"
     assert user.protocol == "openai"

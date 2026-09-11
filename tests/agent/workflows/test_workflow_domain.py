@@ -36,13 +36,13 @@ def test_package(test_sandbox: IsolatedPaths) -> None:
     {
       "valid": {"execution_steps": 2},
       "missing_script": "rejected before use",
-      "local_environment": "rejected before use"
+      "extra_files": "allowed"
     }
 
     Checks:
     1. A complete package needs only WORKFLOW.md and exposes ordered execution sections.
     2. Package validation rejects a referenced script that is absent from the source tree.
-    3. Package validation rejects a bundled dependency environment from the source tree.
+    3. Package validation allows unused files and directories in the source tree.
     """
     root = test_sandbox.root / "package-contract"
     _write_package(root, "Initial")
@@ -69,7 +69,7 @@ def test_package(test_sandbox: IsolatedPaths) -> None:
     assert "scripts/generate.py" in reason
     assert "does not exist" in reason
 
-    # Check 3: A Workflow cannot capture a machine-local dependency environment.
+    # Check 3: Extra directories do not affect the executable source contract.
     package.entry_path.write_text(
         package.entry_path.read_text(encoding="utf-8").replace(
             "\nRun `scripts/generate.py` for the final output.\n",
@@ -78,9 +78,91 @@ def test_package(test_sandbox: IsolatedPaths) -> None:
         encoding="utf-8",
     )
     (package.source_root / ".venv").mkdir()
-    reason = package.validation_reason()
-    assert reason is not None
-    assert "local dependency environment" in reason
+    assert package.validation_reason() is None
+
+
+def test_optional_artifacts_are_ignored(test_sandbox: IsolatedPaths) -> None:
+    """Unused documents and scripts never impose requirements on executable source."""
+    root = test_sandbox.root / "legacy-package"
+    _write_package(root, "Legacy")
+    package = WorkflowPackage(root)
+    package.scripts_dir.mkdir()
+    validator = package.scripts_dir / "validate_htmls.py"
+    validator.write_text("def broken(:\n", encoding="utf-8")
+    validation = package.source_root / "VALIDATE.md"
+    validation.write_bytes(b"# Old document\nRun scripts/missing.py\n\xff")
+    (package.source_root / "node_modules").mkdir()
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert package.validation_reason() is None
+    assert [step.title for step in package.execution_steps] == ["Collect inputs", "Publish report"]
+    assert {path: path.read_bytes() for path in before} == before
+    validator.unlink()
+    assert package.validation_reason() is None
+    validation.unlink()
+    validator.write_text("def broken(:\n", encoding="utf-8")
+    assert package.validation_reason() is None
+
+    # Filesystem boundaries apply to optional content as well as executable files.
+    outside = root / "outside.py"
+    outside.write_text("print('outside')\n", encoding="utf-8")
+    validator.unlink()
+    validator.symlink_to(outside)
+    assert "symbolic link" in package.validation_reason()
+
+
+def test_metadata_and_heading_extensions(test_sandbox: IsolatedPaths) -> None:
+    """Extra metadata, multiline descriptions, and generic titles remain executable."""
+    root = test_sandbox.root / "extended-package"
+    _write_package(root, "Extended")
+    package = WorkflowPackage(root)
+    package.entry_path.write_text(
+        "---\nname: 报表 Workflow v1\ndescription: |\n  First line.\n  Second line.\n"
+        "version: 1\ncustom: {owner: example}\n---\n"
+        "Extra introduction mentions scripts/unused.py.\n\n# Section 1\n\nProduce the report.\n",
+        encoding="utf-8",
+    )
+    assert package.validation_reason() is None
+    assert [step.title for step in package.execution_steps] == ["Section 1"]
+
+
+@pytest.mark.parametrize("reference", [
+    "scripts/generate.py", "./scripts/generate.py", "workflow/scripts/generate.py",
+    ".build/workflow/scripts/generate.py", r"scripts\generate.py",
+])
+def test_required_script_references(test_sandbox: IsolatedPaths, reference: str) -> None:
+    """Accept equivalent package paths while requiring usable execution scripts."""
+    root = test_sandbox.root / "script-package"
+    _write_package(root, "Scripts")
+    package = WorkflowPackage(root)
+    package.entry_path.write_text(
+        package.entry_path.read_text(encoding="utf-8") + f"\nRun `python {reference}`.\n",
+        encoding="utf-8",
+    )
+    assert "does not exist" in package.validation_reason()
+    package.scripts_dir.mkdir()
+    script = package.scripts_dir / "generate.py"
+    script.write_text("def broken(:\n", encoding="utf-8")
+    assert "syntax error" in package.validation_reason()
+    script.write_text("print('generated')\n", encoding="utf-8")
+    assert package.validation_reason() is None
+
+
+@pytest.mark.parametrize("body, reason", [
+    ("", "empty"),
+    ("# Run\nInstruction.\n", "frontmatter"),
+    ("---\ndescription: Run\n---\n# Run\nInstruction.\n", "name"),
+    ("---\nname: report\n---\n# Run\nInstruction.\n", "description"),
+    ("---\nname: report\ndescription: Run\n---\nInstruction.\n", "no level-one"),
+    ("---\nname: report\ndescription: Run\n---\n# Run\n", "no instructions"),
+    ("---\nname: report\ndescription: Run\n---\n# Run\nRun scripts/../../outside.py\n", "escapes"),
+])
+def test_required_source_content(test_sandbox: IsolatedPaths, body: str, reason: str) -> None:
+    """Relaxed validation still rejects missing execution content and escaping paths."""
+    root = test_sandbox.root / "incomplete-package"
+    _write_package(root, "Incomplete")
+    package = WorkflowPackage(root)
+    package.entry_path.write_text(body, encoding="utf-8")
+    assert reason in package.validation_reason()
 
 
 async def test_materialization(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch, workflow_store: None) -> None:

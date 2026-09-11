@@ -11,7 +11,7 @@ from typing import AsyncIterator, ClassVar, Dict, Iterator, Optional, Tuple
 
 import yaml
 from markdown_it import MarkdownIt
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 from yaml.tokens import AliasToken, AnchorToken
@@ -30,20 +30,10 @@ WORKFLOWS_ROOT_ENV_VAR = "BRIDGIC_AGENT_WORKFLOWS_ROOT"
 class _WorkflowMetadata(BaseModel):
     """Validated ``WORKFLOW.md`` frontmatter used by the Build pipeline."""
 
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    name: str = Field(
-        min_length=1,
-        max_length=100,
-        pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-    )
-    description: str = Field(min_length=1, max_length=500)
-
-    @model_validator(mode="after")
-    def validate_description(self) -> "_WorkflowMetadata":
-        if "\n" in self.description or "\r" in self.description:
-            raise ValueError("`description` must fit on one line")
-        return self
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
 
 
 @dataclass(frozen=True)
@@ -89,9 +79,6 @@ class WorkflowPackage:
     SCRIPT_PATH_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"(?<![\w.-])((?:(?:[A-Za-z]:)?[/\\])?"
         r"(?:[\w.-]+[/\\])*scripts[/\\][\w./\\-]+\.py)\b"
-    )
-    GENERIC_HEADING_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"Section\s+\d+", flags=re.IGNORECASE,
     )
     MAX_FRONTMATTER_BYTES: ClassVar[int] = 64 * 1024
     _MARKDOWN: ClassVar[MarkdownIt] = MarkdownIt("commonmark")
@@ -290,11 +277,6 @@ class WorkflowPackage:
         for index, (_, instruction_start, title) in enumerate(headings, start=1):
             if not title:
                 raise ValueError(f"contains an empty level-one {kind.replace(' ', '-')} heading")
-            if cls.GENERIC_HEADING_RE.fullmatch(title):
-                raise ValueError(
-                    f"heading `# {title}` is generic; describe what that {kind} "
-                    "does in the Build language"
-                )
             instruction_end = headings[index][0] if index < len(headings) else len(lines)
             instruction = "\n".join(lines[instruction_start:instruction_end]).strip()
             if not instruction:
@@ -322,12 +304,6 @@ class WorkflowPackage:
                 root_path = Path(root)
                 for name in sorted(dirs):
                     path = root_path / name
-                    if name in {".venv", "node_modules"}:
-                        rel = path.relative_to(self.source_root).as_posix()
-                        return (
-                            f"workflow/{rel} is a local dependency environment; "
-                            "Workflow source must use the app-level shared runtime bases."
-                        )
                     if path.is_symlink():
                         rel = path.relative_to(self.source_root).as_posix()
                         return f"workflow/{rel} is a symbolic link; workflow artifacts cannot contain links."
@@ -342,40 +318,6 @@ class WorkflowPackage:
                         return f"workflow/{rel} is a symbolic link; workflow artifacts cannot contain links."
                     if not stat.S_ISREG(mode):
                         return f"workflow/{rel} is not a regular file."
-            return None
-
-        def script_reference_rejection(reference: str, scripts_dir: Path, document_name: str) -> Optional[str]:
-            if "\\" in reference or reference.startswith("/"):
-                return f"`{reference}` is an invalid script path; use a relative `scripts/...py` path."
-            if reference.startswith(".build/workflow/scripts/"):
-                replacement = reference.removeprefix(".build/workflow/")
-                return (
-                    f"`{reference}` references the temporary Build workspace. Paths inside "
-                    f"{document_name} are relative to `workflow/`; replace it with `{replacement}`. "
-                    "Do not move or copy the on-disk script."
-                )
-            if reference.startswith("workflow/scripts/"):
-                replacement = reference.removeprefix("workflow/")
-                return (
-                    f"`{reference}` includes the workflow directory itself. Paths inside "
-                    f"{document_name} are relative to `workflow/`; replace it with `{replacement}`. "
-                    "Do not move or copy the on-disk script."
-                )
-            parts = reference.split("/")
-            if (
-                len(parts) < 2
-                or parts[0] != "scripts"
-                or any(part in {"", ".", ".."} for part in parts)
-            ):
-                return (
-                    f"`{reference}` is an invalid script path; it must stay under "
-                    "`workflow/scripts/` and cannot contain `.` or `..`."
-                )
-            candidate = scripts_dir.parent.joinpath(*parts)
-            try:
-                candidate.resolve(strict=False).relative_to(scripts_dir.resolve(strict=False))
-            except ValueError:
-                return f"`{reference}` escapes `workflow/scripts/`."
             return None
 
         def read_required_document(name: str) -> Tuple[Optional[str], Optional[str]]:
@@ -405,72 +347,48 @@ class WorkflowPackage:
 
         workflow_body = "\n".join(content.splitlines()[closing + 1 :])
         try:
-            self._parse_steps(workflow_body, "execution step")
+            steps = self._parse_steps(workflow_body, "execution step")
         except ValueError as exc:
             return f"workflow/{self.ENTRY_NAME} {exc}."
 
-        documents = [(self.ENTRY_NAME, workflow_body, closing + 2)]
-        references: set[str] = set()
-        reference_sources: dict[str, str] = {}
-        scripts_dir = self.scripts_dir
-        if scripts_dir.exists() and not scripts_dir.is_dir():
-            return "workflow/scripts must be a directory when present."
-
-        on_disk = set()
-        if scripts_dir.is_dir():
-            for root, _, files in os.walk(scripts_dir, followlinks=False):
-                root_path = Path(root)
-                for filename in files:
-                    path = root_path / filename
-                    if path.suffix == ".py":
-                        on_disk.add(f"scripts/{path.relative_to(scripts_dir).as_posix()}")
-
-        for document_name, body, body_start_line in documents:
-            invalid_references = []
-            for match in self.SCRIPT_PATH_RE.finditer(body):
-                reference = match.group(1)
-                references.add(reference)
-                reference_sources.setdefault(reference, document_name)
-                path_reason = script_reference_rejection(reference, scripts_dir, document_name)
-                if path_reason:
-                    line_number = body_start_line + body.count("\n", 0, match.start())
-                    invalid_references.append(
-                        f"- workflow/{document_name} line {line_number}: {path_reason}"
-                    )
-            if invalid_references:
-                count = len(invalid_references)
-                noun = "reference" if count == 1 else "references"
-                return (
-                    f"workflow/{document_name} contains {count} invalid script {noun}:\n"
-                    + "\n".join(invalid_references)
-                )
-
+        # Only executable instructions declare required scripts. Extra package
+        # files and unused documents do not add validation requirements.
+        references = {
+            match.group(1)
+            for step in steps
+            for match in self.SCRIPT_PATH_RE.finditer(step.instruction)
+        }
         for reference in sorted(references):
-            script_path = self.source_root.joinpath(*reference.split("/"))
+            relative = reference.replace("\\", "/")
+            if relative.startswith("/") or re.match(r"^[A-Za-z]:", relative):
+                return f"`{reference}` is an absolute script path; references must stay inside workflow/."
+            while relative.startswith("./"):
+                relative = relative[2:]
+            for prefix in (".build/workflow/", "workflow/"):
+                if relative.startswith(prefix):
+                    relative = relative.removeprefix(prefix)
+                    break
+            script_path = self.source_root.joinpath(*relative.split("/"))
+            try:
+                script_path.resolve().relative_to(self.source_root.resolve())
+            except ValueError:
+                return f"`{reference}` escapes workflow/."
             if not script_path.is_file():
-                document_name = reference_sources[reference]
                 return (
-                    f"workflow/{document_name} references `{reference}`, but that file does "
-                    "not exist under workflow/scripts/."
+                    f"workflow/{self.ENTRY_NAME} references `{reference}`, but that file does "
+                    "not exist in the workflow package."
                 )
             try:
                 source = script_path.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as exc:
-                return f"workflow/{reference} cannot be read as UTF-8: {exc}."
+                return f"`{reference}` cannot be read as UTF-8: {exc}."
             try:
                 compile(source, reference, "exec")
             except SyntaxError as exc:
                 return (
-                    f"workflow/{reference} has a syntax error "
+                    f"`{reference}` has a syntax error "
                     f"(line {exc.lineno}: {exc.msg})."
                 )
-
-        orphaned = sorted(on_disk - references)
-        if orphaned:
-            return (
-                f"workflow/{orphaned[0]} exists but is not referenced by any "
-                "step in WORKFLOW.md."
-            )
         return None
 
 
