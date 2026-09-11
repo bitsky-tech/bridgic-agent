@@ -133,29 +133,37 @@ async def test_presentation_pipeline_switches_and_resumes() -> None:
     assert context.session.get_all() == [previous_turn]
 
 
-def test_presentation_continue_prompt_matches_the_current_cursor() -> None:
+async def test_presentation_continue_prompt_matches_the_current_cursor() -> None:
     """Continuation guidance never asks Brief to call its unavailable report tool."""
+    agent = AmphiAgent()
+    context = AmphiContext()
     brief = AmphiOTAContext(ota_record=[OTARecord()])
     brief.transition_think(PresentationStageState(stage="ppt_brief"))
-    AmphiAgent._stamp_presentation_continue(brief)
+    brief_outcome = await agent._current_think_worker(brief, context).handle_think_unit_result(
+        brief, context, brief.think_status, "", agent,
+    )
 
-    brief_note = brief.ota_record[-1].observation_result or ""
+    brief_note = brief_outcome.continuation
     assert ".presentation/brief.md" in brief_note
     assert 'switch(stage="ppt_plan"' in brief_note
     assert "Do not call report_presentation_step" in brief_note
 
     plan = AmphiOTAContext(ota_record=[OTARecord()])
     plan.transition_think(PresentationStageState(stage="ppt_plan"))
-    AmphiAgent._stamp_presentation_continue(plan)
-    assert "collect_evidence" in (plan.ota_record[-1].observation_result or "")
+    plan_outcome = await agent._current_think_worker(plan, context).handle_think_unit_result(
+        plan, context, plan.think_status, "", agent,
+    )
+    assert "collect_evidence" in plan_outcome.continuation
 
     ready = AmphiOTAContext(ota_record=[OTARecord()])
     ready.transition_think(PresentationStageState(
         stage="ppt_plan",
         step_index=len(PRESENTATION_STAGE_STEPS["ppt_plan"]),
     ))
-    AmphiAgent._stamp_presentation_continue(ready)
-    ready_note = ready.ota_record[-1].observation_result or ""
+    ready_outcome = await agent._current_think_worker(ready, context).handle_think_unit_result(
+        ready, context, ready.think_status, "", agent,
+    )
+    ready_note = ready_outcome.continuation
     assert 'switch(stage="ppt_compose"' in ready_note
     assert "do not repeat a completed step" in ready_note
 

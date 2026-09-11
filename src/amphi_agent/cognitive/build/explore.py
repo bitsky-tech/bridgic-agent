@@ -25,6 +25,50 @@ class ExploreThink(BuildThink):
     persona: str = EXPLORE_PERSONA
 
     ############################################################################
+    # The agent design
+    ############################################################################
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            if getattr(call, "tool", None) != "switch":
+                return None
+
+            target_stage = next(
+                (
+                    _view(argument, "value")
+                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
+                    if _view(argument, "name") == "stage"
+                ),
+                None,
+            )
+            if target_stage != "generate":
+                return None
+            package = self.build_package(context)
+            body = package.read_document("explore.md") if package is not None else None
+            if body:
+                reason = self.human_document_reason("explore.md", body)
+                return f"switch rejected: {reason}" if reason else None
+            return (
+                "switch rejected: write explore.md before handing off to "
+                "generate; it is the operation sequence generate builds from. Create "
+                "explore.md now as a complete, non-empty file, then call switch "
+                "again."
+            )
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
+    ############################################################################
     # Dynamic prompt assembly
     ############################################################################
     async def assemble_messages(
@@ -69,50 +113,6 @@ class ExploreThink(BuildThink):
         messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
-
-    ############################################################################
-    # Legality check
-    ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            if getattr(call, "tool", None) != "switch":
-                return None
-
-            target_stage = next(
-                (
-                    _view(argument, "value")
-                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
-                    if _view(argument, "name") == "stage"
-                ),
-                None,
-            )
-            if target_stage != "generate":
-                return None
-            package = self.build_package(context)
-            body = package.read_document("explore.md") if package is not None else None
-            if body:
-                reason = self.human_document_reason("explore.md", body)
-                return f"switch rejected: {reason}" if reason else None
-            return (
-                "switch rejected: write explore.md before handing off to "
-                "generate; it is the operation sequence generate builds from. Create "
-                "explore.md now as a complete, non-empty file, then call switch "
-                "again."
-            )
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
 
     ############################################################################
     # Tools and Skills selection

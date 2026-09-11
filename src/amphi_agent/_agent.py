@@ -27,8 +27,6 @@ from bridgic.core.automa.args import ArgsMappingRule, InOrder
 from bridgic.core.model.types import Message, Role, ToolCall
 
 from .cognitive import (
-    PRESENTATION_STAGE_ORDER,
-    PRESENTATION_STAGE_STEPS,
     get_cognitive_stages,
     BaseThink,
     WorkflowRunThink,
@@ -206,55 +204,29 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 answer = ota_context.subagent_status
                 break
 
-            # 3. Think-stage control flow (only reached when NOT parked).
-            next_status = ota_context.think_status
-            if isinstance(next_status, NormalStageState):
-                if next_status != current_status:
-                    current_status = next_status
-                    current_stage = self._current_think_unit_name(ota_context, context)
-                    self._publish_stage(ota_context, next_status)
-                    budget = max(budget, 1)
-                    continue
-                if not answer:
-                    if empty_answer_recovery_attempts >= MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS:
-                        raise AgentEmptyAnswerError(empty_answer_recovery_attempts)
-                    empty_answer_recovery_attempts += 1
-                    self._stamp_continue(ota_context)
-                    budget = max(budget, 1)
-                    continue
+            # 3. Let the resulting state's worker decide how execution continues.
+            previous_status = current_status
+            current_status = ota_context.think_status
+            if current_status != previous_status:
+                current_stage = self._current_think_unit_name(ota_context, context)
+                self._publish_stage(ota_context, current_status)
+            worker = self._current_think_worker(ota_context, context)
+            outcome = await worker.handle_think_unit_result(
+                ota_context, context, previous_status, answer, self,
+            )
+            if outcome.retry_empty_answer:
+                if empty_answer_recovery_attempts >= MAX_EMPTY_ANSWER_RECOVERY_ATTEMPTS:
+                    raise AgentEmptyAnswerError(empty_answer_recovery_attempts)
+                empty_answer_recovery_attempts += 1
+            budget = max(budget, outcome.minimum_budget)
+            if outcome.continuation and ota_context.ota_record:
+                record = ota_context.ota_record[-1]
+                existing = getattr(record, "observation_result", None)
+                record.observation_result = (
+                    f"{existing}\n{outcome.continuation}" if existing else outcome.continuation
+                )
+            if outcome.finished:
                 break
-            elif isinstance(next_status, BuildStageState):
-                if next_status != current_status:
-                    current_status = next_status
-                    current_stage = self._current_think_unit_name(ota_context, context)
-                    self._publish_stage(ota_context, next_status)
-                else:
-                    self._stamp_build_continue(ota_context)
-                continue
-            elif isinstance(next_status, PresentationStageState):
-                if next_status != current_status:
-                    current_status = next_status
-                    current_stage = self._current_think_unit_name(ota_context, context)
-                    self._publish_stage(ota_context, next_status)
-                else:
-                    self._stamp_presentation_continue(ota_context)
-                continue
-            elif isinstance(next_status, WorkflowStageState):
-                if next_status != current_status:
-                    entering_workflow = not isinstance(current_status, WorkflowStageState)
-                    current_status = next_status
-                    current_stage = self._current_think_unit_name(ota_context, context)
-                    self._publish_stage(ota_context, next_status)
-                    WorkflowRunThink._publish_workflow_progress(ota_context, context, next_status, "running")
-                    if entering_workflow:
-                        budget = max(
-                            budget,
-                            WorkflowRunThink._workflow_remaining_units(next_status, context) + 1,
-                        )
-                else:
-                    self._stamp_workflow_continue(ota_context)
-                continue
-            raise RuntimeError(f"Unsupported think state: {type(next_status).__name__}")
 
         if not answer:
             raise RuntimeError("Agent think-unit budget exhausted before producing an answer")
@@ -1075,120 +1047,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             if name is not None:
                 out[str(name)] = getattr(arg, "value", None)
         return out
-
-    @staticmethod
-    def _stamp_continue(ota_context: AmphiOTAContext) -> None:
-        """Ask Main to recover an empty response without assuming the task is done."""
-        records = getattr(ota_context, "ota_record", None) or []
-        if not records:
-            return
-        note = (
-            "[system] The previous round ended without a user-visible response. "
-            "Re-evaluate the current task from the available context and continue "
-            "appropriately. If work remains, continue it and call tools as needed. "
-            "If the task is complete, give the user a clear, concise outcome and say "
-            "where relevant results can be found. If progress is blocked or depends "
-            "on a user decision, explain the concrete blocker and use the appropriate "
-            "interaction. Do not assume completion solely because the previous round "
-            "was empty, and do not repeat work already confirmed complete."
-        )
-        last = records[-1]
-        existing = getattr(last, "observation_result", None)
-        last.observation_result = f"{existing}\n{note}" if existing else note
-
-    @staticmethod
-    def _stamp_workflow_continue(ota_context: AmphiOTAContext) -> None:
-        """Remind the active Workflow stage that a section ends through its report tool."""
-        records = getattr(ota_context, "ota_record", None) or []
-        if not records:
-            return
-        note = (
-            "[workflow] The current section is still active. Complete only this section, "
-            "then call report_workflow_step with its result. Do not use "
-            "switch(mode=\"normal\") as a completion shortcut; it is only for an explicit "
-            "user request to stop or leave the Run. Ask the user when required."
-        )
-        record = records[-1]
-        existing = getattr(record, "observation_result", None)
-        record.observation_result = f"{existing}\n{note}" if existing else note
-
-    @staticmethod
-    def _stamp_presentation_continue(ota_context: AmphiOTAContext) -> None:
-        """Remind a presentation stage to finish through a real cognitive handoff."""
-        records = getattr(ota_context, "ota_record", None) or []
-        if not records:
-            return
-        status = ota_context.think_status
-        if not isinstance(status, PresentationStageState):
-            return
-        steps = PRESENTATION_STAGE_STEPS.get(status.stage, ())
-        if status.stage == "ppt_brief":
-            note = (
-                "[presentation] Brief is still active. Complete `.presentation/brief.md`, then "
-                "call switch(stage=\"ppt_plan\", reason=...). Do not call "
-                "report_presentation_step; Brief has no production-step cursor."
-            )
-        elif status.step_index < len(steps):
-            current = steps[status.step_index]
-            note = (
-                f"[presentation] Production step `{current.step_id}` is still active. Complete "
-                "only that step, then call report_presentation_step with its concrete result "
-                "and evidence."
-            )
-        else:
-            current_index = PRESENTATION_STAGE_ORDER.index(status.stage)
-            if status.stage == "ppt_review":
-                handoff = 'switch(mode="normal", reason=...)'
-            else:
-                handoff = f'switch(stage="{PRESENTATION_STAGE_ORDER[current_index + 1]}", reason=...)'
-            note = (
-                f"[presentation] Every production step in `{status.stage}` is reported. Call "
-                f"{handoff} now; do not repeat a completed step."
-            )
-        record = records[-1]
-        existing = getattr(record, "observation_result", None)
-        record.observation_result = f"{existing}\n{note}" if existing else note
-
-    @staticmethod
-    def _stamp_build_continue(ota_context: AmphiOTAContext) -> None:
-        # Fed back to a build stage that finished without its completion control.
-        status = ota_context.think_status
-        stage = status.stage if isinstance(status, BuildStageState) else ""
-        if stage == "clarify":
-            nudge = (
-                "[build] Your last reply did NOT complete Clarify. When task.md is ready, "
-                "call request_human_task_confirm so the user can review it; the system "
-                "will enter Explore after confirmation. Need missing input first? Call "
-                "request_human_choice."
-            )
-        elif stage == "verify":
-            nudge = (
-                "[build] Your last reply did NOT complete Verify. On a safe verification PASS, call "
-                "request_human_workflow_confirm and end the turn on that tool call; only "
-                "successful user confirmation and save close the Build. Do not use "
-                "switch(mode=\"normal\") as a completion shortcut. If verification failed, "
-                "switch to the stage that owns the defect or ask the user when required."
-            )
-        else:
-            nudge = (
-                "[build] Your last reply did NOT move the pipeline — you are still in this "
-                "stage. The stage advances ONLY when you actually INVOKE the switch tool "
-                "(a real tool call). Writing a tool call as text in your message does NOT "
-                "count and changes nothing. When this stage is done, call the switch tool "
-                "to hand off to the next Build stage. Never switch to normal merely because "
-                "the work appears complete; normal is only for an explicit user pause or exit. "
-                "Need input from the user? Call request_human_choice. Otherwise invoke the "
-                "next-stage handoff now—call it, don't type it."
-            )
-
-        records = getattr(ota_context, "ota_record", None) or []
-        if not records:
-            return
-        last = records[-1]
-        existing = getattr(last, "observation_result", None)
-        last.observation_result = (
-            f"{existing}\n{nudge}" if existing else nudge
-        )
 
     @staticmethod
     def _save_large_tool_results(result: Optional[ActionResult], context: AmphiContext) -> None:

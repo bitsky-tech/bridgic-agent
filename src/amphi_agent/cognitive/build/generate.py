@@ -24,6 +24,42 @@ class GenerateThink(BuildThink):
     persona: str = GENERATE_PERSONA
 
     ############################################################################
+    # The agent design
+    ############################################################################
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            if getattr(call, "tool", None) != "switch":
+                return None
+
+            target_stage = next(
+                (
+                    _view(argument, "value")
+                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
+                    if _view(argument, "name") == "stage"
+                ),
+                None,
+            )
+            if target_stage != "verify":
+                return None
+
+            reason = self.workflow_validation_reason(context)
+            return f"switch rejected: {reason}" if reason else None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
+    ############################################################################
     # Dynamic prompt assembly
     ############################################################################
     async def assemble_messages(
@@ -69,39 +105,3 @@ class GenerateThink(BuildThink):
         messages.append(await self.current_user_message(ota_context, context))
         messages += self.turn_messages_block(turn_context, context)
         return messages
-
-    ############################################################################
-    # Legality check
-    ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            if getattr(call, "tool", None) != "switch":
-                return None
-
-            target_stage = next(
-                (
-                    _view(argument, "value")
-                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
-                    if _view(argument, "name") == "stage"
-                ),
-                None,
-            )
-            if target_stage != "verify":
-                return None
-
-            reason = self.workflow_validation_reason(context)
-            return f"switch rejected: {reason}" if reason else None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved

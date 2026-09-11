@@ -1,6 +1,7 @@
 """Shared context, tools, and legality checks for saved Workflow stages."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -14,7 +15,7 @@ from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ...security import Permission
 from ..._tools import TOOL_LIBRARY
-from ..state import CallVerdict
+from ..state import CallVerdict, InStage, ThinkUnitOutcome
 from ..normal.state import NormalStageState
 from .state import WorkflowStageState
 from ...prompts.render import render_stage_persona
@@ -192,6 +193,315 @@ class WorkflowRunThink(BaseThink):
                                 "published_result_dir": str(published.result_dir.resolve()),
                             }
 
+    async def handle_think_unit_result(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        previous_status: InStage,
+        result: Optional[str],
+        agent: "AmphiAgent",
+    ) -> ThinkUnitOutcome:
+        """Continue the active Run and preserve its entry budget and progress event."""
+        outcome = await super().handle_think_unit_result(ota_context, context, previous_status, result, agent)
+        status = ota_context.think_status
+        if status != previous_status:
+            self._publish_workflow_progress(ota_context, context, status, "running")
+            if not isinstance(previous_status, WorkflowStageState):
+                return replace(outcome, minimum_budget=self._workflow_remaining_units(status, context) + 1)
+            return outcome
+        continuation = (
+            "[workflow] The current section is still active. Complete only this section, "
+            "then call report_workflow_step with its result. Do not use "
+            "switch(mode=\"normal\") as a completion shortcut; it is only for an explicit "
+            "user request to stop or leave the Run. Ask the user when required."
+        )
+        return replace(outcome, continuation=continuation)
+
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Validate controls against this stage's bound Run and pinned source."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"report_workflow_step"})
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            tool_name = getattr(call, "tool", None)
+            if ota_context is None:
+                return (
+                    "workflow control rejected: no Workflow run is active."
+                    if tool_name in {
+                        "switch",
+                        "report_workflow_step",
+                    }
+                    else None
+                )
+            try:
+                state = self.state(ota_context, self.workflow_stage)
+                source = self.source(state, context)
+            except (RuntimeError, ValueError) as exc:
+                return f"workflow control rejected: {exc}."
+            steps = source.steps(state.stage)
+            if tool_name == "switch":
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                if arguments.get("mode") == "normal":
+                    return None
+                return (
+                    "switch rejected: Workflow stages advance automatically; use mode "
+                    "`normal` only for an explicit user-requested pause or exit."
+                )
+            if tool_name != "report_workflow_step":
+                return None
+            if state.step_index >= len(steps):
+                return "workflow step report rejected: the current section does not exist."
+            return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
+    async def permission_check(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        calls: List[StepToolCall],
+        agent: "AmphiAgent",
+        *,
+        execution_mode: Optional[str] = None,
+        additional_mount_roots: Optional[List[str]] = None,
+    ) -> List[CallVerdict]:
+        """Extend common permission roots with the active Run's source and inputs."""
+        mount_roots = list(additional_mount_roots or [])
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None and isinstance(ota_context.think_status, WorkflowStageState):
+            source = self._workflow_source(ota_context.think_status, context)
+            mount_roots.append(str(source.source_root))
+            run_state = context.workspace.run_workflow
+            if run_state is None:
+                raise RuntimeError("Workflow Run space was not prepared for permission review.")
+            mount_roots.extend(
+                str(path)
+                for input_run in workflow_runs.referenced_runs(run_state.workflow_input)
+                for path in (input_run.result_dir, input_run.background_work_dir)
+            )
+        return await super().permission_check(
+            ota_context, context, calls, agent,
+            execution_mode=execution_mode,
+            additional_mount_roots=mount_roots,
+        )
+
+    ############################################################################
+    # Dynamic prompt assembly
+    ############################################################################
+    async def assemble_messages(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+    ) -> List[Message]:
+        """Assemble one Workflow Run round from its stage-owned tool surface."""
+        ota_context.tools = list(self.select_tools(ota_context, context))
+        blocks = await self.context_blocks(ota_context, context)
+        umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
+
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "run_workflow",
+            self.workflow_stage,
+        )
+        messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
+        messages.append(await self.current_user_message(ota_context, context))
+        messages += self.turn_messages_block(turn_context, context)
+        return messages
+
+    ##############
+    # Input
+    ##############
+    @staticmethod
+    def workflow_input(context: AmphiContext) -> str:
+        """Render the original structured input with its persisted references resolved."""
+        workspace = context.workspace
+        if workspace is None:
+            raise RuntimeError("Workflow Run workspace is unavailable.")
+        state = workspace.run_workflow
+        if state is None:
+            raise RuntimeError("Workflow Run space has not been prepared.")
+        mention_ids = [
+            str(block.get("id") or "")
+            for block in state.workflow_input.blocks
+            if block.get("type") == "mention" and block.get("id")
+        ]
+        path_map = (
+            workspace.reference_map(mention_ids)
+            if mention_ids
+            else {}
+        )
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None:
+            for input_run in workflow_runs.referenced_runs(state.workflow_input):
+                path_map[input_run.run_id] = str(input_run.result_dir)
+        return render_input(state.workflow_input, path_map)
+
+    ##############
+    # Blocks
+    ##############
+    def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Return the stable Workflow-stage persona."""
+        tools = self.select_tools(ota_context, context)
+        return render_stage_persona(
+            [tool.tool_name for tool in tools],
+            template=self.persona,
+        ).strip()
+
+    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Add this Workflow Run's writable directories to its Session environment."""
+        lines = ["<Workspace>", self.working_directory_block(context)]
+        workspace = context.workspace
+        workflow_run = workspace.run_workflow if workspace is not None else None
+        if workflow_run is not None and workflow_run.is_available:
+            workflow_runs = context.workflow_runs
+            if workflow_runs is None:
+                raise RuntimeError("Workflow Run space is bound without its result library.")
+            active_run = workflow_runs.require_run_workflow(workflow_run.root)
+            lines.extend([
+                "- Workflow final result directory (active, writable): "
+                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
+                "- Workflow background work directory (active, writable): "
+                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
+            ])
+        lines.append(self.environment_block(context))
+        lines.append("</Workspace>")
+        return "\n".join(lines)
+
+    async def workflow_run_block(
+        self, ota_context: AmphiOTAContext, context: AmphiContext, expected_stage: str,
+    ) -> str:
+        """Render the active Workflow position and current immutable section."""
+        state = self.state(ota_context, expected_stage)
+        source = self.source(state, context)
+        steps = source.steps(state.stage)
+        if state.step_index > len(steps):
+            raise RuntimeError(
+                f"Workflow {state.stage} step index {state.step_index} is out of range."
+            )
+        current = steps[state.step_index] if state.step_index < len(steps) else None
+        workflow_runs = context.workflow_runs
+        workspace = context.workspace
+        run_space = workspace.run_workflow if workspace is not None else None
+        if workflow_runs is None or run_space is None:
+            raise RuntimeError("Workflow run context is unavailable.")
+        run = workflow_runs.require_run_workflow(run_space.root)
+        durable = run_space
+        execution_lines = [
+            f"- [{'x' if index < state.step_index else ' '}] "
+            f"{step.index}. {step.title}"
+            for index, step in enumerate(source.execution_steps)
+        ]
+        result_dir = str(run.result_dir)
+        work_dir = str(run.background_work_dir)
+        input_lines = []
+        for input_run in workflow_runs.referenced_runs(durable.workflow_input):
+            input_lines.append(
+                f"- {input_run.workflow_name} (run_id: {input_run.run_id}): "
+                f"final results: {input_run.result_dir}; "
+                f"intermediate work: {input_run.background_work_dir}"
+            )
+        boundary_instruction = (
+            "This persisted boundary will be advanced automatically by the runtime."
+        )
+        current_block = (
+            f"Current section: {current.index}. {current.title}\n"
+            f"Current instruction:\n{current.instruction}\n"
+            if current is not None
+            else f"Stage completion boundary:\n{boundary_instruction}\n"
+        )
+        step_position = (
+            f"Step: {state.step_index + 1} of {len(steps)}\n"
+            if current is not None
+            else f"Step: completion boundary ({len(steps)} of {len(steps)} steps complete)\n"
+        )
+        runtime = (
+            "<workflow_run>\n"
+            f"Workflow id: `{source.workflow_id}`\n"
+            f"Workflow name: `{source.name}`\n"
+            f"Original Workflow input: {self.workflow_input(context)}\n"
+            f"Read-only package root: {source.root}\n"
+            f"Read-only source root: {source.source_root}\n"
+            f"Session-owned run root: {run_space.root}\n"
+            f"Writable final result directory: {result_dir}\n"
+            f"Writable background work directory: {work_dir}\n"
+            + ("Read-only input results:\n" + "\n".join(input_lines) + "\n" if input_lines else "")
+            + f"Stage: {state.stage}\n"
+            + step_position
+            + "Execution sections:\n"
+            + "\n".join(execution_lines)
+            + f"\n{current_block}"
+            "</workflow_run>"
+        )
+        return runtime
+
+    async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
+        """Render Workflow context from stable catalogues to live runtime state."""
+        return [
+            self.transcript_block(ota_context, context),
+            await self.skills_block(ota_context, context),
+            await self.schedules_block(ota_context, context),
+            await self.workflow_run_block(ota_context, context, self.workflow_stage),
+            await self.memory_block(ota_context, context),
+            await self.workspace_block(ota_context, context),
+        ]
+
+    ############################################################################
+    # Tools and Skills selection
+    ############################################################################
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select this mode's tools in stable catalogue order."""
+        tools = [
+            *super().select_tools(ota_context, context),
+            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
+                "bash",
+                "create_schedule",
+                "delete_schedule",
+                "generate_image",
+                "get_schedule",
+                "list_schedules",
+                "list_workflow_runs",
+                "read_image",
+                "read_workflow_run",
+                "remove_workflow",
+                "report_workflow_step",
+                "request_human_choice",
+                "run_subagent",
+                "start_subagent",
+                "update_schedule",
+                "web_fetch",
+                "web_search",
+            }),
+            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
+            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
+            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
+        ]
+        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
+        return [*tools, switch_tool]
+
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Expose the enabled Skills selected for this mode."""
+        skills = context.skills
+        return skills.data() if skills is not None else {}
+
+    ############################################################################
+    # Helpers
+    ############################################################################
     @staticmethod
     def _close_run_workflow_bindings(context: AmphiContext) -> None:
         """Unbind the Run Space and its active Run and Workflow package."""
@@ -584,298 +894,6 @@ class WorkflowRunThink(BaseThink):
         cls._close_run_workflow_bindings(context)
         ota_context.transition_think(NormalStageState())
 
-    ############################################################################
-    # Dynamic prompt assembly
-    ############################################################################
-    async def assemble_messages(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-    ) -> List[Message]:
-        """Assemble one Workflow Run round from its stage-owned tool surface."""
-        ota_context.tools = list(self.select_tools(ota_context, context))
-        blocks = await self.context_blocks(ota_context, context)
-        umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
-        system = "\n\n".join(block for block in (
-            self.system_block(ota_context, context), umbrella,
-        ) if block)
-
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "run_workflow",
-            self.workflow_stage,
-        )
-        messages = [Message.from_text(system, role=Role.SYSTEM)]
-        messages += await self.session_messages_block(ota_context, context)
-        messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
-        return messages
-
-    ##############
-    # Input
-    ##############
-    @staticmethod
-    def workflow_input(context: AmphiContext) -> str:
-        """Render the original structured input with its persisted references resolved."""
-        workspace = context.workspace
-        if workspace is None:
-            raise RuntimeError("Workflow Run workspace is unavailable.")
-        state = workspace.run_workflow
-        if state is None:
-            raise RuntimeError("Workflow Run space has not been prepared.")
-        mention_ids = [
-            str(block.get("id") or "")
-            for block in state.workflow_input.blocks
-            if block.get("type") == "mention" and block.get("id")
-        ]
-        path_map = (
-            workspace.reference_map(mention_ids)
-            if mention_ids
-            else {}
-        )
-        workflow_runs = context.workflow_runs
-        if workflow_runs is not None:
-            for input_run in workflow_runs.referenced_runs(state.workflow_input):
-                path_map[input_run.run_id] = str(input_run.result_dir)
-        return render_input(state.workflow_input, path_map)
-
-    ##############
-    # Blocks
-    ##############
-    def system_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Return the stable Workflow-stage persona."""
-        tools = self.select_tools(ota_context, context)
-        return render_stage_persona(
-            [tool.tool_name for tool in tools],
-            template=self.persona,
-        ).strip()
-
-    async def workspace_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
-        """Add this Workflow Run's writable directories to its Session environment."""
-        lines = ["<Workspace>", self.working_directory_block(context)]
-        workspace = context.workspace
-        workflow_run = workspace.run_workflow if workspace is not None else None
-        if workflow_run is not None and workflow_run.is_available:
-            workflow_runs = context.workflow_runs
-            if workflow_runs is None:
-                raise RuntimeError("Workflow Run space is bound without its result library.")
-            active_run = workflow_runs.require_run_workflow(workflow_run.root)
-            lines.extend([
-                "- Workflow final result directory (active, writable): "
-                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
-                "- Workflow background work directory (active, writable): "
-                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
-            ])
-        lines.append(self.environment_block(context))
-        lines.append("</Workspace>")
-        return "\n".join(lines)
-
-    async def workflow_run_block(
-        self, ota_context: AmphiOTAContext, context: AmphiContext, expected_stage: str,
-    ) -> str:
-        """Render the active Workflow position and current immutable section."""
-        state = self.state(ota_context, expected_stage)
-        source = self.source(state, context)
-        steps = source.steps(state.stage)
-        if state.step_index > len(steps):
-            raise RuntimeError(
-                f"Workflow {state.stage} step index {state.step_index} is out of range."
-            )
-        current = steps[state.step_index] if state.step_index < len(steps) else None
-        workflow_runs = context.workflow_runs
-        workspace = context.workspace
-        run_space = workspace.run_workflow if workspace is not None else None
-        if workflow_runs is None or run_space is None:
-            raise RuntimeError("Workflow run context is unavailable.")
-        run = workflow_runs.require_run_workflow(run_space.root)
-        durable = run_space
-        execution_lines = [
-            f"- [{'x' if index < state.step_index else ' '}] "
-            f"{step.index}. {step.title}"
-            for index, step in enumerate(source.execution_steps)
-        ]
-        result_dir = str(run.result_dir)
-        work_dir = str(run.background_work_dir)
-        input_lines = []
-        for input_run in workflow_runs.referenced_runs(durable.workflow_input):
-            input_lines.append(
-                f"- {input_run.workflow_name} (run_id: {input_run.run_id}): "
-                f"final results: {input_run.result_dir}; "
-                f"intermediate work: {input_run.background_work_dir}"
-            )
-        boundary_instruction = (
-            "This persisted boundary will be advanced automatically by the runtime."
-        )
-        current_block = (
-            f"Current section: {current.index}. {current.title}\n"
-            f"Current instruction:\n{current.instruction}\n"
-            if current is not None
-            else f"Stage completion boundary:\n{boundary_instruction}\n"
-        )
-        step_position = (
-            f"Step: {state.step_index + 1} of {len(steps)}\n"
-            if current is not None
-            else f"Step: completion boundary ({len(steps)} of {len(steps)} steps complete)\n"
-        )
-        runtime = (
-            "<workflow_run>\n"
-            f"Workflow id: `{source.workflow_id}`\n"
-            f"Workflow name: `{source.name}`\n"
-            f"Original Workflow input: {self.workflow_input(context)}\n"
-            f"Read-only package root: {source.root}\n"
-            f"Read-only source root: {source.source_root}\n"
-            f"Session-owned run root: {run_space.root}\n"
-            f"Writable final result directory: {result_dir}\n"
-            f"Writable background work directory: {work_dir}\n"
-            + ("Read-only input results:\n" + "\n".join(input_lines) + "\n" if input_lines else "")
-            + f"Stage: {state.stage}\n"
-            + step_position
-            + "Execution sections:\n"
-            + "\n".join(execution_lines)
-            + f"\n{current_block}"
-            "</workflow_run>"
-        )
-        return runtime
-
-    async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
-        """Render Workflow context from stable catalogues to live runtime state."""
-        return [
-            self.transcript_block(ota_context, context),
-            await self.skills_block(ota_context, context),
-            await self.schedules_block(ota_context, context),
-            await self.workflow_run_block(ota_context, context, self.workflow_stage),
-            await self.memory_block(ota_context, context),
-            await self.workspace_block(ota_context, context),
-        ]
-
-    ############################################################################
-    # Legality check
-    ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Validate controls against this stage's bound Run and pinned source."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"report_workflow_step"})
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            tool_name = getattr(call, "tool", None)
-            if ota_context is None:
-                return (
-                    "workflow control rejected: no Workflow run is active."
-                    if tool_name in {
-                        "switch",
-                        "report_workflow_step",
-                    }
-                    else None
-                )
-            try:
-                state = self.state(ota_context, self.workflow_stage)
-                source = self.source(state, context)
-            except (RuntimeError, ValueError) as exc:
-                return f"workflow control rejected: {exc}."
-            steps = source.steps(state.stage)
-            if tool_name == "switch":
-                arguments = {
-                    _view(argument, "name"): _view(argument, "value")
-                    for argument in getattr(call, "tool_arguments", None) or []
-                }
-                if arguments.get("mode") == "normal":
-                    return None
-                return (
-                    "switch rejected: Workflow stages advance automatically; use mode "
-                    "`normal` only for an explicit user-requested pause or exit."
-                )
-            if tool_name != "report_workflow_step":
-                return None
-            if state.step_index >= len(steps):
-                return "workflow step report rejected: the current section does not exist."
-            return None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
-
-    ############################################################################
-    # Permission policy and classifier context
-    ############################################################################
-    async def permission_check(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        calls: List[StepToolCall],
-        agent: "AmphiAgent",
-        *,
-        execution_mode: Optional[str] = None,
-        additional_mount_roots: Optional[List[str]] = None,
-    ) -> List[CallVerdict]:
-        """Extend common permission roots with the active Run's source and inputs."""
-        mount_roots = list(additional_mount_roots or [])
-        workflow_runs = context.workflow_runs
-        if workflow_runs is not None and isinstance(ota_context.think_status, WorkflowStageState):
-            source = self._workflow_source(ota_context.think_status, context)
-            mount_roots.append(str(source.source_root))
-            run_state = context.workspace.run_workflow
-            if run_state is None:
-                raise RuntimeError("Workflow Run space was not prepared for permission review.")
-            mount_roots.extend(
-                str(path)
-                for input_run in workflow_runs.referenced_runs(run_state.workflow_input)
-                for path in (input_run.result_dir, input_run.background_work_dir)
-            )
-        return await super().permission_check(
-            ota_context, context, calls, agent,
-            execution_mode=execution_mode,
-            additional_mount_roots=mount_roots,
-        )
-
-    ############################################################################
-    # Tools and Skills selection
-    ############################################################################
-    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
-        """Select this mode's tools in stable catalogue order."""
-        tools = [
-            *super().select_tools(ota_context, context),
-            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
-                "bash",
-                "create_schedule",
-                "delete_schedule",
-                "generate_image",
-                "get_schedule",
-                "list_schedules",
-                "list_workflow_runs",
-                "read_image",
-                "read_workflow_run",
-                "remove_workflow",
-                "report_workflow_step",
-                "request_human_choice",
-                "run_subagent",
-                "start_subagent",
-                "update_schedule",
-                "web_fetch",
-                "web_search",
-            }),
-            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
-            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
-            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
-        ]
-        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
-        return [*tools, switch_tool]
-
-    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
-        """Expose the enabled Skills selected for this mode."""
-        skills = context.skills
-        return skills.data() if skills is not None else {}
-
-    ############################################################################
-    # Helpers
-    ############################################################################
     @staticmethod
     def state(ota_context: AmphiOTAContext, expected_stage: str) -> WorkflowStageState:
         """Return the active Workflow state for the expected cognitive stage."""

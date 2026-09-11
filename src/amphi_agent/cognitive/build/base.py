@@ -1,5 +1,7 @@
 """Shared capabilities and history policy for Workflow Build stages."""
 
+from dataclasses import replace
+
 import json
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -11,7 +13,7 @@ from ..base import BaseThink
 from ..._context import AmphiContext, AmphiOTAContext, _view
 from ..._skills import Skill
 from ...security import Permission
-from ..state import CallVerdict
+from ..state import CallVerdict, InStage, ThinkUnitOutcome
 from .state import BuildStageState
 from ..normal.state import NormalStageState
 from ..._tools import TOOL_LIBRARY
@@ -42,76 +44,6 @@ class BuildThink(BaseThink):
         await self.sync_build_space(ota_context, context)
         await super().init_state(ota_context, context, previous_turn, agent)
 
-    @staticmethod
-    async def sync_build_space(ota_context: AmphiOTAContext, context: AmphiContext, *, create: bool = False) -> None:
-        """Project the resolved think state onto this turn's Workspace.
-
-        Parameters
-        ----------
-        ota_context : AmphiOTAContext
-            Turn state containing the active discriminated think state.
-        context : AmphiContext
-            Session context whose Workspace receives the Build-space projection.
-        create : bool
-            Create a new build directory instead of reopening an existing one.
-        """
-        workspace = context.workspace
-        if workspace is None:
-            return
-        workflows = context.workflows
-        think = ota_context.think_status
-        if isinstance(think, BuildStageState):
-            if workflows is None:
-                raise RuntimeError("No Workflow library is available for the active Build.")
-            if create:
-                workflows.close_package()
-            active = workspace.build
-            if create:
-                if think.workflow_id:
-                    async with workflows.guarded_source(think.workflow_id) as workflow:
-                        active = await workspace.prepare_build_space(
-                            "create",
-                            workflow_id=think.workflow_id,
-                            stage=think.stage,
-                        )
-                        try:
-                            await workflows.restore_source(workflow, active.root)
-                            task_baseline = workflow.task_markdown
-                            if task_baseline is None:
-                                raise RuntimeError(
-                                    "The saved Workflow has no task.md edit baseline."
-                                )
-                            active.record_edit_task_baseline(task_baseline)
-                        except BaseException:
-                            await workspace.discard_build()
-                            raise
-                else:
-                    active = await workspace.prepare_build_space(
-                        "create",
-                        stage=think.stage,
-                    )
-            elif active is None:
-                active = await workspace.prepare_build_space(
-                    "resume",
-                    stage=think.stage,
-                )
-            if active.workflow_id != think.workflow_id:
-                raise RuntimeError("The active Build does not match the current edit target.")
-            active.set_stage(think.stage, think.workflow_id)
-            workflows.open_package(active.root)
-            return
-        workspace.close_build_space()
-        if workflows is not None:
-            workflows.close_package()
-
-    @staticmethod
-    def close_build_bindings(context: AmphiContext) -> None:
-        """Unbind the Build Space and its active Workflow package."""
-        if context.workspace is not None:
-            context.workspace.close_build_space()
-        if context.workflows is not None:
-            context.workflows.close_package()
-
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Apply stage transitions within the current Build or return control to Main."""
         await super().handle_action_result(ota_context, context, agent)
@@ -138,6 +70,61 @@ class BuildThink(BaseThink):
                 elif isinstance(next_status, NormalStageState):
                     agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
                     self.close_build_bindings(context)
+
+    async def handle_think_unit_result(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        previous_status: InStage,
+        result: Optional[str],
+        agent: "AmphiAgent",
+    ) -> ThinkUnitOutcome:
+        """Continue an unchanged Build stage until its completion control is used."""
+        outcome = await super().handle_think_unit_result(
+            ota_context, context, previous_status, result, agent,
+        )
+        if ota_context.think_status != previous_status:
+            return outcome
+        nudge = (
+            "[build] Your last reply did NOT move the pipeline — you are still in this "
+            "stage. The stage advances ONLY when you actually INVOKE the switch tool "
+            "(a real tool call). Writing a tool call as text in your message does NOT "
+            "count and changes nothing. When this stage is done, call the switch tool "
+            "to hand off to the next Build stage. Never switch to normal merely because "
+            "the work appears complete; normal is only for an explicit user pause or exit. "
+            "Need input from the user? Call request_human_choice. Otherwise invoke the "
+            "next-stage handoff now—call it, don't type it."
+        )
+
+        return replace(outcome, continuation=nudge)
+
+    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Validate explicit handoffs within the current Build."""
+        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = None
+            if getattr(call, "tool", None) == "switch" and ota_context is not None:
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                if (
+                    arguments.get("mode") != "normal"
+                    and arguments.get("stage")
+                    and not str(arguments.get("reason") or "").strip()
+                ):
+                    reason = (
+                        "switch rejected: a Build stage handoff requires a non-empty, "
+                        "self-contained reason for the next stage."
+                    )
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
 
     ############################################################################
     # Dynamic prompt assembly
@@ -250,35 +237,107 @@ class BuildThink(BaseThink):
         ]
 
     ############################################################################
-    # Legality check
+    # Tools and Skills selection
     ############################################################################
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Validate explicit handoffs within the current Build."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = None
-            if getattr(call, "tool", None) == "switch" and ota_context is not None:
-                arguments = {
-                    _view(argument, "name"): _view(argument, "value")
-                    for argument in getattr(call, "tool_arguments", None) or []
-                }
-                if (
-                    arguments.get("mode") != "normal"
-                    and arguments.get("stage")
-                    and not str(arguments.get("reason") or "").strip()
-                ):
-                    reason = (
-                        "switch rejected: a Build stage handoff requires a non-empty, "
-                        "self-contained reason for the next stage."
+    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
+        """Select this mode's tools in stable catalogue order."""
+        tools = [
+            *super().select_tools(ota_context, context),
+            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
+                "bash",
+                "generate_image",
+                "list_workflow_runs",
+                "read_image",
+                "read_workflow_run",
+                "request_human_choice",
+                "run_subagent",
+                "web_fetch",
+                "web_search",
+            }),
+            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
+            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
+            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
+        ]
+        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
+        return [*tools, switch_tool]
+
+    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
+        """Expose the enabled Skills selected for this mode."""
+        skills = context.skills
+        return skills.data() if skills is not None else {}
+
+    ############################################################################
+    # Helpers
+    ############################################################################
+    @staticmethod
+    async def sync_build_space(ota_context: AmphiOTAContext, context: AmphiContext, *, create: bool = False) -> None:
+        """Project the resolved think state onto this turn's Workspace.
+
+        Parameters
+        ----------
+        ota_context : AmphiOTAContext
+            Turn state containing the active discriminated think state.
+        context : AmphiContext
+            Session context whose Workspace receives the Build-space projection.
+        create : bool
+            Create a new build directory instead of reopening an existing one.
+        """
+        workspace = context.workspace
+        if workspace is None:
+            return
+        workflows = context.workflows
+        think = ota_context.think_status
+        if isinstance(think, BuildStageState):
+            if workflows is None:
+                raise RuntimeError("No Workflow library is available for the active Build.")
+            if create:
+                workflows.close_package()
+            active = workspace.build
+            if create:
+                if think.workflow_id:
+                    async with workflows.guarded_source(think.workflow_id) as workflow:
+                        active = await workspace.prepare_build_space(
+                            "create",
+                            workflow_id=think.workflow_id,
+                            stage=think.stage,
+                        )
+                        try:
+                            await workflows.restore_source(workflow, active.root)
+                            task_baseline = workflow.task_markdown
+                            if task_baseline is None:
+                                raise RuntimeError(
+                                    "The saved Workflow has no task.md edit baseline."
+                                )
+                            active.record_edit_task_baseline(task_baseline)
+                        except BaseException:
+                            await workspace.discard_build()
+                            raise
+                else:
+                    active = await workspace.prepare_build_space(
+                        "create",
+                        stage=think.stage,
                     )
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
+            elif active is None:
+                active = await workspace.prepare_build_space(
+                    "resume",
+                    stage=think.stage,
+                )
+            if active.workflow_id != think.workflow_id:
+                raise RuntimeError("The active Build does not match the current edit target.")
+            active.set_stage(think.stage, think.workflow_id)
+            workflows.open_package(active.root)
+            return
+        workspace.close_build_space()
+        if workflows is not None:
+            workflows.close_package()
+
+    @staticmethod
+    def close_build_bindings(context: AmphiContext) -> None:
+        """Unbind the Build Space and its active Workflow package."""
+        if context.workspace is not None:
+            context.workspace.close_build_space()
+        if context.workflows is not None:
+            context.workflows.close_package()
 
     @staticmethod
     def human_document_reason(name: str, body: str) -> Optional[str]:
@@ -327,39 +386,6 @@ class BuildThink(BaseThink):
         package = self.build_package(context)
         return package.validation_reason() if package is not None else "no active build package."
 
-    ############################################################################
-    # Tools and Skills selection
-    ############################################################################
-    def select_tools(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[ToolSpec]:
-        """Select this mode's tools in stable catalogue order."""
-        tools = [
-            *super().select_tools(ota_context, context),
-            *TOOL_LIBRARY.select(FILE_SYSTEM_TOOL_NAMES | {
-                "bash",
-                "generate_image",
-                "list_workflow_runs",
-                "read_image",
-                "read_workflow_run",
-                "request_human_choice",
-                "run_subagent",
-                "web_fetch",
-                "web_search",
-            }),
-            *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
-            *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
-            *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),
-        ]
-        tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
-        return [*tools, switch_tool]
-
-    def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
-        """Expose the enabled Skills selected for this mode."""
-        skills = context.skills
-        return skills.data() if skills is not None else {}
-
-    ############################################################################
-    # Helpers
-    ############################################################################
     def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
         """Project one stable Build-stage trace with its entry and switch context."""
         def switches_to_target(record: Any) -> bool:

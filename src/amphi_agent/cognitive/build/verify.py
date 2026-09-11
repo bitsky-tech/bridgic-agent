@@ -1,5 +1,7 @@
 """Cognitive worker for verifying a generated Workflow Build implementation."""
 
+from dataclasses import replace
+
 import logging
 import re
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -14,7 +16,7 @@ from .base import BuildThink
 from ..base import render_input
 from ....amphi_store import SessionTurnRecord, TurnStatus
 from ..._tools import TOOL_LIBRARY
-from ..state import CallVerdict
+from ..state import CallVerdict, InStage, ThinkUnitOutcome
 from .state import AwaitingWorkflowConfirm, BuildStageState
 from ..normal.state import NormalStageState
 from ...tools.build import RequestHumanWorkflowConfirm
@@ -241,57 +243,30 @@ class VerifyThink(BuildThink):
                     ota_context.transition_interaction(AwaitingWorkflowConfirm(workflow_confirm=payload))
                     step.tool_result = payload
 
-    ############################################################################
-    # Dynamic prompt assembly
-    ############################################################################
-    async def assemble_messages(
+    async def handle_think_unit_result(
         self,
         ota_context: AmphiOTAContext,
         context: AmphiContext,
-    ) -> List[Message]:
-        """Assemble verify's model messages.
-
-        Parameters
-        ----------
-        ota_context : AmphiOTAContext
-            Active build turn and its current action trace.
-        context : AmphiContext
-            Session context for this Build turn.
-
-        Returns
-        -------
-        List[Message]
-            Persona, live context, Session history, upstream artifacts, user
-            input, and the current Verify trace.
-        """
-        ota_context.tools = list(self.select_tools(ota_context, context))
-        blocks = await self.build_context_blocks(
-            ota_context,
-            context,
-            "task.md",
-            "explore.md",
-            "verify.md",
+        previous_status: InStage,
+        result: Optional[str],
+        agent: "AmphiAgent",
+    ) -> ThinkUnitOutcome:
+        """Continue an unchanged Build stage until its completion control is used."""
+        outcome = await super().handle_think_unit_result(
+            ota_context, context, previous_status, result, agent,
         )
-        umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
-        system = "\n\n".join(block for block in (
-            self.system_block(ota_context, context), umbrella,
-        ) if block)
-
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "verify",
+        if ota_context.think_status != previous_status:
+            return outcome
+        nudge = (
+            "[build] Your last reply did NOT complete Verify. On a safe verification PASS, call "
+            "request_human_workflow_confirm and end the turn on that tool call; only "
+            "successful user confirmation and save close the Build. Do not use "
+            "switch(mode=\"normal\") as a completion shortcut. If verification failed, "
+            "switch to the stage that owns the defect or ask the user when required."
         )
 
-        messages = [Message.from_text(system, role=Role.SYSTEM)]
-        messages += await self.session_messages_block(ota_context, context)
-        messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
-        return messages
+        return replace(outcome, continuation=nudge)
 
-    ############################################################################
-    # Legality check
-    ############################################################################
     async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Apply inherited admission rules, then this worker's business constraints."""
         resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
@@ -341,6 +316,54 @@ class VerifyThink(BuildThink):
                     "reason": reason,
                 })
         return resolved
+
+    ############################################################################
+    # Dynamic prompt assembly
+    ############################################################################
+    async def assemble_messages(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+    ) -> List[Message]:
+        """Assemble verify's model messages.
+
+        Parameters
+        ----------
+        ota_context : AmphiOTAContext
+            Active build turn and its current action trace.
+        context : AmphiContext
+            Session context for this Build turn.
+
+        Returns
+        -------
+        List[Message]
+            Persona, live context, Session history, upstream artifacts, user
+            input, and the current Verify trace.
+        """
+        ota_context.tools = list(self.select_tools(ota_context, context))
+        blocks = await self.build_context_blocks(
+            ota_context,
+            context,
+            "task.md",
+            "explore.md",
+            "verify.md",
+        )
+        umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
+        system = "\n\n".join(block for block in (
+            self.system_block(ota_context, context), umbrella,
+        ) if block)
+
+        turn_context, _ = self._stage_turn_context(
+            ota_context,
+            "build",
+            "verify",
+        )
+
+        messages = [Message.from_text(system, role=Role.SYSTEM)]
+        messages += await self.session_messages_block(ota_context, context)
+        messages.append(await self.current_user_message(ota_context, context))
+        messages += self.turn_messages_block(turn_context, context)
+        return messages
 
     ############################################################################
     # Tools and Skills selection

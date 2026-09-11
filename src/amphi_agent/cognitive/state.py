@@ -1,5 +1,6 @@
 """Shared cognitive state and the aggregate Session state contracts."""
 
+from dataclasses import dataclass
 from typing import Annotated, Dict, List, Literal, Optional, TypeAlias, Union
 from uuid import uuid4
 
@@ -24,6 +25,16 @@ InStage = Annotated[
     Union[NormalStageState, BuildStageState, PresentationStageState, WorkflowStageState],
     Field(discriminator="mode"),
 ]
+
+
+@dataclass(frozen=True)
+class ThinkUnitOutcome:
+    """A worker's scheduling decision, never persisted in AgentState."""
+
+    finished: bool = False
+    minimum_budget: int = 0
+    retry_empty_answer: bool = False
+    continuation: str = ""
 
 
 class AwaitingFeedback(BaseModel):
@@ -232,6 +243,7 @@ class AgentState(BaseModel):
 
 __all__ = [
     "InStage",
+    "ThinkUnitOutcome",
     "InteractionState",
     "AwaitingFeedback",
     "AwaitingPermission",
