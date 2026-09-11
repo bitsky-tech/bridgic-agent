@@ -597,7 +597,7 @@ class MainThink(CognitiveWorker):
             ]
 
         def record_summary_usage(result: Any) -> None:
-            input_tokens, output_tokens, _ = self._usage_values(result.usage)
+            input_tokens, output_tokens, _, _ = self._usage_values(result.usage)
             if not input_tokens and not output_tokens:
                 return
             self.spent_tokens += input_tokens + output_tokens
@@ -837,9 +837,12 @@ class MainThink(CognitiveWorker):
                 values[index] += 1
             return ContextUsageBreakdown(**dict(zip(names, values)))
 
-        provider_input_tokens, provider_output_tokens, cached_input_tokens = self._usage_values(
-            result.usage
-        )
+        (
+            provider_input_tokens,
+            provider_output_tokens,
+            cached_input_tokens,
+            cache_write_tokens,
+        ) = self._usage_values(result.usage)
         previous = ota_context.context_usage
         total_input_tokens = previous.input_tokens + provider_input_tokens
         total_output_tokens = previous.output_tokens + provider_output_tokens
@@ -864,6 +867,10 @@ class MainThink(CognitiveWorker):
             occupied_input_tokens=input_tokens,
             occupied_output_tokens=output_tokens,
             cached_input_tokens=cached_input_tokens,
+            cached_input_tokens_total=previous.cached_input_tokens_total + (cached_input_tokens or 0),
+            cache_write_tokens_total=previous.cache_write_tokens_total + cache_write_tokens,
+            cached_reported_rounds=previous.cached_reported_rounds + (cached_input_tokens is not None),
+            cached_total_rounds=previous.cached_total_rounds + 1,
             used_tokens=used_tokens,
             usable_tokens=usable_tokens,
             percentage=percentage,
@@ -1929,10 +1936,10 @@ class MainThink(CognitiveWorker):
         return skills.data() if skills is not None else {}
 
     @staticmethod
-    def _usage_values(usage: Any) -> Tuple[int, int, Optional[int]]:
-        """Normalize provider usage to input, output, and cache-read tokens."""
+    def _usage_values(usage: Any) -> Tuple[int, int, Optional[int], int]:
+        """Normalize provider usage to input, output, cache-read, and cache-write tokens."""
         if usage is None:
-            return 0, 0, None
+            return 0, 0, None, 0
         get = usage.get if isinstance(usage, dict) else (lambda k: getattr(usage, k, None))
 
         def nested_value(container: Any, key: str) -> Any:
@@ -1942,13 +1949,16 @@ class MainThink(CognitiveWorker):
                 return container.get(key)
             return getattr(container, key, None)
 
+        # Only Anthropic-shaped usage prices cache writes separately; elsewhere the
+        # write is folded into the ordinary input price and reports as zero here.
+        cache_write_tokens = max(0, int(get("cache_creation_input_tokens") or 0))
         inp = get("prompt_tokens")
         if inp is None:
             inp = get("input_tokens")
             # Anthropic's input_tokens EXCLUDES cache reads/writes; fold them in
             # so turn totals stay comparable whether or not caching hit.
             if inp is not None:
-                inp = int(inp) + int(get("cache_creation_input_tokens") or 0) + int(
+                inp = int(inp) + cache_write_tokens + int(
                     get("cache_read_input_tokens") or 0
                 )
         out = get("completion_tokens")
@@ -1968,7 +1978,7 @@ class MainThink(CognitiveWorker):
             if cached is not None
             else None
         )
-        return input_tokens, output_tokens, cached_input_tokens
+        return input_tokens, output_tokens, cached_input_tokens, cache_write_tokens
 
 ################################################################################################################
 # Child Agent — an isolated normal-mode worker with its own role and tool surface

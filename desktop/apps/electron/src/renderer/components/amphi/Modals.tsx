@@ -80,6 +80,7 @@ import { Tooltip } from './Tooltip'
 import { Modal } from './Modal'
 import { ModalBackdrop } from './ModalBackdrop'
 import { SettingsAboutTab } from './SettingsAboutTab'
+import { SettingsAccountTab } from './SettingsAccountTab'
 import { SettingsPrivacyTab } from './SettingsPrivacyTab'
 import {
   Badge,
@@ -102,6 +103,7 @@ import { APP_PRODUCT_NAME } from '@shared/app-meta'
  */
 export const SettingsTabId = {
   Model: 'model',
+  Account: 'account',
   Mode: 'mode',
   Gateway: 'gateway',
   Appearance: 'appearance',
@@ -152,6 +154,7 @@ export function SettingsModal({
   useEscapeToClose(handleClose)
   const tabs: { id: SettingsTabId; label: string; icon: (size?: number) => React.ReactNode }[] = [
     { id: SettingsTabId.Model,      label: t('modals.settings.tabs.model'), icon: Icons.robot },
+    { id: SettingsTabId.Account,    label: t('modals.settings.tabs.account'),      icon: Icons.user },
     {
       id: SettingsTabId.Mode,
       label: t('modals.settings.tabs.mode'),
@@ -210,6 +213,7 @@ export function SettingsModal({
           </div>
           <div className="flex-1 overflow-auto px-6 pb-6">
             {activeTabId === SettingsTabId.Model && <SettingsModelTab />}
+            {activeTabId === SettingsTabId.Account && <SettingsAccountTab />}
             {activeTabId === SettingsTabId.Mode && <SettingsModeTab />}
             {activeTabId === SettingsTabId.Gateway && <SettingsGatewayTab />}
             {activeTabId === SettingsTabId.Appearance && <SettingsAppearanceTab />}

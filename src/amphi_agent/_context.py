@@ -52,6 +52,14 @@ class ContextUsageSnapshot(BaseModel):
     occupied_input_tokens: int = 0
     occupied_output_tokens: int = 0
     cached_input_tokens: Optional[int] = None
+    cached_input_tokens_total: int = 0
+    cache_write_tokens_total: int = 0
+    # Cache reporting is three-state, not two: some providers omit the fields
+    # entirely on a cold call rather than reporting zero. Counting reported
+    # rounds against total rounds keeps "no cache" apart from "no report", so a
+    # hit rate computed later can say how much of its sample it actually saw.
+    cached_reported_rounds: int = 0
+    cached_total_rounds: int = 0
     used_tokens: int = 0
     usable_tokens: Optional[int] = None
     percentage: Optional[float] = None
