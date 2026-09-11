@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
-from ._agent import AmphiAgent
+from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
 from ._browser import BrowserHost
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._error import PublicAgentError
@@ -682,7 +682,6 @@ class AgentInvocation:
         ):
             execution_mode = previous_turns[-1].execution_mode
         execution_mode = execution_mode or user.execution_mode
-        max_rounds = user.default_max_rounds
         ota_context = AmphiOTAContext(user_input=user_input, stream=stream)
         title_task: Optional[asyncio.Task[Optional[str]]] = None
         prepared_children: list[tuple[SessionRecord, SubAgentCall]] = []
@@ -777,7 +776,7 @@ class AgentInvocation:
                 llm_provider=llm_provider,
                 execution_mode=execution_mode,
             )
-            agent = AmphiAgent(max_rounds=max_rounds, verbose=False)
+            agent = AmphiAgent(verbose=False)
 
             # Name a new root Session alongside its first Agent turn. Title generation
             # only needs the opening user input, so waiting for ``agent.arun`` would
@@ -819,7 +818,7 @@ class AgentInvocation:
                             status=TurnStatus.CANCELLED,
                             model=model,
                             execution_mode=execution_mode,
-                            max_rounds=max_rounds,
+                            max_rounds=DEFAULT_MAX_ROUNDS,
                             duration_ms=elapsed_ms(),
                         ),
                     )
@@ -838,7 +837,7 @@ class AgentInvocation:
                         error=error_message,
                         model=model,
                         execution_mode=execution_mode,
-                        max_rounds=max_rounds,
+                        max_rounds=DEFAULT_MAX_ROUNDS,
                         duration_ms=elapsed_ms(),
                     )
                 finally:
@@ -855,7 +854,7 @@ class AgentInvocation:
                         outcome=outcome,
                         model=model,
                         execution_mode=execution_mode,
-                        max_rounds=max_rounds,
+                        max_rounds=DEFAULT_MAX_ROUNDS,
                         duration_ms=elapsed_ms(),
                     )
                 except BaseException:
