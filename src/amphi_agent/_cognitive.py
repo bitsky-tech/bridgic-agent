@@ -2199,25 +2199,6 @@ class WorkflowRunThink(MainThink):
         | {"report_workflow_step"}
     )
 
-    async def thinking(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Tuple[List[Dict[str, Any]], str]:
-        """Keep the section boundary durable before a round can pause for input."""
-        state = self.state(ota_context, self.workflow_stage)
-        source = self.source(state, context)
-        steps = source.steps(state.stage)
-        if state.step_index < len(steps):
-            ota_context._current_record().workflow_step = {
-                "workflow_id": source.workflow_id,
-                "generation": state.generation,
-                "workflow_name": source.name,
-                "phase": state.stage,
-                "step_index": state.step_index,
-                "step_count": len(steps),
-                "title": steps[state.step_index].title,
-                "execution_steps": [step.title for step in source.execution_steps],
-                "status": "running",
-            }
-        return await super().thinking(ota_context, context)
-
     async def assemble_messages(
         self,
         ota_context: AmphiOTAContext,

@@ -566,10 +566,10 @@ def _workflow_steps_before_content(
     """Rotate Workflow markers before their historical process blocks.
 
     Live ``workflow_progress`` opens a section with ``running`` and later updates
-    that same marker to ``success`` or ``failure``. Older traces retain only the
-    terminal report, while new rounds also persist their opening section.
-    Rotating each ``content ... marker`` range restores the live ordering,
-    including older content preceding the first durable section snapshot.
+    that same marker to ``success`` or ``failure``. History supplies completed
+    headings from reports and the unfinished heading from the active Run.
+    Rotating each ``content ... marker`` range restores the live ordering at
+    the section boundaries already recorded by the OTA sequence.
     """
     if not spans:
         return blocks
@@ -625,7 +625,7 @@ def _turn_messages(
     open_choice = bool(open_questions)
 
     def project_workflow_step(payload: dict) -> int:
-        """Update a section in place so interaction resumes cannot move its heading."""
+        """Project a report or active Run cursor without duplicating its heading."""
         block = {
             "type": "workflow_step",
             "workflowId": str(payload.get("workflow_id")),
@@ -718,9 +718,13 @@ def _turn_messages(
                 if build_stage is not None or active_build_stage is not None:
                     blocks.append({"type": "build_stage", "stage": build_stage})
                 active_build_stage = build_stage
-        workflow_step = (round_ or {}).get("workflow_step")
-        if isinstance(workflow_step, dict) and workflow_step.get("workflow_id"):
-            project_workflow_step(workflow_step)
+        scope = (round_ or {}).get("think_scope")
+        if (
+            isinstance(scope, dict)
+            and scope.get("mode") == "run_workflow"
+            and workflow_content_start is None
+        ):
+            workflow_content_start = len(blocks)
         # This round's chain-of-thought first (streamed live as ``reasoning``
         # before the answer text) — matches the live block order; without it a
         # reloaded transcript would drop the thinking the GUI shows.
@@ -1019,8 +1023,8 @@ def _turn_messages(
             "questions": permission.get("questions") or [],
         })
 
-    # Older parked Turns have no per-round section snapshot yet. The matching
-    # active Run supplies the missing heading until a resumed round persists it.
+    # An unfinished section has no report yet. Reuse the current Run metadata
+    # at its existing OTA boundary, including while a human reply is pending.
     if is_last and workflow_run and isinstance(think_state, dict) and (
         think_state.get("mode") == "run_workflow"
         and think_state.get("workflow_id") == workflow_run.get("workflow_id")

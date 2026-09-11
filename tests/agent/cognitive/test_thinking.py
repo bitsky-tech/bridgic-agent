@@ -6,49 +6,9 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Message, Role
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink
-from src.amphi_agent._cognitive import WorkflowThink
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive._harness import make_session
-
-
-async def test_workflow_round_persists_heading_before_model_output(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Even a paused or interrupted model call retains its section's original position."""
-    ota_context = AmphiOTAContext(
-        user_input="Summarize a directory",
-        state={"think": {
-            "mode": "run_workflow", "stage": "execute",
-            "workflow_id": "workflow-directory", "generation": "run-directory", "step_index": 0,
-        }},
-    )
-    expected = {
-        "workflow_id": "workflow-directory", "generation": "run-directory",
-        "workflow_name": "Directory summary", "phase": "execute",
-        "step_index": 0, "step_count": 1, "title": "Choose directory",
-        "execution_steps": ["Choose directory"], "status": "running",
-    }
-
-    class InterruptedLlm:
-        async def stream_turn(self, messages: list[Any], tools: list[Any], **kwargs: Any) -> StreamResult:
-            assert ota_context.model_dump()["ota_record"][-1]["workflow_step"] == expected
-            raise RuntimeError("Model call interrupted")
-
-    async def assemble_messages(self: WorkflowThink, ota: AmphiOTAContext, context: AmphiContext) -> list[Message]:
-        return [Message.from_text("Choose the target directory", role=Role.USER)]
-
-    steps = [SimpleNamespace(title="Choose directory")]
-    source = SimpleNamespace(
-        workflow_id="workflow-directory", name="Directory summary",
-        execution_steps=steps, steps=lambda stage: steps,
-    )
-    monkeypatch.setattr(WorkflowThink, "source", lambda self, state, context: source)
-    monkeypatch.setattr(WorkflowThink, "assemble_messages", assemble_messages)
-    worker = WorkflowThink(InterruptedLlm())
-    context = AmphiContext(session=make_session(test_sandbox.sessions / "workflow-heading"))
-    with pytest.raises(RuntimeError, match="Model call interrupted"):
-        await worker.thinking(ota_context, context)
-    restored = AmphiOTAContext.model_validate_json(ota_context.model_dump_json())
-    assert restored.ota_record[-1].workflow_step == expected
 
 
 async def test_live_round(test_sandbox: IsolatedPaths) -> None:
