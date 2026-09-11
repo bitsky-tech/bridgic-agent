@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -670,6 +671,114 @@ async def test_run_entry(orchestration: _Harness) -> None:
     assert (restarted_checkpoint.stage, restarted_checkpoint.step_index) == ("execute", 0)
     assert restarted_checkpoint.workflow_input.text == "Create today's report"
     assert not partial.exists()
+
+
+@pytest.mark.parametrize("entry", ["tool", "choice"])
+@pytest.mark.parametrize("stage,step_index,expected_status", [
+    pytest.param("execute", 1, None, id="unfinished"),
+    pytest.param("execute", 2, WorkflowRunStatus.COMPLETED, id="execution-complete"),
+    pytest.param("validate", 7, WorkflowRunStatus.COMPLETED, id="legacy-complete"),
+    pytest.param("validate", 7, WorkflowRunStatus.FAILED, id="legacy-failed"),
+])
+async def test_manual_run_resume(
+    orchestration: _Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+    stage: str,
+    step_index: int,
+    expected_status: WorkflowRunStatus | None,
+) -> None:
+    """Resume unfinished steps or publish terminal results through either manual entry."""
+    def reject_replay(*args, **kwargs):
+        raise AssertionError("Resuming a Run must not replay step reports")
+
+    saved = await _save_workflow(orchestration, "manual-resume")
+    saved.entry_path.write_text(
+        saved.entry_path.read_text(encoding="utf-8") + "\n# Deliver report\n\nDeliver the report.\n",
+        encoding="utf-8",
+    )
+    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    active = orchestration.workflow_runs.require_run_workflow()
+    (active.result_dir / "report.txt").write_text("Retained report\n", encoding="utf-8")
+    (active.background_work_dir / "inputs.txt").write_text("Retained inputs\n", encoding="utf-8")
+    if expected_status is WorkflowRunStatus.FAILED:
+        (active.result_dir / "failure.md").write_text("Recorded failure\n", encoding="utf-8")
+    state_path = active.root / ".state.json"
+    raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+    raw_state.update(stage=stage, step_index=step_index)
+    state_path.write_text(json.dumps(raw_state), encoding="utf-8")
+    original_checkpoint = state_path.read_bytes()
+
+    # The saved Run remains on disk after the user has returned to normal chat.
+    orchestration.agent._close_run_workflow_bindings(orchestration.context)
+    paused = AmphiOTAContext(user_input="Pause the workflow and return to normal chat")
+    orchestration.context.session = Session(orchestration.record, [
+        _turn(paused, "turn-paused-run", TurnStatus.COMPLETED),
+    ])
+    monkeypatch.setattr(WorkflowRunLibrary, "record_step", reject_replay)
+
+    request = _ota(
+        "Continue the report",
+        _step("request_run_workflow", RequestRunWorkflow(
+            saved.workflow_id, "ask" if entry == "choice" else "resume",
+        )),
+    )
+    await orchestration.agent.init_state(request, orchestration.context)
+    assert request.think_status == NormalStageState()
+    await _apply(orchestration, request)
+    if entry == "choice":
+        choice = request.interaction_status
+        assert isinstance(choice, AwaitingWorkflowRunChoice)
+        orchestration.context.session = Session(orchestration.record, [
+            *orchestration.context.session.get_all(),
+            _pending(request, "turn-resume-choice"),
+        ])
+        resumed = AmphiOTAContext(user_input={
+            "type": "choice_answer",
+            "request_id": choice.request_id,
+            "answers": [{"index": 0, "option_id": "resume"}],
+        })
+        await orchestration.agent.init_state(resumed, orchestration.context)
+    else:
+        resumed = request
+
+    payload = _payload(resumed, "request_run_workflow")
+    assert payload["execution_steps"] == ["Create report", "Deliver report"]
+    assert payload["status"] == ("resolved" if entry == "choice" else "resumed")
+    assert resumed.interaction_status is None
+    if expected_status is None:
+        assert resumed.think_status == started.think_status.model_copy(update={"step_index": 1})
+        assert state_path.read_bytes() == original_checkpoint
+        assert (active.result_dir / "report.txt").read_text(encoding="utf-8") == "Retained report\n"
+        assert "run_id" not in payload
+        assert not any(getattr(record, "workflow_result", None) for record in resumed.ota_record)
+        return
+
+    assert resumed.think_status == NormalStageState()
+    assert not active.root.exists()
+    assert orchestration.workspace.run_workflow is None
+    assert orchestration.workflow_runs.run_workflow is None
+    assert orchestration.workflows.package is None
+    published = orchestration.workflow_runs.get(payload["run_id"])
+    assert published is not None
+    assert payload["run_status"] == published.status.value == expected_status.value
+    assert published.read_file("result/report.txt") == "Retained report\n"
+    assert published.read_file("background/work/inputs.txt") == "Retained inputs\n"
+    if expected_status is WorkflowRunStatus.FAILED:
+        assert published.read_file("result/failure.md") == "Recorded failure\n"
+    result = resumed.ota_record[-1].workflow_result
+    assert result["run_id"] == published.run_id
+
+    # A subsequent turn must not publish the completed Run again.
+    orchestration.context.session = Session(orchestration.record, [
+        *orchestration.context.session.get_all(),
+        _turn(resumed, "turn-resumed-run", TurnStatus.COMPLETED),
+    ])
+    resumed_again = AmphiOTAContext(user_input="Continue")
+    await orchestration.agent.init_state(resumed_again, orchestration.context)
+    assert resumed_again.think_status == NormalStageState()
+    assert not orchestration.workspace.has_run_workflow
+    assert not any(getattr(record, "workflow_result", None) for record in resumed_again.ota_record)
 
 
 async def test_run_completion(orchestration: _Harness) -> None:

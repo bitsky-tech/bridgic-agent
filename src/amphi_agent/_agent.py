@@ -888,16 +888,14 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             "status": "pending",
                         }
                     else:
-                        source, resolved_action = await self._enter_or_resume_run_workflow(
+                        result_fields, resolved_action = await self._enter_or_resume_run_workflow(
                             ota_context,
                             context,
                             result.workflow_id,
                             result.action,
                         )
                         step.tool_result = {
-                            "workflow_id": source.workflow_id,
-                            "workflow_name": source.name,
-                            **self._workflow_sections(source),
+                            **result_fields,
                             "status": resolved_action,
                             "reason": result.reason,
                         }
@@ -1663,7 +1661,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         if selected_action is not None:
             try:
-                source, resolved_action = await self._enter_or_resume_run_workflow(
+                result_fields, resolved_action = await self._enter_or_resume_run_workflow(
                     ota_context,
                     context,
                     selected_workflow_id,
@@ -1679,9 +1677,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     )
                 )
                 result_fields = {
-                    "workflow_id": source.workflow_id,
-                    "workflow_name": source.name,
-                    **self._workflow_sections(source),
+                    **result_fields,
                     "resolved_action": resolved_action,
                 }
             except (RuntimeError, ValueError) as exc:
@@ -2410,8 +2406,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         context: AmphiContext,
         workflow_id: str,
         action: str,
-    ) -> tuple[Any, str]:
-        """Enter, resume, or atomically restart the Workspace-owned Run."""
+    ) -> tuple[Dict[str, Any], str]:
+        """Enter or resume a Run and return action fields after settling its boundary."""
         if context.session.is_child:
             raise RuntimeError("Child Sessions cannot control Workflow Runs.")
         workflows = context.workflows
@@ -2495,7 +2491,21 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             stage=state.stage,
             step_index=state.step_index,
         ))
-        return source, resolved_action
+        # Capture source fields before terminal publication removes the active Run.
+        result_fields = {
+            "workflow_id": source.workflow_id,
+            "workflow_name": source.name,
+            **self._workflow_sections(source),
+        }
+        published = await self._settle_workflow_boundary(ota_context, context)
+        if published is not None:
+            result_fields.update({
+                "run_id": published.run_id,
+                "run_status": published.status.value,
+                "created_at": published.created_at.isoformat(),
+                "published_result_dir": str(published.result_dir.resolve()),
+            })
+        return result_fields, resolved_action
 
     @staticmethod
     async def _hydrate_run_workflow(
@@ -2659,13 +2669,22 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 f"Workflow Run state points outside {status.stage} sections."
             )
 
+        run = context.workflow_runs.require_run_workflow()
+        failure = run.result_dir / "failure.md"
+        outcome = (
+            WorkflowRunStatus.FAILED
+            if failure.exists() or failure.is_symlink()
+            else WorkflowRunStatus.COMPLETED
+        )
         published = await self._publish_workflow_run(
             context,
             status,
-            status=WorkflowRunStatus.COMPLETED,
+            status=outcome,
         )
         terminal_summary = (
             f"Workflow `{published.workflow_name}` completed all execution sections successfully."
+            if outcome is WorkflowRunStatus.COMPLETED
+            else f"Workflow `{published.workflow_name}` failed; its saved failure report was retained."
         )
         await self._finish_workflow_run(
             ota_context,
