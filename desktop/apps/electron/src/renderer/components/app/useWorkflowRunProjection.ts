@@ -34,21 +34,22 @@ export function useWorkflowRunProjection(): WorkflowRunProjection {
     const rows = streaming ? [...messages, streaming] : messages
     const allWorkflowBlocks = rows.flatMap((message) =>
       (message.blocks ?? []).filter(
-        (block): block is WorkflowStepBlock => block.type === 'workflow_step',
+        (block): block is WorkflowStepBlock => block.type === 'workflow_step' && block.phase === 'execute',
       ),
     )
     const latestLive = streaming?.blocks
-      .filter((block): block is WorkflowStepBlock => block.type === 'workflow_step')
+      .filter((block): block is WorkflowStepBlock => block.type === 'workflow_step' && block.phase === 'execute')
       .at(-1)
     const generation = run?.generation ?? latestLive?.generation
     const workflowId = run?.workflowId ?? latestLive?.workflowId
     const workflowBlocks = allWorkflowBlocks.filter(
-      (block) => block.generation === generation,
+      (block) => block.workflowId === workflowId && block.generation === generation,
     )
     const latest = workflowBlocks.at(-1)
     const runRows = rows.filter((message) =>
       (message.blocks ?? []).some(
-        (block) => block.type === 'workflow_step' && block.generation === generation,
+        (block) => block.type === 'workflow_step' && block.phase === 'execute'
+          && block.workflowId === workflowId && block.generation === generation,
       ),
     )
     const toolCalls = runRows.reduce(

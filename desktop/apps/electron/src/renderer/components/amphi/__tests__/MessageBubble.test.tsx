@@ -972,6 +972,47 @@ describe('Pipeline', () => {
     host.remove()
   })
 
+  it('renders legacy execution and validation from one Turn as independently collapsible sections', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const store = createStore()
+    const messages = resolveWorkflowStepMetadata(sessionTurnsToMessages([{
+      id: 'legacy-turn', session_id: 'legacy-session', session_ordinal: 0, user_id: 'local',
+      user_input: { text: 'Run workflow', blocks: [] }, status: 'completed', agent_state: {},
+      final_answer: null, error: null, execution_mode: 'auto', model: null, max_rounds: null,
+      browser_tool_loaded: false, workspace_tools_loaded: false, skills_tool_loaded: false,
+      context_usage: {}, created_at: '2026-09-11T00:00:00Z',
+      ota_records: ['execute', 'validate'].map((phase) => ({
+        think_scope: { mode: 'run_workflow', stage: phase }, reasoning_content: `${phase.toUpperCase()}_CONTENT`,
+        action_result: { results: [{ tool_name: 'report_workflow_step', tool_result: {
+          workflow_id: 'wf', generation: 'gen', workflow_name: 'Legacy workflow', phase, step_index: 0,
+          step_count: 1, title: phase === 'execute' ? 'Create report' : 'Check report', status: 'success',
+          execution_steps: ['Create report'], validation_steps: ['Check report'],
+        } }] },
+      })),
+    }]))
+    await act(async () => root.render(
+      <Provider store={store}><Pipeline session={{ id: 'legacy-session', messages, pending: false }} /></Provider>,
+    ))
+    const headings = host.querySelectorAll<HTMLElement>('[data-testid="workflow-stage-header"]')
+    const contents = host.querySelectorAll<HTMLElement>('[data-testid="workflow-stage-content"]')
+    expect(headings).toHaveLength(2)
+    expect(headings[0]?.textContent).toContain('执行 1/1')
+    expect(headings[0]?.textContent).toContain('Create report')
+    expect(headings[1]?.textContent).toContain('验证 1/1')
+    expect(headings[1]?.textContent).toContain('Check report')
+    expect(contents[0]?.textContent).toContain('EXECUTE_CONTENT')
+    expect(contents[0]?.textContent).not.toContain('VALIDATE_CONTENT')
+    expect(contents[1]?.textContent).toContain('VALIDATE_CONTENT')
+    expect(contents[1]?.textContent).not.toContain('EXECUTE_CONTENT')
+    await act(async () => headings[0]!.click())
+    expect(headings[0]!.getAttribute('aria-expanded')).toBe('false')
+    expect(headings[1]!.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
   it('groups Build process content under four independently collapsible stage headings', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)

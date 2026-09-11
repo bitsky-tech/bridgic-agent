@@ -221,18 +221,31 @@ class SessionMessagesHandler(BaseHandler):
         # last turn is mid-history, so pending/thinking would be wrong there.
         is_tail_page = before_ordinal is None
         children = await SessionRepository().list_children(user.id, record.id)
+        # Foreground children belong to calls in this page, not the whole Session.
+        # Background children remain available to the separate hierarchy pane.
+        page_call_ids = {
+            action.get("tool_id")
+            for turn in turns
+            for round in turn.ota_records or []
+            for action in (round.get("action_result") or {}).get("results") or []
+            if action.get("tool_id")
+        }
+        related_children = [
+            child for child in children
+            if child.subagent_mode is SubAgentMode.BACKGROUND or child.parent_call_id in page_call_ids
+        ]
         child_turns = await asyncio.gather(*(
-            repository.latest(child.id, user.id) for child in children
+            repository.latest(child.id, user.id) for child in related_children
         ))
         subagents: Dict[str, List[_SubagentProjection]] = {}
-        for child, turn in zip(children, child_turns):
+        for child, turn in zip(related_children, child_turns):
             if child.parent_call_id and child.subagent_mode is not SubAgentMode.BACKGROUND:
                 subagents.setdefault(child.parent_call_id, []).append(
                     (child.id, turn, child.title or ""),
                 )
         child_turn_by_id = {
             child.id: turn
-            for child, turn in zip(children, child_turns)
+            for child, turn in zip(related_children, child_turns)
         }
 
         def child_status(child: SessionRecord) -> str:

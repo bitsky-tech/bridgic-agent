@@ -164,7 +164,8 @@ export type MessageBlock =
       workflowId: string
       generation: string
       workflowName: string
-      phase: 'execute'
+      /** Historical Turns may still contain the retired validation phase. */
+      phase: 'execute' | 'validate'
       stepIndex: number
       stepCount: number
       title: string
@@ -172,6 +173,7 @@ export type MessageBlock =
       status: 'neutral' | 'running' | 'success' | 'failure'
       summary?: string | null
       executionSteps?: string[]
+      validationSteps?: string[]
     }
   | {
       type: 'workflow_result'

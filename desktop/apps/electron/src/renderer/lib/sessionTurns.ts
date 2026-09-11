@@ -18,7 +18,7 @@ const object = (value: unknown): Data => value && typeof value === 'object' && !
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const string = (value: unknown): string => value == null ? '' : String(value)
 const terminal = (turn: SessionTurnRecord) => ['completed', 'failed', 'cancelled'].includes(turn.status)
-const runKey = (workflowId: string, generation: string) => JSON.stringify([workflowId, generation])
+const phaseKey = (workflowId: string, generation: string, phase: WorkflowStep['phase']) => JSON.stringify([workflowId, generation, phase])
 
 /** Older tool arguments sometimes contain Python literals instead of JSON. No evaluation. */
 function storedValue(value: unknown): unknown {
@@ -121,8 +121,22 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
   let fallbackStart = 0
   let toolIndex = 0
   let hasRunScope = false
+  let workflowEntry: Data | null = null
+  let entryGeneration: string | null = null
 
   const addStep = (step: WorkflowStep) => {
+    // Entry results have no generation. Bind them only inside their Run segment,
+    // using its first report or the Turn's own unfinished cursor.
+    if (workflowEntry?.workflow_id === step.workflowId && (entryGeneration === null || entryGeneration === step.generation)) {
+      entryGeneration = step.generation
+      const titles = array(workflowEntry[step.phase === 'execute' ? 'execution_steps' : 'validation_steps']).map(string)
+      step = {
+        ...step, workflowName: step.workflowName || string(workflowEntry.workflow_name),
+        title: step.title || titles[step.stepIndex] || '', stepCount: step.stepCount || titles.length,
+        ...(titles.length && step.phase === 'execute' && !step.executionSteps?.length ? { executionSteps: titles } : {}),
+        ...(titles.length && step.phase === 'validate' && !step.validationSteps?.length ? { validationSteps: titles } : {}),
+      }
+    }
     const existing = blocks.findIndex((block) => block.type === 'workflow_step'
       && block.workflowId === step.workflowId && block.generation === step.generation
       && block.phase === step.phase && block.stepIndex === step.stepIndex)
@@ -162,6 +176,8 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
       if (scope.mode && scope.mode !== 'run_workflow' && hasRunScope) {
         if (nextBuild === null) blocks.push({ type: 'build_stage', stage: null })
         hasRunScope = false
+        workflowEntry = null
+        entryGeneration = null
       }
     }
     if (scope.mode === 'run_workflow') {
@@ -191,10 +207,11 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
         if (payload.workflow_id) {
           addStep({
             type: 'workflow_step', workflowId: string(payload.workflow_id), generation: string(payload.generation),
-            workflowName: string(payload.workflow_name), phase: 'execute', stepIndex: Number(payload.step_index ?? 0),
+            workflowName: string(payload.workflow_name), phase: payload.phase === 'validate' ? 'validate' : 'execute', stepIndex: Number(payload.step_index ?? 0),
             stepCount: Number(payload.step_count ?? 0), title: string(payload.title),
             status: payload.status === 'success' ? 'success' : 'failure', summary: string(payload.summary) || null,
             ...(Array.isArray(payload.execution_steps) ? { executionSteps: payload.execution_steps.map(string) } : {}),
+            ...(Array.isArray(payload.validation_steps) ? { validationSteps: payload.validation_steps.map(string) } : {}),
           })
           reported = true
           reportTerminal = Boolean(payload.run_id)
@@ -218,6 +235,10 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
           entered = ['started', 'resumed', 'restarted'].includes(status)
             || (status === 'resolved' && ['resume', 'restart'].includes(string(payload.action)))
             || (!['pending', 'failed', 'not_answered'].includes(status) && ['start', 'resume', 'restart'].includes(string(arguments_.action)))
+          if (entered) {
+            workflowEntry = payload
+            entryGeneration = null
+          }
         }
         const response = string(payload.response || payload.user_message).trim()
         if (['resolved', 'not_answered', 'failed'].includes(status) && response) blocks.push({
@@ -299,6 +320,10 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
       fallbackStart = blocks.length
       workflowStart = reportTerminal ? null : blocks.length
     } else if (entered) workflowStart = fallbackStart = blocks.length
+    if (reportTerminal) {
+      workflowEntry = null
+      entryGeneration = null
+    }
   }
   if (showPending && interaction.permission) {
     const permission = object(interaction.permission)
@@ -309,10 +334,10 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
   // Legacy Turns predate per-round scope recording; their cursor still owns the unreported tail.
   if (workflowStart === null && !(turn.ota_records ?? []).some((round) => round.think_scope)) workflowStart = fallbackStart
   // The Turn's own cursor identifies its unfinished section, even after later Turns advance the Run.
-  if (think.mode === 'run_workflow' && think.stage === 'execute' && think.workflow_id && workflowStart !== null && workflowStart < blocks.length) {
+  if (think.mode === 'run_workflow' && (think.stage === 'execute' || think.stage === 'validate') && think.workflow_id && workflowStart !== null && workflowStart < blocks.length) {
     addStep({
       type: 'workflow_step', workflowId: string(think.workflow_id), generation: string(think.generation),
-      workflowName: '', phase: 'execute', stepIndex: Number(think.step_index ?? 0), stepCount: 0, title: '',
+      workflowName: '', phase: think.stage, stepIndex: Number(think.step_index ?? 0), stepCount: 0, title: '',
       status: 'running',
     })
   }
@@ -331,19 +356,20 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext): Me
   )
 }
 
-/** Share labels within a Run generation, never its outcome or its current step position across Turns. */
+/** Share labels within a Run generation and phase, never its outcome or current step position across Turns. */
 export function resolveWorkflowStepMetadata(messages: AgentMessage[], run?: WorkflowRunState | null): AgentMessage[] {
   const metadata = new Map<string, { name: string; titles: string[]; count: number }>()
   for (const message of messages) for (const block of message.blocks ?? []) {
     if (block.type !== 'workflow_step') continue
-    const key = runKey(block.workflowId, block.generation)
+    const key = phaseKey(block.workflowId, block.generation, block.phase)
     const previous = metadata.get(key)
-    const titles = block.executionSteps?.length ? [...block.executionSteps] : [...(previous?.titles ?? [])]
+    const steps = block.phase === 'execute' ? block.executionSteps : block.validationSteps
+    const titles = steps?.length ? [...steps] : [...(previous?.titles ?? [])]
     if (block.title) titles[block.stepIndex] = block.title
     metadata.set(key, { name: block.workflowName || previous?.name || '', titles, count: Math.max(block.stepCount, previous?.count ?? 0) })
   }
   if (run) {
-    const key = runKey(run.workflowId, run.generation)
+    const key = phaseKey(run.workflowId, run.generation, 'execute')
     const previous = metadata.get(key)
     metadata.set(key, {
       name: run.workflowName || previous?.name || '',
@@ -353,7 +379,7 @@ export function resolveWorkflowStepMetadata(messages: AgentMessage[], run?: Work
   }
   return messages.map((message) => ({ ...message, blocks: message.blocks?.map((block) => {
     if (block.type !== 'workflow_step') return block
-    const data = metadata.get(runKey(block.workflowId, block.generation))
+    const data = metadata.get(phaseKey(block.workflowId, block.generation, block.phase))
     return data ? { ...block, workflowName: block.workflowName || data.name, title: block.title || data.titles[block.stepIndex] || '', stepCount: block.stepCount || data.count } : block
   }) }))
 }

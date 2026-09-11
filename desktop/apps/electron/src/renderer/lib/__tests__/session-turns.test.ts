@@ -68,6 +68,70 @@ describe('Session Turn display projection', () => {
     const message = assistant(sessionTurnsToMessages([turn({ agent_state: { think: { ...cursor, step_index: 1 } }, ota_records: [{ think_scope: scope, reasoning_content: 'Work', action_result: { results: [report(0)] } }] })]))
     expect(headings(message).map((step) => step.stepIndex)).toEqual([0])
   })
+  for (const status of ['cancelled', 'failed'] as const) for (const entryStatus of ['started', 'resumed', 'resolved']) {
+    it(`restores ${status} stage labels from the ${entryStatus} entry after a restart`, () => {
+      const input = turn({ status, ota_records: [
+        { think_scope: { mode: 'normal', stage: 'main' }, action_result: { results: [{
+          tool_name: 'request_run_workflow', success: true, tool_result: {
+            workflow_id: 'wf', workflow_name: 'Directory', execution_steps: run.executionSteps,
+            status: entryStatus, ...(entryStatus === 'resolved' ? { action: 'restart', resolved_action: 'restarted' } : {}),
+          },
+        }] } },
+        { think_scope: scope, reasoning_content: 'Original work before any report' },
+      ] })
+      const before = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([input]), run))
+      const after = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([input]), {
+        ...run, generation: 'new-generation', workflowName: 'Edited workflow', executionSteps: ['Changed title'],
+      }))
+      expect(headings(after)).toEqual(headings(before))
+      expect(headings(after)[0]).toMatchObject({ workflowName: 'Directory', title: 'Choose directory', stepCount: 2, generation: 'gen' })
+      expect(after.blocks![1]).toEqual({ type: 'thinking', text: 'Original work before any report' })
+    })
+  }
+  it('binds entry labels to their Run segment when one Turn enters multiple generations', () => {
+    const entry = (titles: string[], workflowId = 'wf') => ({ think_scope: { mode: 'normal', stage: 'main' }, action_result: { results: [{
+      tool_name: 'request_run_workflow', tool_result: { status: 'started', workflow_id: workflowId, workflow_name: titles[0], execution_steps: titles },
+    }] } })
+    const input = turn({ status: 'cancelled', agent_state: { think: { ...cursor, generation: 'new' } }, ota_records: [
+      entry(['Old execution']),
+      { think_scope: scope, reasoning_content: 'Old work', action_result: { results: [{
+        tool_name: 'report_workflow_step', tool_result: { workflow_id: 'wf', generation: 'gen', step_index: 0, status: 'success', run_id: 'old-result' },
+      }] } },
+      entry(['New execution', 'New delivery']),
+      { think_scope: scope, reasoning_content: 'New work' },
+    ] })
+    const message = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([input])))
+    expect(headings(message).map(({ generation, title, stepCount }) => ({ generation, title, stepCount }))).toEqual([
+      { generation: 'gen', title: 'Old execution', stepCount: 1 }, { generation: 'new', title: 'New execution', stepCount: 2 },
+    ])
+    const differentWorkflow = turn({ ota_records: [entry(['Unrelated'], 'other-workflow'), { think_scope: scope, reasoning_content: 'Work' }] })
+    expect(headings(assistant(sessionTurnsToMessages([differentWorkflow])))[0]).toMatchObject({ workflowName: '', title: '', stepCount: 0 })
+  })
+  it('keeps historical execution and validation labels, counts and contents separate across pages', () => {
+    const validation = { ...scope, stage: 'validate' }
+    const old = turn({ status: 'cancelled', agent_state: { think: { ...cursor, stage: 'validate' } }, ota_records: [
+      { think_scope: scope, reasoning_content: 'Execution content', action_result: { results: [report(0)] } },
+      { think_scope: validation, reasoning_content: 'Validation content' },
+    ] })
+    const later = turn({ id: 'later', session_ordinal: 1, status: 'completed', agent_state: {}, ota_records: [{
+      think_scope: validation, action_result: { results: [{ tool_name: 'report_workflow_step', tool_result: {
+        workflow_id: 'wf', generation: 'gen', workflow_name: 'Directory', phase: 'validate', step_index: 0,
+        title: 'Check result', step_count: 1, execution_steps: run.executionSteps, validation_steps: ['Check result'], status: 'success',
+      } }] },
+    }] })
+    const messages = resolveWorkflowStepMetadata([...sessionTurnsToMessages([old]), ...sessionTurnsToMessages([later])], run)
+    expect(headings(assistant(messages)).map(({ phase, title, stepCount, status }) => ({ phase, title, stepCount, status }))).toEqual([
+      { phase: 'execute', title: 'Choose directory', stepCount: 2, status: 'success' },
+      { phase: 'validate', title: 'Check result', stepCount: 1, status: 'neutral' },
+    ])
+    expect(assistant(messages).blocks!.map((block) => block.type)).toEqual(['workflow_step', 'thinking', 'workflow_step', 'thinking'])
+    const isolated = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([old]), run))
+    expect(headings(isolated)[1]).toMatchObject({ phase: 'validate', title: '', stepCount: 0 })
+    const completed = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([turn({
+      status: 'completed', agent_state: {}, ota_records: [old.ota_records![0]!, { ...later.ota_records![0]!, reasoning_content: 'Validate' }],
+    })]), run))
+    expect(headings(completed).map((block) => [block.phase, block.title])).toEqual([['execute', 'Choose directory'], ['validate', 'Check result']])
+  })
   it('keeps the boundary when duplicate question text before it is removed', () => {
     const message = assistant(sessionTurnsToMessages([turn({ status: 'completed', ota_records: [
       { think_result: { step_content: 'Which directory?' }, action_result: { results: [{ tool_name: 'request_run_workflow', tool_result: { status: 'started' } }] } },
