@@ -1,6 +1,7 @@
 import type { AgentEvent } from './agent-events'
 import type {
   AgentMessage,
+  SessionTurnRecord,
   AgentMessageOptions,
   AgentTurnStatus,
   AgentMessageSubagent,
@@ -103,6 +104,7 @@ export type {
   AutostartStatusJson,
   BackendCompatibility,
   AgentMessage,
+  SessionTurnRecord,
   AgentMessageOptions,
   AgentTurnStatus,
   AgentMessageSubagent,

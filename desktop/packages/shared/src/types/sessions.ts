@@ -28,6 +28,28 @@ export type AgentTurnStatus =
   | 'cancelled'
 export type SessionTitleSource = 'default' | 'fallback' | 'generated' | 'manual' | 'persisted'
 
+/** Complete SessionTurnRecord wire data. OTA and state fields stay extensible. */
+export interface SessionTurnRecord {
+  id: string
+  user_id: string
+  session_id: string
+  session_ordinal: number
+  user_input: { text: string; blocks: Record<string, unknown>[] }
+  ota_records: Record<string, unknown>[] | null
+  agent_state: Record<string, unknown> | null
+  browser_tool_loaded: boolean
+  workspace_tools_loaded: boolean
+  skills_tool_loaded: boolean
+  status: AgentTurnStatus
+  final_answer: string | null
+  error: string | null
+  execution_mode: string | null
+  max_rounds: number | null
+  model: string | null
+  context_usage: Record<string, unknown>
+  created_at: string
+}
+
 export interface SessionMeta {
   id: string
   title: string

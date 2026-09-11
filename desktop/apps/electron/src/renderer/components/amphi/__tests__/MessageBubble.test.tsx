@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { AgentMessageToolCall, MessageBlock } from '@/atoms/agent'
+import { sessionTurnsToMessages, resolveWorkflowStepMetadata } from '@/lib/sessionTurns'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -536,6 +537,9 @@ describe('Pipeline', () => {
                 text: '',
                 toolCalls: [],
                 blocks: [{
+                  type: 'workflow_step', workflowId: 'wf', generation: 'gen', workflowName: 'Workflow',
+                  phase: 'execute', stepIndex: 0, stepCount: 1, title: 'Review', status: 'running',
+                }, {
                   type: 'subagent',
                   invocationId: 'hydrated-child',
                   goal: '审核结果',
@@ -557,6 +561,7 @@ describe('Pipeline', () => {
     expect(host.querySelector('[aria-label="正在等待子 Agent"]')).not.toBeNull()
     expect(host.querySelectorAll('[aria-label="正在等待子 Agent"] .agent-activity-wave > span')).toHaveLength(3)
     expect(host.querySelector('[aria-label="消息生成信息"]')).toBeNull()
+    expect(host.querySelector('[data-testid="workflow-stage-header"] .animate-pulse')).not.toBeNull()
     const processLabel = [...host.querySelectorAll('span')].find(
       (element) => element.textContent === '执行过程',
     )
@@ -764,15 +769,18 @@ describe('Pipeline', () => {
       phase: 'execute' as const, stepIndex: 0, stepCount: 2, title: '确认目标目录',
     }
     store.set(activeSessionIdAtom, sessionId)
-    store.set(messageFamily(sessionId), [{
-      id: 'parked-workflow', role: AgentRole.Assistant, text: '', toolCalls: [],
-      blocks: [
-        { type: 'text', text: '准备运行目录统计工作流。' },
-        { type: 'workflow_step', ...progress, status: 'running' },
-        { type: 'thinking', text: '确认要统计的目录。' },
+    store.set(messageFamily(sessionId), resolveWorkflowStepMetadata(sessionTurnsToMessages([{
+      id: 'parked-workflow', session_id: sessionId, session_ordinal: 0, user_id: 'local',
+      user_input: { text: '统计目录', blocks: [] }, status: 'awaiting_human',
+      ota_records: [
+        { think_scope: { mode: 'normal', stage: 'main' }, think_result: { step_content: '准备运行目录统计工作流。' } },
+        { think_scope: { mode: 'run_workflow', stage: 'execute' }, reasoning_content: '确认要统计的目录。' },
       ],
-      done: true, finalAnswer: '', createdAt: 1,
-    }])
+      agent_state: { think: { mode: 'run_workflow', stage: 'execute', workflow_id: progress.workflowId, generation: progress.generation, step_index: 0 } },
+      final_answer: null, error: null, execution_mode: 'auto', model: null, max_rounds: null,
+      browser_tool_loaded: false, workspace_tools_loaded: false, skills_tool_loaded: false,
+      context_usage: {}, created_at: '2026-09-11T00:00:00Z',
+    }]), { ...progress, sourceSessionId: sessionId, executionSteps: ['确认目标目录', '扫描目录'] }))
     store.set(setHumanRequestAtom, {
       sessionId, kind: 'choose', requestId: 'choose-directory',
       questions: [{ question: '统计哪个目录？', options: [{ label: 'project' }] }],

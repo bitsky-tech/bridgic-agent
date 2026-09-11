@@ -31,6 +31,7 @@ import type {
 } from '@shared/types'
 import { AgentRole } from '@shared/types'
 import { rlog } from '@/lib/logger'
+import { resolveWorkflowStepMetadata } from '@/lib/sessionTurns'
 import {
   activeIsDraftAtom,
   activeSessionIdAtom,
@@ -390,7 +391,7 @@ export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: st
       ? currentRows.findIndex((m) => m.id === fetchedHeadId)
       : -1
     if (headIdx > 0) {
-      set(messageFamily(sessionId), [...currentRows.slice(0, headIdx), ...rows])
+      set(messageFamily(sessionId), resolveWorkflowStepMetadata([...currentRows.slice(0, headIdx), ...rows], workflowRun))
     } else {
       set(messageFamily(sessionId), rows)
       set(transcriptPagingFamily(sessionId), {
@@ -552,7 +553,7 @@ export const fetchOlderTranscriptAtom = atom(null, async (get, set, sessionId: s
       rlog.debug('[agent] older page discarded: session head changed during fetch', { sessionId })
       return false
     }
-    set(messageFamily(sessionId), [...older.messages, ...current])
+    set(messageFamily(sessionId), resolveWorkflowStepMetadata([...older.messages, ...current], get(workflowRunFamily(sessionId))))
     set(transcriptPagingFamily(sessionId), {
       hasMore: older.hasMore,
       nextBefore: older.nextBefore,

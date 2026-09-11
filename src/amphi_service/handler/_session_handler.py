@@ -4,7 +4,7 @@ import json
 import os
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from fastapi import HTTPException, Response, status
 
@@ -191,9 +191,8 @@ class SessionDetailHandler(BaseHandler):
 class SessionMessagesHandler(BaseHandler):
     """Bind: ``GET /sessions/{session_id}/messages``.
 
-    The session's full transcript as frontend ``AgentMessage`` dicts — the
-    daemon is the source of truth, so the GUI hydrates from here rather than
-    from local storage.
+    ``format=turns`` returns complete durable records for client-side display.
+    The default message projection remains available for older clients.
     """
 
     tags = ["sessions"]
@@ -203,6 +202,7 @@ class SessionMessagesHandler(BaseHandler):
         session_id: str,
         before_ordinal: Optional[int] = None,
         limit: Optional[int] = None,
+        format: Literal["messages", "turns"] = "messages",
     ) -> Response:
         user = await self.require_user()
         record = await self.require_session(session_id, user)
@@ -239,17 +239,25 @@ class SessionMessagesHandler(BaseHandler):
             turn = child_turn_by_id.get(child.id)
             return turn.status.value if turn is not None else "unknown"
 
-        workflow_run = self._workflow_run_snapshot(record) if is_tail_page else None
+        show_pending = is_tail_page and record.status is SessionStatus.AWAITING
+        if format == "turns":
+            transcript = {
+                "turns": [turn.model_dump(mode="json") for turn in turns],
+                "session_status": record.status.value,
+                "subagents": {
+                    call_id: [
+                        {"session_id": child_id, "turn": turn.model_dump(mode="json") if turn else None, "title": title}
+                        for child_id, turn, title in children
+                    ]
+                    for call_id, children in subagents.items()
+                },
+            }
+        else:
+            transcript = {"messages": session_to_agent_messages(
+                session_id, turns, subagents, show_pending_interaction=show_pending,
+            )}
         return self.response({
-            "messages": session_to_agent_messages(
-                session_id,
-                turns,
-                subagents,
-                show_pending_interaction=(
-                    is_tail_page and record.status is SessionStatus.AWAITING
-                ),
-                workflow_run=workflow_run,
-            ),
+            **transcript,
             # Keep the parked Turn durable until its resumed Invocation settles,
             # but do not replay its question after AgentInvocation accepted the
             # answer and cleared the Session's awaiting projection.
@@ -263,7 +271,10 @@ class SessionMessagesHandler(BaseHandler):
             "context_usage": _context_usage(turns) if is_tail_page else None,
             # The trailing turn's thinking position and active Workflow card.
             "thinking_mode": _thinking_mode(turns) if is_tail_page else None,
-            "workflow_run": workflow_run,
+            "workflow_run": (
+                self._workflow_run_snapshot(record)
+                if is_tail_page else None
+            ),
             # For the "session hierarchy" pane on the left of the run-detail dialog: this
             # session's background sub-Agents (independent Child Sessions,
             # fire-and-forget, not projected into the transcript, hence listed
@@ -370,7 +381,6 @@ def session_to_agent_messages(
     subagents: Optional[Dict[str, List[_SubagentProjection]]] = None,
     *,
     show_pending_interaction: bool = True,
-    workflow_run: Optional[Dict[str, Any]] = None,
 ) -> List[dict]:
     """Rebuild a session transcript from its ordered top-level Turns.
 
@@ -403,7 +413,6 @@ def session_to_agent_messages(
             is_last=is_last,
             subagents=subagents or {},
             show_pending_interaction=show_pending_interaction,
-            workflow_run=workflow_run if is_last else None,
         )
         messages.extend(turn)
         seq += len(turn)
@@ -563,13 +572,14 @@ def _workflow_steps_before_content(
     blocks: List[dict],
     spans: Sequence[tuple[int, int]],
 ) -> List[dict]:
-    """Rotate Workflow markers before their historical process blocks.
+    """Rotate completed Workflow markers before their historical process blocks.
 
     Live ``workflow_progress`` opens a section with ``running`` and later updates
-    that same marker to ``success`` or ``failure``. History supplies completed
-    headings from reports and the unfinished heading from the active Run.
-    Rotating each ``content ... marker`` range restores the live ordering at
-    the section boundaries already recorded by the OTA sequence.
+    that same marker to ``success`` or ``failure``. Persisted traces retain only
+    the terminal ``report_workflow_step`` action, so their marker is discovered
+    after all OTA rounds for the section. ``spans`` records those stable report
+    boundaries; rotating each ``content ... marker`` range restores the live
+    ordering without changing any block payload or unreported tail content.
     """
     if not spans:
         return blocks
@@ -595,14 +605,12 @@ def _turn_messages(
     is_last: bool,
     subagents: Dict[str, List[_SubagentProjection]],
     show_pending_interaction: bool,
-    workflow_run: Optional[Dict[str, Any]] = None,
 ) -> List[dict]:
     """Project one Session Turn into one assistant reply with interaction blocks."""
     ota = turn.ota_context_dump()
     blocks: List[dict] = []
     current_calls: List[dict] = []
     workflow_step_spans: List[tuple[int, int]] = []
-    workflow_step_indices: Dict[tuple, int] = {}
     workflow_content_start: Optional[int] = None
     workflow_fallback_start = 0
     t_idx = 0
@@ -623,35 +631,6 @@ def _turn_messages(
         else []
     )
     open_choice = bool(open_questions)
-
-    def project_workflow_step(payload: dict) -> int:
-        """Project a report or active Run cursor without duplicating its heading."""
-        block = {
-            "type": "workflow_step",
-            "workflowId": str(payload.get("workflow_id")),
-            "generation": str(payload.get("generation") or ""),
-            "workflowName": str(payload.get("workflow_name") or ""),
-            "phase": str(payload.get("phase") or "execute"),
-            "stepIndex": int(payload.get("step_index") or 0),
-            "stepCount": int(payload.get("step_count") or 1),
-            "title": str(payload.get("title") or ""),
-            "status": str(payload.get("status") or "failure"),
-            "summary": payload.get("summary"),
-        }
-        if "execution_steps" in payload:
-            block["executionSteps"] = [str(title) for title in payload.get("execution_steps") or []]
-        key = (block["workflowId"], block["generation"], block["phase"], block["stepIndex"])
-        existing = workflow_step_indices.get(key)
-        if existing is not None:
-            if block["status"] != "running":
-                blocks[existing].update(block)
-            return existing
-        marker_index = len(blocks)
-        workflow_step_indices[key] = marker_index
-        blocks.append(block)
-        content_start = workflow_content_start if workflow_content_start is not None else workflow_fallback_start
-        workflow_step_spans.append((content_start, marker_index))
-        return marker_index
 
     def should_show_interaction_block(block: dict) -> bool:
         return block.get("status") != "pending" or (is_last and show_pending_interaction)
@@ -678,9 +657,10 @@ def _turn_messages(
             text = str(block.get("text") or "").rstrip()
             if text.endswith(question):
                 remaining = text[:-len(question)].rstrip()
-                # Keep positions stable until every section boundary is resolved.
-                # Empty text is removed only after the final block reordering.
-                blocks[block_index] = {"type": "text", "text": remaining}
+                if remaining:
+                    blocks[block_index] = {"type": "text", "text": remaining}
+                else:
+                    blocks.pop(block_index)
             break
 
     def child_block(child_id: str, child_turn: Optional[SessionTurnRecord], goal: str = "") -> dict:
@@ -718,13 +698,6 @@ def _turn_messages(
                 if build_stage is not None or active_build_stage is not None:
                     blocks.append({"type": "build_stage", "stage": build_stage})
                 active_build_stage = build_stage
-        scope = (round_ or {}).get("think_scope")
-        if (
-            isinstance(scope, dict)
-            and scope.get("mode") == "run_workflow"
-            and workflow_content_start is None
-        ):
-            workflow_content_start = len(blocks)
         # This round's chain-of-thought first (streamed live as ``reasoning``
         # before the answer text) — matches the live block order; without it a
         # reloaded transcript would drop the thinking the GUI shows.
@@ -788,8 +761,23 @@ def _turn_messages(
             if step.get("tool_name") == "report_workflow_step":
                 result = step.get("tool_result")
                 if isinstance(result, dict) and result.get("workflow_id"):
-                    workflow_report_index = project_workflow_step(result)
+                    block = {
+                        "type": "workflow_step",
+                        "workflowId": str(result.get("workflow_id")),
+                        "generation": str(result.get("generation") or ""),
+                        "workflowName": str(result.get("workflow_name") or ""),
+                        "phase": str(result.get("phase") or "execute"),
+                        "stepIndex": int(result.get("step_index") or 0),
+                        "stepCount": int(result.get("step_count") or 1),
+                        "title": str(result.get("title") or ""),
+                        "status": str(result.get("status") or "failure"),
+                        "summary": result.get("summary"),
+                    }
+                    if "execution_steps" in result:
+                        block["executionSteps"] = [str(title) for title in result.get("execution_steps") or []]
+                    workflow_report_index = len(blocks)
                     workflow_report_terminal = bool(result.get("run_id"))
+                    blocks.append(block)
                 continue
             if step.get("tool_name") == "request_human_choice":
                 arguments = step.get("tool_arguments") or {}
@@ -988,6 +976,13 @@ def _turn_messages(
 
         round_end = len(blocks)
         if workflow_report_index is not None:
+            content_start = (
+                workflow_content_start
+                if workflow_content_start is not None
+                else workflow_fallback_start
+            )
+            if content_start <= workflow_report_index:
+                workflow_step_spans.append((content_start, workflow_report_index))
             workflow_fallback_start = round_end
             workflow_content_start = None if workflow_report_terminal else round_end
         elif entered_workflow:
@@ -1023,37 +1018,7 @@ def _turn_messages(
             "questions": permission.get("questions") or [],
         })
 
-    # An unfinished section has no report yet. Reuse the current Run metadata
-    # at its existing OTA boundary, including while a human reply is pending.
-    if is_last and workflow_run and isinstance(think_state, dict) and (
-        think_state.get("mode") == "run_workflow"
-        and think_state.get("workflow_id") == workflow_run.get("workflow_id")
-        and think_state.get("generation") == workflow_run.get("generation")
-        and think_state.get("stage") == workflow_run.get("phase")
-        and think_state.get("step_index", 0) == workflow_run.get("step_index")
-    ):
-        step_index = int(workflow_run.get("step_index") or 0)
-        execution_steps = workflow_run.get("execution_steps") or []
-        if 0 <= step_index < len(execution_steps):
-            project_workflow_step({
-                **workflow_run,
-                "step_count": len(execution_steps),
-                "title": execution_steps[step_index],
-                "status": "running",
-            })
-
-    blocks = [
-        block for block in _workflow_steps_before_content(blocks, workflow_step_spans)
-        if block.get("type") != "text" or block.get("text")
-    ]
-    if turn.status.is_terminal:
-        workflow_steps = [block for block in blocks if block.get("type") == "workflow_step"]
-        for block in workflow_steps:
-            if block["status"] == "running":
-                block["status"] = (
-                    "failure" if turn.status is TurnStatus.FAILED and block is workflow_steps[-1]
-                    else "neutral"
-                )
+    blocks = _workflow_steps_before_content(blocks, workflow_step_spans)
 
     messages: List[dict] = []
     completed_at = turn.created_at

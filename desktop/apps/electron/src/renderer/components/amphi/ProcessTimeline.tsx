@@ -43,6 +43,8 @@ export interface ProcessTimelineProps {
   blocks: MessageBlock[]
   /** Streaming in progress → expanded by default (the user can click the title to collapse and override). */
   streaming?: boolean
+  /** The logical Turn is executing or waiting, even when no tokens are streaming. */
+  active?: boolean
   /** Extra condition for defaulting to expanded (alongside streaming): set to true when this message contains a pending
    *  approval card, so the user sees the execution context before deciding — this fixes "when an approval is parked (the turn
    *  has ended, streaming=false) the execution flow happens to fall back to collapsed". Clicking the title can still override it. */
@@ -58,7 +60,7 @@ type TimelineSection =
   | { type: 'build'; key: string; stage: BuildStage; blocks: MessageBlock[] }
 type StageTimelineSection = Exclude<TimelineSection, { type: 'blocks' }>
 
-export function ProcessTimeline({ blocks, streaming = false, defaultOpen = false, sessionId }: ProcessTimelineProps) {
+export function ProcessTimeline({ blocks, streaming = false, active = streaming, defaultOpen = false, sessionId }: ProcessTimelineProps) {
   const { t } = useTranslation()
   // userOpen=null → follow the default (expanded while streaming / defaultOpen, collapsed otherwise); once the user clicks the
   // title it is pinned to an explicit true/false — which is what lets the user actively collapse it (overriding the expanded
@@ -139,6 +141,7 @@ export function ProcessTimeline({ blocks, streaming = false, defaultOpen = false
                 <WorkflowStageSection
                   key={section.key}
                   step={section.step}
+                  active={active}
                   blocks={section.blocks}
                   streaming={streaming}
                   sessionId={sessionId}
@@ -151,7 +154,7 @@ export function ProcessTimeline({ blocks, streaming = false, defaultOpen = false
                   key={section.key}
                   stage={section.stage}
                   blocks={section.blocks}
-                  active={section.key === activeBuildKey && (streaming || defaultOpen)}
+                  active={section.key === activeBuildKey && active}
                   streaming={streaming}
                   sessionId={sessionId}
                 />
@@ -218,11 +221,13 @@ function TimelineBlock({ block, streaming, sessionId }: { block: MessageBlock; s
 /** Workflow-specific adapter for the shared process-section heading. */
 function WorkflowStageSection({
   step,
+  active,
   blocks,
   streaming,
   sessionId,
 }: {
   step: Extract<MessageBlock, { type: 'workflow_step' }>
+  active: boolean
   blocks: MessageBlock[]
   streaming: boolean
   sessionId?: string
@@ -234,13 +239,13 @@ function WorkflowStageSection({
   return (
     <TimelineStageSection
       testIdPrefix="workflow-stage"
-      eyebrow={t('session.timeline.eyebrow.workflow', {
+      eyebrow={step.stepCount > 0 ? t('session.timeline.eyebrow.workflow', {
         phase,
         index: step.stepIndex + 1,
         count: step.stepCount,
-      })}
+      }) : `${phase} ${step.stepIndex + 1}`}
       title={step.title}
-      status={step.status === 'running' && !streaming ? 'neutral' : step.status}
+      status={step.status === 'running' && !active ? 'neutral' : step.status}
       summary={step.summary}
     >
       {blocks.map((block, index) => (

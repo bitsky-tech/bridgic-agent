@@ -1478,6 +1478,7 @@
       "card": {
         "answerLabel": "您的回答",
         "buildConfirmedBadge": "已确认构建",
+        "buildConflictTitle": "未完成构建处理",
         "buildDesc": "是否将当前任务沉淀为可重复运行的工作流",
         "buildOnceBadge": "仅执行一次",
         "buildTitle": "工作流构建确认",
@@ -1489,6 +1490,7 @@
         "qaListLabel": "已确认的问答",
         "qaTitle": "需求确认",
         "questionLabel": "Agent 向您确认",
+        "runTitle": "工作流运行方式",
         "taskRevisedBadge": "已要求修改",
         "taskTitle": "任务说明书确认",
         "workflowTitle": "工作流保存确认"
