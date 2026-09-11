@@ -80,9 +80,13 @@ function fixtureRound(round: PresentationTraceRound, turn: ExperimentTurn, scena
     status: awaiting ? 'waiting' : calls.some(call => call.status === 'error') ? 'error' : 'success', source: 'fixture',
     promptMessages: round.promptBlocks.map(block => ({ ...block })),
     toolDefinitions: exampleDefinitions(example, calls.map(call => call.name), t),
-    model: null, modelOptions: null, output: null,
+    model: null, modelOptions: null, output: round.output ?? null, thinking: round.thinking ?? null,
+    ...(round.output != null && round.outputFidelity ? { outputFidelity: round.outputFidelity } : {}),
+    ...(round.thinking != null && round.thinkingFidelity ? { thinkingFidelity: round.thinkingFidelity } : {}),
+    ...(round.inspectionSource ? { inspectionSource: round.inspectionSource } : {}),
     decision: round.decision, evidence: [...round.evidence], beforeState: null, afterState: null,
     durationMs: null, calls,
+    ...(round.metrics ? { metrics: { ...round.metrics } } : {}),
   }
 }
 
@@ -121,7 +125,7 @@ function simulatedRounds(session: ExperimentSession, turn: ExperimentTurn, turnI
         ...messages.map(message => ({ ...message })),
       ],
       toolDefinitions: exampleDefinitions(example, calls.map(call => call.name), t),
-      model: null, modelOptions: null, output: completed ? example.response : null,
+      model: null, modelOptions: null, output: null, thinking: null, inspectionSource: 'example',
       decision, evidence: [], beforeState: null, afterState: null, durationMs: null, calls,
     }]
   })

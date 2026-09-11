@@ -1,3 +1,5 @@
+import type { RoundMetrics } from './round-metrics'
+
 export type DebugRecordStatus = 'success' | 'error' | 'running' | 'cancelled' | 'waiting' | 'example'
 export type DebugRecordSource = 'fixture' | 'simulation'
 
@@ -53,11 +55,17 @@ export interface DebugRound {
   model: string | null
   modelOptions: Record<string, unknown> | null
   output: string | null
+  thinking?: string | null
+  outputFidelity?: 'recorded' | 'example'
+  thinkingFidelity?: 'recorded' | 'example'
+  /** Inspection metadata is separate from the model's response and exposed reasoning. */
+  inspectionSource?: 'recorded' | 'example'
   decision: string
   evidence: string[]
   beforeState: Record<string, unknown> | null
   afterState: Record<string, unknown> | null
   durationMs: number | null
+  metrics?: RoundMetrics
   calls: DebugToolCall[]
 }
 

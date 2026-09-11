@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { AlertCircle, ArrowRight, BrainCircuit, Check, ChevronRight, Clock3, FileText, GitBranch, Layers3, Wrench } from 'lucide-react'
+import { AlertCircle, ArrowRight, ArrowUpRight, BrainCircuit, Check, ChevronRight, Clock3, FileText, Layers3, Wrench } from 'lucide-react'
 import { useI18n } from '../i18n'
 import type { InspectorPanel } from './experiment-state'
 import type { PresentationTraceCall, PresentationTraceRound } from './presentation-trace-data'
 import './execution-tree.css'
+import { RoundMetricsBar } from './RoundMetricsBar'
+import { ModelResponseContent } from './ModelResponseContent'
 
 type Artifact = 'outline' | 'brief' | 'sources'
 export type TraceTreeFocus = { kind: 'stage'; stageId: string } | { kind: 'round'; roundId: string; panel: InspectorPanel }
@@ -118,22 +120,20 @@ export function TraceExecutionTree({ rounds, focusRequest, onFocusHandled, onArt
         {group.rounds.length > 0 && <ul className="exec-rounds">
           {group.rounds.map(round => {
             const open = !collapsedRounds.has(round.id)
-            const wait = round.id === 'R10'
             const artifact: Artifact | null = round.id === 'R10' ? 'outline' : round.id === 'R09' ? 'sources' : ['R03', 'R04'].includes(round.id) ? 'brief' : null
             return <li key={round.id} className={`exec-round${focusedRound === round.id ? ' is-focused' : ''}`}>
-              <article className="exec-round-card" aria-label={round.title} tabIndex={-1} ref={node => { if (node) nodeRefs.current.set(round.id, node); else nodeRefs.current.delete(round.id) }}>
-                <div className="exec-round-heading"><button className="exec-round-toggle" aria-expanded={open} aria-controls={`${treeId}-${round.id}-body`} onClick={() => toggleRound(round.id)}><ChevronRight size={13} className="exec-chevron" /><BrainCircuit size={15} /><strong>{round.title}</strong><code className="exec-round-id">{round.id}</code></button></div>
-                <p className="exec-agent-summary">{round.summary}</p>
+              <article className="exec-round-card" aria-label={t(`循环 ${round.id}`, `Round ${round.id}`)} tabIndex={-1} ref={node => { if (node) nodeRefs.current.set(round.id, node); else nodeRefs.current.delete(round.id) }}>
+                <div className="exec-round-heading"><button className="exec-round-toggle" aria-label={t(`展开或收起循环 ${round.id}`, `Expand or collapse round ${round.id}`)} aria-expanded={open} aria-controls={`${treeId}-${round.id}-body`} onClick={() => toggleRound(round.id)}><ChevronRight size={13} className="exec-chevron" /><code className="exec-round-id">{round.id}</code><span className="exec-round-label">{t('模型响应', 'Model response')}</span></button><button className="exec-round-link" aria-label={t(`查看循环 ${round.id}`, `Inspect round ${round.id}`)} title={t('查看循环详情', 'Inspect round details')} disabled={!onOpenRound} onClick={() => onOpenRound?.(round.id)}>{t('详情', 'Details')}<ArrowUpRight size={12} /></button></div>
                 <div className="exec-round-body" id={`${treeId}-${round.id}-body`} hidden={!open}>
+                  <ModelResponseContent output={round.output} thinking={round.thinking} outputFidelity={round.outputFidelity} thinkingFidelity={round.thinkingFidelity} />
                   <ul className="exec-calls" aria-label={t(`${round.title}的工具调用`, `Tool calls for ${round.title}`)}>{round.calls.map((call, callIndex) => <li key={call.id} className="exec-call">
                     <button className="exec-call-summary" data-round-id={round.id} data-call-id={call.id} disabled={!onOpenTool} onClick={() => onOpenTool?.(round.id, call.id)} aria-label={t(`查看工具调用 ${call.name} · ${round.id} · ${callIndex + 1}`, `Inspect tool call ${call.name} · ${round.id} · ${callIndex + 1}`)}>
                       <Wrench size={13} className="exec-tool-icon" /><code>{call.name}</code><span className="exec-call-target" title={callTarget(call)}>{callTarget(call)}</span><span className={`exec-call-status ${call.status === 'error' ? 'is-error' : 'is-success'}`}>{call.status === 'error' ? <AlertCircle size={12} /> : <Check size={12} />}{call.status === 'error' ? call.error?.startsWith('HTTP') ? call.error : t('失败', 'Failed') : t('成功', 'Succeeded')}</span><ChevronRight size={12} className="exec-chevron" />
                     </button>
                   </li>)}</ul>
-                  <div className={`exec-outcome${wait ? ' is-waiting' : ''}`}>{wait ? <Clock3 size={14} /> : <GitBranch size={14} />}<p>{round.decision}</p></div>
                   {artifact && <button className="exec-artifact-link" onClick={() => onArtifact(artifact)}><FileText size={13} />{artifact === 'outline' ? t('预览大纲 · 4 章 / 11 页', 'Preview outline · 4 chapters / 11 slides') : artifact === 'brief' ? t('查看需求简报', 'Read the brief') : t('查看资料与引用', 'Inspect sources')}<ArrowRight size={12} /></button>}
-                  <button className="exec-round-link" aria-label={t(`查看循环 ${round.id}`, `Inspect round ${round.id}`)} disabled={!onOpenRound} onClick={() => onOpenRound?.(round.id)}><BrainCircuit size={12} />{t('查看循环', 'Inspect round')}<code>{round.id}</code><ChevronRight size={12} /></button>
                 </div>
+                <footer className="exec-round-footer"><RoundMetricsBar metrics={round.metrics} /></footer>
               </article>
             </li>
           })}
@@ -142,7 +142,7 @@ export function TraceExecutionTree({ rounds, focusRequest, onFocusHandled, onArt
       </li>
   }
   return <section className="exec-tree" aria-label={t('Agent 执行过程', 'Agent execution process')}>
-    <header className="exec-tree-heading"><div><h2>{t('Agent 执行过程', 'Agent execution process')}</h2><p>{t('完整展示所有阶段。点击左侧阶段，跳转到对应的执行起点。', 'All stages in one tree. Use the sidebar to jump to a stage’s starting point.')}</p></div><div className="exec-tree-controls"><button onClick={() => { setCollapsedBranches(new Set()); setCollapsedRounds(new Set()) }}>{t('展开过程', 'Expand process')}</button><button onClick={() => setCollapsedBranches(new Set(groups.map(group => group.id)))}>{t('收起过程', 'Collapse process')}</button></div></header>
+    <header className="exec-tree-heading"><div><h2>{t('Agent 执行过程', 'Agent execution process')}</h2><p>{t('按阶段查看执行过程，点击工具或循环查看详情。', 'Follow each stage and select a tool or round for details.')}</p></div><div className="exec-tree-controls"><button onClick={() => { setCollapsedBranches(new Set()); setCollapsedRounds(new Set()) }}>{t('展开过程', 'Expand process')}</button><button onClick={() => setCollapsedBranches(new Set(groups.map(group => group.id)))}>{t('收起过程', 'Collapse process')}</button></div></header>
     <div className="exec-tree-root"><BrainCircuit size={19} /><strong>PPT Agent</strong><span>{t('完整流程 · 4 个阶段', 'Full workflow · 4 stages')}</span><code>presentation</code></div>
     <ul className="exec-branches">{groups.map(renderBranch)}</ul>
   </section>

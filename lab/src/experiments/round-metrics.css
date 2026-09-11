@@ -1,0 +1,6 @@
+.round-metrics { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 12px; min-width: 0; margin: 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.6; }
+.round-metrics > div { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.round-metrics dt { font-weight: 400; }
+.round-metrics dd { margin: 0; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.round-metrics-source { font-size: 9px; color: var(--text-tertiary); }
+@container experiment-trace (max-width: 400px) { .round-metrics { column-gap: 9px; } }

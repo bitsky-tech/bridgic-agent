@@ -5,6 +5,8 @@ import type { DemoScenario } from './demo-data'
 import type { ExperimentSession, ExperimentTurn } from './experiment-state'
 import type { DebugRecords, DebugRecordStatus } from './debug-record-types'
 import './session-execution.css'
+import { RoundMetricsBar } from './RoundMetricsBar'
+import { ModelResponseContent } from './ModelResponseContent'
 
 export interface SessionStageFocus { stageId: string; turnId?: string }
 interface Props {
@@ -123,7 +125,7 @@ export function SessionExecutionTimeline({ session, scenario, focusRequest, onFo
         <article className="session-agent-message" data-message-role="agent" aria-label={`${turnLabel} · Bridgic Agent`}>
         <header className="session-agent-heading"><span className="session-agent-avatar" aria-hidden="true"><img className="session-agent-logo-light" src={lightLogo} alt="" width={26} height={26} draggable={false} /><img className="session-agent-logo-dark" src={darkLogo} alt="" width={26} height={26} draggable={false} /></span><h2>Bridgic Agent</h2><span className={`session-agent-meta is-${turn.status}`}>{turnLabel}<span aria-hidden="true"> · </span>{executionLabel}</span></header>
         <div className="session-agent-body">
-        <div className="session-turn-origin"><GitBranch size={13} /><p>{fixture ? t('初始示例执行快照 · 保留原始记录', 'Initial example execution snapshot · Original records retained') : policyText(turn)}</p></div>
+        <div className="session-turn-origin"><GitBranch size={13} /><p>{fixture ? t('PPT 测试示例 · 正文与 Thinking 来自历史记录', 'PPT test example · Response text and Thinking from a historical record') : policyText(turn)}</p></div>
         {fixture ? <div className="session-initial-trace" ref={initialTraceRef}>{initialTrace}</div> : <ul className="session-stage-tree">{scenario.stages.map((stage, index) => {
           const key = `${turn.id}:${stage.id}`
           const state = executionStageStatus(turn, index)
@@ -136,16 +138,15 @@ export function SessionExecutionTimeline({ session, scenario, focusRequest, onFo
             </button>
             <div id={`${timelineId}-${turnIndex}-${stage.id}`} className="session-stage-body" hidden={!open}>
               {!reached ? <p className="session-stage-empty">{state === 'inherited' ? t('继续策略保留了前轮的阶段位置，本轮没有再次执行这里。', 'The continuation policy retained the earlier stage position; this stage was not executed again.') : t('这一轮还没有执行到此阶段。', 'This turn did not reach this stage.')}</p> : <>
-                <p className="session-stage-purpose">{stage.description}</p>
+                {records.length === 0 && <p className="session-stage-purpose">{stage.description}</p>}
                 {records.map(record => <section className="session-stage-record" key={record.id} data-debug-round-id={record.id}>
-                  {record.summary && record.summary !== stage.description && <p className="session-round-summary">{record.summary}</p>}
+                  <ModelResponseContent output={record.output} thinking={record.thinking} outputFidelity={record.outputFidelity} thinkingFidelity={record.thinkingFidelity} />
                   {record.calls.length > 0 && <ul className="session-compact-calls" aria-label={t(`${stage.title}的工具调用`, `Tool calls for ${stage.title}`)}>{record.calls.map((call, callIndex) => <li key={call.id}>
                     <button className="session-tool-link" data-debug-call-id={call.id} disabled={!onOpenTool} onClick={() => onOpenTool?.(call.id)} aria-label={t(`查看工具调用 ${call.name} · 第 ${call.turnOrdinal} 轮 · ${record.label} · ${callIndex + 1}`, `Inspect tool call ${call.name} · Turn ${call.turnOrdinal} · ${record.label} · ${callIndex + 1}`)}>
                       <Wrench size={13} /><code>{call.name}</code><span className="session-call-summary" title={call.summary}>{call.summary}</span><span className={`session-call-status is-${call.status}`}>{call.status === 'error' ? <AlertCircle size={11} /> : call.status === 'success' ? <Check size={11} /> : null}{callStatusLabel(call.status)}</span><ChevronRight size={12} />
                     </button>
                   </li>)}</ul>}
-                  {record.decision && record.decision !== record.summary && <p className="session-round-decision"><GitBranch size={12} />{record.decision}</p>}
-                  <button className="session-round-link" aria-label={t(`查看循环 · 第 ${record.turnOrdinal} 轮 · ${record.label}`, `Inspect round · Turn ${record.turnOrdinal} · ${record.label}`)} disabled={!onOpenRound} onClick={() => onOpenRound?.(record.id)}><BrainCircuit size={12} />{t('查看循环', 'Inspect round')}<code>{record.label}</code><ChevronRight size={12} /></button>
+                  <footer className="session-round-footer"><RoundMetricsBar metrics={record.metrics} /><button className="session-round-link" aria-label={t(`查看循环 · 第 ${record.turnOrdinal} 轮 · ${record.label}`, `Inspect round · Turn ${record.turnOrdinal} · ${record.label}`)} disabled={!onOpenRound} onClick={() => onOpenRound?.(record.id)}><BrainCircuit size={12} /><code>{record.label}</code><ChevronRight size={12} /></button></footer>
                 </section>)}
                 {state === 'cancelled' && <p className="session-stop-note">{t('本轮在此中断，本阶段没有完成回执。', 'This turn stopped here; this stage has no completion receipt.')}</p>}
                 {records.length === 0 && <p className="session-mock-note">{t('阶段由前端计时模拟，尚未接入实际执行记录。', 'Stage progress is simulated by the frontend; actual execution records are not connected.')}</p>}

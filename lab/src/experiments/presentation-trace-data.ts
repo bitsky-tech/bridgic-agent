@@ -1,3 +1,6 @@
+import type { RoundMetrics } from './round-metrics'
+import { presentationResponseSnapshot } from './presentation-response-snapshot'
+
 export interface PresentationTraceCall {
   id: string
   name: string
@@ -20,10 +23,17 @@ export interface PresentationTraceRound {
   stage: 'main' | 'ppt_brief' | 'ppt_plan'
   title: string
   summary: string
+  output?: string | null
+  thinking?: string | null
+  outputFidelity?: 'recorded' | 'example'
+  thinkingFidelity?: 'recorded' | 'example'
+  /** Titles, summaries, decisions, and evidence are inspection metadata, not model output. */
+  inspectionSource?: 'recorded' | 'example'
   decision: string
   evidence: string[]
   calls: PresentationTraceCall[]
   promptBlocks: PresentationTracePromptBlock[]
+  metrics?: RoundMetrics
 }
 
 export interface PresentationTraceSlide {
@@ -94,8 +104,23 @@ export function getPresentationTrace(locale: 'zh-CN' | 'en-US'): PresentationTra
   ]
   const call = (id: string, name: string, args: Record<string, unknown>, result: unknown): PresentationTraceCall => ({ id, name, status: 'success', arguments: args, result })
   const fetchFailure = (id: string, domain: string, status: number): PresentationTraceCall => ({ id, name: 'web_fetch', status: 'error', arguments: { url: `https://${domain}/` }, result: { status_code: status, content: null }, error: `HTTP ${status}` })
+  // These values illustrate the UI only; they are not telemetry from the historical task.
+  const exampleMetrics: Record<string, Omit<RoundMetrics, 'source'>> = {
+    R01: { durationMs: 1380, inputTokens: 2480, outputTokens: 136, cacheReadTokens: 0 },
+    R02: { durationMs: 2760, inputTokens: 3940, outputTokens: 310, cacheReadTokens: 2048 },
+    R03: { durationMs: 4820, inputTokens: 5310, outputTokens: 940, cacheReadTokens: 3072 },
+    R04: { durationMs: 1510, inputTokens: 6580, outputTokens: 126, cacheReadTokens: 5120 },
+    R05: { durationMs: 1860, inputTokens: 6840, outputTokens: 210, cacheReadTokens: 6144 },
+    R06: { durationMs: 5840, inputTokens: 8740, outputTokens: 640, cacheReadTokens: 4096 },
+    R07: { durationMs: 13880, inputTokens: 9720, outputTokens: 420, cacheReadTokens: 8192 },
+    R08: { durationMs: 13420, inputTokens: 10460, outputTokens: 380, cacheReadTokens: 9216 },
+    R09: { durationMs: 4260, inputTokens: 11840, outputTokens: 920, cacheReadTokens: 10240 },
+    R10: { durationMs: 8940, inputTokens: 14320, outputTokens: 1680, cacheReadTokens: 11264 },
+  }
   const round = (id: string, stage: PresentationTraceRound['stage'], title: string, summary: string, decision: string, evidence: string[], calls: PresentationTraceCall[]): PresentationTraceRound => ({
     id, stage, title, summary, decision, evidence, calls, promptBlocks: [],
+    ...presentationResponseSnapshot[id], inspectionSource: 'example',
+    ...(exampleMetrics[id] ? { metrics: { ...exampleMetrics[id], source: 'example' as const } } : {}),
   })
   const rounds: PresentationTraceRound[] = [
     round('R01', 'main', t('进入 PPT 编排', 'Enter presentation orchestration'), t('识别到佛教入门 PPT 制作需求，调用演示工作流入口。', 'Recognize an introductory Buddhism presentation request and invoke the presentation workflow.'), t('交接至明确需求阶段。', 'Hand off to the briefing stage.'), [t('初始任务已收到，受众与阅读方式仍需确认。', 'Initial task received; confirm the audience and reading format.')], [call('call-01', 'request_presentation', { goal: input }, { next_stage: 'ppt_brief' })]),

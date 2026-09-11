@@ -4,6 +4,8 @@ import { useI18n } from '../i18n'
 import type { DebugOpenRequest, DebugRecords, DebugRecordStatus, DebugRound, DebugToolCall } from './debug-record-types'
 import { createDebugSimulationReceipt, debugRoundTabs, emptyDebugFilters, filterDebugCalls, filterDebugRounds, isValidRoundRequest, nextDebugRoundTab, parseDebugArguments, roundRequest, type DebugFilters, type DebugRoundTab, type DebugSimulationReceipt } from './debug-panel-state'
 import './debug-workbench-panel.css'
+import { RoundMetricsBar } from './RoundMetricsBar'
+import { ModelResponseContent } from './ModelResponseContent'
 
 interface Props {
   sessionId?: string
@@ -198,6 +200,7 @@ export function DebugWorkbenchPanel({ sessionId, surface, records, request, onLo
       </> : round ? <>
         <div className="debug-detail-title"><h3 ref={detailTitle} tabIndex={-1}><span className="debug-round-number">{round.label}</span>{round.title}</h3><Status status={round.status} t={t} round /><p>{execution(round.turnOrdinal)} · {round.stageLabel}</p></div>
         <div className="debug-detail-links"><button type="button" className="debug-text-button" onClick={() => onLocateRound(round)}><LocateFixed size={13} />{t('定位到对话', 'Locate in conversation')}</button>{artifactButton(round)}</div>
+        <RoundMetricsBar metrics={round.metrics} />
         <div className="debug-round-tabs" role="tablist" aria-label={t('循环详情', 'Round details')}>{debugRoundTabs.map(tab => <button type="button" role="tab" id={`${editorId}-tab-${tab}`} aria-controls={`${editorId}-panel-${tab}`} aria-selected={roundTab === tab} tabIndex={roundTab === tab ? 0 : -1} key={tab} ref={node => { if (node) tabNodes.current.set(tab, node); else tabNodes.current.delete(tab) }} onClick={() => setRoundTab(tab)} onKeyDown={event => {
           const next = nextDebugRoundTab(tab, event.key)
           if (!next) return
@@ -207,7 +210,7 @@ export function DebugWorkbenchPanel({ sessionId, surface, records, request, onLo
         }}>{tab === 'request' ? t('模型请求', 'Request') : tab === 'response' ? t('输出与调用', 'Output & tools') : t('Cognitive', 'Cognitive')}</button>)}</div>
         <div role="tabpanel" id={`${editorId}-panel-request`} aria-labelledby={`${editorId}-tab-request`} hidden={roundTab !== 'request'} tabIndex={0}>
           <p className="debug-provenance"><FlaskConical size={13} />{round.promptMessages.some(message => message.fidelity === 'illustrative') ? t('以下为示例组装的请求，不是实际发送给模型的完整原始请求。', 'This is an illustrative request, not the complete original request sent to a model.') : t('显示已记录的请求字段；未记录字段不会补造。', 'Showing recorded request fields; missing fields are not fabricated.')}</p>
-          <dl className="debug-record-meta"><div><dt>{t('模型', 'Model')}</dt><dd>{round.model ?? t('未记录', 'Not recorded')}</dd></div><div><dt>{t('执行时间', 'Duration')}</dt><dd>{duration(round.durationMs)}</dd></div></dl>
+          <dl className="debug-record-meta"><div><dt>{t('模型', 'Model')}</dt><dd>{round.model ?? t('未记录', 'Not recorded')}</dd></div></dl>
           <DetailSection title={t('Prompt 消息', 'Prompt messages')} aside={<span>{round.promptMessages.length}</span>}>
             {round.promptMessages.length ? <ol className="debug-prompt-messages">{round.promptMessages.map((message, index) => <li key={message.id}><details open><summary><code>{message.role}</code><strong>{message.label}</strong><span>{index + 1}</span><ChevronDown size={12} /></summary><pre>{message.content}</pre></details></li>)}</ol> : <p className="debug-empty-value">{t('未记录 Prompt。', 'Prompt was not recorded.')}</p>}
           </DetailSection>
@@ -217,14 +220,15 @@ export function DebugWorkbenchPanel({ sessionId, surface, records, request, onLo
           <details className="debug-model-options"><summary>{t('模型选项', 'Model options')}<ChevronDown size={12} /></summary><JsonView value={round.modelOptions} empty={t('未记录模型选项。', 'Model options were not recorded.')} /></details>
         </div>
         <div role="tabpanel" id={`${editorId}-panel-response`} aria-labelledby={`${editorId}-tab-response`} hidden={roundTab !== 'response'} tabIndex={0}>
-          <DetailSection title={t('模型原始输出', 'Original model output')}><JsonView value={round.output} empty={t('未记录模型原始输出。下方展示可追溯的工具调用记录。', 'Original model output was not recorded. Available tool calls appear below.')} /></DetailSection>
+          <DetailSection title={t('模型返回内容', 'Model response')}><ModelResponseContent output={round.output} thinking={round.thinking} outputFidelity={round.outputFidelity} thinkingFidelity={round.thinkingFidelity} /></DetailSection>
           <DetailSection title={t('返回的工具调用与结果', 'Returned tool calls and results')} aside={<span>{round.calls.length}</span>}>
             <div className="debug-round-calls">{round.calls.map(call => <button type="button" key={call.id} onClick={() => openTool(call, round.id)}><Wrench size={14} /><span><strong>{call.name}</strong><small>{call.summary}</small></span><Status status={call.status} t={t} /><ChevronRight size={12} /></button>)}</div>
             {!round.calls.length && <p className="debug-empty-value">{t('本轮还没有工具调用记录。', 'No tool calls are recorded for this round.')}</p>}
           </DetailSection>
         </div>
         <div role="tabpanel" id={`${editorId}-panel-state`} aria-labelledby={`${editorId}-tab-state`} hidden={roundTab !== 'state'} tabIndex={0}>
-          <DetailSection title={t('本轮决策', 'Round decision')}><p className="debug-decision">{round.decision || t('未记录决策。', 'No decision was recorded.')}</p>{round.evidence.length > 0 && <ul className="debug-evidence">{round.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul>}</DetailSection>
+          {round.inspectionSource === 'example' && <p className="debug-provenance"><FlaskConical size={13} />{t('以下是为演示整理的流程说明，不是模型正文、Thinking 或实际决策记录。', 'The following workflow notes were written for this demo; they are not model text, Thinking, or recorded decisions.')}</p>}
+          <DetailSection title={round.inspectionSource === 'example' ? t('演示说明', 'Demo notes') : t('本轮决策', 'Round decision')}><p className="debug-decision">{round.decision || t('未记录决策。', 'No decision was recorded.')}</p>{round.evidence.length > 0 && <ul className="debug-evidence">{round.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul>}</DetailSection>
           <DetailSection title={t('执行前状态', 'State before')}><JsonView value={round.beforeState} empty={t('未记录完整状态快照。', 'A complete state snapshot was not recorded.')} /></DetailSection>
           <DetailSection title={t('执行后状态', 'State after')}><JsonView value={round.afterState} empty={t('未记录完整状态快照。', 'A complete state snapshot was not recorded.')} /></DetailSection>
         </div>

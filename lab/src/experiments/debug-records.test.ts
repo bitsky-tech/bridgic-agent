@@ -4,6 +4,7 @@ import { debugCallId, debugRoundId } from './debug-record-types'
 import { getDemoScenarios } from './demo-data'
 import { createExperimentPreviewState, type ExperimentSession, type ExperimentTurn } from './experiment-state'
 import { getPresentationTrace } from './presentation-trace-data'
+import { roundCacheHitPercent } from './round-metrics'
 
 const locale = 'en-US'
 const scenario = getDemoScenarios(locale)[0]!
@@ -28,7 +29,7 @@ describe('debug record normalization', () => {
     for (const roundId of ['R06', 'R07', 'R08']) expect(records.rounds.find(round => round.sourceRoundId === roundId)?.status).toBe('error')
     for (const roundId of ['R01', 'R02', 'R03', 'R04', 'R05', 'R09']) expect(records.rounds.find(round => round.sourceRoundId === roundId)?.status).toBe('success')
     expect(records.rounds.find(round => round.sourceRoundId === 'R06')?.calls.every(call => call.status === 'error')).toBe(true)
-    expect(records.rounds.find(round => round.sourceRoundId === 'R01')?.output).toBeNull()
+    expect(records.rounds.find(round => round.sourceRoundId === 'R01')?.output).toBe(trace.rounds[0]!.output)
   })
 
   test('a waiting confirmation takes precedence over other failed calls in the round', () => {
@@ -117,6 +118,81 @@ describe('debug record normalization', () => {
     ;(records.calls[0]!.result as Record<string, unknown>).next_stage = 'changed locally'
     records.rounds[0]!.promptMessages[0]!.content = 'changed locally'
     records.rounds[0]!.evidence.push('changed locally')
+    records.rounds[0]!.metrics!.inputTokens = 1
     expect(original).toEqual(before)
+  })
+
+  test('only the fixed preview has explicit example metrics and normalization preserves their provenance', () => {
+    const fixture = createExperimentPreviewState().modes[0]!.sessions[0]!
+    const records = buildDebugRecords({ ...fixture, turns: [...fixture.turns, first] }, scenario, trace, locale)
+    expect(trace.rounds).toHaveLength(10)
+    trace.rounds.forEach((round, index) => {
+      expect(round.metrics?.source).toBe('example')
+      expect(round.metrics?.inputTokens).toBeGreaterThan(0)
+      expect(round.metrics?.outputTokens).toBeGreaterThan(0)
+      expect(round.metrics?.durationMs).toBeGreaterThan(0)
+      const cachePercent = roundCacheHitPercent(round.metrics)
+      expect(cachePercent).not.toBeNull()
+      expect(cachePercent!).toBeGreaterThanOrEqual(0)
+      expect(cachePercent!).toBeLessThanOrEqual(100)
+      expect(records.rounds[index]!.metrics).toEqual(round.metrics)
+      expect(records.rounds[index]!.metrics).not.toBe(round.metrics)
+      expect(records.rounds[index]!.durationMs).toBeNull()
+    })
+    expect(records.rounds.filter(round => round.source === 'simulation').every(round => round.metrics === undefined)).toBe(true)
+    expect(buildDebugRecords(session, scenario, null, locale).rounds.every(round => round.metrics === undefined)).toBe(true)
+    expect(getPresentationTrace('zh-CN').rounds.map(round => round.metrics)).toEqual(trace.rounds.map(round => round.metrics))
+  })
+
+  test('recorded responses stay with their fixture while timer examples never use inspection text as output', () => {
+    const fixture = createExperimentPreviewState().modes[0]!.sessions[0]!
+    const records = buildDebugRecords({ ...fixture, turns: [...fixture.turns, { ...first, status: 'completed', completedStages: 4 }] }, scenario, trace, locale)
+    expect(records.rounds.filter(round => round.source === 'simulation')).toHaveLength(4)
+    for (const round of trace.rounds) {
+      expect(round.outputFidelity).toBe('recorded')
+      expect(round.output).not.toBe(round.summary)
+      expect(round.thinking).not.toBe(round.decision)
+      expect(round.inspectionSource).toBe('example')
+    }
+    for (const round of records.rounds.filter(round => round.source === 'simulation')) {
+      expect(round.title.length).toBeGreaterThan(0)
+      expect(round.summary.length).toBeGreaterThan(0)
+      expect(round.decision.length).toBeGreaterThan(0)
+      expect(round.output).toBeNull()
+      expect(round.thinking).toBeNull()
+      expect(round.outputFidelity).toBeUndefined()
+      expect(round.thinkingFidelity).toBeUndefined()
+      expect(round.inspectionSource).toBe('example')
+    }
+  })
+
+  test('explicit model content, fidelity, and empty strings are preserved independently', () => {
+    const fixture = createExperimentPreviewState().modes[0]!.sessions[0]!
+    const withContent = getPresentationTrace(locale)
+    withContent.rounds[0] = {
+      ...withContent.rounds[0]!, output: 'Recorded assistant body', outputFidelity: 'recorded',
+      thinking: 'Recorded reasoning text', thinkingFidelity: 'recorded',
+    }
+    withContent.rounds[1] = {
+      ...withContent.rounds[1]!, output: '', outputFidelity: 'recorded',
+      thinking: '', thinkingFidelity: 'recorded',
+    }
+    withContent.rounds[2] = {
+      ...withContent.rounds[2]!, output: undefined, outputFidelity: 'example',
+      thinking: null, thinkingFidelity: 'example',
+    }
+    const [recorded, empty, missing] = buildDebugRecords(fixture, scenario, withContent, locale).rounds
+    expect(recorded!.output).toBe('Recorded assistant body')
+    expect(recorded!.thinking).toBe('Recorded reasoning text')
+    expect(recorded!.outputFidelity).toBe('recorded')
+    expect(recorded!.thinkingFidelity).toBe('recorded')
+    expect(empty!.output).toBe('')
+    expect(empty!.thinking).toBe('')
+    expect(empty!.outputFidelity).toBe('recorded')
+    expect(empty!.thinkingFidelity).toBe('recorded')
+    expect(missing!.output).toBeNull()
+    expect(missing!.thinking).toBeNull()
+    expect(missing!.outputFidelity).toBeUndefined()
+    expect(missing!.thinkingFidelity).toBeUndefined()
   })
 })

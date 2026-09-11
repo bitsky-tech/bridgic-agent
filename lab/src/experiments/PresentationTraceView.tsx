@@ -39,7 +39,7 @@ export function PresentationTraceView({ trace, panel, focusRequest, onFocusChang
         <div className="experiment-trace-task"><span>{t('原始任务', 'Original task')}</span><p>{trace.input}</p><button className="dbg-text-button" onClick={() => inspectRound('R01', 'cognitive')} aria-label={t('查看流程入口', 'Inspect workflow entry')}><ArrowRight size={14} /></button></div>
       </header>}
       <TraceExecutionTree rounds={trace.rounds} focusRequest={focusRequest} onFocusHandled={handleFocus} onPanelChange={onPanelChange} onArtifact={onArtifact} onInspectRound={inspectRound} onOpenTool={onOpenTool} onOpenRound={onOpenRound} />
-      <p className="trace-bottom-note"><FlaskConical size={12} />{t('根据一次 PPT 测试整理的模拟记录 · 数据固定，未连接运行服务', 'Mock record based on a PPT test · fixed data, no execution service connected')}</p>
+      <p className="trace-bottom-note"><FlaskConical size={12} />{t('正文与 Thinking 为历史快照；工具、流程说明与指标仍为示例，未连接执行服务。', 'Response text and Thinking are historical snapshots; tools, workflow notes, and metrics remain examples, with no execution service connected.')}</p>
     </div>
   </div>
 }

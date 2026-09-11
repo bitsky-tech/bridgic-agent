@@ -110,3 +110,5 @@
 .debug-round-replay > button { width: 100%; }
 .debug-round-replay > .debug-editor { margin-top: 14px; }
 @media (prefers-reduced-motion: reduce) { .debug-record-card { transition: none; } }
+
+.debug-detail-links + .round-metrics { margin: -4px 0 13px; }
