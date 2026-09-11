@@ -2479,42 +2479,6 @@ class BuildThink(MainThink):
             await self.workspace_block(ota_context, context),
         ]
 
-    @staticmethod
-    def human_document_reason(name: str, body: str) -> Optional[str]:
-        """Validate heading use in a human-facing Build document."""
-        level_one: List[int] = []
-        fence: Optional[str] = None
-        annotation = re.compile(
-            r"^\s*#{1,6}\s+`?(CODE|AGENT|STABLE|VOLATILE|HUMAN|sample)`?\s*[:=]",
-            flags=re.IGNORECASE,
-        )
-        for line_number, line in enumerate(body.splitlines(), start=1):
-            stripped = line.strip()
-            marker = re.match(r"^(`{3,}|~{3,})", stripped)
-            if marker:
-                candidate = marker.group(1)
-                if fence is None:
-                    fence = candidate
-                elif candidate[0] == fence[0] and len(candidate) >= len(fence):
-                    fence = None
-                continue
-            if fence is not None:
-                continue
-            if annotation.match(line):
-                return (
-                    f"{name} line {line_number} uses a machine annotation as a Markdown "
-                    "heading; write it as a list item with an inline-code marker instead."
-                )
-            if re.match(r"^#\s+\S", stripped):
-                level_one.append(line_number)
-        if len(level_one) > 1:
-            lines = ", ".join(str(line_number) for line_number in level_one)
-            return (
-                f"{name} has multiple level-one headings on lines {lines}; keep one "
-                "document title and use ## or ### for sections."
-            )
-        return None
-
     def workflow_validation_reason(
         self,
         context: AmphiContext,
@@ -2543,14 +2507,6 @@ class ClarifyThink(BuildThink):
     allowed_tools = BuildThink.allowed_tools | {
         "request_human_task_confirm",
     }
-
-    _MERMAID_DIAGRAM_TYPES = frozenset({
-        "architecture-beta", "block-beta", "classdiagram", "erdiagram", "gantt",
-        "gitgraph", "journey", "kanban", "mindmap", "packet-beta", "pie",
-        "quadrantchart", "radar-beta", "requirementdiagram", "sankey-beta",
-        "sequencediagram", "statediagram", "statediagram-v2", "timeline",
-        "treemap-beta", "xychart-beta", "zenuml",
-    })
 
     async def assemble_messages(
         self,
@@ -2666,125 +2622,10 @@ class ClarifyThink(BuildThink):
         )
 
     def task_validation_reason(self, context: AmphiContext) -> Optional[str]:
-        """Validate the current task definition and any Mermaid diagrams it contains."""
-        def diagram_reason(source: str) -> Optional[str]:
-            lines = [
-                (number, line.strip())
-                for number, line in enumerate(source.splitlines(), start=1)
-                if line.strip() and not line.lstrip().startswith("%%")
-            ]
-            if not lines:
-                return "the diagram is empty."
-
-            header = lines[0][1]
-            kind = header.split(maxsplit=1)[0].casefold().rstrip(";")
-            flowchart = kind in {"flowchart", "graph"}
-            if flowchart:
-                if not re.fullmatch(
-                    r"(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\s*;?",
-                    header,
-                    re.IGNORECASE,
-                ):
-                    return "declare a valid flow direction, for example `flowchart TD`."
-            elif kind not in self._MERMAID_DIAGRAM_TYPES and not kind.startswith("c4"):
-                return f"`{header}` is not a recognized Mermaid diagram declaration."
-            if len(lines) == 1:
-                return "the diagram has a declaration but no content."
-
-            pairs = {")": "(", "]": "[", "}": "{"}
-            stack: List[Tuple[str, int]] = []
-            quoted = False
-            escaped = False
-            for line_number, line in enumerate(source.splitlines(), start=1):
-                if line.lstrip().startswith("%%"):
-                    continue
-                for character in line:
-                    if escaped:
-                        escaped = False
-                    elif character == "\\" and quoted:
-                        escaped = True
-                    elif character == '"':
-                        quoted = not quoted
-                    elif not quoted and character in "([{":
-                        stack.append((character, line_number))
-                    elif not quoted and character in pairs:
-                        if not stack or stack[-1][0] != pairs[character]:
-                            return f"line {line_number} has an unmatched `{character}`."
-                        stack.pop()
-            if quoted:
-                return "a double-quoted label is not closed."
-            if stack:
-                opener, line_number = stack[-1]
-                return f"line {line_number} has an unmatched `{opener}`."
-
-            if flowchart:
-                open_subgraphs = 0
-                edge = r"(?:<-->|<==>|-->|---|-\.->|==>|~~~|--[ox]|[ox]--[ox])"
-                for line_number, line in lines[1:]:
-                    if re.match(r"^subgraph(?:\s|$)", line, flags=re.IGNORECASE):
-                        open_subgraphs += 1
-                    elif line.casefold().rstrip(";") == "end":
-                        if open_subgraphs == 0:
-                            return f"line {line_number} has an unmatched `end`."
-                        open_subgraphs -= 1
-                    dangling = re.match(rf"^{edge}", line) or re.search(
-                        rf"{edge}(?:\|[^|]*\|)?\s*;?$",
-                        line,
-                    )
-                    if dangling:
-                        return f"line {line_number} has a connector without nodes on both sides."
-                if open_subgraphs:
-                    return "a `subgraph` block is missing its closing `end`."
-            return None
-
+        """Require a readable task definition without enforcing prose formatting."""
         package = self.build_package(context)
         body = package.read_document("task.md") if package is not None else None
-        if not body:
-            return "write task.md before requesting confirmation."
-        document_reason = self.human_document_reason("task.md", body)
-        if document_reason:
-            return document_reason
-
-        diagrams: List[Tuple[int, str]] = []
-        fence: Optional[str] = None
-        start_line = 0
-        source: List[str] = []
-
-        for line_number, line in enumerate(body.splitlines(), start=1):
-            stripped = line.strip()
-            if fence is None:
-                opening = re.fullmatch(r"(`{3,})\s*mermaid\s*", stripped, flags=re.IGNORECASE)
-                if opening:
-                    fence = opening.group(1)
-                    start_line = line_number
-                    source = []
-                elif re.match(r"`{3,}.*\bmermaid\b", stripped, flags=re.IGNORECASE):
-                    return (
-                        f"task.md line {line_number} has an invalid Mermaid fence; "
-                        "use a standalone ```mermaid opening fence."
-                    )
-                continue
-
-            if stripped == fence:
-                diagrams.append((start_line, "\n".join(source)))
-                fence = None
-                source = []
-            elif stripped.startswith(fence):
-                return (
-                    f"task.md line {line_number} has an invalid Mermaid closing fence; "
-                    f"close the block with {fence} on its own line."
-                )
-            else:
-                source.append(line)
-
-        if fence is not None:
-            return f"the Mermaid block opened at task.md line {start_line} is not closed."
-
-        for index, (line_number, diagram) in enumerate(diagrams, start=1):
-            reason = diagram_reason(diagram)
-            if reason:
-                return f"Mermaid diagram {index} at task.md line {line_number}: {reason}"
-        return None
+        return None if body else "write task.md before requesting confirmation."
 
 
 class ExploreThink(BuildThink):
@@ -2890,8 +2731,7 @@ class ExploreThink(BuildThink):
         package = self.build_package(context)
         body = package.read_document("explore.md") if package is not None else None
         if body:
-            reason = self.human_document_reason("explore.md", body)
-            return f"switch rejected: {reason}" if reason else None
+            return None
         return (
             "switch rejected: write explore.md before handing off to "
             "generate; it is the operation sequence generate builds from. Create "
@@ -3081,23 +2921,29 @@ class VerifyThink(BuildThink):
                 "and the overall verification verdict before calling "
                 "request_human_workflow_confirm."
             )
-        document_reason = self.human_document_reason("verify.md", body)
-        if document_reason:
-            return f"confirm rejected: {document_reason}"
 
         def overall_verdict() -> Optional[str]:
-            """Read a localized overall-verdict section at the document tail."""
-            lines = [line.strip() for line in body.splitlines() if line.strip()]
-            if len(lines) < 2 or not re.fullmatch(r"##\s+\S.*", lines[-2]):
-                return None
-            return lines[-1].upper()
+            """Read the last explicit verdict outside code blocks, allowing later notes."""
+            verdict = None
+            fence = None
+            for line in body.splitlines():
+                stripped = line.strip()
+                marker = re.match(r"^(`{3,}|~{3,})", stripped)
+                if marker:
+                    candidate = marker.group(1)
+                    if fence is None:
+                        fence = candidate
+                    elif candidate[0] == fence[0] and len(candidate) >= len(fence):
+                        fence = None
+                    continue
+                if fence is None and stripped.upper() in {"PASS", "FAIL"}:
+                    verdict = stripped.upper()
+            return verdict
 
         if overall_verdict() != "PASS":
             return (
-                "confirm rejected: verify.md must end with a level-two heading meaning "
-                "Overall verdict in the document language, followed by `PASS`. Do not "
-                "mark PASS while safely testable behavior failed, Verify changed actual "
-                "external state, or a safety limitation was hidden."
+                "confirm rejected: verify.md must contain an explicit overall `PASS` verdict. "
+                "Do not mark PASS while safely testable behavior failed or a safety limitation was hidden."
             )
         reason = self.workflow_validation_reason(context)
         return f"confirm rejected: {reason}" if reason else None

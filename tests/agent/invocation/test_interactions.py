@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import AsyncIterator
@@ -10,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from src.amphi_agent._agent import AmphiAgent
 from src.amphi_agent._invocation import (
     AgentInvocation,
     InvocationDisposition,
@@ -24,6 +26,7 @@ from src.amphi_agent._state import (
     AwaitingWorkflowConfirm,
     AwaitingWorkflowRunChoice,
     BuildStageState,
+    SubAgentsCompleted,
 )
 from src.amphi_agent._workflow_run import WorkflowRunLibrary
 from src.amphi_agent._workflows import WorkflowLibrary
@@ -443,3 +446,205 @@ async def test_run_choice(interactions: _Harness) -> None:
     checkpoint = workspace.run_workflow_checkpoint()
     assert checkpoint is not None
     assert checkpoint.generation == "retained-generation"
+
+
+@pytest.mark.parametrize("answer_type", ["permission_answer", "choice_answer", "chat", "subagents"])
+@pytest.mark.parametrize("run_state", ["completed", "failed", "gone", "publication_error"])
+async def test_resume_retired_validation_turn(
+    interactions: _Harness,
+    agent_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+    answer_type: str,
+    run_state: str,
+) -> None:
+    """Resume an old approval on the original Turn without replaying validation tools."""
+    async def reject_tool_replay(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Retired validation tools must not execute")
+
+    async def fail_publication(*args: Any, **kwargs: Any) -> None:
+        raise OSError("Publication unavailable")
+
+    record = await interactions.create_session("retired-validation")
+    interactions.llm.enqueue_text("Earlier answer.")
+    await interactions.run(record.id, "Earlier request.")
+    previous = await interactions.turns.latest(record.id, USER_ID)
+    assert previous is not None
+
+    workspace = await interactions.workspace(record)
+    source = interactions.paths.root / "legacy-source"
+    _write_package(source)
+    workflows = await WorkflowLibrary(USER_ID).load()
+    saved = await workflows.materialize_workflow(
+        source,
+        workflow_id=None,
+        source_session_id=record.id,
+        source_turn_id="legacy-build",
+        name="Legacy report",
+        description="Create a report",
+    )
+    workflow_runs = await WorkflowRunLibrary(USER_ID).load()
+    original = UserInput(
+        text="Create the original report.",
+        blocks=[{"type": "text", "value": "Create the original report."}],
+    )
+    initial_state = RunWorkflowState(
+        workflow_id=saved.workflow_id,
+        generation="legacy-generation",
+        workflow_name=saved.name,
+        workflow_input=original,
+    )
+
+    def populate(root: Path) -> None:
+        workflow_runs.populate_run_workflow(root, saved.root)
+
+    active = await workspace.prepare_run_workflow_space("create", initial_state=initial_state, populate=populate)
+    (active.root / "result" / "report.txt").write_text("Original report\n", encoding="utf-8")
+    if run_state == "failed":
+        (active.root / "result" / "failure.md").write_text("Legacy failure\n", encoding="utf-8")
+    raw_state = json.loads((active.root / ".state.json").read_text(encoding="utf-8"))
+    raw_state.update(stage="validate", step_index=3)
+    (active.root / ".state.json").write_text(json.dumps(raw_state), encoding="utf-8")
+    if run_state == "gone":
+        await workspace.discard_run_workflow(expected_generation=initial_state.generation)
+    workspace.close_run_workflow_space()
+
+    prior_round = {"observation_result": "The original report was created."}
+    questions = [{"question": "Run the final validation?", "options": [{"id": "yes", "label": "Yes"}]}]
+    permission = answer_type == "permission_answer"
+    tool = "bash" if permission else "request_human_choice"
+    arguments = {"command": "legacy-validation"} if permission else {"questions": questions}
+    if answer_type == "subagents":
+        tool = "run_subagent"
+        arguments = {"goal": "Check the existing report."}
+    call = {
+        "call_id": "legacy-pending-tool",
+        "tool": tool,
+        "tool_arguments": [{"name": name, "value": value} for name, value in arguments.items()],
+    }
+    held_round = {
+        "think_result": {"step_content": "Validate the finished report.", "tool_calls": [call]},
+        "action_result": None if permission else {"results": [{
+            "tool_id": call["call_id"],
+            "tool_name": tool,
+            "tool_arguments": arguments,
+            "tool_result": questions,
+            "success": True,
+        }]},
+    }
+    interaction = {"request_id": "legacy-request"}
+    if permission:
+        interaction["permission"] = {"calls": [call], "verdicts": ["ask"], "items": [{"call_index": 0}]}
+    else:
+        interaction["questions"] = questions
+    state = {
+        "think": {
+            "mode": "run_workflow",
+            "stage": "validate",
+            "workflow_id": saved.workflow_id,
+            "generation": initial_state.generation,
+            "step_index": 3,
+        },
+        "interaction": interaction,
+    }
+    status = TurnStatus.AWAITING_PERMISSION if permission else TurnStatus.AWAITING_HUMAN
+    if answer_type == "subagents":
+        status = TurnStatus.AWAITING_SUBAGENTS
+        state["interaction"] = None
+        state["subagents"] = {"calls": [{
+            "tool_call_id": call["call_id"], "goal": arguments["goal"], "session_id": "finished-child",
+        }]}
+        held_round["action_result"]["results"][0]["tool_result"] = "Waiting for the child."
+    pending = await interactions.turns.append_result(
+        USER_ID,
+        session_id=record.id,
+        expected_tail_id=previous.id,
+        user_input=original,
+        ota_records=[prior_round, held_round],
+        agent_state=state,
+        browser_tool_loaded=False,
+        workspace_tools_loaded=False,
+        skills_tool_loaded=False,
+        status=status,
+        final_answer=None,
+        error=None,
+        context_usage={"model_id": agent_model, "input_tokens": 100, "output_tokens": 20},
+        model=agent_model,
+        execution_mode="auto",
+        max_rounds=8,
+        duration_ms=1234,
+    )
+    reply = {"type": answer_type, "request_id": "legacy-request"}
+    if permission:
+        reply["answers"] = [{"call_index": 0, "decision": "allow", "instruction": "Keep the original report unchanged."}]
+    elif answer_type == "choice_answer":
+        reply["answers"] = [{"index": 0, "option_id": "yes"}]
+    elif answer_type == "subagents":
+        reply = SubAgentsCompleted.model_validate({"results": [{
+            "tool_call_id": call["call_id"], "status": "completed", "answer": "The child finished checking.",
+        }]})
+    else:
+        reply["input"] = "Continue with the existing report."
+    monkeypatch.setattr(AmphiAgent, "action_tool_call", reject_tool_replay)
+    if run_state == "publication_error":
+        monkeypatch.setattr(WorkflowRunLibrary, "publish_run_workflow", fail_publication)
+        with pytest.raises(OSError, match="Publication unavailable"):
+            await interactions.run(record.id, reply)
+    else:
+        interactions.llm.enqueue_text("The report is ready.", input_tokens=10, output_tokens=2)
+        resumed = await interactions.run(record.id, reply)
+        assert resumed.outcome.disposition is InvocationDisposition.COMPLETED
+        assert resumed.interaction is None
+
+    turns = await interactions.turns.list_conversation(USER_ID, record.id)
+    assert len(turns) == 2
+    assert turns[0].id == previous.id
+    completed = turns[-1]
+    assert completed.id != pending.id
+    assert completed.session_ordinal == pending.session_ordinal
+    assert completed.user_input == original
+    assert completed.context_usage["input_tokens"] == (100 if run_state == "publication_error" else 110)
+    assert completed.context_usage["output_tokens"] == (20 if run_state == "publication_error" else 22)
+    assert completed.duration_ms >= 1234
+    assert completed.ota_records[0]["observation_result"] == prior_round["observation_result"]
+    held = completed.ota_records[1]
+    step = held["action_result"]["results"][0]
+    assert step["tool_id"] == call["call_id"]
+    if permission:
+        assert step["success"] is False
+        assert "Skipped" in step["error"]
+        assert "Keep the original report unchanged." in held["observation_result"]
+    else:
+        assert isinstance(step["tool_result"], str)
+        if answer_type == "subagents":
+            assert "The child finished checking." in step["tool_result"]
+        elif answer_type == "choice_answer":
+            assert "Yes" in step["tool_result"]
+        else:
+            assert reply["input"] in step["tool_result"]
+    assert completed.agent_state["interaction"] is None
+    assert completed.agent_state["subagents"] is None
+    if run_state == "publication_error":
+        assert completed.status is TurnStatus.FAILED
+        assert completed.error
+        assert workspace.has_run_workflow
+        assert (active.root / "result" / "report.txt").read_text(encoding="utf-8") == "Original report\n"
+        return
+    assert completed.status is TurnStatus.COMPLETED
+    assert completed.agent_state["think"] == {"mode": "normal", "stage": "main"}
+    assert not workspace.has_run_workflow
+    stamps = [item["workflow_result"] for item in completed.ota_records if item.get("workflow_result")]
+    await workflow_runs.load()
+    if run_state == "gone":
+        assert stamps == []
+        assert workflow_runs.runs() == ()
+    else:
+        assert len(stamps) == 1
+        assert len(workflow_runs.runs()) == 1
+        published = workflow_runs.get(stamps[0]["run_id"])
+        assert published is not None
+        assert published.status.value == run_state
+        assert published.read_file("result/report.txt") == "Original report\n"
+    if answer_type in {"permission_answer", "choice_answer"}:
+        with pytest.raises(InvocationStaleAnswerError):
+            await interactions.run(record.id, reply)
+        assert [turn.id for turn in await interactions.turns.list_conversation(USER_ID, record.id)] == [turn.id for turn in turns]

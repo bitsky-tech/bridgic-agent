@@ -884,16 +884,14 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                             "status": "pending",
                         }
                     else:
-                        source, resolved_action = await self._enter_or_resume_run_workflow(
+                        result_fields, resolved_action = await self._enter_or_resume_run_workflow(
                             ota_context,
                             context,
                             result.workflow_id,
                             result.action,
                         )
                         step.tool_result = {
-                            "workflow_id": source.workflow_id,
-                            "workflow_name": source.name,
-                            **self._workflow_sections(source),
+                            **result_fields,
                             "status": resolved_action,
                             "reason": result.reason,
                         }
@@ -1170,6 +1168,46 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             if isinstance(ota_context.think_status, BuildStageState) and not confirming_workflow:
                 await self._sync_build_space(ota_context, context)
             elif isinstance(ota_context.think_status, WorkflowStageState):
+                if think.get("stage") == "validate":
+                    # Consume the parked Turn before settlement can publish a result
+                    # or fail. Persistence must replace it with its original trace.
+                    approval_answers = self._permission_answers(ota_context.user_input)
+                    if latest_turn.status is TurnStatus.AWAITING_SUBAGENTS:
+                        self._resume_subagents(ota_context, context, subagent_state, rounds, original_user_input)
+                    elif latest_turn.status is TurnStatus.AWAITING_HUMAN:
+                        self._resume_human_choice(ota_context, context, interaction, rounds, original_user_input)
+                    else:
+                        ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
+                        context.session = context.session.without_last()
+                        ota_context.user_input = original_user_input
+
+                    note = "Skipped the retired Workflow validation phase; its pending tools must not be replayed."
+                    if not ota_context.ota_record:
+                        ota_context.ota_record.append(OTARecord())
+                    held = ota_context.ota_record[-1]
+                    if latest_turn.status is TurnStatus.AWAITING_PERMISSION:
+                        permission = interaction.get("permission") or {}
+                        results = ActionResult.model_validate(held.action_result or {"results": []})
+                        recorded_ids = {step.tool_id for step in results.results}
+                        for raw_call in permission.get("calls") or []:
+                            call = StepToolCall.model_validate(raw_call)
+                            if call.call_id not in recorded_ids:
+                                results.results.append(ActionStepResult(
+                                    tool_id=call.call_id,
+                                    tool_name=call.tool,
+                                    tool_arguments=self._tool_args(call),
+                                    tool_result=note,
+                                    success=False,
+                                    error=note,
+                                ))
+                        held.action_result = results.model_dump(mode="json")
+                        for _, instruction in approval_answers.values():
+                            if instruction:
+                                note += f"\nUser approval note: {instruction}"
+                    held.observation_result = f"{held.observation_result}\n{note}" if held.observation_result else note
+                    ota_context.transition_interaction(None)
+                    ota_context.transition_subagents(None)
+
                 projected = await self._hydrate_run_workflow(
                     ota_context.think_status,
                     context,
@@ -1179,6 +1217,11 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 else:
                     ota_context.transition_think(projected)
                     await self._settle_workflow_boundary(ota_context, context)
+
+                if think.get("stage") == "validate":
+                    # The retired phase has settled (or its Run is already gone).
+                    # Do not replay pending validation tools or approvals.
+                    return
 
         # Resume the parked state selected by the durable Turn status
         if latest_turn.status is TurnStatus.AWAITING_SUBAGENTS:
@@ -1238,6 +1281,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         if think.get("mode") == "build":
             ota_context.transition_think(BuildStageState.model_validate(think))
         elif think.get("mode") == "run_workflow":
+            if think.get("stage") == "validate":
+                # Only restore identity here; hydration below replaces the cursor
+                # with the completion boundary projected from the pinned source.
+                think = {**think, "stage": "execute"}
             ota_context.transition_think(WorkflowStageState.model_validate(think))
 
     async def _enter_or_resume_build(self, ota_context: AmphiOTAContext, context: AmphiContext, workflow_id: Optional[str] = None) -> Optional[BuildStageState]:
@@ -1659,7 +1706,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         if selected_action is not None:
             try:
-                source, resolved_action = await self._enter_or_resume_run_workflow(
+                result_fields, resolved_action = await self._enter_or_resume_run_workflow(
                     ota_context,
                     context,
                     selected_workflow_id,
@@ -1675,9 +1722,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     )
                 )
                 result_fields = {
-                    "workflow_id": source.workflow_id,
-                    "workflow_name": source.name,
-                    **self._workflow_sections(source),
+                    **result_fields,
                     "resolved_action": resolved_action,
                 }
             except (RuntimeError, ValueError) as exc:
@@ -2406,8 +2451,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         context: AmphiContext,
         workflow_id: str,
         action: str,
-    ) -> tuple[Any, str]:
-        """Enter, resume, or atomically restart the Workspace-owned Run."""
+    ) -> tuple[Dict[str, Any], str]:
+        """Enter or resume a Run and return action fields after settling its boundary."""
         if context.session.is_child:
             raise RuntimeError("Child Sessions cannot control Workflow Runs.")
         workflows = context.workflows
@@ -2491,7 +2536,21 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             stage=state.stage,
             step_index=state.step_index,
         ))
-        return source, resolved_action
+        # Capture source fields before terminal publication removes the active Run.
+        result_fields = {
+            "workflow_id": source.workflow_id,
+            "workflow_name": source.name,
+            **self._workflow_sections(source),
+        }
+        published = await self._settle_workflow_boundary(ota_context, context)
+        if published is not None:
+            result_fields.update({
+                "run_id": published.run_id,
+                "run_status": published.status.value,
+                "created_at": published.created_at.isoformat(),
+                "published_result_dir": str(published.result_dir.resolve()),
+            })
+        return result_fields, resolved_action
 
     @staticmethod
     async def _hydrate_run_workflow(
@@ -2655,13 +2714,22 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 f"Workflow Run state points outside {status.stage} sections."
             )
 
+        run = context.workflow_runs.require_run_workflow()
+        failure = run.result_dir / "failure.md"
+        outcome = (
+            WorkflowRunStatus.FAILED
+            if failure.exists() or failure.is_symlink()
+            else WorkflowRunStatus.COMPLETED
+        )
         published = await self._publish_workflow_run(
             context,
             status,
-            status=WorkflowRunStatus.COMPLETED,
+            status=outcome,
         )
         terminal_summary = (
             f"Workflow `{published.workflow_name}` completed all execution sections successfully."
+            if outcome is WorkflowRunStatus.COMPLETED
+            else f"Workflow `{published.workflow_name}` failed; its saved failure report was retained."
         )
         await self._finish_workflow_run(
             ota_context,

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -271,3 +272,53 @@ async def test_invalid_run(agent_workspace: Workspace) -> None:
     with pytest.raises(ValueError, match="invalid JSON"):
         await agent_workspace.prepare_run_workflow_space("resume")
     assert agent_workspace.run_workflow is None
+
+
+@pytest.mark.parametrize("backup", [False, True])
+@pytest.mark.parametrize("validation_index", [0, 7])
+async def test_legacy_validation_checkpoint(agent_workspace: Workspace, backup: bool, validation_index: int) -> None:
+    """Project legacy validation cursors to completion without changing discovery files."""
+    def populate(root: Path) -> None:
+        source = root / "source" / "workflow"
+        source.mkdir(parents=True)
+        (source / "WORKFLOW.md").write_text(
+            "---\nname: report\ndescription: Produce a report\n---\n"
+            "# Collect inputs\n\nRead inputs.\n\n# Publish report\n\nWrite result.\n",
+            encoding="utf-8",
+        )
+        (root / "report.txt").write_text("already produced\n", encoding="utf-8")
+
+    run = await agent_workspace.prepare_run_workflow_space(
+        "create", initial_state=_run_state(), populate=populate,
+    )
+    state = {**_run_state().model_dump(mode="json"), "stage": "validate", "step_index": validation_index}
+    state_path = run.root / ".state.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    original = state_path.read_bytes()
+    agent_workspace.close_run_workflow_space()
+    retained = run.root.with_name(".run.backup.legacy") if backup else run.root
+    if backup:
+        run.root.replace(retained)
+
+    checkpoint = agent_workspace.run_workflow_checkpoint()
+    assert checkpoint is not None
+    assert (checkpoint.stage, checkpoint.step_index) == ("execute", 2)
+    assert checkpoint.generation == _run_state().generation
+    assert checkpoint.workflow_input == _run_state().workflow_input
+    assert (retained / ".state.json").read_bytes() == original
+    assert (retained / "report.txt").read_text(encoding="utf-8") == "already produced\n"
+
+    resumed = await agent_workspace.prepare_run_workflow_space("resume")
+    assert (resumed.stage, resumed.step_index) == ("execute", 2)
+    assert (resumed.root / "report.txt").read_text(encoding="utf-8") == "already produced\n"
+
+
+@pytest.mark.parametrize("stage, step_index", [("unknown", 0), ("validate", -1), ("validate", 0)])
+async def test_legacy_migration_rejects_invalid_state(agent_workspace: Workspace, stage: str, step_index: int) -> None:
+    """Legacy compatibility must not invent a cursor for corrupt persisted state."""
+    run = await agent_workspace.prepare_run_workflow_space("create", initial_state=_run_state())
+    state = {**_run_state().model_dump(mode="json"), "stage": stage, "step_index": step_index}
+    (run.root / ".state.json").write_text(json.dumps(state), encoding="utf-8")
+    assert run.checkpoint() is None
+    with pytest.raises(ValueError):
+        await agent_workspace.prepare_run_workflow_space("resume")
