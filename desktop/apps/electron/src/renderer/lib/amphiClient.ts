@@ -27,6 +27,7 @@
  */
 
 import { z } from 'zod'
+import { sessionTurnsToMessages, resolveWorkflowStepMetadata, type SessionTurnChild } from './sessionTurns'
 import {
   AUTH_HEADER_NAME,
   CLIENT_ID_HEADER,
@@ -42,6 +43,7 @@ import type {
 } from '../../main/python-client/types'
 import type {
   AgentMessage,
+  SessionTurnRecord,
   AgentTurnStatus,
   AskUserQuestion,
   ContextUsageSnapshot,
@@ -715,14 +717,28 @@ const contextUsageSnapshotSchema = z.object({
     current_input_tokens: 0,
   }),
 })
+const sessionTurnSchema = z.object({
+  id: z.string(), session_id: z.string(), session_ordinal: z.number().int(),
+  user_input: z.object({ text: z.string(), blocks: z.array(z.record(z.string(), z.unknown())) }),
+  ota_records: z.array(z.record(z.string(), z.unknown())).nullable(),
+  agent_state: z.record(z.string(), z.unknown()).nullable(),
+  status: z.enum(['awaiting_human', 'awaiting_permission', 'awaiting_subagents', 'completed', 'failed', 'cancelled']),
+  created_at: z.string(),
+}).passthrough()
+
 const sessionMessagesSchema = z
   .object({
+    turns: z.array(sessionTurnSchema).optional(),
+    session_status: z.string().optional(),
+    subagents: z.record(z.string(), z.array(z.object({
+      session_id: z.string(), title: z.string(), turn: sessionTurnSchema.nullable(),
+    }))).optional(),
     messages: z.array(z.object({
       id: z.string(),
       turnId: z.string().optional(),
       model: z.string().optional(),
       executionMode: z.enum(['request', 'auto', 'full']).optional(),
-    }).passthrough()),
+    }).passthrough()).default([]),
     // Cursor-pagination envelope (absent on older daemons → no more history).
     has_more: z.boolean().optional(),
     next_before: z.number().nullable().optional(),
@@ -1340,12 +1356,15 @@ export class AmphiClient {
     id: string,
     page?: { limit?: number; beforeOrdinal?: number },
   ): Promise<SessionTranscript> {
-    const params = new URLSearchParams()
+    const params = new URLSearchParams({ format: 'turns' })
     if (page?.limit !== undefined) params.set('limit', String(page.limit))
     if (page?.beforeOrdinal !== undefined) params.set('before_ordinal', String(page.beforeOrdinal))
     const query = params.size > 0 ? `?${params.toString()}` : ''
     const res = parseResponse<{
       messages: AgentMessage[]
+      turns?: SessionTurnRecord[]
+      session_status?: string
+      subagents?: Record<string, SessionTurnChild[]>
       has_more?: boolean
       next_before?: number | null
       context_usage?: {
@@ -1399,8 +1418,20 @@ export class AmphiClient {
       `GET /sessions/${id}/messages`,
     )
     const pending = res.pending_request
+    const workflowRun: WorkflowRunState | null = res.workflow_run ? {
+      workflowId: res.workflow_run.workflow_id,
+      generation: res.workflow_run.generation,
+      workflowName: res.workflow_run.workflow_name,
+      sourceSessionId: res.workflow_run.source_session_id,
+      phase: res.workflow_run.phase,
+      stepIndex: res.workflow_run.step_index,
+      executionSteps: res.workflow_run.execution_steps,
+    } : null
     return {
-      messages: res.messages,
+      messages: res.turns === undefined ? res.messages : resolveWorkflowStepMetadata(sessionTurnsToMessages(res.turns, {
+        subagents: res.subagents,
+        showPendingInteraction: page?.beforeOrdinal === undefined && res.session_status === 'awaiting',
+      }), workflowRun),
       hasMore: res.has_more ?? false,
       nextBefore: res.next_before ?? null,
       contextUsage: res.context_usage
@@ -1441,17 +1472,7 @@ export class AmphiClient {
               : {}),
           }
         : null,
-      workflowRun: res.workflow_run
-        ? {
-            workflowId: res.workflow_run.workflow_id,
-            generation: res.workflow_run.generation,
-            workflowName: res.workflow_run.workflow_name,
-            sourceSessionId: res.workflow_run.source_session_id,
-            phase: res.workflow_run.phase,
-            stepIndex: res.workflow_run.step_index,
-            executionSteps: res.workflow_run.execution_steps,
-          }
-        : null,
+      workflowRun,
       children: (res.children ?? []).map((c) => ({
         sessionId: c.session_id,
         title: c.title,

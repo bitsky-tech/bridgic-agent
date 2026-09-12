@@ -31,6 +31,7 @@ import type {
 } from '@shared/types'
 import { AgentRole } from '@shared/types'
 import { rlog } from '@/lib/logger'
+import { resolveWorkflowStepMetadata } from '@/lib/sessionTurns'
 import {
   activeIsDraftAtom,
   activeSessionIdAtom,
@@ -206,6 +207,14 @@ function appendMessage(get: Getter, set: Setter, sessionId: string, msg: AgentMe
   markHydrated(get, set, sessionId)
 }
 
+/** Settle unfinished headings without changing the outcome of reported sections. */
+function settleWorkflowSteps(blocks: MessageBlock[], failed: boolean): MessageBlock[] {
+  const latest = [...blocks].reverse().find((block) => block.type === 'workflow_step')
+  return blocks.map((block) => block.type === 'workflow_step' && block.status === 'running'
+    ? { ...block, status: failed && block === latest ? 'failure' : 'neutral' }
+    : block)
+}
+
 /** Commit the streaming state into a single assistant message. A non-empty error =
  *  marked as failed; finalAnswer comes from the daemon `final` frame (the authoritative
  *  final answer, empty string = this turn has no visible answer). */
@@ -224,7 +233,7 @@ function finalizeStreaming(
     text: s.content,
     thinking: s.thinking,
     toolCalls: s.toolCalls,
-    blocks: s.blocks,
+    blocks: error !== undefined ? settleWorkflowSteps(s.blocks, true) : s.blocks,
     done: true,
     createdAt: s.startedAt,
     ...completion,
@@ -382,7 +391,7 @@ export const loadSessionMessagesAtom = atom(null, async (get, set, sessionId: st
       ? currentRows.findIndex((m) => m.id === fetchedHeadId)
       : -1
     if (headIdx > 0) {
-      set(messageFamily(sessionId), [...currentRows.slice(0, headIdx), ...rows])
+      set(messageFamily(sessionId), resolveWorkflowStepMetadata([...currentRows.slice(0, headIdx), ...rows], workflowRun))
     } else {
       set(messageFamily(sessionId), rows)
       set(transcriptPagingFamily(sessionId), {
@@ -544,7 +553,7 @@ export const fetchOlderTranscriptAtom = atom(null, async (get, set, sessionId: s
       rlog.debug('[agent] older page discarded: session head changed during fetch', { sessionId })
       return false
     }
-    set(messageFamily(sessionId), [...older.messages, ...current])
+    set(messageFamily(sessionId), resolveWorkflowStepMetadata([...older.messages, ...current], get(workflowRunFamily(sessionId))))
     set(transcriptPagingFamily(sessionId), {
       hasMore: older.hasMore,
       nextBefore: older.nextBefore,
@@ -606,16 +615,20 @@ function appendDelta(
 function appendBuildStageMarker(blocks: MessageBlock[], position: ThinkPosition): MessageBlock[] {
   const stage = position.mode === 'build' ? position.stage : null
   let latest: Extract<MessageBlock, { type: 'build_stage' }> | undefined
+  let workflowOpen = false
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index]
-    if (block?.type === 'workflow_step') break
+    if (block?.type === 'workflow_step') {
+      workflowOpen = true
+      break
+    }
     if (block?.type === 'build_stage') {
       latest = block
       break
     }
   }
   if (latest?.stage === stage) return blocks
-  if (stage === null && latest === undefined) return blocks
+  if (stage === null && latest === undefined && (!workflowOpen || position.mode === 'run_workflow')) return blocks
   return [...blocks, { type: 'build_stage', stage }]
 }
 
@@ -1487,7 +1500,9 @@ export const applyAgentEventAtom = atom(
         const cur = get(streamingFamily(sessionId))
         if (!cur) return
         let found = false
-        const blocks = cur.blocks.map((block) => {
+        const boundary = cur.blocks.findLastIndex((block) => block.type === 'build_stage')
+        let historySection = 0
+        const blocks = cur.blocks.map((block, index) => {
           if (
             block.type !== 'workflow_step' ||
             block.workflowId !== event.workflowId ||
@@ -1495,6 +1510,8 @@ export const applyAgentEventAtom = atom(
             block.phase !== event.phase ||
             block.stepIndex !== event.stepIndex
           ) return block
+          historySection = Math.max(historySection, (block.historySection ?? 0) + 1)
+          if (index <= boundary) return block
           found = true
           return {
             ...block,
@@ -1519,6 +1536,7 @@ export const applyAgentEventAtom = atom(
             title: event.title,
             status: event.status,
             summary: event.summary ?? null,
+            ...(historySection ? { historySection } : {}),
             ...(event.executionSteps ? { executionSteps: event.executionSteps } : {}),
           }],
         })
@@ -1733,7 +1751,11 @@ export const applyAgentEventAtom = atom(
           if (index >= 0) {
             set(messageFamily(sessionId), [
               ...msgs.slice(0, index),
-              { ...msgs[index]!, stopped: true },
+              {
+                ...msgs[index]!,
+                stopped: true,
+                ...(msgs[index]!.blocks ? { blocks: settleWorkflowSteps(msgs[index]!.blocks!, false) } : {}),
+              },
               ...msgs.slice(index + 1),
             ])
           } else {
@@ -1953,7 +1975,8 @@ export const applyAgentEventAtom = atom(
         }
         const cur = get(streamingFamily(sessionId))
         if (cur) {
-          const nextBlocks = appendBuildStageMarker(cur.blocks, event.position)
+          const settled = event.position.mode !== 'run_workflow' ? settleWorkflowSteps(cur.blocks, false) : cur.blocks
+          const nextBlocks = appendBuildStageMarker(settled, event.position)
           if (nextBlocks !== cur.blocks) {
             set(streamingFamily(sessionId), { ...cur, blocks: nextBlocks })
           }

@@ -28,6 +28,28 @@ export type AgentTurnStatus =
   | 'cancelled'
 export type SessionTitleSource = 'default' | 'fallback' | 'generated' | 'manual' | 'persisted'
 
+/** Complete SessionTurnRecord wire data. OTA and state fields stay extensible. */
+export interface SessionTurnRecord {
+  id: string
+  user_id: string
+  session_id: string
+  session_ordinal: number
+  user_input: { text: string; blocks: Record<string, unknown>[] }
+  ota_records: Record<string, unknown>[] | null
+  agent_state: Record<string, unknown> | null
+  browser_tool_loaded: boolean
+  workspace_tools_loaded: boolean
+  skills_tool_loaded: boolean
+  status: AgentTurnStatus
+  final_answer: string | null
+  error: string | null
+  execution_mode: string | null
+  max_rounds: number | null
+  model: string | null
+  context_usage: Record<string, unknown>
+  created_at: string
+}
+
 export interface SessionMeta {
   id: string
   title: string
@@ -142,13 +164,20 @@ export type MessageBlock =
       workflowId: string
       generation: string
       workflowName: string
-      phase: 'execute'
+      /** Historical Turns may still contain the retired validation phase. */
+      phase: 'execute' | 'validate'
       stepIndex: number
       stepCount: number
       title: string
-      status: 'running' | 'success' | 'failure'
+      /** Unfinished sections become neutral when execution stops without a report. */
+      status: 'neutral' | 'running' | 'success' | 'failure'
       summary?: string | null
       executionSteps?: string[]
+      validationSteps?: string[]
+      /** This section inherits the retained Run from before its Turn, without a local restart. */
+      inheritedCursor?: boolean
+      /** Distinguish separate visits to the same stage within one historical Turn. */
+      historySection?: number
     }
   | {
       type: 'workflow_result'
@@ -221,6 +250,21 @@ export const AgentRole = {
 export type AgentRole = (typeof AgentRole)[keyof typeof AgentRole]
 
 export interface AgentMessage {
+  /** Renderer-owned Turn boundary for resolving separately loaded history pages. */
+  workflowTurn?: {
+    sessionId: string
+    ordinal: number
+    /** Retained Run position, even after exiting to Main. Undefined inherits; null ends the Run. */
+    cursor?: Pick<Extract<MessageBlock, { type: 'workflow_step' }>, 'workflowId' | 'generation' | 'phase' | 'stepIndex' | 'inheritedCursor'> | null
+  }
+  /** Renderer-owned Run labels, retained even when a Turn stops immediately after entry. */
+  workflowMetadata?: {
+    workflowId: string
+    generation: string
+    workflowName: string
+    executionSteps: string[]
+    validationSteps: string[]
+  }[]
   id: string
   /** Durable Session Turn identity. Live-only messages omit it until hydration. */
   turnId?: string

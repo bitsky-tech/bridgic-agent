@@ -425,6 +425,17 @@ describe('WorkflowRunDetailsPane', () => {
         title: '生成交付文件',
         status: 'success',
         summary: '交付文件已生成。',
+      }, {
+        type: 'workflow_step',
+        workflowId: 'wf-completed-run',
+        generation: 'gen-completed-run',
+        workflowName: '执行工作流',
+        phase: 'validate',
+        stepIndex: 0,
+        stepCount: 1,
+        title: '历史验证步骤',
+        status: 'failure',
+        summary: '历史验证失败信息',
       }],
       done: true,
       createdAt: 1,
@@ -446,6 +457,9 @@ describe('WorkflowRunDetailsPane', () => {
     expect(details.textContent).not.toContain('验证结果')
     expect(details.textContent).not.toContain('验证完成')
     expect(details.textContent).not.toContain('尚未加载阶段步骤')
+    expect(details.textContent).toContain('交付文件已生成。')
+    expect(details.textContent).not.toContain('历史验证')
+    expect(details.querySelector('[data-step-state]')?.getAttribute('data-step-state')).toBe('done')
     expect(details.querySelector('[data-testid="workflow-run-overview"]')?.textContent)
       .toContain('1/1')
 

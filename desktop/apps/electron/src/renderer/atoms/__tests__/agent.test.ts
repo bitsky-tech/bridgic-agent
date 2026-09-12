@@ -385,6 +385,34 @@ describe('reducer: message lifecycle', () => {
     expect(store.get(currentWorkflowRunAtom)).toBeUndefined()
   })
 
+  it('closes a live Workflow on exit and updates only the resumed visit to the same stage', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    const send = (event: Parameters<typeof applyAgentEventAtom.write>[2]['event']) => store.set(applyAgentEventAtom, { sessionId: id, event })
+    const progress = {
+      type: 'workflow_progress' as const, workflowId: 'wf', generation: 'gen', workflowName: 'Directory',
+      phase: 'execute' as const, stepIndex: 0, stepCount: 1, title: 'Choose directory',
+    }
+    send({ type: 'message_start', messageId: 'reply', role: 'assistant' })
+    send({ type: 'stage', position: { mode: 'run_workflow', stage: 'execute' } })
+    send({ ...progress, status: 'running' })
+    send({ type: 'thinking_delta', messageId: 'reply', text: 'Original stage' })
+    send({ type: 'stage', position: { mode: 'normal', stage: 'main' } })
+    send({ type: 'thinking_delta', messageId: 'reply', text: 'Main work' })
+    expect(store.get(currentStreamingAtom)?.blocks[0]).toMatchObject({ type: 'workflow_step', status: 'neutral' })
+    expect(store.get(currentStreamingAtom)?.blocks.map((block) => block.type)).toEqual(['workflow_step', 'thinking', 'build_stage', 'thinking'])
+    send({ type: 'stage', position: { mode: 'run_workflow', stage: 'execute' } })
+    send({ ...progress, status: 'running' })
+    send({ type: 'thinking_delta', messageId: 'reply', text: 'Resumed stage' })
+    send({ ...progress, status: 'success' })
+    const blocks = store.get(currentStreamingAtom)!.blocks
+    const headings = blocks.filter((block) => block.type === 'workflow_step')
+    expect(headings.map((block) => block.status)).toEqual(['neutral', 'success'])
+    expect(headings[0]?.historySection).not.toBe(headings[1]?.historySection)
+    expect(blocks.map((block) => block.type)).toEqual(['workflow_step', 'thinking', 'build_stage', 'thinking', 'workflow_step', 'thinking'])
+  })
+
   it('deduplicates a live Workflow result and persists it on message stop', () => {
     const store = makeStore()
     const id = setupSession(store)
