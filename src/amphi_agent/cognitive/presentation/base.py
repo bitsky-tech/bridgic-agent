@@ -166,92 +166,6 @@ class PresentationThink(BaseThink):
             )
         return replace(outcome, continuation=note)
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Keep one presentation control and validate its active production cursor."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"ppt_rag", "report_presentation_step"})
-
-        def legality_reason(call: StepToolCall) -> Optional[str]:
-            tool_name = getattr(call, "tool", None)
-            if tool_name not in {"ppt_rag", "report_presentation_step", "switch"}:
-                return None
-            if ota_context is None or not isinstance(ota_context.think_status, PresentationStageState):
-                return "presentation control rejected: no presentation pipeline is active."
-            state = ota_context.think_status
-            steps = PRESENTATION_STAGE_STEPS.get(state.stage, ())
-            if tool_name == "ppt_rag":
-                if (
-                    state.stage != "ppt_plan"
-                    or state.step_index != 2
-                    or not state.outline_confirmed
-                    or state.template_selection_status != "idle"
-                ):
-                    return "PPT template retrieval rejected: the confirmed visual-direction step is not active."
-                return None
-            if tool_name == "report_presentation_step":
-                if not steps:
-                    return "presentation step report rejected: this stage has no reportable production steps."
-                if state.step_index >= len(steps):
-                    return "presentation step report rejected: this stage has no unfinished step."
-                current = steps[state.step_index]
-                if state.stage == "ppt_plan" and current.step_id in {"collect_evidence", "map_slides"}:
-                    arguments = {
-                        _view(argument, "name"): _view(argument, "value")
-                        for argument in getattr(call, "tool_arguments", None) or []
-                    }
-                    try:
-                        data = parse_presentation_step_data(arguments.get("data"))
-                        state.apply_plan_step_data(current.step_id, data)
-                    except (TypeError, ValueError) as exc:
-                        return f"presentation step report rejected: {exc}"
-                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and not state.outline_confirmed:
-                    return "presentation step report rejected: the editable outline must be confirmed first."
-                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and state.template_selection_status not in {"selected", "skipped"}:
-                    return "presentation step report rejected: call `ppt_rag` by itself and wait for the user's template decision first."
-                if state.step_index == len(steps) - 1:
-                    reason = self.artifact_validation_reason(context, state.stage)
-                    if reason:
-                        return f"presentation step report rejected: {reason}"
-                return None
-
-            arguments = {
-                _view(argument, "name"): _view(argument, "value")
-                for argument in getattr(call, "tool_arguments", None) or []
-            }
-            target_mode = str(arguments.get("mode") or state.mode)
-            if target_mode == "normal":
-                return None
-            target_stage = str(arguments.get("stage") or "")
-            if target_stage not in PRESENTATION_STAGE_ORDER:
-                return f"switch rejected: `{target_stage}` is not a presentation stage."
-            current_index = PRESENTATION_STAGE_ORDER.index(state.stage)
-            target_index = PRESENTATION_STAGE_ORDER.index(target_stage)
-            if state.stage == "ppt_review" and target_index < current_index:
-                return None
-            if target_index != current_index + 1:
-                return "switch rejected: presentation stages must advance in production order."
-            if state.step_index < len(steps):
-                current = steps[state.step_index]
-                return (
-                    "switch rejected: finish and report the current presentation step "
-                    f"`{current.step_id}` first."
-                )
-            reason = self.artifact_validation_reason(context, state.stage)
-            if reason:
-                return f"switch rejected: {reason}"
-            return None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = legality_reason(call)
-            if reason is not None:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
     ############################################################################
     # Dynamic prompt assembly
     ############################################################################
@@ -403,6 +317,92 @@ class PresentationThink(BaseThink):
     ############################################################################
     # Helpers
     ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Keep one presentation control and validate its active production cursor."""
+        resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"ppt_rag", "report_presentation_step"})
+
+        def legality_reason(call: StepToolCall) -> Optional[str]:
+            tool_name = getattr(call, "tool", None)
+            if tool_name not in {"ppt_rag", "report_presentation_step", "switch"}:
+                return None
+            if ota_context is None or not isinstance(ota_context.think_status, PresentationStageState):
+                return "presentation control rejected: no presentation pipeline is active."
+            state = ota_context.think_status
+            steps = PRESENTATION_STAGE_STEPS.get(state.stage, ())
+            if tool_name == "ppt_rag":
+                if (
+                    state.stage != "ppt_plan"
+                    or state.step_index != 2
+                    or not state.outline_confirmed
+                    or state.template_selection_status != "idle"
+                ):
+                    return "PPT template retrieval rejected: the confirmed visual-direction step is not active."
+                return None
+            if tool_name == "report_presentation_step":
+                if not steps:
+                    return "presentation step report rejected: this stage has no reportable production steps."
+                if state.step_index >= len(steps):
+                    return "presentation step report rejected: this stage has no unfinished step."
+                current = steps[state.step_index]
+                if state.stage == "ppt_plan" and current.step_id in {"collect_evidence", "map_slides"}:
+                    arguments = {
+                        _view(argument, "name"): _view(argument, "value")
+                        for argument in getattr(call, "tool_arguments", None) or []
+                    }
+                    try:
+                        data = parse_presentation_step_data(arguments.get("data"))
+                        state.apply_plan_step_data(current.step_id, data)
+                    except (TypeError, ValueError) as exc:
+                        return f"presentation step report rejected: {exc}"
+                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and not state.outline_confirmed:
+                    return "presentation step report rejected: the editable outline must be confirmed first."
+                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and state.template_selection_status not in {"selected", "skipped"}:
+                    return "presentation step report rejected: call `ppt_rag` by itself and wait for the user's template decision first."
+                if state.step_index == len(steps) - 1:
+                    reason = self.artifact_validation_reason(context, state.stage)
+                    if reason:
+                        return f"presentation step report rejected: {reason}"
+                return None
+
+            arguments = {
+                _view(argument, "name"): _view(argument, "value")
+                for argument in getattr(call, "tool_arguments", None) or []
+            }
+            target_mode = str(arguments.get("mode") or state.mode)
+            if target_mode == "normal":
+                return None
+            target_stage = str(arguments.get("stage") or "")
+            if target_stage not in PRESENTATION_STAGE_ORDER:
+                return f"switch rejected: `{target_stage}` is not a presentation stage."
+            current_index = PRESENTATION_STAGE_ORDER.index(state.stage)
+            target_index = PRESENTATION_STAGE_ORDER.index(target_stage)
+            if state.stage == "ppt_review" and target_index < current_index:
+                return None
+            if target_index != current_index + 1:
+                return "switch rejected: presentation stages must advance in production order."
+            if state.step_index < len(steps):
+                current = steps[state.step_index]
+                return (
+                    "switch rejected: finish and report the current presentation step "
+                    f"`{current.step_id}` first."
+                )
+            reason = self.artifact_validation_reason(context, state.stage)
+            if reason:
+                return f"switch rejected: {reason}"
+            return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = legality_reason(call)
+            if reason is not None:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
     @staticmethod
     def state(ota_context: AmphiOTAContext) -> PresentationStageState:
         """Return the active presentation progress state."""

@@ -466,6 +466,36 @@ class BaseThink(CognitiveWorker):
         """
         return ThinkUnitOutcome()
 
+    async def handle_action(self, ota_context: AmphiOTAContext, context: AmphiContext, calls: List[StepToolCall], agent: "AmphiAgent", *, execution_mode: Optional[str] = None) -> List[CallVerdict]:
+        """Check all inherited action rules before evaluating permissions.
+
+        Reviewed calls still pass through legality checks, but keep the user's
+        permission decisions. Only admitted, unreviewed calls reach the classifier.
+        """
+        gate = agent._get_current_ota_permission_status(ota_context)
+        execution_mode = execution_mode or gate.execution_mode or agent._effective_execution_mode(ota_context, context)
+        if gate.reviewed:
+            verdicts = agent._reviewed_verdicts(gate.verdicts)
+        else:
+            verdicts = [
+                CallVerdict(id=call.call_id, tool=call.tool, arguments=agent._tool_args(call), verdict=Permission.ALLOW.value)
+                for call in calls
+            ]
+        verdicts = await self._check_action_legality(ota_context, context, calls, verdicts, agent)
+        if not gate.reviewed:
+            legal_indices = [index for index, verdict in enumerate(verdicts) if verdict.verdict == Permission.ALLOW.value]
+            if legal_indices:
+                permission_verdicts = await self._check_action_permissions(
+                    ota_context,
+                    context,
+                    [calls[index] for index in legal_indices],
+                    agent,
+                    execution_mode=execution_mode,
+                )
+                for index, verdict in zip(legal_indices, permission_verdicts):
+                    verdicts[index] = verdict
+        return verdicts
+
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Apply shared interactions and park the complete child batch."""
         gate = agent._get_current_ota_permission_status(ota_context)
@@ -518,153 +548,6 @@ class BaseThink(CognitiveWorker):
 
         if subagent_calls:
             ota_context.transition_subagents(AwaitingSubAgent(calls=subagent_calls))
-
-    # Legality check
-
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Check visible tools and routing, then isolate shared control calls."""
-        visible_tools = {spec.tool_name for spec in ota_context.tools or []} if ota_context is not None else set()
-        think_status = ota_context.think_status if ota_context is not None else None
-
-        def availability_reason(call: StepToolCall) -> Optional[str]:
-            if think_status is None:
-                return None
-            if call.tool not in visible_tools:
-                return (
-                    f"tool `{call.tool}` rejected: it is not available in this "
-                    "Session's current ToolSurface."
-                )
-            if call.tool == "switch":
-                arguments = agent._tool_args(call)
-                target_stage = arguments.get("stage")
-                if think_status.mode != "normal" and not arguments.get("mode") and target_stage:
-                    registered_stages = agent.thinking_modes.get(think_status.mode)
-                    unit = getattr(agent, str(target_stage), None)
-                    if registered_stages is None or target_stage not in registered_stages or unit is None:
-                        return (
-                            f"switch rejected: target stage `{target_stage}` is not registered "
-                            f"for mode `{think_status.mode}`."
-                        )
-            return None
-
-        resolved = list(verdicts)
-        for index, (call, verdict) in enumerate(zip(calls, verdicts)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = availability_reason(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
-
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"switch", "request_human_choice"})
-
-        def switch_reason(call: StepToolCall) -> Optional[str]:
-            if call.tool != "switch" or ota_context is None:
-                return None
-            status = ota_context.think_status
-            if status.mode == "normal":
-                return None
-            arguments = {
-                _view(argument, "name"): _view(argument, "value")
-                for argument in call.tool_arguments
-            }
-            requested_mode = arguments.get("mode") or None
-            target_stage = arguments.get("stage") or None
-            if requested_mode not in (None, "normal"):
-                return (
-                    f"switch rejected: omit mode to remain in `{status.mode}`, "
-                    "or use mode `normal` to return to Main."
-                )
-            if requested_mode == "normal":
-                if target_stage:
-                    return "switch rejected: mode `normal` cannot be combined with a target stage."
-                return None
-            if not target_stage:
-                return "switch rejected: provide a target stage, or use mode `normal` to return to Main."
-            return None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = switch_reason(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
-        return resolved
-
-    # Permission check
-
-    async def permission_check(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        calls: List[StepToolCall],
-        agent: "AmphiAgent",
-        *,
-        execution_mode: Optional[str] = None,
-        additional_mount_roots: Optional[List[str]] = None,
-    ) -> List[CallVerdict]:
-        """Evaluate system permissions for the tool calls admitted by legality checks.
-
-        Parameters
-        ----------
-        ota_context : AmphiOTAContext
-            Active turn containing the proposed tool calls and current Think stage.
-        context : AmphiContext
-            Session workspace, execution mode, mounts, and safety classifier context.
-        calls : List[StepToolCall]
-            Tool calls that passed legality checks, in their original relative order.
-        agent : AmphiAgent
-            Active agent supplying the bound LLM and effective execution mode.
-        execution_mode : Optional[str]
-            Effective mode already resolved for this round; omitted to resolve it here.
-        additional_mount_roots : Optional[List[str]]
-            Extra roots owned by the specialized cognitive worker.
-
-        Returns
-        -------
-        List[CallVerdict]
-            Permission verdicts aligned one-to-one with the supplied tool calls.
-        """
-        execution_mode = execution_mode or agent._effective_execution_mode(ota_context, context)
-        workspace = context.workspace
-        root = (
-            str(workspace.work_dir)
-            if workspace is not None
-            else str(context.session.workspace_root or "")
-        )
-        # Merged from main: the real mount roots (this was mount_roots=[] with a TODO on the original
-        # branch). Mounted directories are judged by the engine as inside the boundary rather than
-        # always out of bounds; with no session (an edge case) it falls back to an empty list.
-        mount_roots = workspace.mount_roots() if workspace is not None else []
-        workflow_runs = context.workflow_runs
-        if workflow_runs is not None:
-            referenced_runs = workflow_runs.referenced_runs(ota_context.user_input)
-            mount_roots.extend(
-                str(path)
-                for run in referenced_runs
-                for path in (run.result_dir, run.background_work_dir)
-            )
-        mount_roots.extend(additional_mount_roots or [])
-        mount_roots = list(dict.fromkeys(mount_roots))
-        audit_dir = workspace.permission_dir if workspace is not None else None
-        engine = PermissionEngine(
-            root,
-            mount_roots=mount_roots,
-            mode=execution_mode,
-            classifier=LlmSafetyClassifier(agent.llm, audit_dir=audit_dir),
-            audit_dir=audit_dir,
-        )
-        verdicts = await engine.evaluate(
-            calls,
-            self._recent_user_messages(ota_context, context),
-            agent_reasoning=self._current_reasoning(ota_context),
-            session_approvals=self._session_approvals(context),
-            named_paths=self._named_paths(ota_context, context),
-        )
-        aligned: List[CallVerdict] = []
-        for c, verdict in zip(calls, verdicts):
-            cid = getattr(c, "call_id", None)
-            aligned.append(verdict.model_copy(update={"id": str(cid)}) if cid else verdict)
-        return aligned
 
     ############################################################################
     # Context estimation and compaction
@@ -1868,6 +1751,149 @@ class BaseThink(CognitiveWorker):
     ############################################################################
     # Helpers
     ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Check visible tools and routing, then isolate shared control calls."""
+        visible_tools = {spec.tool_name for spec in ota_context.tools or []} if ota_context is not None else set()
+        think_status = ota_context.think_status if ota_context is not None else None
+
+        def availability_reason(call: StepToolCall) -> Optional[str]:
+            if think_status is None:
+                return None
+            if call.tool not in visible_tools:
+                return (
+                    f"tool `{call.tool}` rejected: it is not available in this "
+                    "Session's current ToolSurface."
+                )
+            if call.tool == "switch":
+                arguments = agent._tool_args(call)
+                target_stage = arguments.get("stage")
+                if think_status.mode != "normal" and not arguments.get("mode") and target_stage:
+                    registered_stages = agent.thinking_modes.get(think_status.mode)
+                    unit = getattr(agent, str(target_stage), None)
+                    if registered_stages is None or target_stage not in registered_stages or unit is None:
+                        return (
+                            f"switch rejected: target stage `{target_stage}` is not registered "
+                            f"for mode `{think_status.mode}`."
+                        )
+            return None
+
+        resolved = list(verdicts)
+        for index, (call, verdict) in enumerate(zip(calls, verdicts)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = availability_reason(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
+
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"switch", "request_human_choice"})
+
+        def switch_reason(call: StepToolCall) -> Optional[str]:
+            if call.tool != "switch" or ota_context is None:
+                return None
+            status = ota_context.think_status
+            if status.mode == "normal":
+                return None
+            arguments = {
+                _view(argument, "name"): _view(argument, "value")
+                for argument in call.tool_arguments
+            }
+            requested_mode = arguments.get("mode") or None
+            target_stage = arguments.get("stage") or None
+            if requested_mode not in (None, "normal"):
+                return (
+                    f"switch rejected: omit mode to remain in `{status.mode}`, "
+                    "or use mode `normal` to return to Main."
+                )
+            if requested_mode == "normal":
+                if target_stage:
+                    return "switch rejected: mode `normal` cannot be combined with a target stage."
+                return None
+            if not target_stage:
+                return "switch rejected: provide a target stage, or use mode `normal` to return to Main."
+            return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = switch_reason(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={"verdict": Permission.DENY.value, "reason": reason})
+        return resolved
+
+    async def _check_action_permissions(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        calls: List[StepToolCall],
+        agent: "AmphiAgent",
+        *,
+        execution_mode: Optional[str] = None,
+        additional_mount_roots: Optional[List[str]] = None,
+    ) -> List[CallVerdict]:
+        """Evaluate system permissions for the tool calls admitted by legality checks.
+
+        Parameters
+        ----------
+        ota_context : AmphiOTAContext
+            Active turn containing the proposed tool calls and current Think stage.
+        context : AmphiContext
+            Session workspace, execution mode, mounts, and safety classifier context.
+        calls : List[StepToolCall]
+            Tool calls that passed legality checks, in their original relative order.
+        agent : AmphiAgent
+            Active agent supplying the bound LLM and effective execution mode.
+        execution_mode : Optional[str]
+            Effective mode already resolved for this round; omitted to resolve it here.
+        additional_mount_roots : Optional[List[str]]
+            Extra roots owned by the specialized cognitive worker.
+
+        Returns
+        -------
+        List[CallVerdict]
+            Permission verdicts aligned one-to-one with the supplied tool calls.
+        """
+        execution_mode = execution_mode or agent._effective_execution_mode(ota_context, context)
+        workspace = context.workspace
+        root = (
+            str(workspace.work_dir)
+            if workspace is not None
+            else str(context.session.workspace_root or "")
+        )
+        # Merged from main: the real mount roots (this was mount_roots=[] with a TODO on the original
+        # branch). Mounted directories are judged by the engine as inside the boundary rather than
+        # always out of bounds; with no session (an edge case) it falls back to an empty list.
+        mount_roots = workspace.mount_roots() if workspace is not None else []
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None:
+            referenced_runs = workflow_runs.referenced_runs(ota_context.user_input)
+            mount_roots.extend(
+                str(path)
+                for run in referenced_runs
+                for path in (run.result_dir, run.background_work_dir)
+            )
+        mount_roots.extend(additional_mount_roots or [])
+        mount_roots = list(dict.fromkeys(mount_roots))
+        audit_dir = workspace.permission_dir if workspace is not None else None
+        engine = PermissionEngine(
+            root,
+            mount_roots=mount_roots,
+            mode=execution_mode,
+            classifier=LlmSafetyClassifier(agent.llm, audit_dir=audit_dir),
+            audit_dir=audit_dir,
+        )
+        verdicts = await engine.evaluate(
+            calls,
+            self._recent_user_messages(ota_context, context),
+            agent_reasoning=self._current_reasoning(ota_context),
+            session_approvals=self._session_approvals(context),
+            named_paths=self._named_paths(ota_context, context),
+        )
+        aligned: List[CallVerdict] = []
+        for c, verdict in zip(calls, verdicts):
+            cid = getattr(c, "call_id", None)
+            aligned.append(verdict.model_copy(update={"id": str(cid)}) if cid else verdict)
+        return aligned
+
     @staticmethod
     def _exclusive_call_verdicts(calls: List[StepToolCall], verdicts: List[CallVerdict], control_tools: set[str]) -> List[CallVerdict]:
         """Keep one control request alone without upgrading any permission verdict.

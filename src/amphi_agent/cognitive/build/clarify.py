@@ -229,56 +229,6 @@ class ClarifyThink(BuildThink):
 
         return replace(outcome, continuation=nudge)
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_human_task_confirm"})
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            tool_name = getattr(call, "tool", None)
-            if tool_name == "request_human_task_confirm":
-                reason = self.task_validation_reason(context)
-                if reason:
-                    return f"task confirmation rejected: {reason}"
-                return None
-            if tool_name != "switch":
-                return None
-
-            arguments = {
-                _view(argument, "name"): _view(argument, "value")
-                for argument in getattr(call, "tool_arguments", None) or []
-            }
-            if arguments.get("mode") == "normal":
-                return None
-            target_stage = next(
-                (
-                    _view(argument, "value")
-                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
-                    if _view(argument, "name") == "stage"
-                ),
-                None,
-            )
-            if target_stage is None:
-                return None
-            reason = self.task_validation_reason(context)
-            if reason:
-                return f"switch rejected: {reason}"
-            return (
-                "switch rejected: task.md must be reviewed by the user before Explore. "
-                "Call request_human_task_confirm instead; the system advances after confirmation."
-            )
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
     ############################################################################
     # Dynamic prompt assembly
     ############################################################################
@@ -349,6 +299,56 @@ class ClarifyThink(BuildThink):
     ############################################################################
     # Helpers
     ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_human_task_confirm"})
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            tool_name = getattr(call, "tool", None)
+            if tool_name == "request_human_task_confirm":
+                reason = self.task_validation_reason(context)
+                if reason:
+                    return f"task confirmation rejected: {reason}"
+                return None
+            if tool_name != "switch":
+                return None
+
+            arguments = {
+                _view(argument, "name"): _view(argument, "value")
+                for argument in getattr(call, "tool_arguments", None) or []
+            }
+            if arguments.get("mode") == "normal":
+                return None
+            target_stage = next(
+                (
+                    _view(argument, "value")
+                    for argument in reversed(getattr(call, "tool_arguments", None) or [])
+                    if _view(argument, "name") == "stage"
+                ),
+                None,
+            )
+            if target_stage is None:
+                return None
+            reason = self.task_validation_reason(context)
+            if reason:
+                return f"switch rejected: {reason}"
+            return (
+                "switch rejected: task.md must be reviewed by the user before Explore. "
+                "Call request_human_task_confirm instead; the system advances after confirmation."
+            )
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
     def task_validation_reason(self, context: AmphiContext) -> Optional[str]:
         """Validate the current task definition and any Mermaid diagrams it contains."""
         def diagram_reason(source: str) -> Optional[str]:

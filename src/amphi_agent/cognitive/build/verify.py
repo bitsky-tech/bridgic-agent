@@ -267,56 +267,6 @@ class VerifyThink(BuildThink):
 
         return replace(outcome, continuation=nudge)
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_human_workflow_confirm"})
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            if getattr(call, "tool", None) != "request_human_workflow_confirm":
-                return None
-
-            package = self.build_package(context)
-            body = package.read_document("verify.md") if package is not None else None
-            if not body:
-                return (
-                    "confirm rejected: write verify.md with the isolated test scope, what "
-                    "actually ran, what was substituted or not run for safety, "
-                    "and the overall verification verdict before calling "
-                    "request_human_workflow_confirm."
-                )
-            document_reason = self.human_document_reason("verify.md", body)
-            if document_reason:
-                return f"confirm rejected: {document_reason}"
-
-            def overall_verdict() -> Optional[str]:
-                """Read a localized overall-verdict section at the document tail."""
-                lines = [line.strip() for line in body.splitlines() if line.strip()]
-                if len(lines) < 2 or not re.fullmatch(r"##\s+\S.*", lines[-2]):
-                    return None
-                return lines[-1].upper()
-
-            if overall_verdict() != "PASS":
-                return (
-                    "confirm rejected: verify.md must end with a level-two heading meaning "
-                    "Overall verdict in the document language, followed by `PASS`. Do not "
-                    "mark PASS while safely testable behavior failed, Verify changed actual "
-                    "external state, or a safety limitation was hidden."
-                )
-            reason = self.workflow_validation_reason(context)
-            return f"confirm rejected: {reason}" if reason else None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
     ############################################################################
     # Dynamic prompt assembly
     ############################################################################
@@ -373,3 +323,56 @@ class VerifyThink(BuildThink):
         tools = super().select_tools(ota_context, context)
         names = [tool.tool_name for tool in tools]
         return [*TOOL_LIBRARY.select([*names, "request_human_workflow_confirm"]), switch_tool]
+
+    ############################################################################
+    # Helpers
+    ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_human_workflow_confirm"})
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            if getattr(call, "tool", None) != "request_human_workflow_confirm":
+                return None
+
+            package = self.build_package(context)
+            body = package.read_document("verify.md") if package is not None else None
+            if not body:
+                return (
+                    "confirm rejected: write verify.md with the isolated test scope, what "
+                    "actually ran, what was substituted or not run for safety, "
+                    "and the overall verification verdict before calling "
+                    "request_human_workflow_confirm."
+                )
+            document_reason = self.human_document_reason("verify.md", body)
+            if document_reason:
+                return f"confirm rejected: {document_reason}"
+
+            def overall_verdict() -> Optional[str]:
+                """Read a localized overall-verdict section at the document tail."""
+                lines = [line.strip() for line in body.splitlines() if line.strip()]
+                if len(lines) < 2 or not re.fullmatch(r"##\s+\S.*", lines[-2]):
+                    return None
+                return lines[-1].upper()
+
+            if overall_verdict() != "PASS":
+                return (
+                    "confirm rejected: verify.md must end with a level-two heading meaning "
+                    "Overall verdict in the document language, followed by `PASS`. Do not "
+                    "mark PASS while safely testable behavior failed, Verify changed actual "
+                    "external state, or a safety limitation was hidden."
+                )
+            reason = self.workflow_validation_reason(context)
+            return f"confirm rejected: {reason}" if reason else None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved

@@ -217,86 +217,6 @@ class WorkflowRunThink(BaseThink):
         )
         return replace(outcome, continuation=continuation)
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Validate controls against this stage's bound Run and pinned source."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"report_workflow_step"})
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            tool_name = getattr(call, "tool", None)
-            if ota_context is None:
-                return (
-                    "workflow control rejected: no Workflow run is active."
-                    if tool_name in {
-                        "switch",
-                        "report_workflow_step",
-                    }
-                    else None
-                )
-            try:
-                state = self.state(ota_context, self.workflow_stage)
-                source = self.source(state, context)
-            except (RuntimeError, ValueError) as exc:
-                return f"workflow control rejected: {exc}."
-            steps = source.steps(state.stage)
-            if tool_name == "switch":
-                arguments = {
-                    _view(argument, "name"): _view(argument, "value")
-                    for argument in getattr(call, "tool_arguments", None) or []
-                }
-                if arguments.get("mode") == "normal":
-                    return None
-                return (
-                    "switch rejected: Workflow stages advance automatically; use mode "
-                    "`normal` only for an explicit user-requested pause or exit."
-                )
-            if tool_name != "report_workflow_step":
-                return None
-            if state.step_index >= len(steps):
-                return "workflow step report rejected: the current section does not exist."
-            return None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
-    async def permission_check(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        calls: List[StepToolCall],
-        agent: "AmphiAgent",
-        *,
-        execution_mode: Optional[str] = None,
-        additional_mount_roots: Optional[List[str]] = None,
-    ) -> List[CallVerdict]:
-        """Extend common permission roots with the active Run's source and inputs."""
-        mount_roots = list(additional_mount_roots or [])
-        workflow_runs = context.workflow_runs
-        if workflow_runs is not None and isinstance(ota_context.think_status, WorkflowStageState):
-            source = self._workflow_source(ota_context.think_status, context)
-            mount_roots.append(str(source.source_root))
-            run_state = context.workspace.run_workflow
-            if run_state is None:
-                raise RuntimeError("Workflow Run space was not prepared for permission review.")
-            mount_roots.extend(
-                str(path)
-                for input_run in workflow_runs.referenced_runs(run_state.workflow_input)
-                for path in (input_run.result_dir, input_run.background_work_dir)
-            )
-        return await super().permission_check(
-            ota_context, context, calls, agent,
-            execution_mode=execution_mode,
-            additional_mount_roots=mount_roots,
-        )
-
     ############################################################################
     # Dynamic prompt assembly
     ############################################################################
@@ -502,6 +422,86 @@ class WorkflowRunThink(BaseThink):
     ############################################################################
     # Helpers
     ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Validate controls against this stage's bound Run and pinned source."""
+        resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"report_workflow_step"})
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            tool_name = getattr(call, "tool", None)
+            if ota_context is None:
+                return (
+                    "workflow control rejected: no Workflow run is active."
+                    if tool_name in {
+                        "switch",
+                        "report_workflow_step",
+                    }
+                    else None
+                )
+            try:
+                state = self.state(ota_context, self.workflow_stage)
+                source = self.source(state, context)
+            except (RuntimeError, ValueError) as exc:
+                return f"workflow control rejected: {exc}."
+            steps = source.steps(state.stage)
+            if tool_name == "switch":
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                if arguments.get("mode") == "normal":
+                    return None
+                return (
+                    "switch rejected: Workflow stages advance automatically; use mode "
+                    "`normal` only for an explicit user-requested pause or exit."
+                )
+            if tool_name != "report_workflow_step":
+                return None
+            if state.step_index >= len(steps):
+                return "workflow step report rejected: the current section does not exist."
+            return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
+    async def _check_action_permissions(
+        self,
+        ota_context: AmphiOTAContext,
+        context: AmphiContext,
+        calls: List[StepToolCall],
+        agent: "AmphiAgent",
+        *,
+        execution_mode: Optional[str] = None,
+        additional_mount_roots: Optional[List[str]] = None,
+    ) -> List[CallVerdict]:
+        """Extend common permission roots with the active Run's source and inputs."""
+        mount_roots = list(additional_mount_roots or [])
+        workflow_runs = context.workflow_runs
+        if workflow_runs is not None and isinstance(ota_context.think_status, WorkflowStageState):
+            source = self._workflow_source(ota_context.think_status, context)
+            mount_roots.append(str(source.source_root))
+            run_state = context.workspace.run_workflow
+            if run_state is None:
+                raise RuntimeError("Workflow Run space was not prepared for permission review.")
+            mount_roots.extend(
+                str(path)
+                for input_run in workflow_runs.referenced_runs(run_state.workflow_input)
+                for path in (input_run.result_dir, input_run.background_work_dir)
+            )
+        return await super()._check_action_permissions(
+            ota_context, context, calls, agent,
+            execution_mode=execution_mode,
+            additional_mount_roots=mount_roots,
+        )
+
     @staticmethod
     def _close_run_workflow_bindings(context: AmphiContext) -> None:
         """Unbind the Run Space and its active Run and Workflow package."""

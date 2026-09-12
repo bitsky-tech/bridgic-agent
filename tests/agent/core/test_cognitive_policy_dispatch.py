@@ -15,8 +15,8 @@ from tests.agent.core.test_action_boundary import _call, _context, _invoke, _ota
 
 
 @pytest.mark.parametrize("stage", ["main", "clarify"])
-async def test_current_worker_extends_permissions_after_shared_legality(test_sandbox: IsolatedPaths, stage: str) -> None:
-    """The selected template extends the shared policy without admitting hidden or denied calls."""
+async def test_current_worker_handles_actions_after_complete_legality(test_sandbox: IsolatedPaths, stage: str) -> None:
+    """The public action protocol finishes every inherited legality check before permission review."""
     events: list[tuple[str, BaseThink, AmphiAgent, list[str]]] = []
     execution_modes: list[str | None] = []
     inherited_verdicts: list[CallVerdict] = []
@@ -26,10 +26,8 @@ async def test_current_worker_extends_permissions_after_shared_legality(test_san
         executions.append(value)
         return value
 
-    class CustomThink(BaseThink):
-        permission_mode_override = "full"
-
-        async def legality_check(
+    class ParentThink(BaseThink):
+        async def _check_action_legality(
             self,
             ota_context: AmphiOTAContext,
             context: AmphiContext,
@@ -37,10 +35,46 @@ async def test_current_worker_extends_permissions_after_shared_legality(test_san
             verdicts: list[CallVerdict],
             agent: AmphiAgent,
         ) -> list[CallVerdict]:
-            events.append(("legality", self, agent, [call.call_id for call in calls]))
-            return await super().legality_check(ota_context, context, calls, verdicts, agent)
+            resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+            events.append(("parent-legality", self, agent, [call.call_id for call in calls]))
+            return [
+                verdict.model_copy(update={"verdict": "deny", "reason": "Rejected by the parent stage."})
+                if verdict.id == "deny-parent" else verdict
+                for verdict in resolved
+            ]
 
-        async def permission_check(
+    class CustomThink(ParentThink):
+        permission_mode_override = "full"
+
+        async def handle_action(
+            self,
+            ota_context: AmphiOTAContext,
+            context: AmphiContext,
+            calls: list[StepToolCall],
+            agent: AmphiAgent,
+            *,
+            execution_mode: str | None = None,
+        ) -> list[CallVerdict]:
+            events.append(("handle-action", self, agent, [call.call_id for call in calls]))
+            return await super().handle_action(ota_context, context, calls, agent, execution_mode=execution_mode)
+
+        async def _check_action_legality(
+            self,
+            ota_context: AmphiOTAContext,
+            context: AmphiContext,
+            calls: list[StepToolCall],
+            verdicts: list[CallVerdict],
+            agent: AmphiAgent,
+        ) -> list[CallVerdict]:
+            resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+            events.append(("stage-legality", self, agent, [call.call_id for call in calls]))
+            return [
+                verdict.model_copy(update={"verdict": "deny", "reason": "Rejected by the final stage."})
+                if verdict.id == "deny-stage" else verdict
+                for verdict in resolved
+            ]
+
+        async def _check_action_permissions(
             self,
             ota_context: AmphiOTAContext,
             context: AmphiContext,
@@ -52,7 +86,7 @@ async def test_current_worker_extends_permissions_after_shared_legality(test_san
         ) -> list[CallVerdict]:
             events.append(("permission", self, agent, [call.call_id for call in calls]))
             execution_modes.append(execution_mode)
-            verdicts = await super().permission_check(
+            verdicts = await super()._check_action_permissions(
                 ota_context,
                 context,
                 calls,
@@ -73,7 +107,9 @@ async def test_current_worker_extends_permissions_after_shared_legality(test_san
 
     calls = [
         _call("hidden", "hidden_action", value="hidden"),
+        _call("deny-parent", "visible_action", value="parent-denied"),
         _call("allow-visible", "visible_action", value="allowed"),
+        _call("deny-stage", "visible_action", value="stage-denied"),
         _call("deny-visible", "visible_action", value="denied"),
     ]
     ota_context = _ota(calls, [FunctionToolSpec.from_raw(visible_action)])
@@ -87,21 +123,25 @@ async def test_current_worker_extends_permissions_after_shared_legality(test_san
     admitted = await _invoke(agent.before_action(ota_context, context))
 
     assert events == [
-        ("legality", worker, agent, [call.call_id for call in calls]),
+        ("handle-action", worker, agent, [call.call_id for call in calls]),
+        ("parent-legality", worker, agent, [call.call_id for call in calls]),
+        ("stage-legality", worker, agent, [call.call_id for call in calls]),
         ("permission", worker, agent, ["allow-visible", "deny-visible"]),
     ]
     assert execution_modes == ["full"]
     assert [verdict.id for verdict in inherited_verdicts] == ["allow-visible", "deny-visible"]
     assert [verdict.arguments for verdict in inherited_verdicts] == [{"value": "allowed"}, {"value": "denied"}]
     assert [verdict.verdict for verdict in inherited_verdicts] == ["allow", "allow"]
-    assert admitted.tool_calls == [calls[1]]
+    assert admitted.tool_calls == [calls[2]]
     gate = ota_context.ota_record[-1].permission
     assert gate.execution_mode == "full"
     assert gate.reviewed is False
     assert [verdict.id for verdict in gate.verdicts] == [call.call_id for call in calls]
-    assert [verdict.verdict for verdict in gate.verdicts] == ["deny", "allow", "deny"]
+    assert [verdict.verdict for verdict in gate.verdicts] == ["deny", "deny", "allow", "deny", "deny"]
     assert "not available" in gate.verdicts[0].reason
-    assert gate.verdicts[2].reason == "Denied by the custom stage."
+    assert gate.verdicts[1].reason == "Rejected by the parent stage."
+    assert gate.verdicts[3].reason == "Rejected by the final stage."
+    assert gate.verdicts[4].reason == "Denied by the custom stage."
     assert ota_context.interaction_status is None
 
     ota_context.think_result = admitted
@@ -114,6 +154,10 @@ async def test_current_worker_extends_permissions_after_shared_legality(test_san
     assert results["allow-visible"].tool_result == "allowed"
     assert results["hidden"].success is False
     assert "not available" in results["hidden"].error
+    assert results["deny-parent"].success is False
+    assert results["deny-parent"].error == "Rejected by the parent stage."
+    assert results["deny-stage"].success is False
+    assert results["deny-stage"].error == "Rejected by the final stage."
     assert results["deny-visible"].success is False
     assert results["deny-visible"].error == "Denied by the custom stage."
 
@@ -145,7 +189,7 @@ async def test_shared_switch_validation_uses_the_active_agent_registry(test_sand
     worker = agent._current_think_worker(ota_context, context)
     verdicts = ota_context.ota_record[-1].permission.verdicts
 
-    resolved = await worker.legality_check(ota_context, context, [call], verdicts, agent)
+    resolved = await worker._check_action_legality(ota_context, context, [call], verdicts, agent)
     admitted = await _invoke(agent.before_action(ota_context, context))
 
     expected = "allow" if case == "registered" else "deny"

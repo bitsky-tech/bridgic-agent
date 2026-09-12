@@ -152,7 +152,7 @@ async def test_cognitive_rules_preserve_system_denials_and_permission_metadata(o
     original = [verdict.model_dump() for verdict in verdicts]
     agent, context = orchestration.agent, orchestration.context
 
-    resolved = await agent.legality_check(ota_context, context, calls, verdicts)
+    resolved = await agent.handle_action(ota_context, context, calls)
 
     assert resolved[0].model_dump() == original[0]
     assert resolved[1].model_dump() == original[1]
@@ -162,32 +162,37 @@ async def test_cognitive_rules_preserve_system_denials_and_permission_metadata(o
     expected_denials = [verdict.model_dump() for verdict in resolved[1:]]
     assert [verdict.model_dump() for verdict in verdicts] == original
     ota_context.tools = [tool for tool in ota_context.tools if tool.tool_name != "request_human_choice"]
-    resolved = await agent.legality_check(ota_context, context, calls, verdicts)
+    resolved = await agent.handle_action(ota_context, context, calls)
     assert resolved[0].verdict == "deny"
     assert "not available" in resolved[0].reason
     assert [verdict.model_dump() for verdict in resolved[1:]] == expected_denials
 
 
 async def test_human_control_does_not_ask_for_an_excluded_network_call(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both permission entry points receive only the surviving human call, never the rejected network call."""
+    """The permission helper and engine receive only the surviving human call, never the rejected network call."""
     calls = [_human_call(), _call("network", "web_fetch", url="https://example.invalid/report")]
     ota_context = await _stage_round(orchestration, "main", calls)
     ota_context.ota_record[-1].permission = RoundPermission(execution_mode="request")
     agent, context = orchestration.agent, orchestration.context
     permission_batches: list[list[dict]] = []
     engine_batches: list[list[dict]] = []
-    original_permission_check = agent.permission_check
+    worker = agent._current_think_worker(ota_context, context)
+    original_check = worker._check_action_permissions
     original_evaluate = PermissionEngine.evaluate
 
-    async def permission_check(current_ota, current_context, evaluated_calls, *, execution_mode=None):
+    async def check_permissions(current_ota, current_context, evaluated_calls, current_agent, *, execution_mode=None, additional_mount_roots=None):
+        assert current_agent is agent
         permission_batches.append([call.model_dump() for call in evaluated_calls])
-        return await original_permission_check(current_ota, current_context, evaluated_calls, execution_mode=execution_mode)
+        return await original_check(
+            current_ota, current_context, evaluated_calls, current_agent,
+            execution_mode=execution_mode, additional_mount_roots=additional_mount_roots,
+        )
 
     async def evaluate(engine: PermissionEngine, evaluated_calls: list[StepToolCall], *args, **kwargs):
         engine_batches.append([call.model_dump() for call in evaluated_calls])
         return await original_evaluate(engine, evaluated_calls, *args, **kwargs)
 
-    monkeypatch.setattr(agent, "permission_check", permission_check)
+    monkeypatch.setattr(worker, "_check_action_permissions", check_permissions)
     monkeypatch.setattr(PermissionEngine, "evaluate", evaluate)
 
     admitted = await _invoke(agent.before_action(ota_context, context))
@@ -214,13 +219,14 @@ async def test_conflicting_controls_are_denied_without_template_approval(orchest
     ota_context = await _stage_round(orchestration, "ppt_plan", calls)
     ota_context.ota_record[-1].permission = RoundPermission(execution_mode="request")
     agent, context = orchestration.agent, orchestration.context
-    permission_check = AsyncMock(side_effect=AssertionError("An entirely rejected batch must not enter permission evaluation."))
-    monkeypatch.setattr(agent, "permission_check", permission_check)
+    worker = agent._current_think_worker(ota_context, context)
+    check_permissions = AsyncMock(side_effect=AssertionError("An entirely rejected batch must not enter permission evaluation."))
+    monkeypatch.setattr(worker, "_check_action_permissions", check_permissions)
 
     admitted = await _invoke(agent.before_action(ota_context, context))
 
     assert admitted.tool_calls == []
-    permission_check.assert_not_awaited()
+    check_permissions.assert_not_awaited()
     assert ota_context.interaction_status is None
     assert [verdict.verdict for verdict in ota_context.ota_record[-1].permission.verdicts] == ["deny", "deny"]
     ota_context.think_result = admitted
@@ -272,13 +278,18 @@ async def test_approval_replay_preserves_existing_denial_and_permission_metadata
     ota_context.ota_record[-1].permission = RoundPermission(execution_mode="request")
     agent, context = orchestration.agent, orchestration.context
     permission_batches: list[list[dict]] = []
-    original_permission_check = agent.permission_check
+    worker = agent._current_think_worker(ota_context, context)
+    original_check = worker._check_action_permissions
 
-    async def permission_check(current_ota, current_context, evaluated_calls, *, execution_mode=None):
+    async def check_permissions(current_ota, current_context, evaluated_calls, current_agent, *, execution_mode=None, additional_mount_roots=None):
+        assert current_agent is agent
         permission_batches.append([call.model_dump() for call in evaluated_calls])
-        return await original_permission_check(current_ota, current_context, evaluated_calls, execution_mode=execution_mode)
+        return await original_check(
+            current_ota, current_context, evaluated_calls, current_agent,
+            execution_mode=execution_mode, additional_mount_roots=additional_mount_roots,
+        )
 
-    monkeypatch.setattr(agent, "permission_check", permission_check)
+    monkeypatch.setattr(worker, "_check_action_permissions", check_permissions)
     admitted = await _invoke(agent.before_action(ota_context, context))
 
     assert admitted.tool_calls == []
@@ -333,13 +344,14 @@ async def test_invalid_template_ask_is_denied_by_the_stage_before_approval(orche
     ota_context.transition_think(PresentationStageState(stage="ppt_plan", step_index=2, outline_confirmed=False))
     ota_context.ota_record[-1].permission = RoundPermission(execution_mode="request")
     agent, context = orchestration.agent, orchestration.context
-    permission_check = AsyncMock(side_effect=AssertionError("An invalid template request must not enter permission evaluation."))
-    monkeypatch.setattr(agent, "permission_check", permission_check)
+    worker = agent._current_think_worker(ota_context, context)
+    check_permissions = AsyncMock(side_effect=AssertionError("An invalid template request must not enter permission evaluation."))
+    monkeypatch.setattr(worker, "_check_action_permissions", check_permissions)
 
     admitted = await _invoke(agent.before_action(ota_context, context))
 
     assert admitted.tool_calls == []
-    permission_check.assert_not_awaited()
+    check_permissions.assert_not_awaited()
     assert ota_context.interaction_status is None
     verdict = ota_context.ota_record[-1].permission.verdicts[0]
     assert verdict.verdict == "deny"

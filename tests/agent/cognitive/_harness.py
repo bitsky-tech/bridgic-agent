@@ -50,7 +50,7 @@ async def legality_reason(worker: BaseThink, call: StepToolCall, ota_context: Am
     )
     if ota_context is not None:
         ota_context.tools = worker.select_tools(ota_context, context)
-    resolved = await worker.legality_check(ota_context, context, [call], [verdict], AmphiAgent())
+    resolved = await worker._check_action_legality(ota_context, context, [call], [verdict], AmphiAgent())
     assert len(resolved) == 1
     if resolved[0].verdict == "allow":
         return None

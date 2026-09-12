@@ -9,7 +9,7 @@ import pytest
 from src.amphi_agent._workspace import Workspace
 from src.amphi_agent.cognitive import base as cognitive_base
 from src.amphi_agent.cognitive.normal.state import NormalStageState
-from src.amphi_agent.cognitive.state import CallVerdict
+from src.amphi_agent.cognitive.state import CallVerdict, RoundPermission
 from src.amphi_agent.security import LlmSafetyClassifier
 from src.amphi_store import SessionMountRecord, UserInput
 from tests.agent.core.test_action_boundary import _call
@@ -101,7 +101,9 @@ async def test_permission_context_preserves_active_mode_boundaries(
     engine_factory = Mock(return_value=engine)
     monkeypatch.setattr(cognitive_base, "PermissionEngine", engine_factory)
 
-    verdicts = await harness.agent.permission_check(
+    ota_context.tools = worker.select_tools(ota_context, harness.context)
+    ota_context.ota_record[-1].permission = RoundPermission(reviewed=False)
+    verdicts = await harness.agent.handle_action(
         ota_context, harness.context, calls, execution_mode=explicit_mode,
     )
 
@@ -127,7 +129,8 @@ async def test_permission_context_preserves_active_mode_boundaries(
     assert classifier._llm is harness.agent.llm is bound_llm
     assert classifier._audit_dir == workspace.permission_dir
     engine.evaluate.assert_awaited_once()
-    assert engine.evaluate.call_args.args[0] is calls
+    assert engine.evaluate.call_args.args[0] == calls
+    assert all(actual is original for actual, original in zip(engine.evaluate.call_args.args[0], calls))
     assert engine.evaluate.call_args.args[1] == [current_input.text]
     assert [verdict.id for verdict in verdicts] == [call.call_id for call in calls]
     assert [verdict.verdict for verdict in verdicts] == ["allow", "ask"]

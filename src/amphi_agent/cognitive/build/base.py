@@ -98,34 +98,6 @@ class BuildThink(BaseThink):
 
         return replace(outcome, continuation=nudge)
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Validate explicit handoffs within the current Build."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = None
-            if getattr(call, "tool", None) == "switch" and ota_context is not None:
-                arguments = {
-                    _view(argument, "name"): _view(argument, "value")
-                    for argument in getattr(call, "tool_arguments", None) or []
-                }
-                if (
-                    arguments.get("mode") != "normal"
-                    and arguments.get("stage")
-                    and not str(arguments.get("reason") or "").strip()
-                ):
-                    reason = (
-                        "switch rejected: a Build stage handoff requires a non-empty, "
-                        "self-contained reason for the next stage."
-                    )
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
     ############################################################################
     # Dynamic prompt assembly
     ############################################################################
@@ -269,6 +241,34 @@ class BuildThink(BaseThink):
     ############################################################################
     # Helpers
     ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Validate explicit handoffs within the current Build."""
+        resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = None
+            if getattr(call, "tool", None) == "switch" and ota_context is not None:
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                if (
+                    arguments.get("mode") != "normal"
+                    and arguments.get("stage")
+                    and not str(arguments.get("reason") or "").strip()
+                ):
+                    reason = (
+                        "switch rejected: a Build stage handoff requires a non-empty, "
+                        "self-contained reason for the next stage."
+                    )
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
     @staticmethod
     async def sync_build_space(ota_context: AmphiOTAContext, context: AmphiContext, *, create: bool = False) -> None:
         """Project the resolved think state onto this turn's Workspace.

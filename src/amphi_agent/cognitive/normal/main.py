@@ -647,90 +647,6 @@ class MainThink(BaseThink):
         )
         return replace(outcome, retry_empty_answer=True, minimum_budget=1, continuation=continuation)
 
-    async def legality_check(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
-        """Apply inherited admission rules, then this worker's business constraints."""
-        resolved = await super().legality_check(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"edit_workflow", "request_build", "request_presentation", "request_run_workflow"})
-
-        def reason_for_call(call: StepToolCall) -> Optional[str]:
-            tool_name = getattr(call, "tool", None)
-            if tool_name == "request_build":
-                arguments = {
-                    _view(argument, "name"): _view(argument, "value")
-                    for argument in getattr(call, "tool_arguments", None) or []
-                }
-                workspace = context.workspace
-                retained = workspace.build_checkpoint() if workspace is not None else None
-                if arguments.get("mode", "ask") == "ask" and retained is not None and not str(arguments.get("reason") or "").strip():
-                    return (
-                        "request_build rejected: mode `ask` requires a concrete reason "
-                        "when resolving an unfinished Build conflict."
-                    )
-                return None
-            if tool_name == "switch":
-                return "switch rejected: Main enters cognitive modes through their dedicated tools."
-            if tool_name not in {"edit_workflow", "request_run_workflow"}:
-                return None
-            if tool_name == "request_run_workflow" and ota_context is not None:
-                recent_steps = (
-                    step
-                    for record in reversed(ota_context.ota_record)
-                    for step in reversed(_view(_view(record, "action_result"), "results") or [])
-                )
-                for step in recent_steps:
-                    if (
-                        _view(step, "tool_name") == "switch"
-                        and _view(step, "success")
-                        and _view(_view(step, "tool_result"), "mode") == "normal"
-                    ):
-                        break
-                    if _view(step, "tool_name") == "report_workflow_step":
-                        return "workflow run rejected: this turn already ran the Workflow; summarize its reports."
-            arguments = {
-                _view(argument, "name"): _view(argument, "value")
-                for argument in getattr(call, "tool_arguments", None) or []
-            }
-            workflow_id = str(arguments.get("workflow_id") or "").strip()
-            workflows = context.workflows
-            if workflows is None:
-                return f"{tool_name} rejected: no Workflow catalogue is available."
-            if tool_name == "request_run_workflow":
-                workspace = context.workspace
-                active = (
-                    workspace.run_workflow_checkpoint()
-                    if workspace is not None
-                    else None
-                )
-                action = str(arguments.get("action") or "start")
-                if action not in {"start", "ask"}:
-                    return (
-                        f"request_run_workflow rejected: unsupported action `{action}`; "
-                        "use action `start` or `ask`."
-                    )
-                if action == "ask" and active is None:
-                    return (
-                        "request_run_workflow rejected: `ask` requires an "
-                        "unfinished Run; use action `start`."
-                    )
-                if action == "ask" and active.workflow_id == workflow_id:
-                    return None
-            try:
-                workflows.source(workflow_id)
-            except ValueError as exc:
-                return f"{tool_name} rejected: {exc}."
-            return None
-
-        for index, (call, verdict) in enumerate(zip(calls, resolved)):
-            if verdict.verdict == Permission.DENY.value:
-                continue
-            reason = reason_for_call(call)
-            if reason:
-                resolved[index] = verdict.model_copy(update={
-                    "verdict": Permission.DENY.value,
-                    "reason": reason,
-                })
-        return resolved
-
     ############################################################################
     # Tools and Skills selection
     ############################################################################
@@ -946,6 +862,94 @@ class MainThink(BaseThink):
         the full SYSTEM message from this plus the ``<context>`` umbrella."""
         names = [tool.tool_name for tool in ota_context.tools]
         return render_main_persona(names, template=self.persona).strip()
+
+    ############################################################################
+    # Helpers
+    ############################################################################
+    async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
+        """Apply inherited admission rules, then this worker's business constraints."""
+        resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"edit_workflow", "request_build", "request_presentation", "request_run_workflow"})
+
+        def reason_for_call(call: StepToolCall) -> Optional[str]:
+            tool_name = getattr(call, "tool", None)
+            if tool_name == "request_build":
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                workspace = context.workspace
+                retained = workspace.build_checkpoint() if workspace is not None else None
+                if arguments.get("mode", "ask") == "ask" and retained is not None and not str(arguments.get("reason") or "").strip():
+                    return (
+                        "request_build rejected: mode `ask` requires a concrete reason "
+                        "when resolving an unfinished Build conflict."
+                    )
+                return None
+            if tool_name == "switch":
+                return "switch rejected: Main enters cognitive modes through their dedicated tools."
+            if tool_name not in {"edit_workflow", "request_run_workflow"}:
+                return None
+            if tool_name == "request_run_workflow" and ota_context is not None:
+                recent_steps = (
+                    step
+                    for record in reversed(ota_context.ota_record)
+                    for step in reversed(_view(_view(record, "action_result"), "results") or [])
+                )
+                for step in recent_steps:
+                    if (
+                        _view(step, "tool_name") == "switch"
+                        and _view(step, "success")
+                        and _view(_view(step, "tool_result"), "mode") == "normal"
+                    ):
+                        break
+                    if _view(step, "tool_name") == "report_workflow_step":
+                        return "workflow run rejected: this turn already ran the Workflow; summarize its reports."
+            arguments = {
+                _view(argument, "name"): _view(argument, "value")
+                for argument in getattr(call, "tool_arguments", None) or []
+            }
+            workflow_id = str(arguments.get("workflow_id") or "").strip()
+            workflows = context.workflows
+            if workflows is None:
+                return f"{tool_name} rejected: no Workflow catalogue is available."
+            if tool_name == "request_run_workflow":
+                workspace = context.workspace
+                active = (
+                    workspace.run_workflow_checkpoint()
+                    if workspace is not None
+                    else None
+                )
+                action = str(arguments.get("action") or "start")
+                if action not in {"start", "ask"}:
+                    return (
+                        f"request_run_workflow rejected: unsupported action `{action}`; "
+                        "use action `start` or `ask`."
+                    )
+                if action == "ask" and active is None:
+                    return (
+                        "request_run_workflow rejected: `ask` requires an "
+                        "unfinished Run; use action `start`."
+                    )
+                if action == "ask" and active.workflow_id == workflow_id:
+                    return None
+            try:
+                workflows.source(workflow_id)
+            except ValueError as exc:
+                return f"{tool_name} rejected: {exc}."
+            return None
+
+        for index, (call, verdict) in enumerate(zip(calls, resolved)):
+            if verdict.verdict == Permission.DENY.value:
+                continue
+            reason = reason_for_call(call)
+            if reason:
+                resolved[index] = verdict.model_copy(update={
+                    "verdict": Permission.DENY.value,
+                    "reason": reason,
+                })
+        return resolved
+
 
 
 __all__ = ["MainThink"]

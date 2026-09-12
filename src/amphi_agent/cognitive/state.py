@@ -108,8 +108,8 @@ class RoundPermission(BaseModel):
     One field carries the whole picture — every call's verdict (aligned with the round's
     tool_calls) plus, for blocked calls, the reason — superseding the separate
     ``denied_steps`` / ``permission_result`` round fields. ``reviewed`` marks a round the
-    user has already decided: ``permission_check`` then returns these verdicts verbatim
-    instead of re-gating, so an approved/denied round never loops back into a fresh ask.
+    user has already decided: ``handle_action`` rechecks legality while reusing the
+    permission decisions, so an approved/denied round never triggers a fresh ask.
     ``execution_mode`` snapshots the effective Think-aware mode used for this round.
     """
     execution_mode: Optional[Literal["request", "auto", "full"]] = None

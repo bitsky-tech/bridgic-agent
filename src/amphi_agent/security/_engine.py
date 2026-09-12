@@ -1,7 +1,7 @@
 """The permission engine facade — chains the four layers to turn a batch of tool calls
 into a batch of :class:`CallVerdict`.
 
-``permission_check`` depends on this single entry point:
+``handle_action`` depends on this single entry point:
 
     engine = PermissionEngine(workspace_root, mount_roots, mode, classifier)
     verdicts = await engine.evaluate(calls, user_messages)

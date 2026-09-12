@@ -252,32 +252,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             yield RETURN(decision.model_copy(update={"tool_calls": []}))
             return
 
-        ########################
-        # Tool Legality Check
-        ########################
-        if current_ota_permission_status.reviewed:
-            verdicts = self._reviewed_verdicts(current_ota_permission_status.verdicts)
-        else:
-            verdicts = [
-                CallVerdict(id=call.call_id, tool=call.tool, arguments=self._tool_args(call), verdict=Permission.ALLOW.value)
-                for call in calls
-            ]
-        verdicts = await self.legality_check(ota_context, context, calls, verdicts)
-
-        ########################
-        # Tool Permission Check
-        ########################
-        if not current_ota_permission_status.reviewed:
-            legal_indices = [index for index, verdict in enumerate(verdicts) if verdict.verdict == Permission.ALLOW.value]
-            if legal_indices:
-                permission_verdicts = await self.permission_check(
-                    ota_context,
-                    context,
-                    [calls[index] for index in legal_indices],
-                    execution_mode=effective_execution_mode,
-                )
-                for index, verdict in zip(legal_indices, permission_verdicts):
-                    verdicts[index] = verdict
+        verdicts = await self.handle_action(
+            ota_context, context, calls, execution_mode=effective_execution_mode,
+        )
 
         ota_context.ota_record[-1].permission = RoundPermission(
             execution_mode=effective_execution_mode,
@@ -963,7 +940,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 reviewed.append(cv)
         return reviewed
 
-    async def permission_check(
+    async def handle_action(
         self,
         ota_context: AmphiOTAContext,
         context: AmphiContext,
@@ -971,9 +948,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         *,
         execution_mode: Optional[str] = None,
     ) -> List[CallVerdict]:
-        """Delegate permission policy to the active cognitive worker."""
+        """Delegate action admission to the active cognitive worker."""
         worker = self._current_think_worker(ota_context, context)
-        return await worker.permission_check(ota_context, context, calls, self, execution_mode=execution_mode)
+        return await worker.handle_action(ota_context, context, calls, self, execution_mode=execution_mode)
 
     @staticmethod
     def _current_think_unit_name(ota_context: AmphiOTAContext, context: AmphiContext) -> str:
@@ -1009,11 +986,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 f"Think worker `{type(worker).__name__}` does not define select_tools()."
             )
         return list(select_tools(ota_context, context))
-
-    async def legality_check(self, ota_context: AmphiOTAContext, context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict]) -> List[CallVerdict]:
-        """Delegate tool availability and cognitive transition rules to the active worker."""
-        worker = self._current_think_worker(ota_context, context)
-        return await worker.legality_check(ota_context, context, calls, verdicts, self)
 
     @staticmethod
     def _stamp_instruction(ota_context: AmphiOTAContext, instruction: str) -> None:
