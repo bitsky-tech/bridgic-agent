@@ -1,4 +1,4 @@
-"""Verify Agent-owned stage binding, dispatch, and instance configuration."""
+"""Verify Agent-owned stage binding, dispatch, and code-controlled round limits."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +8,7 @@ import pytest
 from bridgic.amphibious import AmphibiousAutoma, Context, OTAContext, RETURN, ThinkUnit, ThinkUnitDescriptor, think_unit
 from bridgic.core.model.types import Message, Role
 
-from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session, cognitive
+from src.amphi_agent import DEFAULT_MAX_ROUNDS, AmphiAgent, AmphiContext, AmphiOTAContext, Session, cognitive
 from src.amphi_agent.cognitive.normal.state import NormalStageState
 from src.amphi_agent.cognitive import get_cognitive_stages
 from src.amphi_agent.cognitive import register as registration
@@ -31,7 +31,7 @@ def registry(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_existing_workers_keep_their_bindings_and_mode_order() -> None:
-    agent = AmphiAgent(max_rounds=7)
+    agent = AmphiAgent()
     expected = {
         "main": cognitive.MainThink,
         "subagent": cognitive.SubAgentThink,
@@ -49,14 +49,13 @@ def test_existing_workers_keep_their_bindings_and_mode_order() -> None:
     assert list(units) == [stage.stage for stage in get_cognitive_stages()]
     for name, worker_type in expected.items():
         assert type(units[name]._worker_template) is worker_type
-        assert units[name]._max_attempts == 200
+        assert units[name]._max_attempts == DEFAULT_MAX_ROUNDS
     expected_modes = {
         "build": ("clarify", "explore", "generate", "verify"),
         "normal": ("main", "subagent"),
         "presentation": ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"),
         "run_workflow": ("execute",),
     }
-    assert agent._max_rounds == 7
     assert agent.thinking_modes == expected_modes
     agent.thinking_modes["build"] = ()
     assert AmphiAgent().thinking_modes == expected_modes
@@ -68,12 +67,11 @@ def test_normal_workers_register_and_reuse_their_templates() -> None:
         ("main", 10, cognitive.MainThink),
         ("subagent", 20, cognitive.SubAgentThink),
     ]
-    first = AmphiAgent(max_rounds=7)
-    second = AmphiAgent(max_rounds=11)
+    first = AmphiAgent()
+    second = AmphiAgent()
     for name in ("main", "subagent"):
         assert getattr(first, name) is getattr(second, name)
         assert getattr(first, name)._worker_template is getattr(second, name)._worker_template
-    assert (first._max_rounds, second._max_rounds) == (7, 11)
 
 
 def test_normal_registration_preserves_explicit_subclass_overrides() -> None:
@@ -219,13 +217,12 @@ def test_later_instances_reuse_worker_templates(registry) -> None:
             calls.append("created")
             super().__init__()
 
-    first = AmphiAgent(max_rounds=7)
+    first = AmphiAgent()
     descriptor = first.custom_stage
-    second = AmphiAgent(max_rounds=11)
+    second = AmphiAgent()
     assert calls == ["created"]
     assert second.custom_stage is descriptor
-    assert (first._max_rounds, second._max_rounds) == (7, 11)
-    assert descriptor._max_attempts == 200
+    assert descriptor._max_attempts == DEFAULT_MAX_ROUNDS
 
 
 def test_subclass_created_first_inherits_shared_templates(registry) -> None:
@@ -324,9 +321,13 @@ async def test_registered_base_worker_runs_shared_thinking_without_main_policy(r
     assert ota_context.context_usage.output_tokens == 4
 
 
-async def test_on_agent_round_limit_overrides_descriptor_default_per_instance(registry, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_on_agent_uses_code_round_limit_for_registered_workers(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     cognitive_stage(mode="custom", stage="custom_stage", order=10)(BaseThink)
-    agents = [AmphiAgent(max_rounds=7), AmphiAgent(max_rounds=11)]
+
+    class CustomAgent(AmphiAgent):
+        custom_stage = think_unit(BaseThink(), max_attempts=3)
+
+    agents = [AmphiAgent(), CustomAgent()]
     body = AsyncMock(return_value="done")
     monkeypatch.setattr(AmphiAgent, "init_state", AsyncMock())
     monkeypatch.setattr(AmphiAgent, "_current_think_unit_name", lambda *args: "custom_stage")
@@ -340,11 +341,13 @@ async def test_on_agent_round_limit_overrides_descriptor_default_per_instance(re
             item = await anext(flow)
             assert item.name == "custom_stage"
             assert await agent._run_think_unit(item) == "done"
-            assert body.call_args.kwargs["max_attempts"] == agent._max_rounds
+            assert body.call_args.kwargs["max_attempts"] == DEFAULT_MAX_ROUNDS
         finally:
             await flow.aclose()
     await agents[0]._run_think_unit(ThinkUnit("custom_stage"))
-    assert body.call_args.kwargs["max_attempts"] == 200
+    assert body.call_args.kwargs["max_attempts"] == DEFAULT_MAX_ROUNDS
+    await agents[1]._run_think_unit(ThinkUnit("custom_stage"))
+    assert body.call_args.kwargs["max_attempts"] == 3
 
 
 def test_reading_registry_does_not_import_business_packages(registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -117,6 +117,10 @@ class Repository(Generic[T]):
 
         cls._migrate_session_turn_usage(sync_conn)
         cls._migrate_workflow_runs(sync_conn)
+        # The retired NOT NULL column has no SQLite default and blocks new users.
+        user_columns = sync_conn.exec_driver_sql("PRAGMA table_info(users)").all()
+        if "default_max_rounds" in {row[1] for row in user_columns}:
+            sync_conn.exec_driver_sql("ALTER TABLE users DROP COLUMN default_max_rounds")
         # Repair rows written before the api_key→Codex switch cleared the stale
         # base_url: Codex channels never legitimately carry one, and a leftover
         # https://api.openai.com/v1 routes /codex/responses to a 404. Idempotent.

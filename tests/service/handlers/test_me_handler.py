@@ -25,7 +25,6 @@ async def test_profile(service_client: httpx.AsyncClient) -> None:
         "display_name": None,
         "current_model": "",
         "base_url": None,
-        "default_max_rounds": 50,
         "default_temperature": 0.0,
         "api_key_set": False,
         "protocol": "openai",

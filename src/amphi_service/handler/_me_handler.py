@@ -182,7 +182,6 @@ def me_profile(user: User) -> dict:
         "display_name": user.display_name,
         "current_model": user.current_model,
         "base_url": user.base_url,
-        "default_max_rounds": user.default_max_rounds,
         "default_temperature": user.default_temperature,
         "api_key_set": bool(user.api_key),
         "protocol": getattr(user, "protocol", "openai"),

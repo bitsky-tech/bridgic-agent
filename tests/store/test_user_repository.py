@@ -1,4 +1,8 @@
-from src.amphi_store import UserRepository
+import pytest
+from sqlmodel import SQLModel
+
+from src.amphi_store import Repository, SessionRecord, SessionTurnRecord, TurnStatus, UserInput, UserRepository
+from tests._support.sandbox import IsolatedPaths
 
 
 USER_ID = "local"
@@ -29,10 +33,13 @@ async def test_seeded(initialized_store: None) -> None:
     user = await repository.load(USER_ID)
     assert user is not None
     assert user.id == USER_ID
+    async with repository._engine.connect() as connection:
+        columns = (await connection.exec_driver_sql("PRAGMA table_info(users)")).all()
+    assert "default_max_rounds" not in {column[1] for column in columns}
 
     # Check 2: The local User starts with safe model, execution, and credential defaults.
     assert user.current_model == ""
-    assert user.default_max_rounds == 50
+    assert "default_max_rounds" not in user.model_dump()
     assert user.default_temperature == 0.0
     assert user.execution_mode == "auto"
     assert user.protocol == "openai"
@@ -46,6 +53,104 @@ async def test_seeded(initialized_store: None) -> None:
     preserved = await repository.load(USER_ID)
     assert preserved is not None
     assert preserved.current_model == "preserved-model"
+
+
+@pytest.mark.parametrize("existing_user", [False, True], ids=["empty-legacy-table", "existing-legacy-user"])
+async def test_legacy_round_limit_column(test_sandbox: IsolatedPaths, existing_user: bool) -> None:
+    """Upgrading the old users table preserves preferences and permits new user seeding."""
+    await Repository.close()
+    Repository.connect(test_sandbox.state_db)
+    repository = UserRepository()
+    try:
+        async with repository._engine.begin() as connection:
+            # SQLModel's old Python default did not create a SQLite DEFAULT clause.
+            await connection.exec_driver_sql("""
+                CREATE TABLE users (
+                    id VARCHAR NOT NULL PRIMARY KEY,
+                    display_name VARCHAR,
+                    api_key VARCHAR,
+                    base_url VARCHAR,
+                    current_model VARCHAR NOT NULL,
+                    default_max_rounds INTEGER NOT NULL,
+                    default_temperature FLOAT NOT NULL,
+                    protocol VARCHAR NOT NULL,
+                    execution_mode VARCHAR NOT NULL,
+                    created_at DATETIME NOT NULL
+                )
+            """)
+            if existing_user:
+                await connection.exec_driver_sql("""
+                    INSERT INTO users (
+                        id, display_name, api_key, base_url, current_model,
+                        default_max_rounds, default_temperature, protocol,
+                        execution_mode, created_at
+                    ) VALUES (
+                        'local', 'Existing user', 'retained-key', 'https://models.example.test/v1',
+                        'saved-model', 91, 0.7, 'openai', 'request', '2026-09-01 12:00:00'
+                    )
+                """)
+            await connection.run_sync(SQLModel.metadata.create_all)
+
+        if existing_user:
+            # The retired column must not participate in normal ORM reads or updates.
+            user = await repository.load(USER_ID)
+            assert user is not None
+            assert "default_max_rounds" not in user.model_dump()
+            assert user.current_model == "saved-model"
+            await repository.set_model(USER_ID, "updated-model")
+            await repository.set_execution_mode(USER_ID, "full")
+            async with repository._session() as session:
+                session.add(SessionRecord(
+                    id="legacy-session", user_id=USER_ID,
+                    workspace_root=str(test_sandbox.sessions / "legacy-session"),
+                    title="Preserved session",
+                ))
+                session.add(SessionTurnRecord(
+                    id="legacy-turn", user_id=USER_ID, session_id="legacy-session",
+                    session_ordinal=0, user_input=UserInput(text="Preserved request"),
+                    status=TurnStatus.COMPLETED, final_answer="Preserved answer", max_rounds=50,
+                ))
+                await session.commit()
+
+        await Repository.init_schema()
+        await Repository.init_schema()
+        async with repository._engine.connect() as connection:
+            columns = (await connection.exec_driver_sql("PRAGMA table_info(users)")).all()
+        assert "default_max_rounds" not in {column[1] for column in columns}
+        await repository.ensure_seeded(USER_ID)
+        user = await repository.load(USER_ID)
+        assert user is not None
+        assert "default_max_rounds" not in user.model_dump()
+        if existing_user:
+            assert user.display_name == "Existing user"
+            assert user.current_model == "updated-model"
+            assert user.default_temperature == 0.7
+            assert user.execution_mode == "full"
+            assert user.api_key == "retained-key"
+            assert user.base_url == "https://models.example.test/v1"
+            async with repository._session() as session:
+                stored_session = await session.get(SessionRecord, "legacy-session")
+                stored_turn = await session.get(SessionTurnRecord, "legacy-turn")
+            assert stored_session is not None
+            assert stored_session.user_id == USER_ID
+            assert stored_session.title == "Preserved session"
+            assert stored_turn is not None
+            assert stored_turn.session_id == stored_session.id
+            assert stored_turn.user_input.text == "Preserved request"
+            assert stored_turn.final_answer == "Preserved answer"
+            assert stored_turn.max_rounds == 50
+        else:
+            assert user.current_model == ""
+            assert user.default_temperature == 0.0
+            assert user.execution_mode == "auto"
+
+        await repository.ensure_seeded("new-user")
+        new_user = await repository.load("new-user")
+        assert new_user is not None
+        assert new_user.current_model == ""
+        assert "default_max_rounds" not in new_user.model_dump()
+    finally:
+        await Repository.close()
 
 
 async def test_preferences(initialized_store: None) -> None:
