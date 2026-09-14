@@ -1,0 +1,290 @@
+/* Keep Lab's dock proportions aligned with the desktop Session surface rail. */
+.experiment-workbench {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experiment-workbench > .experiment-trace-column {
+  display: flex;
+  flex: 1 1 0%;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experiment-workbench > .experiment-side-pane {
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.experiment-side-surface {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.experiment-side-header {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.experiment-side-header > svg {
+  flex-shrink: 0;
+  color: var(--phase-accent-text);
+}
+
+.experiment-side-header h2 {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.experiment-side-header > span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.experiment-side-header > button:last-child {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.experiment-side-body {
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  scrollbar-width: thin;
+}
+
+.experiment-side-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.experiment-side-backdrop {
+  display: none;
+}
+
+.experiment-surface-rail {
+  position: relative;
+  z-index: 31;
+  display: flex;
+  flex: 0 0 68px;
+  flex-direction: column;
+  width: 68px;
+  height: 100%;
+  min-height: 0;
+  padding: 8px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid transparent;
+  background: transparent;
+  transition: background-color 200ms ease-out, border-color 200ms ease-out;
+  scrollbar-width: thin;
+}
+
+.experiment-surface-rail[data-presentation='attached'] {
+  border-left-color: var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+}
+
+.experiment-tool-dock {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  margin: auto 2px;
+  padding: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-elevated) 95%, transparent);
+  box-shadow: var(--shadow-card);
+  transition: background-color 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out;
+}
+
+.experiment-surface-rail[data-presentation='attached'] .experiment-tool-dock {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.experiment-rail-entry {
+  min-width: 0;
+}
+
+.experiment-agent-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-strong);
+}
+
+.experiment-rail-button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  height: 50px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  background: transparent;
+  transition: color 200ms ease-out, background-color 200ms ease-out;
+}
+
+.experiment-rail-button[data-surface='agent'] {
+  height: 53px;
+}
+
+.experiment-rail-button:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.experiment-rail-button[aria-selected='true'] {
+  color: var(--phase-accent-text);
+}
+
+.experiment-rail-button[aria-selected='true']:hover {
+  background: transparent;
+}
+
+.experiment-rail-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.experiment-rail-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 28px;
+}
+
+.experiment-rail-icon-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  transition: color 200ms ease-out, background-color 200ms ease-out;
+}
+
+.experiment-rail-button[data-state='background-open'] .experiment-rail-icon-tile {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+}
+
+.experiment-rail-button[aria-selected='true'] .experiment-rail-icon-tile {
+  width: 36px;
+  height: 28px;
+  border-radius: 999px;
+  color: var(--phase-accent-text);
+  background: var(--phase-accent-bg);
+}
+
+.experiment-rail-label {
+  max-width: 58px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-rail-button[aria-selected='true'] .experiment-rail-label {
+  font-weight: 600;
+}
+
+.experiment-rail-icon-tile img {
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.experiment-brand-light,
+.lab-app[data-theme='light'] .experiment-brand-dark {
+  display: none;
+}
+
+.lab-app[data-theme='light'] .experiment-brand-light {
+  display: block;
+}
+
+@media (max-width: 1000px) {
+  .experiment-workbench > .experiment-side-pane {
+    position: absolute;
+    z-index: 30;
+    top: 0;
+    right: 68px;
+    bottom: 0;
+    width: min(430px, calc(100% - 68px)) !important;
+    max-width: calc(100% - 68px);
+    height: 100%;
+    box-shadow: -12px 0 32px rgb(0 0 0 / 14%);
+  }
+
+  .experiment-workbench > .experiment-side-pane > .resizable-pane-separator {
+    display: none;
+  }
+
+  .experiment-workbench[data-panel-open='true'] > .experiment-side-backdrop {
+    position: absolute;
+    z-index: 29;
+    inset: 0 68px 0 0;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgb(0 0 0 / 14%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-surface-rail,
+  .experiment-tool-dock,
+  .experiment-rail-button,
+  .experiment-rail-icon-tile {
+    transition: none;
+  }
+}

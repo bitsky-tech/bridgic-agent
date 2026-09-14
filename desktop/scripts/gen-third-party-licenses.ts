@@ -66,6 +66,7 @@ const OUTPUT_PATH = join(RESOURCES_DIR, 'THIRD-PARTY-LICENSES.txt')
 const LICENSE_FILENAMES = [
   'LICENSE',
   'LICENSE.md',
+  'LICENSE.markdown',
   'LICENSE.txt',
   'LICENCE',
   'LICENCE.md',

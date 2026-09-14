@@ -181,24 +181,33 @@ def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tup
 
 async def test_context_breakdown_classifies_the_final_request(test_sandbox: IsolatedPaths) -> None:
     """The persisted components distinguish tools from other dynamic input."""
-    worker = MainThink()
+    class BreakdownLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            assert tools
+            assert any(message.content == "Earlier question" for message in messages)
+            return StreamResult(tool_calls=[], content="Answer", usage=None)
+
+    class BreakdownThink(MainThink):
+        async def assemble_messages(self, ota_context, context):
+            ota_context.tools = self.select_tools(ota_context, context)
+            current_input = await self.current_user_block(ota_context, context)
+            return [
+                Message.from_text("Stable persona\n\n<context>\nDynamic data\n</context>", role=Role.SYSTEM),
+                Message.from_text("Earlier question", role=Role.USER),
+                Message.from_text("Earlier answer", role=Role.AI),
+                Message.from_text(current_input, role=Role.USER),
+            ]
+
+    worker = BreakdownThink(BreakdownLlm())
     ota_context = AmphiOTAContext(
         user_input="Current request",
         prompt_time="2026-08-26 12:00 (UTC+08:00)",
+        ota_record=[OTARecord()],
     )
     context = AmphiContext(session=make_session(test_sandbox.sessions / "breakdown"))
-    current_input = await worker.current_user_block(ota_context, context)
-    messages = [
-        Message.from_text("Stable persona\n\n<context>\nDynamic data\n</context>", role=Role.SYSTEM),
-        Message.from_text("Earlier question", role=Role.USER),
-        Message.from_text("Earlier answer", role=Role.AI),
-        Message.from_text(current_input, role=Role.USER),
-    ]
+    await worker.thinking(ota_context, context)
 
-    breakdown = await worker._estimate_context_breakdown(
-        messages, [{"name": "read_file"}], ota_context, context,
-    )
-
+    breakdown = ota_context.context_usage.breakdown
     assert breakdown.system_prompt_tokens > 0
     assert breakdown.dynamic_context_tokens > 0
     assert breakdown.tool_schema_tokens > 0
@@ -247,25 +256,30 @@ async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox:
     assert ota_context.context_usage.stage_references == {}
 
 
-@pytest.mark.parametrize(("source", "estimate", "target"), [
-    ("provider", 95, 60),
-    ("estimated", 90, 55),
+@pytest.mark.parametrize(("source", "estimate"), [
+    ("provider", 95),
+    ("estimated", 90),
 ])
-async def test_context_threshold_enters_the_compaction_hook(test_sandbox: IsolatedPaths, source: str, estimate: int, target: int) -> None:
+async def test_context_threshold_enters_the_compaction_hook(test_sandbox: IsolatedPaths, source: str, estimate: int) -> None:
     """Provider and estimated preflights compact at their configured late thresholds."""
+    class ProbeLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            return StreamResult(tool_calls=[], content="Answer", usage=None)
+
     class ProbeThink(MainThink):
         compacted = False
-        target_tokens = None
+        request_estimate = estimate - 1
+
+        async def assemble_messages(self, ota_context, context):
+            return [Message.from_text("Large request")]
 
         def _estimate_request_tokens(self, messages, tools):
-            return estimate
+            return self.request_estimate
 
-        async def compact_messages(self, messages, tools, ota_context, context, target_tokens):
+        async def compact_history(self, ota_context, context, scope, candidate, *, read_scopes=None):
             self.compacted = True
-            self.target_tokens = target_tokens
-            return messages
 
-    worker = ProbeThink()
+    worker = ProbeThink(ProbeLlm())
     context = AmphiContext(
         session=make_session(test_sandbox.sessions / f"compaction-threshold-{source}"),
         llm_provider=LlmProvider(
@@ -273,8 +287,6 @@ async def test_context_threshold_enters_the_compaction_hook(test_sandbox: Isolat
             model_limits={"input": 100},
         ),
     )
-    messages = await worker.assemble_messages(AmphiOTAContext(user_input="large request"), context)
-
     usage = (
         {
             "model_id": "small-model",
@@ -290,15 +302,15 @@ async def test_context_threshold_enters_the_compaction_hook(test_sandbox: Isolat
         if source == "provider"
         else {}
     )
-    ota_context = AmphiOTAContext(user_input="large request", context_usage=usage)
-    prepared, request_estimate = await worker._prepare_context_window(
-        messages, [], ota_context, context,
-    )
+    ota_context = AmphiOTAContext(user_input="large request", context_usage=usage, ota_record=[OTARecord()])
+    await worker.thinking(ota_context, context)
+    assert worker.compacted is False
+
+    worker.request_estimate = estimate
+    await worker.thinking(ota_context, context)
 
     assert worker.compacted is True
-    assert worker.target_tokens == target
-    assert prepared == messages
-    assert request_estimate == estimate
+    assert ota_context.context_usage.estimated_occupied_tokens == estimate
 
 
 def test_reasoning_replay(test_sandbox: IsolatedPaths) -> None:

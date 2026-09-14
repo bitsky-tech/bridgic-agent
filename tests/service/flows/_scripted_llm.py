@@ -10,7 +10,7 @@ from typing import Any
 
 from bridgic.core.model.types import Message, Response, Role, TokenUsage
 
-from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA
 from src.amphi_service.protocol.llms._streaming import StreamResult
 
 

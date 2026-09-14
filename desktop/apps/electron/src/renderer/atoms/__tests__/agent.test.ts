@@ -11,6 +11,7 @@ import {
   appendUserMessageAtom,
   currentAgentRunningAtom,
   currentBrowserAgentActiveAtom,
+  currentPowerPointAgentActiveAtom,
   contextUsageFamily,
   currentMessagesAtom,
   currentPendingFrameworkInteractionAtom,
@@ -21,6 +22,7 @@ import {
   hasPendingPermissionAtom,
   hasPendingTaskConfirmAtom,
   isBrowserAgentActionToolName,
+  isPowerPointAgentActionToolName,
   loadSessionMessagesAtom,
   messageFamily,
   prepareInteractionContinuationAtom,
@@ -41,6 +43,14 @@ import {
 } from '../build'
 import { currentSessionFocusPaneAtom } from '../session-focus-pane'
 import { browserNeedsAttentionFamily } from '../browser-attention'
+import {
+  powerPointNeedsAttentionFamily,
+  setPowerPointNeedsAttentionAtom,
+} from '../powerpoint-attention'
+import {
+  presentationPaneViewFamily,
+  presentationTemplateSelectionFamily,
+} from '../presentation'
 import {
   SessionWorkbenchSurface,
   sessionWorkbenchSurfaceAtom,
@@ -601,6 +611,43 @@ describe('reducer: message lifecycle', () => {
     expect(startedAt).toBeLessThanOrEqual(after)
   })
 
+  it('continues accumulated execution time without counting the human wait', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    const startedAt = Date.parse('2026-09-04T10:00:00Z')
+    const parkedAt = startedAt + 12_000
+    setSystemTime(new Date(parkedAt + 30_000))
+    try {
+      store.set(activeSessionIdAtom, id)
+      store.set(messageFamily(id), [{
+        id: 'hydrated-review',
+        role: AgentRole.Assistant,
+        text: '请确认任务说明书。',
+        toolCalls: [],
+        blocks: [{
+          type: 'task_confirm',
+          requestId: 'task-review',
+          taskMarkdown: '# Task\n内容',
+          status: 'pending',
+        }],
+        done: true,
+        createdAt: 1,
+        completedAt: parkedAt,
+        durationMs: 12_000,
+      }])
+
+      store.set(prepareInteractionContinuationAtom, { sessionId: id })
+      store.set(applyAgentEventAtom, {
+        sessionId: id,
+        event: { type: 'message_start', messageId: 'resumed-message', role: 'assistant' },
+      })
+
+      expect(store.get(currentStreamingAtom)?.startedAt).toBe(parkedAt + 30_000 - 12_000)
+    } finally {
+      setSystemTime()
+    }
+  })
+
   it('does not carry an assistant reply from an earlier Session Turn', () => {
     const store = makeStore()
     const id = setupSession(store)
@@ -699,6 +746,28 @@ describe('reducer: message lifecycle', () => {
           status: 'pending',
         } satisfies MessageBlock,
       },
+      {
+        event: {
+          type: 'presentation_outline_confirm_request' as const,
+          requestId: 'outline-1',
+        },
+        expected: {
+          type: 'presentation_outline_confirm',
+          requestId: 'outline-1',
+          status: 'pending',
+        } satisfies MessageBlock,
+      },
+      {
+        event: {
+          type: 'presentation_template_selection_request' as const,
+          requestId: 'template-selection-1',
+        },
+        expected: {
+          type: 'presentation_template_selection',
+          requestId: 'template-selection-1',
+          status: 'pending',
+        } satisfies MessageBlock,
+      },
     ]
 
     for (const { event, expected } of cases) {
@@ -718,7 +787,7 @@ describe('reducer: message lifecycle', () => {
 describe('reducer: tool calls', () => {
   it('treats only interactive Browser tools as user-visible Browser activity', () => {
     // Exhaustive partition of `browser_tool_specs` in
-    // `src/amphi_agent/tools/_browser.py`. Keep the catalog and this contract
+    // `src/amphi_agent/tools/browser.py`. Keep the catalog and this contract
     // synchronized when a Browser tool is added or renamed.
     const interactiveBrowserTools = [
       'browser_open',
@@ -877,6 +946,59 @@ describe('reducer: tool calls', () => {
     expect(store.get(browserNeedsAttentionFamily(id))).toBe(true)
   })
 
+  it('classifies visible PowerPoint actions and reveals their Session surface', () => {
+    const visibleActions = [
+      'view_ppt',
+      'update_ppt_design',
+      'edit_ppt_page',
+      'insert_ppt_element',
+      'remove_ppt_element',
+      'insert_ppt_page',
+      'remove_ppt_page',
+      'move_ppt_page',
+      'goto_ppt_page',
+    ]
+    expect(visibleActions.every(isPowerPointAgentActionToolName)).toBe(true)
+    expect(isPowerPointAgentActionToolName('get_ppt_page')).toBe(false)
+
+    const store = makeStore()
+    const id = setupSession(store)
+    store.set(activeSessionIdAtom, id)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
+    store.set(setRightPanelCollapsedAtom, true)
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: { type: 'message_start', messageId: 'powerpoint-write', role: 'assistant' },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'tool_call',
+        messageId: 'powerpoint-write',
+        toolUseId: 'view-deck',
+        toolName: 'view_ppt',
+        input: { target: 'quarterly-review' },
+      },
+    })
+
+    expect(store.get(currentPowerPointAgentActiveAtom)).toBe(true)
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(store.get(powerPointNeedsAttentionFamily(id))).toBe(true)
+
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'tool_result',
+        toolUseId: 'view-deck',
+        output: 'done',
+        isError: false,
+        durationMs: 20,
+      },
+    })
+    expect(store.get(currentPowerPointAgentActiveAtom)).toBe(false)
+  })
+
   it('keeps Agent mode ahead of Browser action auto-reveal', () => {
     const store = makeStore()
     const id = setupSession(store)
@@ -933,10 +1055,16 @@ describe('reducer: tool calls', () => {
       needsAttention: true,
     })
     expect(store.get(filesNeedsAttentionFamily(backgroundSessionId))).toBe(true)
+    store.set(setPowerPointNeedsAttentionAtom, {
+      sessionId: backgroundSessionId,
+      needsAttention: true,
+    })
+    expect(store.get(powerPointNeedsAttentionFamily(backgroundSessionId))).toBe(true)
 
     store.set(purgeSessionAtom, backgroundSessionId)
     expect(store.get(browserNeedsAttentionFamily(backgroundSessionId))).toBe(false)
     expect(store.get(filesNeedsAttentionFamily(backgroundSessionId))).toBe(false)
+    expect(store.get(powerPointNeedsAttentionFamily(backgroundSessionId))).toBe(false)
     store.set(activeSessionIdAtom, backgroundSessionId)
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
   })
@@ -1568,6 +1696,14 @@ describe('appendUserMessageAtom', () => {
         },
         question: '工作流保存确认',
       },
+      {
+        block: {
+          type: 'presentation_outline_confirm',
+          requestId: 'outline-1',
+          status: 'pending',
+        },
+        question: 'PPT 大纲已生成',
+      },
     ]
 
     for (const { block, question } of cases) {
@@ -2176,6 +2312,48 @@ describe('reducer: stage (build focus mode)', () => {
       'build_stage',
       'build_stage',
     ])
+  })
+
+  it('releases transient presentation UI state when a template request finishes or the session is purged', () => {
+    const store = makeStore()
+    const id = setupSession(store)
+    const requestId = 'presentation-template-request'
+    const selection = presentationTemplateSelectionFamily(requestId)
+    const paneView = presentationPaneViewFamily(id)
+    store.set(selection, 'template-1')
+    store.set(paneView, 'templates')
+
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'stage',
+        position: {
+          mode: 'presentation',
+          stage: 'ppt_plan',
+          presentationTemplateSelectionId: requestId,
+          presentationTemplateSelectionStatus: 'pending',
+        },
+      },
+    })
+    store.set(applyAgentEventAtom, {
+      sessionId: id,
+      event: {
+        type: 'stage',
+        position: {
+          mode: 'presentation',
+          stage: 'ppt_plan',
+          presentationTemplateSelectionId: null,
+          presentationTemplateSelectionStatus: 'selected',
+        },
+      },
+    })
+
+    expect(presentationTemplateSelectionFamily(requestId)).not.toBe(selection)
+    expect(store.get(presentationTemplateSelectionFamily(requestId))).toBeNull()
+
+    store.set(purgeSessionAtom, id)
+    expect(presentationPaneViewFamily(id)).not.toBe(paneView)
+    expect(store.get(presentationPaneViewFamily(id))).toBe('progress')
   })
 })
 

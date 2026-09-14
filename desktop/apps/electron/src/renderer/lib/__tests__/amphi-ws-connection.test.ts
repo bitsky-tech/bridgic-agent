@@ -330,6 +330,66 @@ describe('AmphiWsConnection', () => {
     expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
   })
 
+  it('presentationOutlineConfirm sends the edited outline without a chat message', () => {
+    const { conn, sock, events } = setup()
+    sock.sent.length = 0
+    conn.presentationOutlineConfirm('A', {
+      request_id: 'presentation-outline-1',
+      chapters: [{
+        id: 'chapter-001',
+        title: 'Opening',
+        slides: [{
+          id: 'slide-001',
+          title: 'Why this matters',
+          key_message: 'Set the stakes.',
+          content_outline: ['Frame the decision.', 'Show why it matters now.'],
+          source_ids: ['source-001'],
+        }],
+      }],
+    })
+    expect(sock.frames()).toEqual([
+      { type: 'subscribe', topics: ['session:A'] },
+      {
+        type: 'presentation_outline_confirm',
+        session_id: 'A',
+        request_id: 'presentation-outline-1',
+        chapters: [{
+          id: 'chapter-001',
+          title: 'Opening',
+          slides: [{
+            id: 'slide-001',
+            title: 'Why this matters',
+            key_message: 'Set the stakes.',
+            content_outline: ['Frame the decision.', 'Show why it matters now.'],
+            source_ids: ['source-001'],
+          }],
+        }],
+      },
+    ])
+    expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
+  })
+
+  it('presentationTemplateSelection sends a dedicated selection frame', () => {
+    const { conn, sock, events } = setup()
+    sock.sent.length = 0
+    conn.presentationTemplateSelection('A', {
+      request_id: 'template-selection-1',
+      action: 'select',
+      template_id: 'template-editorial-1',
+    })
+    expect(sock.frames()).toEqual([
+      { type: 'subscribe', topics: ['session:A'] },
+      {
+        type: 'presentation_template_selection',
+        session_id: 'A',
+        request_id: 'template-selection-1',
+        action: 'select',
+        template_id: 'template-editorial-1',
+      },
+    ])
+    expect(events.filter((e) => e.sid === 'A' && e.event.type === 'message_start')).toHaveLength(1)
+  })
+
   it('recovers the sole active turn when an older daemon omits cmd_error session_id', () => {
     const { conn, sock, events } = setup()
     conn.taskConfirm('A', {

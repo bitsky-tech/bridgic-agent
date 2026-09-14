@@ -8,6 +8,9 @@ import {
   sessionWorkbenchSurfaceAtom,
 } from '@/atoms/browser'
 import { sessionFocusPaneOpenAtom } from '@/atoms/session-focus-pane-view'
+import { presentationExpandedAtom } from '@/atoms/presentation'
+import { wordExpandedAtom } from '@/atoms/word'
+import { excelExpandedAtom } from '@/atoms/excel'
 import { AppLayout } from '@/components/amphi'
 
 export interface AppWorkspaceLayoutProps {
@@ -25,9 +28,20 @@ export interface AppWorkspaceLayoutProps {
 export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutProps) {
   const showSessionDock = useAtomValue(showRightPanelAtom)
   const browserExpanded = useAtomValue(browserExpandedAtom)
+  const excelExpanded = useAtomValue(excelExpandedAtom)
+  const wordExpanded = useAtomValue(wordExpandedAtom)
+  const presentationExpanded = useAtomValue(presentationExpandedAtom)
   const workbenchSurface = useAtomValue(sessionWorkbenchSurfaceAtom)
   const focusPaneOpen = useAtomValue(sessionFocusPaneOpenAtom)
   const browserLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Browser
+  const presentationLayout = !focusPaneOpen
+    && workbenchSurface === SessionWorkbenchSurface.Presentation
+  let rightKind: 'panel' | 'browser' | 'presentation' | 'excel' = 'panel'
+  if (browserLayout) rightKind = 'browser'
+  else if (presentationLayout) rightKind = 'presentation'
+  const wordLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Word
+  const excelLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Excel
+  if (excelLayout) rightKind = 'excel'
 
   return (
     <AppLayout
@@ -36,8 +50,11 @@ export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutPr
       left={left}
       center={center}
       right={right}
-      rightKind={browserLayout ? 'browser' : 'panel'}
-      rightExpanded={browserLayout && browserExpanded}
+      rightKind={rightKind}
+      rightExpanded={(browserLayout && browserExpanded)
+        || (presentationLayout && presentationExpanded)
+        || (wordLayout && wordExpanded)
+        || (excelLayout && excelExpanded)}
     />
   )
 }

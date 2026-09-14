@@ -9,7 +9,7 @@ export interface IssueReportModelSnapshot {
 }
 
 export interface IssueReportThinkingSnapshot {
-  mode: 'normal' | 'build' | 'run_workflow'
+  mode: 'normal' | 'build' | 'presentation' | 'run_workflow'
   stage: string | null
 }
 

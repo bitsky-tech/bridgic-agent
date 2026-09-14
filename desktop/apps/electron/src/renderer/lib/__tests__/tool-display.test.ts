@@ -191,6 +191,27 @@ describe('toolLabel — 已登记工具族(spec 驱动)', () => {
     // Preserve unmapped enum values instead of dropping them.
     expect(toolLabel('generic', 'browser_scroll', { direction: 'sideways' }).subject).toBe('sideways')
   })
+  it('PPT 工具显示页面级动作和稳定页 id', () => {
+    expect(toolLabel('generic', 'view_ppt', { target: 'decks/review.pptx' })).toEqual({
+      verb: '打开 PPT',
+      subject: 'review.pptx',
+      subjectFull: 'decks/review.pptx',
+    })
+    expect(toolLabel('generic', 'edit_ppt_page', { page_id: 'page-2', ref: 'title' })).toEqual({
+      verb: '编辑 PPT 页',
+      subject: 'page-2',
+      subjectMono: true,
+    })
+    expect(toolMeta('generic', 'edit_ppt_page', { page_id: 'page-2', ref: 'title' }, '').detail).toBe('title')
+    expect(toolLabel('generic', 'update_ppt_design', { theme: 'midnight' })).toEqual({
+      verb: '更新 PPT 设计',
+      subject: 'midnight',
+    })
+    expect(toolMeta('generic', 'move_ppt_page', {
+      page_id: 'page-2',
+      target_page_id: 'page-4',
+    }, '').detail).toBe('page-4')
+  })
   it('无参工具只显示动词', () => {
     expect(toolLabel('generic', 'workspace_status', {})).toEqual({ verb: '查看工作区状态', subject: '' })
     expect(toolLabel('generic', 'browser_snapshot', {})).toEqual({ verb: '页面快照', subject: '' })

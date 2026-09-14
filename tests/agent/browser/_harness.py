@@ -3,9 +3,9 @@ from typing import Any
 
 import pytest
 
-from src.amphi_agent import _browser as browser_module
-from src.amphi_agent._browser import (
-    BrowserHost,
+from src.amphi_agent.browser import BrowserHost
+from src.amphi_agent import browser as browser_module
+from src.amphi_agent.browser import (
     SessionBrowserState,
     SessionBrowserTab,
     _EmbeddedBrowserController,

@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const PROMPT_FACADE_PATH = "src/amphi_agent/_prompt.py";
 const PROMPT_MODULE_GLOB = "src/amphi_agent/prompts/**/*.py";
 
 export interface PromptSourceFingerprint {
@@ -29,7 +28,7 @@ export async function promptSourceFingerprint(repositoryRoot: string): Promise<P
   for await (const sourcePath of glob.scan({ cwd: repositoryRoot, onlyFiles: true })) {
     modules.push(sourcePath.replaceAll("\\", "/"));
   }
-  const paths = [PROMPT_FACADE_PATH, ...modules.sort()];
+  const paths = modules.sort();
   const hasher = new Bun.CryptoHasher("sha256");
   for (const sourcePath of paths) {
     hasher.update(sourcePath);

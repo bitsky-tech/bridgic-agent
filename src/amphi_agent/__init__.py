@@ -4,8 +4,8 @@ The core agent stack is built on the bridgic-amphibious two-loop framework:
 
 * **contexts** (:mod:`._context`) — ``AmphiOTAContext`` (small loop, one
   observe-think-act run) + ``AmphiContext`` (big loop, cross-turn knowledge);
-* **cognitive workers** (:mod:`._cognitive`) — the autonomous ``MainThink``
-  cycle plus the build pipeline's per-stage workers;
+* **cognitive workers** (:mod:`.cognitive`) — shared ``BaseThink`` mechanics
+  plus normal-mode and business-stage workers;
 * **agent** (:mod:`._agent`) — ``AmphiAgent`` orchestrates the workers over the
   contexts via ``on_agent``;
 * **invocation** (:mod:`._invocation`) — Session-scoped Agent initialization,
@@ -22,9 +22,10 @@ still built and cached by the service, then injected into the invocation entry.
 from __future__ import annotations
 
 from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
-from ._browser import BrowserHost
-from ._cognitive import MainThink
-from ._prompt import AGENT_NAME
+from .browser import BrowserHost
+from .powerpoint import PowerPointHost, SessionPowerPoint
+from .cognitive import BaseThink, MainThink
+from .prompts.shared import AGENT_NAME
 from ._context import (
     AmphiContext,
     AmphiOTAContext,
@@ -60,10 +61,13 @@ __all__ = [
     "ContextUsageSnapshot",
     "ContextWindowExceededError",
     # cognitive / agent
+    "BaseThink",
     "MainThink",
     "AGENT_NAME",
     "AmphiAgent",
     "BrowserHost",
+    "PowerPointHost",
+    "SessionPowerPoint",
     "AgentInvocation",
     "AppEnvironmentStatus",
     "InvocationBusyError",

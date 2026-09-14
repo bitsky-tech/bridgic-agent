@@ -8,7 +8,9 @@ describe('Bridgic Agent Lab shell', () => {
 
     expect(html).toContain('Bridgic Agent Lab')
     expect(html).toContain('Agent Loop Lab')
+    expect(html).toContain('Execution Experiments')
     expect(html).toContain('File Import Lab')
+    expect(html.indexOf('Execution Experiments')).toBeLessThan(html.indexOf('File Import Lab'))
     expect(html).toContain('Memory Lab')
     expect(html).toContain('Local state.db')
     expect(html).toContain('Loading sessions')
@@ -20,7 +22,9 @@ describe('Bridgic Agent Lab shell', () => {
 
     expect(html).toContain('本地工程工作台')
     expect(html).toContain('Agent 循环实验室')
+    expect(html).toContain('执行实验')
     expect(html).toContain('文件导入实验室')
+    expect(html.indexOf('执行实验')).toBeLessThan(html.indexOf('文件导入实验室'))
     expect(html).toContain('本地 state.db')
     expect(html).toContain('正在加载会话')
     expect(html).toContain('正在读取本地 Trace 数据')

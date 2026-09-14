@@ -30,6 +30,7 @@ export type {
   AgentMessageToolCall,
   AgentMessageSubagent,
   MessageBlock,
+  PresentationTemplateCandidate,
   SessionMeta,
   SessionTitleSource,
   SubAgentMode,

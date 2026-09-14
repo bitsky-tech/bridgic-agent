@@ -399,6 +399,86 @@ describe('Session Turn display projection', () => {
     expect(message.blocks![0]).toMatchObject({ type: 'confirmation', question: "Use 'project'?", response: 'Yes' })
     expect(message.blocks![1]).toMatchObject({ type: 'workflow_confirm', defaultName: 'Directory', status: 'confirmed' })
   })
+  for (const status of ['confirmed', 'revision_requested'] as const) {
+    it(`retains the outline tool and ${status} confirmation together after reload`, () => {
+      const payload = { outline_confirmation_id: ' outline-1 ', status, feedback: 'Move the evidence section first.' }
+      const input = turn({ status: 'completed', agent_state: { think: { mode: 'presentation', stage: 'ppt_compose' } }, ota_records: [{
+        think_scope: { mode: 'presentation', stage: 'ppt_plan' }, act_duration_ms: 75,
+        action_result: { results: [{ tool_name: 'report_presentation_step', tool_id: 'outline-call', tool_arguments: { step_id: 'map_slides' }, tool_result: payload }] },
+      }] })
+      const original = structuredClone(input)
+      const message = assistant(sessionTurnsToMessages([input]))
+      expect(message.blocks!.map((block) => block.type)).toEqual(['tool', 'presentation_outline_confirm'])
+      expect(message.blocks![0]).toMatchObject({ name: 'report_presentation_step', result: { isError: false, durationMs: 75 } })
+      expect(JSON.parse(String(message.toolCalls[0]!.result!.output))).toEqual(payload)
+      expect(message.blocks![1]).toEqual({ type: 'presentation_outline_confirm', requestId: 'outline-1', status, feedback: payload.feedback })
+      expect(input).toEqual(original)
+    })
+  }
+  for (const status of ['selected', 'skipped', 'refresh_requested', 'revision_requested'] as const) {
+    it(`retains a ${status} template decision beside the original search tool`, () => {
+      const payload = { template_selection_id: 'template-1', status, selected_template_id: status === 'selected' ? 'template-blue' : null, feedback: 'Use a quieter color palette.' }
+      const message = assistant(sessionTurnsToMessages([turn({ status: 'completed', agent_state: {}, ota_records: [{
+        action_result: { results: [{ tool_name: 'ppt_rag', tool_id: 'search-call', tool_result: payload }] },
+      }] })]))
+      expect(message.blocks!.map((block) => block.type)).toEqual(['tool', 'presentation_template_selection'])
+      expect(message.toolCalls).toHaveLength(1)
+      expect(message.toolCalls[0]!.name).toBe('ppt_rag')
+      expect(message.blocks![1]).toEqual({
+        type: 'presentation_template_selection', requestId: 'template-1', status,
+        selectedTemplateId: payload.selected_template_id, feedback: payload.feedback,
+      })
+    })
+  }
+  for (const [toolName, requestKey, pendingStatus, blockType] of [
+    ['report_presentation_step', 'outline_confirmation_id', 'awaiting_outline_confirmation', 'presentation_outline_confirm'],
+    ['ppt_rag', 'template_selection_id', 'awaiting_template_selection', 'presentation_template_selection'],
+  ] as const) for (const explicitStatus of [false, true]) {
+    it(`shows ${toolName}'s pending card only on the active tail (explicit status=${explicitStatus})`, () => {
+      const input = turn({ agent_state: { think: { mode: 'presentation', stage: 'ppt_plan' } }, ota_records: [{
+        action_result: { results: [{ tool_name: toolName, tool_result: { [requestKey]: 'request-1', ...(explicitStatus ? { status: pendingStatus } : {}) } }] },
+      }] })
+      const shown = assistant(sessionTurnsToMessages([input], { showPendingInteraction: true }))
+      expect(shown.blocks!.map((block) => block.type)).toEqual(['tool', blockType])
+      expect(shown.blocks![1]).toMatchObject({ requestId: 'request-1', status: 'pending' })
+      expect(assistant(sessionTurnsToMessages([input], { showPendingInteraction: false })).blocks!.map((block) => block.type)).toEqual(['tool'])
+      const next = turn({ id: 'next', session_ordinal: 1, status: 'completed', agent_state: {}, final_answer: 'Continued' })
+      expect(assistant(sessionTurnsToMessages([input, next], { showPendingInteraction: true })).blocks!.map((block) => block.type)).toEqual(['tool'])
+    })
+  }
+  it('keeps ordinary or failed presentation tool results without inventing interaction cards', () => {
+    const message = assistant(sessionTurnsToMessages([turn({ status: 'completed', agent_state: {}, ota_records: [{
+      action_result: { results: [
+        { tool_name: 'report_presentation_step', tool_result: { step_id: 'collect_sources', summary: 'Collected sources' } },
+        { tool_name: 'ppt_rag', success: false, error: 'Template search failed', tool_result: null },
+        { tool_name: 'ppt_rag', tool_result: { template_selection_id: '   ', status: 'selected' } },
+      ] },
+    }] })], { showPendingInteraction: true }))
+    expect(message.blocks!.map((block) => block.type)).toEqual(['tool', 'tool', 'tool'])
+    expect(message.toolCalls[1]!.result).toMatchObject({ isError: true, output: 'Template search failed' })
+  })
+  it('restores the edit baseline of a legacy task confirmation from its durable Build state', () => {
+    const message = assistant(sessionTurnsToMessages([turn({ status: 'completed', agent_state: { think: { mode: 'build', stage: 'explore', workflow_id: 'edited-workflow' } }, ota_records: [{
+      action_result: { results: [{ tool_name: 'request_human_task_confirm', tool_result: {
+        request_id: 'task-1', task_markdown: '# Updated task', status: 'confirmed', previous_task_markdown: '# Previous task', original_task_markdown: '# Saved task',
+      } }] },
+    }] })]))
+    expect(message.blocks![0]).toMatchObject({
+      type: 'task_confirm', operation: 'edit', workflowId: 'edited-workflow',
+      previousTaskMarkdown: '# Previous task', originalTaskMarkdown: '# Saved task',
+    })
+  })
+  it('keeps explicit task confirmation identity and null baselines over a later Build state', () => {
+    const message = assistant(sessionTurnsToMessages([turn({ status: 'completed', agent_state: { think: { mode: 'build', stage: 'explore', workflow_id: 'later-workflow' } }, ota_records: [{
+      action_result: { results: [{ tool_name: 'request_human_task_confirm', tool_result: {
+        request_id: 'task-1', task_markdown: '# New task', status: 'confirmed', operation: 'create', workflow_id: null,
+        previous_task_markdown: null, original_task_markdown: null,
+      } }] },
+    }] })]))
+    expect(message.blocks![0]).toMatchObject({
+      type: 'task_confirm', operation: 'create', workflowId: null, previousTaskMarkdown: null, originalTaskMarkdown: null,
+    })
+  })
   it('restores an unreported legacy Turn and reads timezone-less durable timestamps as UTC', () => {
     const message = assistant(resolveWorkflowStepMetadata(sessionTurnsToMessages([turn({
       created_at: '2026-09-11T00:00:00', status: 'cancelled', ota_records: [{ reasoning_content: 'Legacy work' }],

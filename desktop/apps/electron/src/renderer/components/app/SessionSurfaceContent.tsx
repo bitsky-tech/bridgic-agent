@@ -2,6 +2,7 @@
 import { SessionWorkbenchSurface } from '@/atoms/browser'
 import { SessionModeSurfaceKind } from '@/atoms/session-focus-pane-view'
 import { EmbeddedBrowserPanel } from './EmbeddedBrowserPanel'
+import { EmbeddedPowerPointPanel } from './EmbeddedPowerPointPanel'
 import { ScheduleWorkbenchPanel } from './ScheduleWorkbenchPanel'
 import { SessionFilesPanel } from './SessionFilesPanel'
 import {
@@ -9,12 +10,19 @@ import {
   WorkbenchSurface,
 } from './SessionSurfaceChrome'
 import { SpecPreviewPane } from './SpecPreviewPane'
+import { PresentationModePane } from './PresentationModePane'
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel'
 import { WorkflowResultsPanel } from './WorkflowResultsPanel'
 import { WorkflowRunDetailsPane } from './WorkflowRunDetailsPane'
+import { WordWorkbenchPanel } from './WordWorkbenchPanel'
+import { ExcelWorkbenchPanel } from './ExcelWorkbenchPanel'
 import { cn } from '@/lib/cn'
+import { EMPTY_SESSION_EXTENSIONS, extensionSurfaceTestId, type SessionWorkbenchExtension } from './DesktopAppExtensions'
 
 export interface SessionSurfaceContentProps {
+  extensions?: readonly SessionWorkbenchExtension[]
+  sessionId?: string | null
+  onCloseExtension?: (surface: SessionWorkbenchExtension['id']) => void
   isBrowserActive: boolean
   isNativeHandoffPending: boolean
   isToolActive: (surface: SessionWorkbenchSurface) => boolean
@@ -27,6 +35,9 @@ export interface SessionSurfaceContentProps {
 
 /** Keep workbench tools mounted while presenting one tool or Agent mode surface. */
 export function SessionSurfaceContent({
+  extensions = EMPTY_SESSION_EXTENSIONS,
+  sessionId,
+  onCloseExtension,
   isBrowserActive,
   isNativeHandoffPending,
   isToolActive,
@@ -36,6 +47,14 @@ export function SessionSurfaceContent({
   onNativeHidden,
   selectedModeSurface,
 }: SessionSurfaceContentProps) {
+  let modeContent = <WorkflowRunDetailsPane />
+  if (selectedModeSurface === SessionModeSurfaceKind.Task) {
+    modeContent = <SpecPreviewPane />
+  } else if (selectedModeSurface === SessionModeSurfaceKind.Presentation) {
+    modeContent = <PresentationModePane />
+  }
+  const excelActive = isToolActive(SessionWorkbenchSurface.Excel)
+
   return (
     <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
       <WorkbenchSurface
@@ -66,6 +85,27 @@ export function SessionSurfaceContent({
       >
         <ScheduleWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Schedules)} />
       </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={isToolActive(SessionWorkbenchSurface.Presentation)}
+        labelledBy="session-workbench-presentation-tab"
+        testId="session-workbench-presentation-content"
+      >
+        <EmbeddedPowerPointPanel active={isToolActive(SessionWorkbenchSurface.Presentation)} />
+      </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={isToolActive(SessionWorkbenchSurface.Word)}
+        labelledBy="session-workbench-word-tab"
+        testId="session-workbench-word-content"
+      >
+        <WordWorkbenchPanel active={isToolActive(SessionWorkbenchSurface.Word)} />
+      </WorkbenchSurface>
+      <WorkbenchSurface
+        isActive={excelActive}
+        labelledBy="session-workbench-excel-tab"
+        testId="session-workbench-excel-content"
+      >
+        <ExcelWorkbenchPanel active={excelActive} />
+      </WorkbenchSurface>
 
       <div
         id="session-workbench-browser-content"
@@ -85,15 +125,28 @@ export function SessionSurfaceContent({
         />
       </div>
 
+      {sessionId ? extensions.map(({ id, Content }) => {
+        const active = isToolActive(id)
+        const testId = extensionSurfaceTestId(id)
+        return (
+          <WorkbenchSurface
+            key={id}
+            isActive={active}
+            labelledBy={`${testId}-tab`}
+            testId={`${testId}-content`}
+          >
+            <Content sessionId={sessionId} active={active} onClose={() => onCloseExtension?.(id)} />
+          </WorkbenchSurface>
+        )
+      }) : null}
+
       {selectedModeSurface !== null ? (
         <ModeSurfaceGate
           key={modeSurfaceKey}
           shouldAwaitNativeHide={isNativeHandoffPending}
           nativeHideAcknowledgement={nativeHideAcknowledgement}
         >
-          {selectedModeSurface === SessionModeSurfaceKind.Task
-            ? <SpecPreviewPane />
-            : <WorkflowRunDetailsPane />}
+          {modeContent}
         </ModeSurfaceGate>
       ) : null}
     </div>

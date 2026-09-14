@@ -1,8 +1,6 @@
 /**
- * File-open gate atoms — a session-file double-click opens it with the OS
- * default program, but first asks for a confirmation the user can choose to
- * remember. Remembered keys live in `GuiSettings.fileOpen` and persist across
- * sessions / restarts.
+ * File-open routing for Session-owned Office editors and the remembered
+ * confirmation flow for files opened with the OS default program.
  *
  * Key model: a file WITH an extension is remembered by its lowercased
  * extension (".TXT" === "txt" → one decision covers every .txt); a file
@@ -16,11 +14,18 @@
  */
 import { atom } from 'jotai'
 import type { GuiSettings } from '@app/shared/types'
+import { isDocxFileName } from '@/lib/fileTypes'
 import { i18n } from '@/lib/i18n'
 import { rlog } from '@/lib/logger'
 import { settingsAtom, updateSettingsAtom } from './settings'
 import { showToastAtom } from './toast'
 import { ModalKind, openModalAtom } from './amphi'
+import { setPowerPointNeedsAttentionAtom } from './powerpoint-attention'
+import { setRightPanelCollapsedAtom } from './layout'
+import { viewedSessionIdAtom } from './navigation'
+import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workbench'
+import { requestWordFileOpenAtom } from './word'
+import { queueExcelWorkbookOpenAtom } from './excel'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -29,6 +34,10 @@ export type FileOpenKeyKind = 'ext' | 'name'
 export interface FileOpenTarget {
   path: string
   name: string
+}
+
+export function isPowerPointFileTarget(file: Pick<FileOpenTarget, 'name'>): boolean {
+  return file.name.toLowerCase().endsWith('.pptx')
 }
 
 /**
@@ -43,6 +52,11 @@ export function deriveFileOpenKey(name: string): { kind: FileOpenKeyKind; key: s
     : { kind: 'name', key: name }
 }
 
+/** Only OOXML workbooks are supported by the embedded importer today. */
+export function isEmbeddedExcelWorkbook(name: string): boolean {
+  return /\.xlsx$/i.test(name.trim())
+}
+
 /** True when the file's key is already approved for confirm-free opening. */
 function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string): boolean {
   const { autoOpenExtensions, autoOpenFilenames } = settings.fileOpen
@@ -50,10 +64,18 @@ function isRemembered(settings: GuiSettings, kind: FileOpenKeyKind, key: string)
 }
 
 /**
- * Double-click entry point. Opens directly when the file's key is already
- * remembered; otherwise routes to the FileOpenConfirm modal.
+ * Shared entry point for file rows and Agent-generated local file links.
  */
 export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) => {
+  if (isDocxFileName(file.name)) {
+    set(requestWordFileOpenAtom, file)
+    return
+  }
+  const sessionId = get(viewedSessionIdAtom)
+  if (sessionId && isEmbeddedExcelWorkbook(file.name)) {
+    set(queueExcelWorkbookOpenAtom, { sessionId, path: file.path })
+    return
+  }
   const { kind, key } = deriveFileOpenKey(file.name)
   if (isRemembered(get(settingsAtom), kind, key)) {
     void window.api.shell.openPath(file.path).catch((err: unknown) => {
@@ -63,6 +85,28 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
     return
   }
   set(openModalAtom, { type: ModalKind.FileOpenConfirm, path: file.path, name: file.name })
+})
+
+/** Route supported Session files into an in-app owner before falling back to the OS. */
+export const requestSessionFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
+  if (!isPowerPointFileTarget(file)) {
+    set(requestFileOpenAtom, file)
+    return
+  }
+  const sessionId = get(viewedSessionIdAtom)
+  if (!sessionId) return
+  try {
+    await window.api.powerpoint.openFile(sessionId, file.path)
+    const stillViewed = get(viewedSessionIdAtom) === sessionId
+    set(setPowerPointNeedsAttentionAtom, { sessionId, needsAttention: !stillViewed })
+    if (!stillViewed) return
+    set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Presentation)
+    set(setRightPanelCollapsedAtom, false)
+    set(showToastAtom, i18n.t('session.presentation.imported', { name: file.name }))
+  } catch (error) {
+    rlog.warn('[fileOpen] in-app PowerPoint import failed', error)
+    set(showToastAtom, i18n.t('session.presentation.importFailed'))
+  }
 })
 
 /**

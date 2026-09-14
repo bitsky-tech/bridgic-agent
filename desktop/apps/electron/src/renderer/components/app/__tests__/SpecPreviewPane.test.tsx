@@ -21,6 +21,7 @@ const {
 const { streamingFamily, thinkingModeFamily } = await import('@/atoms/agent')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { i18n } = await import('@/lib/i18n')
+const { I18nextProvider } = await import('react-i18next')
 const { SpecPreviewPane } = await import('../SpecPreviewPane')
 const { SESSION_STATUS_BAR_HEIGHT_PX } = await import('../SessionStatusBar')
 
@@ -54,7 +55,7 @@ async function renderDiffReview(
   await act(async () => {
     root.render(
       <Provider store={store}>
-        <SpecPreviewPane />
+        <I18nextProvider i18n={i18n}><SpecPreviewPane /></I18nextProvider>
       </Provider>,
     )
   })
@@ -126,7 +127,7 @@ describe('SpecPreviewPane task review diff', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <SpecPreviewPane />
+          <I18nextProvider i18n={i18n}><SpecPreviewPane /></I18nextProvider>
         </Provider>,
       )
     })
@@ -189,7 +190,7 @@ describe('SpecPreviewPane task review diff', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <SpecPreviewPane />
+          <I18nextProvider i18n={i18n}><SpecPreviewPane /></I18nextProvider>
         </Provider>,
       )
     })
@@ -259,7 +260,7 @@ describe('SpecPreviewPane task review diff', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <SpecPreviewPane />
+          <I18nextProvider i18n={i18n}><SpecPreviewPane /></I18nextProvider>
         </Provider>,
       )
     })
@@ -300,7 +301,7 @@ describe('SpecPreviewPane task review diff', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <SpecPreviewPane />
+          <I18nextProvider i18n={i18n}><SpecPreviewPane /></I18nextProvider>
         </Provider>,
       )
     })
@@ -561,7 +562,7 @@ describe('SpecPreviewPane unsent drafts are per-session', () => {
     await act(async () => {
       root.render(
         <Provider store={store}>
-          <SpecPreviewPane />
+          <I18nextProvider i18n={i18n}><SpecPreviewPane /></I18nextProvider>
         </Provider>,
       )
     })

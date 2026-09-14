@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -47,7 +48,14 @@ describe('local-resource URL contract', () => {
 })
 
 describe('local-resource privileged scheme', () => {
-  it('grants only the streaming privilege', () => {
+  it('allows renderer fetches through the main-window content security policy', () => {
+    const html = readFileSync(new URL('../../renderer/index.html', import.meta.url), 'utf8')
+    const policy = html.match(/content="(default-src[^"]+)"/)?.[1]
+    const connections = policy?.split(';').find(directive => directive.trim().startsWith('connect-src '))
+    expect(connections?.trim().split(/\s+/)).toContain(`${LOCAL_RESOURCE_SCHEME}:`)
+  })
+
+  it('grants only the read privileges needed by media elements and renderer imports', () => {
     let registration: Electron.CustomScheme[] = []
 
     registerLocalResourceScheme({
@@ -60,6 +68,8 @@ describe('local-resource privileged scheme', () => {
       {
         scheme: LOCAL_RESOURCE_SCHEME,
         privileges: {
+          supportFetchAPI: true,
+          corsEnabled: true,
           stream: true,
         },
       },
@@ -68,6 +78,34 @@ describe('local-resource privileged scheme', () => {
 })
 
 describe('local-resource request handler', () => {
+  it('allows fetch only from the current main-window origin, including packaged file pages', async () => {
+    let mainOrigin = 'http://localhost:5173'
+    let reads = 0
+    const handler = createLocalResourceHandler(TOKEN, {
+      getFetchOrigin: () => mainOrigin,
+      statFile: async () => ({ isFile: () => true }),
+      fetchFile: async () => {
+        reads += 1
+        return new Response('pptx bytes')
+      },
+    })
+    const fetchFrom = (origin: string, token = TOKEN) => handler(new Request(createLocalResourceUrl(SOURCE_URL, token), {
+      headers: { Origin: origin },
+    }))
+    const allowed = await fetchFrom(mainOrigin)
+    expect(allowed.status).toBe(200)
+    expect(allowed.headers.get('access-control-allow-origin')).toBe(mainOrigin)
+    expect((await fetchFrom('https://example.com')).status).toBe(403)
+    expect((await fetchFrom('http://localhost:5174')).status).toBe(403)
+    expect((await fetchFrom(mainOrigin, 'wrong-token')).status).toBe(403)
+    expect(reads).toBe(1)
+    mainOrigin = 'null'
+    const packaged = await fetchFrom('null')
+    expect(packaged.status).toBe(200)
+    expect(packaged.headers.get('access-control-allow-origin')).toBe('null')
+    expect((await fetchFrom('http://localhost:5173')).status).toBe(403)
+  })
+
   it('forwards GET headers to file fetch after checking for a regular file', async () => {
     const calls: Array<{ input: string; init: RequestInit & { bypassCustomProtocolHandlers?: boolean } }> = []
     const statPaths: string[] = []

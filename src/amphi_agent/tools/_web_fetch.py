@@ -18,7 +18,7 @@ from bridgic.core.agentic.tool_specs import FunctionToolSpec
 from bridgic.core.model.types import Message, Role
 from pydantic import WithJsonSchema
 
-from .._prompt import AGENT_NAME
+from ..prompts.shared import AGENT_NAME
 
 MAX_URL_LENGTH = 2_000
 MAX_HTTP_CONTENT_LENGTH = 10 * 1024 * 1024

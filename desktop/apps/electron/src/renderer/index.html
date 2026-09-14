@@ -24,7 +24,7 @@
          frame-src directive the policy falls back to `default-src 'self'`, which
          blocks the iframe outright. -->
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https: bridgic-local:; media-src 'self' data: blob: https: bridgic-local:; font-src 'self' data: https: https://fonts.gstatic.com; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:* http://127.0.0.1:* ws://127.0.0.1:* https:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src https://showcase.bridgic.ai;" />
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https: bridgic-local:; media-src 'self' data: blob: https: bridgic-local:; font-src 'self' data: https: https://fonts.gstatic.com; connect-src 'self' bridgic-local: http://localhost:* ws://localhost:* wss://localhost:* http://127.0.0.1:* ws://127.0.0.1:* https:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src https://showcase.bridgic.ai;" />
   </head>
   <body>
     <div id="root"></div>

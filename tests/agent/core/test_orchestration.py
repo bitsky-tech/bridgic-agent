@@ -1,11 +1,13 @@
-import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
-from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
+from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall
+from bridgic.amphibious._type import ThinkResult
+from bridgic.core.model.types import ToolCallBlock, ToolResultBlock
 
 from src.amphi_agent import (
     AmphiAgent,
@@ -15,24 +17,25 @@ from src.amphi_agent import (
     WorkflowLibrary,
     WorkflowRunLibrary,
 )
-from src.amphi_agent._cognitive import ClarifyThink, GenerateThink
-from src.amphi_agent._state import (
-    AwaitingBuildConflict,
-    AwaitingTaskConfirm,
-    AwaitingWorkflowConfirm,
-    AwaitingWorkflowRunChoice,
-    BuildStageState,
-    NormalStageState,
-    WorkflowStageState,
-)
+from src.amphi_agent.cognitive.normal.state import AwaitingBuildConflict, AwaitingWorkflowRunChoice, NormalStageState
+from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, GenerateThink, WorkflowRunThink
+from src.amphi_agent.cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection, PresentationStageState
+from src.amphi_agent.cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
+from src.amphi_agent.cognitive.state import RoundPermission
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_agent._workspace import Workspace
-from src.amphi_agent.tools._request_human import (
-    RequestBuild,
+from src.amphi_agent._error import AgentResumeError
+from src.amphi_agent.tools.build import (
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
-    RequestRunWorkflow,
 )
-from src.amphi_agent.tools._workflow import EditWorkflow, WorkflowStepReport
+from src.amphi_agent.tools.ppt import PresentationStepReport
+from src.amphi_agent.tools._workflow import EditWorkflow
+from src.amphi_agent.tools.workflow import RequestRunWorkflow, WorkflowStepReport
+from src.amphi_service.protocol import (
+    WsPresentationOutlineConfirmMessage,
+    WsPresentationTemplateSelectionMessage,
+)
 from src.amphi_store import (
     Repository,
     SessionRecord,
@@ -44,6 +47,7 @@ from src.amphi_store import (
     WorkflowRunStatus,
 )
 from tests._support.sandbox import IsolatedPaths
+from tests.agent.core.test_action_boundary import _call, _invoke
 
 
 USER_ID = "local"
@@ -142,6 +146,18 @@ async def _apply(harness: _Harness, ota_context: AmphiOTAContext) -> None:
         pass
 
 
+async def _execute_call(harness: _Harness, ota_context: AmphiOTAContext, call: StepToolCall) -> ActionStepResult:
+    """Run one proposed call through the selected worker's admission and result pipeline."""
+    record = OTARecord(think_result=ThinkResult(step_content="Handle the requested operation", tool_calls=[call]))
+    record.permission = RoundPermission(execution_mode="full")
+    ota_context.ota_record.append(record)
+    ota_context.tools = harness.agent._select_current_tools(ota_context, harness.context)
+    ota_context.think_result = await _invoke(harness.agent.before_action(ota_context, harness.context))
+    ota_context.action_result = await harness.agent.action_tool_call(ota_context, harness.context)
+    await _apply(harness, ota_context)
+    return next(step for step in ota_context.action_result.results if step.tool_id == call.call_id)
+
+
 def _turn(ota_context: AmphiOTAContext, turn_id: str, status: TurnStatus) -> SessionTurnRecord:
     return SessionTurnRecord(
         id=turn_id,
@@ -191,7 +207,7 @@ async def _save_workflow(harness: _Harness, source_turn_id: str) -> Any:
     )
 
 
-async def _start_run(harness: _Harness, workflow_id: str, request: str) -> AmphiOTAContext:
+async def _start_run(harness: _Harness, workflow_id: str, request: str | UserInput) -> AmphiOTAContext:
     ota_context = _ota(
         request,
         _step("request_run_workflow", RequestRunWorkflow(workflow_id, "start")),
@@ -200,99 +216,417 @@ async def _start_run(harness: _Harness, workflow_id: str, request: str) -> Amphi
     return ota_context
 
 
-def _add_legacy_validation(root: Path) -> None:
-    source = root / "workflow"
-    scripts = source / "scripts"
-    scripts.mkdir(exist_ok=True)
-    (scripts / "validate_htmls.py").write_text("def obsolete(:\n", encoding="utf-8")
-    (source / "VALIDATE.md").write_text(
-        "# Old instructions\n\nRun `python scripts/missing_legacy_check.py`.\n", encoding="utf-8",
+async def test_presentation_outline_confirmation(orchestration: _Harness) -> None:
+    """An edited Plan outline resumes the parked Turn before visual design."""
+    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+        "collect_evidence",
+        {"sources": [{
+            "kind": "conversation",
+            "title": "Original request",
+            "excerpt": "Explain the subject to students.",
+        }]},
     )
+    plan = _ota(
+        "Create the presentation",
+        _step("report_presentation_step", PresentationStepReport(
+            "Mapped the deck.",
+            ["source-001"],
+            {"chapters": [{
+                "title": "Original chapter",
+                "slides": [{
+                    "title": "Original slide",
+                    "content_outline": ["Introduce the original framing."],
+                    "source_ids": ["source-001"],
+                }],
+            }]},
+        )),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationOutlineConfirm)
+    request_id = plan.interaction_status.request_id
+
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-outline")],
+    )
+    confirmed = AmphiOTAContext(user_input=WsPresentationOutlineConfirmMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        chapters=[{
+            "id": "chapter-001",
+            "title": "Edited chapter",
+            "slides": [{
+                "id": "slide-001",
+                "title": "Edited slide",
+                "key_message": "Use the clearer user-owned framing.",
+                "content_outline": ["Open with the audience's central question."],
+                "source_ids": ["source-001"],
+            }],
+        }],
+    ))
+    await orchestration.agent.init_state(confirmed, orchestration.context)
+
+    resumed = confirmed.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.step_index == 2
+    assert resumed.outline_confirmed is True
+    assert resumed.outline_confirmation_id is None
+    assert resumed.outline[0].title == "Edited chapter"
+    assert resumed.outline[0].slides[0].title == "Edited slide"
+    assert resumed.outline[0].slides[0].content_outline == [
+        "Open with the audience's central question."
+    ]
+    assert confirmed.interaction_status is None
+    assert _payload(confirmed, "report_presentation_step")["status"] == "confirmed"
 
 
-async def test_legacy_workflow_edit_and_start(orchestration: _Harness) -> None:
-    """A saved legacy package can enter Build and Run with its original source intact."""
-    saved = await _save_workflow(orchestration, "legacy-source")
-    _add_legacy_validation(saved.root)
-    original = {
-        path.relative_to(saved.root): path.read_bytes()
-        for path in saved.root.rglob("*") if path.is_file()
+async def test_presentation_outline_direct_feedback_returns_to_slide_mapping(orchestration: _Harness) -> None:
+    """A chat reply to the outline review reopens the combined narrative and page-map step."""
+    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+        "collect_evidence",
+        {"sources": [{
+            "kind": "conversation",
+            "title": "Original request",
+            "excerpt": "Explain the subject to students.",
+        }]},
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("report_presentation_step", PresentationStepReport(
+            "Mapped the deck.",
+            ["source-001"],
+            {"chapters": [{
+                "title": "Original chapter",
+                "slides": [{
+                    "title": "Original slide",
+                    "content_outline": ["Introduce the original framing."],
+                    "source_ids": ["source-001"],
+                }],
+            }]},
+        )),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationOutlineConfirm)
+
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-outline-feedback")],
+    )
+    revised = AmphiOTAContext(user_input="Make the opening shorter and add a comparison slide.")
+    await orchestration.agent.init_state(revised, orchestration.context)
+
+    resumed = revised.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.step_index == 1
+    assert resumed.outline_confirmed is False
+    assert resumed.outline_confirmation_id is None
+    assert all(report.step_id != "map_slides" for report in resumed.reports)
+    assert revised.interaction_status is None
+    assert _payload(revised, "report_presentation_step")["status"] == "revision_requested"
+
+
+async def test_presentation_template_selection(orchestration: _Harness) -> None:
+    """A retrieved shortlist parks Plan and the selected template resumes the same Turn."""
+    candidate = {
+        "template_id": "template-editorial-1",
+        "version": "sha256:test",
+        "title": "Editorial Research",
+        "aspect_ratio": "16:9",
+        "slide_count": 18,
+        "semantic_tags": ["editorial", "research"],
+        "strengths": ["cover", "timeline"],
+        "colors": ["#F7F4EE", "#25324A", "#7566E8"],
+        "fonts": ["Aptos"],
+        "preview_paths": [f"/templates/previews/editorial-{index}.jpg" for index in range(1, 7)],
+        "role_coverage": 0.8,
+        "agentic_fit": "strong",
+        "agentic_reason": "The editorial hierarchy fits the confirmed research outline.",
+        "agentic_use_for_roles": ["cover", "content", "timeline"],
+        "agentic_risks": [],
+        "structural_evidence": {"representative_slides": [1, 3, 8]},
+        "materialize_ref": {"provider": "local", "path": "/templates/editorial.pptx"},
     }
-    assert await orchestration.workflows.prepare_edit(saved.workflow_id) == saved
-    edit = _ota("Edit the report", _step("edit_workflow", EditWorkflow(saved.workflow_id)))
-    await _apply(orchestration, edit)
-    assert edit.think_status == BuildStageState(stage="clarify", workflow_id=saved.workflow_id)
-    restored = orchestration.workflows.require_package()
-    for relative, content in original.items():
-        assert (restored.root / relative).read_bytes() == content
-    await orchestration.workspace.discard_build()
-    orchestration.workflows.close_package()
-
-    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
-    assert isinstance(started.think_status, WorkflowStageState)
-    assert (started.think_status.stage, started.think_status.step_index) == ("execute", 0)
-    pinned = orchestration.workflows.require_package()
-    assert [step.title for step in pinned.execution_steps] == ["Create report"]
-    for relative, content in original.items():
-        assert (pinned.root / relative).read_bytes() == content
-        assert (saved.root / relative).read_bytes() == content
-
-
-@pytest.mark.parametrize("turn_status", [TurnStatus.COMPLETED, TurnStatus.CANCELLED, TurnStatus.AWAITING_HUMAN, TurnStatus.AWAITING_PERMISSION])
-@pytest.mark.parametrize("failed", [False, True])
-async def test_resume_legacy_validation(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch, turn_status: TurnStatus, failed: bool) -> None:
-    """Settle retired validation from pinned results without replaying execution or held tools."""
-    def reject_replay(*args, **kwargs):
-        raise AssertionError("Legacy validation must not replay tools or step reports")
-
-    saved = await _save_workflow(orchestration, "legacy-resume")
-    _add_legacy_validation(saved.root)
-    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
-    active = orchestration.workflow_runs.require_run_workflow()
-    (active.result_dir / "report.txt").write_text("Already produced\n", encoding="utf-8")
-    (active.background_work_dir / "inputs.txt").write_text("Original inputs\n", encoding="utf-8")
-    if failed:
-        (active.result_dir / "failure.md").write_text("# Failure\n\nLegacy check failed.\n", encoding="utf-8")
-    state_path = active.root / ".state.json"
-    raw_state = json.loads(state_path.read_text(encoding="utf-8"))
-    raw_state.update(stage="validate", step_index=3)
-    state_path.write_text(json.dumps(raw_state), encoding="utf-8")
-    legacy_turn = _turn(started, "turn-legacy-validation", turn_status)
-    legacy_turn.agent_state["think"].update(stage="validate", step_index=3)
-    # The mutable library source must not determine the retained Run's boundary.
-    saved.entry_path.write_text(
-        saved.entry_path.read_text(encoding="utf-8") + "\n# New section\n\nNew instructions.\n",
-        encoding="utf-8",
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        goal="Explain a research strategy",
+        outline_confirmed=True,
     )
-    orchestration.workspace.close_run_workflow_space()
-    orchestration.workflow_runs.close_run_workflow()
-    orchestration.workflows.close_package()
-    orchestration.context.session = Session(orchestration.record, [legacy_turn])
-    monkeypatch.setattr(AmphiAgent, "_resume_permission", reject_replay)
-    monkeypatch.setattr(WorkflowRunLibrary, "record_step", reject_replay)
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({"candidates": [candidate]})),
+        state,
+    )
 
-    resumed = AmphiOTAContext(user_input="Continue the report")
-    await orchestration.agent.init_state(resumed, orchestration.context)
-    assert resumed.think_status == NormalStageState()
-    assert not orchestration.workspace.has_run_workflow
-    result = resumed.ota_record[-1].workflow_result
-    published = orchestration.workflow_runs.get(result["run_id"])
-    assert published is not None
-    assert published.status is (WorkflowRunStatus.FAILED if failed else WorkflowRunStatus.COMPLETED)
-    assert published.read_file("result/report.txt") == "Already produced\n"
-    assert published.read_file("background/work/inputs.txt") == "Original inputs\n"
-    if failed:
-        assert published.read_file("result/failure.md") == "# Failure\n\nLegacy check failed.\n"
+    await _apply(orchestration, plan)
 
-    # Rehydrating stale legacy cognition after publication must not restart the Run.
-    resumed_again = AmphiOTAContext(user_input="Continue the report")
-    await orchestration.agent.init_state(resumed_again, orchestration.context)
-    assert resumed_again.think_status == NormalStageState()
-    assert not orchestration.workspace.has_run_workflow
-    assert not any(getattr(record, "workflow_result", None) for record in resumed_again.ota_record)
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    request_id = plan.interaction_status.request_id
+    assert plan.think_status.template_selection_status == "pending"
+    assert plan.think_status.template_candidates[0].template_id == "template-editorial-1"
+    receipt = _payload(plan, "ppt_rag")
+    assert receipt["status"] == "awaiting_template_selection"
+    assert receipt["candidate_ids"] == ["template-editorial-1"]
+    assert "candidates" not in receipt
+
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template")],
+    )
+    selected = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="select",
+        template_id="template-editorial-1",
+    ))
+    await orchestration.agent.init_state(selected, orchestration.context)
+
+    resumed = selected.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "selected"
+    assert resumed.template_selection_id is None
+    assert resumed.selected_template is not None
+    assert resumed.selected_template.template_id == "template-editorial-1"
+    assert len(resumed.selected_template.preview_paths) == 6
+    assert selected.interaction_status is None
+    assert _payload(selected, "ppt_rag")["status"] == "selected"
+    assert _payload(selected, "ppt_rag")["selected_template_id"] == "template-editorial-1"
+    assert set(_payload(selected, "ppt_rag")) == {
+        "search_id", "template_selection_id", "status", "selected_template_id", "feedback",
+    }
+    assert _payload(selected, "ppt_rag")["template_selection_id"] == request_id
+    assert "/templates/previews/" not in str(selected.ota_record[-1].observation_result)
 
 
-async def test_build_entry(orchestration: _Harness) -> None:
+async def test_presentation_template_refresh_excludes_the_current_batch(orchestration: _Harness) -> None:
+    """Another-batch resumes Plan with the previous ids excluded from the next retrieval."""
+    candidate = {
+        "template_id": "template-first-batch",
+        "version": "sha256:test",
+        "title": "First batch",
+    }
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({"candidates": [candidate]})),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    request_id = plan.interaction_status.request_id
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template-refresh")],
+    )
+    refreshed = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="refresh",
+    ))
+
+    await orchestration.agent.init_state(refreshed, orchestration.context)
+
+    resumed = refreshed.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "idle"
+    assert resumed.template_selection_id is None
+    assert resumed.template_candidates == []
+    assert resumed.template_excluded_ids == ["template-first-batch"]
+    assert _payload(refreshed, "ppt_rag")["status"] == "refresh_requested"
+
+
+async def test_presentation_template_failure_can_be_skipped(orchestration: _Harness) -> None:
+    """A failed retrieval still parks on a user choice that can advance without a template."""
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({
+            "status": "retrieval_failed",
+            "retrieval_error": "The local template index is unavailable.",
+            "candidates": [],
+        })),
+        state,
+    )
+
+    await _apply(orchestration, plan)
+
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    assert plan.think_status.template_candidates == []
+    assert plan.think_status.template_selection_error == "The local template index is unavailable."
+    request_id = plan.interaction_status.request_id
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template-failure")],
+    )
+    skipped = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="skip",
+    ))
+
+    await orchestration.agent.init_state(skipped, orchestration.context)
+
+    resumed = skipped.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "skipped"
+    assert resumed.template_selection_error is None
+    assert skipped.interaction_status is None
+
+
+async def test_presentation_template_retry_after_exhaustion_resets_exclusions(orchestration: _Harness) -> None:
+    """Retrying an empty batch starts again from the full catalogue."""
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+        template_excluded_ids=["template-previous"],
+    )
+    plan = _ota(
+        "Create the presentation",
+        _step("ppt_rag", json.dumps({
+            "status": "retrieval_failed",
+            "retrieval_error": "No new candidates remain.",
+            "candidates": [],
+        })),
+        state,
+    )
+    await _apply(orchestration, plan)
+    assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
+    request_id = plan.interaction_status.request_id
+    orchestration.context.session = Session(
+        orchestration.record,
+        [_pending(plan, "turn-presentation-template-retry")],
+    )
+    retried = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID,
+        request_id=request_id,
+        action="refresh",
+    ))
+
+    await orchestration.agent.init_state(retried, orchestration.context)
+
+    resumed = retried.think_status
+    assert isinstance(resumed, PresentationStageState)
+    assert resumed.template_selection_status == "idle"
+    assert resumed.template_selection_error is None
+    assert resumed.template_excluded_ids == []
+
+
+async def test_ppt_rag_preserves_full_candidates_until_after_action(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan retains the complete shortlist and compacts it only during result handling."""
+    candidate = {
+        "template_id": "template-large",
+        "version": "sha256:test",
+        "title": "Large candidate",
+        "structural_evidence": {"overview": "x" * 20_000},
+        "materialize_ref": {"template_id": "template-large", "version": "sha256:test"},
+    }
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    payload = json.dumps({"search_id": "search-large", "candidates": [candidate]})
+    result = ActionResult(results=[_step("ppt_rag", payload)])
+    ota_context = AmphiOTAContext(ota_record=[OTARecord()])
+    ota_context.transition_think(state)
+
+    async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
+        return result
+
+    monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
+    executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
+    assert executed is result
+    assert result.results[0].tool_result == payload
+    assert result.results[0].success is True
+    assert ota_context.think_status == state
+    assert ota_context.think_status.template_candidates == []
+    assert ota_context.interaction_status is None
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+    ota_context.action_result = executed
+    await _apply(orchestration, ota_context)
+
+    receipt = result.results[0].tool_result
+    assert isinstance(receipt, dict)
+    assert receipt["status"] == "awaiting_template_selection"
+    assert receipt["candidate_ids"] == ["template-large"]
+    assert len(json.dumps(receipt)) < 16 * 1024
+    retained = ota_context.think_status.template_candidates[0]
+    assert retained.model_dump(include=set(candidate)) == candidate
+    assert isinstance(ota_context.interaction_status, AwaitingPresentationTemplateSelection)
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+    pending_state = ota_context.state.model_dump(mode="json")
+    original_receipt = dict(receipt)
+    await _apply(orchestration, ota_context)
+
+    assert ota_context.state.model_dump(mode="json") == pending_state
+    assert result.results[0].tool_result == original_receipt
+    assert result.results[0].success is True
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+
+async def test_invalid_ppt_rag_payload_is_rejected_after_action_without_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan rejects malformed data after execution and clears the failed payload."""
+    state = PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        outline_confirmed=True,
+    )
+    payload = "{" + "x" * 20_000
+    result = ActionResult(results=[_step("ppt_rag", payload)])
+    ota_context = AmphiOTAContext(ota_record=[OTARecord()])
+    ota_context.transition_think(state)
+
+    async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
+        return result
+
+    monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
+    executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
+    assert executed is result
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+    step = result.results[0]
+    assert step.success is True
+    assert step.tool_result == payload
+    assert step.error is None
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+
+    ota_context.action_result = executed
+    await _apply(orchestration, ota_context)
+
+    assert step.success is False
+    assert step.tool_result is None
+    assert step.error is not None and "invalid JSON" in step.error
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+    original_error = step.error
+    await _apply(orchestration, ota_context)
+
+    assert step.success is False
+    assert step.tool_result is None
+    assert step.error == original_error
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+    assert not orchestration.workspace.tool_result_dir.exists()
+
+
+@pytest.mark.parametrize("legacy_pending", [False, True], ids=["main-card", "legacy-build-card"])
+async def test_build_entry(orchestration: _Harness, legacy_pending: bool) -> None:
     """Final Build routing:
 
     {
@@ -304,16 +638,13 @@ async def test_build_entry(orchestration: _Harness) -> None:
     Checks:
     1. An explicit reusable request enters Clarify and creates its durable Build workspace.
     2. A competing request becomes a user choice without replacing the retained Build.
-    3. Keeping the existing Build resolves the card and rebinds the retained workspace.
+    3. Main resolves its card; a legacy Build-owned card is rejected without changing retained work.
     """
-    start = _ota(
-        "Create a reusable report workflow",
-        _step(
-            "request_build",
-            RequestBuild("Create a reusable report workflow", mode="start"),
-        ),
-    )
-    await _apply(orchestration, start)
+    start = AmphiOTAContext(user_input="Create a reusable report workflow")
+    entered = await _execute_call(orchestration, start, _call(
+        "build-entry", "request_build", goal="Create a reusable report workflow", mode="start",
+    ))
+    assert entered.success is True
 
     # Check 1: Explicit intent enters Build and binds the newly created private workspace.
     assert start.think_status == BuildStageState(stage="clarify")
@@ -324,30 +655,35 @@ async def test_build_entry(orchestration: _Harness) -> None:
     retained_task = orchestration.workspace.build.root / "task.md"
     retained_task.write_text("# Task\n\nRetain this Build.\n", encoding="utf-8")
 
-    ask = _ota(
-        "Also build a different workflow",
-        _step(
-            "request_build",
-            RequestBuild(
-                "Build a different workflow",
-                mode="ask",
-                reason="Another unfinished Build already exists",
-                request_id="build-conflict-1",
-            ),
-        ),
-        BuildStageState(stage="clarify"),
-    )
-    await _apply(orchestration, ask)
+    blocked = await _execute_call(orchestration, start, _call(
+        "build-reentry", "request_build", goal="Build a different workflow", mode="start",
+    ))
+    assert blocked.success is False
+    assert "not available" in blocked.error
+    assert start.think_status == BuildStageState(stage="clarify")
+    assert retained_task.read_text(encoding="utf-8") == "# Task\n\nRetain this Build.\n"
+    exited = await _execute_call(orchestration, start, _call("build-exit", "switch", mode="normal"))
+    assert exited.success is True
+    assert start.think_status == NormalStageState()
+    ask = start
+    requested = await _execute_call(orchestration, ask, _call(
+        "build-conflict", "request_build", goal="Build a different workflow", mode="ask",
+        reason="Another unfinished Build already exists",
+    ))
+    assert requested.success is True
+    assert ask.think_status == NormalStageState()
 
     # Check 2: The conflict is parked while the first Build remains resumable and untouched.
     assert isinstance(ask.interaction_status, AwaitingBuildConflict)
-    assert ask.interaction_status.request_id == "build-conflict-1"
     assert _payload(ask, "request_build")["status"] == "pending"
     assert orchestration.workspace.has_build
     assert orchestration.workspace.build is None
     assert orchestration.workflows.package is None
     assert retained_task.read_text(encoding="utf-8") == "# Task\n\nRetain this Build.\n"
 
+    if legacy_pending:
+        # Older releases parked this same card while the Build worker remained selected.
+        ask.transition_think(BuildStageState(stage="clarify"))
     pending = _pending(ask, "turn-build-conflict")
     orchestration.context.session = Session(orchestration.record, [pending])
     resolved = AmphiOTAContext(user_input={
@@ -355,6 +691,16 @@ async def test_build_entry(orchestration: _Harness) -> None:
         "request_id": ask.interaction_status.request_id,
         "answers": [{"index": 0, "option_id": "keep"}],
     })
+    if legacy_pending:
+        checkpoint = orchestration.workspace.build_checkpoint()
+        with pytest.raises(AgentResumeError):
+            await orchestration.agent.init_state(resolved, orchestration.context)
+        assert resolved.think_status == BuildStageState(stage="clarify")
+        assert orchestration.context.session.get_all() == [pending]
+        assert orchestration.workspace.build_checkpoint() == checkpoint
+        assert retained_task.read_text(encoding="utf-8") == "# Task\n\nRetain this Build.\n"
+        assert _payload(ask, "request_build")["status"] == "pending"
+        return
     await orchestration.agent.init_state(resolved, orchestration.context)
 
     # Check 3: Keeping the first intent clears the conflict and resumes its durable stage.
@@ -450,115 +796,6 @@ async def test_build_switch(orchestration: _Harness) -> None:
     assert orchestration.workspace.build is None
     assert orchestration.workflows.package is None
     assert "unfinished Build workspace was retained" in str(leave.ota_record[-1].observation_result)
-
-
-@pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
-@pytest.mark.parametrize("reply", ["second option", "Choose the delivery method: second option"])
-async def test_switch_carries_saved_human_outcomes(orchestration: _Harness, status: TurnStatus, reply: str) -> None:
-    """Carry shared human outcomes, including referential replies, without foreign logs."""
-    await _prepare_build(orchestration, "explore")
-    choice = _step("request_human_choice", reply)
-    choice.tool_arguments = {
-        "prompt": "Where should the report go?",
-        "questions": json.dumps([{
-            "question": "Choose the delivery method",
-            "options": [{"label": "Email result"}, {"label": "Local result"}],
-        }]),
-    }
-    approved = "Only generate a local report."
-    ignored = _step("request_human_choice", "FAILED CHOICE RESULT")
-    ignored.success = False
-    ignored.error = "The interaction did not complete."
-    historical = AmphiOTAContext(
-        user_input="Review the report requirements",
-        ota_record=[OTARecord(
-            think_scope={"mode": "build", "stage": "verify"},
-            think_result={"step_content": "PRIVATE VERIFY TRACE", "tool_calls": []},
-            action_result=ActionResult(results=[
-                _step("request_human_task_confirm", {
-                    "status": "confirmed", "message": approved,
-                    "task_markdown": "PRIVATE CONFIRMATION CARD",
-                }),
-                choice.model_copy(deep=True),
-                _step("request_human_task_confirm", {"status": "pending", "message": "PENDING CONFIRMATION"}),
-                ignored,
-                _step("exec_command", "PRIVATE TOOL OUTPUT"),
-            ]),
-        )],
-    )
-    saved = _turn(historical, "turn-saved-human-outcomes", status)
-    orchestration.context.session = Session(orchestration.record, [saved])
-    reason = "Exploration is complete; implement the report."
-    advance = _ota(
-        "Continue the report workflow",
-        _step("switch", {"mode": "build", "stage": "generate", "reason": reason}),
-        BuildStageState(stage="explore"),
-    )
-    advance.ota_record[0].think_scope = {"mode": "build", "stage": "explore"}
-    advance.ota_record.insert(0, OTARecord(
-        think_scope={"mode": "build", "stage": "explore"},
-        think_result={"step_content": "PRIVATE EXPLORE TRACE", "tool_calls": []},
-        action_result=ActionResult(results=[choice]),
-    ))
-
-    await _apply(orchestration, advance)
-
-    assert advance.think_status == BuildStageState(stage="generate")
-    handoff = _payload(advance, "switch")["reason"]
-    assert handoff.startswith(reason)
-    assert handoff.count("second option") == 1
-    assert f"- request_human_choice: Answer: {reply}" in handoff
-    assert "Question: Choose the delivery method Options: 1. Email result; 2. Local result" in handoff
-    assert not any(key in handoff for key in ('"reply":', '"questions":', '"status":', '"message":'))
-    persisted = _turn(advance, "turn-switched", TurnStatus.COMPLETED)
-    assert persisted.ota_records[-1]["action_result"]["results"][0]["tool_result"]["reason"] == handoff
-    messages = await GenerateThink().assemble_messages(advance, orchestration.context)
-    prompt = "\n".join(message.content for message in messages)
-    for expected in (reason, approved, "Where should the report go?", "Choose the delivery method", "Email result", "Local result", "second option"):
-        assert expected in handoff
-        assert expected in prompt
-    for excluded in ("PRIVATE VERIFY TRACE", "PRIVATE EXPLORE TRACE", "PRIVATE TOOL OUTPUT", "PRIVATE CONFIRMATION CARD", "PENDING CONFIRMATION", "FAILED CHOICE RESULT"):
-        assert excluded not in handoff
-        assert excluded not in prompt
-
-
-@pytest.mark.parametrize("context_size", [1_500, 19_500])
-async def test_switch_keeps_complete_prompt_and_distinct_decisions(orchestration: _Harness, context_size: int) -> None:
-    """Preserve prompt tails and deduplicate only identical contextual decisions."""
-    await _prepare_build(orchestration, "explore")
-    contexts = ["C" * context_size + suffix for suffix in (" Subject: file A.", " Subject: file B.")]
-    advance = _ota(
-        "Continue implementation",
-        _step("switch", {"mode": "build", "stage": "generate", "reason": "Implement the decisions."}),
-        BuildStageState(stage="explore"),
-    )
-    advance.ota_record[0].think_scope = {"mode": "build", "stage": "explore"}
-    choices = []
-    for prompt in contexts:
-        choice = _step("request_human_choice", "Proceed")
-        choice.tool_arguments = {
-            "prompt": prompt,
-            "questions": json.dumps([{"question": "Proceed?", "options": [{"label": "Proceed"}, {"label": "Cancel"}]}]),
-        }
-        choices.append(choice)
-    choices.append(choices[-1].model_copy(deep=True))
-    advance.ota_record.insert(0, OTARecord(
-        think_scope={"mode": "build", "stage": "explore"},
-        action_result=ActionResult(results=choices),
-    ))
-
-    await _apply(orchestration, advance)
-
-    handoff = _payload(advance, "switch")["reason"]
-    prompt = "\n".join(message.content for message in await GenerateThink().assemble_messages(advance, orchestration.context))
-    assert contexts[-1] in handoff and contexts[-1] in prompt
-    assert handoff.count(contexts[-1]) == 1
-    assert "[truncated;" not in handoff
-    if context_size == 1_500:
-        assert contexts[0] in handoff and handoff.count("- request_human_choice:") == 2
-    else:
-        assert contexts[0] not in handoff and handoff.count("- request_human_choice:") == 1
-        assert "Additional details omitted" in handoff
 
 
 async def test_terminal_rehydration(orchestration: _Harness) -> None:
@@ -800,22 +1037,109 @@ async def test_workflow_edit(orchestration: _Harness) -> None:
     assert set(orchestration.workflows.data()) == {saved.workflow_id, copied.workflow_id}
 
 
-async def test_run_entry(orchestration: _Harness) -> None:
+@pytest.mark.parametrize("choice", ["keep", "replace_edit"])
+async def test_competing_workflow_edit_stays_in_main_until_the_user_chooses(orchestration: _Harness, choice: str) -> None:
+    """Main preserves the retained Build while resolving a different saved Workflow target."""
+    retained = await _save_workflow(orchestration, "retained-edit")
+    requested = await _save_workflow(orchestration, "requested-edit")
+    ota_context = AmphiOTAContext(user_input="Edit the selected saved Workflow")
+    entered = await _execute_call(orchestration, ota_context, _call(
+        "edit-retained", "edit_workflow", workflow_id=retained.workflow_id,
+    ))
+    assert entered.success is True
+    assert "[stage handoff] `normal/main` → `build/clarify`" in ota_context.ota_record[-1].observation_result
+    build = orchestration.workspace.build
+    assert build is not None
+    build.set_stage("explore", retained.workflow_id)
+    ota_context.transition_think(BuildStageState(stage="explore", workflow_id=retained.workflow_id))
+    marker = build.root / "retained.txt"
+    marker.write_text("Keep this unfinished work.\n", encoding="utf-8")
+    checkpoint = orchestration.workspace.build_checkpoint()
+    await _execute_call(orchestration, ota_context, _call("leave-first-edit", "switch", mode="normal"))
+
+    reopened = await _execute_call(orchestration, ota_context, _call(
+        "edit-same-target", "edit_workflow", workflow_id=retained.workflow_id,
+    ))
+    assert reopened.success is True
+    assert ota_context.think_status == BuildStageState(stage="explore", workflow_id=retained.workflow_id)
+    assert orchestration.workspace.build_checkpoint() == checkpoint
+    assert marker.read_text(encoding="utf-8") == "Keep this unfinished work.\n"
+    entry_record = ota_context.ota_record[-1]
+    assert "[stage handoff] `normal/main` → `build/explore`" in entry_record.observation_result
+    assert reopened.tool_result["message"] in entry_record.observation_result
+    assert retained.workflow_id in entry_record.observation_result and retained.name in entry_record.observation_result
+    entry_record.think_scope = {"mode": "normal", "stage": "main"}
+    entry_record.think_result.step_content = "PRIVATE NORMAL EDIT TRACE"
+    handoff = ExploreThink().turn_messages_block(ota_context.model_copy(update={"ota_record": [entry_record]}), orchestration.context)
+    assert len(handoff) == 1
+    assert "[stage handoff]" in handoff[0].content and "PRIVATE NORMAL" not in handoff[0].content
+    assert not any(isinstance(block, (ToolCallBlock, ToolResultBlock)) for message in handoff for block in message.blocks)
+    await _execute_call(orchestration, ota_context, _call("leave-retained-edit", "switch", mode="normal"))
+
+    selected = await _execute_call(orchestration, ota_context, _call(
+        "edit-different-target", "edit_workflow", workflow_id=requested.workflow_id,
+    ))
+    assert selected.success is True
+    assert ota_context.think_status == NormalStageState()
+    assert "request_build" in selected.tool_result["message"]
+    assert orchestration.workspace.build_checkpoint() == checkpoint
+    assert orchestration.workspace.build is None
+    assert orchestration.workflows.package is None
+    assert marker.read_text(encoding="utf-8") == "Keep this unfinished work.\n"
+    assert "[stage handoff]" not in (ota_context.ota_record[-1].observation_result or "")
+
+    proposed = await _execute_call(orchestration, ota_context, _call(
+        "resolve-edit-conflict", "request_build", goal="Edit the newly selected Workflow", mode="ask",
+        reason="Another saved Workflow has an unfinished edit",
+    ))
+    assert proposed.success is True
+    conflict = ota_context.interaction_status
+    assert isinstance(conflict, AwaitingBuildConflict)
+    assert ota_context.think_status == NormalStageState()
+    assert conflict.existing_workflow_id == retained.workflow_id
+    assert conflict.requested_workflow_id == requested.workflow_id
+    assert {option["id"] for option in conflict.questions[0]["options"]} == {"keep", "replace_edit"}
+    orchestration.context.session = Session(orchestration.record, [_pending(ota_context, "edit-conflict")])
+    resumed = AmphiOTAContext(user_input={
+        "type": "choice_answer",
+        "request_id": conflict.request_id,
+        "answers": [{"index": 0, "option_id": choice}],
+    })
+
+    await orchestration.agent.init_state(resumed, orchestration.context)
+
+    assert resumed.interaction_status is None
+    assert resumed.think_status == BuildStageState(
+        stage="explore" if choice == "keep" else "clarify",
+        workflow_id=retained.workflow_id if choice == "keep" else requested.workflow_id,
+    )
+    assert marker.exists() is (choice == "keep")
+    assert _payload(resumed, "request_build")["action"] == ("keep" if choice == "keep" else "replace")
+
+
+@pytest.mark.parametrize("legacy_pending", [False, True], ids=["main-card", "legacy-run-card"])
+@pytest.mark.parametrize("choice_action", ["resume", "restart"])
+async def test_run_entry(orchestration: _Harness, legacy_pending: bool, choice_action: str) -> None:
     """Final Workflow Run entry:
 
     {
       "start": {"stage": "execute", "step_index": 0, "source": "pinned"},
-      "ambiguous_reentry": {"choice": "resume", "generation": "unchanged"},
-      "restart": {"generation": "new", "cursor": "execute/0", "input": "preserved"}
+      "ambiguous_reentry": {
+        "resume": {"generation": "unchanged", "source": "pinned", "input": "original"},
+        "restart": {"generation": "new", "source": "latest", "input": "current_request"}
+      }
     }
 
     Checks:
     1. Starting a saved Workflow creates a pinned private Run and enters its first section.
-    2. An ambiguous re-entry parks for a choice and Resume reopens the same generation.
-    3. Restart replaces the active attempt while preserving its original Workflow input.
+    2. Main resolves its card; legacy Run-owned cards are rejected without replacing the retained Run.
     """
     saved = await _save_workflow(orchestration, "run-entry")
-    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    original_input = UserInput(
+        text="Create today's report",
+        blocks=[{"type": "mention", "group": "Workflow", "id": saved.workflow_id, "label": saved.name, "path": ""}],
+    )
+    started = await _start_run(orchestration, saved.workflow_id, original_input)
 
     # Check 1: Start snapshots the saved source and enters its first execution section.
     assert isinstance(started.think_status, WorkflowStageState)
@@ -826,9 +1150,20 @@ async def test_run_entry(orchestration: _Harness) -> None:
     assert orchestration.workspace.run_workflow is not None
     pinned = orchestration.workflow_runs.require_run_workflow().source_dir
     assert (pinned / "workflow" / "WORKFLOW.md").is_file()
+    partial = orchestration.workflow_runs.require_run_workflow().result_dir / "partial.txt"
+    partial.write_text("Retain this attempt unless restarted.\n", encoding="utf-8")
+    with saved.entry_path.open("a", encoding="utf-8") as source:
+        source.write("\n# Check report\n\nCheck the completed report.\n")
 
+    current_input = UserInput(
+        text="Create tomorrow's report with the updated requirements",
+        blocks=[
+            {"type": "text", "value": "Use tomorrow's updated requirements."},
+            {"type": "mention", "group": "Workflow", "id": saved.workflow_id, "label": saved.name, "path": ""},
+        ],
+    )
     ask = _ota(
-        "Continue the report",
+        current_input,
         _step(
             "request_run_workflow",
             RequestRunWorkflow(saved.workflow_id, "ask", "An unfinished Run exists"),
@@ -837,156 +1172,203 @@ async def test_run_entry(orchestration: _Harness) -> None:
     await _apply(orchestration, ask)
     assert isinstance(ask.interaction_status, AwaitingWorkflowRunChoice)
     choice = ask.interaction_status
+    if legacy_pending:
+        # Older releases could request this card while the Run worker remained selected.
+        ask.transition_think(started.think_status)
     pending = _pending(ask, "turn-run-choice")
     orchestration.context.session = Session(orchestration.record, [pending])
+    resumed = AmphiOTAContext(user_input={
+        "type": "choice_answer",
+        "request_id": choice.request_id,
+        "answers": [{"index": 0, "option_id": choice_action}],
+    })
+    if legacy_pending:
+        checkpoint = orchestration.workspace.run_workflow_checkpoint()
+        with pytest.raises(AgentResumeError):
+            await orchestration.agent.init_state(resumed, orchestration.context)
+        assert resumed.think_status == started.think_status
+        assert orchestration.context.session.get_all() == [pending]
+        assert orchestration.workspace.run_workflow_checkpoint() == checkpoint
+        assert partial.read_text(encoding="utf-8") == "Retain this attempt unless restarted.\n"
+        assert _payload(ask, "request_run_workflow")["status"] == "pending"
+        return
+    await orchestration.agent.init_state(resumed, orchestration.context)
+
+    # Check 2: Resume retains the original input; Restart uses the request that opened the card.
+    assert isinstance(resumed.think_status, WorkflowStageState)
+    assert (resumed.think_status.generation == generation) is (choice_action == "resume")
+    assert resumed.think_status.workflow_id == saved.workflow_id
+    payload = _payload(resumed, "request_run_workflow")
+    assert payload["status"] == "resolved"
+    assert payload["action"] == choice_action
+    assert payload["resolved_action"] == {"resume": "resumed", "restart": "restarted"}[choice_action]
+    checkpoint = orchestration.workspace.run_workflow_checkpoint()
+    assert checkpoint is not None
+    assert checkpoint.generation == resumed.think_status.generation
+    assert (checkpoint.stage, checkpoint.step_index) == ("execute", 0)
+    assert checkpoint.workflow_input == (original_input if choice_action == "resume" else current_input)
+    assert partial.exists() is (choice_action == "resume")
+    assert len(orchestration.workflows.require_package().execution_steps) == (1 if choice_action == "resume" else 2)
+
+
+@pytest.mark.parametrize("action", ["start", "ask"])
+async def test_workflow_reentry_requires_an_explicit_handoff_to_main(orchestration: _Harness, action: str) -> None:
+    """Run controls return to Main before replacing or asking about retained work."""
+    saved = await _save_workflow(orchestration, f"active-reentry-{action}")
+    with saved.entry_path.open("a", encoding="utf-8") as source:
+        source.write("\n# Check report\n\nCheck the completed report.\n")
+    requested = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    reported = await _execute_call(orchestration, requested, _call(
+        "run-report", "report_workflow_step", status="success", summary="Created the report",
+    ))
+    assert reported.success is True
+    initial = requested.think_status
+    assert isinstance(initial, WorkflowStageState)
+    assert initial.step_index == 1
+    partial = orchestration.workflow_runs.require_run_workflow().result_dir / "partial.txt"
+    partial.write_text("Retain this attempt unless restarted.\n", encoding="utf-8")
+    arguments = {
+        "workflow_id": saved.workflow_id,
+        "action": action,
+        "reason": "Resolve the user's intent for the unfinished report.",
+    }
+
+    blocked = await _execute_call(orchestration, requested, _call("run-reentry", "request_run_workflow", **arguments))
+    assert blocked.success is False
+    assert "not available" in blocked.error
+    assert requested.think_status == initial
+    assert partial.exists()
+    assert requested.interaction_status is None
+    exited = await _execute_call(orchestration, requested, _call("run-exit", "switch", mode="normal"))
+    assert exited.success is True
+    assert requested.think_status == NormalStageState()
+
+    entered = await _execute_call(orchestration, requested, _call("main-reentry", "request_run_workflow", **arguments))
+    assert entered.success is True
+    payload = _payload(requested, "request_run_workflow")
+    state = requested.think_status
+    checkpoint = orchestration.workspace.run_workflow_checkpoint()
+    assert checkpoint is not None
+    assert checkpoint.workflow_input.text == "Create today's report"
+    if action == "ask":
+        assert state == NormalStageState()
+        assert isinstance(requested.interaction_status, AwaitingWorkflowRunChoice)
+        assert payload["status"] == "pending"
+        assert requested.interaction_status.existing_workflow_id == saved.workflow_id
+        assert requested.interaction_status.requested_workflow_id == saved.workflow_id
+        assert checkpoint.generation == initial.generation
+        assert checkpoint.step_index == initial.step_index
+        assert partial.exists()
+    else:
+        assert isinstance(state, WorkflowStageState)
+        assert state.workflow_id == saved.workflow_id
+        assert requested.interaction_status is None
+        assert payload["status"] == "restarted"
+        assert (state.stage, state.step_index) == ("execute", 0)
+        assert checkpoint.generation == state.generation
+        assert state.generation != initial.generation
+        assert not partial.exists()
+
+
+@pytest.mark.parametrize("same_workflow", [True, False], ids=["same-workflow", "different-workflow"])
+@pytest.mark.parametrize("fail_population", [False, True], ids=["replacement", "preserved-on-failure"])
+async def test_start_replaces_retained_run(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch, same_workflow: bool, fail_population: bool) -> None:
+    """Explicit Start replaces retained work atomically using the current structured task input."""
+    saved = await _save_workflow(orchestration, "start-replacement")
+    original_input = UserInput(
+        text="Create the original report",
+        blocks=[{"type": "mention", "group": "Workflow", "id": saved.workflow_id}],
+    )
+    started = AmphiOTAContext(user_input=original_input)
+    result = await _execute_call(orchestration, started, _call(
+        "initial-start", "request_run_workflow", workflow_id=saved.workflow_id,
+    ))
+    assert result.success is True
+    initial = orchestration.workspace.run_workflow_checkpoint()
+    assert initial is not None
+    assert initial.workflow_input == original_input
+    partial = orchestration.workflow_runs.require_run_workflow().result_dir / "partial.txt"
+    partial.write_text("Retained work\n", encoding="utf-8")
+    await _execute_call(orchestration, started, _call("pause-for-new-request", "switch", mode="normal"))
+
+    target = saved if same_workflow else await _save_workflow(orchestration, "replacement-target")
+    with target.entry_path.open("a", encoding="utf-8") as source:
+        source.write("\n# Check report\n\nCheck the completed report.\n")
+    current_input = UserInput(
+        text="Start the requested Workflow from the beginning",
+        blocks=[{"type": "mention", "group": "Workflow", "id": target.workflow_id}],
+    )
+    requested = AmphiOTAContext(user_input=current_input)
+    call = _call("replacement-start", "request_run_workflow", workflow_id=target.workflow_id, action="start")
+    if fail_population:
+        def fail_populate(root: Path, source_root: Path) -> None:
+            raise RuntimeError("Simulated Workflow snapshot failure")
+
+        monkeypatch.setattr(orchestration.workflow_runs, "populate_run_workflow", fail_populate)
+        with pytest.raises(RuntimeError, match="snapshot failure"):
+            await _execute_call(orchestration, requested, call)
+        assert orchestration.workspace.run_workflow_checkpoint() == initial
+        assert partial.read_text(encoding="utf-8") == "Retained work\n"
+        assert requested.think_status == NormalStageState()
+        return
+
+    result = await _execute_call(orchestration, requested, call)
+    assert result.success is True
+    assert _payload(requested, "request_run_workflow")["status"] == "restarted"
+    checkpoint = orchestration.workspace.run_workflow_checkpoint()
+    assert checkpoint is not None
+    assert checkpoint.generation != initial.generation
+    assert checkpoint.workflow_id == target.workflow_id
+    assert checkpoint.workflow_input == current_input
+    assert (checkpoint.stage, checkpoint.step_index) == ("execute", 0)
+    assert len(orchestration.workflows.require_package().execution_steps) == 2
+    assert not partial.exists()
+
+
+@pytest.mark.parametrize("source_state", ["removed", "invalid"])
+async def test_ask_resumes_retained_run_without_valid_saved_source(orchestration: _Harness, source_state: str) -> None:
+    """Ask resumes the pinned snapshot when the current saved source cannot start a new Run."""
+    saved = await _save_workflow(orchestration, "removed-run-source")
+    started = await _start_run(orchestration, saved.workflow_id, "Create the original report")
+    initial = started.think_status
+    assert isinstance(initial, WorkflowStageState)
+    partial = orchestration.workflow_runs.require_run_workflow().result_dir / "partial.txt"
+    partial.write_text("Retained work\n", encoding="utf-8")
+    await _execute_call(orchestration, started, _call("pause-before-removal", "switch", mode="normal"))
+    if source_state == "removed":
+        assert await orchestration.workflows.delete(saved.workflow_id)
+    else:
+        saved.entry_path.write_text("This is not a valid Workflow source.\n", encoding="utf-8")
+
+    requested = AmphiOTAContext(user_input="Continue the retained report")
+    blocked = await _execute_call(orchestration, requested, _call(
+        "start-unavailable-source", "request_run_workflow", workflow_id=saved.workflow_id, action="start",
+    ))
+    assert blocked.success is False
+    checkpoint = orchestration.workspace.run_workflow_checkpoint()
+    assert checkpoint is not None
+    assert checkpoint.generation == initial.generation
+    assert partial.read_text(encoding="utf-8") == "Retained work\n"
+    result = await _execute_call(orchestration, requested, _call(
+        "ask-retained-run", "request_run_workflow", workflow_id=saved.workflow_id,
+        action="ask", reason="The unfinished report can still be continued.",
+    ))
+    assert result.success is True
+    assert isinstance(requested.interaction_status, AwaitingWorkflowRunChoice)
+    choice = requested.interaction_status
+    assert {option["id"] for question in choice.questions for option in question["options"]} == {"resume"}
+    orchestration.context.session = Session(orchestration.record, [_pending(requested, "removed-source-choice")])
     resumed = AmphiOTAContext(user_input={
         "type": "choice_answer",
         "request_id": choice.request_id,
         "answers": [{"index": 0, "option_id": "resume"}],
     })
     await orchestration.agent.init_state(resumed, orchestration.context)
-
-    # Check 2: The explicit Resume choice binds the original snapshot and generation.
-    assert isinstance(resumed.think_status, WorkflowStageState)
-    assert resumed.think_status.generation == generation
-    assert resumed.think_status.workflow_id == saved.workflow_id
-    payload = _payload(resumed, "request_run_workflow")
-    assert payload["status"] == "resolved"
-    assert payload["action"] == "resume"
-    assert payload["resolved_action"] == "resumed"
-    checkpoint = orchestration.workspace.run_workflow_checkpoint()
-    assert checkpoint is not None
-    assert checkpoint.generation == generation
-
-    active = orchestration.workflow_runs.require_run_workflow()
-    partial = active.result_dir / "partial.txt"
-    partial.write_text("discard this attempt\n", encoding="utf-8")
-    restarted = _ota(
-        "This text must not replace the original Run input",
-        _step("request_run_workflow", RequestRunWorkflow(saved.workflow_id, "restart")),
-    )
-    await _apply(orchestration, restarted)
-
-    # Check 3: Restart atomically replaces attempt-local output and resets only the generation.
-    assert isinstance(restarted.think_status, WorkflowStageState)
-    assert restarted.think_status.workflow_id == saved.workflow_id
-    assert restarted.think_status.generation != generation
-    assert (restarted.think_status.stage, restarted.think_status.step_index) == ("execute", 0)
-    assert _payload(restarted, "request_run_workflow")["status"] == "restarted"
-    restarted_checkpoint = orchestration.workspace.run_workflow_checkpoint()
-    assert restarted_checkpoint is not None
-    assert restarted_checkpoint.generation == restarted.think_status.generation
-    assert (restarted_checkpoint.stage, restarted_checkpoint.step_index) == ("execute", 0)
-    assert restarted_checkpoint.workflow_input.text == "Create today's report"
-    assert not partial.exists()
-
-
-@pytest.mark.parametrize("entry", ["tool", "choice"])
-@pytest.mark.parametrize("stage,step_index,expected_status", [
-    pytest.param("execute", 1, None, id="unfinished"),
-    pytest.param("execute", 2, WorkflowRunStatus.COMPLETED, id="execution-complete"),
-    pytest.param("validate", 7, WorkflowRunStatus.COMPLETED, id="legacy-complete"),
-    pytest.param("validate", 7, WorkflowRunStatus.FAILED, id="legacy-failed"),
-])
-async def test_manual_run_resume(
-    orchestration: _Harness,
-    monkeypatch: pytest.MonkeyPatch,
-    entry: str,
-    stage: str,
-    step_index: int,
-    expected_status: WorkflowRunStatus | None,
-) -> None:
-    """Resume unfinished steps or publish terminal results through either manual entry."""
-    def reject_replay(*args, **kwargs):
-        raise AssertionError("Resuming a Run must not replay step reports")
-
-    saved = await _save_workflow(orchestration, "manual-resume")
-    saved.entry_path.write_text(
-        saved.entry_path.read_text(encoding="utf-8") + "\n# Deliver report\n\nDeliver the report.\n",
-        encoding="utf-8",
-    )
-    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
-    active = orchestration.workflow_runs.require_run_workflow()
-    (active.result_dir / "report.txt").write_text("Retained report\n", encoding="utf-8")
-    (active.background_work_dir / "inputs.txt").write_text("Retained inputs\n", encoding="utf-8")
-    if expected_status is WorkflowRunStatus.FAILED:
-        (active.result_dir / "failure.md").write_text("Recorded failure\n", encoding="utf-8")
-    state_path = active.root / ".state.json"
-    raw_state = json.loads(state_path.read_text(encoding="utf-8"))
-    raw_state.update(stage=stage, step_index=step_index)
-    state_path.write_text(json.dumps(raw_state), encoding="utf-8")
-    original_checkpoint = state_path.read_bytes()
-
-    # The saved Run remains on disk after the user has returned to normal chat.
-    orchestration.agent._close_run_workflow_bindings(orchestration.context)
-    paused = AmphiOTAContext(user_input="Pause the workflow and return to normal chat")
-    orchestration.context.session = Session(orchestration.record, [
-        _turn(paused, "turn-paused-run", TurnStatus.COMPLETED),
-    ])
-    monkeypatch.setattr(WorkflowRunLibrary, "record_step", reject_replay)
-
-    request = _ota(
-        "Continue the report",
-        _step("request_run_workflow", RequestRunWorkflow(
-            saved.workflow_id, "ask" if entry == "choice" else "resume",
-        )),
-    )
-    await orchestration.agent.init_state(request, orchestration.context)
-    assert request.think_status == NormalStageState()
-    await _apply(orchestration, request)
-    if entry == "choice":
-        choice = request.interaction_status
-        assert isinstance(choice, AwaitingWorkflowRunChoice)
-        orchestration.context.session = Session(orchestration.record, [
-            *orchestration.context.session.get_all(),
-            _pending(request, "turn-resume-choice"),
-        ])
-        resumed = AmphiOTAContext(user_input={
-            "type": "choice_answer",
-            "request_id": choice.request_id,
-            "answers": [{"index": 0, "option_id": "resume"}],
-        })
-        await orchestration.agent.init_state(resumed, orchestration.context)
-    else:
-        resumed = request
-
-    payload = _payload(resumed, "request_run_workflow")
-    assert payload["execution_steps"] == ["Create report", "Deliver report"]
-    assert payload["status"] == ("resolved" if entry == "choice" else "resumed")
+    assert resumed.think_status == initial
     assert resumed.interaction_status is None
-    if expected_status is None:
-        assert resumed.think_status == started.think_status.model_copy(update={"step_index": 1})
-        assert state_path.read_bytes() == original_checkpoint
-        assert (active.result_dir / "report.txt").read_text(encoding="utf-8") == "Retained report\n"
-        assert "run_id" not in payload
-        assert not any(getattr(record, "workflow_result", None) for record in resumed.ota_record)
-        return
-
-    assert resumed.think_status == NormalStageState()
-    assert not active.root.exists()
-    assert orchestration.workspace.run_workflow is None
-    assert orchestration.workflow_runs.run_workflow is None
-    assert orchestration.workflows.package is None
-    published = orchestration.workflow_runs.get(payload["run_id"])
-    assert published is not None
-    assert payload["run_status"] == published.status.value == expected_status.value
-    assert published.read_file("result/report.txt") == "Retained report\n"
-    assert published.read_file("background/work/inputs.txt") == "Retained inputs\n"
-    if expected_status is WorkflowRunStatus.FAILED:
-        assert published.read_file("result/failure.md") == "Recorded failure\n"
-    result = resumed.ota_record[-1].workflow_result
-    assert result["run_id"] == published.run_id
-
-    # A subsequent turn must not publish the completed Run again.
-    orchestration.context.session = Session(orchestration.record, [
-        *orchestration.context.session.get_all(),
-        _turn(resumed, "turn-resumed-run", TurnStatus.COMPLETED),
-    ])
-    resumed_again = AmphiOTAContext(user_input="Continue")
-    await orchestration.agent.init_state(resumed_again, orchestration.context)
-    assert resumed_again.think_status == NormalStageState()
-    assert not orchestration.workspace.has_run_workflow
-    assert not any(getattr(record, "workflow_result", None) for record in resumed_again.ota_record)
+    assert _payload(resumed, "request_run_workflow")["resolved_action"] == "resumed"
+    assert partial.read_text(encoding="utf-8") == "Retained work\n"
+    assert orchestration.workflows.require_package().workflow_id == saved.workflow_id
 
 
 async def test_run_completion(orchestration: _Harness) -> None:
@@ -1029,6 +1411,14 @@ async def test_run_completion(orchestration: _Harness) -> None:
     assert orchestration.workflow_runs.run_workflow is None
     assert orchestration.workflows.package is None
     assert execute.ota_record[-1].workflow_result["run_id"] == published.run_id
+
+    repeated = await _execute_call(orchestration, execute, _call(
+        "repeat-run", "request_run_workflow", workflow_id=saved.workflow_id, action="start",
+    ))
+    assert repeated.success is False
+    assert "already ran the Workflow" in repeated.error
+    assert execute.think_status == NormalStageState()
+    assert not orchestration.workspace.has_run_workflow
 
 
 async def test_multi_section_execution(orchestration: _Harness) -> None:
@@ -1155,3 +1545,317 @@ async def test_run_failure(orchestration: _Harness) -> None:
     assert orchestration.workspace.run_workflow is None
     assert orchestration.workflow_runs.run_workflow is None
     assert orchestration.workflows.package is None
+
+
+def _add_legacy_validation(root: Path) -> None:
+    source = root / "workflow"
+    scripts = source / "scripts"
+    scripts.mkdir(exist_ok=True)
+    (scripts / "validate_htmls.py").write_text("def obsolete(:\n", encoding="utf-8")
+    (source / "VALIDATE.md").write_text(
+        "# Old instructions\n\nRun `python scripts/missing_legacy_check.py`.\n", encoding="utf-8",
+    )
+
+
+async def test_legacy_workflow_edit_and_start(orchestration: _Harness) -> None:
+    """A saved legacy package can enter Build and Run with its original source intact."""
+    saved = await _save_workflow(orchestration, "legacy-source")
+    _add_legacy_validation(saved.root)
+    original = {
+        path.relative_to(saved.root): path.read_bytes()
+        for path in saved.root.rglob("*") if path.is_file()
+    }
+    assert await orchestration.workflows.prepare_edit(saved.workflow_id) == saved
+    edit = _ota("Edit the report", _step("edit_workflow", EditWorkflow(saved.workflow_id)))
+    await _apply(orchestration, edit)
+    assert edit.think_status == BuildStageState(stage="clarify", workflow_id=saved.workflow_id)
+    restored = orchestration.workflows.require_package()
+    for relative, content in original.items():
+        assert (restored.root / relative).read_bytes() == content
+    await orchestration.workspace.discard_build()
+    orchestration.workflows.close_package()
+
+    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    assert isinstance(started.think_status, WorkflowStageState)
+    assert (started.think_status.stage, started.think_status.step_index) == ("execute", 0)
+    pinned = orchestration.workflows.require_package()
+    assert [step.title for step in pinned.execution_steps] == ["Create report"]
+    for relative, content in original.items():
+        assert (pinned.root / relative).read_bytes() == content
+        assert (saved.root / relative).read_bytes() == content
+
+
+@pytest.mark.parametrize("turn_status", [TurnStatus.COMPLETED, TurnStatus.CANCELLED, TurnStatus.FAILED])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_resume_legacy_validation(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch, turn_status: TurnStatus, failed: bool) -> None:
+    """Settle retired validation from pinned results without replaying execution or held tools."""
+    def reject_replay(*args, **kwargs):
+        raise AssertionError("Legacy validation must not replay tools or step reports")
+
+    saved = await _save_workflow(orchestration, "legacy-resume")
+    _add_legacy_validation(saved.root)
+    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    active = orchestration.workflow_runs.require_run_workflow()
+    (active.result_dir / "report.txt").write_text("Already produced\n", encoding="utf-8")
+    (active.background_work_dir / "inputs.txt").write_text("Original inputs\n", encoding="utf-8")
+    if failed:
+        (active.result_dir / "failure.md").write_text("# Failure\n\nLegacy check failed.\n", encoding="utf-8")
+    state_path = active.root / ".state.json"
+    raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+    raw_state.update(stage="validate", step_index=3)
+    state_path.write_text(json.dumps(raw_state), encoding="utf-8")
+    legacy_turn = _turn(started, "turn-legacy-validation", turn_status)
+    legacy_turn.agent_state["think"].update(stage="validate", step_index=3)
+    # The mutable library source must not determine the retained Run's boundary.
+    saved.entry_path.write_text(
+        saved.entry_path.read_text(encoding="utf-8") + "\n# New section\n\nNew instructions.\n",
+        encoding="utf-8",
+    )
+    orchestration.workspace.close_run_workflow_space()
+    orchestration.workflow_runs.close_run_workflow()
+    orchestration.workflows.close_package()
+    orchestration.context.session = Session(orchestration.record, [legacy_turn])
+    monkeypatch.setattr(AmphiAgent, "_resume_permission", reject_replay)
+    monkeypatch.setattr(WorkflowRunLibrary, "record_step", reject_replay)
+
+    resumed = AmphiOTAContext(user_input="Continue the report")
+    await orchestration.agent.init_state(resumed, orchestration.context)
+    assert resumed.think_status == NormalStageState()
+    assert not orchestration.workspace.has_run_workflow
+    result = resumed.ota_record[-1].workflow_result
+    published = orchestration.workflow_runs.get(result["run_id"])
+    assert published is not None
+    assert published.status is (WorkflowRunStatus.FAILED if failed else WorkflowRunStatus.COMPLETED)
+    assert published.read_file("result/report.txt") == "Already produced\n"
+    assert published.read_file("background/work/inputs.txt") == "Original inputs\n"
+    if failed:
+        assert published.read_file("result/failure.md") == "# Failure\n\nLegacy check failed.\n"
+
+    # Rehydrating stale legacy cognition after publication must not restart the Run.
+    resumed_again = AmphiOTAContext(user_input="Continue the report")
+    await orchestration.agent.init_state(resumed_again, orchestration.context)
+    assert resumed_again.think_status == NormalStageState()
+    assert not orchestration.workspace.has_run_workflow
+    assert not any(getattr(record, "workflow_result", None) for record in resumed_again.ota_record)
+
+
+@pytest.mark.parametrize("entry", ["worker", "choice"])
+@pytest.mark.parametrize("stage,step_index,expected_status", [
+    pytest.param("execute", 1, None, id="unfinished"),
+    pytest.param("execute", 2, WorkflowRunStatus.COMPLETED, id="execution-complete"),
+    pytest.param("validate", 7, WorkflowRunStatus.COMPLETED, id="legacy-complete"),
+    pytest.param("validate", 7, WorkflowRunStatus.FAILED, id="legacy-failed"),
+])
+async def test_manual_run_resume(
+    orchestration: _Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+    stage: str,
+    step_index: int,
+    expected_status: WorkflowRunStatus | None,
+) -> None:
+    """Resume unfinished steps or publish terminal results through either manual entry."""
+    def reject_replay(*args, **kwargs):
+        raise AssertionError("Resuming a Run must not replay step reports")
+
+    saved = await _save_workflow(orchestration, "manual-resume")
+    saved.entry_path.write_text(
+        saved.entry_path.read_text(encoding="utf-8") + "\n# Deliver report\n\nDeliver the report.\n",
+        encoding="utf-8",
+    )
+    started = await _start_run(orchestration, saved.workflow_id, "Create today's report")
+    active = orchestration.workflow_runs.require_run_workflow()
+    (active.result_dir / "report.txt").write_text("Retained report\n", encoding="utf-8")
+    (active.background_work_dir / "inputs.txt").write_text("Retained inputs\n", encoding="utf-8")
+    if expected_status is WorkflowRunStatus.FAILED:
+        (active.result_dir / "failure.md").write_text("Recorded failure\n", encoding="utf-8")
+    state_path = active.root / ".state.json"
+    raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+    raw_state.update(stage=stage, step_index=step_index)
+    state_path.write_text(json.dumps(raw_state), encoding="utf-8")
+    original_checkpoint = state_path.read_bytes()
+
+    # The saved Run remains on disk after the user has returned to normal chat.
+    WorkflowRunThink._close_run_workflow_bindings(orchestration.context)
+    paused = AmphiOTAContext(user_input="Pause the workflow and return to normal chat")
+    orchestration.context.session = Session(orchestration.record, [
+        _turn(paused, "turn-paused-run", TurnStatus.COMPLETED),
+    ])
+    monkeypatch.setattr(WorkflowRunLibrary, "record_step", reject_replay)
+
+    request = _ota(
+        "Continue the report",
+        _step("request_run_workflow", RequestRunWorkflow(
+            saved.workflow_id, "ask",
+        )),
+    )
+    await orchestration.agent.init_state(request, orchestration.context)
+    assert request.think_status == NormalStageState()
+    if entry == "choice":
+        await _apply(orchestration, request)
+        choice = request.interaction_status
+        assert isinstance(choice, AwaitingWorkflowRunChoice)
+        orchestration.context.session = Session(orchestration.record, [
+            *orchestration.context.session.get_all(),
+            _pending(request, "turn-resume-choice"),
+        ])
+        resumed = AmphiOTAContext(user_input={
+            "type": "choice_answer",
+            "request_id": choice.request_id,
+            "answers": [{"index": 0, "option_id": "resume"}],
+        })
+        await orchestration.agent.init_state(resumed, orchestration.context)
+    else:
+        fields, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
+            request, orchestration.context, saved.workflow_id, "resume",
+        )
+        request.action_result.results[0].tool_result = {**fields, "status": resolved_action}
+        resumed = request
+
+    payload = _payload(resumed, "request_run_workflow")
+    assert payload["execution_steps"] == ["Create report", "Deliver report"]
+    assert payload["status"] == ("resolved" if entry == "choice" else "resumed")
+    assert resumed.interaction_status is None
+    if expected_status is None:
+        assert resumed.think_status == started.think_status.model_copy(update={"step_index": 1})
+        assert state_path.read_bytes() == original_checkpoint
+        assert (active.result_dir / "report.txt").read_text(encoding="utf-8") == "Retained report\n"
+        assert "run_id" not in payload
+        assert not any(getattr(record, "workflow_result", None) for record in resumed.ota_record)
+        return
+
+    assert resumed.think_status == NormalStageState()
+    assert not active.root.exists()
+    assert orchestration.workspace.run_workflow is None
+    assert orchestration.workflow_runs.run_workflow is None
+    assert orchestration.workflows.package is None
+    published = orchestration.workflow_runs.get(payload["run_id"])
+    assert published is not None
+    assert payload["run_status"] == published.status.value == expected_status.value
+    assert published.read_file("result/report.txt") == "Retained report\n"
+    assert published.read_file("background/work/inputs.txt") == "Retained inputs\n"
+    if expected_status is WorkflowRunStatus.FAILED:
+        assert published.read_file("result/failure.md") == "Recorded failure\n"
+    result = resumed.ota_record[-1].workflow_result
+    assert result["run_id"] == published.run_id
+
+    # A subsequent turn must not publish the completed Run again.
+    orchestration.context.session = Session(orchestration.record, [
+        *orchestration.context.session.get_all(),
+        _turn(resumed, "turn-resumed-run", TurnStatus.COMPLETED),
+    ])
+    resumed_again = AmphiOTAContext(user_input="Continue")
+    await orchestration.agent.init_state(resumed_again, orchestration.context)
+    assert resumed_again.think_status == NormalStageState()
+    assert not orchestration.workspace.has_run_workflow
+    assert not any(getattr(record, "workflow_result", None) for record in resumed_again.ota_record)
+
+
+@pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
+@pytest.mark.parametrize("reply", ["second option", "Choose the delivery method: second option"])
+async def test_switch_carries_saved_human_outcomes(orchestration: _Harness, status: TurnStatus, reply: str) -> None:
+    """Carry shared human outcomes, including referential replies, without foreign logs."""
+    await _prepare_build(orchestration, "explore")
+    choice = _step("request_human_choice", reply)
+    choice.tool_arguments = {
+        "prompt": "Where should the report go?",
+        "questions": json.dumps([{
+            "question": "Choose the delivery method",
+            "options": [{"label": "Email result"}, {"label": "Local result"}],
+        }]),
+    }
+    approved = "Only generate a local report."
+    ignored = _step("request_human_choice", "FAILED CHOICE RESULT")
+    ignored.success = False
+    ignored.error = "The interaction did not complete."
+    historical = AmphiOTAContext(
+        user_input="Review the report requirements",
+        state={"think": BuildStageState(stage="verify")},
+        ota_record=[OTARecord(
+            think_scope={"mode": "build", "stage": "verify"},
+            think_result={"step_content": "PRIVATE VERIFY TRACE", "tool_calls": []},
+            action_result=ActionResult(results=[
+                _step("request_human_task_confirm", {
+                    "status": "confirmed", "message": approved,
+                    "task_markdown": "PRIVATE CONFIRMATION CARD",
+                }),
+                choice.model_copy(deep=True),
+                _step("request_human_task_confirm", {"status": "pending", "message": "PENDING CONFIRMATION"}),
+                ignored,
+                _step("exec_command", "PRIVATE TOOL OUTPUT"),
+            ]),
+        )],
+    )
+    saved = _turn(historical, "turn-saved-human-outcomes", status)
+    orchestration.context.session = Session(orchestration.record, [saved])
+    reason = "Exploration is complete; implement the report."
+    advance = _ota(
+        "Continue the report workflow",
+        _step("switch", {"mode": "build", "stage": "generate", "reason": reason}),
+        BuildStageState(stage="explore"),
+    )
+    advance.ota_record[0].think_scope = {"mode": "build", "stage": "explore"}
+    advance.ota_record.insert(0, OTARecord(
+        think_scope={"mode": "build", "stage": "explore"},
+        think_result={"step_content": "PRIVATE EXPLORE TRACE", "tool_calls": []},
+        action_result=ActionResult(results=[choice]),
+    ))
+
+    await _apply(orchestration, advance)
+
+    assert advance.think_status == BuildStageState(stage="generate")
+    handoff = _payload(advance, "switch")["reason"]
+    assert handoff.startswith(reason)
+    assert handoff.count("second option") == 1
+    assert f"- request_human_choice: Answer: {reply}" in handoff
+    assert "Question: Choose the delivery method Options: 1. Email result; 2. Local result" in handoff
+    assert not any(key in handoff for key in ('"reply":', '"questions":', '"status":', '"message":'))
+    persisted = _turn(advance, "turn-switched", TurnStatus.COMPLETED)
+    assert persisted.ota_records[-1]["action_result"]["results"][0]["tool_result"]["reason"] == handoff
+    messages = await GenerateThink().assemble_messages(advance, orchestration.context)
+    prompt = "\n".join(message.content for message in messages)
+    for expected in (reason, approved, "Where should the report go?", "Choose the delivery method", "Email result", "Local result", "second option"):
+        assert expected in handoff
+        assert expected in prompt
+    for excluded in ("PRIVATE VERIFY TRACE", "PRIVATE EXPLORE TRACE", "PRIVATE TOOL OUTPUT", "PRIVATE CONFIRMATION CARD", "PENDING CONFIRMATION", "FAILED CHOICE RESULT"):
+        assert excluded not in handoff
+        assert excluded not in prompt
+
+
+@pytest.mark.parametrize("context_size", [1_500, 19_500])
+async def test_switch_keeps_complete_prompt_and_distinct_decisions(orchestration: _Harness, context_size: int) -> None:
+    """Preserve prompt tails and deduplicate only identical contextual decisions."""
+    await _prepare_build(orchestration, "explore")
+    contexts = ["C" * context_size + suffix for suffix in (" Subject: file A.", " Subject: file B.")]
+    advance = _ota(
+        "Continue implementation",
+        _step("switch", {"mode": "build", "stage": "generate", "reason": "Implement the decisions."}),
+        BuildStageState(stage="explore"),
+    )
+    advance.ota_record[0].think_scope = {"mode": "build", "stage": "explore"}
+    choices = []
+    for prompt in contexts:
+        choice = _step("request_human_choice", "Proceed")
+        choice.tool_arguments = {
+            "prompt": prompt,
+            "questions": json.dumps([{"question": "Proceed?", "options": [{"label": "Proceed"}, {"label": "Cancel"}]}]),
+        }
+        choices.append(choice)
+    choices.append(choices[-1].model_copy(deep=True))
+    advance.ota_record.insert(0, OTARecord(
+        think_scope={"mode": "build", "stage": "explore"},
+        action_result=ActionResult(results=choices),
+    ))
+
+    await _apply(orchestration, advance)
+
+    handoff = _payload(advance, "switch")["reason"]
+    prompt = "\n".join(message.content for message in await GenerateThink().assemble_messages(advance, orchestration.context))
+    assert contexts[-1] in handoff and contexts[-1] in prompt
+    assert handoff.count(contexts[-1]) == 1
+    assert "[truncated;" not in handoff
+    if context_size == 1_500:
+        assert contexts[0] in handoff and handoff.count("- request_human_choice:") == 2
+    else:
+        assert contexts[0] not in handoff and handoff.count("- request_human_choice:") == 1
+        assert "Additional details omitted" in handoff

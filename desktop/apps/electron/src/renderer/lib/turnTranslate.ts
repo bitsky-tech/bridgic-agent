@@ -17,7 +17,7 @@
  * `cancelled`, and `error` are mutually exclusive terminal frames.
  */
 import { z } from 'zod'
-import type { AgentEvent, ThinkPosition, TurnEvent } from '@shared/types'
+import type { AgentEvent, PresentationTemplateCandidate, ThinkPosition, TurnEvent } from '@shared/types'
 import { TURN_EVENT } from '@shared/types'
 import { askUserQuestionSchema } from './askUserQuestionSchema'
 
@@ -117,6 +117,49 @@ const taskConfirmDataSchema = z.object({
   workflow_id: z.string().nullable().optional(),
   original_task_markdown: z.string().nullable().optional(),
 })
+const presentationOutlineConfirmDataSchema = z.object({ request_id: z.string() })
+const presentationTemplateSelectionDataSchema = z.object({ request_id: z.string() })
+const presentationTemplateCandidateDataSchema = z.object({
+  template_id: z.string(),
+  version: z.string(),
+  title: z.string(),
+  aspect_ratio: z.string().nullable().optional(),
+  slide_count: z.number().int().positive().nullable().optional(),
+  semantic_tags: z.array(z.string()).default([]),
+  strengths: z.array(z.string()).default([]),
+  colors: z.array(z.string()).default([]),
+  fonts: z.array(z.string()).default([]),
+  preview_paths: z.array(z.string()).default([]),
+  role_coverage: z.number().min(0).max(1).nullable().optional(),
+  agentic_fit: z.enum(['strong', 'usable', 'weak']).nullable().optional(),
+  agentic_reason: z.string().nullable().optional(),
+  agentic_use_for_roles: z.array(z.string()).default([]),
+  agentic_risks: z.array(z.string()).default([]),
+  structural_evidence: z.record(z.string(), z.unknown()).default({}),
+  materialize_ref: z.record(z.string(), z.unknown()).default({}),
+})
+
+function mapPresentationTemplateCandidate(candidate: z.infer<typeof presentationTemplateCandidateDataSchema>): PresentationTemplateCandidate {
+  return {
+    templateId: candidate.template_id,
+    version: candidate.version,
+    title: candidate.title,
+    ...(candidate.aspect_ratio !== undefined ? { aspectRatio: candidate.aspect_ratio } : {}),
+    ...(candidate.slide_count !== undefined ? { slideCount: candidate.slide_count } : {}),
+    semanticTags: candidate.semantic_tags,
+    strengths: candidate.strengths,
+    colors: candidate.colors,
+    fonts: candidate.fonts,
+    previewPaths: candidate.preview_paths,
+    ...(candidate.role_coverage !== undefined ? { roleCoverage: candidate.role_coverage } : {}),
+    ...(candidate.agentic_fit !== undefined ? { agenticFit: candidate.agentic_fit } : {}),
+    ...(candidate.agentic_reason !== undefined ? { agenticReason: candidate.agentic_reason } : {}),
+    agenticUseForRoles: candidate.agentic_use_for_roles,
+    agenticRisks: candidate.agentic_risks,
+    structuralEvidence: candidate.structural_evidence,
+    materializeRef: candidate.materialize_ref,
+  }
+}
 const workflowConfirmDataSchema = z.object({
   request_id: z.string(),
   default_name: z.string(),
@@ -179,9 +222,45 @@ const permissionRequestDataSchema = z.object({
 // Two-layer think position: `mode` (loop) is required; `stage` (unit) is nullable
 // because normal chat is presented as {mode:'normal', stage:null} on the wire.
 const stageDataSchema = z.object({
-  mode: z.enum(['build', 'normal', 'run_workflow']),
+  mode: z.enum(['build', 'normal', 'presentation', 'run_workflow']),
   stage: z.string().nullable().optional(),
   workflow_id: z.string().nullable().optional(),
+  presentation_goal: z.string().nullable().optional(),
+  presentation_step_index: z.number().int().nonnegative().optional(),
+  presentation_reports: z.array(z.object({
+    stage: z.string(),
+    step_id: z.string(),
+    summary: z.string(),
+    evidence: z.array(z.string()).default([]),
+  })).default([]),
+  presentation_sources: z.array(z.object({
+    id: z.string(),
+    kind: z.enum(['web', 'file', 'conversation']),
+    title: z.string(),
+    locator: z.string().nullable().optional(),
+    excerpt: z.string().nullable().optional(),
+    usage: z.string().nullable().optional(),
+  })).default([]),
+  presentation_outline: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    summary: z.string().nullable().optional(),
+    slides: z.array(z.object({
+      id: z.string(),
+      title: z.string(),
+      purpose: z.string().nullable().optional(),
+      key_message: z.string().nullable().optional(),
+      content_outline: z.array(z.string()).default([]),
+      source_ids: z.array(z.string()).default([]),
+    })).default([]),
+  })).default([]),
+  presentation_outline_confirmed: z.boolean().default(false),
+  presentation_outline_confirmation_id: z.string().nullable().optional(),
+  presentation_template_candidates: z.array(presentationTemplateCandidateDataSchema).optional(),
+  presentation_template_selection_id: z.string().nullable().optional(),
+  presentation_template_selection_status: z.enum(['idle', 'pending', 'selected', 'skipped']).optional(),
+  presentation_template_selection_error: z.string().nullable().optional(),
+  presentation_selected_template: presentationTemplateCandidateDataSchema.nullable().optional(),
 })
 const titleDataSchema = z.object({ title: z.string() })
 
@@ -445,6 +524,38 @@ export function translateTurnEvent(
       next = { ...next, sawContent: true }
       return { events, state: next }
     }
+    case TURN_EVENT.PresentationOutlineConfirmRequest: {
+      const r = presentationOutlineConfirmDataSchema.safeParse(frame.data)
+      if (!r.success) {
+        return {
+          events,
+          state: next,
+          warning: 'presentation_outline_confirm_request payload invalid — skipped',
+        }
+      }
+      events.push({
+        type: 'presentation_outline_confirm_request',
+        requestId: r.data.request_id,
+      })
+      next = { ...next, sawContent: true }
+      return { events, state: next }
+    }
+    case TURN_EVENT.PresentationTemplateSelectionRequest: {
+      const r = presentationTemplateSelectionDataSchema.safeParse(frame.data)
+      if (!r.success) {
+        return {
+          events,
+          state: next,
+          warning: 'presentation_template_selection_request payload invalid — skipped',
+        }
+      }
+      events.push({
+        type: 'presentation_template_selection_request',
+        requestId: r.data.request_id,
+      })
+      next = { ...next, sawContent: true }
+      return { events, state: next }
+    }
     case TURN_EVENT.PermissionRequest: {
       // The tool-permission gate: held ASK calls + their judgement `items`. Unlike
       // `human_request` this renders as an INLINE approval card (the reducer
@@ -488,6 +599,47 @@ export function translateTurnEvent(
         stage: r.data.stage ?? null,
       }
       if (r.data.workflow_id) position.workflowId = r.data.workflow_id
+      if (r.data.mode === 'presentation') {
+        position.presentationGoal = r.data.presentation_goal ?? null
+        position.presentationStepIndex = r.data.presentation_step_index ?? 0
+        position.presentationReports = r.data.presentation_reports.map(report => ({
+          stage: report.stage,
+          stepId: report.step_id,
+          summary: report.summary,
+          evidence: report.evidence,
+        }))
+        position.presentationSources = r.data.presentation_sources
+        position.presentationOutline = r.data.presentation_outline.map(chapter => ({
+          id: chapter.id,
+          title: chapter.title,
+          ...(chapter.summary !== undefined ? { summary: chapter.summary } : {}),
+          slides: chapter.slides.map(slide => ({
+            id: slide.id,
+            title: slide.title,
+            ...(slide.purpose !== undefined ? { purpose: slide.purpose } : {}),
+            ...(slide.key_message !== undefined ? { keyMessage: slide.key_message } : {}),
+            contentOutline: slide.content_outline,
+            sourceIds: slide.source_ids,
+          })),
+        }))
+        position.presentationOutlineConfirmed = r.data.presentation_outline_confirmed
+        position.presentationOutlineConfirmationId = r.data.presentation_outline_confirmation_id ?? null
+        if (
+          r.data.presentation_template_candidates !== undefined
+          || r.data.presentation_template_selection_id !== undefined
+          || r.data.presentation_template_selection_status !== undefined
+          || r.data.presentation_template_selection_error !== undefined
+          || r.data.presentation_selected_template !== undefined
+        ) {
+          position.presentationTemplateCandidates = (r.data.presentation_template_candidates ?? []).map(mapPresentationTemplateCandidate)
+          position.presentationTemplateSelectionId = r.data.presentation_template_selection_id ?? null
+          position.presentationTemplateSelectionStatus = r.data.presentation_template_selection_status ?? 'idle'
+          position.presentationTemplateSelectionError = r.data.presentation_template_selection_error ?? null
+          position.presentationSelectedTemplate = r.data.presentation_selected_template
+            ? mapPresentationTemplateCandidate(r.data.presentation_selected_template)
+            : null
+        }
+      }
       events.push({
         type: 'stage',
         position,

@@ -49,7 +49,7 @@ describe('sessionWorkbenchSurfaceAtom', () => {
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
   })
 
-  it('keeps all five tool selections isolated by viewed Session', () => {
+  it('keeps all six tool selections isolated by viewed Session', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
     store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
@@ -67,6 +67,13 @@ describe('sessionWorkbenchSurfaceAtom', () => {
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Schedules)
     store.set(activeSessionIdAtom, 'session-a')
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Browser)
+
+    store.set(activeSessionIdAtom, 'session-c')
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(activeSessionIdAtom, 'session-b')
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Schedules)
+    store.set(activeSessionIdAtom, 'session-c')
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
   })
 
   it('ignores writes while no Session is being viewed', () => {

@@ -15,7 +15,7 @@
  * Re-exported through `./types` so consumers keep importing from `@shared/types`.
  */
 
-import type { SubAgentMode } from '@app/shared/types'
+import type { PresentationTemplateCandidate, SubAgentMode } from '@app/shared/types'
 
 /** Single option inside an `AskUserQuestion`. */
 export interface AskUserQuestionOption {
@@ -89,7 +89,7 @@ export interface PermissionItem {
 
 /**
  * The turn's thinking position — the daemon's two-layer think loop laid bare.
- * `mode` is the loop: Build pipeline, saved Workflow run, or normal chat.
+ * `mode` is the loop: Build pipeline, presentation pipeline, saved Workflow run, or normal chat.
  * `stage` is the Build unit, Workflow Run unit, or Main unit; it is null on a clean
  * close frame. The Build focus rail remains active only for `mode === 'build'`.
  *
@@ -97,11 +97,56 @@ export interface PermissionItem {
  * `thinking_mode` (state rehydration on reload). Open `string` on `stage` because
  * display policy maps the units it knows.
  */
+export interface PresentationProgressReport {
+  stage: string
+  stepId: string
+  summary: string
+  evidence: string[]
+}
+
+export interface PresentationSourceCard {
+  id: string
+  kind: 'web' | 'file' | 'conversation'
+  title: string
+  locator?: string | null
+  excerpt?: string | null
+  usage?: string | null
+}
+
+export interface PresentationSlideOutline {
+  id: string
+  title: string
+  purpose?: string | null
+  keyMessage?: string | null
+  contentOutline: string[]
+  sourceIds: string[]
+}
+
+export interface PresentationChapterOutline {
+  id: string
+  title: string
+  summary?: string | null
+  slides: PresentationSlideOutline[]
+}
+
 export interface ThinkPosition {
-  mode: 'build' | 'normal' | 'run_workflow'
+  mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
   stage: string | null
   /** Present while Build is editing an existing saved Workflow. */
   workflowId?: string | null
+  /** Presentation-only durable cursor and completed production reports. */
+  presentationGoal?: string | null
+  presentationStepIndex?: number
+  presentationReports?: PresentationProgressReport[]
+  presentationSources?: PresentationSourceCard[]
+  presentationOutline?: PresentationChapterOutline[]
+  presentationOutlineConfirmed?: boolean
+  presentationOutlineConfirmationId?: string | null
+  presentationTemplateCandidates?: PresentationTemplateCandidate[]
+  presentationTemplateSelectionId?: string | null
+  presentationTemplateSelectionStatus?: 'idle' | 'pending' | 'selected' | 'skipped'
+  presentationTemplateSelectionError?: string | null
+  presentationSelectedTemplate?: PresentationTemplateCandidate | null
 }
 
 /** Session-level projection of one active saved Workflow run. */
@@ -195,6 +240,14 @@ export type AgentEvent =
       operation?: 'create' | 'edit'
       workflowId?: string | null
       originalTaskMarkdown?: string | null
+    }
+  | {
+      type: 'presentation_outline_confirm_request'
+      requestId: string
+    }
+  | {
+      type: 'presentation_template_selection_request'
+      requestId: string
     }
   | {
       type: 'workflow_confirm_request'

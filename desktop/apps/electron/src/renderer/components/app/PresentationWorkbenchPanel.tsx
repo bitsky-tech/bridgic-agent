@@ -1,0 +1,4773 @@
+import { presentationChartValueTicks, presentationChartHoleSize, presentationChartValue, presentationChartLineSegments, presentationLineLabelY, presentationPieLabels } from '@/lib/presentationCharts'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useTranslation } from 'react-i18next'
+import type {
+  Canvas as FabricCanvas,
+  FabricImage,
+  FabricObject,
+  Group as FabricGroup,
+  Point as FabricPoint,
+  TextStyle,
+} from 'fabric'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Grid2X2,
+  MessageSquareText,
+  MonitorPlay,
+  Play,
+  Rows3,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react'
+import {
+  createBlankPresentationSlide,
+  createPresentationId,
+  currentPresentationDocumentAtom,
+  currentPresentationWorkspaceAtom,
+  formatPresentationText,
+  getPresentationPageSize,
+  layoutPresentationVerticalText,
+  presentationAgentChangeAtom,
+  presentationExpandedAtom,
+  presentationSessionIdAtom,
+  presentationWorkspaceFamily,
+  stripPresentationTextFormatting,
+  type PresentationAnimationEffect,
+  type PresentationChartElement,
+  type PresentationComment,
+  type PresentationDocument,
+  type PresentationElement,
+  type PresentationFileSource,
+  type PresentationHyperlink,
+  type PresentationImageElement,
+  type PresentationMediaElement,
+  type PresentationMaster,
+  type PresentationPageSize,
+  type PresentationPageSizePreset,
+  type PresentationShapeElement,
+  type PresentationShapeType,
+  type PresentationSlide,
+  type PresentationSlideLayout,
+  type PresentationTableElement,
+  type PresentationTextElement,
+  type PresentationTransition,
+} from '@/atoms/presentation'
+import { setRightPanelCollapsedAtom } from '@/atoms/layout'
+import { requestExternalLinkAtom } from '@/atoms/external-link'
+import { showToastAtom } from '@/atoms/toast'
+import { Tooltip } from '@/components/amphi/Tooltip'
+import { cn } from '@/lib/cn'
+import { rlog } from '@/lib/logger'
+import { resizePresentationDocument } from '@/lib/presentationDesign'
+import {
+  buildPresentationAnimationPlaybackSteps,
+  getPresentationAnimationHiddenElementIds,
+  getPresentationAnimationDisplayStates,
+} from '@/lib/presentationAnimationPreview'
+import { buildPresentationTextRevealFrames } from '@/lib/presentationAgentTransition'
+import {
+  clearPresentationAnimation,
+  copyPresentationAnimationPatch,
+  hasPresentationAnimation,
+  normalizePresentationAnimation,
+  presentationAnimationLabelKeys,
+} from '@/lib/presentationAnimations'
+import {
+  clearPresentationCanvasPreservingSelection,
+  restorePresentationSelectionState,
+} from '@/lib/presentationCanvasSelection'
+import {
+  presentationRenderingFontFamily,
+  presentationScriptMetrics,
+  presentationTextDisplaySegments,
+  presentationTextParagraphs,
+  scalePresentationParagraphs,
+  PRESENTATION_TEXT_LINE_METRICS,
+  presentationTextFrame,
+  presentationTextStyleAt,
+  presentationParagraphTextStyle,
+  patchPresentationText,
+  shouldSplitPresentationTextByGrapheme,
+} from '@/lib/presentationText'
+import {
+  detachPresentationElementsOutsideGroups,
+  getPresentationAnimationOwner,
+  getPresentationAnimationTargets,
+  getPresentationElementBounds,
+  getPresentationElementGroup,
+  getPresentationSelectionElements,
+  getPresentationElementTargets,
+  isPresentationAnimationPatch,
+  removePresentationElements,
+  resolvePresentationCanvasSelectionScope,
+} from '@/lib/presentationGroups'
+import {
+  createPresentationChartElement,
+  createPresentationFooter,
+  createPresentationImageElement,
+  createPresentationMediaElement,
+  createPresentationTableElement,
+  createPresentationUrlHyperlink,
+  hasValidPresentationMediaSignature,
+  isPresentationChartElement,
+  isPresentationImageElement,
+  isPresentationMediaElement,
+  isPresentationShapeElement,
+  isPresentationTableElement,
+  isPresentationTextElement,
+  normalizePresentationFileSource,
+  supportsPresentationElementHyperlink,
+  supportsPresentationElementRotation,
+  supportsPresentationElementShadow,
+} from '@/lib/presentationInsert'
+import { normalizePresentationTransition } from '@/lib/presentationTransitions'
+import { createPresentationWorkspaceRuntime, type PresentationWorkspaceRuntime } from '@/lib/presentationWorkspaceRuntime'
+import { createOfficeEditorBinding, type OfficeEditorBinding, type OfficeEditorLease } from '@/lib/office/officeEditorBinding'
+import { bindPresentationNativeEdit, createPresentationEditorDriver, type PresentationEditingObject } from '@/lib/presentationEditorDriver'
+import {
+  getPresentationShapePath,
+  getPresentationShapeDefinition,
+  getPresentationShapeSize,
+  isPresentationLineShape,
+} from '@/lib/presentationShapes'
+import {
+  PresentationInsertDialogs,
+  type PresentationInsertDialogKind,
+  type PresentationInsertDialogValue,
+} from './PresentationInsertDialogs'
+import { OfficeAppHeader, OfficeDocumentTabs, OfficePanelControls } from './OfficeWorkbenchChrome'
+import { PresentationAnimationPlayer } from './PresentationAnimationPlayer'
+import {
+  PresentationRibbon,
+  type PresentationElementAlignment,
+  type PresentationRibbonTab,
+  type PresentationViewOptions,
+} from './PresentationRibbon'
+import {
+  getPresentationPieSlices,
+  presentationPieSlicePath,
+  getPresentationChartLayout,
+  getPresentationChartRange,
+  getPresentationChartValueRatio,
+  PresentationSlidePreview,
+} from './PresentationSlidePreview'
+import {
+  PresentationTransitionPlayer,
+  type PresentationTransitionPlaybackDirection,
+} from './PresentationTransitionPlayer'
+
+export interface PresentationWorkbenchPanelProps {
+  active: boolean
+  workspaceRuntime?: PresentationWorkspaceRuntime
+  onClose?: () => void
+  onExpandedChange?: (expanded: boolean) => void
+}
+
+interface SlideshowTransitionRun {
+  previousCompletedTargetIds: ReadonlySet<string>
+  direction: PresentationTransitionPlaybackDirection
+  fromIndex: number
+  runKey: number
+  toIndex: number
+}
+
+interface TransitionPreviewRun {
+  runKey: number
+  slideId: string
+  transition: PresentationTransition
+}
+
+interface AnimationPreviewRun {
+  elementIds?: string[]
+  runKey: number
+  slide: PresentationSlide
+  slideNumber: number
+}
+
+interface SlideshowTransitionView extends SlideshowTransitionRun {
+  currentSlide: PresentationSlide
+  previousSlide: PresentationSlide
+  transition: PresentationTransition
+}
+
+export const PRESENTATION_HISTORY_MAX_ENTRIES = 50
+export const PRESENTATION_HISTORY_MAX_BYTES = 192 * 1024 * 1024
+
+export interface PresentationHistoryEntry {
+  document: PresentationDocument
+  estimatedBytes: number
+}
+
+/** Estimate retained JS heap without serializing large embedded data URLs. */
+export function estimatePresentationDocumentBytes(document: PresentationDocument): number {
+  const seen = new Set<object>()
+  let bytes = 0
+
+  const visit = (value: unknown) => {
+    if (value === null || value === undefined) {
+      bytes += 4
+      return
+    }
+    if (typeof value === 'string') {
+      // UTF-16 is deliberately conservative; data URLs are ASCII but can still be
+      // promoted internally, and the budget should remain safe across runtimes.
+      bytes += value.length * 2
+      return
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      bytes += 8
+      return
+    }
+    if (typeof value !== 'object' || seen.has(value)) return
+    seen.add(value)
+    bytes += Array.isArray(value) ? 24 : 32
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item)
+      return
+    }
+    for (const [key, item] of Object.entries(value)) {
+      bytes += key.length * 2
+      visit(item)
+    }
+  }
+
+  visit(document)
+  return bytes
+}
+
+function cloneDocument(document: PresentationDocument): PresentationDocument {
+  // structuredClone would duplicate every Base64 payload for every undo step.
+  // Strip the immutable payloads while cloning the mutable model, then reattach
+  // the original strings by index so snapshots cannot mutate one another.
+  const payloadFreeSources = new WeakMap<PresentationFileSource, PresentationFileSource>()
+  const sourceWithoutPayload = (source: PresentationFileSource) => {
+    const existing = payloadFreeSources.get(source)
+    if (existing) return existing
+    const cloned = { ...source, dataUrl: '' }
+    payloadFreeSources.set(source, cloned)
+    return cloned
+  }
+  const payloads = document.slides.map((slide) => slide.elements.map((element) => (
+    isPresentationImageElement(element) || isPresentationMediaElement(element)
+      ? element.source.dataUrl
+      : null
+  )))
+  const payloadFreeDocument: PresentationDocument = {
+    ...document,
+    slides: document.slides.map((slide) => ({
+      ...slide,
+      elements: slide.elements.map((element) => (
+        isPresentationImageElement(element) || isPresentationMediaElement(element)
+          ? { ...element, source: sourceWithoutPayload(element.source) }
+          : element
+      )),
+    })),
+  }
+  const cloned = structuredClone(payloadFreeDocument)
+  cloned.slides.forEach((slide, slideIndex) => {
+    slide.elements.forEach((element, elementIndex) => {
+      const dataUrl = payloads[slideIndex]?.[elementIndex]
+      if (dataUrl !== null && dataUrl !== undefined && (
+        isPresentationImageElement(element) || isPresentationMediaElement(element)
+      )) {
+        element.source.dataUrl = dataUrl
+      }
+    })
+  })
+  return cloned
+}
+
+export function createPresentationHistoryEntry(document: PresentationDocument, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry | null {
+  const estimatedBytes = estimatePresentationDocumentBytes(document)
+  if (estimatedBytes > maxBytes) return null
+  return { document: cloneDocument(document), estimatedBytes }
+}
+
+export function canAppendPresentationFileElement(
+  document: PresentationDocument,
+  element: PresentationImageElement | PresentationMediaElement,
+  maxBytes = PRESENTATION_HISTORY_MAX_BYTES,
+): boolean {
+  const slide = document.slides.find((item) => item.id === document.selectedSlideId)
+  if (!slide) return false
+  const nextDocument = {
+    ...document,
+    slides: document.slides.map((item) => item.id === slide.id
+      ? { ...item, elements: [...item.elements, element] }
+      : item),
+  }
+  return estimatePresentationDocumentBytes(nextDocument) <= maxBytes
+}
+
+export function resolvePresentationNumberFieldValue(draft: string, min: number | undefined, fallback: number): number {
+  const parsed = draft.trim() ? Number(draft) : Number.NaN
+  if (!Number.isFinite(parsed)) return Math.round(fallback)
+  return Math.round(min === undefined ? parsed : Math.max(min, parsed))
+}
+
+/** Keep the newest contiguous history segment within both entry and byte limits. */
+export function trimPresentationHistoryEntries(entries: readonly PresentationHistoryEntry[], maxEntries = PRESENTATION_HISTORY_MAX_ENTRIES, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry[] {
+  const kept: PresentationHistoryEntry[] = []
+  let retainedBytes = 0
+  for (let index = entries.length - 1; index >= 0 && kept.length < Math.max(0, maxEntries); index -= 1) {
+    const entry = entries[index]!
+    if (entry.estimatedBytes > maxBytes - retainedBytes) break
+    kept.unshift(entry)
+    retainedBytes += entry.estimatedBytes
+  }
+  return kept
+}
+
+function trimPresentationHistoryPair(past: PresentationHistoryEntry[], future: PresentationHistoryEntry[]): void {
+  let entryCount = past.length + future.length
+  let retainedBytes = [...past, ...future].reduce((sum, entry) => sum + entry.estimatedBytes, 0)
+  while (entryCount > PRESENTATION_HISTORY_MAX_ENTRIES || retainedBytes > PRESENTATION_HISTORY_MAX_BYTES) {
+    // Prefer discarding the oldest undo state. Once none remain, discard the
+    // farthest redo state (future[0]); the nearest redo lives at the end.
+    const removed = past.length > 0 ? past.shift() : future.shift()
+    if (!removed) break
+    entryCount -= 1
+    retainedBytes -= removed.estimatedBytes
+  }
+}
+
+export function isPresentationRotationLocked(element: PresentationElement): boolean {
+  return !supportsPresentationElementRotation(element)
+}
+
+export type PresentationSlideshowKeyAction = 'close' | 'next' | 'previous' | null
+
+export function resolvePresentationSlideshowKeyAction(target: EventTarget | null, key: string): PresentationSlideshowKeyAction {
+  if (key === 'Escape') return 'close'
+  const element = target instanceof HTMLElement ? target : null
+  const mediaHasFocus = Boolean(element?.closest('audio, video'))
+  if (mediaHasFocus && (key === ' ' || key === 'ArrowLeft' || key === 'ArrowRight')) return null
+  if (key === ' ' && element?.closest('button, a, input, textarea, select')) return null
+  if (key === 'ArrowRight' || key === ' ') return 'next'
+  if (key === 'ArrowLeft') return 'previous'
+  return null
+}
+
+interface PresentationInsertDialogState {
+  kind: PresentationInsertDialogKind
+  elementId?: string
+}
+
+interface PresentationFileInsertionTarget {
+  documentId: string
+  generation: number
+  sessionId: string | null
+  slideId: string
+}
+
+const MAX_PRESENTATION_IMAGE_BYTES = 20 * 1024 * 1024
+const MAX_PRESENTATION_MEDIA_BYTES = 60 * 1024 * 1024
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('The selected file could not be encoded'))
+    }, { once: true })
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('The selected file could not be read')), { once: true })
+    reader.addEventListener('abort', () => reject(new Error('The selected file read was cancelled')), { once: true })
+    reader.readAsDataURL(file)
+  })
+}
+
+async function presentationImageSize(file: File): Promise<{ width: number; height: number } | null | undefined> {
+  // happy-dom and older runtimes do not expose createImageBitmap. In Chromium,
+  // a decode failure means the selected file is not a usable image and should
+  // not be committed to the document or exported as corrupt media.
+  if (typeof createImageBitmap !== 'function') return undefined
+  try {
+    const bitmap = await createImageBitmap(file)
+    const size = bitmap.width > 0 && bitmap.height > 0
+      ? { width: bitmap.width, height: bitmap.height }
+      : null
+    bitmap.close()
+    return size
+  } catch {
+    return null
+  }
+}
+
+async function presentationMediaCanLoad(file: File, type: PresentationMediaElement['type'], mimeType: string): Promise<boolean> {
+  const media = document.createElement(type)
+  if (!media.canPlayType(mimeType) || typeof URL.createObjectURL !== 'function') return false
+  const objectUrl = URL.createObjectURL(file)
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: boolean) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      media.removeEventListener('loadedmetadata', onLoaded)
+      media.removeEventListener('error', onError)
+      media.removeAttribute('src')
+      URL.revokeObjectURL(objectUrl)
+      resolve(result)
+    }
+    const onLoaded = () => finish(true)
+    const onError = () => finish(false)
+    const timeout = window.setTimeout(() => finish(false), 5_000)
+    media.addEventListener('loadedmetadata', onLoaded, { once: true })
+    media.addEventListener('error', onError, { once: true })
+    media.preload = 'metadata'
+    media.src = objectUrl
+    try {
+      media.load()
+    } catch {
+      finish(false)
+    }
+  })
+}
+
+type FabricModule = typeof import('fabric')
+
+const PRESENTATION_IMAGE_LOAD_TIMEOUT_MS = 8_000
+
+function fitFabricGroupToElement(group: FabricObject, element: PresentationElement): FabricObject {
+  group.set({
+    left: element.x,
+    top: element.y,
+    angle: isPresentationRotationLocked(element) ? 0 : element.rotation,
+    originX: 'left',
+    originY: 'top',
+    scaleX: element.width / Math.max(1, group.width ?? element.width),
+    scaleY: element.height / Math.max(1, group.height ?? element.height),
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
+  })
+  return group
+}
+
+interface PresentationMediaFabricView {
+  buttonCenter: FabricPoint
+  buttonHitRadius: number
+  pauseGlyphs: [FabricObject, FabricObject]
+  playGlyph: FabricObject
+  root: FabricGroup
+  videoFrame: FabricImage | null
+}
+
+const presentationMediaFabricViews = new WeakMap<FabricObject, PresentationMediaFabricView>()
+
+function createFixedMediaGroup(fabric: FabricModule, element: PresentationMediaElement, objects: FabricObject[]): FabricGroup {
+  const radius = element.type === 'audio'
+    ? Math.min(element.width, element.height) / 2
+    : Math.min(12, element.height * 0.08)
+  const [background, ...decorations] = objects
+  const group = new fabric.Group(background ? [background] : [], {
+    left: 0,
+    top: 0,
+    width: element.width,
+    height: element.height,
+    originX: 'left',
+    originY: 'top',
+    strokeWidth: 0,
+    lockSkewingX: true,
+    lockSkewingY: true,
+    layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+    clipPath: new fabric.Rect({
+      width: element.width,
+      height: element.height,
+      rx: radius,
+      ry: radius,
+      originX: 'center',
+      originY: 'center',
+    }),
+  })
+  if (decorations.length > 0) group.add(...decorations)
+  group.set({
+    left: element.x,
+    top: element.y,
+    angle: isPresentationRotationLocked(element) ? 0 : element.rotation,
+  })
+  group.setCoords()
+  return group
+}
+
+function createMediaPlaybackButton(
+  fabric: FabricModule,
+  centerX: number,
+  centerY: number,
+  size: number,
+  background: string,
+  foreground: string,
+): { objects: FabricObject[]; pauseGlyphs: [FabricObject, FabricObject]; playGlyph: FabricObject } {
+  const circle = new fabric.Circle({
+    left: centerX,
+    top: centerY,
+    radius: size / 2,
+    originX: 'center',
+    originY: 'center',
+    fill: background,
+    stroke: 'rgba(255,255,255,0.38)',
+    strokeWidth: 1,
+    selectable: false,
+    evented: false,
+  })
+  const playGlyph = new fabric.Triangle({
+    left: centerX + (size * 0.035),
+    top: centerY,
+    width: size * 0.32,
+    height: size * 0.36,
+    originX: 'center',
+    originY: 'center',
+    angle: 90,
+    fill: foreground,
+    strokeWidth: 0,
+    selectable: false,
+    evented: false,
+  })
+  const pauseWidth = Math.max(1.5, size * 0.105)
+  const pauseHeight = size * 0.34
+  const pauseOffset = size * 0.105
+  const createPauseGlyph = (offset: number) => new fabric.Rect({
+    left: centerX + offset,
+    top: centerY,
+    width: pauseWidth,
+    height: pauseHeight,
+    rx: pauseWidth / 2,
+    ry: pauseWidth / 2,
+    originX: 'center',
+    originY: 'center',
+    fill: foreground,
+    strokeWidth: 0,
+    visible: false,
+    selectable: false,
+    evented: false,
+  })
+  const pauseGlyphs: [FabricObject, FabricObject] = [
+    createPauseGlyph(-pauseOffset),
+    createPauseGlyph(pauseOffset),
+  ]
+  return { objects: [circle, playGlyph, ...pauseGlyphs], pauseGlyphs, playGlyph }
+}
+
+function createAudioFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  const width = element.width
+  const height = element.height
+  const buttonSize = Math.max(4, Math.min(48, Math.min(width, height) - 12))
+  const buttonCenterX = width / 2
+  const buttonCenterY = height / 2
+  const playbackButton = createMediaPlaybackButton(
+    fabric,
+    buttonCenterX,
+    buttonCenterY,
+    buttonSize,
+    '#705BE5',
+    '#FFFFFF',
+  )
+  const objects: FabricObject[] = [
+    new fabric.Rect({
+      left: 0.5,
+      top: 0.5,
+      width: Math.max(1, width - 1),
+      height: Math.max(1, height - 1),
+      originX: 'left',
+      originY: 'top',
+      rx: Math.min(width, height) / 2,
+      ry: Math.min(width, height) / 2,
+      fill: '#F4F1FF',
+      stroke: '#BEB4F1',
+      strokeWidth: 1,
+    }),
+    ...playbackButton.objects,
+  ]
+  const root = createFixedMediaGroup(fabric, element, objects)
+  presentationMediaFabricViews.set(root, {
+    buttonCenter: new fabric.Point(buttonCenterX - (width / 2), buttonCenterY - (height / 2)),
+    buttonHitRadius: Math.max(buttonSize / 2, 4),
+    pauseGlyphs: playbackButton.pauseGlyphs,
+    playGlyph: playbackButton.playGlyph,
+    root,
+    videoFrame: null,
+  })
+  return root
+}
+
+function createVideoFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  const width = element.width
+  const height = element.height
+  const radius = Math.min(12, height * 0.08)
+  const buttonSize = Math.max(4, Math.min(64, Math.min(width, height) * 0.2))
+  const playbackButton = createMediaPlaybackButton(
+    fabric,
+    width / 2,
+    height / 2,
+    buttonSize,
+    'rgba(16,17,25,0.68)',
+    '#FFFFFF',
+  )
+  const objects: FabricObject[] = [
+    new fabric.Rect({
+      left: 0,
+      top: 0,
+      width,
+      height,
+      originX: 'left',
+      originY: 'top',
+      rx: radius,
+      ry: radius,
+      fill: '#171923',
+      strokeWidth: 0,
+    }),
+    new fabric.Rect({
+      left: 0.5,
+      top: 0.5,
+      width: Math.max(1, width - 1),
+      height: Math.max(1, height - 1),
+      originX: 'left',
+      originY: 'top',
+      rx: radius,
+      ry: radius,
+      fill: 'rgba(0,0,0,0)',
+      stroke: 'rgba(132,112,237,0.72)',
+      strokeWidth: 1,
+    }),
+    ...playbackButton.objects,
+  ]
+  const root = createFixedMediaGroup(fabric, element, objects)
+  presentationMediaFabricViews.set(root, {
+    buttonCenter: new fabric.Point(0, 0),
+    buttonHitRadius: Math.max((buttonSize / 2) * 1.3, 4),
+    pauseGlyphs: playbackButton.pauseGlyphs,
+    playGlyph: playbackButton.playGlyph,
+    root,
+    videoFrame: null,
+  })
+  return root
+}
+
+export function createPresentationMediaFabricObject(fabric: FabricModule, element: PresentationMediaElement): FabricObject {
+  return element.type === 'audio'
+    ? createAudioFabricObject(fabric, element)
+    : createVideoFabricObject(fabric, element)
+}
+
+interface PresentationMediaRegistration {
+  element: PresentationMediaElement
+  object: FabricObject
+  view: PresentationMediaFabricView
+}
+
+interface PresentationMediaSession {
+  dispose: () => void
+  pause: () => void
+  start: () => void
+  toggle: () => Promise<void>
+}
+
+export interface PresentationMediaRuntime {
+  cursorFromCanvas: (object: FabricObject, scenePoint: FabricPoint) => 'pointer' | null
+  dispose: () => void
+  pause: (elementId: string) => void
+  pauseAll: () => void
+  prepare: (elementId: string) => void
+  register: (element: PresentationMediaElement, object: FabricObject) => void
+  releaseAll: () => void
+  reset: () => void
+  toggle: (elementId: string) => Promise<void>
+  toggleFromCanvas: (object: FabricObject, scenePoint: FabricPoint) => boolean
+}
+
+/** Runtime-only playback state for media drawn inside the Fabric canvas. */
+export function createPresentationMediaRuntime(fabric: FabricModule, canvas: FabricCanvas): PresentationMediaRuntime {
+  const registrations = new Map<string, PresentationMediaRegistration>()
+  const registrationIds = new WeakMap<FabricObject, string>()
+  const sessions = new Map<string, PresentationMediaSession>()
+  let runtimeDisposed = false
+
+  const setViewPlaying = (view: PresentationMediaFabricView, playing: boolean) => {
+    view.playGlyph.set({ visible: !playing })
+    for (const glyph of view.pauseGlyphs) glyph.set({ visible: playing })
+    view.root.dirty = true
+    if (view.root.canvas === canvas) canvas.requestRenderAll()
+  }
+
+  const pauseAllExcept = (elementId?: string) => {
+    for (const [id, session] of [...sessions]) {
+      if (id === elementId) continue
+      if (registrations.get(id)?.element.type === 'audio') {
+        sessions.delete(id)
+        session.dispose()
+      } else {
+        session.pause()
+      }
+    }
+  }
+
+  const disposeAll = () => {
+    for (const [id, session] of [...sessions]) {
+      sessions.delete(id)
+      session.dispose()
+    }
+  }
+
+  const createSession = (registration: PresentationMediaRegistration): PresentationMediaSession => {
+    const { element, view } = registration
+    const media = document.createElement(element.type)
+    let disposed = false
+    let playing = false
+    let starting = false
+    let playAttempt = 0
+    let videoFrameCallback: number | null = null
+    let animationFrame: number | null = null
+
+    const markVideoFrameDirty = () => {
+      if (disposed || view.root.canvas !== canvas) return
+      view.root.dirty = true
+      if (view.videoFrame) view.videoFrame.dirty = true
+      canvas.renderAll()
+    }
+
+    const cancelFrameRefresh = () => {
+      if (videoFrameCallback !== null && media instanceof HTMLVideoElement) {
+        media.cancelVideoFrameCallback(videoFrameCallback)
+        videoFrameCallback = null
+      }
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame)
+        animationFrame = null
+      }
+    }
+
+    const scheduleFrameRefresh = () => {
+      if (
+        disposed
+        || !(media instanceof HTMLVideoElement)
+        || media.paused
+        || media.ended
+        || videoFrameCallback !== null
+        || animationFrame !== null
+      ) return
+      if (typeof media.requestVideoFrameCallback === 'function') {
+        videoFrameCallback = media.requestVideoFrameCallback(() => {
+          videoFrameCallback = null
+          markVideoFrameDirty()
+          scheduleFrameRefresh()
+        })
+        return
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null
+        markVideoFrameDirty()
+        scheduleFrameRefresh()
+      })
+    }
+
+    const updatePlaying = (next: boolean) => {
+      playing = next
+      if (!next) starting = false
+      setViewPlaying(view, next)
+      if (next) scheduleFrameRefresh()
+      else cancelFrameRefresh()
+    }
+
+    const removeVideoFrame = () => {
+      const frame = view.videoFrame
+      if (!frame) return
+      view.videoFrame = null
+      if (frame.group === view.root) view.root.remove(frame)
+      frame.dispose()
+      view.root.dirty = true
+      if (view.root.canvas === canvas) canvas.requestRenderAll()
+    }
+
+    const attachVideoFrame = () => {
+      if (disposed || !(media instanceof HTMLVideoElement) || view.videoFrame) return
+      const sourceWidth = Math.max(0, media.videoWidth)
+      const sourceHeight = Math.max(0, media.videoHeight)
+      if (!sourceWidth || !sourceHeight) return
+      media.width = sourceWidth
+      media.height = sourceHeight
+      const frameWidth = registration.element.width
+      const frameHeight = registration.element.height
+      const scale = Math.max(frameWidth / sourceWidth, frameHeight / sourceHeight)
+      const cropWidth = frameWidth / scale
+      const cropHeight = frameHeight / scale
+      const frame = new fabric.FabricImage(media, {
+        left: 0,
+        top: 0,
+        width: cropWidth,
+        height: cropHeight,
+        cropX: Math.max(0, (sourceWidth - cropWidth) / 2),
+        cropY: Math.max(0, (sourceHeight - cropHeight) / 2),
+        scaleX: scale,
+        scaleY: scale,
+        originX: 'left',
+        originY: 'top',
+        selectable: false,
+        evented: false,
+        objectCaching: false,
+      })
+      view.videoFrame = frame
+      view.root.insertAt(1, frame)
+      frame.set({
+        left: -(frameWidth / 2),
+        top: -(frameHeight / 2),
+      })
+      frame.setCoords()
+      view.root.dirty = true
+      if (view.root.canvas === canvas) canvas.requestRenderAll()
+    }
+
+    const onPlay = () => {
+      if (!media.paused) updatePlaying(true)
+    }
+    const onPause = () => {
+      if (media.paused) updatePlaying(false)
+    }
+    const onEnded = () => updatePlaying(false)
+    const onLoadedData = () => attachVideoFrame()
+    const onSeeked = () => {
+      view.root.dirty = true
+      if (view.videoFrame) view.videoFrame.dirty = true
+      if (view.root.canvas === canvas) canvas.requestRenderAll()
+    }
+    let session: PresentationMediaSession
+    const onError = () => {
+      if (disposed) return
+      session.dispose()
+      if (sessions.get(element.id) === session) sessions.delete(element.id)
+    }
+
+    const dispose = () => {
+      if (disposed) return
+      disposed = true
+      playAttempt += 1
+      starting = false
+      playing = false
+      cancelFrameRefresh()
+      media.removeEventListener('play', onPlay)
+      media.removeEventListener('pause', onPause)
+      media.removeEventListener('ended', onEnded)
+      media.removeEventListener('error', onError)
+      media.removeEventListener('loadeddata', onLoadedData)
+      media.removeEventListener('seeked', onSeeked)
+      try {
+        media.pause()
+      } catch {
+        // The source may already have been detached by the browser.
+      }
+      media.removeAttribute('src')
+      try {
+        media.load()
+      } catch {
+        // A disposed media element does not need to be reloaded.
+      }
+      removeVideoFrame()
+      setViewPlaying(view, false)
+    }
+
+    const pause = () => {
+      if (disposed) return
+      playAttempt += 1
+      starting = false
+      try {
+        media.pause()
+      } finally {
+        updatePlaying(false)
+      }
+    }
+
+    const toggle = async () => {
+      if (disposed) return
+      if (playing || starting || !media.paused) {
+        pause()
+        return
+      }
+      const attempt = ++playAttempt
+      starting = true
+      setViewPlaying(view, true)
+      try {
+        await media.play()
+        if (disposed || attempt !== playAttempt) return
+        if (!media.paused) {
+          starting = false
+          updatePlaying(true)
+        } else {
+          updatePlaying(false)
+        }
+      } catch {
+        if (!disposed && attempt === playAttempt) updatePlaying(false)
+      }
+    }
+
+    const start = () => {
+      if (disposed) return
+      media.autoplay = false
+      media.controls = false
+      media.loop = element.loop
+      media.muted = element.muted
+      media.preload = element.type === 'video' ? 'auto' : 'metadata'
+      if (media instanceof HTMLVideoElement) media.playsInline = true
+      media.addEventListener('play', onPlay)
+      media.addEventListener('pause', onPause)
+      media.addEventListener('ended', onEnded)
+      media.addEventListener('error', onError)
+      media.addEventListener('loadeddata', onLoadedData)
+      media.addEventListener('seeked', onSeeked)
+      media.src = element.source.dataUrl
+      try {
+        media.load()
+      } catch {
+        onError()
+        return
+      }
+      if (media instanceof HTMLVideoElement && media.readyState >= 2) attachVideoFrame()
+    }
+
+    session = { dispose, pause, start, toggle }
+    return session
+  }
+
+  const ensureSession = (elementId: string): PresentationMediaSession | null => {
+    const existing = sessions.get(elementId)
+    if (existing) return existing
+    const registration = registrations.get(elementId)
+    if (!registration || runtimeDisposed) return null
+    const session = createSession(registration)
+    sessions.set(elementId, session)
+    session.start()
+    return sessions.get(elementId) === session ? session : null
+  }
+
+  const isPlaybackTarget = (object: FabricObject, scenePoint: FabricPoint) => {
+    const elementId = registrationIds.get(object)
+    const view = presentationMediaFabricViews.get(object)
+    if (!elementId || !view || !registrations.has(elementId)) return null
+    const localPoint = scenePoint.transform(fabric.util.invertTransform(object.calcTransformMatrix()))
+    const distance = Math.hypot(
+      localPoint.x - view.buttonCenter.x,
+      localPoint.y - view.buttonCenter.y,
+    )
+    return distance <= view.buttonHitRadius
+  }
+
+  const runtime: PresentationMediaRuntime = {
+    cursorFromCanvas(object, scenePoint) {
+      const playbackTarget = isPlaybackTarget(object, scenePoint)
+      return playbackTarget ? 'pointer' : null
+    },
+    dispose() {
+      if (runtimeDisposed) return
+      runtime.reset()
+      runtimeDisposed = true
+    },
+    pause(elementId) {
+      sessions.get(elementId)?.pause()
+    },
+    pauseAll() {
+      pauseAllExcept()
+    },
+    prepare(elementId) {
+      if (registrations.get(elementId)?.element.type === 'video') ensureSession(elementId)
+    },
+    register(element, object) {
+      if (runtimeDisposed) return
+      const view = presentationMediaFabricViews.get(object)
+      if (!view) return
+      sessions.get(element.id)?.dispose()
+      sessions.delete(element.id)
+      registrations.set(element.id, { element, object, view })
+      registrationIds.set(object, element.id)
+      setViewPlaying(view, false)
+    },
+    releaseAll() {
+      disposeAll()
+    },
+    reset() {
+      disposeAll()
+      registrations.clear()
+    },
+    async toggle(elementId) {
+      const session = ensureSession(elementId)
+      if (!session) return
+      pauseAllExcept(elementId)
+      await session.toggle()
+    },
+    toggleFromCanvas(object, scenePoint) {
+      const elementId = registrationIds.get(object)
+      if (!elementId || !isPlaybackTarget(object, scenePoint)) return false
+      void runtime.toggle(elementId)
+      return true
+    },
+  }
+
+  return runtime
+}
+
+function createFixedGraphicGroup(fabric: FabricModule, element: PresentationTableElement | PresentationChartElement, objects: FabricObject[], width = element.width, height = element.height): FabricGroup {
+  const frame = new fabric.Rect({ left: 0, top: 0, width, height, originX: 'left', originY: 'top', fill: 'transparent', strokeWidth: 0 })
+  const group = new fabric.Group([frame], {
+    left: 0, top: 0, width, height, originX: 'left', originY: 'top', strokeWidth: 0,
+    layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+    clipPath: new fabric.Rect({ width, height, originX: 'center', originY: 'center' }),
+    objectCaching: false,
+  })
+  // Labels must not change the chart/table frame or rescale its plotted geometry.
+  group.add(...objects)
+  group.set({ left: element.x, top: element.y, scaleX: element.width / width, scaleY: element.height / height,
+    flipX: element.flipHorizontal, flipY: element.flipVertical })
+  group.setCoords()
+  return group
+}
+
+function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
+  const rows = Math.max(1, element.cells.length)
+  const columns = Math.max(1, ...element.cells.map((row) => row.length))
+  const cellWidth = element.width / columns
+  const cellHeight = element.height / rows
+  const objects: FabricObject[] = []
+  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const header = element.headerRow && rowIndex === 0
+      objects.push(new fabric.Rect({
+        originX: 'left',
+        originY: 'top',
+        left: columnIndex * cellWidth,
+        top: rowIndex * cellHeight,
+        width: cellWidth - 1,
+        height: cellHeight - 1,
+        strokeWidth: 1,
+        fill: header ? element.headerFill : element.bodyFill,
+        stroke: element.borderColor,
+      }))
+      const text = new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
+        originX: 'left',
+        originY: 'center',
+        strokeWidth: 0,
+        left: (columnIndex * cellWidth) + 10,
+        top: (rowIndex + 0.5) * cellHeight,
+        width: Math.max(12, cellWidth - 20),
+        height: Math.max(12, cellHeight - 8),
+        fill: header ? element.headerTextColor ?? '#FFFFFF' : element.textColor,
+        fontFamily: presentationRenderingFontFamily('Aptos', element.cells[rowIndex]?.[columnIndex] ?? ''),
+        splitByGrapheme: shouldSplitPresentationTextByGrapheme(element.cells[rowIndex]?.[columnIndex] ?? ''),
+        fontSize: element.fontSize,
+        fontWeight: header ? 600 : 400,
+        textAlign: 'left',
+      })
+      const contentHeight = Math.max(0, cellHeight - 8)
+      // Clip each cell independently; overflowing text starts at the top of its own row.
+      text.set({
+        top: rowIndex * cellHeight + 4 + Math.max(contentHeight, text.height) / 2,
+        clipPath: new fabric.Rect({
+          width: Math.max(0, cellWidth - 20), height: contentHeight,
+          left: (cellWidth - 20 - text.width) / 2,
+          top: Math.min(0, (contentHeight - text.height) / 2),
+          originX: 'center', originY: 'center', strokeWidth: 0,
+        }),
+      })
+      objects.push(text)
+    }
+  }
+  return createFixedGraphicGroup(fabric, element, objects)
+}
+
+function createChartFabricObject(fabric: FabricModule, element: Extract<PresentationElement, { type: 'chart' }>): FabricObject {
+  const { layoutWidth, layoutHeight, plot } = getPresentationChartLayout(element)
+  const { x: plotX, y: plotY, width: plotWidth, height: plotHeight } = plot
+  const chartAreaFill = element.chartAreaFill ?? '#FFFFFF'
+  const plotAreaFill = element.plotAreaFill ?? 'transparent'
+  const categoryAxisLabelColor = element.categoryAxisLabelColor ?? '#666571'
+  const gridLineColor = element.gridLineColor ?? '#E9EAF0'
+  const dataLabelColor = element.dataLabelColor ?? '#20202B'
+  const objects: FabricObject[] = [new fabric.Rect({
+    originX: 'left',
+    originY: 'top',
+    left: 0,
+    top: 0,
+    width: layoutWidth - 1,
+    height: layoutHeight - 1,
+    fill: chartAreaFill,
+    stroke: chartAreaFill === 'transparent' ? 'transparent' : '#E3E4EA',
+    strokeWidth: 1,
+  })]
+  if (element.title) {
+    objects.push(new fabric.Textbox(element.title, {
+      originX: 'left',
+      originY: 'top',
+      strokeWidth: 0,
+      left: 36,
+      top: 10,
+      width: layoutWidth - 72,
+      height: 30,
+      fill: element.categoryAxisLabelColor ?? '#20202B',
+      fontFamily: 'Aptos Display',
+      fontSize: 20,
+      fontWeight: 600,
+      textAlign: 'center',
+    }))
+  }
+  objects.push(new fabric.Rect({
+    originX: 'left',
+    originY: 'top',
+    strokeWidth: 0,
+    left: plotX,
+    top: plotY,
+    width: plotWidth,
+    height: plotHeight,
+    fill: plotAreaFill,
+    stroke: 'transparent',
+  }))
+  if (element.chartType === 'pie' || element.chartType === 'doughnut') {
+    const slices = getPresentationPieSlices(element.series[0]?.values ?? [])
+    const radius = Math.max(8, Math.min(plotWidth, plotHeight) * 0.43)
+    const cx = plotX + plotWidth / 2
+    const cy = plotY + plotHeight / 2
+    const holeSize = element.chartType === 'doughnut' ? presentationChartHoleSize(element.holeSize) : 0
+    for (const { index, start, end } of slices) {
+      objects.push(new fabric.Path(presentationPieSlicePath(cx, cy, radius, start, end, radius * holeSize / 100), {
+        originX: 'left', originY: 'top',
+        fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
+        fillRule: 'evenodd', stroke: slices.length > 1 ? '#FFFFFF' : undefined,
+        strokeWidth: slices.length > 1 ? 2 : 0,
+      }))
+    }
+    for (const label of presentationPieLabels(element, slices, plot)) {
+      const originX = ({ middle: 'center', start: 'left', end: 'right' } as const)[label.anchor]
+      if (label.leader) objects.push(new fabric.Polyline(label.leader, {
+        fill: 'transparent', stroke: categoryAxisLabelColor, strokeWidth: 1,
+      }))
+      objects.push(new fabric.FabricText(label.text, {
+        left: label.x, top: label.y, originX,
+        originY: 'center', strokeWidth: 0, fontFamily: 'Aptos', fontSize: label.fontSize, fill: dataLabelColor,
+      }))
+    }
+  } else if (element.chartType === 'bar') {
+    const categoryCount = Math.max(1, element.categories.length)
+    const seriesCount = Math.max(1, element.series.length)
+    const range = getPresentationChartRange(element.series)
+    const valueX = (value: number) => plotX + (getPresentationChartValueRatio(value, range) * plotWidth)
+    const zeroX = valueX(0)
+    const groupHeight = plotHeight / categoryCount
+    const barHeight = Math.max(2, (groupHeight - 8) / seriesCount)
+    for (const tick of presentationChartValueTicks(range, plotWidth, true)) {
+      const x = plotX + plotWidth * tick.ratio
+      const originX = tick.ratio === 0 ? 'left' : 'center'
+      objects.push(new fabric.Line([x, plotY, x, plotY + plotHeight], { originX: 'left', originY: 'top', stroke: gridLineColor, strokeWidth: 1 }))
+      objects.push(new fabric.FabricText(tick.label, {
+        left: x, top: plotY + plotHeight + 14, originX: tick.ratio === 1 ? 'right' : originX,
+        originY: 'center', strokeWidth: 0, fontFamily: 'Aptos', fontSize: tick.fontSize, fill: element.valueAxisLabelColor ?? '#666571',
+      }))
+    }
+    objects.push(new fabric.Line([zeroX, plotY, zeroX, plotY + plotHeight], { originX: 'left', originY: 'top', stroke: '#AEB0BA', strokeWidth: 1.5 }))
+    element.categories.forEach((category, categoryIndex) => {
+      objects.push(new fabric.Textbox(category, {
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
+        left: 6,
+        top: plotY + (categoryIndex * groupHeight) + (groupHeight / 2) - 9,
+        width: plotX - 18,
+        height: 20,
+        fill: categoryAxisLabelColor,
+        fontFamily: 'Aptos',
+        fontSize: 12,
+        textAlign: 'right',
+      }))
+      element.series.forEach((series, seriesIndex) => {
+        const value = presentationChartValue(series.values[categoryIndex], element.displayBlanksAs)
+        if (value === null) return
+        const valuePosition = valueX(value)
+        objects.push(new fabric.Rect({
+          originX: 'left',
+          originY: 'top',
+          strokeWidth: 0,
+          left: Math.min(valuePosition, zeroX),
+          top: plotY + (categoryIndex * groupHeight) + 4 + (seriesIndex * barHeight),
+          width: Math.abs(valuePosition - zeroX),
+          height: Math.max(1, barHeight - 2),
+          rx: 2,
+          ry: 2,
+          fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+        }))
+        if (element.showValue) {
+          objects.push(new fabric.Textbox(String(value), {
+            originX: 'left',
+            originY: 'top',
+            strokeWidth: 0,
+            left: value >= 0 ? valuePosition + 4 : valuePosition - 38,
+            top: plotY + (categoryIndex * groupHeight) + 2 + (seriesIndex * barHeight),
+            width: 34,
+            height: Math.max(12, barHeight),
+            fill: dataLabelColor,
+            fontFamily: 'Aptos',
+            fontSize: 10,
+            textAlign: value >= 0 ? 'left' : 'right',
+          }))
+        }
+      })
+    })
+  } else {
+    const categoryCount = Math.max(1, element.categories.length)
+    const range = getPresentationChartRange(element.series)
+    const valueY = (value: number) => plotY + ((1 - getPresentationChartValueRatio(value, range)) * plotHeight)
+    const zeroY = valueY(0)
+    for (const tick of presentationChartValueTicks(range, plotHeight)) {
+      const y = plotY + plotHeight * (1 - tick.ratio)
+      objects.push(new fabric.Line([plotX, y, plotX + plotWidth, y], { originX: 'left', originY: 'top', stroke: gridLineColor, strokeWidth: 1 }))
+      objects.push(new fabric.FabricText(tick.label, {
+        left: plotX - 10, top: y, originX: 'right', originY: 'center', strokeWidth: 0,
+        fontFamily: 'Aptos', fontSize: tick.fontSize, fill: element.valueAxisLabelColor ?? '#666571',
+      }))
+    }
+    objects.push(new fabric.Line([plotX, zeroY, plotX + plotWidth, zeroY], { originX: 'left', originY: 'top', stroke: '#AEB0BA', strokeWidth: 1.5 }))
+    if (element.chartType === 'line') {
+      element.series.forEach((series, seriesIndex) => {
+        const color = element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9'
+        for (const points of presentationChartLineSegments(element, series, plot, valueY)) {
+          if (points.length > 1) objects.push(new fabric.Polyline(points, {
+            originX: 'left', originY: 'top', fill: 'transparent', stroke: color,
+            strokeWidth: 4, strokeLineCap: 'round', strokeLineJoin: 'round',
+          }))
+          for (const point of points) {
+            objects.push(new fabric.Circle({ left: point.x, top: point.y, radius: 4, fill: color,
+              originX: 'center', originY: 'center', strokeWidth: 0 }))
+            if (element.showValue) objects.push(new fabric.FabricText(String(point.value), {
+              left: point.x, top: presentationLineLabelY(point.y, plotY), originX: 'center', originY: 'center',
+              strokeWidth: 0, fontFamily: 'Aptos', fontSize: 12, fill: dataLabelColor,
+            }))
+          }
+        }
+      })
+    } else {
+      const groupWidth = plotWidth / categoryCount
+      const seriesCount = Math.max(1, element.series.length)
+      const gap = Math.min(8, groupWidth * 0.08)
+      const barWidth = Math.max(2, (groupWidth - (gap * 2)) / seriesCount)
+      element.categories.forEach((_, categoryIndex) => {
+        element.series.forEach((series, seriesIndex) => {
+          const value = presentationChartValue(series.values[categoryIndex], element.displayBlanksAs)
+          if (value === null) return
+          const valuePosition = valueY(value)
+          const height = Math.abs(valuePosition - zeroY)
+          objects.push(new fabric.Rect({
+            originX: 'left',
+            originY: 'top',
+            strokeWidth: 0,
+            left: plotX + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth),
+            top: Math.min(valuePosition, zeroY),
+            width: Math.max(1, barWidth - 2),
+            height,
+            rx: 2,
+            ry: 2,
+            fill: element.colors[seriesIndex % Math.max(1, element.colors.length)] ?? '#6957D9',
+          }))
+          if (element.showValue) {
+            objects.push(new fabric.Textbox(String(value), {
+              originX: 'left',
+              originY: 'top',
+              strokeWidth: 0,
+              left: plotX + (categoryIndex * groupWidth) + gap + (seriesIndex * barWidth) - 4,
+              top: value >= 0 ? valuePosition - 18 : valuePosition + 2,
+              width: barWidth + 6,
+              height: 16,
+              fill: dataLabelColor,
+              fontFamily: 'Aptos',
+              fontSize: 10,
+              textAlign: 'center',
+            }))
+          }
+        })
+      })
+    }
+    element.categories.forEach((category, categoryIndex) => {
+      objects.push(new fabric.Textbox(category, {
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
+        left: plotX + (categoryIndex * (plotWidth / categoryCount)),
+        top: plotY + plotHeight + 7,
+        width: plotWidth / categoryCount,
+        height: 20,
+        fill: categoryAxisLabelColor,
+        fontFamily: 'Aptos',
+        fontSize: 12,
+        textAlign: 'center',
+      }))
+    })
+  }
+  if (element.showLegend) {
+    const labels = element.chartType === 'pie' || element.chartType === 'doughnut'
+      ? element.categories
+      : element.series.map((series) => series.name)
+    const itemWidth = Math.min(150, layoutWidth / Math.max(1, labels.length))
+    const startX = (layoutWidth - (labels.length * itemWidth)) / 2
+    labels.forEach((label, index) => {
+      objects.push(new fabric.Rect({
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
+        left: startX + (index * itemWidth),
+        top: layoutHeight - 25,
+        width: 10,
+        height: 10,
+        rx: 2,
+        ry: 2,
+        fill: element.colors[index % Math.max(1, element.colors.length)] ?? '#6957D9',
+      }))
+      objects.push(new fabric.Textbox(label, {
+        originX: 'left',
+        originY: 'top',
+        strokeWidth: 0,
+        left: startX + (index * itemWidth) + 15,
+        top: layoutHeight - 29,
+        width: itemWidth - 18,
+        height: 18,
+        fill: categoryAxisLabelColor,
+        fontFamily: 'Aptos',
+        fontSize: 11,
+      }))
+    })
+  }
+  return createFixedGraphicGroup(fabric, element, objects, layoutWidth, layoutHeight)
+}
+
+function createShapeFabricObject(fabric: FabricModule, element: PresentationShapeElement): FabricObject {
+  const shadow = element.shadow
+    ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 })
+    : undefined
+  const frameShape = (shape: FabricObject) => {
+    const frame = new fabric.Rect({ left: 0, top: 0, width: element.width, height: element.height, originX: 'center', originY: 'center', fill: 'transparent', strokeWidth: 0 })
+    return new fabric.Group([frame, shape], {
+      left: element.x, top: element.y, width: element.width, height: element.height,
+      originX: 'left', originY: 'top', angle: element.rotation,
+      flipX: element.flipHorizontal, flipY: element.flipVertical,
+      opacity: element.opacity ?? 1, shadow, strokeWidth: 0,
+      // The fixed selection frame excludes centered strokes; do not clip paint to a frame-sized cache.
+      objectCaching: false,
+      layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+    })
+  }
+  const shapeStyle = { left: 0, top: 0, originX: 'center', originY: 'center',
+    fill: element.fill, stroke: element.borderColor, strokeWidth: element.borderWidth,
+  } as const
+  if (element.type === 'ellipse') {
+    return frameShape(new fabric.Ellipse({ ...shapeStyle, rx: element.width / 2, ry: element.height / 2 }))
+  }
+  if (element.type === 'rect' || element.type === 'roundRect') {
+    const radius = element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0
+    return frameShape(new fabric.Rect({ ...shapeStyle, width: element.width, height: element.height, rx: radius, ry: radius }))
+  }
+  const definition = getPresentationShapeDefinition(element.type)
+  const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
+  const path = new fabric.Path(getPresentationShapePath(element), {
+    originX: 'center',
+    originY: 'center',
+    fill: strokeOnly ? 'transparent' : element.fill,
+    fillRule: 'evenodd',
+    stroke: element.borderColor,
+    strokeWidth: strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth,
+    strokeLineCap: 'round',
+    strokeLineJoin: 'round',
+    strokeUniform: true,
+  })
+  // Preset paths use a 100 x 100 viewBox, even when their painted bounds are a thin line.
+  path.set({
+    left: (path.pathOffset.x - 50) * element.width / 100,
+    top: (path.pathOffset.y - 50) * element.height / 100,
+    scaleX: element.width / 100,
+    scaleY: element.height / 100,
+  })
+  return frameShape(path)
+}
+
+function createPresentationTextFabricOptions(fabric: FabricModule, element: PresentationTextElement, text: string) {
+  const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
+  return {
+    left: element.x + insets.left,
+    top: element.y + insets.top,
+    angle: element.rotation,
+    originX: 'left',
+    originY: 'top',
+    fill: element.hyperlink ? '#2563EB' : element.color,
+    fontFamily: presentationRenderingFontFamily(element.fontFamily, text),
+    fontSize: element.fontSize,
+    fontWeight: element.fontWeight,
+    fontStyle: element.italic ? 'italic' : 'normal',
+    lineHeight: element.lineHeight ?? 1.08,
+    textAlign: element.align,
+    underline: Boolean(element.underline || element.hyperlink),
+    linethrough: Boolean(element.strikethrough),
+    textBackgroundColor: element.highlightColor ?? '',
+    charSpacing: element.characterSpacing ?? 0,
+    padding: (element.indentLevel ?? 0) * 16,
+    opacity: element.opacity ?? 1,
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
+    shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.28)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
+    splitByGrapheme: shouldSplitPresentationTextByGrapheme(text, element.wordWrap !== false),
+  } as const
+}
+
+function presentationFabricRunStyle(fabric: FabricModule, element: PresentationTextElement, offset: number, style = presentationTextStyleAt(element, offset)) {
+  const color = element.hyperlink ? '#2563EB' : style.color ?? element.color
+  return {
+    ...presentationScriptMetrics(style),
+    fontFamily: presentationRenderingFontFamily(style.fontFamily ?? element.fontFamily, element.text),
+    fontWeight: style.fontWeight,
+    fontStyle: style.italic ? 'italic' as const : 'normal' as const,
+    fill: style.opacity === undefined ? color : new fabric.Color(color).setAlpha(style.opacity).toRgba(),
+    underline: Boolean(style.underline || element.hyperlink),
+    linethrough: Boolean(style.strikethrough),
+    textBackgroundColor: style.highlightColor ?? '',
+    presentationTracking: style.characterSpacing ?? 0,
+  }
+}
+
+function presentationTextObjectPosition(element: PresentationTextElement, width: number, height: number) {
+  const frame = presentationTextFrame(element)
+  let inlineOffset = 0
+  if (element.align === 'center') inlineOffset = Math.max(0, frame.width - width) / 2
+  else if (element.align === 'right') inlineOffset = Math.max(0, frame.width - width)
+  let blockOffset = 0
+  if (element.verticalAlign === 'middle') blockOffset = Math.max(0, frame.height - height) / 2
+  else if (element.verticalAlign === 'bottom') blockOffset = Math.max(0, frame.height - height)
+  const innerAngle = frame.rotation * Math.PI / 180
+  let centerX = frame.x + Math.cos(innerAngle) * (inlineOffset + width / 2) - Math.sin(innerAngle) * (blockOffset + height / 2)
+  let centerY = frame.y + Math.sin(innerAngle) * (inlineOffset + width / 2) + Math.cos(innerAngle) * (blockOffset + height / 2)
+  if (element.flipHorizontal) centerX = element.width - centerX
+  if (element.flipVertical) centerY = element.height - centerY
+  const angleOffset = (Boolean(element.flipHorizontal) !== Boolean(element.flipVertical) ? -1 : 1) * frame.rotation
+  const angle = (element.rotation + angleOffset) * Math.PI / 180
+  const outerAngle = element.rotation * Math.PI / 180
+  const left = element.x + Math.cos(outerAngle) * centerX - Math.sin(outerAngle) * centerY
+    - (Math.cos(angle) * width - Math.sin(angle) * height) / 2
+  const top = element.y + Math.sin(outerAngle) * centerX + Math.cos(outerAngle) * centerY
+    - (Math.sin(angle) * width + Math.cos(angle) * height) / 2
+  return { left, top, angleOffset }
+}
+
+const presentationTextObjectLayouts = new WeakMap<FabricObject, { width: number; angleOffset: number }>()
+
+/** Recover the authored frame after editing or transforming its rotated inner text object. */
+export function getPresentationTextFabricFramePatch(object: FabricObject, element: PresentationTextElement): Partial<PresentationTextElement> | null {
+  const layout = presentationTextObjectLayouts.get(object)
+  if (!layout) return null
+  const scaleX = object.scaleX ?? 1
+  const scaleY = object.scaleY ?? 1
+  const rotated = Math.abs(layout.angleOffset) === 90
+  const frameScaleX = rotated ? scaleY : scaleX
+  const frameScaleY = rotated ? scaleX : scaleY
+  const rotation = (object.angle ?? 0) - layout.angleOffset
+  const angle = rotation * Math.PI / 180
+  const widthChange = element.wordWrap === false ? 0 : object.width - layout.width
+  const frameWidth = element.width + (rotated ? 0 : widthChange)
+  const frameHeight = element.height + (rotated ? widthChange : 0)
+  const offset = presentationTextObjectPosition({ ...element, x: 0, y: 0, rotation: 0, width: frameWidth, height: frameHeight }, object.width, object.height)
+  return {
+    x: object.left - Math.cos(angle) * offset.left * frameScaleX + Math.sin(angle) * offset.top * frameScaleY,
+    y: object.top - Math.sin(angle) * offset.left * frameScaleX - Math.cos(angle) * offset.top * frameScaleY,
+    rotation,
+    width: Math.max(8, frameWidth * frameScaleX),
+    height: Math.max(8, frameHeight * frameScaleY),
+    ...(scaleY !== 1 ? { fontSize: element.fontSize * scaleY, paragraphs: scalePresentationParagraphs(element.paragraphs, scaleY), ...(element.lineSpacing ? { lineSpacing: element.lineSpacing * scaleY } : {}) } : {}),
+    ...(element.textInsets && (scaleX !== 1 || scaleY !== 1) ? { textInsets: {
+      left: element.textInsets.left * frameScaleX, right: element.textInsets.right * frameScaleX,
+      top: element.textInsets.top * frameScaleY, bottom: element.textInsets.bottom * frameScaleY,
+    } } : {}),
+  }
+}
+
+/** Lay out an editable text object inside its authored frame before applying frame transforms. */
+export function createPresentationTextFabricObject(fabric: FabricModule, element: PresentationTextElement, onTextEdit: (object: FabricObject) => void = () => undefined) {
+  const frame = presentationTextFrame(element)
+  const segments = presentationTextDisplaySegments(element)
+  const text = segments.map(segment => segment.text).join('')
+  const styles: TextStyle = {}
+  let line = 0
+  let character = 0
+  for (const segment of segments) {
+    let offset = segment.start
+    for (const glyph of fabric.Text.prototype.graphemeSplit(segment.text)) {
+      if (glyph === '\n') { line++; character = 0 }
+      else {
+        styles[line] ??= {}
+        styles[line]![character++] = presentationFabricRunStyle(fabric, element, offset, segment.style)
+      }
+      if (segment.end > segment.start) offset += glyph.length
+    }
+  }
+  let paragraphLine = 0
+  for (const paragraph of presentationTextParagraphs(element)) {
+    if (!paragraph.text) styles[paragraphLine] = { 0: presentationFabricRunStyle(fabric, element, paragraph.start, presentationParagraphTextStyle(element, paragraph)) }
+    paragraphLine += paragraph.text.split('\n').length
+  }
+  const options = { ...createPresentationTextFabricOptions(fabric, element, text), styles,
+    _fontSizeMult: PRESENTATION_TEXT_LINE_METRICS.height, _fontSizeFraction: PRESENTATION_TEXT_LINE_METRICS.descent,
+  }
+  const textbox = (() => {
+    if (element.wordWrap === false) {
+      const object = new fabric.IText(text, options)
+      object.on('editing:exited', () => onTextEdit(object))
+      return object
+    }
+    const object = new fabric.Textbox(text, { ...options, width: frame.width })
+    object.on('editing:exited', () => onTextEdit(object))
+    return object
+  })()
+  if (segments.some(segment => segment.style.characterSpacing)) {
+    // Fabric exposes tracking at object level; measure each run with its own font-size-relative tracking.
+    const getGraphemeBox = textbox._getGraphemeBox.bind(textbox)
+    let measuringSpacing = 0
+    textbox.charSpacing = 1
+    textbox._getWidthOfCharSpacing = () => measuringSpacing
+    textbox._getGraphemeBox = (...args) => {
+      const style = textbox._getStyleDeclaration(args[1], args[2]) as { presentationTracking?: number }
+      const fontSize = textbox.getValueOfPropertyAt(args[1], args[2], 'fontSize')
+      measuringSpacing = (style.presentationTracking ?? 0) * fontSize / 1_000
+      try { return getGraphemeBox(...args) } finally { measuringSpacing = 0 }
+    }
+    textbox.initDimensions()
+  }
+  if (element.paragraphs?.length || element.lineSpacing || element.lineHeight || element.textRuns?.length) {
+    let paragraphs = presentationTextParagraphs(element)
+    let logicalParagraphs = paragraphs.flatMap(paragraph => paragraph.text.split('\n').map(() => paragraph))
+    const paragraphAt = (index: number) => {
+      const logicalLine = textbox instanceof fabric.Textbox ? textbox._styleMap[index]?.line ?? index : index
+      return logicalParagraphs[logicalLine] ?? paragraphs[paragraphs.length - 1]!
+    }
+    if (textbox instanceof fabric.Textbox) {
+      const wrapLine = textbox._wrapLine.bind(textbox)
+      textbox._wrapLine = (lineIndex, desiredWidth, data, reservedSpace) => (
+        wrapLine(lineIndex, Math.max(1, desiredWidth - (logicalParagraphs[lineIndex]?.style.indentLevel ?? 0) * 16), data, reservedSpace)
+      )
+    }
+    const shouldJustify = (index: number) => paragraphAt(index).style.align === 'justify' && !textbox.isEndOfWrapping(index)
+    textbox.enlargeSpaces = () => {
+      for (let index = 0; index < textbox.textLines.length; index++) {
+        const line = textbox._textLines[index]!
+        const spaces = line.filter(glyph => /[ \t]/.test(glyph)).length
+        const remaining = textbox.width - (paragraphAt(index).style.indentLevel ?? 0) * 16 - textbox.getLineWidth(index)
+        if (!shouldJustify(index) || !spaces || remaining <= 0) continue
+        let shift = 0
+        for (let character = 0; character <= line.length; character++) {
+          const bound = textbox.__charBounds[index]![character]!
+          bound.left += shift
+          if (character < line.length && /[ \t]/.test(line[character]!)) {
+            bound.width += remaining / spaces
+            bound.kernedWidth += remaining / spaces
+            shift += remaining / spaces
+          }
+        }
+      }
+    }
+    const renderChars = textbox._renderChars.bind(textbox)
+    textbox._renderChars = (...args) => {
+      const align = textbox.textAlign
+      textbox.textAlign = shouldJustify(args[5]) ? 'justify' : paragraphAt(args[5]).style.align ?? align
+      try { renderChars(...args) } finally { textbox.textAlign = align }
+    }
+    const naturalLineHeight = textbox.getHeightOfLine.bind(textbox)
+    const baselineOffset = (index: number) => naturalLineHeight(index) / textbox.lineHeight * (1 - textbox._fontSizeFraction)
+    textbox.getHeightOfLine = (index: number) => {
+      const paragraph = paragraphAt(index)
+      const next = index + 1 < textbox.textLines.length ? paragraphAt(index + 1) : undefined
+      const natural = naturalLineHeight(index) / textbox.lineHeight
+      const ratio = paragraph.style.lineHeight ?? 1.08
+      // Proportional leading is shared by adjacent line boxes, including differently sized runs.
+      const proportional = next === paragraph
+        ? natural + (ratio - 1) * (natural + naturalLineHeight(index + 1) / textbox.lineHeight) / 2
+        : natural * ratio
+      const advance = paragraph.style.lineSpacing
+        ? paragraph.style.lineSpacing + (next ? baselineOffset(index) - baselineOffset(index + 1) : 0)
+        : proportional
+      return advance + (next && next !== paragraph ? (paragraph.style.spaceAfter ?? 0) + (next.style.spaceBefore ?? 0) : 0)
+    }
+    const naturalHeight = textbox.calcTextHeight.bind(textbox)
+    textbox.calcTextHeight = () => naturalHeight() + (paragraphs[0]!.style.spaceBefore ?? 0) + (paragraphs[paragraphs.length - 1]!.style.spaceAfter ?? 0)
+    const naturalTop = textbox._getTopOffset.bind(textbox)
+    textbox._getTopOffset = () => naturalTop() + (paragraphs[0]!.style.spaceBefore ?? 0)
+    const naturalLeft = textbox._getLineLeftOffset.bind(textbox)
+    textbox._getLineLeftOffset = (index: number) => {
+      const align = textbox.textAlign
+      const paragraph = paragraphAt(index)
+      const width = textbox.width
+      const indent = (paragraph.style.indentLevel ?? 0) * 16
+      textbox.textAlign = paragraph.style.align ?? element.align
+      textbox.width = Math.max(1, width - indent)
+      try { return naturalLeft(index) + indent } finally { textbox.textAlign = align; textbox.width = width }
+    }
+    const initDimensions = textbox.initDimensions.bind(textbox)
+    let measuredText = textbox.text
+    textbox.initDimensions = () => {
+      if (textbox.text !== measuredText) {
+        const text = stripPresentationTextFormatting(textbox.text, element)
+        paragraphs = presentationTextParagraphs(patchPresentationText(element, { text }))
+        logicalParagraphs = paragraphs.flatMap(paragraph => paragraph.text.split('\n').map(() => paragraph))
+        measuredText = textbox.text
+      }
+      const align = textbox.textAlign
+      textbox.textAlign = 'left'
+      try {
+        initDimensions()
+        if (element.wordWrap === false && element.paragraphs?.length) textbox.width = frame.width
+        textbox.enlargeSpaces()
+      } finally { textbox.textAlign = align }
+    }
+    textbox.initDimensions()
+  }
+  const { left, top, angleOffset } = presentationTextObjectPosition(element, textbox.width, textbox.height)
+  textbox.set({ left, top, angle: element.rotation + angleOffset })
+  presentationTextObjectLayouts.set(textbox, { width: textbox.width, angleOffset })
+  return textbox
+}
+
+/** Compose PowerPoint vertical text in Fabric's center-based group coordinate plane. */
+export function createPresentationVerticalTextFabricObject(fabric: FabricModule, element: PresentationTextElement): FabricGroup {
+  const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
+  const layout = layoutPresentationVerticalText(element)
+  const textOptions = createPresentationTextFabricOptions(fabric, element, formatPresentationText(element))
+  const frame = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width: element.width,
+    height: element.height,
+    originX: 'center',
+    originY: 'center',
+    fill: 'rgba(0,0,0,0)',
+    strokeWidth: 0,
+  })
+  const glyphs = layout.columns.flatMap((column, columnIndex) => {
+    const columnLeft = insets.left + layout.columnOffsets[columnIndex]!
+    const columnHeight = layout.columnHeights[columnIndex]!
+    const availableHeight = Math.max(0, element.height - insets.top - insets.bottom - columnHeight)
+    let alignmentOffset = 0
+    if (element.verticalAlign === 'bottom') alignmentOffset = availableHeight
+    else if (element.verticalAlign === 'middle') alignmentOffset = availableHeight / 2
+    return Array.from(column).map((glyph, rowIndex) => new fabric.Text(glyph, {
+      ...textOptions,
+      ...presentationFabricRunStyle(fabric, element, layout.sourceOffsets[columnIndex]![rowIndex]!, layout.glyphStyles[columnIndex]![rowIndex]!),
+      left: columnLeft - (element.width / 2),
+      top: insets.top + alignmentOffset + layout.rowOffsets[columnIndex]![rowIndex]! - (element.height / 2),
+      angle: 0,
+      lineHeight: 1,
+      opacity: 1,
+      padding: 0,
+      flipX: false,
+      flipY: false,
+      originX: 'left',
+      originY: 'top',
+    }))
+  })
+  const group = new fabric.Group([frame, ...glyphs], {
+    left: element.x,
+    top: element.y,
+    width: element.width,
+    height: element.height,
+    angle: element.rotation,
+    originX: 'left',
+    originY: 'top',
+    opacity: element.opacity ?? 1,
+    flipX: element.flipHorizontal,
+    flipY: element.flipVertical,
+    strokeWidth: 0,
+    lockSkewingX: true,
+    lockSkewingY: true,
+    layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
+  })
+  group.setCoords()
+  return group
+}
+
+export function createPresentationImageFabricClipPath(fabric: FabricModule, element: PresentationImageElement): FabricObject | undefined {
+  if (element.clipShape !== 'ellipse') return undefined
+  return new fabric.Ellipse({
+    left: 0,
+    top: 0,
+    originX: 'center',
+    originY: 'center',
+    rx: element.width / 2,
+    ry: element.height / 2,
+  })
+}
+
+export async function createPresentationFabricObject(
+  fabric: FabricModule,
+  element: PresentationElement,
+  onTextEdit: (object: FabricObject) => void,
+): Promise<FabricObject> {
+  if (isPresentationTextElement(element)) {
+    if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') {
+      return createPresentationVerticalTextFabricObject(fabric, element)
+    }
+    return createPresentationTextFabricObject(fabric, element, onTextEdit)
+  }
+  if (isPresentationShapeElement(element)) return createShapeFabricObject(fabric, element)
+  if (isPresentationImageElement(element)) {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), PRESENTATION_IMAGE_LOAD_TIMEOUT_MS)
+    try {
+      const image = await fabric.FabricImage.fromURL(element.source.dataUrl, { signal: controller.signal })
+      const naturalWidth = Math.max(1, image.width ?? element.width)
+      const naturalHeight = Math.max(1, image.height ?? element.height)
+      const frame = new fabric.Rect({
+        left: 0,
+        top: 0,
+        width: element.width,
+        height: element.height,
+        fill: 'rgba(0,0,0,0)',
+        strokeWidth: 0,
+      })
+      const crop = element.crop
+      const visibleWidth = crop ? Math.max(0.001, 1 - crop.left - crop.right) : 1
+      const visibleHeight = crop ? Math.max(0.001, 1 - crop.top - crop.bottom) : 1
+      if (crop) {
+        const cropWidth = naturalWidth * visibleWidth
+        const cropHeight = naturalHeight * visibleHeight
+        image.set({
+          left: 0,
+          top: 0,
+          width: cropWidth,
+          height: cropHeight,
+          cropX: naturalWidth * crop.left,
+          cropY: naturalHeight * crop.top,
+          scaleX: element.width / cropWidth,
+          scaleY: element.height / cropHeight,
+        })
+      } else if (element.fit === 'cover') {
+        const scale = Math.max(element.width / naturalWidth, element.height / naturalHeight)
+        const cropWidth = element.width / scale
+        const cropHeight = element.height / scale
+        image.set({
+          left: 0,
+          top: 0,
+          width: cropWidth,
+          height: cropHeight,
+          cropX: Math.max(0, (naturalWidth - cropWidth) / 2),
+          cropY: Math.max(0, (naturalHeight - cropHeight) / 2),
+          scaleX: scale,
+          scaleY: scale,
+        })
+      } else {
+        const scale = Math.min(element.width / naturalWidth, element.height / naturalHeight)
+        image.set({
+          left: (element.width - (naturalWidth * scale)) / 2,
+          top: (element.height - (naturalHeight * scale)) / 2,
+          scaleX: scale,
+          scaleY: scale,
+        })
+      }
+      const group = fitFabricGroupToElement(new fabric.Group([frame, image]), element)
+      group.set({
+        clipPath: createPresentationImageFabricClipPath(fabric, element),
+        opacity: element.opacity ?? 1,
+        shadow: element.shadow ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 }) : undefined,
+      })
+      return group
+    } catch {
+      const fallback: PresentationMediaElement = {
+        ...element,
+        type: 'video',
+        autoplay: false,
+        loop: false,
+        muted: true,
+      }
+      return createPresentationMediaFabricObject(fabric, fallback)
+    } finally {
+      window.clearTimeout(timeout)
+    }
+  }
+  if (isPresentationMediaElement(element)) return createPresentationMediaFabricObject(fabric, element)
+  if (isPresentationTableElement(element)) return createTableFabricObject(fabric, element)
+  if (isPresentationChartElement(element)) return createChartFabricObject(fabric, element)
+  throw new Error(`Unsupported presentation element: ${(element as { type?: string }).type ?? 'unknown'}`)
+}
+
+function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlide, slideNumber: number, pageSize: PresentationPageSize): FabricObject[] {
+  if (!slide.footer) return []
+  const objects: FabricObject[] = []
+  const style = {
+    fill: '#666571',
+    fontFamily: 'Aptos',
+    fontSize: 12,
+    selectable: false,
+    evented: false,
+    originX: 'left' as const,
+    originY: 'top' as const,
+  }
+  const footerTop = pageSize.height - 34
+  if (slide.footer.text) objects.push(new fabric.Text(slide.footer.text, { ...style, left: 32, top: footerTop }))
+  if (slide.footer.showDate) {
+    objects.push(new fabric.Text(new Intl.DateTimeFormat().format(new Date()), {
+      ...style,
+      left: pageSize.width / 2,
+      top: footerTop,
+      originX: 'center',
+    }))
+  }
+  if (slide.footer.showSlideNumber) {
+    objects.push(new fabric.Text(String(slideNumber), {
+      ...style,
+      left: pageSize.width - 32,
+      top: footerTop,
+      originX: 'right',
+    }))
+  }
+  return objects
+}
+
+/** A focused PowerPoint-style editor embedded in the Session workbench. */
+export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, workspaceRuntime }: PresentationWorkbenchPanelProps) {
+  const { t } = useTranslation()
+  const sessionId = useAtomValue(presentationSessionIdAtom)
+  const agentChange = useAtomValue(presentationAgentChangeAtom)
+  const workspace = useAtomValue(currentPresentationWorkspaceAtom)
+  const document = useAtomValue(currentPresentationDocumentAtom)
+  const store = useStore()
+  const presentationRuntime = useMemo(() => {
+    if (workspaceRuntime) return workspaceRuntime
+    const workspaceAtom = presentationWorkspaceFamily(sessionId ?? '')
+    return createPresentationWorkspaceRuntime({
+      sessionId: sessionId ?? '',
+      read: () => store.get(workspaceAtom),
+      write: (next) => store.set(workspaceAtom, next),
+    })
+  }, [sessionId, store, workspaceRuntime])
+  useEffect(() => store.sub(presentationWorkspaceFamily(sessionId ?? ''), () => {
+    presentationRuntime.runtime.publish()
+  }), [presentationRuntime, sessionId, store])
+  const pageSize = getPresentationPageSize(document)
+  const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
+  const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
+  const requestExternalLink = useSetAtom(requestExternalLinkAtom)
+  const showToast = useSetAtom(showToastAtom)
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const [canvasGeneration, setCanvasGeneration] = useState(0)
+  const [canvasScale, setCanvasScale] = useState(0.4)
+  const [compact, setCompact] = useState(true)
+  const [ribbonCollapsed, setRibbonCollapsed] = useState(false)
+  const [viewOptions, setViewOptions] = useState<PresentationViewOptions>({
+    gridlines: false,
+    guides: false,
+    notes: true,
+    ruler: false,
+    smartSnap: true,
+  })
+  const [animationMarkersHidden, setAnimationMarkersHidden] = useState(false)
+  const [filmstripCollapsed, setFilmstripCollapsed] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [inspectorMode, setInspectorMode] = useState<'animation' | 'comments' | 'layers' | 'properties'>('properties')
+  const [ribbonTab, setRibbonTab] = useState<PresentationRibbonTab>('home')
+  const [slideshowOpen, setSlideshowOpen] = useState(false)
+  const [slideshowIndex, setSlideshowIndex] = useState(0)
+  const [slideshowTransition, setSlideshowTransition] = useState<SlideshowTransitionRun | null>(null)
+  const [animationPreviewRun, setAnimationPreviewRun] = useState<AnimationPreviewRun | null>(null)
+  const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
+  const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
+  const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
+  const [masterDialogOpen, setMasterDialogOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const canvasElementRef = useRef<HTMLCanvasElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
+  const canvasRef = useRef<FabricCanvas | null>(null)
+  const fabricModuleRef = useRef<typeof import('fabric') | null>(null)
+  const mediaRuntimeRef = useRef<PresentationMediaRuntime | null>(null)
+  const objectIdsRef = useRef(new WeakMap<FabricObject, string>())
+  const documentRef = useRef(document)
+  const editorBindingRef = useRef<OfficeEditorBinding<PresentationDocument> | null>(null)
+  const nativeCommitRef = useRef<(next: PresentationDocument) => void>(() => undefined)
+  const flushNativeEditRef = useRef<(() => void) | null>(null)
+  const pendingCanvasEditRef = useRef<(() => void) | null>(null)
+  const pageSizeRef = useRef(pageSize)
+  const viewOptionsRef = useRef(viewOptions)
+  const selectedElementIdRef = useRef<string | null>(null)
+  const isolatedElementIdRef = useRef<string | null>(null)
+  const activeGroupIdRef = useRef<string | null>(null)
+  const drillIntoElementOnClickRef = useRef(false)
+  const pointerDownSelectionContextRef = useRef<{ groupId: string | null, isolatedId: string | null }>({
+    groupId: null,
+    isolatedId: null,
+  })
+  const suppressCanvasSelectionRef = useRef(false)
+  const canvasSelectionFrameRef = useRef<number | null>(null)
+  const pastRef = useRef<PresentationHistoryEntry[]>([])
+  const futureRef = useRef<PresentationHistoryEntry[]>([])
+  const animationRunIdRef = useRef(0)
+  const transitionRunIdRef = useRef(0)
+  const consumedAgentChangeIdRef = useRef(0)
+  const fileInsertionTargetRef = useRef<PresentationFileInsertionTarget>({
+    documentId: document.id,
+    generation: 0,
+    sessionId,
+    slideId: document.selectedSlideId,
+  })
+
+  const currentSlide = document.slides.find((slide) => slide.id === document.selectedSlideId)
+    ?? document.slides[0]
+  const selectedElement = currentSlide?.elements.find((element) => (
+    element.id === selectedElementId
+  )) ?? null
+  const selectedAnimationElement = currentSlide && selectedElement
+    ? getPresentationAnimationOwner(currentSlide.elements, selectedElement)
+    : null
+  const selectedAnimationTargetElements = currentSlide && selectedElement
+    ? getPresentationElementGroup(currentSlide.elements, selectedElement)
+    : []
+  const selectedText = selectedElement && isPresentationTextElement(selectedElement) ? selectedElement : null
+
+  const commitDocument = useCallback((next: PresentationDocument, recordHistory = true) => {
+    const current = documentRef.current
+    let versionedNext: PresentationDocument
+    try {
+      versionedNext = presentationRuntime.commitDocument(current, next)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (recordHistory) {
+      const entry = createPresentationHistoryEntry(current)
+      // An oversized state is an undo barrier. Keeping older entries would make
+      // Undo skip the latest change and restore an unrelated document state.
+      pastRef.current = entry
+        ? trimPresentationHistoryEntries([...pastRef.current, entry])
+        : []
+      futureRef.current = []
+    }
+    documentRef.current = versionedNext
+    setHistoryStatus({
+      canUndo: pastRef.current.length > 0,
+      canRedo: futureRef.current.length > 0,
+    })
+  }, [presentationRuntime, showToast])
+
+  const replaceCurrentSlide = useCallback((nextSlide: PresentationSlide) => {
+    const current = documentRef.current
+    commitDocument({
+      ...current,
+      slides: current.slides.map((slide) => slide.id === nextSlide.id ? nextSlide : slide),
+    })
+  }, [commitDocument])
+
+  const addPresentationComment = useCallback((text: string) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide || !text.trim()) return
+    const comment: PresentationComment = {
+      author: t('session.presentation.commentAuthorYou'),
+      createdAt: new Date().toISOString(),
+      ...(selectedElementIdRef.current ? { elementId: selectedElementIdRef.current } : {}),
+      id: createPresentationId('comment'),
+      resolved: false,
+      text: text.trim(),
+    }
+    replaceCurrentSlide({ ...slide, comments: [...(slide.comments ?? []), comment] })
+  }, [replaceCurrentSlide, t])
+
+  const updatePresentationComment = useCallback((commentId: string, patch: Partial<PresentationComment>) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    replaceCurrentSlide({
+      ...slide,
+      comments: (slide.comments ?? []).flatMap((comment) => (
+        comment.id === commentId && patch.text === '' ? [] : [{ ...comment, ...patch }]
+      )),
+    })
+  }, [replaceCurrentSlide])
+
+  const applyPresentationMaster = useCallback((master: PresentationMaster) => {
+    const current = documentRef.current
+    commitDocument({
+      ...current,
+      master,
+      slides: current.slides.map((slide) => ({
+        ...slide,
+        background: master.background,
+        footer: { ...master.footer },
+        elements: slide.elements.map((element): PresentationElement => (
+          isPresentationTextElement(element)
+            ? patchPresentationText(element, {
+                fontFamily: element.fontWeight >= 600 || element.fontSize >= 30
+                  ? master.titleFontFamily
+                  : master.bodyFontFamily,
+              })
+            : element
+        )),
+      })),
+    })
+    setMasterDialogOpen(false)
+  }, [commitDocument, setMasterDialogOpen])
+
+  const applyPresentationTheme = useCallback((background: string, colors: readonly string[]) => {
+    const current = documentRef.current
+    const normalized = background.replace('#', '')
+    const red = Number.parseInt(normalized.slice(0, 2), 16)
+    const green = Number.parseInt(normalized.slice(2, 4), 16)
+    const blue = Number.parseInt(normalized.slice(4, 6), 16)
+    const dark = Number.isFinite(red + green + blue) && ((red * 299) + (green * 587) + (blue * 114)) / 1_000 < 140
+    const primaryText = dark ? '#FFFFFF' : '#1D1D28'
+    const secondaryText = dark ? '#C7C8D8' : '#666571'
+    commitDocument({
+      ...current,
+      master: { ...current.master, accentColors: [...colors], background },
+      slides: current.slides.map((slide) => ({
+        ...slide,
+        background,
+        elements: slide.elements.map((element, index): PresentationElement => {
+          if (isPresentationTextElement(element)) {
+            return patchPresentationText(element, { color: element.fontWeight >= 600 || element.fontSize >= 30 ? primaryText : secondaryText })
+          }
+          if (isPresentationShapeElement(element) && element.fill !== 'transparent') {
+            const accent = colors[index % colors.length] ?? element.fill
+            return { ...element, fill: accent, borderColor: accent }
+          }
+          return element
+        }),
+      })),
+    })
+  }, [commitDocument])
+
+  const patchElement = useCallback((elementId: string, patch: Partial<PresentationElement>) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const selected = slide.elements.find((element) => element.id === elementId)
+    const animationPatch = isPresentationAnimationPatch(patch)
+    const target = selected && animationPatch
+      ? getPresentationAnimationOwner(slide.elements, selected)
+      : selected
+    if (!target) return
+    const groupedIds = animationPatch
+      ? new Set(getPresentationElementGroup(slide.elements, target).map((element) => element.id))
+      : null
+    const nextElements = slide.elements.map((element): PresentationElement => {
+      if (element.id === target.id) return isPresentationTextElement(element)
+        ? patchPresentationText(element, patch as Partial<PresentationTextElement>)
+        : { ...element, ...patch } as PresentationElement
+      if (groupedIds?.has(element.id)) return clearPresentationAnimation(element)
+      return element
+    })
+    replaceCurrentSlide({ ...slide, elements: nextElements })
+  }, [replaceCurrentSlide])
+
+  const syncFabricObjectsRef = useRef<(objects: readonly FabricObject[], detachMovedMembers?: boolean, lease?: OfficeEditorLease) => void>(() => undefined)
+  const syncFabricObjects = useCallback((objects: readonly FabricObject[], detachMovedMembers = false, lease = editorBindingRef.current?.capture()) => {
+    const binding = editorBindingRef.current
+    if (!binding || !lease?.isCurrent()) return
+    const current = documentRef.current
+    if (current.id !== lease.identity.documentId) return
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const patches = new Map<string, Partial<PresentationElement>>()
+    for (const object of objects) {
+      const elementId = objectIdsRef.current.get(object)
+      if (!elementId) continue
+      const element = slide.elements.find((item) => item.id === elementId)
+      if (!element) continue
+      const scaleX = object.scaleX ?? 1
+      const scaleY = object.scaleY ?? 1
+      const patch: Partial<PresentationElement> = {
+        x: Math.round(object.left),
+        y: Math.round(object.top),
+        width: Math.max(8, Math.round((object.width ?? 0) * scaleX)),
+        height: Math.max(8, Math.round((object.height ?? 0) * scaleY)),
+        ...(isPresentationRotationLocked(element) ? {} : { rotation: Math.round(object.angle ?? 0) }),
+      }
+      if ('text' in object && typeof object.text === 'string') {
+        if (isPresentationTextElement(element)) {
+          Object.assign(patch, getPresentationTextFabricFramePatch(object, element))
+        }
+        const text = element.type === 'text'
+          ? stripPresentationTextFormatting(object.text, element)
+          : object.text
+        Object.assign(patch, { text })
+      }
+      patches.set(elementId, patch)
+    }
+    if (patches.size === 0) return
+    const nextElements = slide.elements.map((element) => {
+        const patch = patches.get(element.id)
+        if (!patch) return element
+        return isPresentationTextElement(element)
+          ? patchPresentationText(element, patch as Partial<PresentationTextElement>)
+          : { ...element, ...patch } as PresentationElement
+      })
+    const nextSlide = {
+      ...slide,
+      elements: detachMovedMembers
+        ? detachPresentationElementsOutsideGroups(slide.elements, nextElements, new Set(patches.keys()))
+        : nextElements,
+    }
+    binding.publishChange({ ...current, slides: current.slides.map((item) => item.id === slide.id ? nextSlide : item) }, lease)
+  }, [])
+
+  const syncFabricObjectRef = useRef<(object: FabricObject, lease?: OfficeEditorLease) => void>(() => undefined)
+  const syncFabricObject = useCallback((object: FabricObject, lease?: OfficeEditorLease) => syncFabricObjects([object], false, lease), [syncFabricObjects])
+
+  useLayoutEffect(() => {
+    documentRef.current = document
+    editorBindingRef.current?.bindDocument(document.id)
+    const previous = fileInsertionTargetRef.current
+    const targetChanged = previous.sessionId !== sessionId
+      || previous.documentId !== document.id
+      || previous.slideId !== document.selectedSlideId
+    fileInsertionTargetRef.current = {
+      documentId: document.id,
+      generation: targetChanged ? previous.generation + 1 : previous.generation,
+      sessionId,
+      slideId: document.selectedSlideId,
+    }
+  }, [document, sessionId])
+
+  useLayoutEffect(() => { nativeCommitRef.current = commitDocument }, [commitDocument])
+
+  useEffect(() => () => {
+    fileInsertionTargetRef.current = {
+      ...fileInsertionTargetRef.current,
+      generation: fileInsertionTargetRef.current.generation + 1,
+    }
+  }, [])
+
+  useEffect(() => {
+    selectedElementIdRef.current = selectedElementId
+  }, [selectedElementId])
+
+  useEffect(() => {
+    viewOptionsRef.current = viewOptions
+  }, [viewOptions])
+
+  useEffect(() => {
+    pageSizeRef.current = pageSize
+  }, [pageSize])
+
+  useEffect(() => {
+    syncFabricObjectsRef.current = syncFabricObjects
+    syncFabricObjectRef.current = syncFabricObject
+  }, [syncFabricObject, syncFabricObjects])
+
+  useEffect(() => {
+    pastRef.current = []
+    futureRef.current = []
+    isolatedElementIdRef.current = null
+    selectedElementIdRef.current = null
+    const timer = window.setTimeout(() => {
+      setSlideshowOpen(false)
+      setSlideshowTransition(null)
+      setAnimationPreviewRun(null)
+      setTransitionPreviewRun(null)
+      setInsertDialog(null)
+      setSelectedElementId(null)
+      setHistoryStatus({ canUndo: false, canRedo: false })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [document.id, sessionId])
+
+  useEffect(() => {
+    if (active) return
+    const timer = window.setTimeout(() => {
+      setSlideshowOpen(false)
+      setSlideshowTransition(null)
+      setAnimationPreviewRun(null)
+      setTransitionPreviewRun(null)
+      setInsertDialog(null)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [active])
+
+  useEffect(() => {
+    const mediaRuntime = mediaRuntimeRef.current
+    if (!mediaRuntime) return
+    if (!active || slideshowOpen || transitionPreviewRun || animationPreviewRun) {
+      mediaRuntime.releaseAll()
+      return
+    }
+    const elementId = selectedElementIdRef.current
+    if (elementId) mediaRuntime.prepare(elementId)
+  }, [active, animationPreviewRun, slideshowOpen, transitionPreviewRun])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      setCompact(entry.contentRect.width < 1120)
+    })
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (!active) return
+    const stage = stageRef.current
+    if (!stage || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const widthScale = Math.max(0.1, (entry.contentRect.width - 32) / pageSize.width)
+      const heightScale = Math.max(0.1, (entry.contentRect.height - 32) / pageSize.height)
+      setCanvasScale(Math.min(widthScale, heightScale, 1))
+    })
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [active, compact, expanded, pageSize.height, pageSize.width])
+
+  const activateFabricElement = useCallback((elementId: string, scope: 'group' | 'element' = 'group') => {
+    const canvas = canvasRef.current
+    const fabric = fabricModuleRef.current
+    if (!canvas || !fabric) return
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const element = slide?.elements.find((item) => item.id === elementId)
+    if (!slide || !element) return
+    // Programmatic selection restoration must also restore React state. Fabric's
+    // canvas.clear() emits selection:cleared while a changed slide is rebuilt;
+    // without this assignment the visual selection returns but the Ribbon stays
+    // disabled because selectedElementId was left as null.
+    restorePresentationSelectionState(elementId, selectedElementIdRef, setSelectedElementId)
+    const group = getPresentationElementGroup(slide.elements, element)
+    const groupedIds = new Set((scope === 'element' ? [element] : group).map((member) => member.id))
+    const activeGroupId = scope === 'group' && group.length > 1 ? element.groupId ?? null : null
+    const objects = canvas.getObjects().filter((object) => {
+      const objectId = objectIdsRef.current.get(object)
+      return Boolean(objectId && groupedIds.has(objectId))
+    })
+    if (objects.length === 0) return
+
+    const activeObject = canvas.getActiveObject()
+    if (objects.length === 1 && activeObject === objects[0]) {
+      isolatedElementIdRef.current = scope === 'element' ? elementId : null
+      activeGroupIdRef.current = activeGroupId
+      return
+    }
+    if (objects.length > 1 && activeObject instanceof fabric.ActiveSelection) {
+      const activeIds = new Set(activeObject.getObjects().map((object) => objectIdsRef.current.get(object)))
+      if (activeIds.size === groupedIds.size && [...groupedIds].every((id) => activeIds.has(id))) {
+        isolatedElementIdRef.current = null
+        activeGroupIdRef.current = activeGroupId
+        return
+      }
+    }
+
+    suppressCanvasSelectionRef.current = true
+    try {
+      canvas.discardActiveObject()
+      if (objects.length === 1) {
+        canvas.setActiveObject(objects[0]!)
+      } else {
+        const selection = new fabric.ActiveSelection(objects, {
+          canvas,
+          multiSelectionStacking: 'canvas-stacking',
+          subTargetCheck: true,
+        })
+        selection.set({
+          borderColor: '#6957D9',
+          cornerColor: '#FFFFFF',
+          cornerStrokeColor: '#6957D9',
+          cornerStyle: 'circle',
+          cornerSize: 11,
+          transparentCorners: false,
+        })
+        objectIdsRef.current.set(selection, elementId)
+        canvas.setActiveObject(selection)
+      }
+    } finally {
+      suppressCanvasSelectionRef.current = false
+    }
+    isolatedElementIdRef.current = scope === 'element' ? elementId : null
+    activeGroupIdRef.current = activeGroupId
+    canvas.requestRenderAll()
+  }, [])
+
+  useEffect(() => {
+    if (!active || !canvasElementRef.current) return
+    const binding = createOfficeEditorBinding<PresentationDocument>({
+      appKind: 'presentation', sessionId: sessionId ?? '', documentId: documentRef.current.id,
+      onChange: (next, identity) => {
+        if (identity.documentId !== presentationRuntime.runtime.getSnapshot().activeDocumentId) return
+        nativeCommitRef.current(next)
+      },
+    })
+    editorBindingRef.current = binding
+    let unregisterEditor: (() => void) | undefined
+    void import('fabric').then((fabric) => {
+      if (binding.getStatus() === 'disposed' || !canvasElementRef.current) return
+      const canvas = new fabric.Canvas(canvasElementRef.current, {
+        width: pageSizeRef.current.width,
+        height: pageSizeRef.current.height,
+        preserveObjectStacking: true,
+        selection: false,
+        selectionColor: 'rgba(105, 87, 217, 0.12)',
+        selectionBorderColor: '#6957D9',
+      })
+      fabricModuleRef.current = fabric
+      canvasRef.current = canvas
+      const mediaRuntime = createPresentationMediaRuntime(fabric, canvas)
+      mediaRuntimeRef.current = mediaRuntime
+      const selectCanvasObject = (selected?: FabricObject) => {
+        if (suppressCanvasSelectionRef.current) return
+        const elementId = selected ? objectIdsRef.current.get(selected) ?? null : null
+        mediaRuntime.pauseAll()
+        if (elementId) mediaRuntime.prepare(elementId)
+        selectedElementIdRef.current = elementId
+        setSelectedElementId(elementId)
+        if (!elementId) {
+          isolatedElementIdRef.current = null
+          activeGroupIdRef.current = null
+        }
+      }
+      canvas.on('selection:created', (event) => selectCanvasObject(event.selected?.[0]))
+      canvas.on('selection:updated', (event) => selectCanvasObject(event.selected?.[0]))
+      canvas.on('selection:cleared', () => selectCanvasObject())
+      canvas.on('object:moving', (event) => {
+        mediaRuntime.pauseAll()
+        const object = event.target
+        if (!object || !viewOptionsRef.current.smartSnap) return
+        const objectWidth = (object.width ?? 0) * (object.scaleX ?? 1)
+        const objectHeight = (object.height ?? 0) * (object.scaleY ?? 1)
+        const threshold = 8
+        const gridSize = 10
+        let left = Math.round(object.left / gridSize) * gridSize
+        let top = Math.round(object.top / gridSize) * gridSize
+        const centerX = object.left + (objectWidth / 2)
+        const centerY = object.top + (objectHeight / 2)
+        const currentPageSize = pageSizeRef.current
+        if (Math.abs(centerX - (currentPageSize.width / 2)) <= threshold) {
+          left = (currentPageSize.width - objectWidth) / 2
+        }
+        if (Math.abs(centerY - (currentPageSize.height / 2)) <= threshold) {
+          top = (currentPageSize.height - objectHeight) / 2
+        }
+        object.set({ left, top })
+      })
+      canvas.on('object:scaling', () => mediaRuntime.pauseAll())
+      canvas.on('mouse:down:before', () => {
+        if (suppressCanvasSelectionRef.current) return
+        pointerDownSelectionContextRef.current = {
+          groupId: activeGroupIdRef.current,
+          isolatedId: isolatedElementIdRef.current,
+        }
+        drillIntoElementOnClickRef.current = false
+      })
+      canvas.on('mouse:down', (event) => {
+        if (suppressCanvasSelectionRef.current) return
+        const selected = [...(event.subTargets ?? [])].reverse().find((object) => objectIdsRef.current.has(object))
+          ?? event.target
+        const elementId = selected ? objectIdsRef.current.get(selected) : undefined
+        if (!elementId) return
+        const current = documentRef.current
+        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const element = slide?.elements.find((item) => item.id === elementId)
+        const selectionContext = pointerDownSelectionContextRef.current
+        drillIntoElementOnClickRef.current = Boolean(
+          element && resolvePresentationCanvasSelectionScope(element, selectionContext) === 'element',
+        )
+        selectedElementIdRef.current = elementId
+        setSelectedElementId(elementId)
+      })
+      canvas.on('mouse:move', (event) => {
+        if (!event.target) return
+        const cursor = mediaRuntime.cursorFromCanvas(event.target, event.scenePoint)
+        if (cursor) canvas.setCursor(cursor)
+      })
+      canvas.on('mouse:up', (event) => {
+        if (!event.isClick || !event.target) {
+          drillIntoElementOnClickRef.current = false
+          return
+        }
+        mediaRuntime.toggleFromCanvas(event.target, event.scenePoint)
+        const selected = [...(event.subTargets ?? [])].reverse().find((object) => objectIdsRef.current.has(object))
+          ?? event.target
+        const elementId = selected ? objectIdsRef.current.get(selected) : undefined
+        if (!elementId) {
+          drillIntoElementOnClickRef.current = false
+          return
+        }
+        const scope = drillIntoElementOnClickRef.current ? 'element' : 'group'
+        drillIntoElementOnClickRef.current = false
+        if (canvasSelectionFrameRef.current !== null) window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+        canvasSelectionFrameRef.current = window.requestAnimationFrame(() => {
+          canvasSelectionFrameRef.current = null
+          if (canvasRef.current !== canvas) return
+          selectedElementIdRef.current = elementId
+          setSelectedElementId(elementId)
+          activateFabricElement(elementId, scope)
+        })
+      })
+      canvas.on('object:modified', (event) => {
+        if (!event.target) return
+        if (event.target instanceof fabric.ActiveSelection) {
+          const selection = event.target
+          const objects = [...selection.getObjects()]
+          const lease = binding.capture()
+          const slideId = documentRef.current.selectedSlideId
+          if (canvasSelectionFrameRef.current !== null) window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+          const commitSelection = bindPresentationNativeEdit(lease, slideId, () => documentRef.current, () => {
+            if (canvasRef.current !== canvas) return
+            suppressCanvasSelectionRef.current = true
+            try {
+              if (canvas.getActiveObject() === selection) canvas.discardActiveObject()
+            } finally {
+              suppressCanvasSelectionRef.current = false
+            }
+            isolatedElementIdRef.current = null
+            activeGroupIdRef.current = null
+            syncFabricObjectsRef.current(objects, false, lease)
+          })
+          pendingCanvasEditRef.current = commitSelection
+          canvasSelectionFrameRef.current = window.requestAnimationFrame(() => {
+            canvasSelectionFrameRef.current = null
+            if (pendingCanvasEditRef.current !== commitSelection) return
+            pendingCanvasEditRef.current = null
+            commitSelection()
+          })
+          return
+        }
+        syncFabricObjectsRef.current([event.target], true)
+      })
+      canvas.on('mouse:dblclick', (event) => {
+        const selected = [...(event.subTargets ?? [])].reverse().find((object) => objectIdsRef.current.has(object))
+          ?? event.target
+        const elementId = selected ? objectIdsRef.current.get(selected) : undefined
+        if (!elementId) return
+        const current = documentRef.current
+        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const element = slide?.elements.find((item) => item.id === elementId)
+        if (!element) return
+        setSelectedElementId(element.id)
+        selectedElementIdRef.current = element.id
+        if (isPresentationTextElement(element) && selected) {
+          if (canvasSelectionFrameRef.current !== null) window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+          canvasSelectionFrameRef.current = window.requestAnimationFrame(() => {
+            canvasSelectionFrameRef.current = null
+            if (canvasRef.current !== canvas) return
+            activateFabricElement(element.id, 'element')
+            const editable = canvas.getActiveObject() as FabricObject & { enterEditing?: () => void }
+            editable.enterEditing?.()
+            canvas.requestRenderAll()
+          })
+          return
+        }
+        if (!isPresentationTableElement(element) && !isPresentationChartElement(element)) return
+        setInsertDialog({ kind: element.type, elementId: element.id })
+      })
+      const driver = createPresentationEditorDriver({
+        readSnapshot: () => store.get(presentationWorkspaceFamily(sessionId ?? '')).documents
+          .find((item) => item.id === binding.capture().identity.documentId) ?? null,
+        readEditingObject: () => canvas.getActiveObject() as (FabricObject & PresentationEditingObject) | null,
+        flushPendingEdit: () => {
+          const pending = pendingCanvasEditRef.current
+          if (!pending) return
+          pendingCanvasEditRef.current = null
+          if (canvasSelectionFrameRef.current !== null) {
+            window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+            canvasSelectionFrameRef.current = null
+          }
+          pending()
+        },
+        dispose: () => {
+          if (canvasRef.current === canvas) {
+            canvasRef.current = null
+            fabricModuleRef.current = null
+            flushNativeEditRef.current = null
+            pendingCanvasEditRef.current = null
+            if (canvasSelectionFrameRef.current !== null) {
+              window.cancelAnimationFrame(canvasSelectionFrameRef.current)
+              canvasSelectionFrameRef.current = null
+            }
+            objectIdsRef.current = new WeakMap()
+            activeGroupIdRef.current = null
+            drillIntoElementOnClickRef.current = false
+            pointerDownSelectionContextRef.current = { groupId: null, isolatedId: null }
+          }
+          if (mediaRuntimeRef.current === mediaRuntime) mediaRuntimeRef.current = null
+          mediaRuntime.dispose()
+          void canvas.dispose()
+        },
+      })
+      if (!binding.attach(driver)) return
+      flushNativeEditRef.current = () => { void driver.flush(binding.capture()) }
+      unregisterEditor = presentationRuntime.bindEditor(binding)
+      setCanvasGeneration((value) => value + 1)
+    })
+    return () => {
+      unregisterEditor?.()
+      binding.dispose()
+      if (editorBindingRef.current === binding) editorBindingRef.current = null
+    }
+  }, [activateFabricElement, active, presentationRuntime, sessionId, store])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const fabric = fabricModuleRef.current
+    const mediaRuntime = mediaRuntimeRef.current
+    if (!active || !canvas || !fabric || !mediaRuntime || !currentSlide) return
+    const lease = editorBindingRef.current?.capture()
+    let cancelled = false
+    const revealFrameIds = new Set<number>()
+    const visibleAgentChange = agentChange
+      && agentChange.slideId === currentSlide.id
+      && agentChange.changeId > consumedAgentChangeIdRef.current
+      ? agentChange
+      : null
+    if (visibleAgentChange) consumedAgentChangeIdRef.current = visibleAgentChange.changeId
+    const revealedElementIds = new Set(visibleAgentChange?.elementIds ?? [])
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const scheduleRevealFrame = (callback: FrameRequestCallback) => {
+      const frameId = window.requestAnimationFrame((time) => {
+        revealFrameIds.delete(frameId)
+        callback(time)
+      })
+      revealFrameIds.add(frameId)
+    }
+    const animateAgentObject = (object: FabricObject, element: PresentationElement, index: number) => {
+      if (!visibleAgentChange || reducedMotion || !revealedElementIds.has(element.id)) return
+      const delayMs = Math.min(240, index * 32)
+      const targetOpacity = element.opacity ?? 1
+      if (
+        visibleAgentChange.kind === 'content'
+        && isPresentationTextElement(element)
+        && element.textDirection !== 'eastAsianVertical'
+        && element.textDirection !== 'stacked'
+        && object instanceof fabric.IText
+      ) {
+        const fullText = formatPresentationText(element)
+        const frames = buildPresentationTextRevealFrames(fullText)
+        const startedAt = performance.now() + delayMs
+        const durationMs = Math.min(900, Math.max(240, frames.length * 38))
+        object.set({ opacity: targetOpacity, text: '' })
+        const tick = (time: number) => {
+          if (cancelled || object.canvas !== canvas) return
+          if (time < startedAt) {
+            scheduleRevealFrame(tick)
+            return
+          }
+          const progress = Math.min(1, (time - startedAt) / durationMs)
+          const frameIndex = Math.min(frames.length - 1, Math.floor(progress * frames.length))
+          object.set({ text: frames[frameIndex] })
+          object.setCoords()
+          canvas.requestRenderAll()
+          if (progress < 1) scheduleRevealFrame(tick)
+          else object.set({ text: fullText })
+        }
+        scheduleRevealFrame(tick)
+        return
+      }
+      const startedAt = performance.now() + delayMs
+      const durationMs = visibleAgentChange.kind === 'design' ? 320 : 240
+      object.set({ opacity: 0 })
+      const tick = (time: number) => {
+        if (cancelled || object.canvas !== canvas) return
+        if (time < startedAt) {
+          scheduleRevealFrame(tick)
+          return
+        }
+        const progress = Math.min(1, (time - startedAt) / durationMs)
+        const eased = 1 - ((1 - progress) ** 3)
+        object.set({ opacity: targetOpacity * eased })
+        canvas.requestRenderAll()
+        if (progress < 1) scheduleRevealFrame(tick)
+        else object.set({ opacity: targetOpacity })
+      }
+      scheduleRevealFrame(tick)
+    }
+    mediaRuntime.reset()
+    // Rebuilding Fabric objects is an implementation detail, not a user
+    // deselection. Ignore the synchronous selection:cleared event so Ribbon
+    // controls never flash disabled while effects and formatting are applied.
+    const activeElementId = clearPresentationCanvasPreservingSelection(
+      selectedElementIdRef,
+      suppressCanvasSelectionRef,
+      () => canvas.clear(),
+    )
+    canvas.setDimensions({ width: pageSize.width, height: pageSize.height })
+    canvas.backgroundColor = currentSlide.background
+    objectIdsRef.current = new WeakMap()
+    const elementOrder = new Map(currentSlide.elements.map((element, index) => [element.id, index]))
+    const slideNumber = documentRef.current.slides.findIndex((slide) => slide.id === currentSlide.id) + 1
+    createFooterFabricObjects(fabric, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
+    canvas.requestRenderAll()
+
+    currentSlide.elements.forEach((element, index) => {
+      void createPresentationFabricObject(
+        fabric,
+        element,
+        lease ? bindPresentationNativeEdit(lease, currentSlide.id, () => documentRef.current, (object) => {
+          if (!cancelled) syncFabricObjectRef.current(object, lease)
+        }) : () => undefined,
+      ).then((object) => {
+        if (cancelled || !lease?.isCurrent() || canvasRef.current !== canvas) return
+        let hoverCursor = 'move'
+        if (isPresentationMediaElement(element)) hoverCursor = 'default'
+        else if (element.hyperlink && supportsPresentationElementHyperlink(element)) hoverCursor = 'pointer'
+        object.set({
+          borderColor: '#6957D9',
+          cornerColor: '#FFFFFF',
+          cornerStrokeColor: '#6957D9',
+          cornerStyle: 'circle',
+          cornerSize: 11,
+          transparentCorners: false,
+          objectCaching: false,
+          lockRotation: isPresentationRotationLocked(element),
+          hoverCursor,
+        })
+        objectIdsRef.current.set(object, element.id)
+        const insertionIndex = canvas.getObjects().findIndex((existingObject) => {
+          const existingId = objectIdsRef.current.get(existingObject)
+          if (!existingId) return true
+          return (elementOrder.get(existingId) ?? Number.POSITIVE_INFINITY) > index
+        })
+        canvas.insertAt(insertionIndex < 0 ? canvas.getObjects().length : insertionIndex, object)
+        animateAgentObject(object, element, index)
+        if (isPresentationMediaElement(element)) mediaRuntime.register(element, object)
+        if (activeElementId) {
+          activateFabricElement(
+            activeElementId,
+            isolatedElementIdRef.current === activeElementId ? 'element' : 'group',
+          )
+          mediaRuntime.prepare(activeElementId)
+        }
+        canvas.requestRenderAll()
+      }).catch((error: unknown) => {
+        if (cancelled || canvasRef.current !== canvas) return
+        rlog.warn('[presentation] canvas element render failed', {
+          elementId: element.id,
+          elementType: element.type,
+          error,
+        })
+        canvas.requestRenderAll()
+      })
+    })
+    return () => {
+      cancelled = true
+      for (const frameId of revealFrameIds) window.cancelAnimationFrame(frameId)
+      if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
+    }
+  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, pageSize])
+
+  const undo = useCallback(() => {
+    const previous = pastRef.current.pop()
+    if (!previous) return
+    const current = createPresentationHistoryEntry(documentRef.current)
+    if (current) futureRef.current.push(current)
+    else futureRef.current = []
+    trimPresentationHistoryPair(pastRef.current, futureRef.current)
+    commitDocument(previous.document, false)
+  }, [commitDocument])
+
+  const redo = useCallback(() => {
+    const next = futureRef.current.pop()
+    if (!next) return
+    const current = createPresentationHistoryEntry(documentRef.current)
+    if (current) pastRef.current.push(current)
+    else pastRef.current = []
+    trimPresentationHistoryPair(pastRef.current, futureRef.current)
+    commitDocument(next.document, false)
+  }, [commitDocument])
+
+  const deleteSelectedElement = useCallback(() => {
+    const elementId = selectedElementIdRef.current
+    if (!elementId) return
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const selected = slide.elements.find((element) => element.id === elementId)
+    if (!selected) return
+    const removedIds = new Set(getPresentationSelectionElements(
+      slide.elements,
+      selected,
+      isolatedElementIdRef.current,
+    ).map((element) => element.id))
+    isolatedElementIdRef.current = null
+    selectedElementIdRef.current = null
+    setSelectedElementId(null)
+    replaceCurrentSlide({
+      ...slide,
+      elements: removePresentationElements(slide.elements, removedIds),
+    })
+  }, [replaceCurrentSlide])
+
+  useEffect(() => {
+    if (!active || slideshowOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      if (target instanceof HTMLElement && (
+        target.isContentEditable
+        || target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT'
+        || Boolean(target.closest('button, a, [role="button"]'))
+      )) return
+      const modifier = event.metaKey || event.ctrlKey
+      if (!modifier && !event.repeat && (event.key === ' ' || event.key === 'Enter')) {
+        const elementId = selectedElementIdRef.current
+        const current = documentRef.current
+        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const element = slide?.elements.find((item) => item.id === elementId)
+        if (element && isPresentationMediaElement(element) && !transitionPreviewRun) {
+          event.preventDefault()
+          void mediaRuntimeRef.current?.toggle(element.id)
+          return
+        }
+      }
+      if (modifier && event.key.toLowerCase() === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) redo()
+        else undo()
+        return
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault()
+        deleteSelectedElement()
+        return
+      }
+      if (event.key === 'Escape' && isolatedElementIdRef.current) {
+        event.preventDefault()
+        const elementId = isolatedElementIdRef.current
+        isolatedElementIdRef.current = null
+        activateFabricElement(elementId, 'group')
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activateFabricElement, active, deleteSelectedElement, redo, slideshowOpen, transitionPreviewRun, undo])
+
+  const goToSlideshowIndex = useCallback((requestedIndex: number, completedTargetIds: ReadonlySet<string> = new Set()) => {
+    if (slideshowTransition) return
+    const slides = documentRef.current.slides
+    const toIndex = Math.max(0, Math.min(slides.length - 1, requestedIndex))
+    if (toIndex === slideshowIndex) return
+    const transition = normalizePresentationTransition(slides[toIndex]?.transition)
+    if (transition.effect === 'none') {
+      setSlideshowIndex(toIndex)
+      return
+    }
+    transitionRunIdRef.current += 1
+    setSlideshowTransition({
+      previousCompletedTargetIds: completedTargetIds,
+      direction: toIndex > slideshowIndex ? 'forward' : 'backward',
+      fromIndex: slideshowIndex,
+      runKey: transitionRunIdRef.current,
+      toIndex,
+    })
+  }, [setSlideshowIndex, setSlideshowTransition, slideshowIndex, slideshowTransition])
+
+  const activateSlideshowHyperlink = useCallback((hyperlink: PresentationHyperlink, completedTargetIds?: ReadonlySet<string>) => {
+    if (hyperlink.type === 'slide') {
+      const index = documentRef.current.slides.findIndex((slide) => slide.id === hyperlink.slideId)
+      if (index >= 0) goToSlideshowIndex(index, completedTargetIds)
+      return
+    }
+    void requestExternalLink(hyperlink.url).then((open) => {
+      if (open) return window.api.shell.openExternal(hyperlink.url)
+    })
+  }, [goToSlideshowIndex, requestExternalLink])
+
+  const selectSlide = (slideId: string) => {
+    try {
+      flushNativeEditRef.current?.()
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+      return
+    }
+    isolatedElementIdRef.current = null
+    selectedElementIdRef.current = null
+    setSelectedElementId(null)
+    setAnimationPreviewRun(null)
+    setTransitionPreviewRun(null)
+    const current = documentRef.current
+    if (current.selectedSlideId === slideId) return
+    const selected = { ...current, selectedSlideId: slideId }
+    try {
+      documentRef.current = presentationRuntime.commitDocument(current, selected, false)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const selectPresentationDocument = (documentId: string) => {
+    void presentationRuntime.activateDocument(documentId).then((result) => {
+      if (!result.ok) showToast(result.error.message)
+    })
+  }
+
+  const createPresentationDocument = () => {
+    void presentationRuntime.createDocument().then((result) => {
+      if (!result.ok) showToast(result.error.message)
+    })
+  }
+
+  const closePresentationDocument = (documentId: string) => {
+    void presentationRuntime.closeDocument(documentId).then((result) => {
+      if (!result.ok) showToast(result.error.message)
+      else if (result.value.closeSurface) {
+        setExpanded(false)
+        if (onClose) onClose()
+        else setRightCollapsed(true)
+      }
+    })
+  }
+
+  const closePresentationPanel = () => {
+    void presentationRuntime.flushEditor().then(() => {
+      setExpanded(false)
+      if (onClose) onClose()
+      else setRightCollapsed(true)
+    }).catch((error) => showToast(error instanceof Error ? error.message : String(error)))
+  }
+
+  const addSlide = () => {
+    const current = documentRef.current
+    const slide = createBlankPresentationSlide(
+      t('session.presentation.slideName', { index: current.slides.length + 1 }),
+    )
+    setSelectedElementId(null)
+    commitDocument({
+      ...current,
+      selectedSlideId: slide.id,
+      slides: [...current.slides, slide],
+    })
+  }
+
+  const duplicateSlide = () => {
+    if (!currentSlide) return
+    const current = documentRef.current
+    const duplicate: PresentationSlide = {
+      ...currentSlide,
+      id: createPresentationId('slide'),
+      name: t('session.presentation.slideCopy', { name: currentSlide.name }),
+      elements: currentSlide.elements.map((element) => ({
+        ...element,
+        id: createPresentationId(element.type),
+      })),
+    }
+    const index = current.slides.findIndex((slide) => slide.id === currentSlide.id)
+    const slides = [...current.slides]
+    slides.splice(index + 1, 0, duplicate)
+    setSelectedElementId(null)
+    commitDocument({ ...current, selectedSlideId: duplicate.id, slides })
+  }
+
+  const deleteSlide = () => {
+    const current = documentRef.current
+    if (current.slides.length <= 1 || !currentSlide) return
+    const index = current.slides.findIndex((slide) => slide.id === currentSlide.id)
+    const slides = current.slides.filter((slide) => slide.id !== currentSlide.id)
+    const nextSelectedSlide = slides[Math.min(index, slides.length - 1)]
+    if (!nextSelectedSlide) return
+    setSelectedElementId(null)
+    commitDocument({
+      ...current,
+      slides,
+      selectedSlideId: nextSelectedSlide.id,
+    })
+  }
+
+  const addText = (kind: 'title' | 'body') => {
+    if (!currentSlide) return
+    const isTitle = kind === 'title'
+    const element: PresentationTextElement = {
+      id: createPresentationId('text'),
+      type: 'text',
+      x: isTitle ? 82 : 100,
+      y: isTitle ? 76 : 210,
+      width: isTitle ? 940 : 700,
+      height: isTitle ? 82 : 120,
+      rotation: 0,
+      text: t(isTitle ? 'session.presentation.titlePlaceholder' : 'session.presentation.textPlaceholder'),
+      fontSize: isTitle ? 42 : 24,
+      fontFamily: isTitle ? 'Aptos Display' : 'Aptos',
+      fontWeight: isTitle ? 700 : 400,
+      italic: false,
+      underline: false,
+      strikethrough: false,
+      baseline: 'normal',
+      characterSpacing: 0,
+      lineHeight: 1.08,
+      indentLevel: 0,
+      listStyle: 'none',
+      color: '#20202B',
+      align: 'left',
+    }
+    setSelectedElementId(element.id)
+    replaceCurrentSlide({ ...currentSlide, elements: [...currentSlide.elements, element] })
+  }
+
+  const applySlideLayout = (layout: PresentationSlideLayout) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    if (layout === 'blank') {
+      replaceCurrentSlide({ ...slide, layout })
+      return
+    }
+    const textElements = slide.elements.filter(isPresentationTextElement)
+    const nonTextElements = slide.elements.filter((element) => !isPresentationTextElement(element))
+    const createLayoutText = (title: boolean): PresentationTextElement => ({
+      id: createPresentationId('text'),
+      type: 'text',
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 80,
+      rotation: 0,
+      text: t(title ? 'session.presentation.titlePlaceholder' : 'session.presentation.textPlaceholder'),
+      fontSize: title ? 42 : 24,
+      fontFamily: title ? current.master.titleFontFamily : current.master.bodyFontFamily,
+      fontWeight: title ? 700 : 400,
+      color: '#20202B',
+      align: 'left',
+    })
+    const title = textElements[0] ?? createLayoutText(true)
+    const body = textElements[1] ?? createLayoutText(false)
+    const positioned: PresentationTextElement[] = []
+    if (layout === 'title') {
+      positioned.push(
+        { ...title, x: 120, y: 245, width: pageSize.width - 240, height: 100, align: 'center' },
+        { ...body, x: 180, y: 365, width: pageSize.width - 360, height: 70, align: 'center' },
+      )
+    } else {
+      positioned.push({ ...title, x: 80, y: 58, width: pageSize.width - 160, height: 82 })
+      if (layout === 'titleContent') {
+        positioned.push({ ...body, x: 90, y: 165, width: pageSize.width - 180, height: pageSize.height - 235 })
+      } else {
+        const secondBody = textElements[2] ?? createLayoutText(false)
+        const contentWidth = (pageSize.width - 210) / 2
+        positioned.push(
+          { ...body, x: 80, y: 165, width: contentWidth, height: pageSize.height - 235 },
+          { ...secondBody, x: 130 + contentWidth, y: 165, width: contentWidth, height: pageSize.height - 235 },
+        )
+      }
+    }
+    const usedIds = new Set(positioned.map((element) => element.id))
+    replaceCurrentSlide({
+      ...slide,
+      layout,
+      elements: [...nonTextElements, ...textElements.filter((element) => !usedIds.has(element.id)), ...positioned],
+    })
+  }
+
+  const addShape = (type: PresentationShapeType) => {
+    if (!currentSlide) return
+    const size = getPresentationShapeSize(type)
+    const lineShape = isPresentationLineShape(type)
+    const element: PresentationShapeElement = {
+      id: createPresentationId('shape'),
+      type,
+      x: Math.round((pageSize.width - size.width) / 2),
+      y: Math.round((pageSize.height - size.height) / 2),
+      width: size.width,
+      height: size.height,
+      rotation: 0,
+      fill: lineShape ? 'transparent' : '#8B7CFF',
+      borderColor: '#6957D9',
+      borderWidth: lineShape ? 3 : 1,
+      radius: type === 'rect' ? 18 : undefined,
+    }
+    setSelectedElementId(element.id)
+    replaceCurrentSlide({ ...currentSlide, elements: [...currentSlide.elements, element] })
+  }
+
+  const appendElement = (element: PresentationElement) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    setSelectedElementId(element.id)
+    replaceCurrentSlide({ ...slide, elements: [...slide.elements, element] })
+  }
+
+  const insertFile = async (kind: 'image' | 'audio' | 'video', event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    const target = { ...fileInsertionTargetRef.current }
+    const maxBytes = kind === 'image' ? MAX_PRESENTATION_IMAGE_BYTES : MAX_PRESENTATION_MEDIA_BYTES
+    if (file.size > maxBytes) {
+      showToast(t('session.presentation.insertDialog.fileTooLarge', { size: Math.round(maxBytes / 1024 / 1024) }))
+      return
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      const targetStillCurrent = () => {
+        const currentTarget = fileInsertionTargetRef.current
+        return target.generation === currentTarget.generation
+          && target.sessionId === currentTarget.sessionId
+          && target.documentId === currentTarget.documentId
+          && target.slideId === currentTarget.slideId
+      }
+      const source = normalizePresentationFileSource(kind, {
+        dataUrl,
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+      })
+      if (!source) throw new Error('Unsupported presentation media format')
+      if (!targetStillCurrent()) {
+        showToast(t('session.common.cancelled'))
+        return
+      }
+      let element: PresentationElement
+      if (kind === 'image') {
+        const image = createPresentationImageElement(source)
+        const size = await presentationImageSize(file)
+        if (size === null) throw new Error('The selected image could not be decoded')
+        if (size) {
+          const scale = Math.min(640 / size.width, 420 / size.height)
+          const width = Math.max(32, Math.round(size.width * scale))
+          const height = Math.max(32, Math.round(size.height * scale))
+          element = {
+            ...image,
+            x: Math.round((pageSize.width - width) / 2),
+            y: Math.round((pageSize.height - height) / 2),
+            width,
+            height,
+          }
+        } else {
+          element = image
+        }
+      } else {
+        if (!hasValidPresentationMediaSignature(kind, source)) {
+          throw new Error('The selected media container does not match its file type')
+        }
+        if (!await presentationMediaCanLoad(file, kind, source.mimeType)) {
+          throw new Error('The selected media cannot be decoded by the slide show renderer')
+        }
+        element = createPresentationMediaElement(kind, source)
+      }
+      if (!targetStillCurrent()) {
+        showToast(t('session.common.cancelled'))
+        return
+      }
+      if ((isPresentationImageElement(element) || isPresentationMediaElement(element))
+        && !canAppendPresentationFileElement(documentRef.current, element)) {
+        showToast(t('session.presentation.insertDialog.totalFileSizeTooLarge'))
+        return
+      }
+      appendElement(element)
+    } catch {
+      showToast(t('session.presentation.insertDialog.fileReadError'))
+    }
+  }
+
+  const openLinkDialog = () => {
+    const linkable = selectedElement && supportsPresentationElementHyperlink(selectedElement)
+      ? selectedElement
+      : null
+    setInsertDialog({ kind: 'link', ...(linkable ? { elementId: linkable.id } : {}) })
+  }
+
+  const submitInsertDialog = (value: PresentationInsertDialogValue) => {
+    const state = insertDialog
+    if (!state) return
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const existing = state.elementId
+      ? slide.elements.find((element) => element.id === state.elementId)
+      : undefined
+
+    if (value.kind === 'table') {
+      if (existing && isPresentationTableElement(existing)) {
+        patchElement(existing.id, { cells: value.cells.map((row) => [...row]) } as Partial<PresentationTableElement>)
+      } else {
+        appendElement(createPresentationTableElement(value.cells))
+      }
+    } else if (value.kind === 'chart') {
+      if (existing && isPresentationChartElement(existing)) {
+        patchElement(existing.id, {
+          chartType: value.chartType,
+          title: value.title || undefined,
+          categories: [...value.categories],
+          series: value.series.map((series) => ({ name: series.name, values: [...series.values] })),
+        } as Partial<typeof existing>)
+      } else {
+        const element = createPresentationChartElement(value.chartType)
+        appendElement({
+          ...element,
+          title: value.title || undefined,
+          categories: [...value.categories],
+          series: value.series.map((series) => ({ name: series.name, values: [...series.values] })),
+        })
+      }
+    } else if (value.kind === 'link') {
+      let hyperlink: PresentationHyperlink | null = null
+      if (value.targetType === 'url') {
+        hyperlink = createPresentationUrlHyperlink(value.url, value.tooltip)
+      } else if (current.slides.some((item) => item.id === value.slideId)) {
+        hyperlink = { type: 'slide', slideId: value.slideId, ...(value.tooltip ? { tooltip: value.tooltip } : {}) }
+      }
+      if (!hyperlink) {
+        showToast(t('session.presentation.insertDialog.linkError'))
+        return
+      }
+      if (existing && (
+        isPresentationTextElement(existing)
+        || isPresentationShapeElement(existing)
+        || isPresentationImageElement(existing)
+      )) {
+        patchElement(existing.id, {
+          hyperlink,
+          ...(isPresentationTextElement(existing) ? { text: value.label } : {}),
+        } as Partial<PresentationElement>)
+      } else {
+        const width = 560
+        const height = 54
+        const element: PresentationTextElement = {
+          id: createPresentationId('text'),
+          type: 'text',
+          x: Math.round((pageSize.width - width) / 2),
+          y: Math.round((pageSize.height - height) / 2),
+          width,
+          height,
+          rotation: 0,
+          text: value.label,
+          fontSize: 26,
+          fontFamily: 'Aptos',
+          fontWeight: 400,
+          underline: true,
+          color: '#2563EB',
+          align: 'center',
+          hyperlink,
+        }
+        appendElement(element)
+      }
+    } else {
+      const footer = {
+        ...createPresentationFooter(value.text),
+        showDate: value.showDate,
+        showSlideNumber: value.showSlideNumber,
+      }
+      if (value.applyAll) {
+        commitDocument({
+          ...current,
+          slides: current.slides.map((item) => ({ ...item, footer: { ...footer } })),
+        })
+      } else {
+        replaceCurrentSlide({ ...slide, footer })
+      }
+    }
+    setInsertDialog(null)
+  }
+
+  const updateSelectedElement = (patch: Partial<PresentationElement>) => {
+    const target = isPresentationAnimationPatch(patch) ? selectedAnimationElement : selectedElement
+    if (!target) return
+    let supportedPatch = patch
+    if (isPresentationRotationLocked(target) && 'rotation' in supportedPatch) {
+      const { rotation: _ignoredRotation, ...remainingPatch } = supportedPatch
+      supportedPatch = remainingPatch
+    }
+    if (!supportsPresentationElementShadow(target) && 'shadow' in supportedPatch) {
+      const { shadow: _ignoredShadow, ...remainingPatch } = supportedPatch
+      supportedPatch = remainingPatch
+    }
+    if (Object.keys(supportedPatch).length > 0) patchElement(target.id, supportedPatch)
+  }
+
+  const moveSelectedElement = (direction: 'front' | 'back') => {
+    if (!currentSlide || !selectedElement) return
+    const groupedElements = getPresentationSelectionElements(
+      currentSlide.elements,
+      selectedElement,
+      isolatedElementIdRef.current,
+    )
+    const groupedIds = new Set(groupedElements.map((element) => element.id))
+    const elements = currentSlide.elements.filter((element) => !groupedIds.has(element.id))
+    if (direction === 'front') elements.push(...groupedElements)
+    else elements.unshift(...groupedElements)
+    replaceCurrentSlide({ ...currentSlide, elements })
+  }
+
+  const alignSelectedElement = (alignment: PresentationElementAlignment) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const selected = slide?.elements.find((element) => element.id === selectedElementIdRef.current)
+    if (!slide || !selected) return
+    const targets = getPresentationSelectionElements(slide.elements, selected, isolatedElementIdRef.current)
+    const targetIds = new Set(targets.map((element) => element.id))
+    const bounds = getPresentationElementBounds(targets)
+    let deltaX = 0
+    let deltaY = 0
+    if (alignment === 'left') deltaX = -bounds.x
+    else if (alignment === 'center') deltaX = ((pageSize.width - bounds.width) / 2) - bounds.x
+    else if (alignment === 'right') deltaX = pageSize.width - bounds.width - bounds.x
+    else if (alignment === 'top') deltaY = -bounds.y
+    else if (alignment === 'middle') deltaY = ((pageSize.height - bounds.height) / 2) - bounds.y
+    else deltaY = pageSize.height - bounds.height - bounds.y
+    replaceCurrentSlide({
+      ...slide,
+      elements: slide.elements.map((element): PresentationElement => targetIds.has(element.id)
+        ? { ...element, x: Math.round(element.x + deltaX), y: Math.round(element.y + deltaY) } as PresentationElement
+        : element),
+    })
+  }
+
+  const toggleSelectedElementGroup = () => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const selected = slide?.elements.find((element) => element.id === selectedElementIdRef.current)
+    if (!slide || !selected) return
+    if (selected.groupId) {
+      const groupId = selected.groupId
+      isolatedElementIdRef.current = selected.id
+      replaceCurrentSlide({
+        ...slide,
+        elements: slide.elements.map((element): PresentationElement => element.groupId === groupId
+          ? { ...element, groupId: undefined } as PresentationElement
+          : element),
+      })
+      return
+    }
+
+    const selectedBounds = getPresentationElementBounds([selected])
+    const overlapsSelected = (element: PresentationElement): boolean => {
+      const right = Math.min(selectedBounds.x + selectedBounds.width, element.x + element.width)
+      const bottom = Math.min(selectedBounds.y + selectedBounds.height, element.y + element.height)
+      return right > Math.max(selectedBounds.x, element.x) && bottom > Math.max(selectedBounds.y, element.y)
+    }
+    const members = slide.elements.filter((element) => element.id === selected.id || overlapsSelected(element))
+    if (members.length < 2) {
+      showToast(t('session.presentation.groupNeedsOverlap'))
+      return
+    }
+    const memberIds = new Set(members.map((element) => element.id))
+    const groupId = createPresentationId('group')
+    const animationOwner = members.find(hasPresentationAnimation)
+    replaceCurrentSlide({
+      ...slide,
+      elements: slide.elements.map((element): PresentationElement => {
+        if (!memberIds.has(element.id)) return element
+        const grouped = { ...element, groupId } as PresentationElement
+        return animationOwner && element.id !== animationOwner.id
+          ? clearPresentationAnimation(grouped)
+          : grouped
+      }),
+    })
+    isolatedElementIdRef.current = null
+    activeGroupIdRef.current = groupId
+  }
+
+  const updateCurrentSlide = (patch: Partial<PresentationSlide>, recordHistory = true) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const nextSlide = { ...slide, ...patch }
+    if (recordHistory) {
+      replaceCurrentSlide(nextSlide)
+      return
+    }
+    commitDocument({
+      ...current,
+      slides: current.slides.map((item) => item.id === slide.id ? nextSlide : item),
+    }, false)
+  }
+
+  const changePageSize = (preset: PresentationPageSizePreset) => {
+    const current = documentRef.current
+    commitDocument(resizePresentationDocument(current, preset))
+  }
+
+  const applyCurrentTransitionToAll = () => {
+    const current = documentRef.current
+    const selectedSlide = current.slides.find((slide) => slide.id === current.selectedSlideId)
+    if (!selectedSlide) return
+    const transition = normalizePresentationTransition(selectedSlide.transition)
+    commitDocument({
+      ...current,
+      slides: current.slides.map((slide) => ({
+        ...slide,
+        transition: { ...transition },
+      })),
+    })
+  }
+
+  const applyCurrentAnimationToAll = () => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const selected = slide?.elements.find((element) => element.id === selectedElementIdRef.current)
+    if (!slide || !selected) return
+    const source = getPresentationAnimationOwner(slide.elements, selected)
+    if (!hasPresentationAnimation(source)) return
+    const animationPatch = copyPresentationAnimationPatch(source)
+    const ownerIds = new Set(getPresentationElementTargets(slide.elements).map((target) => target.elements[0]!.id))
+    replaceCurrentSlide({
+      ...slide,
+      elements: slide.elements.map((element) => {
+        const cleared = clearPresentationAnimation(element)
+        return ownerIds.has(element.id)
+          ? { ...cleared, ...animationPatch } as PresentationElement
+          : cleared
+      }),
+    })
+  }
+
+  const updateSlideBackground = (event: ChangeEvent<HTMLInputElement>) => {
+    updateCurrentSlide({ background: event.target.value })
+  }
+
+  const updateSlideNotes = (event: FormEvent<HTMLTextAreaElement>) => {
+    updateCurrentSlide({ notes: event.currentTarget.value }, false)
+  }
+
+  const fitCanvas = () => {
+    const stage = stageRef.current
+    if (!stage) return
+    const widthScale = Math.max(0.1, (stage.clientWidth - 40) / pageSize.width)
+    const heightScale = Math.max(0.1, (stage.clientHeight - 40) / pageSize.height)
+    setCanvasScale(Math.min(widthScale, heightScale, 1))
+  }
+
+  const previewTransition = (override?: PresentationTransition) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const transition = normalizePresentationTransition(override ?? slide?.transition)
+    if (!slide) return
+    if (transition.effect === 'none') {
+      setTransitionPreviewRun(null)
+      return
+    }
+    mediaRuntimeRef.current?.releaseAll()
+    setAnimationPreviewRun(null)
+    transitionRunIdRef.current += 1
+    setTransitionPreviewRun({ runKey: transitionRunIdRef.current, slideId: slide.id, transition })
+  }
+
+  const previewSelectedAnimation = useCallback((animationOverride?: Partial<PresentationElement>) => {
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    if (!slide) return
+    const selected = slide.elements.find((element) => element.id === selectedElementIdRef.current)
+    const target = selected ? getPresentationAnimationOwner(slide.elements, selected) : null
+    const targetElementId = animationOverride ? target?.id ?? null : null
+    const previewSlide = targetElementId && animationOverride
+      ? {
+          ...slide,
+          elements: slide.elements.map((element): PresentationElement => (
+            element.id === targetElementId ? { ...element, ...animationOverride } as PresentationElement : element
+          )),
+        }
+      : slide
+    const previewElements = targetElementId
+      ? previewSlide.elements.filter((element) => element.id === targetElementId && hasPresentationAnimation(element))
+      : previewSlide.elements.filter(hasPresentationAnimation)
+    if (previewElements.length === 0) {
+      setAnimationPreviewRun(null)
+      return
+    }
+    mediaRuntimeRef.current?.releaseAll()
+    setTransitionPreviewRun(null)
+    animationRunIdRef.current += 1
+    setAnimationPreviewRun({
+      elementIds: targetElementId ? [targetElementId] : undefined,
+      runKey: animationRunIdRef.current,
+      slide: previewSlide,
+      slideNumber: current.slides.findIndex((item) => item.id === slide.id) + 1,
+    })
+  }, [])
+
+  const startSlideshow = () => {
+    const index = documentRef.current.slides.findIndex((slide) => slide.id === documentRef.current.selectedSlideId)
+    mediaRuntimeRef.current?.releaseAll()
+    setAnimationPreviewRun(null)
+    setTransitionPreviewRun(null)
+    setSlideshowTransition(null)
+    setSlideshowIndex(Math.max(0, index))
+    setSlideshowOpen(true)
+  }
+
+  const startSlideshowFromBeginning = () => {
+    mediaRuntimeRef.current?.releaseAll()
+    setAnimationPreviewRun(null)
+    setTransitionPreviewRun(null)
+    setSlideshowTransition(null)
+    setSlideshowIndex(0)
+    setSlideshowOpen(true)
+  }
+
+  const togglePropertiesInspector = () => {
+    if (inspectorMode !== 'properties') {
+      setInspectorMode('properties')
+      setInspectorOpen(true)
+      return
+    }
+    setInspectorOpen((value) => !value)
+  }
+
+  const toggleAnimationPane = () => {
+    if (inspectorMode !== 'animation') {
+      setInspectorMode('animation')
+      setInspectorOpen(true)
+      return
+    }
+    setInspectorOpen((value) => !value)
+  }
+
+  const toggleLayersPane = () => {
+    if (inspectorMode !== 'layers') {
+      setInspectorMode('layers')
+      setInspectorOpen(true)
+      return
+    }
+    setInspectorOpen((value) => !value)
+  }
+
+  const toggleCommentsPane = () => {
+    if (inspectorOpen && inspectorMode === 'comments') {
+      setInspectorOpen(false)
+      return
+    }
+    setInspectorMode('comments')
+    setInspectorOpen(true)
+  }
+
+  const selectPresentationElement = (elementId: string) => {
+    isolatedElementIdRef.current = null
+    selectedElementIdRef.current = elementId
+    setSelectedElementId(elementId)
+    activateFabricElement(elementId, 'group')
+  }
+
+  const changeRibbonTab = (tab: PresentationRibbonTab) => {
+    setRibbonTab(tab)
+    if (tab !== 'animations' || selectedElementIdRef.current) return
+    const current = documentRef.current
+    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const firstElement = slide?.elements[0]
+    if (firstElement) selectPresentationElement(firstElement.id)
+  }
+
+  const previewWidth = compact ? 78 : 126
+  const sessionTarget = sessionId ? sessionId.slice(0, 8).toUpperCase() : '—'
+  const documentFileName = (item: PresentationDocument) => {
+    const title = item.title.trim() || t('session.presentation.untitled')
+    return title.toLowerCase().endsWith('.pptx') ? title : `${title}.pptx`
+  }
+  const insertDialogElement = insertDialog?.elementId
+    ? currentSlide?.elements.find((element) => element.id === insertDialog.elementId)
+    : undefined
+  let insertDialogInitialValue: PresentationInsertDialogValue | null = null
+  if (insertDialog?.kind === 'table' && insertDialogElement && isPresentationTableElement(insertDialogElement)) {
+    insertDialogInitialValue = {
+      kind: 'table',
+      rows: insertDialogElement.cells.length,
+      columns: Math.max(1, ...insertDialogElement.cells.map((row) => row.length)),
+      cells: insertDialogElement.cells.map((row) => [...row]),
+    }
+  } else if (insertDialog?.kind === 'chart' && insertDialogElement && isPresentationChartElement(insertDialogElement)) {
+    insertDialogInitialValue = {
+      kind: 'chart',
+      chartType: insertDialogElement.chartType,
+      title: insertDialogElement.title ?? '',
+      categories: [...insertDialogElement.categories],
+      series: insertDialogElement.series.map((series) => ({ name: series.name, values: [...series.values] })),
+    }
+  } else if (insertDialog?.kind === 'link') {
+    const hyperlink = insertDialogElement?.hyperlink
+    let label = t('session.presentation.link')
+    if (insertDialogElement && isPresentationTextElement(insertDialogElement)) label = insertDialogElement.text
+    else if (insertDialogElement && isPresentationImageElement(insertDialogElement)) label = insertDialogElement.altText
+    insertDialogInitialValue = {
+      kind: 'link',
+      targetType: hyperlink?.type ?? 'url',
+      url: hyperlink?.type === 'url' ? hyperlink.url : 'https://',
+      slideId: hyperlink?.type === 'slide' ? hyperlink.slideId : document.slides[0]?.id ?? '',
+      label,
+      tooltip: hyperlink?.tooltip ?? '',
+    }
+  } else if (insertDialog?.kind === 'footer') {
+    insertDialogInitialValue = {
+      kind: 'footer',
+      text: currentSlide?.footer?.text ?? '',
+      showDate: currentSlide?.footer?.showDate ?? false,
+      showSlideNumber: currentSlide?.footer?.showSlideNumber ?? true,
+      applyAll: true,
+    }
+  }
+  const currentSlideIndex = currentSlide
+    ? document.slides.findIndex((slide) => slide.id === currentSlide.id)
+    : -1
+  const transitionPreviewPreviousSlide = currentSlideIndex > 0
+    ? document.slides[currentSlideIndex - 1]
+    : undefined
+  const slideshowTargetIndex = slideshowTransition?.toIndex ?? slideshowIndex
+  const slideshowSlide = document.slides[slideshowTargetIndex] ?? currentSlide
+  const slideshowTransitionCurrentSlide = slideshowTransition
+    ? document.slides[slideshowTransition.toIndex]
+    : undefined
+  const slideshowTransitionPreviousSlide = slideshowTransition
+    ? document.slides[slideshowTransition.fromIndex]
+    : undefined
+  const slideshowTransitionView = slideshowTransition && slideshowTransitionCurrentSlide && slideshowTransitionPreviousSlide ? {
+    ...slideshowTransition,
+    currentSlide: slideshowTransitionCurrentSlide,
+    previousSlide: slideshowTransitionPreviousSlide,
+    transition: normalizePresentationTransition(slideshowTransitionCurrentSlide.transition),
+  } : null
+
+  return (
+    <div
+      ref={rootRef}
+      className="relative flex h-full min-h-0 flex-col overflow-hidden bg-bg-app text-text-primary"
+      data-testid="presentation-workbench-panel"
+    >
+      <OfficeAppHeader
+        icon={<PresentationMark />}
+        iconClassName="bg-[#FFF3E4] text-[#D97706] dark:bg-[#4A331C] dark:text-[#F2A64A]"
+        subtitle={t('session.presentation.sessionTargetReady', { target: sessionTarget })}
+        testId="presentation-app-header"
+        title={t('session.presentation.applicationName')}
+      >
+        <OfficePanelControls
+          closeLabel={t('session.presentation.closePanel')}
+          expanded={expanded}
+          expandLabel={t(expanded ? 'session.presentation.restore' : 'session.presentation.expand')}
+          onClose={closePresentationPanel}
+          onToggleExpanded={() => {
+            const next = !expanded
+            setExpanded(next)
+            onExpandedChange?.(next)
+          }}
+          testIdPrefix="presentation"
+          tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
+        />
+      </OfficeAppHeader>
+
+      <OfficeDocumentTabs
+        activeId={workspace.activeDocumentId}
+        icon={<span className="shrink-0 text-[#D97706]"><PresentationMark /></span>}
+        label={t('session.presentation.documentTabs')}
+        newIcon={<PlusIcon />}
+        newLabel={t('session.presentation.newPresentation')}
+        onClose={closePresentationDocument}
+        onCreate={createPresentationDocument}
+        onSelect={selectPresentationDocument}
+        tabs={workspace.documents.map((item) => {
+          const fileName = documentFileName(item)
+          return {
+            id: item.id,
+            label: fileName,
+            closeLabel: t('session.presentation.closeDocument', { name: fileName }),
+          }
+        })}
+        testIdPrefix="presentation"
+        tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
+      />
+
+      <PresentationRibbon
+        activeTab={ribbonTab}
+        animationTargetElements={selectedAnimationTargetElements}
+        animationMarkersHidden={animationMarkersHidden}
+        animationPaneOpen={inspectorOpen && inspectorMode === 'animation'}
+        canvasScale={canvasScale}
+        compact={compact}
+        currentSlide={currentSlide}
+        filmstripCollapsed={filmstripCollapsed}
+        historyStatus={historyStatus}
+        inspectorOpen={inspectorOpen && inspectorMode === 'properties'}
+        commentsOpen={inspectorOpen && inspectorMode === 'comments'}
+        layersOpen={inspectorOpen && inspectorMode === 'layers'}
+        pageSizePreset={pageSize.preset}
+        ribbonCollapsed={ribbonCollapsed}
+        selectedElement={ribbonTab === 'animations' ? selectedAnimationElement : selectedElement}
+        selectedText={selectedText}
+        viewOptions={viewOptions}
+        onActiveTabChange={changeRibbonTab}
+        onAddShape={addShape}
+        onAddSlide={addSlide}
+        onAddText={addText}
+        onAlignElement={alignSelectedElement}
+        onApplyAnimationToAll={applyCurrentAnimationToAll}
+        onApplyLayout={applySlideLayout}
+        onApplyTheme={applyPresentationTheme}
+        onApplyTransitionToAll={applyCurrentTransitionToAll}
+        onApplyFormat={patchElement}
+        onCanvasScaleChange={setCanvasScale}
+        onToggleComments={toggleCommentsPane}
+        onFitCanvas={fitCanvas}
+        onEditMaster={() => setMasterDialogOpen(true)}
+        onInsertAudio={() => audioInputRef.current?.click()}
+        onInsertChart={() => setInsertDialog({ kind: 'chart' })}
+        onInsertFooter={() => setInsertDialog({ kind: 'footer' })}
+        onInsertImage={() => imageInputRef.current?.click()}
+        onInsertLink={openLinkDialog}
+        onInsertTable={() => setInsertDialog({ kind: 'table' })}
+        onInsertVideo={() => videoInputRef.current?.click()}
+        onMoveElement={moveSelectedElement}
+        onPageSizeChange={changePageSize}
+        onPreviewAnimation={previewSelectedAnimation}
+        onPreviewTransition={previewTransition}
+        onRedo={redo}
+        onSlideChange={updateCurrentSlide}
+        onStartSlideshow={startSlideshow}
+        onStartSlideshowFromBeginning={startSlideshowFromBeginning}
+        onToggleAnimationMarkers={() => setAnimationMarkersHidden((value) => !value)}
+        onToggleAnimationPane={toggleAnimationPane}
+        onToggleFilmstrip={() => setFilmstripCollapsed((value) => !value)}
+        onToggleGroup={toggleSelectedElementGroup}
+        onToggleInspector={togglePropertiesInspector}
+        onToggleLayers={toggleLayersPane}
+        onToggleRibbon={() => setRibbonCollapsed((value) => !value)}
+        onUndo={undo}
+        onUpdateElement={updateSelectedElement}
+        onViewOptionsChange={setViewOptions}
+      />
+
+      <div className="flex min-h-0 flex-1 bg-[#ECEEF2] dark:bg-[#26272D]">
+        <div className="h-full shrink-0">
+          <aside
+            className={cn(
+              'h-full shrink-0 overflow-hidden bg-bg-surface transition-[width,border-color] duration-200 ease-out',
+              filmstripCollapsed
+                ? 'w-0 border-r border-transparent'
+                : cn('border-r border-border-subtle/70', compact ? 'w-[118px]' : 'w-[166px]'),
+            )}
+            aria-hidden={filmstripCollapsed}
+            aria-label={t('session.presentation.thumbnailsAria')}
+          >
+            {!filmstripCollapsed ? (
+              <div className={cn('flex h-full flex-col', compact ? 'w-[118px]' : 'w-[166px]')}>
+                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-3">
+                  {document.slides.map((slide, index) => (
+                    <button
+                      type="button"
+                      key={slide.id}
+                      onClick={() => selectSlide(slide.id)}
+                      className={cn(
+                        'group flex items-start gap-1 rounded-lg p-1 text-left transition-colors hover:bg-bg-hover/80',
+                        slide.id === currentSlide?.id && 'bg-brand-purple/8',
+                      )}
+                      aria-label={t('session.presentation.slideAria', { index: index + 1, name: slide.name })}
+                    >
+                      <span className={cn('w-4 shrink-0 pt-0.5 text-right text-2xs text-text-tertiary', slide.id === currentSlide?.id && 'font-semibold text-brand-purple')}>{index + 1}</span>
+                      <PresentationSlidePreview pageSize={pageSize} slide={slide} slideNumber={index + 1} width={previewWidth} selected={slide.id === currentSlide?.id} />
+                    </button>
+                  ))}
+                </div>
+                <div
+                  className="mt-auto grid h-11 shrink-0 grid-cols-3 gap-1 border-t border-border-subtle/60 bg-bg-surface px-2 py-1.5"
+                  data-testid="presentation-filmstrip-footer"
+                >
+                  <MiniButton label={t('session.presentation.newSlide')} onClick={addSlide}><PlusIcon /></MiniButton>
+                  <MiniButton label={t('session.presentation.duplicateSlide')} onClick={duplicateSlide}><DuplicateIcon /></MiniButton>
+                  <MiniButton label={t('session.presentation.deleteSlide')} onClick={deleteSlide} disabled={document.slides.length <= 1}><TrashIcon /></MiniButton>
+                </div>
+              </div>
+            ) : null}
+          </aside>
+        </div>
+
+        <section className="flex min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1">
+            <main ref={stageRef} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_36%,#F5F6F8_0%,#E4E6EB_78%)] dark:bg-[radial-gradient(circle_at_50%_36%,#35363D_0%,#25262C_82%)]">
+              <div
+                className="relative shrink-0 overflow-hidden ring-1 ring-black/5 shadow-[0_24px_62px_rgba(30,27,48,0.18),0_3px_12px_rgba(30,27,48,0.1)] dark:ring-white/10"
+                style={{ width: pageSize.width * canvasScale, height: pageSize.height * canvasScale }}
+              >
+                <div className="absolute left-0 top-0 origin-top-left" style={{ width: pageSize.width, height: pageSize.height, transform: `scale(${canvasScale})` }}>
+                  <canvas ref={canvasElementRef} aria-label={t('session.presentation.canvasAria')} />
+                </div>
+                {viewOptions.gridlines ? (
+                  <div
+                    className="pointer-events-none absolute inset-0 z-[5]"
+                    data-testid="presentation-gridlines"
+                    style={{
+                      backgroundImage: 'linear-gradient(to right, rgba(79,70,120,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(79,70,120,0.16) 1px, transparent 1px)',
+                      backgroundSize: `${40 * canvasScale}px ${40 * canvasScale}px`,
+                    }}
+                  />
+                ) : null}
+                {viewOptions.guides ? (
+                  <div className="pointer-events-none absolute inset-0 z-[6]" data-testid="presentation-guides">
+                    <span className="absolute inset-y-0 left-1/2 border-l border-dashed border-[#E0529C]/80" />
+                    <span className="absolute inset-x-0 top-1/2 border-t border-dashed border-[#E0529C]/80" />
+                  </div>
+                ) : null}
+                {viewOptions.ruler ? (
+                  <div className="pointer-events-none absolute inset-0 z-[7] text-[8px] text-[#4A4860]" data-testid="presentation-ruler">
+                    <span
+                      className="absolute inset-x-0 top-0 h-4 border-b border-black/15 bg-white/80"
+                      style={{ backgroundImage: 'repeating-linear-gradient(to right, transparent 0, transparent 9px, rgba(45,43,61,0.45) 9px, rgba(45,43,61,0.45) 10px)' }}
+                    />
+                    <span
+                      className="absolute inset-y-0 left-0 w-4 border-r border-black/15 bg-white/80"
+                      style={{ backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0, transparent 9px, rgba(45,43,61,0.45) 9px, rgba(45,43,61,0.45) 10px)' }}
+                    />
+                  </div>
+                ) : null}
+                {ribbonTab === 'animations' && !animationMarkersHidden && currentSlide ? (
+                  <div className="pointer-events-none absolute inset-0 z-10" data-testid="presentation-animation-markers">
+                    {getPresentationAnimationTargets(currentSlide.elements).map((target, index) => (
+                      <span
+                        key={target.id}
+                        className="absolute flex size-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white bg-[#2678E8] text-[9px] font-bold text-white shadow-sm"
+                        style={{ left: target.bounds.x * canvasScale, top: target.bounds.y * canvasScale }}
+                      >
+                        {index + 1}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {animationPreviewRun && currentSlide && animationPreviewRun.slide.id === currentSlide.id ? (
+                  <div className="absolute inset-0 z-20">
+                    <PresentationAnimationPlayer
+                      className="size-full"
+                      elementIds={animationPreviewRun.elementIds}
+                      onComplete={() => setAnimationPreviewRun((run) => run?.runKey === animationPreviewRun.runKey ? null : run)}
+                      pageSize={pageSize}
+                      runKey={animationPreviewRun.runKey}
+                      slide={animationPreviewRun.slide}
+                      slideNumber={animationPreviewRun.slideNumber}
+                      width={pageSize.width * canvasScale}
+                    />
+                  </div>
+                ) : null}
+                {transitionPreviewRun && currentSlide && transitionPreviewRun.slideId === currentSlide.id ? (
+                  <div className="absolute inset-0 z-20">
+                    <PresentationTransitionPlayer
+                      previous={transitionPreviewPreviousSlide
+                        ? <PresentationSlidePreview pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} width={pageSize.width * canvasScale} selected={false} presentation />
+                        : <span className="block size-full bg-black" />}
+                      current={<PresentationSlidePreview pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} width={pageSize.width * canvasScale} selected={false} presentation />}
+                      transition={transitionPreviewRun.transition}
+                      runKey={transitionPreviewRun.runKey}
+                      onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
+                      className="size-full"
+                    />
+                  </div>
+                ) : null}
+              </div>
+              {active && canvasGeneration === 0 ? (
+                <span className="absolute rounded-full bg-bg-elevated px-3 py-1.5 text-xs text-text-secondary shadow-sm">{t('session.presentation.loadingCanvas')}</span>
+              ) : null}
+            </main>
+
+            {inspectorOpen && inspectorMode === 'animation' ? (
+              <AnimationInspector currentSlide={currentSlide} selectedElement={selectedAnimationElement} onClose={() => setInspectorOpen(false)} onElementChange={updateSelectedElement} onPreviewAnimation={previewSelectedAnimation} onSelectElement={selectPresentationElement} />
+            ) : null}
+            {inspectorOpen && inspectorMode === 'layers' ? (
+              <PresentationLayersInspector
+                currentSlide={currentSlide}
+                selectedElement={selectedElement}
+                onClose={() => setInspectorOpen(false)}
+                onMoveElement={moveSelectedElement}
+                onSelectElement={selectPresentationElement}
+              />
+            ) : null}
+            {inspectorOpen && inspectorMode === 'comments' ? (
+              <PresentationCommentsInspector
+                comments={currentSlide?.comments ?? []}
+                onAdd={addPresentationComment}
+                onClose={() => setInspectorOpen(false)}
+                onSelectElement={selectPresentationElement}
+                onUpdate={updatePresentationComment}
+              />
+            ) : null}
+            {!compact && inspectorOpen && inspectorMode === 'properties' ? (
+              <PresentationInspector
+                currentSlide={currentSlide}
+                selectedElement={selectedElement}
+                onEditElement={(element) => {
+                  if (isPresentationTableElement(element) || isPresentationChartElement(element)) {
+                    setInsertDialog({ kind: element.type, elementId: element.id })
+                  }
+                }}
+                onElementChange={updateSelectedElement}
+                onSlideBackgroundChange={updateSlideBackground}
+              />
+            ) : null}
+          </div>
+
+          {viewOptions.notes ? (
+            <label className={cn('flex shrink-0 items-start gap-2 border-t border-border-subtle/65 bg-bg-surface px-3 py-2', compact ? 'h-11' : 'h-14')}>
+              <MessageSquareText className="mt-0.5 size-4 shrink-0 text-text-tertiary" />
+              <textarea
+                aria-label={t('session.presentation.notes')}
+                data-testid="presentation-notes"
+                value={currentSlide?.notes ?? ''}
+                onInput={updateSlideNotes}
+                placeholder={t('session.presentation.notesPlaceholder')}
+                className="h-full min-w-0 flex-1 resize-none bg-transparent text-xs leading-relaxed text-text-secondary outline-none placeholder:text-text-tertiary/75"
+              />
+            </label>
+          ) : null}
+
+          <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border-subtle/65 bg-bg-surface px-2.5 text-[10px] text-text-tertiary">
+            <span>{t('session.presentation.pageCount', { current: Math.max(1, document.slides.findIndex((slide) => slide.id === currentSlide?.id) + 1), total: document.slides.length })}</span>
+            <div className="flex items-center gap-0.5">
+              <StatusButton label={t('session.presentation.normalView')} active><Rows3 className="size-3.5" /></StatusButton>
+              <StatusButton label={t('session.presentation.sorterView')} onClick={() => setFilmstripCollapsed(false)}><Grid2X2 className="size-3.5" /></StatusButton>
+              <span className="mx-1 h-4 w-px bg-border-subtle" />
+              <StatusButton label={t('session.presentation.playFromCurrent')} onClick={startSlideshow}><Play className="size-3.5" /></StatusButton>
+              <StatusButton label={t('session.presentation.fitSlide')} onClick={fitCanvas}><MonitorPlay className="size-3.5" /></StatusButton>
+              <span className="mx-1 h-4 w-px bg-border-subtle" />
+              <StatusButton label={t('session.presentation.zoomOut')} onClick={() => setCanvasScale((value) => Math.max(0.12, value - 0.05))}><ZoomOut className="size-3.5" /></StatusButton>
+              <span className="w-9 text-center tabular-nums">{Math.round(canvasScale * 100)}%</span>
+              <StatusButton label={t('session.presentation.zoomIn')} onClick={() => setCanvasScale((value) => Math.min(1.25, value + 0.05))}><ZoomIn className="size-3.5" /></StatusButton>
+            </div>
+          </footer>
+        </section>
+      </div>
+
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/svg+xml"
+        className="hidden"
+        data-testid="presentation-image-input"
+        onChange={(event) => void insertFile('image', event)}
+      />
+      <input
+        ref={audioInputRef}
+        type="file"
+        accept="audio/mpeg,audio/wav,audio/mp4,audio/ogg"
+        className="hidden"
+        data-testid="presentation-audio-input"
+        onChange={(event) => void insertFile('audio', event)}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/mp4,video/webm,video/quicktime"
+        className="hidden"
+        data-testid="presentation-video-input"
+        onChange={(event) => void insertFile('video', event)}
+      />
+      <PresentationInsertDialogs
+        open={insertDialog?.kind ?? null}
+        initialValue={insertDialogInitialValue}
+        linkLabelEditable={!insertDialogElement || isPresentationTextElement(insertDialogElement)}
+        slides={document.slides.map((slide) => ({ id: slide.id, name: slide.name }))}
+        onClose={() => setInsertDialog(null)}
+        onSubmit={submitInsertDialog}
+      />
+      {masterDialogOpen ? (
+        <PresentationMasterDialog
+          master={document.master}
+          onApply={applyPresentationMaster}
+          onClose={() => setMasterDialogOpen(false)}
+        />
+      ) : null}
+
+      {slideshowOpen && slideshowSlide ? (
+        <SlideshowOverlay
+          key={slideshowSlide.id}
+          current={slideshowTargetIndex + 1}
+          pageSize={pageSize}
+          slide={slideshowSlide}
+          transitionRun={slideshowTransitionView}
+          total={document.slides.length}
+          onActivateHyperlink={activateSlideshowHyperlink}
+          onClose={() => {
+            setSlideshowOpen(false)
+            setSlideshowTransition(null)
+          }}
+          onNext={(completed) => goToSlideshowIndex(slideshowIndex + 1, completed)}
+          onPrevious={(completed) => goToSlideshowIndex(slideshowIndex - 1, completed)}
+          onTransitionComplete={() => {
+            if (!slideshowTransition) return
+            setSlideshowIndex(slideshowTransition.toIndex)
+            setSlideshowTransition(null)
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function PresentationMasterDialog({ master, onApply, onClose }: {
+  master: PresentationMaster
+  onApply: (master: PresentationMaster) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState<PresentationMaster>(() => ({ ...master, footer: { ...master.footer } }))
+  const fontFamilies = ['Aptos', 'Aptos Display', 'Arial', 'Georgia', 'Helvetica', 'Times New Roman']
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 p-6 backdrop-blur-[2px]" role="presentation" onMouseDown={onClose}>
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('session.presentation.slideMaster')}
+        data-testid="presentation-master-dialog"
+        className="w-full max-w-[520px] overflow-hidden rounded-xl border border-border-subtle bg-bg-surface shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault()
+          onApply(draft)
+        }}
+      >
+        <div className="flex h-12 items-center justify-between border-b border-border-subtle px-4">
+          <h2 className="text-sm font-semibold text-text-primary">{t('session.presentation.slideMaster')}</h2>
+          <button type="button" onClick={onClose} aria-label={t('session.presentation.closePane')} className="flex size-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover"><X className="size-4" /></button>
+        </div>
+        <div className="grid grid-cols-2 gap-4 p-5 text-xs text-text-secondary">
+          <label className="col-span-2 flex items-center justify-between gap-4">
+            <span>{t('session.presentation.slideBackground')}</span>
+            <input type="color" value={draft.background} onChange={(event) => setDraft((value) => ({ ...value, background: event.target.value }))} className="h-9 w-20 rounded border border-border-subtle bg-transparent" />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span>{t('session.presentation.masterTitleFont')}</span>
+            <select value={draft.titleFontFamily} onChange={(event) => setDraft((value) => ({ ...value, titleFontFamily: event.target.value }))} className="h-9 rounded-md border border-border-subtle bg-bg-app px-2 text-text-primary">
+              {fontFamilies.map((font) => <option key={font} value={font}>{font}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span>{t('session.presentation.masterBodyFont')}</span>
+            <select value={draft.bodyFontFamily} onChange={(event) => setDraft((value) => ({ ...value, bodyFontFamily: event.target.value }))} className="h-9 rounded-md border border-border-subtle bg-bg-app px-2 text-text-primary">
+              {fontFamilies.map((font) => <option key={font} value={font}>{font}</option>)}
+            </select>
+          </label>
+          <label className="col-span-2 flex flex-col gap-1.5">
+            <span>{t('session.presentation.footer')}</span>
+            <input value={draft.footer.text} onChange={(event) => setDraft((value) => ({ ...value, footer: { ...value.footer, text: event.target.value } }))} className="h-9 rounded-md border border-border-subtle bg-bg-app px-3 text-text-primary" />
+          </label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={draft.footer.showDate} onChange={(event) => setDraft((value) => ({ ...value, footer: { ...value.footer, showDate: event.target.checked } }))} />{t('session.presentation.insertDialog.showDate')}</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={draft.footer.showSlideNumber} onChange={(event) => setDraft((value) => ({ ...value, footer: { ...value.footer, showSlideNumber: event.target.checked } }))} />{t('session.presentation.insertDialog.showSlideNumber')}</label>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border-subtle px-4 py-3">
+          <button type="button" onClick={onClose} className="h-8 rounded-md border border-border-subtle px-4 text-xs text-text-secondary hover:bg-bg-hover">{t('common.cancel')}</button>
+          <button type="submit" className="h-8 rounded-md bg-brand-purple px-4 text-xs font-semibold text-white hover:opacity-90">{t('session.presentation.applyToAll')}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function StatusButton({ children, active, label, onClick = () => undefined }: {
+  children: ReactNode
+  active?: boolean
+  label: string
+  onClick?: () => void
+}) {
+  return (
+    <PresentationControlTooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active}
+        onClick={onClick}
+        className={cn(
+          'flex size-6 items-center justify-center rounded text-text-tertiary hover:bg-bg-hover hover:text-text-primary',
+          active && 'bg-bg-selected text-text-secondary',
+        )}
+      >
+        {children}
+      </button>
+    </PresentationControlTooltip>
+  )
+}
+
+function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, total, transitionRun }: {
+  current: number
+  onActivateHyperlink: (hyperlink: PresentationHyperlink, completedTargetIds: ReadonlySet<string>) => void
+  onClose: () => void
+  onNext: (completedTargetIds: ReadonlySet<string>) => void
+  onPrevious: (completedTargetIds: ReadonlySet<string>) => void
+  onTransitionComplete: () => void
+  pageSize: PresentationPageSize
+  slide: PresentationSlide
+  total: number
+  transitionRun: SlideshowTransitionView | null
+}) {
+  const { t } = useTranslation()
+  const steps = useMemo(() => buildPresentationAnimationPlaybackSteps(slide.elements), [slide.elements])
+  const [completedTargetIds, setCompletedTargetIds] = useState<Set<string>>(() => new Set())
+  const [runningStepId, setRunningStepId] = useState<string | null>(null)
+  const [animationRunKey, setAnimationRunKey] = useState(0)
+  const [controlsVisible, setControlsVisible] = useState(true)
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window === 'undefined' ? 1_280 : window.innerWidth,
+    height: typeof window === 'undefined' ? 720 : window.innerHeight,
+  }))
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const runningStep = steps.find((step) => step.id === runningStepId) ?? null
+  const slideshowRatio = pageSize.width / pageSize.height
+  const slideshowWidth = Math.max(320, Math.floor(Math.min(
+    Math.max(320, viewport.width - 56),
+    Math.max(180, viewport.height - 132) * slideshowRatio,
+  )))
+  const slideshowHeight = slideshowWidth * (pageSize.height / pageSize.width)
+  const slideshowScale = slideshowWidth / pageSize.width
+  const slideshowProgress = total > 0 ? Math.max(0, Math.min(100, (current / total) * 100)) : 0
+  const hiddenElementIds = useMemo(() => (
+    getPresentationAnimationHiddenElementIds(slide.elements, completedTargetIds)
+  ), [completedTargetIds, slide.elements])
+  const revealControls = useCallback(() => {
+    setControlsVisible(true)
+    if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
+    controlsTimerRef.current = setTimeout(() => setControlsVisible(false), 2_400)
+  }, [])
+  const startStep = useCallback((step: (typeof steps)[number]) => {
+    if (transitionRun || runningStepId) return
+    setRunningStepId(step.id)
+    setAnimationRunKey((value) => value + 1)
+  }, [runningStepId, transitionRun])
+  const advance = useCallback(() => {
+    if (transitionRun || runningStepId) return
+    const nextStep = steps.find((step) => (
+      step.trigger === 'slideClick' && step.targetIds.some((targetId) => !completedTargetIds.has(targetId))
+    ))
+    if (nextStep) {
+      startStep(nextStep)
+      return
+    }
+    onNext(completedTargetIds)
+  }, [completedTargetIds, onNext, runningStepId, startStep, steps, transitionRun])
+
+  useEffect(() => {
+    const automaticStep = steps.find((step) => (
+      step.trigger === 'slideEnter' && step.targetIds.some((targetId) => !completedTargetIds.has(targetId))
+    ))
+    if (!automaticStep) return
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) startStep(automaticStep) })
+    return () => { cancelled = true }
+  }, [completedTargetIds, startStep, steps])
+
+  useEffect(() => {
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight })
+    window.addEventListener('resize', onResize)
+    controlsTimerRef.current = setTimeout(() => setControlsVisible(false), 2_400)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = resolvePresentationSlideshowKeyAction(event.target, event.key)
+      if (action === 'close') {
+        onClose()
+      } else if (action === 'next') {
+        event.preventDefault()
+        revealControls()
+        advance()
+      } else if (action === 'previous') {
+        event.preventDefault()
+        revealControls()
+        onPrevious(completedTargetIds)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [advance, completedTargetIds, onClose, onPrevious, revealControls])
+
+  const activateHyperlink = useCallback((hyperlink: PresentationHyperlink) => onActivateHyperlink(hyperlink, completedTargetIds), [completedTargetIds, onActivateHyperlink])
+
+  const completeRunningStep = () => {
+    if (!runningStep) return
+    setCompletedTargetIds((completed) => new Set([...completed, ...runningStep.targetIds]))
+    setRunningStepId(null)
+  }
+
+  let slideshowContent: ReactNode
+  if (transitionRun) {
+    slideshowContent = (
+      <PresentationTransitionPlayer
+        previous={(
+          <PresentationSlidePreview
+            pageSize={pageSize}
+            animationStates={getPresentationAnimationDisplayStates(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
+            hiddenElementIds={getPresentationAnimationHiddenElementIds(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
+            slide={transitionRun.previousSlide}
+            slideNumber={transitionRun.fromIndex + 1}
+            width={slideshowWidth}
+            selected={false}
+            presentation
+            suppressMediaPlayback
+            onActivateHyperlink={activateHyperlink}
+          />
+        )}
+        current={<PresentationSlidePreview pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
+        transition={transitionRun.transition}
+        runKey={transitionRun.runKey}
+        direction={transitionRun.direction}
+        onComplete={onTransitionComplete}
+        className="size-full"
+      />
+    )
+  } else {
+    // Keep the base slide mounted between animation steps so unrelated media keeps playing.
+    slideshowContent = (
+      <PresentationAnimationPlayer
+        baseHiddenElementIds={hiddenElementIds}
+        completedTargetIds={completedTargetIds}
+        className="size-full"
+        elementIds={runningStep?.elementIds ?? []}
+        onComplete={runningStep ? completeRunningStep : undefined}
+        onActivateHyperlink={activateHyperlink}
+        suppressMediaPlayback={false}
+        pageSize={pageSize}
+        runKey={animationRunKey}
+        slide={slide}
+        slideNumber={current}
+        width={slideshowWidth}
+      />
+    )
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-label={t('session.presentation.slideshow')}
+      aria-modal="true"
+      className={cn(
+        'app-no-drag fixed inset-0 z-[200] flex items-center justify-center overflow-hidden bg-[#08090D] text-white',
+        !controlsVisible && 'cursor-none',
+      )}
+      data-testid="presentation-slideshow"
+      data-controls-visible={controlsVisible}
+      onPointerMove={revealControls}
+      onPointerDown={revealControls}
+    >
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_44%,rgba(88,91,112,0.34)_0%,rgba(26,27,36,0.26)_46%,rgba(8,9,13,0)_72%),linear-gradient(180deg,#111219_0%,#08090D_100%)]" />
+      <div
+        className={cn(
+          'pointer-events-none absolute inset-x-0 top-0 z-40 flex items-center justify-between px-5 py-4 transition-all duration-300',
+          controlsVisible ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0',
+        )}
+        data-testid="presentation-slideshow-header"
+      >
+        <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1.5 text-[11px] font-medium tracking-wide text-white/65 shadow-sm backdrop-blur-xl">
+          {t('session.presentation.slideshow')}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('session.presentation.closeSlideshow')}
+          className="pointer-events-auto flex h-9 items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 text-xs text-white/75 shadow-lg backdrop-blur-xl transition-colors hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+        >
+          <X className="size-4" />
+          <span>{t('session.presentation.closeSlideshow')}</span>
+          <kbd className="rounded border border-white/10 bg-white/10 px-1.5 py-0.5 font-sans text-[9px] text-white/55">Esc</kbd>
+        </button>
+      </div>
+      <div className="relative z-10 flex size-full items-center justify-center" data-testid="presentation-slideshow-stage">
+        <div
+          className="relative shrink-0 overflow-hidden rounded-[3px] ring-1 ring-white/10 shadow-[0_32px_90px_rgba(0,0,0,0.58),0_6px_24px_rgba(0,0,0,0.44)]"
+          style={{ width: slideshowWidth, height: slideshowHeight }}
+          data-testid="presentation-slideshow-frame"
+          onClick={(event) => {
+            const target = event.target instanceof Element ? event.target : null
+            if (target?.closest('button, a, audio, video')) return
+            advance()
+          }}
+        >
+          {slideshowContent}
+          {!transitionRun && !runningStep ? steps.filter((step) => (
+            step.trigger === 'elementClick' && step.targetIds.some((targetId) => !completedTargetIds.has(targetId))
+          )).map((step) => (
+            <button
+              key={step.id}
+              type="button"
+              aria-label={t('session.presentation.triggerElementClick')}
+              className="absolute z-20 bg-transparent"
+              style={{
+                left: step.bounds.x * slideshowScale,
+                top: step.bounds.y * slideshowScale,
+                width: step.bounds.width * slideshowScale,
+                height: step.bounds.height * slideshowScale,
+              }}
+              onClick={(event) => {
+                event.stopPropagation()
+                startStep(step)
+              }}
+            />
+          )) : null}
+        </div>
+      </div>
+      <div
+        className={cn(
+          'pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-4 transition-all duration-300',
+          controlsVisible ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0',
+        )}
+      >
+        <div
+          className="pointer-events-auto flex h-12 items-center gap-1.5 rounded-full border border-white/10 bg-[#15161C]/78 p-1.5 shadow-[0_16px_48px_rgba(0,0,0,0.46)] backdrop-blur-2xl"
+          data-testid="presentation-slideshow-controls"
+          onPointerMove={revealControls}
+        >
+          <button
+            type="button"
+            disabled={current <= 1 || Boolean(transitionRun)}
+            onClick={() => onPrevious(completedTargetIds)}
+            aria-label={t('session.presentation.previousSlide')}
+            className="flex size-9 items-center justify-center rounded-full text-white/75 transition-colors hover:bg-white/12 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-default disabled:text-white/20"
+          >
+            <ChevronLeft className="size-[18px]" />
+          </button>
+          <div className="flex w-36 flex-col gap-1 px-2 sm:w-44">
+            <div className="flex items-center justify-between text-[10px] font-medium tabular-nums text-white/60">
+              <span>{current} / {total}</span>
+              <span>{Math.round(slideshowProgress)}%</span>
+            </div>
+            <span
+              role="progressbar"
+              aria-label={t('session.presentation.pageCount', { current, total })}
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={current}
+              className="h-1 overflow-hidden rounded-full bg-white/12"
+              data-testid="presentation-slideshow-progress"
+            >
+              <span className="block h-full rounded-full bg-white/80 transition-[width] duration-300" style={{ width: `${slideshowProgress}%` }} />
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={(current >= total && !steps.some((step) => step.trigger === 'slideClick' && step.targetIds.some((targetId) => !completedTargetIds.has(targetId)))) || Boolean(transitionRun) || Boolean(runningStep)}
+            onClick={advance}
+            aria-label={t('session.presentation.nextSlide')}
+            className="flex size-9 items-center justify-center rounded-full bg-white text-[#171820] shadow-sm transition-colors hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-default disabled:bg-white/10 disabled:text-white/25"
+          >
+            <ChevronRight className="size-[18px]" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PresentationLayersInspector({ currentSlide, onClose, onMoveElement, onSelectElement, selectedElement }: {
+  currentSlide: PresentationSlide | undefined
+  onClose: () => void
+  onMoveElement: (direction: 'front' | 'back') => void
+  onSelectElement: (elementId: string) => void
+  selectedElement: PresentationElement | null
+}) {
+  const { t } = useTranslation()
+  const elements = [...(currentSlide?.elements ?? [])].reverse()
+  return (
+    <aside className="w-[238px] shrink-0 overflow-y-auto border-l border-border-subtle/60 bg-bg-surface/90" data-testid="presentation-layers-pane">
+      <div className="flex h-12 items-center justify-between border-b border-border-subtle/60 px-4">
+        <h3 className="text-sm font-semibold text-text-primary">{t('session.presentation.allLayers')}</h3>
+        <button type="button" onClick={onClose} aria-label={t('session.presentation.closePane')} className="flex size-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"><X className="size-4" /></button>
+      </div>
+      <div className="flex gap-1 border-b border-border-subtle/60 p-2">
+        <button type="button" disabled={!selectedElement} onClick={() => onMoveElement('front')} className="flex h-8 flex-1 items-center justify-center gap-1 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-bg-hover disabled:opacity-35"><ChevronRight className="size-3.5 -rotate-90" />{t('session.presentation.moveUp')}</button>
+        <button type="button" disabled={!selectedElement} onClick={() => onMoveElement('back')} className="flex h-8 flex-1 items-center justify-center gap-1 rounded-md border border-border-subtle text-xs text-text-secondary hover:bg-bg-hover disabled:opacity-35"><ChevronRight className="size-3.5 rotate-90" />{t('session.presentation.moveDown')}</button>
+      </div>
+      <div className="space-y-1 p-2">
+        {elements.map((element, index) => {
+          const label = isPresentationTextElement(element) && element.text.trim()
+            ? element.text.trim().replace(/\s+/g, ' ').slice(0, 32)
+            : element.type
+          return (
+            <button
+              key={element.id}
+              type="button"
+              aria-pressed={selectedElement?.id === element.id}
+              data-presentation-layer-id={element.id}
+              onClick={() => onSelectElement(element.id)}
+              className={cn(
+                'flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-text-secondary hover:bg-bg-hover',
+                selectedElement?.id === element.id && 'bg-brand-purple/10 text-brand-purple',
+              )}
+            >
+              <span className="w-5 shrink-0 text-center text-[10px] tabular-nums text-text-tertiary">{elements.length - index}</span>
+              <span className="min-w-0 flex-1 truncate">{label}</span>
+            </button>
+          )
+        })}
+      </div>
+    </aside>
+  )
+}
+
+function PresentationCommentsInspector({ comments, onAdd, onClose, onSelectElement, onUpdate }: {
+  comments: readonly PresentationComment[]
+  onAdd: (text: string) => void
+  onClose: () => void
+  onSelectElement: (elementId: string) => void
+  onUpdate: (commentId: string, patch: Partial<PresentationComment>) => void
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState('')
+  const submit = () => {
+    if (!draft.trim()) return
+    onAdd(draft)
+    setDraft('')
+  }
+  return (
+    <aside className="flex w-[268px] shrink-0 flex-col border-l border-border-subtle/60 bg-bg-surface/95" data-testid="presentation-comments-pane">
+      <div className="flex h-12 items-center justify-between border-b border-border-subtle/60 px-4">
+        <h3 className="text-sm font-semibold text-text-primary">{t('session.presentation.comments')}</h3>
+        <button type="button" onClick={onClose} aria-label={t('session.presentation.closePane')} className="flex size-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover"><X className="size-4" /></button>
+      </div>
+      <div className="border-b border-border-subtle/60 p-3">
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder={t('session.presentation.commentPlaceholder')}
+          className="h-20 w-full resize-none rounded-md border border-border-subtle bg-bg-app p-2 text-xs text-text-primary outline-none focus:border-brand-purple"
+          data-testid="presentation-comment-input"
+        />
+        <button type="button" disabled={!draft.trim()} onClick={submit} className="mt-2 h-8 w-full rounded-md bg-brand-purple text-xs font-semibold text-white disabled:opacity-35" data-testid="presentation-add-comment">{t('session.presentation.addComment')}</button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+        {comments.length === 0 ? <p className="py-8 text-center text-xs text-text-tertiary">{t('session.presentation.noComments')}</p> : null}
+        {[...comments].reverse().map((comment) => (
+          <article key={comment.id} className={cn('rounded-lg border border-border-subtle bg-bg-app p-3', comment.resolved && 'opacity-55')} data-presentation-comment-id={comment.id}>
+            <div className="flex items-center justify-between gap-2">
+              <strong className="truncate text-xs text-text-primary">{comment.author}</strong>
+              <time className="shrink-0 text-[9px] text-text-tertiary">{new Date(comment.createdAt).toLocaleDateString()}</time>
+            </div>
+            <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{comment.text}</p>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {comment.elementId ? <button type="button" onClick={() => onSelectElement(comment.elementId!)} className="rounded px-1.5 py-1 text-[10px] text-brand-purple hover:bg-brand-purple/10">{t('session.presentation.showCommentTarget')}</button> : null}
+              <button type="button" onClick={() => onUpdate(comment.id, { resolved: !comment.resolved })} className="rounded px-1.5 py-1 text-[10px] text-text-secondary hover:bg-bg-hover">{t(comment.resolved ? 'session.presentation.reopenComment' : 'session.presentation.resolveComment')}</button>
+              <button type="button" onClick={() => onUpdate(comment.id, { text: '' })} className="rounded px-1.5 py-1 text-[10px] text-status-error hover:bg-status-error/10">{t('session.presentation.deleteComment')}</button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+function AnimationInspector({ currentSlide, onClose, onElementChange, onPreviewAnimation, onSelectElement, selectedElement }: {
+  currentSlide: PresentationSlide | undefined
+  onClose: () => void
+  onElementChange: (patch: Partial<PresentationElement>) => void
+  onPreviewAnimation: (animationOverride?: Partial<PresentationElement>) => void
+  onSelectElement: (elementId: string) => void
+  selectedElement: PresentationElement | null
+}) {
+  const { t } = useTranslation()
+  const animationTargets = getPresentationAnimationTargets(currentSlide?.elements ?? [])
+  const animation = selectedElement ? normalizePresentationAnimation(selectedElement) : null
+  const effectOptions: PresentationAnimationEffect[] = [
+    'appear',
+    'fade',
+    'blinds',
+    'checkerboard',
+    'dissolve',
+    'flyIn',
+    'floatIn',
+    'split',
+    'wipeIn',
+    'zoomIn',
+    'zoom',
+    'fillColor',
+    'textColor',
+    'disappear',
+    'blindsOut',
+  ]
+  return (
+    <aside className="w-[238px] shrink-0 overflow-y-auto border-l border-border-subtle/60 bg-bg-surface/90">
+      <div className="flex h-12 items-center justify-between border-b border-border-subtle/60 px-4">
+        <h3 className="text-sm font-semibold text-text-primary">{t('session.presentation.animation')}</h3>
+        <button type="button" onClick={onClose} aria-label={t('session.presentation.closePane')} className="flex size-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary"><X className="size-4" /></button>
+      </div>
+      <div className="space-y-3 p-4">
+        <button
+          type="button"
+          disabled={!selectedElement}
+          onClick={() => {
+            const patch: Partial<PresentationElement> = { animation: hasPresentationAnimation(selectedElement) ? selectedElement!.animation : 'appear' }
+            onElementChange(patch)
+            onPreviewAnimation(patch)
+          }}
+          className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium text-text-secondary hover:bg-bg-hover disabled:opacity-40"
+          data-testid="presentation-animation-pane-add"
+        >
+          <span className="flex size-5 items-center justify-center rounded-full bg-[#2678E8] text-sm font-semibold text-white">+</span>
+          {t('session.presentation.addAnimation')}
+        </button>
+        {animationTargets.length > 0 ? (
+          <div className="space-y-1" data-testid="presentation-animation-pane-list">
+            {animationTargets.map((target, index) => {
+              const element = target.animationElement
+              return (
+                <button
+                  key={target.id}
+                  type="button"
+                  aria-pressed={element.id === selectedElement?.id}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-hover',
+                    element.id === selectedElement?.id && 'bg-brand-purple/10 text-brand-purple',
+                  )}
+                  onClick={() => onSelectElement(element.id)}
+                >
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[#2678E8] text-[10px] font-semibold text-white">{index + 1}</span>
+                  <span className="min-w-0 flex-1 truncate">{isPresentationTextElement(element) ? element.text || element.type : element.type}</span>
+                  <span className="shrink-0 text-[10px]">{t(presentationAnimationLabelKeys[element.animation ?? 'none'])}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+        {selectedElement && hasPresentationAnimation(selectedElement) && animation ? (
+          <div className="rounded-lg border border-border-subtle bg-bg-app/60 p-3">
+            <label className="flex items-center justify-between gap-2 text-xs text-text-secondary">
+              {t('session.presentation.animationEffect')}
+              <select
+                aria-label={t('session.presentation.animationEffect')}
+                value={animation.effect}
+                onChange={(event) => {
+                  const patch: Partial<PresentationElement> = { animation: event.target.value as PresentationAnimationEffect }
+                  onElementChange(patch)
+                  onPreviewAnimation(patch)
+                }}
+                className="h-7 w-28 rounded-md border border-border-default bg-bg-surface px-1 text-xs outline-none focus:border-brand-purple"
+              >
+                {effectOptions.map((effect) => <option key={effect} value={effect}>{t(presentationAnimationLabelKeys[effect])}</option>)}
+              </select>
+            </label>
+            <label className="mt-3 flex items-center justify-between gap-2 text-xs text-text-secondary">
+              {t('session.presentation.startMode')}
+              <select
+                aria-label={t('session.presentation.startMode')}
+                value={animation.start}
+                onChange={(event) => onElementChange({ animationStart: event.target.value as 'onClick' | 'withPrevious' | 'afterPrevious' })}
+                className="h-7 w-28 rounded-md border border-border-default bg-bg-surface px-1 text-xs outline-none focus:border-brand-purple"
+              >
+                <option value="onClick">{t('session.presentation.startOnClick')}</option>
+                <option value="withPrevious">{t('session.presentation.startWithPrevious')}</option>
+                <option value="afterPrevious">{t('session.presentation.startAfterPrevious')}</option>
+              </select>
+            </label>
+            <label className="mt-3 flex items-center justify-between gap-2 text-xs text-text-secondary">
+              {t('session.presentation.delay')}
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={Number((animation.delayMs / 1000).toFixed(2))}
+                onChange={(event) => onElementChange({ animationDelay: Math.round(Math.max(0, Number(event.target.value) || 0) * 1000) })}
+                className="h-7 w-20 rounded-md border border-border-default bg-bg-surface px-2 text-right text-xs outline-none focus:border-brand-purple"
+              />
+            </label>
+            <label className="mt-3 flex items-center justify-between gap-2 text-xs text-text-secondary">
+              {t('session.presentation.duration')}
+              <input
+                type="number"
+                min={0.18}
+                step={0.1}
+                value={Number((animation.durationMs / 1000).toFixed(2))}
+                onChange={(event) => onElementChange({ animationDuration: Math.round(Math.max(0.18, Number(event.target.value) || 0.18) * 1000) })}
+                className="h-7 w-20 rounded-md border border-border-default bg-bg-surface px-2 text-right text-xs outline-none focus:border-brand-purple"
+              />
+            </label>
+            <button
+              type="button"
+              className="mt-3 h-8 w-full rounded-md border border-border-default text-xs text-status-error hover:bg-bg-hover"
+              onClick={() => onElementChange({ animation: 'none', animationColor: undefined, animationDelay: undefined, animationDuration: undefined, animationStart: undefined, animationTrigger: undefined })}
+            >
+              {t('session.presentation.removeAnimation')}
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs leading-relaxed text-text-tertiary">{selectedElement ? t('session.presentation.addAnimationHint') : t('session.presentation.selectElementForAnimation')}</p>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+function PresentationInspector({
+  currentSlide,
+  selectedElement,
+  onEditElement,
+  onElementChange,
+  onSlideBackgroundChange,
+}: {
+  currentSlide: PresentationSlide | undefined
+  selectedElement: PresentationElement | null
+  onEditElement: (element: PresentationElement) => void
+  onElementChange: (patch: Partial<PresentationElement>) => void
+  onSlideBackgroundChange: (event: ChangeEvent<HTMLInputElement>) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <aside className="w-[214px] shrink-0 overflow-y-auto border-l border-border-subtle/60 bg-bg-surface/85 p-3">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+        {t('session.presentation.properties')}
+      </h3>
+      {selectedElement ? (
+        <div className="space-y-3">
+          {isPresentationTextElement(selectedElement) ? (
+            <ColorField
+              label={t('session.presentation.textColor')}
+              value={selectedElement.color}
+              onChange={(value) => onElementChange({ color: value })}
+            />
+          ) : null}
+          {isPresentationShapeElement(selectedElement) ? (
+            <ColorField
+              label={t('session.presentation.fill')}
+              value={selectedElement.fill}
+              onChange={(value) => onElementChange({ fill: value })}
+            />
+          ) : null}
+          {isPresentationTextElement(selectedElement) ? (
+            <div className="grid grid-cols-[1fr_72px] gap-2">
+              <label className="block min-w-0 text-2xs font-medium text-text-tertiary">
+                {t('session.presentation.fontFamily')}
+                <select
+                  value={selectedElement.fontFamily}
+                  onChange={(event) => onElementChange({ fontFamily: event.target.value })}
+                  className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-1.5 text-xs text-text-primary outline-none focus:border-brand-purple"
+                >
+                  <option value="Aptos">Aptos</option>
+                  <option value="Aptos Display">Aptos Display</option>
+                  <option value="Arial">Arial</option>
+                  <option value="Helvetica">Helvetica</option>
+                  <option value="Georgia">Georgia</option>
+                  <option value="Times New Roman">Times New Roman</option>
+                  <option value="Courier New">Courier New</option>
+                </select>
+              </label>
+              <PresentationNumberField
+                label={t('session.presentation.fontSize')}
+                value={selectedElement.fontSize}
+                min={8}
+                onChange={(value) => onElementChange({ fontSize: value })}
+              />
+            </div>
+          ) : null}
+          {isPresentationImageElement(selectedElement) ? (
+            <div className="space-y-2">
+              <label className="block text-2xs font-medium text-text-tertiary">
+                {t('session.presentation.insertDialog.imageFit')}
+                <select
+                  value={selectedElement.fit}
+                  onChange={(event) => onElementChange({ fit: event.target.value as PresentationImageElement['fit'] } as Partial<PresentationImageElement>)}
+                  className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-1.5 text-xs text-text-primary outline-none focus:border-brand-purple"
+                >
+                  <option value="contain">{t('session.presentation.insertDialog.contain')}</option>
+                  <option value="cover">{t('session.presentation.insertDialog.cover')}</option>
+                </select>
+              </label>
+              <label className="block text-2xs font-medium text-text-tertiary">
+                {t('session.presentation.insertDialog.imageAltText')}
+                <input
+                  value={selectedElement.altText}
+                  onChange={(event) => onElementChange({ altText: event.target.value } as Partial<PresentationImageElement>)}
+                  className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-2 text-xs text-text-primary outline-none focus:border-brand-purple"
+                />
+              </label>
+            </div>
+          ) : null}
+          {isPresentationMediaElement(selectedElement) ? (
+            <div className="space-y-2 rounded-md border border-border-subtle bg-bg-app/55 p-2">
+              <InspectorCheckbox
+                checked={selectedElement.autoplay}
+                label={t('session.presentation.insertDialog.autoplay')}
+                onChange={(checked) => onElementChange({ autoplay: checked } as Partial<PresentationMediaElement>)}
+              />
+              <InspectorCheckbox
+                checked={selectedElement.loop}
+                label={t('session.presentation.insertDialog.loop')}
+                onChange={(checked) => onElementChange({ loop: checked } as Partial<PresentationMediaElement>)}
+              />
+              <InspectorCheckbox
+                checked={selectedElement.muted}
+                label={t('session.presentation.insertDialog.muted')}
+                onChange={(checked) => onElementChange({ muted: checked } as Partial<PresentationMediaElement>)}
+              />
+              <p className="text-[10px] leading-4 text-text-tertiary">
+                {t('session.presentation.insertDialog.playbackSettingsAppOnly')}
+              </p>
+            </div>
+          ) : null}
+          {isPresentationTableElement(selectedElement) ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <ColorField label={t('session.presentation.insertDialog.headerFill')} value={selectedElement.headerFill} onChange={(value) => onElementChange({ headerFill: value } as Partial<PresentationTableElement>)} />
+                <ColorField label={t('session.presentation.insertDialog.bodyFill')} value={selectedElement.bodyFill} onChange={(value) => onElementChange({ bodyFill: value } as Partial<PresentationTableElement>)} />
+              </div>
+              <button type="button" onClick={() => onEditElement(selectedElement)} className="h-8 w-full rounded-md border border-border-default text-xs font-medium text-text-secondary hover:bg-bg-hover">
+                {t('session.presentation.insertDialog.editData')}
+              </button>
+            </div>
+          ) : null}
+          {isPresentationChartElement(selectedElement) ? (
+            <div className="space-y-2">
+              <InspectorCheckbox
+                checked={selectedElement.showLegend}
+                label={t('session.presentation.insertDialog.showLegend')}
+                onChange={(checked) => onElementChange({ showLegend: checked } as Partial<typeof selectedElement>)}
+              />
+              <button type="button" onClick={() => onEditElement(selectedElement)} className="h-8 w-full rounded-md border border-border-default text-xs font-medium text-text-secondary hover:bg-bg-hover">
+                {t('session.presentation.insertDialog.editData')}
+              </button>
+            </div>
+          ) : null}
+          {selectedElement.hyperlink ? (
+            <button
+              type="button"
+              onClick={() => onElementChange({ hyperlink: undefined })}
+              className="h-8 w-full rounded-md border border-border-default text-xs font-medium text-text-secondary hover:bg-bg-hover"
+            >
+              {t('session.presentation.insertDialog.removeLink')}
+            </button>
+          ) : null}
+          <div className="grid grid-cols-2 gap-2">
+            <PresentationNumberField label="X" value={selectedElement.x} onChange={(value) => onElementChange({ x: value })} />
+            <PresentationNumberField label="Y" value={selectedElement.y} onChange={(value) => onElementChange({ y: value })} />
+            <PresentationNumberField label={t('session.presentation.width')} value={selectedElement.width} min={8} onChange={(value) => onElementChange({ width: value })} />
+            <PresentationNumberField label={t('session.presentation.height')} value={selectedElement.height} min={8} onChange={(value) => onElementChange({ height: value })} />
+          </div>
+          {!isPresentationRotationLocked(selectedElement) ? (
+            <PresentationNumberField
+              label={t('session.presentation.rotation')}
+              value={selectedElement.rotation}
+              onChange={(value) => onElementChange({ rotation: value })}
+            />
+          ) : null}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs leading-relaxed text-text-tertiary">
+            {t('session.presentation.noSelection')}
+          </p>
+          {currentSlide ? (
+            <label className="flex items-center justify-between gap-3 text-xs text-text-secondary">
+              {t('session.presentation.slideBackground')}
+              <input
+                type="color"
+                className="h-7 w-10 cursor-pointer rounded border border-border-default bg-transparent p-0.5"
+                value={currentSlide.background}
+                onChange={onSlideBackgroundChange}
+              />
+            </label>
+          ) : null}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function MiniButton({ children, disabled, label, onClick }: {
+  children: ReactNode
+  disabled?: boolean
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <PresentationControlTooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        className="flex h-7 items-center justify-center rounded-md text-text-tertiary hover:bg-bg-hover hover:text-text-primary disabled:opacity-30"
+      >
+        {children}
+      </button>
+    </PresentationControlTooltip>
+  )
+}
+
+function PresentationControlTooltip({ children, content, placement = 'auto' }: { children: ReactElement; content: ReactNode; placement?: 'auto' | 'bottom' }) {
+  return <Tooltip appearance="presentation" content={content} delayMs={0} placement={placement}>{children}</Tooltip>
+}
+
+function InspectorCheckbox({ checked, label, onChange }: {
+  checked: boolean
+  label: string
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs text-text-secondary">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="size-3.5 accent-brand-purple"
+      />
+      {label}
+    </label>
+  )
+}
+
+export function PresentationNumberField({ label, min, value, onChange }: {
+  label: string
+  min?: number
+  value: number
+  onChange: (value: number) => void
+}) {
+  const [draft, setDraft] = useState(String(Math.round(value)))
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(String(Math.round(value)))
+  }, [value])
+
+  const commitDraft = () => {
+    focusedRef.current = false
+    const next = resolvePresentationNumberFieldValue(draft, min, value)
+    setDraft(String(next))
+    if (next !== value) onChange(next)
+  }
+
+  return (
+    <label className="block text-2xs font-medium text-text-tertiary">
+      {label}
+      <input
+        type="number"
+        min={min}
+        value={draft}
+        onFocus={() => {
+          focusedRef.current = true
+        }}
+        onChange={(event) => {
+          const raw = event.target.value
+          setDraft(raw)
+          if (!raw.trim()) return
+          const next = Number(raw)
+          if (Number.isFinite(next) && (min === undefined || next >= min)) onChange(next)
+        }}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+        className="mt-1 h-7 w-full rounded-md border border-border-default bg-bg-app px-2 text-xs text-text-primary outline-none focus:border-brand-purple"
+      />
+    </label>
+  )
+}
+
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-xs text-text-secondary">
+      {label}
+      <input
+        type="color"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-7 w-10 cursor-pointer rounded border border-border-default bg-transparent p-0.5"
+      />
+    </label>
+  )
+}
+
+function PresentationMark() {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2.5" width="12" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><path d="M5 14h6M8 11.5V14M4.5 5.2h5M4.5 7.5h7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+}
+
+function PlusIcon() {
+  return <svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+}
+
+function DuplicateIcon() {
+  return <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="3" width="8" height="9" rx="1.2" stroke="currentColor" strokeWidth="1.3" /><path d="M3 5v7a2 2 0 002 2h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+}
+
+function TrashIcon() {
+  return <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3.5 5h9M6 3h4M5 5l.5 8h5l.5-8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>
+}

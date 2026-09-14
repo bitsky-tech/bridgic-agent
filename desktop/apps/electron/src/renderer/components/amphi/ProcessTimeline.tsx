@@ -22,6 +22,8 @@ import { Icons } from './Icons'
 import { Collapse } from './Collapse'
 import { StickyScroll } from './StickyScroll'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
+import { PresentationOutlineConfirmCard } from './PresentationOutlineConfirmCard'
+import { PresentationTemplateSelectionCard } from './PresentationTemplateSelectionCard'
 import { MessageThinking } from './MessageThinking'
 import { ToolCallRow } from './ToolCallRow'
 import { SubagentCard } from './SubagentCard'
@@ -51,6 +53,8 @@ export interface ProcessTimelineProps {
   defaultOpen?: boolean
   /** Session receiving interaction responses from timeline cards. */
   sessionId?: string
+  /** Inline embeds show the same process blocks without the aggregate header or collapse. */
+  presentation?: 'collapsible' | 'inline'
 }
 
 type WorkflowStepBlock = Extract<MessageBlock, { type: 'workflow_step' }>
@@ -60,7 +64,7 @@ type TimelineSection =
   | { type: 'build'; key: string; stage: BuildStage; blocks: MessageBlock[] }
 type StageTimelineSection = Exclude<TimelineSection, { type: 'blocks' }>
 
-export function ProcessTimeline({ blocks, streaming = false, active = streaming, defaultOpen = false, sessionId }: ProcessTimelineProps) {
+export function ProcessTimeline({ blocks, streaming = false, active = streaming, defaultOpen = false, sessionId, presentation = 'collapsible' }: ProcessTimelineProps) {
   const { t } = useTranslation()
   // userOpen=null → follow the default (expanded while streaming / defaultOpen, collapsed otherwise); once the user clicks the
   // title it is pinned to an explicit true/false — which is what lets the user actively collapse it (overriding the expanded
@@ -111,6 +115,46 @@ export function ProcessTimeline({ blocks, streaming = false, active = streaming,
   }
   flushLooseBlocks()
   const activeBuildKey = activeSection?.type === 'build' ? activeSection.key : null
+  const content = sections.map((section) => {
+    if (section.type === 'workflow') {
+      return (
+        <WorkflowStageSection
+          key={section.key}
+          step={section.step}
+          active={active}
+          blocks={section.blocks}
+          streaming={streaming}
+          sessionId={sessionId}
+        />
+      )
+    }
+    if (section.type === 'build') {
+      return (
+        <BuildStageSection
+          key={section.key}
+          stage={section.stage}
+          blocks={section.blocks}
+          active={section.key === activeBuildKey && active}
+          streaming={streaming}
+          sessionId={sessionId}
+        />
+      )
+    }
+    return (
+      <div key={section.key} className="flex flex-col gap-3.5">
+        {section.blocks.map((block, i) => (
+          <TimelineBlock
+            key={timelineKey(block, i)}
+            block={block}
+            streaming={streaming}
+            sessionId={sessionId}
+          />
+        ))}
+      </div>
+    )
+  })
+
+  if (presentation === 'inline') return <div className="flex flex-col gap-3.5">{content}</div>
 
   return (
     <div>
@@ -135,44 +179,7 @@ export function ProcessTimeline({ blocks, streaming = false, active = streaming,
       </div>
       <Collapse open={open}>
         <div className="flex flex-col gap-3.5 pt-3">
-          {sections.map((section) => {
-            if (section.type === 'workflow') {
-              return (
-                <WorkflowStageSection
-                  key={section.key}
-                  step={section.step}
-                  active={active}
-                  blocks={section.blocks}
-                  streaming={streaming}
-                  sessionId={sessionId}
-                />
-              )
-            }
-            if (section.type === 'build') {
-              return (
-                <BuildStageSection
-                  key={section.key}
-                  stage={section.stage}
-                  blocks={section.blocks}
-                  active={section.key === activeBuildKey && active}
-                  streaming={streaming}
-                  sessionId={sessionId}
-                />
-              )
-            }
-            return (
-              <div key={section.key} className="flex flex-col gap-3.5">
-                {section.blocks.map((block, i) => (
-                  <TimelineBlock
-                    key={timelineKey(block, i)}
-                    block={block}
-                    streaming={streaming}
-                    sessionId={sessionId}
-                  />
-                ))}
-              </div>
-            )
-          })}
+          {content}
         </div>
       </Collapse>
     </div>
@@ -214,6 +221,14 @@ function TimelineBlock({ block, streaming, sessionId }: { block: MessageBlock; s
   ) {
     if ('status' in block && (block.status ?? 'pending') === 'pending') return null
     return <CompletedInteractionRow block={block} sessionId={sessionId} />
+  }
+  if (block.type === 'presentation_outline_confirm') {
+    if ((block.status ?? 'pending') === 'pending') return null
+    return <PresentationOutlineConfirmCard block={block} sessionId={sessionId} />
+  }
+  if (block.type === 'presentation_template_selection') {
+    if ((block.status ?? 'pending') === 'pending') return null
+    return <PresentationTemplateSelectionCard block={block} sessionId={sessionId} />
   }
   return null
 }

@@ -15,7 +15,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { hasConversationAtom } from '@/atoms/agent'
 import { pendingCommentsAtom } from '@/atoms/build'
-import { bootPendingAtom } from '@/atoms/sessions'
+import { activeSessionIdAtom, bootPendingAtom } from '@/atoms/sessions'
 import { ComposerTarget, activeNavAtom, ModalKind, openModalAtom } from '@/atoms/amphi'
 import { scheduleDetailIdAtom, schedulesAtom } from '@/atoms/schedules'
 import { openScheduleSessionAtom } from '@/atoms/schedule-session'
@@ -48,10 +48,14 @@ import { ChatInputZone } from '@/components/composer'
 import { CommentFeedbackPanel } from './CommentFeedbackPanel'
 import { FocusModeHeader } from './FocusModeHeader'
 import type { WorkflowSummary } from '@/lib/amphiClient'
+import type { DesktopAppExtensions } from './DesktopAppExtensions'
+
+type CenterViewProps = Pick<DesktopAppExtensions, 'ConversationHistory'>
 
 /** Session view stacking Pipeline + composer vertically (Home nav with an existing conversation). */
-function ConversationView() {
+function ConversationView({ ConversationHistory }: CenterViewProps) {
   const { t } = useTranslation()
+  const sessionId = useAtomValue(activeSessionIdAtom)
   const hasPendingComments = useAtomValue(pendingCommentsAtom).length > 0
   return (
     // grid-cols-[minmax(0,1fr)]: a single-column grid defaults to `auto`, and an auto track's minimum is
@@ -62,7 +66,9 @@ function ConversationView() {
     <div className="grid grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] h-full min-w-0 overflow-hidden">
       <FocusModeHeader />
       <div className="row-start-2 min-w-0 min-h-0 overflow-hidden">
-        <Pipeline />
+        {ConversationHistory && sessionId
+          ? <ConversationHistory key={sessionId} sessionId={sessionId} />
+          : <Pipeline />}
       </div>
       {/* Composer area: 12px top + 24px horizontal + 16px bottom + top divider + one shade lighter background.
           Matches the padding/border/bg of center.jsx::InputBar in the design mock. pt-3 gives the composer
@@ -93,7 +99,7 @@ function ConversationView() {
 }
 
 /** Center-column content: the nav → view router. Mounted in AppLayout's center slot. */
-export function CenterView() {
+export function CenterView({ ConversationHistory }: CenterViewProps = {}) {
   const { t } = useTranslation()
   const activeNav = useAtomValue(activeNavAtom)
   const hasConversation = useAtomValue(hasConversationAtom)
@@ -174,7 +180,7 @@ export function CenterView() {
     return <CenterAssets />
   }
   if (hasConversation) {
-    return <ConversationView />
+    return <ConversationView ConversationHistory={ConversationHistory} />
   }
   // The boot placement decision is not in yet (waiting for daemon Ready + on-disk truth) → render a blank placeholder.
   // Rendering Landing directly would make a refresh that restores a session "flash Landing → jump to the session".

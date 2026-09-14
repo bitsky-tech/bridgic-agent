@@ -49,7 +49,10 @@ const EXEMPT_FILES = new Set([
 const ALLOWED: Record<string, string> = {
   // A historical persisted provider default must be recognized after an upgrade.
   'desktop/apps/electron/src/renderer/atoms/models-presets.ts': 'legacy GLM display name stored by earlier app versions',
-
+  'desktop/apps/electron/src/renderer/excel/excelDataOperations.ts': 'total-row detection matches existing Chinese sheet labels independently of the UI locale',
+  'desktop/apps/electron/src/renderer/lib/presentationText.ts': 'authored font-family matching and East Asian document numbering glyphs must remain locale-independent',
+  'lab/src/experiments/presentation-highlights.ts': 'legacy captured audience and reading-mode question headers identify response fields when question ids are absent',
+  'src/amphi_agent/tools/ppt/template_catalog.py': 'template classification matches source text, vendor names, and the source preview directory name',
 }
 
 function trackedSources(): string[] {

@@ -1,6 +1,6 @@
 import pytest
 
-from src.amphi_agent._browser import (
+from src.amphi_agent.browser import (
     EmbeddedBrowserUnavailableError,
     _EmbeddedSessionTabs,
     _EmbeddedTargetAttachTimeout,

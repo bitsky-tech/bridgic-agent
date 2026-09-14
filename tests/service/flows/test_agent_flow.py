@@ -5,7 +5,7 @@ import asyncio
 import httpx
 from bridgic.core.model.types import Role
 
-from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA
 from tests.service.flows._scripted_llm import FLOW_MODEL, ScriptedLlm
 
 

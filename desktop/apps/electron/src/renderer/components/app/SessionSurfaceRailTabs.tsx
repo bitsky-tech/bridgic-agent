@@ -1,10 +1,15 @@
 /** Permanent workbench tabs rendered below the Bridgic entry in the Session rail. */
 import { useTranslation } from 'react-i18next'
+import type { ReactNode } from 'react'
 import { SessionWorkbenchSurface } from '@/atoms/browser'
 import { Icons } from '@/components/amphi/Icons'
+import { OFFICE_APP_KINDS, type OfficeAppKind, type OfficeSurfaceStatuses } from '@/lib/office/officeSurfaceStatus'
+import { OfficeSurfaceRailButton, type OfficeRailLabels } from './OfficeSurfaceRailButton'
 import { SurfaceRailButton } from './SessionSurfaceChrome'
+import { EMPTY_SESSION_EXTENSIONS, extensionSurfaceTestId, type SessionWorkbenchExtension } from './DesktopAppExtensions'
 
 export interface SessionSurfaceRailTabsProps {
+  extensions?: readonly SessionWorkbenchExtension[]
   browserAriaLabel: string
   browserLabel: string
   browserNeedsAttention: boolean
@@ -15,11 +20,14 @@ export interface SessionSurfaceRailTabsProps {
   isContentOpen: boolean
   isModeSelected: boolean
   onSelect: (surface: SessionWorkbenchSurface) => void
+  officeStatuses: OfficeSurfaceStatuses
+  seenOfficeSurface: OfficeAppKind | null
   selectedSurface: SessionWorkbenchSurface
 }
 
-/** Render the four independent Session tools with a Browser-specific activity state. */
+/** Office entries share one status contract; other tools keep their own domain adapters. */
 export function SessionSurfaceRailTabs({
+  extensions = EMPTY_SESSION_EXTENSIONS,
   browserAriaLabel,
   browserLabel,
   browserNeedsAttention,
@@ -30,6 +38,8 @@ export function SessionSurfaceRailTabs({
   isContentOpen,
   isModeSelected,
   onSelect,
+  officeStatuses,
+  seenOfficeSurface,
   selectedSurface,
 }: SessionSurfaceRailTabsProps) {
   const { t } = useTranslation()
@@ -41,6 +51,7 @@ export function SessionSurfaceRailTabs({
       icon: Icons.folder(17),
       isOpenInBackground: false,
       label: t('session.resourcePanel.files'),
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Files,
       testId: 'session-workbench-files',
     },
@@ -49,6 +60,7 @@ export function SessionSurfaceRailTabs({
       icon: Icons.workflow(17),
       isOpenInBackground: false,
       label: t('session.resourcePanel.workflows'),
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Workflows,
       testId: 'session-workbench-workflows',
     },
@@ -57,23 +69,41 @@ export function SessionSurfaceRailTabs({
       icon: Icons.workflowResult(17),
       isOpenInBackground: false,
       label: t('session.resourcePanel.results'),
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Results,
       testId: 'session-workbench-results',
     },
+    ...OFFICE_APP_KINDS.map((surface) => ({ surface, office: true as const })),
     {
       ariaLabel: browserAriaLabel,
       icon: Icons.globe(17),
       label: browserLabel,
       isOpenInBackground: hasBrowserOpenPage,
+      showActiveIndicator: true,
       surface: SessionWorkbenchSurface.Browser,
       testId: 'session-workbench-browser',
     },
   ] as const
 
-  return tools.map((tool) => {
+  const builtInTabs = tools.map((tool) => {
     const isBrowser = tool.surface === SessionWorkbenchSurface.Browser
     const isFiles = tool.surface === SessionWorkbenchSurface.Files
     const isSelected = !isModeSelected && selectedSurface === tool.surface
+    if ('office' in tool) {
+      const status = officeStatuses[tool.surface]
+      return (
+        <OfficeSurfaceRailButton
+          icon={officeDefinitions[tool.surface].icon}
+          isActive={isContentOpen && isSelected}
+          isSeen={seenOfficeSurface === tool.surface}
+          isSelected={isSelected}
+          key={`${status.sessionId}:${tool.surface}`}
+          labels={officeDefinitions[tool.surface]}
+          onClick={() => onSelect(tool.surface)}
+          status={status}
+        />
+      )
+    }
     return (
       <SurfaceRailButton
         isActive={isContentOpen && isSelected}
@@ -83,13 +113,69 @@ export function SessionSurfaceRailTabs({
         key={tool.surface}
         label={tool.label}
         isOpenInBackground={tool.isOpenInBackground ?? false}
+        showActiveIndicator={tool.showActiveIndicator}
         isBusy={isBrowser && isBrowserBusy}
         isPulsing={isBrowser && isBrowserAgentActive && !browserNeedsAttention}
-        needsAttention={(isBrowser && browserNeedsAttention) || (isFiles && filesNeedsAttention)}
+        needsAttention={(
+          (isBrowser && browserNeedsAttention)
+          || (isFiles && filesNeedsAttention)
+        )}
         isSelected={isSelected}
         testId={tool.testId}
         onClick={() => onSelect(tool.surface)}
       />
     )
   })
+  return (
+    <>
+      {builtInTabs}
+      <SessionExtensionRailTabs
+        extensions={extensions.filter((extension) => extension.placement !== 'agent')}
+        isContentOpen={isContentOpen}
+        isModeSelected={isModeSelected}
+        selectedSurface={selectedSurface}
+        onSelect={onSelect}
+      />
+    </>
+  )
+}
+
+/** Extension placement changes the rail order, never selection or native handoff behavior. */
+export function SessionExtensionRailTabs({
+  extensions = EMPTY_SESSION_EXTENSIONS,
+  isContentOpen,
+  isModeSelected,
+  selectedSurface,
+  onSelect,
+}: Pick<SessionSurfaceRailTabsProps, 'extensions' | 'isContentOpen' | 'isModeSelected' | 'selectedSurface' | 'onSelect'>) {
+  return extensions.map((extension) => {
+    const isSelected = !isModeSelected && selectedSurface === extension.id
+    const testId = extensionSurfaceTestId(extension.id)
+    return (
+      <SurfaceRailButton
+        key={extension.id}
+        isActive={isContentOpen && isSelected}
+        isSelected={isSelected}
+        ariaLabel={extension.label}
+        controls={`${testId}-content`}
+        icon={extension.icon}
+        label={extension.label}
+        testId={testId}
+        onClick={() => onSelect(extension.id)}
+      />
+    )
+  })
+}
+
+const officeDefinitions: Readonly<Record<OfficeAppKind, OfficeRailLabels & { icon: ReactNode }>> = {
+  presentation: {
+    icon: Icons.presentation(17),
+    title: 'session.resourcePanel.presentation',
+    agentActive: 'session.resourcePanel.presentationAgentActive',
+    activeShort: 'session.resourcePanel.presentationActiveShort',
+    needsAttention: 'session.resourcePanel.presentationNeedsAttention',
+    opened: 'session.resourcePanel.presentationOpened',
+  },
+  word: { icon: Icons.wordDocument(17), title: 'session.resourcePanel.word' },
+  excel: { icon: Icons.spreadsheet(17), title: 'session.resourcePanel.excel' },
 }

@@ -48,6 +48,7 @@ import type {
   AskUserQuestion,
   ContextUsageSnapshot,
   PermissionItem,
+  PresentationTemplateCandidate,
   SubAgentMode,
   ThinkPosition,
   WorkflowRunState,
@@ -717,6 +718,49 @@ const contextUsageSnapshotSchema = z.object({
     current_input_tokens: 0,
   }),
 })
+
+const presentationTemplateCandidateSchema = z.object({
+  template_id: z.string(),
+  version: z.string(),
+  title: z.string(),
+  aspect_ratio: z.string().nullable().optional(),
+  slide_count: z.number().int().positive().nullable().optional(),
+  semantic_tags: z.array(z.string()).default([]),
+  strengths: z.array(z.string()).default([]),
+  colors: z.array(z.string()).default([]),
+  fonts: z.array(z.string()).default([]),
+  preview_paths: z.array(z.string()).default([]),
+  role_coverage: z.number().min(0).max(1).nullable().optional(),
+  agentic_fit: z.enum(['strong', 'usable', 'weak']).nullable().optional(),
+  agentic_reason: z.string().nullable().optional(),
+  agentic_use_for_roles: z.array(z.string()).default([]),
+  agentic_risks: z.array(z.string()).default([]),
+  structural_evidence: z.record(z.string(), z.unknown()).default({}),
+  materialize_ref: z.record(z.string(), z.unknown()).default({}),
+})
+
+function mapPresentationTemplateCandidate(candidate: z.infer<typeof presentationTemplateCandidateSchema>): PresentationTemplateCandidate {
+  return {
+    templateId: candidate.template_id,
+    version: candidate.version,
+    title: candidate.title,
+    ...(candidate.aspect_ratio !== undefined ? { aspectRatio: candidate.aspect_ratio } : {}),
+    ...(candidate.slide_count !== undefined ? { slideCount: candidate.slide_count } : {}),
+    semanticTags: candidate.semantic_tags,
+    strengths: candidate.strengths,
+    colors: candidate.colors,
+    fonts: candidate.fonts,
+    previewPaths: candidate.preview_paths,
+    ...(candidate.role_coverage !== undefined ? { roleCoverage: candidate.role_coverage } : {}),
+    ...(candidate.agentic_fit !== undefined ? { agenticFit: candidate.agentic_fit } : {}),
+    ...(candidate.agentic_reason !== undefined ? { agenticReason: candidate.agentic_reason } : {}),
+    agenticUseForRoles: candidate.agentic_use_for_roles,
+    agenticRisks: candidate.agentic_risks,
+    structuralEvidence: candidate.structural_evidence,
+    materializeRef: candidate.materialize_ref,
+  }
+}
+
 const sessionTurnSchema = z.object({
   id: z.string(), session_id: z.string(), session_ordinal: z.number().int(),
   user_input: z.object({ text: z.string(), blocks: z.array(z.record(z.string(), z.unknown())) }),
@@ -801,9 +845,45 @@ const sessionMessagesSchema = z
     // Absent/null on fresh sessions and older daemons; stage is nullable.
     thinking_mode: z
       .object({
-        mode: z.enum(['build', 'normal', 'run_workflow']),
+        mode: z.enum(['build', 'normal', 'presentation', 'run_workflow']),
         stage: z.string().nullable().optional(),
         workflow_id: z.string().nullable().optional(),
+        presentation_goal: z.string().nullable().optional(),
+        presentation_step_index: z.number().int().nonnegative().optional(),
+        presentation_reports: z.array(z.object({
+          stage: z.string(),
+          step_id: z.string(),
+          summary: z.string(),
+          evidence: z.array(z.string()).default([]),
+        })).default([]),
+        presentation_sources: z.array(z.object({
+          id: z.string(),
+          kind: z.enum(['web', 'file', 'conversation']),
+          title: z.string(),
+          locator: z.string().nullable().optional(),
+          excerpt: z.string().nullable().optional(),
+          usage: z.string().nullable().optional(),
+        })).default([]),
+        presentation_outline: z.array(z.object({
+          id: z.string(),
+          title: z.string(),
+          summary: z.string().nullable().optional(),
+          slides: z.array(z.object({
+            id: z.string(),
+            title: z.string(),
+            purpose: z.string().nullable().optional(),
+            key_message: z.string().nullable().optional(),
+            content_outline: z.array(z.string()).default([]),
+            source_ids: z.array(z.string()).default([]),
+          })).default([]),
+        })).default([]),
+        presentation_outline_confirmed: z.boolean().default(false),
+        presentation_outline_confirmation_id: z.string().nullable().optional(),
+        presentation_template_candidates: z.array(presentationTemplateCandidateSchema).optional(),
+        presentation_template_selection_id: z.string().nullable().optional(),
+        presentation_template_selection_status: z.enum(['idle', 'pending', 'selected', 'skipped']).optional(),
+        presentation_template_selection_error: z.string().nullable().optional(),
+        presentation_selected_template: presentationTemplateCandidateSchema.nullable().optional(),
       })
       .nullable()
       .optional(),
@@ -1396,6 +1476,42 @@ export class AmphiClient {
         mode: ThinkPosition['mode']
         stage?: string | null
         workflow_id?: string | null
+        presentation_goal?: string | null
+        presentation_step_index?: number
+        presentation_reports?: Array<{
+          stage: string
+          step_id: string
+          summary: string
+          evidence: string[]
+        }>
+        presentation_sources?: Array<{
+          id: string
+          kind: 'web' | 'file' | 'conversation'
+          title: string
+          locator?: string | null
+          excerpt?: string | null
+          usage?: string | null
+        }>
+        presentation_outline?: Array<{
+          id: string
+          title: string
+          summary?: string | null
+          slides: Array<{
+            id: string
+            title: string
+            purpose?: string | null
+            key_message?: string | null
+            content_outline: string[]
+            source_ids: string[]
+          }>
+        }>
+        presentation_outline_confirmed?: boolean
+        presentation_outline_confirmation_id?: string | null
+        presentation_template_candidates?: Array<z.infer<typeof presentationTemplateCandidateSchema>>
+        presentation_template_selection_id?: string | null
+        presentation_template_selection_status?: 'idle' | 'pending' | 'selected' | 'skipped'
+        presentation_template_selection_error?: string | null
+        presentation_selected_template?: z.infer<typeof presentationTemplateCandidateSchema> | null
       } | null
       workflow_run?: {
         workflow_id: string
@@ -1469,6 +1585,51 @@ export class AmphiClient {
             stage: res.thinking_mode.stage ?? null,
             ...(res.thinking_mode.workflow_id
               ? { workflowId: res.thinking_mode.workflow_id }
+              : {}),
+            ...(res.thinking_mode.mode === 'presentation'
+              ? {
+                  presentationGoal: res.thinking_mode.presentation_goal ?? null,
+                  presentationStepIndex: res.thinking_mode.presentation_step_index ?? 0,
+                  presentationReports: (res.thinking_mode.presentation_reports ?? []).map(report => ({
+                    stage: report.stage,
+                    stepId: report.step_id,
+                    summary: report.summary,
+                    evidence: report.evidence,
+                  })),
+                  presentationSources: res.thinking_mode.presentation_sources ?? [],
+                  presentationOutline: (res.thinking_mode.presentation_outline ?? []).map(chapter => ({
+                    id: chapter.id,
+                    title: chapter.title,
+                    ...(chapter.summary !== undefined ? { summary: chapter.summary } : {}),
+                    slides: chapter.slides.map(slide => ({
+                      id: slide.id,
+                      title: slide.title,
+                      ...(slide.purpose !== undefined ? { purpose: slide.purpose } : {}),
+                      ...(slide.key_message !== undefined ? { keyMessage: slide.key_message } : {}),
+                      contentOutline: slide.content_outline,
+                      sourceIds: slide.source_ids,
+                    })),
+                  })),
+                  presentationOutlineConfirmed: res.thinking_mode.presentation_outline_confirmed ?? false,
+                  presentationOutlineConfirmationId: res.thinking_mode.presentation_outline_confirmation_id ?? null,
+                  ...(
+                    res.thinking_mode.presentation_template_candidates !== undefined
+                    || res.thinking_mode.presentation_template_selection_id !== undefined
+                    || res.thinking_mode.presentation_template_selection_status !== undefined
+                    || res.thinking_mode.presentation_template_selection_error !== undefined
+                    || res.thinking_mode.presentation_selected_template !== undefined
+                      ? {
+                          presentationTemplateCandidates: (res.thinking_mode.presentation_template_candidates ?? []).map(mapPresentationTemplateCandidate),
+                          presentationTemplateSelectionId: res.thinking_mode.presentation_template_selection_id ?? null,
+                          presentationTemplateSelectionStatus: res.thinking_mode.presentation_template_selection_status ?? 'idle' as const,
+                          presentationTemplateSelectionError: res.thinking_mode.presentation_template_selection_error ?? null,
+                          presentationSelectedTemplate: res.thinking_mode.presentation_selected_template
+                            ? mapPresentationTemplateCandidate(res.thinking_mode.presentation_selected_template)
+                            : null,
+                        }
+                      : {}
+                  ),
+                }
               : {}),
           }
         : null,

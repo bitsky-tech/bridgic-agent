@@ -100,8 +100,9 @@ failed-Turn marker. `personas.test.ts` checks that source manifest and hash,
 then compares every rendered persona byte-for-byte with the Python renderer in
 both UI languages, including conditional Child delegation guidance.
 
-After intentionally changing `src/amphi_agent/_prompt.py` or a module under
-`src/amphi_agent/prompts/`, refresh the Lab copy from the repository root with:
+The generator imports templates directly from `src/amphi_agent/prompts/`.
+After intentionally changing a module there, refresh the Lab copy from the
+repository root with:
 
 ```sh
 cd lab

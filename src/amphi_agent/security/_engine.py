@@ -1,7 +1,7 @@
 """The permission engine facade — chains the four layers to turn a batch of tool calls
 into a batch of :class:`CallVerdict`.
 
-``permission_check`` depends on this single entry point:
+``handle_action`` depends on this single entry point:
 
     engine = PermissionEngine(workspace_root, mount_roots, mode, classifier)
     verdicts = await engine.evaluate(calls, user_messages)
@@ -22,7 +22,7 @@ from typing import List, Optional
 
 from src.amphi_service.i18n import backend_i18n
 
-from .._state import CallVerdict
+from ..cognitive.state import CallVerdict
 from ._audit import write_verdict_record
 from ._classifier import ClassifyItem, SafetyClassifier
 from ._classify import classify, label_text

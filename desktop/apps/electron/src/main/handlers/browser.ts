@@ -1,9 +1,10 @@
 import { IPC } from '../../shared/ipc-channels'
 import type { EmbeddedBrowserBounds } from '../../shared/types'
 import type { EmbeddedBrowserManager } from '../embedded-browser-manager'
+import type { ExcelHost } from '../excel-host'
 import { loggedHandle } from './logged-handle'
 
-export function registerBrowserHandlers(browser: EmbeddedBrowserManager): void {
+export function registerBrowserHandlers(browser: EmbeddedBrowserManager, excelHost?: ExcelHost): void {
   loggedHandle(IPC.browser.snapshot, () => browser.snapshot())
 
   loggedHandle(IPC.browser.closeSession, (_event, sessionId: string) => {
@@ -63,6 +64,7 @@ export function registerBrowserHandlers(browser: EmbeddedBrowserManager): void {
   })
 
   loggedHandle(IPC.browser.setVisible, (event, visible: boolean, focusHost?: boolean) => {
+    if (visible) excelHost?.setVisible(false)
     browser.setVisible(visible)
     if (!visible && focusHost === true && !event.sender.isDestroyed()) event.sender.focus()
   })

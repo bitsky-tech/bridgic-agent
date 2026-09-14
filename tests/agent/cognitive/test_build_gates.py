@@ -1,8 +1,9 @@
 from src.amphi_agent import AmphiContext
-from src.amphi_agent._cognitive import ClarifyThink, ExploreThink, GenerateThink, VerifyThink
+from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, GenerateThink, VerifyThink
 from src.amphi_agent._workflows import WorkflowLibrary
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive._harness import (
+    legality_reason,
     USER_ID,
     make_session,
     make_workspace,
@@ -46,8 +47,11 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     def write(name: str, body: str) -> None:
         (build.root / name).write_text(body, encoding="utf-8")
 
-    # Check 1: Clarify requires a valid task before confirmation.
-    assert "write task.md" in (await clarify.legality_check(confirm_task, None, context) or "")
+    # Check 1: Clarify requires a readable, non-empty task before confirmation.
+    assert "write task.md" in (await legality_reason(clarify, confirm_task, None, context) or "")
+    for invalid_task in (b" \n\t", b"\xff"):
+        (build.root / "task.md").write_bytes(invalid_task)
+        assert "write task.md" in (await legality_reason(clarify, confirm_task, None, context) or "")
     write(
         "task.md",
         """# Report workflow
@@ -61,7 +65,7 @@ Input -->
 ```
 """,
     )
-    assert await clarify.legality_check(confirm_task, None, context) is None
+    assert await legality_reason(clarify, confirm_task, None, context) is None
     write(
         "task.md",
         """# Report workflow
@@ -77,11 +81,15 @@ Collect the inputs, prepare the report, and deliver it.
 
 ## Final deliverables
 A report containing the requested summary.
+
+# Additional context
+## CODE: optional implementation note
+Formatting conventions do not prevent task review.
 """,
     )
-    assert await clarify.legality_check(confirm_task, None, context) is None
+    assert await legality_reason(clarify, confirm_task, None, context) is None
     assert "reviewed by the user" in (
-        await clarify.legality_check(
+        await legality_reason(clarify,
             tool_call("switch", mode="build", stage="explore"),
             None,
             context,
@@ -91,7 +99,7 @@ A report containing the requested summary.
     # Check 2: Explore hands off only after a valid implementation plan exists.
     explore = ExploreThink()
     generate = tool_call("switch", mode="build", stage="generate")
-    assert "write explore.md" in (await explore.legality_check(generate, None, context) or "")
+    assert "write explore.md" in (await legality_reason(explore, generate, None, context) or "")
     write(
         "explore.md",
         """# Implementation plan
@@ -103,26 +111,26 @@ Read the input, create the report, and validate its contents.
 Additional headings and content are allowed.
 """,
     )
-    assert await explore.legality_check(generate, None, context) is None
+    assert await legality_reason(explore, generate, None, context) is None
 
     # Check 3: Generate hands off only after the Workflow package is executable and validatable.
     generate_worker = GenerateThink()
     verify = tool_call("switch", mode="build", stage="verify")
     assert "workflow/ is missing" in (
-        await generate_worker.legality_check(verify, None, context) or ""
+        await legality_reason(generate_worker, verify, None, context) or ""
     )
     write_workflow_source(build.root)
     source = build.root / "workflow"
     (source / "scripts").mkdir()
     (source / "scripts" / "unused.py").write_text("def obsolete(:\n", encoding="utf-8")
     (source / "VALIDATE.md").write_bytes(b"Unused scripts/missing.py\n\xff")
-    assert await generate_worker.legality_check(verify, None, context) is None
+    assert await legality_reason(generate_worker, verify, None, context) is None
 
-    # Check 4: Verify requests final confirmation only after a valid report ends in PASS.
+    # Check 4: Verify requires the last explicit verdict outside code blocks to be PASS.
     verify_worker = VerifyThink()
     confirm_workflow = tool_call("request_human_workflow_confirm")
     assert "write verify.md" in (
-        await verify_worker.legality_check(confirm_workflow, None, context) or ""
+        await legality_reason(verify_worker, confirm_workflow, None, context) or ""
     )
     write(
         "verify.md",
@@ -135,8 +143,17 @@ FAIL
 """,
     )
     assert "explicit overall `PASS`" in (
-        await verify_worker.legality_check(confirm_workflow, None, context) or ""
+        await legality_reason(verify_worker, confirm_workflow, None, context) or ""
     )
+    for failed_report in (
+        "# Verification\n\n```text\nPASS\n```\n",
+        "# Verification\n\nPASS\n\nFAIL\n",
+        "# Verification\n\nFAIL\n\n~~~text\nPASS\n~~~\n",
+    ):
+        write("verify.md", failed_report)
+        assert "explicit overall `PASS`" in (
+            await legality_reason(verify_worker, confirm_workflow, None, context) or ""
+        )
     write(
         "verify.md",
         """# Verification
@@ -154,4 +171,10 @@ FAIL
 ```
 """,
     )
-    assert await verify_worker.legality_check(confirm_workflow, None, context) is None
+    assert await legality_reason(verify_worker, confirm_workflow, None, context) is None
+    write("verify.md", "PASS\n\nAdditional notes without a prescribed heading.\n")
+    assert await legality_reason(verify_worker, confirm_workflow, None, context) is None
+    (source / "WORKFLOW.md").unlink()
+    assert "WORKFLOW.md" in (
+        await legality_reason(verify_worker, confirm_workflow, None, context) or ""
+    )

@@ -10,6 +10,7 @@ import type { KeyboardEvent, ReactNode, Ref } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/cn'
 import { AgentDockEntry } from './AgentDockEntry'
+import { SurfaceStatusIcon, type SurfaceStatus } from './SurfaceStatusIcon'
 
 export interface WorkbenchSurfaceProps {
   isActive: boolean
@@ -95,6 +96,7 @@ export interface SurfaceRailButtonProps {
   label: string
   onClick: () => void
   isOpenInBackground?: boolean
+  showActiveIndicator?: boolean
   isBusy?: boolean
   isPulsing?: boolean
   isSelected: boolean
@@ -111,6 +113,7 @@ export function SurfaceRailButton({
   label,
   onClick,
   isOpenInBackground = false,
+  showActiveIndicator = true,
   isBusy = false,
   isPulsing = false,
   isSelected,
@@ -118,9 +121,10 @@ export function SurfaceRailButton({
   testId,
 }: SurfaceRailButtonProps) {
   const showAttention = needsAttention
-  let statusIndicatorState = 'background-open'
+  let statusIndicatorState: SurfaceStatus | undefined
   if (showAttention) statusIndicatorState = 'attention'
-  else if (isActive) statusIndicatorState = 'active'
+  else if (isActive && (showActiveIndicator || isOpenInBackground)) statusIndicatorState = 'active'
+  else if (!isActive && isOpenInBackground) statusIndicatorState = 'background-open'
   return (
     <button
       id={`${testId}-tab`}
@@ -137,43 +141,38 @@ export function SurfaceRailButton({
       onClick={onClick}
       onKeyDown={navigateSurfaceRail}
       className={cn(
-        'relative flex h-[50px] w-full flex-col items-center justify-center gap-1 rounded-[10px]',
+        'relative flex h-[50px] w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-[10px]',
         'border border-transparent text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-secondary',
-        isActive && 'bg-bg-selected text-text-primary',
-        isBusy && !showAttention && 'border-brand-blue/30 bg-accent-blue-subtle text-text-accent',
+        isActive && !isBusy && !showAttention && 'text-text-primary hover:bg-transparent hover:text-text-primary',
+        isBusy && !showAttention && 'border-brand-blue/30 bg-accent-blue-subtle text-text-accent hover:bg-accent-blue-subtle hover:text-text-accent',
         showAttention && 'animate-surface-attention border-status-warning/40 bg-status-warning-bg text-status-warning hover:bg-status-warning-bg hover:text-status-warning motion-reduce:animate-none',
       )}
     >
-      {isActive || isOpenInBackground || showAttention ? (
-        <span
-          aria-hidden="true"
-          className={cn(
-            'absolute -right-[3px] top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full',
-            showAttention ? 'bg-status-warning' : 'bg-text-secondary/65',
-          )}
-          data-state={statusIndicatorState}
-          data-testid={`${testId}-status-indicator`}
-        />
-      ) : null}
-      <span className={cn(
-        'flex h-5 items-center justify-center',
-        isBusy && !showAttention && 'text-text-accent',
-        isPulsing && 'animate-pulse motion-reduce:animate-none',
-      )}>
+      <SurfaceStatusIcon
+        busy={isBusy}
+        pulsing={isPulsing}
+        selected={isActive}
+        state={statusIndicatorState}
+        testId={`${testId}-status-indicator`}
+      >
         {icon}
-      </span>
+      </SurfaceStatusIcon>
       {/* 58px is the button's real content box (rail 68 − mx-0.5 4 − dock border 2 − p-px 2 −
           this button's own border 2). It has to be stated explicitly: `truncate` needs a
           definite width, and a flex column's `items-center` lets an oversized child overflow
           instead of clamping it. `tracking-tight` buys back the last couple of pixels so the
           English labels fit without widening the rail or shortening the product's vocabulary. */}
-      <span className="max-w-[58px] truncate text-2xs font-medium leading-none tracking-tight">{label}</span>
+      <span className={cn(
+        'max-w-[58px] truncate text-2xs leading-none tracking-tight',
+        isActive ? 'font-semibold' : 'font-medium',
+      )}>{label}</span>
     </button>
   )
 }
 
 export interface SessionSurfaceRailProps {
   children: ReactNode
+  agentTabs?: ReactNode
   isAgentActive: boolean
   isContentOpen: boolean
   modeAriaLabel: string
@@ -186,6 +185,7 @@ export interface SessionSurfaceRailProps {
 /** Frame the permanent Bridgic entry and tool tablist at the far right of a Session. */
 export function SessionSurfaceRail({
   children,
+  agentTabs,
   isAgentActive,
   isContentOpen,
   modeAriaLabel,
@@ -194,6 +194,7 @@ export function SessionSurfaceRail({
   railAriaLabel,
   railRef,
 }: SessionSurfaceRailProps) {
+  const divider = <div className="mx-1.5 my-1 h-px shrink-0 bg-border-strong" data-testid="session-agent-divider" />
   return (
     <div
       ref={railRef}
@@ -227,8 +228,10 @@ export function SessionSurfaceRail({
           modeAriaLabel={modeAriaLabel}
           onOpenMode={onOpenMode}
         />
-        <div className="mx-1.5 my-1 h-px shrink-0 bg-border-strong" data-testid="session-agent-divider" />
+        {!agentTabs ? divider : null}
         <div role="tablist" aria-orientation="vertical" aria-label={railAriaLabel}>
+          {agentTabs}
+          {agentTabs ? divider : null}
           {children}
         </div>
       </div>

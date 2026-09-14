@@ -3,6 +3,7 @@ from collections import deque
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
@@ -12,15 +13,17 @@ from src.amphi_agent import (
     AmphiAgent,
     AmphiContext,
     AmphiOTAContext,
-    ContextUsageBreakdown,
     ContextWindowExceededError,
     LlmProvider,
     MainThink,
     Session,
 )
-from src.amphi_agent._cognitive import ClarifyThink, ExploreThink, VerifyThink
+from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, VerifyThink
 from src.amphi_agent._invocation import AgentInvocation
-from src.amphi_agent._state import BuildStageState, ContextCompactionState, NormalStageState, WorkflowStageState
+from src.amphi_agent.cognitive.build.state import BuildStageState
+from src.amphi_agent.cognitive.normal.state import NormalStageState
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
+from src.amphi_agent.cognitive.state import ContextCompactionState
 from src.amphi_agent.prompts.compaction import (
     render_session_compaction_prompt,
     render_turn_compaction_prompt,
@@ -114,7 +117,7 @@ def _context(root: str, turns: list[SessionTurnRecord], capacity: int) -> AmphiC
         user_id="local",
         workspace_root=root,
     )
-    return AmphiContext(
+    context = AmphiContext(
         session=Session(record, turns),
         llm_provider=LlmProvider(
             model_id="compaction-model",
@@ -122,38 +125,60 @@ def _context(root: str, turns: list[SessionTurnRecord], capacity: int) -> AmphiC
         ),
     )
 
+    context._cognitive_workers = {("normal", "main"): MainThink(), ("build", "explore"): ExploreThink()}
+    return context
 
-def _record_usage(worker: MainThink, ota: AmphiOTAContext, context: AmphiContext, counts: tuple[int, int]) -> None:
+async def _record_usage(worker: MainThink, ota: AmphiOTAContext, context: AmphiContext, counts: tuple[int | None, int]) -> None:
+    """Record a controlled model response through the worker's normal thinking path."""
     provider_input, estimate = counts
-    result = StreamResult(content="Completed round", tool_calls=[], usage=SimpleNamespace(input_tokens=provider_input, output_tokens=3))
-    worker._record_model_usage(ota, context, result, estimate, ContextUsageBreakdown(dynamic_context_tokens=estimate))
+
+    class UsageLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            usage = SimpleNamespace(input_tokens=provider_input, output_tokens=3) if provider_input is not None else None
+            return StreamResult(content="Completed round", tool_calls=[], usage=usage)
+
+    messages = [Message.from_text("Usage calibration request")]
+    with (
+        patch.object(worker, "_llm", UsageLlm()),
+        patch.object(worker, "assemble_messages", AsyncMock(return_value=messages)),
+        patch.object(worker, "compact_messages", AsyncMock(return_value=messages)),
+        patch.object(worker, "_estimate_request_tokens", return_value=estimate),
+    ):
+        ota.ota_record.append(OTARecord())
+        try:
+            await worker.thinking(ota, context)
+        finally:
+            ota.ota_record.pop()
 
 
-def test_usage_references_follow_stage_visits_without_changing_display(test_sandbox: IsolatedPaths) -> None:
+async def test_usage_references_follow_stage_visits_without_changing_display(test_sandbox: IsolatedPaths) -> None:
     """Each stage owns its calibration; visiting it does not rewrite the latest UI snapshot."""
     context = _context(str(test_sandbox.sessions / "usage-scopes"), [], 200_000)
     ota = AmphiOTAContext(stream=EventStream())
     worker = MainThink()
     visits = [
-        (NormalStageState(), (150_000, 100_000), 30_000),
-        (BuildStageState(stage="generate"), (190_000, 190_000), 20_000),
-        (BuildStageState(stage="verify"), (80_000, 40_000), 40_000),
-        (WorkflowStageState(workflow_id="workflow", generation="generation"), (100_000, 80_000), 25_000),
+        (NormalStageState(), (150_000, 100_000)),
+        (BuildStageState(stage="generate"), (190_000, 190_000)),
+        (BuildStageState(stage="verify"), (80_000, 40_000)),
+        (WorkflowStageState(workflow_id="workflow", generation="generation"), (100_000, 80_000)),
     ]
-    for status, counts, expected in visits:
+    for status, counts in visits:
         ota.transition_think(status)
-        assert worker._project_context_usage(ota, 20_000, context.llm_provider.model_id) == (20_000, "estimated")
-        _record_usage(worker, ota, context, counts)
-        assert worker._project_context_usage(ota, 20_000, context.llm_provider.model_id) == (expected, "provider")
+        assert status.stage not in ota.context_usage.stage_references.get(status.mode, {})
+        await _record_usage(worker, ota, context, counts)
+        reference = ota.context_usage.stage_references[status.mode][status.stage]
+        assert (reference.model_id, reference.input_tokens, reference.estimated_input_tokens) == (
+            context.llm_provider.model_id, *counts,
+        )
     latest = ota.context_usage.model_dump(mode="json")
     events = deepcopy(ota.stream.events)
-    for status, _, expected in visits:
+    for status, _ in visits:
         ota.transition_think(status)
-        assert worker._project_context_usage(ota, 20_000, context.llm_provider.model_id) == (expected, "provider")
+        assert ota.context_usage.stage_references[status.mode][status.stage].model_id == context.llm_provider.model_id
     assert ota.context_usage.model_dump(mode="json") == latest
     assert ota.stream.events == events
     assert len(events) == len(visits)
-    assert ota.context_usage.input_tokens == sum(counts[0] for _, counts, _ in visits)
+    assert ota.context_usage.input_tokens == sum(counts[0] for _, counts in visits)
     assert ota.context_usage.output_tokens == 3 * len(visits)
 
 
@@ -163,29 +188,102 @@ def test_usage_references_follow_stage_visits_without_changing_display(test_sand
     (90_000, 100_000, 20_000, 20_000),
     (190_000, 100_000, 120_000, 228_000),
 ])
-def test_usage_projection_tracks_growth_and_shrinkage(test_sandbox: IsolatedPaths, provider_input: int, old_estimate: int, new_estimate: int, expected: int) -> None:
+async def test_usage_projection_tracks_growth_and_shrinkage(test_sandbox: IsolatedPaths, provider_input: int, old_estimate: int, new_estimate: int, expected: int) -> None:
     """Calibrate today's prompt size rather than retaining yesterday's absolute occupancy."""
-    context = _context(str(test_sandbox.sessions / "usage-size"), [], 200_000)
+    context = _context(str(test_sandbox.sessions / "usage-size"), [], 400_000)
     ota = AmphiOTAContext()
     worker = MainThink()
-    _record_usage(worker, ota, context, (provider_input, old_estimate))
-    assert worker._project_context_usage(ota, new_estimate, context.llm_provider.model_id) == (expected, "provider")
+    await _record_usage(worker, ota, context, (provider_input, old_estimate))
+    messages = [Message.from_text("Current request")]
+    with (
+        patch.object(worker, "_estimate_request_tokens", return_value=new_estimate),
+        patch.object(worker, "compact_history", AsyncMock()) as compact_history,
+    ):
+        await worker.compact_messages(messages, [], ota, context, target=expected)
+        compact_history.assert_not_awaited()
+        await worker.compact_messages(messages, [], ota, context, target=expected - 1)
+        compact_history.assert_awaited_once()
     assert ota.context_usage.used_tokens == provider_input
 
 
-def test_missing_provider_usage_does_not_overwrite_a_measured_reference(test_sandbox: IsolatedPaths) -> None:
+async def test_calibrated_capacity_rejects_unchanged_protected_context(test_sandbox: IsolatedPaths) -> None:
+    """No eligible history cannot make a calibrated oversized request safe to send."""
+    context = _context(str(test_sandbox.sessions / "calibrated-protected"), [], 100_000)
+    ota = AmphiOTAContext(stream=EventStream())
+    llm = SummaryLlm()
+    worker = MainThink(llm)
+    await _record_usage(worker, ota, context, (90_000, 45_000))
+    ota.stream.events.clear()
+    overhead = worker._estimate_request_tokens([Message.from_text("")], [])
+    messages = [Message.from_text("x" * (2 * (55_000 - overhead)))]
+    assert worker._estimate_request_tokens(messages, []) == 55_000
+
+    with pytest.raises(ContextWindowExceededError) as raised:
+        await worker.compact_messages(messages, [], ota, context)
+
+    assert raised.value.estimated_tokens == 110_000
+    assert raised.value.input_capacity == 100_000
+    assert ota.state.context_compaction is None
+    assert not llm.calls
+    assert ota.stream.events == [
+        ("context_compaction", {"active": True}),
+        ("context_compaction", {"active": False}),
+    ]
+
+
+@pytest.mark.parametrize("history_repeats,rejected", [(200, True), (240, False)])
+async def test_calibrated_capacity_validates_rebuilt_context(test_sandbox: IsolatedPaths, history_repeats: int, rejected: bool) -> None:
+    """Validate the smaller request with calibration; the target remains best effort."""
+    records = [
+        OTARecord(think_result={"step_content": "Historical task facts. " * history_repeats, "tool_calls": []})
+        for _ in range(6)
+    ]
+    ota = AmphiOTAContext(user_input="", ota_record=records, stream=EventStream())
+    context = _context(str(test_sandbox.sessions / "calibrated-rebuilt"), [], 100_000)
+    llm = SummaryLlm("Earlier facts")
+    worker = MainThink(llm)
+    messages = await worker.append_runtime_state(await worker.assemble_messages(ota, context), ota, context)
+    initial_tokens = worker._estimate_request_tokens(messages, [])
+    ota.user_input = "x" * (2 * (55_000 - initial_tokens))
+    messages = await worker.append_runtime_state(await worker.assemble_messages(ota, context), ota, context)
+    assert worker._estimate_request_tokens(messages, []) == 55_000
+    await _record_usage(worker, ota, context, (90_000, 45_000))
+    previous_usage = ota.context_usage.model_dump(mode="json")
+    previous_state = AgentInvocation._ota_context_values(ota)["agent_state"]
+    spent_before = worker.spent_tokens
+
+    if rejected:
+        with pytest.raises(ContextWindowExceededError) as raised:
+            await worker.compact_messages(messages, [], ota, context)
+        assert 100_000 <= raised.value.estimated_tokens < 110_000
+        assert raised.value.input_capacity == 100_000
+        assert ota.state.context_compaction is None
+        assert AgentInvocation._ota_context_values(ota)["agent_state"] == previous_state
+    else:
+        rebuilt = await worker.compact_messages(messages, [], ota, context)
+        calibrated_tokens = 2 * worker._estimate_request_tokens(rebuilt, [])
+        assert 60_000 < calibrated_tokens < 100_000
+        assert ota.state.context_compaction.turn["normal"]["main"].turn_covered_rounds == [1, 2]
+
+    assert len(llm.calls) == 1
+    assert worker.spent_tokens == spent_before + 7
+    assert ota.context_usage.input_tokens == previous_usage["input_tokens"] + 5
+    assert ota.context_usage.output_tokens == previous_usage["output_tokens"] + 2
+    assert ota.context_usage.model_dump(mode="json")["stage_references"] == previous_usage["stage_references"]
+    assert ota.stream.events[-1] == ("context_compaction", {"active": False})
+
+
+async def test_missing_provider_usage_does_not_overwrite_a_measured_reference(test_sandbox: IsolatedPaths) -> None:
     """An estimated UI snapshot must not masquerade as a new provider calibration."""
     context = _context(str(test_sandbox.sessions / "missing-counter"), [], 200_000)
     ota = AmphiOTAContext()
     worker = MainThink()
-    _record_usage(worker, ota, context, (80_000, 40_000))
+    await _record_usage(worker, ota, context, (80_000, 40_000))
     previous = ota.context_usage.model_dump(mode="json")
-    result = StreamResult(content="No usage this time", tool_calls=[], usage=None)
-    worker._record_model_usage(ota, context, result, 20_000, ContextUsageBreakdown(dynamic_context_tokens=20_000))
+    await _record_usage(worker, ota, context, (None, 20_000))
     assert ota.context_usage.source == "estimated"
     assert ota.context_usage.used_tokens == 20_000
     assert ota.context_usage.model_dump(mode="json")["stage_references"] == previous["stage_references"]
-    assert worker._project_context_usage(ota, 10_000, context.llm_provider.model_id) == (20_000, "provider")
     assert ota.context_usage.input_tokens == previous["input_tokens"]
     assert ota.context_usage.output_tokens == previous["output_tokens"]
 
@@ -204,7 +302,7 @@ async def test_small_stage_does_not_compact_from_an_unrelated_high_water_mark(te
     worker = VerifyThink(llm)
     if reference == "foreign_stage":
         ota.transition_think(BuildStageState(stage="generate"))
-    _record_usage(worker, ota, context, (190_000, 0 if reference == "zero_estimate" else 190_000))
+    await _record_usage(worker, ota, context, (190_000, 0 if reference == "zero_estimate" else 190_000))
     ota.transition_think(BuildStageState(stage="verify"))
     if reference == "legacy":
         # Old snapshots have no reliable owner: the final Think cursor may already have switched.
@@ -218,7 +316,7 @@ async def test_small_stage_does_not_compact_from_an_unrelated_high_water_mark(te
     tools = [spec.to_tool() for spec in ota.tools]
     estimate = worker._estimate_request_tokens(messages, tools)
     assert estimate < 100_000
-    prepared, _ = await worker._prepare_context_window(messages, tools, ota, context)
+    prepared = await worker.compact_messages(messages, tools, ota, context)
     assert prepared == messages
     assert await worker.compact_messages(messages, tools, ota, context, target=120_000) == messages
     assert not llm.calls
@@ -241,16 +339,16 @@ async def test_current_stage_calibration_still_compacts_and_does_not_retrigger(t
     messages = await worker.append_runtime_state(messages, ota, context)
     tools = [spec.to_tool() for spec in ota.tools]
     estimate = worker._estimate_request_tokens(messages, tools)
-    _record_usage(worker, ota, context, (190_000, estimate))
+    await _record_usage(worker, ota, context, (190_000, estimate))
     references = deepcopy(ota.context_usage.stage_references)
-    rebuilt, reduced_estimate = await worker._prepare_context_window(messages, tools, ota, context)
+    rebuilt = await worker.compact_messages(messages, tools, ota, context)
+    reduced_estimate = worker._estimate_request_tokens(rebuilt, tools)
     assert len(llm.calls) == 1
     assert ota.state.context_compaction.turn["build"]["verify"].turn_covered_rounds == [1, 2]
     assert reduced_estimate < estimate
-    assert worker._project_context_usage(ota, reduced_estimate, context.llm_provider.model_id)[0] < 190_000
     assert ota.context_usage.stage_references == references
     assert ota.context_usage.used_tokens == 190_000
-    await worker._prepare_context_window(rebuilt, tools, ota, context)
+    await worker.compact_messages(rebuilt, tools, ota, context)
     assert len(llm.calls) == 1
 
 
@@ -260,9 +358,9 @@ async def test_stage_usage_references_survive_new_turns(test_sandbox: IsolatedPa
     context = _context(str(test_sandbox.sessions / "usage-resume"), [], 200_000)
     ota = AmphiOTAContext()
     worker = MainThink()
-    _record_usage(worker, ota, context, (150_000, 100_000))
+    await _record_usage(worker, ota, context, (150_000, 100_000))
     ota.transition_think(BuildStageState(stage="verify"))
-    _record_usage(worker, ota, context, (80_000, 40_000))
+    await _record_usage(worker, ota, context, (80_000, 40_000))
     ota.transition_think(NormalStageState())
     previous = _turn(context.session.id, 0, "Previous turn")
     previous.status = status
@@ -272,9 +370,9 @@ async def test_stage_usage_references_survive_new_turns(test_sandbox: IsolatedPa
     current = AmphiOTAContext(user_input="Continue")
     await AmphiAgent().init_state(current, context)
     assert current.context_usage.input_tokens == current.context_usage.output_tokens == 0
-    assert worker._project_context_usage(current, 20_000, context.llm_provider.model_id) == (30_000, "provider")
+    assert current.context_usage.stage_references == ota.context_usage.stage_references
     current.transition_think(BuildStageState(stage="verify"))
-    assert worker._project_context_usage(current, 20_000, context.llm_provider.model_id) == (40_000, "provider")
+    assert current.context_usage.stage_references == ota.context_usage.stage_references
 
 
 async def test_compacts_session_and_turn_together_while_protecting_recent_suffixes(test_sandbox: IsolatedPaths) -> None:

@@ -1,4 +1,4 @@
-/** Session workbench selection plus event-time Browser/Files reveal arbitration. */
+/** Session workbench selection plus event-time Browser/PowerPoint/Files reveal arbitration. */
 import { atom } from 'jotai'
 import {
   setBrowserNeedsAttentionAtom,
@@ -6,6 +6,7 @@ import {
 import {
   setFilesNeedsAttentionAtom,
 } from './files-attention'
+import { setPowerPointNeedsAttentionAtom } from './powerpoint-attention'
 import {
   rightPanelCollapseRequestAtom,
   rightPanelCollapsedAtom,
@@ -25,10 +26,49 @@ export const SessionWorkbenchSurface = {
   Workflows: 'workflows',
   Results: 'results',
   Schedules: 'schedules',
+  Presentation: 'presentation',
+  Word: 'word',
+  Excel: 'excel',
   Browser: 'browser',
 } as const
+export type SessionWorkbenchExtensionId = `extension:${string}`
 export type SessionWorkbenchSurface =
-  (typeof SessionWorkbenchSurface)[keyof typeof SessionWorkbenchSurface]
+  | (typeof SessionWorkbenchSurface)[keyof typeof SessionWorkbenchSurface]
+  | SessionWorkbenchExtensionId
+
+/** An entry point without a previously selected extension restores the file tool. */
+export function resolveSessionWorkbenchSurface(
+  surface: SessionWorkbenchSurface,
+  extensions: readonly { id: SessionWorkbenchExtensionId }[],
+): SessionWorkbenchSurface {
+  if (!surface.startsWith('extension:') || extensions.some(({ id }) => id === surface)) return surface
+  return SessionWorkbenchSurface.Files
+}
+
+interface SessionWorkbenchSurfaceOpenRequest {
+  sessionId: string
+  surface: SessionWorkbenchSurface
+}
+
+const pendingSurfaceOpenRequestAtom = atom<SessionWorkbenchSurfaceOpenRequest | null>(null)
+export const sessionWorkbenchSurfaceOpenRequestAtom = atom((get) => get(pendingSurfaceOpenRequestAtom))
+
+/** Ask the dock to reveal a tool through the same native handoff as a rail click. */
+export const requestSessionWorkbenchSurfaceOpenAtom = atom(
+  null,
+  (get, set, request: SessionWorkbenchSurfaceOpenRequest) => {
+    if (!request.sessionId || get(viewedSessionIdAtom) !== request.sessionId) return
+    set(pendingSurfaceOpenRequestAtom, { ...request })
+  },
+)
+
+/** Consume only the observed request; a newer click must survive an older handoff. */
+export const consumeSessionWorkbenchSurfaceOpenRequestAtom = atom(
+  null,
+  (get, set, request: SessionWorkbenchSurfaceOpenRequest) => {
+    if (get(pendingSurfaceOpenRequestAtom) === request) set(pendingSurfaceOpenRequestAtom, null)
+  },
+)
 
 const workbenchSurfacesBySessionAtom = atom<ReadonlyMap<string, SessionWorkbenchSurface>>(
   new Map(),
@@ -59,9 +99,10 @@ export const setSessionWorkbenchSurfaceAtom = atom(
 export type AttentionWorkbenchSurface =
   | typeof SessionWorkbenchSurface.Browser
   | typeof SessionWorkbenchSurface.Files
+  | typeof SessionWorkbenchSurface.Presentation
 
 /**
- * Report one new Browser/File activity at the moment it happens.
+ * Report one new Browser/PowerPoint/File activity at the moment it happens.
  *
  * Attention is latched first. The first activity finding a genuinely empty
  * right column owns it; a simultaneous or later activity sees that new owner
@@ -85,8 +126,13 @@ export const notifySessionWorkbenchActivityAtom = atom(
         sessionId: payload.sessionId,
         needsAttention: true,
       })
-    } else {
+    } else if (payload.surface === SessionWorkbenchSurface.Files) {
       set(setFilesNeedsAttentionAtom, {
+        sessionId: payload.sessionId,
+        needsAttention: true,
+      })
+    } else {
+      set(setPowerPointNeedsAttentionAtom, {
         sessionId: payload.sessionId,
         needsAttention: true,
       })
@@ -110,6 +156,9 @@ export const notifySessionWorkbenchActivityAtom = atom(
 
 /** Drop a deleted Session's durable workbench selection. */
 export const purgeSessionWorkbenchStateAtom = atom(null, (get, set, sessionId: string) => {
+  if (get(pendingSurfaceOpenRequestAtom)?.sessionId === sessionId) {
+    set(pendingSurfaceOpenRequestAtom, null)
+  }
   const current = get(workbenchSurfacesBySessionAtom)
   if (!current.has(sessionId)) return
   const next = new Map(current)

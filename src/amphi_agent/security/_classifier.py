@@ -54,7 +54,7 @@ from bridgic.core.model.types import Message, Role
 
 from src.amphi_service.i18n import backend_i18n
 
-from .._prompt import AGENT_NAME
+from ..prompts.shared import AGENT_NAME
 from ..prompts.render import _ui_language
 from ._audit import write_classify_record
 from ._policy import Policy, load_policy, soft_deny_ids, soft_deny_title
@@ -107,7 +107,7 @@ _TIMEOUT_SECONDS = _resolve_timeout()
 _VALID_VERDICTS = ("allow", "ask", "deny")
 
 # Cap on how many rounds of user requests are fed to the classifier. **Single source of truth**:
-# the injection side (``_agent._recent_user_messages``) reads it from here too. These used to be
+# the injection side (``cognitive.base.BaseThink._recent_user_messages``) reads it from here too. These used to be
 # two separate bare 5s, so raising the injection-side one had no effect — prompt assembly here cut
 # it back to 5, and "the user named it" is soft_deny's only unlock key, so tuning this is the first
 # thing you reach for when debugging "I named it earlier but it still prompts".
@@ -186,7 +186,7 @@ def _build_system_prompt(policy: Policy) -> str:
 
     The locale is named as the fallback for ``reason``'s language. ``reason`` is
     rendered verbatim on the approval card, so it
-    follows the user's own language exactly as the agent's replies do (``_prompt.py``'s
+    follows the user's own language exactly as the agent's replies do (``prompts/shared.py``'s
     CRITICAL language rule) — but the requests are not always readable (a scheduled or
     resumed Run carries none, and paths / commands / quoted logs carry no language of
     their own), and with nothing named to fall back to the model used to pick a language

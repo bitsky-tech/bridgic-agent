@@ -6,13 +6,19 @@ from copy import deepcopy
 
 import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
-from bridgic.core.model.types import ToolCallBlock, ToolResultBlock
+from bridgic.core.model.types import Message, ToolCallBlock, ToolResultBlock
 
-from src.amphi_agent import AmphiAgent, AmphiOTAContext, ContextWindowExceededError, MainThink
-from src.amphi_agent._cognitive import ClarifyThink, _covered_rounds, _project_rounds
-from src.amphi_agent._state import AgentState, BuildStageState, ContextCompactionState, NormalStageState
+from src.amphi_agent import AmphiAgent, AmphiOTAContext, MainThink
+from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, GenerateThink, PresentationBriefThink, PresentationThink, VerifyThink
+from src.amphi_agent.cognitive.base import BaseThink
+from src.amphi_agent.cognitive.build.state import BuildStageState
+from src.amphi_agent.cognitive.normal.state import NormalStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
+from src.amphi_agent.cognitive.state import AgentState, ContextCompactionState
 from src.amphi_agent._tools import TOOL_LIBRARY
-from src.amphi_store import SessionTurnRecord, TurnStatus, UserInput
+from src.amphi_agent._workspace import Workspace
+from src.amphi_agent.tools.ppt import RequestPresentation
+from src.amphi_store import SessionMountRecord, SessionTurnRecord, TurnStatus, UserInput
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive.test_compaction import SummaryLlm, _context
 
@@ -38,7 +44,69 @@ def _serialized(messages) -> str:
     return str([message.model_dump(mode="json") for message in messages])
 
 
-@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "verify"), ("run_workflow", "execute")])
+@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("presentation", "ppt_review"), ("build", "explore"), ("run_workflow", "execute")])
+async def test_retired_workflow_validation_is_read_as_normal_history(test_sandbox: IsolatedPaths, mode: str, stage: str) -> None:
+    """Main retains legacy validation activity and notes without changing stored scope."""
+    validation = _round("run_workflow", "validate", "Retained validation evidence")
+    validation.action_result.results[0].tool_id = "legacy-validation-call"
+    validation.observation_result = "Published report location: /saved/report.txt"
+    note = OTARecord(
+        think_scope={"mode": "run_workflow", "stage": "validate", "session_history": "all_stages"},
+        think_result={"step_content": "Legacy final assessment", "tool_calls": []},
+        observation_result="Legacy assessment note",
+    )
+    records = [validation, note, _round("run_workflow", "execute", "PRIVATE EXECUTION"), _round("build", "validate", "PRIVATE BUILD")]
+    previous = _turn(0, records, AgentState())
+    before = deepcopy(previous.model_dump(mode="json"))
+    before_records = [record.model_dump(mode="json") for record in records]
+    context = _context(str(test_sandbox.sessions / "retired-validation-history"), [previous], 100_000)
+    think = {"mode": mode, "stage": stage}
+    if mode == "run_workflow":
+        think.update(workflow_id="workflow", generation="generation")
+    current = AmphiOTAContext(user_input="Continue", ota_record=records, state={"think": think})
+    current.tools = TOOL_LIBRARY.select(["read_file"])
+    worker = MainThink()
+
+    for messages in (worker.turn_messages_block(current, context), await worker.session_messages_block(current, context)):
+        text = _serialized(messages)
+        for marker in ("Retained validation evidence", "Published report location", "Legacy final assessment", "Legacy assessment note"):
+            assert (marker in text) == (mode == "normal" and stage == "main")
+        calls = [block for message in messages for block in message.blocks if isinstance(block, ToolCallBlock)]
+        results = [block for message in messages for block in message.blocks if isinstance(block, ToolResultBlock)]
+        assert sum(call.id == "legacy-validation-call" for call in calls) == int(mode == "normal" and stage == "main")
+        assert [call.id for call in calls] == [result.id for result in results]
+        if mode == "normal" and stage == "main":
+            assert text.index("Legacy final assessment") < text.index("Legacy assessment note")
+            assert "PRIVATE EXECUTION" not in text and "PRIVATE BUILD" not in text
+
+    assert previous.model_dump(mode="json") == before
+    assert [record.model_dump(mode="json") for record in records] == before_records
+
+
+async def test_normal_compaction_covers_retired_validation_without_reexpansion(test_sandbox: IsolatedPaths) -> None:
+    """Aliased records use Main's normal coverage while raw validation tags stay intact."""
+    records = [_round("run_workflow", "validate", "COVERED VALIDATION"), _round("run_workflow", "validate", "RETAINED VALIDATION")]
+    state = AgentState(context_compaction=ContextCompactionState(turn={"normal": {"main": {
+        "turn_summary": "Earlier validation summary", "turn_through_round": 1,
+        "turn_covered_rounds": [1], "turn_covered_raw_rounds": [1],
+    }}}))
+    previous = _turn(0, records, state)
+    before = deepcopy(previous.model_dump(mode="json"))
+    context = _context(str(test_sandbox.sessions / "retired-validation-compaction"), [previous], 100_000)
+    current = AmphiOTAContext(user_input="Continue", state=state, ota_record=records)
+    current.tools = TOOL_LIBRARY.select(["read_file"])
+    worker = MainThink()
+
+    for messages in (worker.turn_messages_block(current, context), await worker.session_messages_block(current, context)):
+        text = _serialized(messages)
+        assert "Earlier validation summary" in text
+        assert "COVERED VALIDATION" not in text
+        assert "RETAINED VALIDATION" in text
+    assert previous.model_dump(mode="json") == before
+    assert all(record.think_scope["stage"] == "validate" for record in current.ota_record)
+
+
+@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "verify"), ("run_workflow", "execute"), ("presentation", "ppt_review")])
 @pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
 async def test_compacted_turn_tail_does_not_expand_in_session_history(test_sandbox: IsolatedPaths, mode: str, stage: str, status: TurnStatus) -> None:
     """A protected large-argument round keeps the same bounded replay in the next Turn."""
@@ -78,7 +146,7 @@ async def test_compacted_turn_tail_does_not_expand_in_session_history(test_sandb
     assert previous.model_dump(mode="json") == raw_before
     # A new request must fit without trying to compact the protected last Turn.
     messages = await worker.assemble_messages(next_turn, historical_context)
-    await worker._prepare_context_window(messages, next_turn.tools, next_turn, historical_context)
+    await worker.compact_messages(messages, next_turn.tools, next_turn, historical_context)
     assert not llm.calls
 
 
@@ -132,7 +200,7 @@ async def test_session_tool_replay_matches_completed_action_steps(test_sandbox: 
     assert len(calls) == (0 if case in {"oversized", "structured", "missing", "large_choice"} else 1 if case == "partial" else 2)
 
 
-@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "clarify"), ("build", "verify"), ("run_workflow", "execute")])
+@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "clarify"), ("build", "verify"), ("run_workflow", "execute"), ("presentation", "ppt_brief")])
 @pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
 async def test_new_turn_keeps_stage_session_summary_and_compacted_tail(test_sandbox: IsolatedPaths, mode: str, stage: str, status: TurnStatus) -> None:
     """Terminal Turns start a fresh loop, retaining every stage's Session checkpoint."""
@@ -193,14 +261,14 @@ async def test_switch_restores_target_stage_without_reexpanding_foreign_rounds(t
     })
     context = _context(str(test_sandbox.sessions / "switch"), [], 100_000)
     before = current.model_dump(mode="json", exclude={"tools"})
-    worker = MainThink()
+    worker = ClarifyThink()
     clarify = _serialized(await worker.assemble_messages(current, context))
     assert "CLARIFY SUMMARY" in clarify and "CLARIFY RECENT" in clarify
     assert "Need the missing decision" in clarify
     assert "NORMAL PRIVATE" in clarify
     assert "CLARIFY COVERED" not in clarify and "EXPLORE PRIVATE" not in clarify
     current.transition_think(BuildStageState(stage="explore"))
-    explore = _serialized(await worker.assemble_messages(current, context))
+    explore = _serialized(await ExploreThink().assemble_messages(current, context))
     assert "EXPLORE PRIVATE" in explore and "CLARIFY SUMMARY" not in explore
     current.transition_think(BuildStageState(stage="clarify"))
     assert _serialized(await worker.assemble_messages(current, context)) == clarify
@@ -267,14 +335,14 @@ async def test_clarify_reads_independently_compacted_normal_history(test_sandbox
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_clarify_compacts_only_its_own_inputs_and_keeps_normal_unchanged(test_sandbox: IsolatedPaths, cancel: bool) -> None:
-    """Shared Normal Turns/Rounds never enter Clarify's retention window or summaries."""
+async def test_clarify_delegates_each_history_to_its_owner_atomically(test_sandbox: IsolatedPaths, cancel: bool) -> None:
+    """Normal and Clarify keep separate summaries while one coordinator commits both."""
     turns = []
     records = []
     for index in range(6):
         turns.extend([
             _turn(index * 2, [_round("normal", "main", f"NORMAL SESSION {index} " * 100)], AgentState()),
-            _turn(index * 2 + 1, [_round("build", "clarify", f"CLARIFY SESSION {index} " * 100)], AgentState()),
+            _turn(index * 2 + 1, [_round("build", "clarify", f"CLARIFY SESSION {index} " * 100)], AgentState(think=BuildStageState(stage="clarify"))),
         ])
         records.extend([
             _round("normal", "main", f"NORMAL ROUND {index} " * 100),
@@ -288,7 +356,7 @@ async def test_clarify_compacts_only_its_own_inputs_and_keeps_normal_unchanged(t
         },
     })
     context = _context(str(test_sandbox.sessions / "shared-compaction"), turns, 200_000)
-    llm = SummaryLlm("CLARIFY SESSION SUMMARY", asyncio.CancelledError() if cancel else "CLARIFY TURN SUMMARY")
+    llm = SummaryLlm("NORMAL SESSION SUMMARY", "NORMAL TURN SUMMARY", "CLARIFY SESSION SUMMARY", asyncio.CancelledError() if cancel else "CLARIFY TURN SUMMARY")
     worker = ClarifyThink(llm)
     original_state = current.state.model_dump(mode="json")
     original_records = deepcopy([record.model_dump(mode="json") for record in records])
@@ -304,33 +372,43 @@ async def test_clarify_compacts_only_its_own_inputs_and_keeps_normal_unchanged(t
         compaction = current.state.context_compaction
         assert compaction.session["build"]["clarify"].session_through_ordinal == 3
         assert compaction.turn["build"]["clarify"].turn_covered_rounds == [2, 4]
-        assert compaction.session["normal"]["main"] == normal.state.context_compaction.session["normal"]["main"]
-        assert compaction.turn["normal"]["main"] == normal.state.context_compaction.turn["normal"]["main"]
+        assert compaction.session["normal"]["main"].session_through_ordinal == 2
+        assert compaction.turn["normal"]["main"].turn_covered_rounds == [1, 3]
         text = _serialized(rebuilt)
-        assert "NORMAL SESSION 1" in text and "NORMAL ROUND 1" in text
+        assert "NORMAL SESSION 1" not in text and "NORMAL ROUND 1" not in text
+        assert "NORMAL SESSION 2" in text and "NORMAL ROUND 2" in text
         assert "CLARIFY SESSION 0" not in text and "CLARIFY ROUND 0" not in text
         assert "CLARIFY SESSION 2" in text and "CLARIFY ROUND 2" in text
-    assert len(llm.calls) == 2
-    assert all("NORMAL" not in _serialized(call) for call in llm.calls)
-    assert "CLARIFY SESSION 0" in _serialized(llm.calls[0])
-    assert "CLARIFY ROUND 0" in _serialized(llm.calls[1])
+    assert len(llm.calls) == 4
+    assert all("CLARIFY" not in _serialized(call) for call in llm.calls[:2])
+    assert all("NORMAL" not in _serialized(call) for call in llm.calls[2:])
+    assert "NORMAL SESSION 1" in _serialized(llm.calls[0])
+    assert "NORMAL ROUND 1" in _serialized(llm.calls[1])
+    assert "CLARIFY SESSION 0" in _serialized(llm.calls[2])
+    assert "CLARIFY ROUND 0" in _serialized(llm.calls[3])
     normal.state = current.state.model_copy(update={"think": NormalStageState()})
-    assert _serialized(await MainThink().assemble_messages(normal, context)) == normal_before
+    assert (_serialized(await MainThink().assemble_messages(normal, context)) == normal_before) is cancel
     assert [record.model_dump(mode="json") for record in records] == original_records
 
 
-async def test_clarify_cannot_compact_normal_even_when_shared_history_exceeds_capacity(test_sandbox: IsolatedPaths) -> None:
+async def test_clarify_compacts_normal_when_shared_history_exceeds_capacity(test_sandbox: IsolatedPaths) -> None:
     current = AmphiOTAContext(user_input="Clarify", state={"think": {"mode": "build", "stage": "clarify"}}, ota_record=[
         _round("normal", "main", f"NORMAL LARGE {index} " * 2_000) for index in range(8)
     ])
-    context = _context(str(test_sandbox.sessions / "read-only-overflow"), [], 40_000)
-    llm = SummaryLlm()
+    context = _context(str(test_sandbox.sessions / "shared-overflow"), [], 200_000)
+    llm = SummaryLlm(*["Earlier Normal requirements." for _ in range(8)])
     worker = ClarifyThink(llm)
     messages = await worker.assemble_messages(current, context)
-    with pytest.raises(ContextWindowExceededError):
-        await worker._prepare_context_window(messages, [], current, context)
-    assert not llm.calls
-    assert current.state.context_compaction is None
+    assert worker._estimate_request_tokens(messages, []) > 200_000
+    rebuilt = await worker.compact_messages(messages, [], current, context)
+    assert llm.calls
+    assert worker._estimate_request_tokens(rebuilt, []) < 200_000
+    assert current.think_status == BuildStageState(stage="clarify")
+    assert current.state.context_compaction.turn["normal"]["main"].turn_covered_rounds == [1, 2, 3, 4]
+    assert "build" not in current.state.context_compaction.turn
+    calls = len(llm.calls)
+    await worker.compact_messages(rebuilt, [], current, context)
+    assert len(llm.calls) == calls
 
 
 @pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "explore"), ("build", "generate"), ("build", "verify"), ("run_workflow", "execute")])
@@ -421,8 +499,9 @@ async def test_normal_receives_build_exit_and_artifact_paths_not_build_logs(test
         "normal": {"main": {"turn_summary": "NORMAL SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [1]}},
         "build": {"generate": {"turn_summary": "BUILD SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [2]}},
     }}})
-    AmphiAgent._stamp_mode_exit(current, BuildStageState(stage="verify"), "Validated successfully; report completion.")
-    AmphiAgent._stamp_published_directory_handoff(
+    worker = VerifyThink()
+    worker._stamp_mode_exit(current, BuildStageState(stage="verify"), "Validated successfully; report completion.")
+    worker._stamp_published_directory_handoff(
         current, publication="Workflow published", published_directory=test_sandbox.root / "published",
         relative_paths="workflow/WORKFLOW.md", temporary_workspace=".build",
     )
@@ -495,9 +574,243 @@ async def test_foreign_session_summary_is_not_reused_for_target_stage(test_sandb
 def test_legacy_compaction_uses_original_projection_coordinates() -> None:
     records = [_round("normal", "main", "entry"), _round("build", "clarify", "covered"), _round("build", "clarify", "keep")]
     compaction = ContextCompactionState(turn={"build": {"clarify": {"turn_summary": "Legacy", "turn_through_round": 2}}})
-    covered = _covered_rounds(records, ("build", "clarify"), compaction.turn["build"]["clarify"])
+    covered = BaseThink._covered_rounds(records, ("build", "clarify"), compaction.turn["build"]["clarify"])
     assert covered == {1, 2}
-    assert [item.number for item in _project_rounds(records, ("build", "clarify")) if item.number not in covered] == [3]
+    assert [item.number for item in BaseThink._project_rounds(records, ("build", "clarify")) if item.number not in covered] == [3]
+
+
+@pytest.mark.parametrize("stage,expected_coverage", [("ppt_brief", {1, 2}), ("ppt_plan", {3, 4})])
+async def test_legacy_presentation_summary_maps_local_indices_before_replay(test_sandbox: IsolatedPaths, stage: str, expected_coverage: set[int]) -> None:
+    """Old PPT summaries cover their original local projection, including entry handoffs."""
+    records = [
+        _round("normal", "main", "NORMAL ENTRY"),
+        _round("presentation", "ppt_brief", "BRIEF COVERED"),
+        _round("presentation", "ppt_brief", "BRIEF HANDOFF"),
+        _round("presentation", "ppt_plan", "PLAN COVERED"),
+        _round("presentation", "ppt_compose", "COMPOSE PRIVATE"),
+        _round("presentation", "ppt_plan", "PLAN RETAINED"),
+    ]
+    for index, record in enumerate(records):
+        record.action_result.results[0].tool_id = f"ppt-history-{index}"
+    records[2].action_result = ActionResult(results=[ActionStepResult(
+        tool_id="enter-plan", tool_name="switch", tool_arguments={"stage": "ppt_plan", "reason": "The brief is ready."},
+        tool_result={"stage": "ppt_plan", "reason": "The brief is ready."},
+    )])
+    state = AgentState(think=PresentationStageState(stage=stage), context_compaction=ContextCompactionState(turn={
+        "presentation": {stage: {"turn_summary": "LEGACY PPT SUMMARY", "turn_through_round": 2}},
+    }))
+    summary = state.context_compaction.turn["presentation"][stage]
+    assert summary.turn_covered_rounds is None
+    assert BaseThink._covered_rounds(records, ("presentation", stage), summary) == expected_coverage
+    current = AmphiOTAContext(user_input="Continue", ota_record=records, state=state)
+    previous = _turn(0, records, state)
+    before = deepcopy(previous.model_dump(mode="json"))
+    context = _context(str(test_sandbox.sessions / "legacy-presentation"), [previous], 100_000)
+    worker = PresentationThink()
+    live = worker.turn_messages_block(current, context)
+    historical = (await worker.session_messages_block(current, context))[1:]
+    assert [message.blocks for message in historical] == [message.blocks for message in live]
+    text = _serialized(live)
+    assert "LEGACY PPT SUMMARY" in text
+    assert "COMPOSE PRIVATE" not in text
+    if stage == "ppt_plan":
+        assert "PLAN COVERED" not in text and "PLAN RETAINED" in text
+        assert "The brief is ready." not in text
+    else:
+        assert "BRIEF COVERED" not in text and "BRIEF HANDOFF" in text
+    assert previous.model_dump(mode="json") == before
+    assert summary.turn_covered_rounds is None
+
+
+async def test_custom_history_policy_delegates_to_each_source(test_sandbox: IsolatedPaths) -> None:
+    """Any declared read source participates in compaction through its own worker."""
+    class SharedHistoryThink(BaseThink):
+        def history_scopes(self, ota_context, context):
+            return (("build", "explore"), *super().history_scopes(ota_context, context))
+
+        async def assemble_messages(self, ota_context, context):
+            return [
+                *await self.session_messages_block(ota_context, context),
+                Message.from_text(str(ota_context.user_input)),
+                *self.turn_messages_block(ota_context, context),
+            ]
+
+    turns = []
+    records = []
+    for index in range(6):
+        turns.extend([
+            _turn(index * 2, [_round("build", "explore", f"FOREIGN SESSION {index} " * 100)], AgentState()),
+            _turn(index * 2 + 1, [_round("presentation", "ppt_review", f"OWN SESSION {index} " * 100)], AgentState()),
+        ])
+        records.extend([
+            _round("build", "explore", f"FOREIGN ROUND {index} " * 100),
+            _round("presentation", "ppt_review", f"OWN ROUND {index} " * 100),
+        ])
+    current = AmphiOTAContext(user_input="Review", ota_record=records, state={
+        "think": {"mode": "presentation", "stage": "ppt_review"},
+        "context_compaction": {
+            "session": {"build": {"explore": {"session_summary": "FOREIGN SESSION CHECKPOINT", "session_through_ordinal": 0}}},
+            "turn": {"build": {"explore": {"turn_summary": "FOREIGN TURN CHECKPOINT", "turn_through_round": 1, "turn_covered_rounds": [1]}}},
+        },
+    })
+    context = _context(str(test_sandbox.sessions / "custom-history-policy"), turns, 200_000)
+    original_records = deepcopy([record.model_dump(mode="json") for record in records])
+    original_turns = deepcopy([turn.model_dump(mode="json") for turn in turns])
+    llm = SummaryLlm("FOREIGN SESSION SUMMARY", "FOREIGN TURN SUMMARY", "OWN SESSION SUMMARY", "OWN TURN SUMMARY")
+    worker = SharedHistoryThink(llm)
+    messages = await worker.assemble_messages(current, context)
+    assert "FOREIGN SESSION CHECKPOINT" in _serialized(messages)
+    assert "FOREIGN ROUND 1" in _serialized(messages)
+    assert "FOREIGN" not in _serialized([
+        *await PresentationThink().session_messages_block(current, context),
+        *PresentationThink().turn_messages_block(current, context),
+    ])
+
+    rebuilt = await worker.compact_messages(messages, [], current, context, target=1)
+
+    compaction = current.state.context_compaction
+    assert compaction.session["build"]["explore"].session_through_ordinal == 2
+    assert compaction.turn["build"]["explore"].turn_covered_rounds == [1, 3]
+    assert compaction.session["presentation"]["ppt_review"].session_through_ordinal == 3
+    assert compaction.turn["presentation"]["ppt_review"].turn_covered_rounds == [2, 4]
+    assert len(llm.calls) == 4
+    assert all("OWN" not in _serialized(call) for call in llm.calls[:2])
+    assert all("FOREIGN" not in _serialized(call) for call in llm.calls[2:])
+    text = _serialized(rebuilt)
+    assert "FOREIGN SESSION 1" not in text and "FOREIGN ROUND 1" not in text
+    assert "FOREIGN SESSION 2" in text and "FOREIGN ROUND 2" in text
+    assert "OWN SESSION 0" not in text and "OWN ROUND 0" not in text
+    assert "OWN SESSION 2" in text and "OWN ROUND 2" in text
+    assert [record.model_dump(mode="json") for record in records] == original_records
+    assert [turn.model_dump(mode="json") for turn in turns] == original_turns
+
+
+async def test_interrupted_presentation_entry_retains_original_request_and_attachment(test_sandbox: IsolatedPaths) -> None:
+    """Cancellation before Brief's first call must preserve its incoming request in history."""
+    session_root = test_sandbox.sessions / "interrupted-presentation"
+    context = _context(str(session_root), [], 100_000)
+    attachment = test_sandbox.root / "quarterly-revenue.csv"
+    attachment.write_text("quarter,revenue\nQ1,125\n", encoding="utf-8")
+    mount = SessionMountRecord(
+        id="presentation-input", session_id=context.session.id, user_id="local",
+        name=attachment.name, abs_path=str(attachment), kind="file",
+    )
+    context.workspace = Workspace(context.session.id, session_root, mounts=[mount])
+    requirement = "Prepare twelve slides for the executive committee using "
+    user_input = UserInput(text=requirement + "@quarterly-revenue.csv", blocks=[
+        {"type": "text", "value": requirement},
+        {"type": "mention", "id": mount.id, "label": attachment.name, "group": ""},
+    ])
+    prior = _round("normal", "main", "PRIVATE NORMAL TOOL TRACE")
+    entry = _round("normal", "main", "PRIVATE NORMAL ENTRY THOUGHT")
+    goal = "Create an earnings presentation"
+    entry.action_result = ActionResult(results=[ActionStepResult(
+        tool_id="presentation-entry", tool_name="request_presentation",
+        tool_arguments={"goal": goal}, tool_result=RequestPresentation(goal),
+    )])
+    current = AmphiOTAContext(user_input=user_input, ota_record=[prior, entry])
+    await MainThink().handle_action_result(current, context, AmphiAgent())
+    assert current.think_status == PresentationStageState(goal=goal)
+    assert all(record.think_scope["mode"] == "normal" for record in current.ota_record)
+    assert not current.ota_record[0].observation_result
+    entry_note = current.ota_record[-1].observation_result
+    assert "[stage handoff] `normal/main` → `presentation/ppt_brief`" in entry_note
+    assert f"Presentation goal: {goal}" in entry_note
+
+    worker = PresentationBriefThink()
+    live_handoff = worker.turn_messages_block(current, context)
+    handoff_text = _serialized(live_handoff)
+    assert "[stage handoff]" in handoff_text and goal in handoff_text
+    assert "PRIVATE NORMAL" not in handoff_text
+    assert not any(isinstance(block, (ToolCallBlock, ToolResultBlock)) for message in live_handoff for block in message.blocks)
+
+    previous = _turn(0, current.ota_record, current.state, TurnStatus.CANCELLED)
+    previous.user_input = user_input
+    saved = deepcopy(previous.model_dump(mode="json"))
+    resumed_context = _context(str(session_root), [previous], 100_000)
+    resumed_context.workspace = context.workspace
+    resumed = AmphiOTAContext(user_input="Continue")
+    await AmphiAgent().init_state(resumed, resumed_context)
+    assert resumed.think_status == current.think_status
+    assert resumed.ota_record == []
+
+    history = await worker.session_messages_block(resumed, resumed_context)
+    text = _serialized(history)
+    assert requirement.strip() in text and str(attachment) in text
+    assert goal in text and "[stage handoff]" in text
+    assert "PRIVATE NORMAL" not in text
+    assert [message.blocks for message in history[1:]] == [message.blocks for message in live_handoff]
+    assert previous.model_dump(mode="json") == saved
+
+
+@pytest.mark.parametrize("stage,worker_type", [("explore", ExploreThink), ("generate", GenerateThink), ("verify", VerifyThink)])
+async def test_legacy_unstamped_build_entry_retains_only_original_user_input(test_sandbox: IsolatedPaths, stage: str, worker_type: type[BaseThink]) -> None:
+    """A saved target cursor retains the entry request even before its first owned round."""
+    session_root = test_sandbox.sessions / "legacy-edit-entry"
+    attachment = test_sandbox.root / "revised-requirements.md"
+    attachment.write_text("# Requirements\nKeep the original output columns.\n", encoding="utf-8")
+    requirement = "Update the retained workflow without changing its output columns using "
+    original_input = UserInput(text=requirement + "@revised-requirements.md", blocks=[
+        {"type": "text", "value": requirement},
+        {"type": "mention", "id": "edit-input", "label": attachment.name, "group": ""},
+    ])
+    entry = _round("normal", "main", "PRIVATE NORMAL EDIT REASONING")
+    entry.action_result = ActionResult(results=[ActionStepResult(
+        tool_id="legacy-edit", tool_name="edit_workflow", tool_arguments={"workflow_id": "workflow-a"},
+        tool_result={"workflow_id": "workflow-a", "workflow_name": "Retained Workflow", "message": "The requested Workflow is already the active editable Build."},
+    )])
+    previous = _turn(0, [entry], AgentState(think=BuildStageState(stage=stage, workflow_id="workflow-a")), TurnStatus.CANCELLED)
+    previous.user_input = original_input
+    saved = deepcopy(previous.model_dump(mode="json"))
+    context = _context(str(session_root), [previous], 100_000)
+    mount = SessionMountRecord(
+        id="edit-input", session_id=context.session.id, user_id="local", name=attachment.name,
+        abs_path=str(attachment), kind="file",
+    )
+    context.workspace = Workspace(context.session.id, session_root, mounts=[mount])
+    current = AmphiOTAContext(user_input="Continue the edit", state={"think": {"mode": "build", "stage": stage}})
+
+    history = await worker_type().session_messages_block(current, context)
+
+    assert len(history) == 1
+    assert requirement.strip() in history[0].content and str(attachment) in history[0].content
+    assert "PRIVATE NORMAL" not in _serialized(history)
+    assert not any(isinstance(block, (ToolCallBlock, ToolResultBlock)) for message in history for block in message.blocks)
+    assert previous.model_dump(mode="json") == saved
+    for other_stage in {"explore", "generate", "verify"} - {stage}:
+        other = current.model_copy(update={"state": AgentState(think=BuildStageState(stage=other_stage))})
+        assert await worker_type().session_messages_block(other, context) == []
+    for missing_think in ({}, {"think": {"mode": "build"}}, {"think": {"stage": stage}}):
+        previous.agent_state = missing_think
+        assert await worker_type().session_messages_block(current, context) == []
+
+
+@pytest.mark.parametrize("outcome", ["entered", "failed", "error", "wrong_mode", "wrong_stage", "proposed"])
+def test_presentation_handoff_requires_applied_entry_and_targets_only_brief(outcome: str) -> None:
+    """An unsuccessful or unapplied request must not expose Normal history to PPT."""
+    record = _round("normal", "main", "PRIVATE NORMAL TRACE")
+    result = {"mode": "presentation", "stage": "ppt_brief", "goal": "Prepare the earnings deck"}
+    if outcome == "wrong_mode":
+        result["mode"] = "normal"
+    elif outcome == "wrong_stage":
+        result["stage"] = "ppt_plan"
+    elif outcome == "proposed":
+        result = {"goal": result["goal"]}
+    record.action_result = ActionResult(results=[ActionStepResult(
+        tool_id="presentation-entry", tool_name="request_presentation",
+        tool_arguments={"goal": "Prepare the earnings deck"}, tool_result=result,
+        success=outcome != "failed", error="Entry failed" if outcome == "error" else None,
+    )])
+    for stage in ("ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"):
+        projected = BaseThink._project_rounds([record], ("presentation", stage))
+        if outcome != "entered" or stage != "ppt_brief":
+            assert projected == []
+            continue
+        assert len(projected) == 1
+        assert "Prepare the earnings deck" in str(projected[0].record)
+        assert "PRIVATE NORMAL TRACE" not in str(projected[0].record)
+        assert "action_result" not in projected[0].record
+        assert projected[0].record["think_result"]["tool_calls"] == []
 
 
 @pytest.mark.parametrize("status", ["started", "resumed", "restarted", "pending"])
@@ -508,7 +821,7 @@ def test_workflow_entry_shares_resolution_not_normal_trace(status: str) -> None:
         "tool_arguments": {"reason": "Use the existing Run"},
         "tool_result": {"workflow_id": "workflow-a", "status": status},
     }]}
-    projected = _project_rounds([record], ("run_workflow", "execute"))
+    projected = BaseThink._project_rounds([record], ("run_workflow", "execute"))
     if status == "pending":
         assert projected == []
     else:
@@ -524,7 +837,7 @@ def test_confirmed_build_entry_keeps_proposed_goal() -> None:
         "tool_name": "request_build", "success": True,
         "tool_result": {"mode": "ask", "status": "confirmed", "goal": "Turn the earlier task into a reusable workflow"},
     }]}
-    text = str(_project_rounds([record], ("build", "clarify"))[0].record)
+    text = str(BaseThink._project_rounds([record], ("build", "clarify"))[0].record)
     assert "Turn the earlier task into a reusable workflow" in text
     assert "PRIVATE NORMAL TRACE" not in text
 
@@ -552,7 +865,7 @@ def test_build_entry_hands_resolved_choice_to_actual_stage(status: str, action: 
     }]}
     before = record.model_dump(mode="json")
     for stage in ("clarify", "explore", "generate", "verify"):
-        projected = _project_rounds([record], ("build", stage))
+        projected = BaseThink._project_rounds([record], ("build", stage))
         if stage != target_stage:
             assert projected == []
             continue

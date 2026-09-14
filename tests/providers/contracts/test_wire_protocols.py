@@ -5,7 +5,7 @@ from bridgic.core.model.types import Message, Role
 from bridgic.llms.openai import OpenAIConfiguration
 from google.genai import types
 
-from src.amphi_agent._cognitive import VOLATILE_TAIL_EXTRA
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA
 from src.amphi_service.protocol.llms._image_inputs import IMAGE_INPUTS_EXTRA, inspect_image_input
 from src.amphi_service.protocol.llms._openai_params import sanitize_openai_params, unsupported_param_of
 from src.amphi_service.protocol.llms._streaming import convert_tools

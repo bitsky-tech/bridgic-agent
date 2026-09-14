@@ -8,10 +8,17 @@ from bridgic.amphibious import OTARecord
 from bridgic.core.model.types import Message
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session, SkillLibrary
-from src.amphi_agent._cognitive import (
+from src.amphi_agent._tools import TOOL_LIBRARY
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
+from src.amphi_agent.cognitive import (
+    BaseThink,
     ClarifyThink,
     ExploreThink,
     GenerateThink,
+    PresentationBriefThink,
+    PresentationComposeThink,
+    PresentationPlanThink,
+    PresentationReviewThink,
     SubAgentThink,
     VerifyThink,
     WorkflowRunThink,
@@ -28,6 +35,18 @@ from src.amphi_store import SessionRecord, SkillRepository
 
 USER_ID = "local"
 SESSION_ID = "session-tools"
+POWERPOINT_TOOL_NAMES = {
+    "view_ppt",
+    "get_ppt_page",
+    "update_ppt_design",
+    "edit_ppt_page",
+    "insert_ppt_element",
+    "remove_ppt_element",
+    "insert_ppt_page",
+    "remove_ppt_page",
+    "move_ppt_page",
+    "goto_ppt_page",
+}
 
 
 class _RecordingLlm:
@@ -60,7 +79,7 @@ def _context(*, skills: SkillLibrary | None = None, child: bool = False) -> Amph
 
 def _prompt_tool_names(system: str) -> tuple[str, ...]:
     marker = "The tools currently available in this cognitive loop are: "
-    rendered = system.split(marker, maxsplit=1)[1].split(". Call them directly.", maxsplit=1)[0]
+    rendered = system.split(marker, maxsplit=1)[1].splitlines()[0]
     return tuple(re.findall(r"`([^`]+)`", rendered))
 
 
@@ -102,6 +121,35 @@ async def test_llm_tool_surface() -> None:
     assert actual_schemas == expected_schemas
 
 
+@pytest.mark.parametrize(("worker_type", "stage", "expects_report"), [
+    (PresentationBriefThink, "ppt_brief", False),
+    (PresentationPlanThink, "ppt_plan", True),
+    (PresentationComposeThink, "ppt_compose", True),
+    (PresentationReviewThink, "ppt_review", True),
+])
+async def test_presentation_llm_tool_surface(worker_type: Any, stage: str, expects_report: bool) -> None:
+    """Every presentation stage advertises and sends the same tools to the model."""
+    llm = _RecordingLlm()
+    ota_context = AmphiOTAContext(
+        user_input="Create a presentation",
+        ota_record=[OTARecord()],
+    )
+    ota_context.transition_think(PresentationStageState(stage=stage, goal="Create a presentation"))
+
+    await worker_type(llm).thinking(ota_context, _context())
+
+    assert f"# Current stage: {stage}" in llm.messages[0].content
+    prompt_names = _prompt_tool_names(llm.messages[0].content)
+    recorded_names = tuple(spec.tool_name for spec in ota_context.tools)
+    expected_schemas = [spec.to_tool().model_dump() for spec in ota_context.tools]
+    actual_schemas = [tool.model_dump() for tool in llm.tools]
+
+    assert "switch" in prompt_names
+    assert ("report_presentation_step" in prompt_names) is expects_report
+    assert prompt_names == recorded_names
+    assert actual_schemas == expected_schemas
+
+
 def test_lazy_tools() -> None:
     """Final lazy ToolSurface expansion:
 
@@ -119,7 +167,7 @@ def test_lazy_tools() -> None:
     worker = MainThink()
     context = _context()
     ota_context = AmphiOTAContext(user_input="Inspect tools")
-    baseline = set(worker.tool_surface(ota_context, context).names)
+    baseline = {spec.tool_name for spec in worker.select_tools(ota_context, context)}
 
     # Check 1: The default surface withholds every advanced lazy group.
     advanced = (
@@ -137,12 +185,41 @@ def test_lazy_tools() -> None:
     )
     for flag, expected in cases:
         setattr(ota_context, flag, True)
-        expanded = set(worker.tool_surface(ota_context, context).names)
+        expanded = {spec.tool_name for spec in worker.select_tools(ota_context, context)}
         assert expanded - baseline == expected
         setattr(ota_context, flag, False)
 
     # Check 3: Disabling the flag restores the original default surface.
-    assert set(worker.tool_surface(ota_context, context).names) == baseline
+    assert {spec.tool_name for spec in worker.select_tools(ota_context, context)} == baseline
+
+
+async def test_base_worker_does_not_select_tools_or_skills_implicitly(prompt_store: None) -> None:
+    """A custom worker opts into capabilities even when the Session has them loaded."""
+    skills = await SkillLibrary(USER_ID).load()
+    assert skills.data()
+    context = _context(skills=skills)
+    ota_context = AmphiOTAContext(
+        user_input="Run a custom workflow",
+        browser_tool_loaded=True,
+        workspace_tools_loaded=True,
+        skills_tool_loaded=True,
+    )
+    worker = BaseThink()
+
+    assert worker.select_tools(ota_context, context) == []
+    assert worker.select_skills(ota_context, context) == {}
+
+
+@pytest.mark.parametrize("worker_type", [ClarifyThink, PresentationBriefThink, WorkflowThink])
+def test_main_tool_policy_does_not_change_specialized_modes(monkeypatch: pytest.MonkeyPatch, worker_type: type[BaseThink]) -> None:
+    context = _context()
+    ota_context = AmphiOTAContext(user_input="Inspect mode tools")
+    worker = worker_type()
+    original = tuple(spec.tool_name for spec in worker.select_tools(ota_context, context))
+    monkeypatch.setattr(MainThink, "select_tools", lambda self, ota_context, context: [])
+
+    assert MainThink().select_tools(ota_context, context) == []
+    assert tuple(spec.tool_name for spec in worker.select_tools(ota_context, context)) == original
 
 
 def test_mode_tools() -> None:
@@ -152,19 +229,21 @@ def test_mode_tools() -> None:
       "main": ["delegation", "no switch"],
       "child": ["no delegation", "no root controls"],
       "build": ["switch", "stage completion control"],
-      "workflow": ["switch", "report_workflow_step", "no build controls"]
+      "presentation": ["switch", "no PowerPoint tools", "no mode-entry controls"],
+      "workflow": ["switch", "report_workflow_step", "no mode-entry controls"]
     }
 
     Checks:
     1. Main and Child expose their distinct root and delegated capabilities.
     2. Build stages expose only the control actions owned by each stage.
-    3. Workflow stages expose reporting and exit controls without Build controls.
-    4. Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
+    3. Presentation stages retain their process controls without exposing dormant PowerPoint tools.
+    4. Workflow stages expose reporting and exit controls without mode-entry controls.
+    5. Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     """
     context = _context()
     ota_context = AmphiOTAContext(user_input="Inspect mode tools")
 
-    def names(worker: MainThink) -> set[str]:
+    def names(worker: BaseThink) -> set[str]:
         return {spec.tool_name for spec in worker.select_tools(ota_context, context)}
 
     main = names(MainThink())
@@ -173,11 +252,18 @@ def test_mode_tools() -> None:
     explore = names(ExploreThink())
     generate = names(GenerateThink())
     verify = names(VerifyThink())
+    ppt_brief = names(PresentationBriefThink())
+    ppt_plan = names(PresentationPlanThink())
+    ppt_compose = names(PresentationComposeThink())
+    ppt_review = names(PresentationReviewThink())
     execute = names(WorkflowThink())
     surfaces = (main, child, clarify, explore, generate, verify, execute)
 
     # Check 1: Main and Child expose their distinct root and delegated capabilities.
     assert {"run_subagent", "start_subagent"} <= main
+    assert "request_presentation" in main
+    assert "ppt_rag" not in main
+    assert "report_presentation_step" not in main
     assert "switch" not in main
     assert {"run_subagent", "start_subagent", "request_build"}.isdisjoint(child)
     assert "request_human_choice" in child
@@ -190,14 +276,77 @@ def test_mode_tools() -> None:
     assert "request_human_task_confirm" not in explore | generate | verify
     assert "request_human_workflow_confirm" not in clarify | explore | generate
 
-    # Check 3: Workflow execution exposes reporting and exit controls without Build controls.
-    assert {"switch", "report_workflow_step"} <= execute
-    assert {"request_build", "edit_workflow", "help"}.isdisjoint(execute)
+    # Check 3: Presentation stages expose process controls without the dormant deck bridge.
+    presentation_surfaces = (ppt_brief, ppt_plan, ppt_compose, ppt_review)
+    for surface in presentation_surfaces:
+        assert "switch" in surface
+        assert "run_subagent" in surface
+        assert "start_subagent" not in surface
+        assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
+        assert "ppt_rag" not in surface
+        assert {"request_build", "request_presentation", "request_run_workflow"}.isdisjoint(surface)
+    assert "report_presentation_step" not in ppt_brief
+    assert all("report_presentation_step" in surface for surface in (ppt_plan, ppt_compose, ppt_review))
 
-    # Check 4: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
+    # Check 4: Workflow execution exposes reporting and exit controls without mode-entry controls.
+    assert {"switch", "report_workflow_step"} <= execute
+    assert "report_presentation_step" not in execute
+    assert {"request_build", "request_presentation", "edit_workflow", "help"}.isdisjoint(execute)
+
+    # Check 5: Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     common = {"request_human_choice", "load_browser_tools", "view_skill"}
-    for surface in surfaces:
+    for surface in (*surfaces, *presentation_surfaces):
         assert common <= surface
+    for surface in (*surfaces, *presentation_surfaces):
+        assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
+
+
+def test_ppt_rag_is_visible_only_for_confirmed_visual_direction() -> None:
+    """Template retrieval appears only when Plan has a confirmed page-role inventory."""
+    context = _context()
+    before = AmphiOTAContext(user_input="Choose a template")
+    before.transition_think(PresentationStageState(stage="ppt_plan", step_index=2, goal="Research deck"))
+    after = AmphiOTAContext(user_input="Choose a template")
+    after.transition_think(PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        goal="Research deck",
+        outline_confirmed=True,
+    ))
+    pending = AmphiOTAContext(user_input="Choose a template")
+    pending.transition_think(PresentationStageState(
+        stage="ppt_plan",
+        step_index=2,
+        goal="Research deck",
+        outline_confirmed=True,
+        template_selection_status="pending",
+    ))
+
+    before_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(before, context)}
+    after_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(after, context)}
+    pending_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(pending, context)}
+    assert "ppt_rag" not in before_tools
+    assert "ppt_rag" in after_tools
+    assert "ppt_rag" not in pending_tools
+
+
+async def test_powerpoint_bridge_is_dormant_and_bridgic_skill_is_absent(prompt_store: None) -> None:
+    assert TOOL_LIBRARY.select(POWERPOINT_TOOL_NAMES) == []
+    assert "bridgic-ppt" not in SkillLibrary.builtin_names()
+    assert "pptx" in SkillLibrary.builtin_names()
+
+    await SkillRepository().ensure_builtin(
+        USER_ID,
+        name="bridgic-ppt",
+        description="Legacy built-in PowerPoint authoring skill",
+        skill_dir="/legacy/bridgic-ppt",
+        source="local",
+        source_uri="builtin://bridgic-ppt",
+    )
+
+    skills = await SkillLibrary(USER_ID).load()
+    assert "bridgic-ppt" not in skills.data()
+    assert await SkillRepository().get_by_name(USER_ID, "bridgic-ppt") is None
 
 
 async def test_mode_tool_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -296,6 +445,7 @@ async def test_explore_skill(prompt_store: None) -> None:
     1. A disabled built-in Skill is absent from normal Agent Context.
     2. Explore restores the product-owned how-to Skill for implementation discovery.
     3. Only Explore records the disabled Skill directory as model-visible.
+    4. Every existing mode retains its enabled Skills without exposing other disabled Skills.
     """
     skills = await SkillLibrary(USER_ID).load()
     how_to = await SkillRepository().get_by_name(USER_ID, "how-to")
@@ -322,3 +472,15 @@ async def test_explore_skill(prompt_store: None) -> None:
     # Check 3: Only Explore records the disabled Skill directory as model-visible.
     assert how_to.skill_dir not in main_ota.selected_skill_dirs
     assert how_to.skill_dir in explore_ota.selected_skill_dirs
+
+    # Check 4: Every existing mode retains its enabled Skills and only Explore adds how-to.
+    enabled_names = {name for name, skill in skills.all_data().items() if skill.enabled}
+    assert enabled_names
+    for worker_type in (
+        MainThink, SubAgentThink, ClarifyThink, ExploreThink, GenerateThink, VerifyThink,
+        WorkflowThink, PresentationBriefThink, PresentationPlanThink,
+        PresentationComposeThink, PresentationReviewThink,
+    ):
+        selected = worker_type().select_skills(explore_ota, context)
+        expected = enabled_names | ({"how-to"} if worker_type is ExploreThink else set())
+        assert set(selected) == expected, worker_type.__name__

@@ -1,9 +1,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { resolve } from 'path'
+import { dirname, resolve } from 'path'
+import { fileURLToPath } from 'url'
+import { debugViteSettings } from '../../scripts/debug/startup'
 
-export default defineConfig({
+const configDir = dirname(fileURLToPath(import.meta.url))
+
+const rendererConfig = defineConfig({
   plugins: [
     react({
       babel: {
@@ -17,31 +21,34 @@ export default defineConfig({
     }),
     tailwindcss(),
   ],
-  root: resolve(__dirname, 'src/renderer'),
+  root: resolve(configDir, 'src/renderer'),
   base: './',
   build: {
-    outDir: resolve(__dirname, 'dist/renderer'),
+    outDir: resolve(configDir, 'dist/renderer'),
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'src/renderer/index.html'),
+        main: resolve(configDir, 'src/renderer/index.html'),
+        powerpoint: resolve(configDir, 'src/renderer/powerpoint.html'),
+        word: resolve(configDir, 'src/renderer/word.html'),
+        excel: resolve(configDir, 'src/renderer/excel.html'),
       },
     },
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src/renderer'),
-      '@shared': resolve(__dirname, 'src/shared'),
+      '@': resolve(configDir, 'src/renderer'),
+      '@shared': resolve(configDir, 'src/shared'),
       // Force a single React copy (Bun hoists to root; this avoids
       // "multiple React copies" errors from workspace packages).
-      'react': resolve(__dirname, '../../node_modules/react'),
-      'react-dom': resolve(__dirname, '../../node_modules/react-dom'),
+      'react': resolve(configDir, '../../node_modules/react'),
+      'react-dom': resolve(configDir, '../../node_modules/react-dom'),
     },
     dedupe: ['react', 'react-dom'],
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'jotai'],
+    include: ['react', 'react-dom', 'jotai', 'pptxgenjs', 'jszip'],
     exclude: ['@app/ui'],
   },
   server: {
@@ -49,4 +56,22 @@ export default defineConfig({
     strictPort: true,
     open: false,
   },
+})
+
+export default defineConfig(({ command }) => {
+  const debug = debugViteSettings(command, process.env)
+  return {
+    ...rendererConfig,
+    define: { __DESKTOP_DEBUG__: JSON.stringify(debug.enabled) },
+    server: {
+      ...rendererConfig.server,
+      ...(debug.enabled ? { proxy: {
+        '/__debug-api': {
+          target: debug.target,
+          changeOrigin: true,
+          headers: { authorization: `Bearer ${debug.token}` },
+        },
+      } } : {}),
+    },
+  }
 })

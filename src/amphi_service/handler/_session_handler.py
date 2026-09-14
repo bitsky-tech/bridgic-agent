@@ -351,7 +351,7 @@ class SessionFileHandler(BaseHandler):
     ``.work/.build/task.md`` as the build brief from this (and later the other stage
     artifacts as read-only previews). Containment is fail-closed: the resolved
     real path must stay inside the workspace root, mirroring the @mention
-    resolution rule in ``render_input`` (amphi_agent/_cognitive.py).
+    resolution rule in ``render_input`` (amphi_agent/cognitive/base.py).
     """
 
     tags = ["sessions"]
@@ -959,6 +959,47 @@ def _turn_messages(
             t_idx += 1
             current_calls.append(call)
             blocks.append({"type": "tool", **call})
+            if step.get("tool_name") == "report_presentation_step":
+                result = step.get("tool_result")
+                request_id = (
+                    str(result.get("outline_confirmation_id") or "").strip()
+                    if isinstance(result, dict)
+                    else ""
+                )
+                if request_id:
+                    raw_status = str(result.get("status") or "awaiting_outline_confirmation")
+                    status = (
+                        "pending"
+                        if raw_status == "awaiting_outline_confirmation"
+                        else raw_status
+                    )
+                    block = {
+                        "type": "presentation_outline_confirm",
+                        "requestId": request_id,
+                        "status": status,
+                        "feedback": result.get("feedback"),
+                    }
+                    if should_show_interaction_block(block):
+                        blocks.append(block)
+            if step.get("tool_name") == "ppt_rag":
+                result = step.get("tool_result")
+                request_id = (
+                    str(result.get("template_selection_id") or "").strip()
+                    if isinstance(result, dict)
+                    else ""
+                )
+                if request_id:
+                    raw_status = str(result.get("status") or "awaiting_template_selection")
+                    status = "pending" if raw_status == "awaiting_template_selection" else raw_status
+                    block = {
+                        "type": "presentation_template_selection",
+                        "requestId": request_id,
+                        "status": status,
+                        "selectedTemplateId": result.get("selected_template_id"),
+                        "feedback": result.get("feedback"),
+                    }
+                    if should_show_interaction_block(block):
+                        blocks.append(block)
 
         terminal = (round_ or {}).get("workflow_result")
         if isinstance(terminal, dict) and terminal.get("run_id"):
@@ -1084,6 +1125,21 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
     position = {"mode": think.get("mode"), "stage": think.get("stage")}
     if think.get("mode") == "build" and think.get("workflow_id"):
         position["workflow_id"] = think["workflow_id"]
+    if think.get("mode") == "presentation":
+        position.update({
+            "presentation_goal": think.get("goal"),
+            "presentation_step_index": think.get("step_index") or 0,
+            "presentation_reports": think.get("reports") or [],
+            "presentation_sources": think.get("sources") or [],
+            "presentation_outline": think.get("outline") or [],
+            "presentation_outline_confirmed": bool(think.get("outline_confirmed")),
+            "presentation_outline_confirmation_id": think.get("outline_confirmation_id"),
+            "presentation_template_candidates": think.get("template_candidates") or [],
+            "presentation_template_selection_id": think.get("template_selection_id"),
+            "presentation_template_selection_status": think.get("template_selection_status") or "idle",
+            "presentation_template_selection_error": think.get("template_selection_error"),
+            "presentation_selected_template": think.get("selected_template"),
+        })
     return position
 
 
@@ -1272,7 +1328,7 @@ def _reasoning_text(round_: Dict[str, Any]) -> str:
 
     ``reasoning_content`` (OpenAI / DeepSeek wire — a plain string) is preferred;
     otherwise the Anthropic ``thinking_blocks`` (``[{"thinking": str, ...}]``) are
-    joined. Both are captured per round during the turn (see ``_cognitive.py``)
+    joined. Both are captured per round during the turn (see ``cognitive/base.py``)
     and survive the OTA ``model_dump`` → reload roundtrip.
     """
     if not isinstance(round_, dict):

@@ -248,6 +248,9 @@
 @keyframes amphi-mode-rail-enter { from { opacity: 0; transform: translateX(7px) scale(0.94) } to { opacity: 1; transform: translateX(0) scale(1) } }
 @keyframes amphi-workbench-tool-enter { from { opacity: 0.35; transform: translateX(12px) scale(0.992) } to { opacity: 1; transform: translateX(0) scale(1) } }
 @keyframes amphi-mode-dock-enter { from { opacity: 0.55; transform: translateX(14px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes presentation-fade { from { opacity: 0.08 } to { opacity: 1 } }
+@keyframes presentation-push { from { opacity: 0.3; transform: translateX(56px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes presentation-wipe { from { clip-path: inset(0 100% 0 0) } to { clip-path: inset(0 0 0 0) } }
 /* Wheel-style switch for the input box's rotating tips: both lines move at once
    — the old one slides up and out (leave), the new one fills in from the bottom
    edge (rise). The offset uses 100% (the line's own height) rather than a fixed

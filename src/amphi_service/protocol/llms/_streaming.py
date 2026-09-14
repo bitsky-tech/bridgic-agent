@@ -3,7 +3,7 @@
 Module-level streaming helpers shared by every LLM adapter (accumulating and parsing
 tool-call fragments, merging reasoning_details, converting tool shapes, open-stream
 retries and error classification), with no dependency on the class hierarchy in
-``_cognitive.py``. These functions once duplicated static methods on ``MainThink``;
+``cognitive/base.py``. These functions once duplicated static methods on ``MainThink``;
 they have since been consolidated here as the single implementation.
 """
 

@@ -1,0 +1,22 @@
+.debug-tool-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.debug-tool-editor-toolbar > .debug-tool-editor-note { flex: 1 1 170px; margin: 0; }
+.debug-tool-editor-toolbar > button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; color: var(--text-accent-purple); font-size: var(--text-2xs); }
+.debug-tool-editor-toolbar > button:disabled { color: var(--text-tertiary); opacity: .55; cursor: default; }
+.debug-tool-editor-note { margin: 8px 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.6; }
+.debug-tool-editor-fields { display: grid; gap: 12px; margin-top: 12px; }
+.debug-tool-editor-field { min-width: 0; }
+.debug-tool-editor-field > label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 5px; color: var(--text-secondary); font-size: 11px; }
+.debug-tool-editor-field > label > span { min-width: 0; overflow-wrap: anywhere; }
+.debug-tool-editor-field > label > code { color: var(--text-tertiary); font-size: 10px; }
+.debug-tool-editor-field input, .debug-tool-editor-field select, .debug-tool-editor-field textarea { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border-subtle); border-radius: 6px; outline: none; background: var(--bg-input); color: var(--text-primary); font-size: 12px; line-height: 1.5; }
+.debug-tool-editor-field textarea { resize: vertical; min-height: 56px; font-family: inherit; }
+.debug-tool-editor-field input:focus, .debug-tool-editor-field select:focus, .debug-tool-editor-field textarea:focus { border-color: var(--text-accent-purple); }
+.debug-tool-editor-field [readonly] { color: var(--text-tertiary); background: var(--bg-hover); }
+.debug-tool-editor-field [aria-invalid=true] { border-color: var(--status-error); }
+.debug-tool-editor-error { margin: 5px 0 0; color: var(--status-error); font-size: 11px; line-height: 1.5; }
+.debug-tool-editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+.debug-tool-editor-actions > span { color: var(--text-tertiary); font-size: 11px; }
+.debug-tool-execute { display: inline-flex; align-items: center; gap: 5px; padding: 7px 11px; border-radius: 6px; background: var(--accent-purple-subtle); color: var(--text-accent-purple); font-size: 12px; opacity: .6; cursor: not-allowed; }
+.debug-tool-editor-record { min-width: 0; margin-top: 12px; border-top: 1px solid var(--border-subtle); padding-top: 9px; }
+.debug-tool-editor-record > summary { color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+.debug-tool-editor-record > pre { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 8px; border-radius: 5px; background: var(--bg-hover); color: var(--text-secondary); font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }

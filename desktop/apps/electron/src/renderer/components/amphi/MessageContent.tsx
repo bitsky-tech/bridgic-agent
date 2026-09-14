@@ -13,13 +13,15 @@
  * according to the backend-authoritative finalAnswer. Pure Q&A streaming is unaffected (no container, the answer streams outside as usual).
  */
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
-import { ProcessTimeline } from './ProcessTimeline'
+import { ProcessTimeline, type ProcessTimelineProps } from './ProcessTimeline'
 import { isPersistentWorkflowCard, splitProcessAndAnswer } from '@/lib/qaSegments'
 import type { MessageBlock } from '@/atoms/agent'
 import { BuildConfirmCard } from './BuildConfirmCard'
 import { TaskConfirmCard } from './TaskConfirmCard'
 import { WorkflowConfirmCard } from './WorkflowConfirmCard'
 import { WorkflowResultCard } from './WorkflowResultCard'
+import { PresentationOutlineConfirmCard } from './PresentationOutlineConfirmCard'
+import { PresentationTemplateSelectionCard } from './PresentationTemplateSelectionCard'
 
 export interface MessageContentProps {
   /** Ordered content blocks (append-only, growing progressively while streaming). */
@@ -35,6 +37,8 @@ export interface MessageContentProps {
   waitingForSubagent?: boolean
   /** The latest Agent Turn is parked on a separate human interaction card. */
   waitingForHumanRequest?: boolean
+  /** Embed process blocks without a second aggregate header when the parent supplies one. */
+  processPresentation?: ProcessTimelineProps['presentation']
 }
 
 export function MessageContent({
@@ -44,6 +48,7 @@ export function MessageContent({
   sessionId,
   waitingForSubagent = false,
   waitingForHumanRequest = false,
+  processPresentation,
 }: MessageContentProps) {
   const hasProcess = blocks.some(
     (b) =>
@@ -54,6 +59,8 @@ export function MessageContent({
       b.type === 'confirmation' ||
       b.type === 'build_confirm' ||
       b.type === 'task_confirm' ||
+      b.type === 'presentation_outline_confirm' ||
+      b.type === 'presentation_template_selection' ||
       b.type === 'workflow_confirm' ||
       b.type === 'build_stage' ||
       b.type === 'workflow_step' ||
@@ -61,7 +68,7 @@ export function MessageContent({
   )
   const hasPendingReview = blocks.some(
     (block) =>
-      (block.type === 'build_confirm' || block.type === 'task_confirm' || block.type === 'workflow_confirm') &&
+      (block.type === 'build_confirm' || block.type === 'task_confirm' || block.type === 'presentation_outline_confirm' || block.type === 'presentation_template_selection' || block.type === 'workflow_confirm') &&
       (block.status ?? 'pending') === 'pending',
   )
   // Streaming with an execution process: keep everything inside the container and do not surface the answer, so that
@@ -86,6 +93,7 @@ export function MessageContent({
     <div className="flex flex-col gap-4">
       {process.length > 0 && (
         <ProcessTimeline
+          presentation={processPresentation}
           blocks={process}
           streaming={streaming}
           active={streaming || waitingForSubagent || waitingForHumanRequest || hasPendingPermission || hasPendingReview}
@@ -154,6 +162,30 @@ function renderAnswerBlocks(blocks: MessageBlock[], sessionId?: string, streamin
         nodes.push(
           <TaskConfirmCard
             key={block.requestId || `task-${index}`}
+            block={block}
+            sessionId={sessionId}
+          />,
+        )
+      }
+    }
+    if (block.type === 'presentation_outline_confirm') {
+      flushText()
+      if ((block.status ?? 'pending') !== 'pending') {
+        nodes.push(
+          <PresentationOutlineConfirmCard
+            key={block.requestId || `presentation-outline-${index}`}
+            block={block}
+            sessionId={sessionId}
+          />,
+        )
+      }
+    }
+    if (block.type === 'presentation_template_selection') {
+      flushText()
+      if ((block.status ?? 'pending') !== 'pending') {
+        nodes.push(
+          <PresentationTemplateSelectionCard
+            key={block.requestId || `presentation-template-${index}`}
             block={block}
             sessionId={sessionId}
           />,

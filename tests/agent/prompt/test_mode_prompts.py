@@ -4,12 +4,20 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Role
 
 from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, MainThink, Session
-from src.amphi_agent._cognitive import (
+from src.amphi_agent.cognitive import (
+    BaseThink,
+    BuildThink,
     ClarifyThink,
     ExploreThink,
     GenerateThink,
+    PresentationBriefThink,
+    PresentationComposeThink,
+    PresentationPlanThink,
+    PresentationReviewThink,
+    PresentationThink,
     SubAgentThink,
     VerifyThink,
+    WorkflowRunThink,
     WorkflowThink,
 )
 from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
@@ -18,6 +26,18 @@ from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserIn
 USER_ID = "local"
 SESSION_ID = "session-mode"
 PROMPT_TIME = "2026-08-19 12:00 (UTC+08:00)"
+
+
+def test_mode_workers_keep_their_shared_inheritance() -> None:
+    """Mode bases and stages retain the shared cognitive behavior after the split."""
+    assert SubAgentThink.__bases__ == (MainThink,)
+    for worker_type in (MainThink, BuildThink, PresentationThink, WorkflowRunThink):
+        assert worker_type.__bases__ == (BaseThink,)
+    for worker_type in (ClarifyThink, ExploreThink, GenerateThink, VerifyThink):
+        assert worker_type.__bases__ == (BuildThink,)
+    for worker_type in (PresentationBriefThink, PresentationPlanThink, PresentationComposeThink, PresentationReviewThink):
+        assert worker_type.__bases__ == (PresentationThink,)
+    assert WorkflowThink.__bases__ == (WorkflowRunThink,)
 
 
 def _context(*, child: bool = False) -> AmphiContext:
@@ -59,7 +79,7 @@ async def test_message_scopes() -> None:
         async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> list[str]:
             return []
 
-    async def assemble(worker: MainThink, state: dict[str, object], child: bool) -> tuple[list[Role], list[str]]:
+    async def assemble(worker: BaseThink, state: dict[str, object], child: bool) -> tuple[list[Role], list[str]]:
         ota_context = AmphiOTAContext(
             user_input="Current build request",
             prompt_time=PROMPT_TIME,
@@ -227,7 +247,7 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     assert "Past request" in clarify_contents
     assert "Past answer" in clarify_contents
     assert "Explore needs clarification" not in clarify_contents
-    assert any("A required decision is missing" in content for content in clarify_contents)
+    assert any("A required decision is missing from task.md." in content for content in clarify_contents)
     assert "Clarify progress" in clarify_contents
 
     generate_ota = AmphiOTAContext(
@@ -265,10 +285,12 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     assert any("input-normalization branch" in content for content in generate_contents)
     assert any("No other verified path" in content for content in generate_contents)
     assert "Generate retry progress" in generate_contents
-    assert not any(
-        getattr(block, "id", None) == "call-verify-to-generate"
-        for message in generate_messages for block in message.blocks
+    assert all(
+        getattr(block, "id", None) != "call-verify-to-generate"
+        for message in generate_messages
+        for block in message.blocks
     )
+    assert any(switch_reason in content for content in generate_contents)
 
     generation_handoff = switch_record(
         "generate",
@@ -294,7 +316,7 @@ async def test_build_stage_message_scope_uses_build_switch_policy() -> None:
     assert "Verification history" in verify_again_contents
     assert "Generate retry progress" not in verify_again_contents
     assert "Generate retry completed" not in verify_again_contents
-    assert any("The corrected implementation is ready" in content for content in verify_again_contents)
+    assert any("The corrected implementation is ready for verification." in content for content in verify_again_contents)
     assert "Second verification progress" in verify_again_contents
 
 

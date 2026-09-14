@@ -480,10 +480,16 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"workspace_restore|workspace_restore_file", Capability.EDIT),   # rollback = modifying files
     (r"web_search|web_fetch|generate_image", Capability.NETWORK),
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
+    (r"get_ppt_page|goto_ppt_page", Capability.MANAGE),
+    (
+        r"view_ppt|update_ppt_design|edit_ppt_page|insert_ppt_element|remove_ppt_element"
+        r"|insert_ppt_page|remove_ppt_page|move_ppt_page",
+        Capability.MANAGE_WRITE,
+    ),
     (r"mcp__.+", Capability.MCP),
     (
-        r"switch|request_build|request_run_workflow|request_human_choice|request_human_task_confirm"
-        r"|request_human_workflow_confirm|edit_workflow|report_workflow_step"
+        r"switch|request_build|request_presentation|request_run_workflow|request_human_choice|request_human_task_confirm"
+        r"|request_human_workflow_confirm|edit_workflow|report_presentation_step|report_workflow_step"
         r"|run_subagent|start_subagent",
         Capability.CONTROL,
     ),

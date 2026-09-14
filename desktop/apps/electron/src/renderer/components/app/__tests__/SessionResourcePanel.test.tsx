@@ -1,12 +1,18 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, jest } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it, jest, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ElectronAPI, EmbeddedBrowserTabInfo } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@app/shared/types'
+import type { SessionWorkbenchExtension, SessionWorkbenchExtensionProps } from '../DesktopAppExtensions'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+mock.module('@/assets/logo.svg', () => ({ default: 'logo.svg' }))
+mock.module('@/assets/logo-dark.svg', () => ({ default: 'logo-dark.svg' }))
+
 const browserCalls: string[] = []
+const excelEnsureCalls: string[] = []
+const excelOpenCalls: Array<{ sessionId: string; path: string; replaceInitialBlank: boolean }> = []
 let nativeWindowForeground = true
 let onWindowForegroundChanged: ((foreground: boolean) => void) | null = null
 const emptyTab: EmbeddedBrowserTabInfo = {
@@ -22,6 +28,7 @@ const emptyTab: EmbeddedBrowserTabInfo = {
   crashed: false,
 }
 const defaultSetVisible: ElectronAPI['browser']['setVisible'] = async () => undefined
+const defaultExcelSetVisible: ElectronAPI['excelHost']['setVisible'] = async () => undefined
 const browserApi: ElectronAPI['browser'] = {
   snapshot: async () => ({ sessions: [] }),
   closeSession: async () => undefined,
@@ -40,8 +47,30 @@ const browserApi: ElectronAPI['browser'] = {
   setBounds: async () => undefined,
   setVisible: defaultSetVisible,
 }
+const excelHostApi: ElectronAPI['excelHost'] = {
+  snapshot: async () => ({ sessions: [] }),
+  ensureSession: async (sessionId) => {
+    excelEnsureCalls.push(sessionId)
+    return {
+      sessionId,
+      targetId: `excel-target-${sessionId}`,
+      webContentsId: 50,
+      ready: true,
+      crashed: false,
+      dirty: false,
+    }
+  },
+  openWorkbook: async (sessionId, _config, request) => {
+    excelOpenCalls.push({ sessionId, ...request })
+  },
+  closeSession: async () => undefined,
+  activateSession: async () => undefined,
+  setBounds: async () => undefined,
+  setVisible: defaultExcelSetVisible,
+}
 ;(window as typeof window & { api: ElectronAPI }).api = {
   browser: browserApi,
+  excelHost: excelHostApi,
   events: {
     onWindowForegroundChanged: (callback: (foreground: boolean) => void) => {
       onWindowForegroundChanged = callback
@@ -76,12 +105,20 @@ const {
   setEmbeddedBrowserSnapshotAtom,
   setSessionWorkbenchSurfaceAtom,
 } = await import('@/atoms/browser')
-const { notifySessionWorkbenchActivityAtom } = await import('@/atoms/workbench')
+const { notifySessionWorkbenchActivityAtom, requestSessionWorkbenchSurfaceOpenAtom } = await import('@/atoms/workbench')
+const { setEmbeddedPowerPointSnapshotAtom } = await import('@/atoms/powerpoint')
 const {
   filesNeedsAttentionFamily,
   setFilesNeedsAttentionAtom,
 } = await import('@/atoms/files-attention')
 const { browserNeedsAttentionFamily } = await import('@/atoms/browser-attention')
+const { powerPointNeedsAttentionFamily } = await import('@/atoms/powerpoint-attention')
+const {
+  queueExcelWorkbookOpenAtom,
+  excelExpandedAtom,
+  excelHostSnapshotAtom,
+  setExcelHostSnapshotAtom,
+} = await import('@/atoms/excel')
 const {
   requestRightPanelCollapseAtom,
   rightPanelCollapseRequestAtom,
@@ -90,9 +127,11 @@ const {
 } = await import('@/atoms/layout')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { i18n } = await import('@/lib/i18n')
+const { wordHostSnapshotAtom } = await import('@/atoms/word')
 const {
   BrowserAttentionAnnouncer,
   FilesAttentionAnnouncer,
+  PowerPointAttentionAnnouncer,
   SessionResourcePanel,
 } = await import('../SessionResourcePanel')
 
@@ -103,7 +142,10 @@ beforeEach(async () => {
 
 afterEach(() => {
   browserCalls.length = 0
+  excelEnsureCalls.length = 0
+  excelOpenCalls.length = 0
   browserApi.setVisible = defaultSetVisible
+  excelHostApi.setVisible = defaultExcelSetVisible
   onWindowForegroundChanged = null
   document.body.replaceChildren()
 })
@@ -111,6 +153,13 @@ afterEach(() => {
 afterAll(async () => {
   await GlobalRegistrator.unregister()
 })
+
+function wordSnapshot(sessionId: string, documentCount: number) {
+  return { sessions: [{
+    sessionId, targetId: `word-${sessionId}`, webContentsId: 51, loading: false, crashed: false,
+    documentCount, persistenceStatus: 'saved' as const, expanded: false,
+  }] }
+}
 
 function browserSnapshot(sessionId: string, tab: EmbeddedBrowserTabInfo = emptyTab) {
   return {
@@ -133,6 +182,19 @@ function startBrowserTool(
   store.set(applyAgentEventAtom, {
     sessionId,
     event: { type: 'tool_call', messageId, toolUseId, toolName, input },
+  })
+}
+
+function startPowerPointTool(
+  store: ReturnType<typeof createStore>,
+  sessionId: string,
+  toolUseId: string,
+  toolName = 'edit_ppt_page',
+): void {
+  startBrowserTool(store, sessionId, toolUseId, toolName, {
+    page_id: 'page-1',
+    ref: 'title',
+    replacement: '<PptText>Updated page</PptText>',
   })
 }
 
@@ -165,25 +227,232 @@ function deferredFailure() {
   return { promise, reject }
 }
 
-async function mountPanel(store: ReturnType<typeof createStore>) {
+async function mountPanel(store: ReturnType<typeof createStore>, extensions?: readonly SessionWorkbenchExtension[]) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  await act(async () => {
+  const render = async (nextExtensions = extensions) => act(async () => {
     root.render(
       <Provider store={store}>
         <BrowserAttentionAnnouncer />
         <FilesAttentionAnnouncer />
-        <SessionResourcePanel />
+        <PowerPointAttentionAnnouncer />
+        <SessionResourcePanel extensions={nextExtensions} />
       </Provider>,
     )
     await Promise.resolve()
   })
-  return { host, root }
+  await render()
+  return { host, root, render }
 }
 
 describe('SessionResourcePanel', () => {
-  it('keeps one permanent Bridgic launcher above four undivided independent tools', async () => {
+  const toolExtension: SessionWorkbenchExtension = {
+    id: 'extension:debug-tools',
+    label: 'Developer tools',
+    icon: <span>T</span>,
+    Content: ({ sessionId, active, onClose }: SessionWorkbenchExtensionProps) => (
+      <div data-testid="extension-tools" data-session-id={sessionId} data-active={active}>
+        <input aria-label="Tool filter" defaultValue="" />
+        <button onClick={onClose}>Close tools</button>
+      </div>
+    ),
+  }
+  const extensionPanel = (host: HTMLElement) => host.querySelector('[data-testid="extension-tools"]')!
+
+  it('groups Agent extensions below Bridgic before the divider and preserves one keyboard tablist', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'agent-extension-placement')
+    const agentTools: SessionWorkbenchExtension = { ...toolExtension, placement: 'agent' }
+    const agentRounds: SessionWorkbenchExtension = { ...toolExtension, id: 'extension:debug-rounds', label: 'Agent rounds', placement: 'agent' }
+    const ordinaryExtension: SessionWorkbenchExtension = { ...toolExtension, id: 'extension:other', label: 'Other tool' }
+    const { host, root } = await mountPanel(store, [ordinaryExtension, agentTools, agentRounds])
+    const dock = host.querySelector('[data-testid="session-tool-dock"]')!
+    const ordered = [...dock.querySelectorAll('[data-testid="session-agent-launcher"], [data-testid="session-agent-divider"], [role="tab"]')]
+      .map((element) => element.getAttribute('data-testid'))
+    expect(ordered).toEqual([
+      'session-agent-launcher',
+      'session-workbench-extension:debug-tools',
+      'session-workbench-extension:debug-rounds',
+      'session-agent-divider',
+      'session-workbench-files',
+      'session-workbench-workflows',
+      'session-workbench-results',
+      'session-workbench-presentation',
+      'session-workbench-word',
+      'session-workbench-excel',
+      'session-workbench-browser',
+      'session-workbench-extension:other',
+    ])
+    expect(dock.querySelectorAll('[role="tablist"]')).toHaveLength(1)
+    expect(new Set(ordered).size).toBe(ordered.length)
+    const rounds = dock.querySelector<HTMLButtonElement>('[data-testid="session-workbench-extension:debug-rounds"]')!
+    const files = dock.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
+    await act(async () => rounds.click())
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(agentRounds.id)
+    await act(async () => rounds.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    expect(document.activeElement).toBe(files)
+    await act(async () => files.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(agentRounds.id)
+    expect(document.activeElement).toBe(rounds)
+    await act(async () => root.unmount())
+  })
+
+  it('uses the shared rail and keeps extension input while switching tools, with Session-owned state', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'extension-session-a')
+    const { host, root } = await mountPanel(store, [toolExtension])
+    const tab = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-extension:debug-tools"]')!
+    expect(tab.getAttribute('aria-label')).toBe('Developer tools')
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+
+    await act(async () => tab.click())
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Tool filter"]')!
+    input.value = 'retained filter'
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!.click())
+    await act(async () => tab.click())
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Tool filter"]')!.value).toBe('retained filter')
+    await act(async () => extensionPanel(host).querySelector('button')!.click())
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+
+    await act(async () => store.set(activeSessionIdAtom, 'extension-session-b'))
+    expect(extensionPanel(host).getAttribute('data-session-id')).toBe('extension-session-b')
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Tool filter"]')!.value).toBe('')
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    await act(async () => root.unmount())
+  })
+
+  it('opens an extension from history without toggling and ignores a background Session request', async () => {
+    const store = createStore()
+    const sessionId = 'extension-open-request'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { host, root } = await mountPanel(store, [toolExtension])
+
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId: 'background', surface: toolExtension.id }))
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    for (let index = 0; index < 2; index += 1) {
+      await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+      expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+      expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    }
+    await act(async () => root.unmount())
+  })
+
+  it('restores the Files tool when an entry point no longer supplies the selected extension', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'extension-removed')
+    store.set(setSessionWorkbenchSurfaceAtom, toolExtension.id)
+    const { host, root, render } = await mountPanel(store, [toolExtension])
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    await render([])
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
+    expect(host.querySelector('[data-testid="extension-tools"]')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('waits for native Browser hide before a history request reveals an extension', async () => {
+    const hidden = deferred()
+    browserApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'browser-to-extension'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Browser)
+    store.set(embeddedBrowserSnapshotAtom, browserSnapshot(sessionId))
+    const { host, root } = await mountPanel(store, [toolExtension])
+
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Browser)
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+    await act(async () => { hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(toolExtension.id)
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('true')
+    await act(async () => root.unmount())
+  })
+
+  it('does not apply an old native handoff or extension close callback to a new Session', async () => {
+    const hidden = deferred()
+    browserApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    let oldClose: (() => void) | undefined
+    const extension = {
+      ...toolExtension,
+      Content: ({ sessionId, onClose }: SessionWorkbenchExtensionProps) => {
+        if (sessionId === 'extension-source') oldClose = onClose
+        return <div />
+      },
+    }
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'extension-source')
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Browser)
+    store.set(embeddedBrowserSnapshotAtom, browserSnapshot('extension-source'))
+    const { root } = await mountPanel(store, [extension])
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId: 'extension-source', surface: extension.id }))
+    await act(async () => store.set(activeSessionIdAtom, 'extension-destination'))
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId: 'extension-destination', surface: extension.id }))
+    await act(async () => { oldClose?.(); hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(extension.id)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    await act(async () => root.unmount())
+  })
+
+  it('keeps the latest history request while waiting for the native Excel hide acknowledgement', async () => {
+    const hidden = deferred()
+    excelHostApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'excel-to-debug-surface'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(excelHostSnapshotAtom, {
+      sessions: [{ sessionId, targetId: 'excel-debug-target', webContentsId: 50, ready: true, crashed: false, dirty: false }],
+    })
+    const roundsExtension: SessionWorkbenchExtension = {
+      ...toolExtension,
+      id: 'extension:debug-rounds',
+      label: 'Debug rounds',
+      Content: ({ active }: SessionWorkbenchExtensionProps) => <div data-testid="debug-rounds" data-active={active} />,
+    }
+    const { host, root } = await mountPanel(store, [toolExtension, roundsExtension])
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: roundsExtension.id }))
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(host.querySelector('[data-testid="debug-rounds"]')?.getAttribute('data-active')).toBe('false')
+    await act(async () => { hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(roundsExtension.id)
+    expect(host.querySelector('[data-testid="debug-rounds"]')?.getAttribute('data-active')).toBe('true')
+    expect(extensionPanel(host).getAttribute('data-active')).toBe('false')
+    await act(async () => root.unmount())
+  })
+
+  it('resolves an extension removed during native Browser hide to Files', async () => {
+    const hidden = deferred()
+    browserApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'extension-removed-during-handoff'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Browser)
+    store.set(embeddedBrowserSnapshotAtom, browserSnapshot(sessionId))
+    const { host, root, render } = await mountPanel(store, [toolExtension])
+    await act(async () => store.set(requestSessionWorkbenchSurfaceOpenAtom, { sessionId, surface: toolExtension.id }))
+    await render([])
+    await act(async () => { hidden.release(); await Promise.resolve(); await Promise.resolve() })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
+    await act(async () => root.unmount())
+  })
+
+  it('keeps one permanent Bridgic launcher above five undivided independent tools', async () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-tools')
     const { host, root } = await mountPanel(store)
@@ -203,22 +472,23 @@ describe('SessionResourcePanel', () => {
       'session-workbench-files',
       'session-workbench-workflows',
       'session-workbench-results',
+      'session-workbench-presentation',
+      'session-workbench-word',
+      'session-workbench-excel',
       'session-workbench-browser',
     ])
     const toolList = host.querySelector('[data-testid="session-workbench-files"]')?.parentElement
-    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(4)
-    expect(toolList?.children).toHaveLength(4)
+    expect(toolList?.querySelectorAll(':scope > [role="tab"]')).toHaveLength(7)
+    expect(toolList?.children).toHaveLength(7)
 
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     const files = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')!
     const filesStatus = files.querySelector<HTMLElement>(
       '[data-testid="session-workbench-files-status-indicator"]',
     )
-    expect(files.className).toContain('bg-bg-selected')
+    expect(filesStatus?.dataset.selected).toBe('true')
     expect(filesStatus?.dataset.state).toBe('active')
-    expect(filesStatus?.className).toContain('-right-[3px]')
-    expect(filesStatus?.className).toContain('h-5')
-    expect(filesStatus?.className).toContain('bg-text-secondary/65')
+    expect(filesStatus?.dataset.appearance).toBe('selection-capsule')
     expect(files.querySelector('.left-0')).toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('true')
@@ -226,19 +496,303 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="workflow-library-panel"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="workflow-results-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="schedule-workbench-tool"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
 
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Workflows)
-    expect(workflows.className).toContain('bg-bg-selected')
+    expect(workflows.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(workflows.querySelector('[data-testid="session-workbench-workflows-status-indicator"]')?.getAttribute('data-state')).toBe('active')
     expect(files.querySelector('[data-testid="session-workbench-files-status-indicator"]')).toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('false')
 
-    await act(async () => workflows.click())
+    const word = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-word"]')!
+    await act(async () => word.click())
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Word)
+    expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('false')
+    expect(window.__bridgicWord).toBeUndefined()
+    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
+
+    await act(async () => word.click())
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     expect(host.querySelector('[data-testid="session-surface-rail"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="session-workbench-workflows-content"]')?.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('true')
+
+    await act(async () => root.unmount())
+  })
+
+  it('tracks blank Word documents in the background until the final document closes', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-word-lifecycle')
+    const { host, root } = await mountPanel(store)
+    const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-workbench-word-status-indicator"]')
+    const word = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-word"]')!
+    try {
+      expect(indicator()).toBeNull()
+      await act(async () => {
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 1))
+      })
+      expect(indicator()?.dataset.state).toBe('background-open')
+      expect(indicator()?.dataset.appearance).toBe('icon-tile')
+      expect(word.getAttribute('aria-busy')).toBeNull()
+      expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
+
+      await act(async () => {
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 2))
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 1))
+      })
+      expect(indicator()?.dataset.state).toBe('background-open')
+
+      await act(async () => word.click())
+      expect(indicator()?.dataset.state).toBe('active')
+      await act(async () => word.click())
+      expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+      expect(indicator()?.dataset.state).toBe('background-open')
+
+      await act(async () => {
+        store.set(wordHostSnapshotAtom, wordSnapshot('session-word-lifecycle', 0))
+      })
+      expect(indicator()).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('restores the Word background marker for the viewed Session without leaking it across Sessions', async () => {
+    const sessionId = 'session-word-restored'
+    const store = createStore()
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(wordHostSnapshotAtom, wordSnapshot(sessionId, 1))
+    const { host, root } = await mountPanel(store)
+    const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-workbench-word-status-indicator"]')
+    try {
+      expect(indicator()?.dataset.state).toBe('background-open')
+      await act(async () => {
+        store.set(activeSessionIdAtom, 'session-word-empty')
+        await Promise.resolve()
+      })
+      expect(indicator()).toBeNull()
+      await act(async () => {
+        store.set(activeSessionIdAtom, sessionId)
+        await Promise.resolve()
+      })
+      expect(indicator()?.dataset.state).toBe('background-open')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('shows PPT as active without a background marker until a presentation is created', async () => {
+    const store = createStore()
+    const sessionId = 'session-ppt-lifecycle'
+    store.set(activeSessionIdAtom, sessionId)
+    const { host, root } = await mountPanel(store)
+    const presentation = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-presentation"]',
+    )!
+
+    await act(async () => presentation.click())
+
+    expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
+    expect(presentation.querySelector(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )).toBeNull()
+
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'ppt-target',
+          webContentsId: 42,
+          loading: false,
+          crashed: false,
+        }],
+      })
+    })
+
+    expect(presentation.querySelector<HTMLElement>(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )?.dataset.state).toBe('active')
+    expect(presentation.getAttribute('aria-label')).toBe('PPT 已打开')
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')?.click()
+    })
+    expect(presentation.querySelector<HTMLElement>(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )?.dataset.state).toBe('background-open')
+
+    await act(async () => presentation.click())
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, { sessions: [] })
+      await Promise.resolve()
+    })
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    expect(presentation.querySelector(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens the PPT surface when the Agent creates its Session target', async () => {
+    const store = createStore()
+    const sessionId = 'session-agent-ppt-open'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Files)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { host, root } = await mountPanel(store)
+
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'agent-ppt-target',
+          webContentsId: 43,
+          loading: false,
+          crashed: false,
+        }],
+      })
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(host.querySelector('[data-testid="session-workbench-presentation-content"]')?.getAttribute('aria-hidden'))
+      .toBe('false')
+
+    await act(async () => root.unmount())
+  })
+
+  it('does not replay PPT auto-open for a target that existed before the Session was viewed', async () => {
+    const store = createStore()
+    const sessionId = 'session-existing-ppt-target'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
+    store.set(setEmbeddedPowerPointSnapshotAtom, {
+      sessions: [{
+        sessionId,
+        targetId: 'existing-ppt-target',
+        webContentsId: 44,
+        loading: false,
+        crashed: false,
+      }],
+    })
+    const { host, root } = await mountPanel(store)
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Results)
+    expect(host.querySelector('[data-testid="session-workbench-results-content"]')?.getAttribute('aria-hidden'))
+      .toBe('false')
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows an Excel launch surface without creating a target until New Excel is clicked', async () => {
+    const store = createStore()
+    const sessionId = 'session-excel-launch'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    const { host, root } = await mountPanel(store)
+
+    const excelButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-excel"]',
+    )!
+    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
+    expect(excelEnsureCalls).toEqual([])
+    expect(excelButton.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
+      .toBeNull()
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="excel-create-workbook"]')?.click()
+      await Promise.resolve()
+    })
+    expect(excelEnsureCalls).toEqual([sessionId])
+
+    await act(async () => {
+      store.set(excelHostSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'excel-target-launch',
+          webContentsId: 50,
+          ready: true,
+          crashed: false,
+          dirty: false,
+        }],
+      })
+      await Promise.resolve()
+    })
+    expect(excelButton.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
+      .not.toBeNull()
+
+    const expandButton = host.querySelector<HTMLButtonElement>('[data-testid="excel-toggle-expanded"]')!
+    expect(expandButton.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => expandButton.click())
+    expect(store.get(excelExpandedAtom)).toBe(true)
+    expect(expandButton.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens a routed workbook in Excel and replaces only the target startup workbook', async () => {
+    const store = createStore()
+    const sessionId = 'session-routed-workbook'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Files)
+    store.set(setRightPanelCollapsedAtom, true)
+    const { root } = await mountPanel(store)
+
+    await act(async () => {
+      store.set(queueExcelWorkbookOpenAtom, {
+        sessionId,
+        path: '/Users/me/session/analysis.xlsx',
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(excelOpenCalls).toEqual([{
+      sessionId,
+      path: '/Users/me/session/analysis.xlsx',
+      replaceInitialBlank: true,
+    }])
+
+    await act(async () => root.unmount())
+  })
+
+  it('collapses Excel when its final workbook tab closes and reopens the launch surface', async () => {
+    const store = createStore()
+    const sessionId = 'session-excel-final-tab-close'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(setExcelHostSnapshotAtom, {
+      sessions: [{
+        sessionId,
+        targetId: 'excel-target-final-tab',
+        webContentsId: 50,
+        ready: true,
+        crashed: false,
+        dirty: false,
+      }],
+    })
+    const { host, root } = await mountPanel(store)
+
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    await act(async () => store.set(setExcelHostSnapshotAtom, { sessions: [] }))
+
+    expect(store.get(rightPanelCollapsedAtom)).toBe(true)
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-excel"]')?.click()
+    })
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
+      .toBeNull()
 
     await act(async () => root.unmount())
   })
@@ -604,6 +1158,40 @@ describe('SessionResourcePanel', () => {
     await act(async () => root.unmount())
   })
 
+  it('keeps an unavailable Agent launcher idle while the Session is streaming', async () => {
+    const store = createStore()
+    const sessionId = 'session-agent-live'
+    store.set(activeSessionIdAtom, sessionId)
+    const { host, root } = await mountPanel(store)
+    const launcher = () => host.querySelector<HTMLButtonElement>('[data-testid="session-agent-launcher"]')!
+    const indicator = () => host.querySelector<HTMLElement>('[data-testid="session-agent-status-indicator"]')
+    try {
+      expect(indicator()).toBeNull()
+      await act(async () => {
+        store.set(streamingFamily(sessionId), {
+          messageId: 'agent-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
+        })
+      })
+      expect(launcher().getAttribute('aria-busy')).toBeNull()
+      expect(launcher().getAttribute('aria-label')).toBe('Bridgic')
+      expect(indicator()).toBeNull()
+      expect(launcher().disabled).toBe(true)
+      expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
+
+      await act(async () => store.set(activeSessionIdAtom, 'session-agent-idle'))
+      expect(launcher().getAttribute('aria-busy')).toBeNull()
+      expect(indicator()).toBeNull()
+
+      await act(async () => store.set(activeSessionIdAtom, sessionId))
+      expect(indicator()).toBeNull()
+      await act(async () => store.set(streamingFamily(sessionId), undefined))
+      expect(launcher().getAttribute('aria-busy')).toBeNull()
+      expect(indicator()).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
   it('uses the same static Bridgic launcher to open and collapse an available Build task', async () => {
     const store = createStore()
     const sessionId = 'session-build-task'
@@ -616,16 +1204,36 @@ describe('SessionResourcePanel', () => {
     expect(launcher.textContent).toContain('Bridgic')
     expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('background-open')
-    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.className).toContain('bg-text-secondary/65')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('icon-tile')
+
+    await act(async () => store.set(streamingFamily(sessionId), {
+      messageId: 'build-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
+    }))
+    expect(launcher.getAttribute('aria-busy')).toBeNull()
+    expect(launcher.getAttribute('aria-label')).toContain('Bridgic 有后台内容，点击返回')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('background-open')
+    expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
+    await act(async () => store.set(streamingFamily(sessionId), undefined))
+    expect(launcher.getAttribute('aria-busy')).toBeNull()
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('background-open')
 
     await act(async () => launcher.click())
     expect(host.querySelector('[data-testid="session-mode-surface"]')).not.toBeNull()
     expect(host.textContent).toContain('保留静态 Bridgic 标识')
     expect(launcher.textContent).toContain('Bridgic')
-    expect(launcher.className).toContain('bg-bg-selected')
+    expect(launcher.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('active')
-    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.className).toContain('bg-text-secondary/65')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('selection-capsule')
     expect(launcher.querySelector('.left-0')).toBeNull()
+
+    await act(async () => store.set(streamingFamily(sessionId), {
+      messageId: 'build-viewing-live', content: '', toolCalls: [], blocks: [], startedAt: Date.now(),
+    }))
+    expect(launcher.getAttribute('aria-busy')).toBeNull()
+    expect(launcher.getAttribute('aria-label')).toContain('正在查看 Bridgic 内容')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-state')).toBe('active')
+    expect(launcher.querySelector('[data-testid="session-agent-status-indicator"]')?.getAttribute('data-appearance')).toBe('selection-capsule')
+    await act(async () => store.set(streamingFamily(sessionId), undefined))
 
     await act(async () => launcher.click())
     expect(host.querySelector('[data-testid="session-mode-surface"]')).toBeNull()
@@ -664,6 +1272,9 @@ describe('SessionResourcePanel', () => {
         'session-workbench-files',
         'session-workbench-workflows',
         'session-workbench-results',
+        'session-workbench-presentation',
+        'session-workbench-word',
+        'session-workbench-excel',
         'session-workbench-browser',
       ])
 
@@ -862,7 +1473,7 @@ describe('SessionResourcePanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('uses one right-edge rail for background-open and focused tool states', async () => {
+  it('styles the icon for background-open and focused tool states', async () => {
     const store = createStore()
     const sessionId = 'session-browser-open-page'
     store.set(activeSessionIdAtom, sessionId)
@@ -877,10 +1488,7 @@ describe('SessionResourcePanel', () => {
     expect(browserButton?.getAttribute('aria-busy')).toBeNull()
     expect(host.querySelector('[data-testid="browser-attention-status"]')?.textContent).toBe('')
     expect(backgroundIndicator?.dataset.state).toBe('background-open')
-    expect(backgroundIndicator?.className).toContain('-right-[3px]')
-    expect(backgroundIndicator?.className).toContain('h-5')
-    expect(backgroundIndicator?.className).toContain('w-0.5')
-    expect(backgroundIndicator?.className).toContain('bg-text-secondary/65')
+    expect(backgroundIndicator?.dataset.appearance).toBe('icon-tile')
     expect(browserButton?.querySelector('svg rect')).toBeNull()
 
     await act(async () => {
@@ -888,14 +1496,13 @@ describe('SessionResourcePanel', () => {
       await Promise.resolve()
     })
     expect(browserButton?.getAttribute('aria-selected')).toBe('true')
-    expect(browserButton?.className).toContain('bg-bg-selected')
+    expect(browserButton?.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(browserButton?.querySelector('.left-0')).toBeNull()
     const activeIndicator = browserButton?.querySelector<HTMLElement>(
       '[data-testid="session-workbench-browser-status-indicator"]',
     )
     expect(activeIndicator?.dataset.state).toBe('active')
-    expect(activeIndicator?.className).toContain('-right-[3px]')
-    expect(activeIndicator?.className).toContain('bg-text-secondary/65')
+    expect(activeIndicator?.dataset.appearance).toBe('selection-capsule')
     await act(async () => {
       browserButton?.click()
       await Promise.resolve()
@@ -925,8 +1532,85 @@ describe('SessionResourcePanel', () => {
     expect(browserButton.getAttribute('aria-busy')).toBe('true')
     expect(browserButton.getAttribute('data-attention')).toBeNull()
     expect(browserButton.className).toContain('bg-accent-blue-subtle')
+    expect(browserButton.querySelector('[data-selected="true"]')).not.toBeNull()
     expect(browserButton.className).not.toContain('animate-surface-attention')
     expect(browserButton.querySelector('.animate-pulse')).not.toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows foreground PowerPoint editing with the same busy pulse and settle dwell', async () => {
+    jest.useFakeTimers()
+    const store = createStore()
+    const sessionId = 'session-powerpoint-foreground-action'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Presentation)
+    const { host, root } = await mountPanel(store)
+    const powerPointButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-presentation"]',
+    )!
+
+    try {
+      await act(async () => {
+        startPowerPointTool(store, sessionId, 'ppt-foreground')
+      })
+
+      expect(powerPointButton.getAttribute('aria-busy')).toBe('true')
+      expect(powerPointButton.getAttribute('aria-label')).toBe('Bridgic 正在编辑 PPT')
+      expect(powerPointButton.textContent).toContain('编辑中')
+      expect(powerPointButton.getAttribute('data-attention')).toBeNull()
+      expect(powerPointButton.className).toContain('bg-accent-blue-subtle')
+      expect(powerPointButton.querySelector('.animate-pulse')).not.toBeNull()
+
+      await act(async () => {
+        finishBrowserTool(store, sessionId, 'ppt-foreground', 'done')
+      })
+      await act(async () => jest.advanceTimersByTime(399))
+      expect(powerPointButton.getAttribute('aria-busy')).toBe('true')
+      expect(powerPointButton.querySelector('.animate-pulse')).toBeNull()
+
+      await act(async () => jest.advanceTimersByTime(1))
+      expect(powerPointButton.getAttribute('aria-busy')).toBeNull()
+      expect(powerPointButton.getAttribute('aria-label')).toBe('PPT')
+    } finally {
+      await act(async () => root.unmount())
+      jest.useRealTimers()
+    }
+  })
+
+  it('holds unseen PowerPoint activity as a warning until selected', async () => {
+    const store = createStore()
+    const sessionId = 'session-powerpoint-background-action'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Results)
+    store.set(setRightPanelCollapsedAtom, false)
+    const { host, root } = await mountPanel(store)
+    const powerPointButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="session-workbench-presentation"]',
+    )!
+
+    await act(async () => {
+      startPowerPointTool(store, sessionId, 'ppt-background')
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Results)
+    expect(store.get(powerPointNeedsAttentionFamily(sessionId))).toBe(true)
+    expect(powerPointButton.getAttribute('data-attention')).toBe('true')
+    expect(powerPointButton.getAttribute('aria-label')).toBe('Bridgic 正在编辑 PPT')
+    expect(powerPointButton.className).toContain('animate-surface-attention')
+    expect(powerPointButton.querySelector('.animate-pulse')).toBeNull()
+    expect(host.querySelector('[data-testid="powerpoint-attention-status"]')?.textContent)
+      .toBe('PPT 有新动态，点击查看')
+
+    await act(async () => {
+      powerPointButton.click()
+      await Promise.resolve()
+    })
+    expect(store.get(powerPointNeedsAttentionFamily(sessionId))).toBe(false)
+    expect(powerPointButton.getAttribute('data-attention')).toBeNull()
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
 
     await act(async () => root.unmount())
   })
@@ -1179,7 +1863,7 @@ describe('SessionResourcePanel', () => {
         await Promise.resolve()
       })
       expect(browserButton.getAttribute('data-attention')).toBeNull()
-      expect(browserButton.className).toContain('bg-bg-selected')
+      expect(browserButton.querySelector('[data-selected="true"]')).not.toBeNull()
     } finally {
       await act(async () => root.unmount())
       jest.useRealTimers()
@@ -1345,6 +2029,46 @@ describe('SessionResourcePanel', () => {
     })
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     expect(store.get(filesNeedsAttentionFamily(sessionId))).toBe(false)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
+
+    await act(async () => root.unmount())
+  })
+
+  it('keeps Excel selected until its Session target is hidden before showing a renderer tool', async () => {
+    const hidden = deferred()
+    excelHostApi.setVisible = async (visible, focusHost) => {
+      if (!visible && focusHost === true) await hidden.promise
+    }
+    const store = createStore()
+    const sessionId = 'session-excel-to-files'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    store.set(excelHostSnapshotAtom, {
+      sessions: [{
+        sessionId,
+        targetId: 'excel-target-a',
+        webContentsId: 50,
+        ready: true,
+        crashed: false,
+        dirty: false,
+      }],
+    })
+    const { host, root } = await mountPanel(store)
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-files"]')?.click()
+      await Promise.resolve()
+    })
+
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Excel)
+    expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('true')
+
+    await act(async () => {
+      hidden.release()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Files)
     expect(host.querySelector('[data-testid="session-workbench-files-content"]')?.getAttribute('aria-hidden')).toBe('false')
 
     await act(async () => root.unmount())

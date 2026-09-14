@@ -16,7 +16,11 @@ import { Tooltip } from './Tooltip'
 import { Collapse } from './Collapse'
 import { ToolExpand } from './ToolViews'
 import { classifyTool, toolLabel, toolMeta, type ToolKind, type ToolLabel } from '@/lib/toolDisplay'
-import { isBrowserAgentActionToolName, type AgentMessageToolCall } from '@/atoms/agent'
+import {
+  isBrowserAgentActionToolName,
+  isPowerPointAgentActionToolName,
+  type AgentMessageToolCall,
+} from '@/atoms/agent'
 import { SubagentGroup } from './SubagentGroup'
 import { ImageGenerationCard } from './ImageGenerationCard'
 
@@ -27,6 +31,7 @@ export interface ToolCallRowProps {
 /** Tool families not covered by ToolKind → icon (prefix match, first hit wins). */
 const FAMILY_ICONS: [RegExp, () => JSX.Element][] = [
   [/^browser_|^load_browser_tools$/, () => Icons.globe(14)],
+  [/(?:^|_)ppt(?:_|$)/, () => Icons.presentation(14)],
   [/^workspace_|^load_workspace_tools$/, () => Icons.folder(14)],
   [/skill/, () => Icons.lightbulb(14)],
   [/subagent/, () => Icons.robot(14)],
@@ -93,6 +98,8 @@ function GenericToolCallRow({ call }: ToolCallRowProps) {
   const meta = toolMeta(kind, name, input, output)
   const longSubject = hasLongSubject(kind)
   const isBrowserRunning = isBrowserAgentActionToolName(name) && result === undefined
+  const isPowerPointRunning = isPowerPointAgentActionToolName(name) && result === undefined
+  const isSurfaceRunning = isBrowserRunning || isPowerPointRunning
   const isImageReadRunning = kind === 'image_read' && result === undefined
 
   return (
@@ -108,22 +115,23 @@ function GenericToolCallRow({ call }: ToolCallRowProps) {
         className={cn(
           'flex w-full items-center gap-[7px] rounded-md py-[3px] transition-colors',
           isError ? 'text-status-error' : 'text-text-tertiary hover:text-text-secondary',
-          isBrowserRunning && 'bg-accent-blue-subtle text-text-accent',
+          isSurfaceRunning && 'bg-accent-blue-subtle text-text-accent',
           isImageReadRunning && 'cursor-default hover:text-text-tertiary',
         )}
         data-browser-tool-state={isBrowserRunning ? 'running' : undefined}
+        data-powerpoint-tool-state={isPowerPointRunning ? 'running' : undefined}
         data-image-analysis-state={isImageReadRunning ? 'running' : undefined}
       >
         <span className={cn(
           'flex shrink-0',
-          isBrowserRunning && 'text-text-accent',
+          isSurfaceRunning && 'text-text-accent',
         )}>
           {toolIcon(kind, name, isError)}
         </span>
         <span
           className={cn('flex min-w-0 items-baseline gap-1 text-xs', longSubject ? 'flex-1' : 'shrink-0')}
         >
-          <span className={cn('shrink-0 text-text-tertiary', isBrowserRunning && 'text-text-accent')}>
+          <span className={cn('shrink-0 text-text-tertiary', isSurfaceRunning && 'text-text-accent')}>
             {label.verb}
           </span>
           <SubjectText label={label} />

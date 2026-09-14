@@ -68,6 +68,8 @@ export const CLIENT_FRAME = {
   TaskConfirm: 'task_confirm',
   WorkflowConfirm: 'workflow_confirm',
   PermissionAnswer: 'permission_answer',
+  PresentationOutlineConfirm: 'presentation_outline_confirm',
+  PresentationTemplateSelection: 'presentation_template_selection',
   ChoiceAnswer: 'choice_answer',
 } as const
 
@@ -134,6 +136,59 @@ export interface TaskConfirmFrame {
   feedback?: string | null
 }
 
+export interface PresentationOutlineSlideInput {
+  id?: string
+  title: string
+  purpose?: string | null
+  key_message?: string | null
+  content_outline: string[]
+  source_ids: string[]
+}
+
+export interface PresentationOutlineChapterInput {
+  id?: string
+  title: string
+  summary?: string | null
+  slides: PresentationOutlineSlideInput[]
+}
+
+export interface PresentationTemplateCandidateData {
+  template_id: string
+  version: string
+  title: string
+  aspect_ratio?: string | null
+  slide_count?: number | null
+  semantic_tags?: string[]
+  strengths?: string[]
+  colors?: string[]
+  fonts?: string[]
+  preview_paths?: string[]
+  role_coverage?: number | null
+  agentic_fit?: 'strong' | 'usable' | 'weak' | null
+  agentic_reason?: string | null
+  agentic_use_for_roles?: string[]
+  agentic_risks?: string[]
+  structural_evidence?: Record<string, unknown>
+  materialize_ref?: Record<string, unknown>
+}
+
+/** Confirm the complete editable outline without creating a chat message. */
+export interface PresentationOutlineConfirmFrame {
+  type: typeof CLIENT_FRAME.PresentationOutlineConfirm
+  session_id: string
+  request_id: string
+  chapters: PresentationOutlineChapterInput[]
+}
+
+/** Resume Plan after the user decides what to do with the current template batch. */
+export interface PresentationTemplateSelectionFrame {
+  type: typeof CLIENT_FRAME.PresentationTemplateSelection
+  session_id: string
+  request_id: string
+  action: 'select' | 'skip' | 'refresh'
+  template_id?: string
+}
+
 /** Save or cancel a Workflow Build and resume its parked confirmation turn. */
 export interface WorkflowConfirmFrame {
   type: typeof CLIENT_FRAME.WorkflowConfirm
@@ -197,6 +252,8 @@ export type ClientFrame =
   | ChatFrame
   | BuildConfirmFrame
   | TaskConfirmFrame
+  | PresentationOutlineConfirmFrame
+  | PresentationTemplateSelectionFrame
   | WorkflowConfirmFrame
   | PermissionAnswerFrame
   | ChoiceAnswerFrame
@@ -300,6 +357,8 @@ export const TURN_EVENT = {
   BuildConfirmRequest: 'build_confirm_request',
   PermissionRequest: 'permission_request',
   TaskConfirmRequest: 'task_confirm_request',
+  PresentationOutlineConfirmRequest: 'presentation_outline_confirm_request',
+  PresentationTemplateSelectionRequest: 'presentation_template_selection_request',
   WorkflowConfirmRequest: 'workflow_confirm_request',
   WorkflowProgress: 'workflow_progress',
   WorkflowResult: 'workflow_result',
@@ -343,9 +402,45 @@ export type TurnEvent =
   | {
       event: typeof TURN_EVENT.Stage
       data: {
-        mode: 'build' | 'normal' | 'run_workflow'
+        mode: 'build' | 'normal' | 'presentation' | 'run_workflow'
         stage: string | null
         workflow_id?: string | null
+        presentation_goal?: string | null
+        presentation_step_index?: number
+        presentation_reports?: Array<{
+          stage: string
+          step_id: string
+          summary: string
+          evidence: string[]
+        }>
+        presentation_sources?: Array<{
+          id: string
+          kind: 'web' | 'file' | 'conversation'
+          title: string
+          locator?: string | null
+          excerpt?: string | null
+          usage?: string | null
+        }>
+        presentation_outline?: Array<{
+          id: string
+          title: string
+          summary?: string | null
+          slides: Array<{
+            id: string
+            title: string
+            purpose?: string | null
+            key_message?: string | null
+            content_outline: string[]
+            source_ids: string[]
+          }>
+        }>
+        presentation_outline_confirmed?: boolean
+        presentation_outline_confirmation_id?: string | null
+        presentation_template_candidates?: PresentationTemplateCandidateData[]
+        presentation_template_selection_id?: string | null
+        presentation_template_selection_status?: 'idle' | 'pending' | 'selected' | 'skipped'
+        presentation_template_selection_error?: string | null
+        presentation_selected_template?: PresentationTemplateCandidateData | null
       }
     }
   | { event: typeof TURN_EVENT.Title; data: { title: string } }
@@ -389,6 +484,14 @@ export type TurnEvent =
         workflow_id?: string | null
         original_task_markdown?: string | null
       }
+    }
+  | {
+      event: typeof TURN_EVENT.PresentationOutlineConfirmRequest
+      data: { request_id: string }
+    }
+  | {
+      event: typeof TURN_EVENT.PresentationTemplateSelectionRequest
+      data: { request_id: string }
     }
   | {
       event: typeof TURN_EVENT.WorkflowConfirmRequest

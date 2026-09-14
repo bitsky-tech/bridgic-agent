@@ -94,7 +94,7 @@ def detect_locale(*texts: str | None) -> Locale | None:
     """Infer the language the user is writing in, newest message first.
 
     This is what the product's display text follows: everything the model writes already
-    matches the user's input language (``_prompt.py``'s CRITICAL language rule), so the
+    matches the user's input language (``prompts/shared.py``'s CRITICAL language rule), so the
     backend's own strings — security labels, conflict cards, tool returns — must key off
     the same signal or one approval card ends up mixing both languages.
 
@@ -351,6 +351,10 @@ class BackendI18n:
             "zh": "当前会话还有未完成的工作流运行。{reason}\n\n你希望继续原运行，还是丢弃它并从头运行{target}？",
             "en": "This session has an unfinished Workflow run. {reason}\n\nContinue it, or discard it and start {target} again?",
         },
+        "agent.workflow_run_choice.question_resume_only": {
+            "zh": "当前会话还有工作流“{name}”的未完成运行。{reason}\n\n当前保存版本已不可用，无法从头重新运行。原运行的快照、输入和进度仍然保留，是否继续？",
+            "en": "This session has an unfinished run of Workflow “{name}”. {reason}\n\nThe saved version is unavailable, so a fresh run cannot be started. The original snapshot, input, and progress are preserved. Continue the existing run?",
+        },
         "agent.workflow_run_choice.target_same": {
             "zh": "工作流“{name}”",
             "en": "Workflow “{name}”",
@@ -558,6 +562,10 @@ class BackendI18n:
         "agent.error.empty_answer": {
             "zh": "抱歉，这次任务没有生成回复。请重新运行一次；如果仍然没有回复，可以换一个模型再试。",
             "en": "Sorry, no response was generated for this task. Run it again, or try another model if it still produces no response.",
+        },
+        "agent.error.resume_unavailable": {
+            "zh": "这次交互已无法恢复。请发送“继续”，从已保存的进度接着执行。",
+            "en": "This interaction can no longer be resumed. Send “continue” to proceed from the saved progress.",
         },
         "agent.error.image_input_unsupported": {
             "zh": "当前模型“{model_display}”不支持图片输入。请切换到支持图片/视觉输入的模型，或移除消息中的图片后重试。",
@@ -773,6 +781,7 @@ class BackendI18n:
         "agent.schedule.invalid_cron": {"zh": "无效的 cron 表达式 {cron!r}；请使用六字段格式：秒 分 时 日 月 周。", "en": "Invalid cron expression {cron!r}; use six fields: sec min hour dom mon dow."},
         "agent.schedule.catalogue_unavailable": {"zh": "当前 Agent 上下文中没有可用的定时任务目录。", "en": "No schedule catalogue is available in this Agent context."},
         "agent.schedule.invalid_enabled": {"zh": "无效的 enabled 值：{value!r}。省略该字段可跳过筛选，或传入 true / false。", "en": "Invalid value for enabled: {value!r}. Omit the field to skip filtering, or pass true / false."},
+        "ppt.template.numeric_title": {"zh": "{family}模板 {number}", "en": "{family} template {number}"},
         "chat.reply_in_progress": {
             "zh": "当前回复仍在生成，请等待完成或先停止，再发送新消息。",
             "en": "A reply is still being generated. Wait for it to finish or stop it before sending another message.",

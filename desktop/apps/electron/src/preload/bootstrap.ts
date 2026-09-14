@@ -5,7 +5,9 @@ import type {
   AutoUpdateEvent,
   BackendSnapshot,
   EmbeddedBrowserSnapshot,
+  EmbeddedPowerPointSnapshot,
   ElectronAPI,
+  ExcelHostSnapshot,
   FsChangedEvent,
   GuiSettings,
   WindowCloseRequest,
@@ -43,6 +45,11 @@ const api: ElectronAPI = {
   dialog: {
     open: (options) => ipcRenderer.invoke(IPC.dialog.open, options),
     save: (options) => ipcRenderer.invoke(IPC.dialog.save, options),
+  },
+  excel: {
+    open: () => ipcRenderer.invoke(IPC.excel.open),
+    save: (request) => ipcRenderer.invoke(IPC.excel.save, request),
+    saveAs: (request) => ipcRenderer.invoke(IPC.excel.saveAs, request),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settings.get),
@@ -95,6 +102,42 @@ const api: ElectronAPI = {
     setVisible: (visible, focusHost) =>
       ipcRenderer.invoke(IPC.browser.setVisible, visible, focusHost),
   },
+  powerpoint: {
+    snapshot: () => ipcRenderer.invoke(IPC.powerpoint.snapshot),
+    ensureSession: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.ensureSession, sessionId),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.powerpoint.setBounds, bounds),
+    setVisible: (visible, focusHost) =>
+      ipcRenderer.invoke(IPC.powerpoint.setVisible, visible, focusHost),
+    requestClose: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.requestClose, sessionId),
+    setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
+    openFile: (sessionId, absPath) => ipcRenderer.invoke(IPC.powerpoint.openFile, sessionId, absPath),
+  },
+  word: {
+    readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
+  },
+  wordHost: {
+    snapshot: () => ipcRenderer.invoke(IPC.wordHost.snapshot),
+    ensureSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.ensureSession, sessionId),
+    openFile: (sessionId, request) => ipcRenderer.invoke(IPC.wordHost.openFile, sessionId, request),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.wordHost.setBounds, bounds),
+    setVisible: (visible, focusHost) => ipcRenderer.invoke(IPC.wordHost.setVisible, visible, focusHost),
+  },
+  excelHost: {
+    snapshot: () => ipcRenderer.invoke(IPC.excelHost.snapshot),
+    ensureSession: (sessionId, config) =>
+      ipcRenderer.invoke(IPC.excelHost.ensureSession, sessionId, config),
+    openWorkbook: (sessionId, config, request) =>
+      ipcRenderer.invoke(IPC.excelHost.openWorkbook, sessionId, config, request),
+    closeSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.closeSession, sessionId),
+    activateSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.activateSession, sessionId),
+    setBounds: (bounds) => ipcRenderer.invoke(IPC.excelHost.setBounds, bounds),
+    setVisible: (visible, focusHost) =>
+      ipcRenderer.invoke(IPC.excelHost.setVisible, visible, focusHost),
+  },
   backend: {
     snapshot: () => ipcRenderer.invoke(IPC.backend.snapshot),
     refresh: (expectedEndpointEpoch) =>
@@ -128,6 +171,8 @@ const api: ElectronAPI = {
     searchDir: (req) => ipcRenderer.invoke(IPC.fs.searchDir, req),
     setWatchDirs: (paths) => ipcRenderer.invoke(IPC.fs.setWatchDirs, paths),
     writeFile: (absPath, content) => ipcRenderer.invoke(IPC.fs.writeFile, absPath, content),
+    writePresentation: (absPath, content) =>
+      ipcRenderer.invoke(IPC.fs.writePresentation, absPath, content),
     writeWorkflowArchive: (absPath, content) =>
       ipcRenderer.invoke(IPC.fs.writeWorkflowArchive, absPath, content),
     writeWorkflowRunArchive: (absPath, content) =>
@@ -150,6 +195,17 @@ const api: ElectronAPI = {
       subscribe<WindowCloseRequest>(IPC.events.windowCloseRequested, callback),
     onEmbeddedBrowserChanged: (callback) =>
       subscribe<EmbeddedBrowserSnapshot>(IPC.events.embeddedBrowserChanged, callback),
+    onEmbeddedPowerPointChanged: (callback) =>
+      subscribe<EmbeddedPowerPointSnapshot>(IPC.events.embeddedPowerPointChanged, callback),
+    onPowerPointCloseRequested: (callback) =>
+      subscribe<string>(IPC.events.powerPointCloseRequested, callback),
+    onPowerPointExpandedChanged: (callback) =>
+      subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
+    onExcelHostChanged: (callback) =>
+      subscribe<ExcelHostSnapshot>(IPC.events.excelHostChanged, callback),
+    onWordHostChanged: (callback) => subscribe(IPC.events.wordHostChanged, callback),
+    onWordHostHideRequested: (callback) => subscribe(IPC.events.wordHostHideRequested, callback),
+    onWordHostExpandedChanged: (callback) => subscribe(IPC.events.wordHostExpandedChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },
 }

@@ -11,6 +11,7 @@ import {
 import type { EmbeddedBrowserSessionInfo, EmbeddedBrowserTabInfo } from '../shared/types'
 import type { BackendEndpoint } from './python-client/types'
 import type { EmbeddedBrowserManager } from './embedded-browser-manager'
+import type { EmbeddedPowerPointManager } from './embedded-powerpoint-manager'
 import { mainLog } from './logger'
 
 const LOOPBACK_HOST = '127.0.0.1'
@@ -49,6 +50,7 @@ export class EmbeddedBrowserController {
   constructor(
     private readonly browser: EmbeddedBrowserManager,
     private readonly cdpEndpoint: string,
+    private readonly powerpoint?: EmbeddedPowerPointManager,
   ) {}
 
   /** Enable Chromium's loopback DevTools endpoint before Electron becomes ready. */
@@ -240,6 +242,41 @@ export class EmbeddedBrowserController {
       if (request.method === 'POST' && request.url === '/v1/sessions/release') {
         const body = await this.readJson<SessionRequest>(request)
         this.browser.closeSession(this.sessionId(body.session_id))
+        this.sendJson(response, 200, { released: true })
+        return
+      }
+      if (request.method === 'POST' && request.url === '/v1/powerpoint/sessions/ensure') {
+        if (!this.powerpoint) throw new Error('PowerPoint controller is unavailable')
+        const body = await this.readJson<SessionRequest>(request)
+        const sessionId = this.sessionId(body.session_id)
+        const info = await this.powerpoint.ensureSession(sessionId)
+        this.sendJson(response, 200, {
+          session_id: info.sessionId,
+          target_id: info.targetId,
+          web_contents_id: info.webContentsId,
+          loading: info.loading,
+          crashed: info.crashed,
+        })
+        return
+      }
+      if (request.method === 'POST' && request.url === '/v1/powerpoint/sessions/get') {
+        if (!this.powerpoint) throw new Error('PowerPoint controller is unavailable')
+        const body = await this.readJson<SessionRequest>(request)
+        const sessionId = this.sessionId(body.session_id)
+        const info = this.powerpoint.sessionInfo(sessionId)
+        this.sendJson(response, 200, info ? {
+          session_id: info.sessionId,
+          target_id: info.targetId,
+          web_contents_id: info.webContentsId,
+          loading: info.loading,
+          crashed: info.crashed,
+        } : { session_id: sessionId, target_id: null })
+        return
+      }
+      if (request.method === 'POST' && request.url === '/v1/powerpoint/sessions/release') {
+        if (!this.powerpoint) throw new Error('PowerPoint controller is unavailable')
+        const body = await this.readJson<SessionRequest>(request)
+        this.powerpoint.closeSession(this.sessionId(body.session_id))
         this.sendJson(response, 200, { released: true })
         return
       }

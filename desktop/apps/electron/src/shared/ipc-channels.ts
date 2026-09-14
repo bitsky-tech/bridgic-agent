@@ -28,6 +28,25 @@ export const IPC = {
     open: 'dialog:open',
     save: 'dialog:save',
   },
+  excel: {
+    open: 'excel:open',
+    openRequestedWorkbook: 'excel:openRequestedWorkbook',
+    save: 'excel:save',
+    saveAs: 'excel:saveAs',
+  },
+  excelHost: {
+    snapshot: 'excel-host:snapshot',
+    ensureSession: 'excel-host:ensureSession',
+    openWorkbook: 'excel-host:openWorkbook',
+    closeSession: 'excel-host:closeSession',
+    closeCurrentSession: 'excel-host:closeCurrentSession',
+    activateSession: 'excel-host:activateSession',
+    setBounds: 'excel-host:setBounds',
+    setVisible: 'excel-host:setVisible',
+    setDirty: 'excel-host:setDirty',
+    getRecoveryState: 'excel-host:getRecoveryState',
+    setRecoveryState: 'excel-host:setRecoveryState',
+  },
   /**
    * GuiSettings (single JSON blob at ~/.bridgic/amphi/gui-settings.json).
    * Whole-blob style — `get()` returns the entire shape, `set(next)`
@@ -99,6 +118,35 @@ export const IPC = {
     hasHorizontalOverflow: 'browser:hasHorizontalOverflow',
     setBounds: 'browser:setBounds',
     setVisible: 'browser:setVisible',
+  },
+  powerpoint: {
+    snapshot: 'powerpoint:snapshot',
+    ensureSession: 'powerpoint:ensureSession',
+    closeSession: 'powerpoint:closeSession',
+    activateSession: 'powerpoint:activateSession',
+    setBounds: 'powerpoint:setBounds',
+    setVisible: 'powerpoint:setVisible',
+    requestClose: 'powerpoint:requestClose',
+    setExpanded: 'powerpoint:setExpanded',
+    openFile: 'powerpoint:openFile',
+  },
+  word: {
+    readDocument: 'word:read-document',
+  },
+  wordHost: {
+    snapshot: 'word-host:snapshot',
+    ensureSession: 'word-host:ensureSession',
+    openFile: 'word-host:openFile',
+    closeSession: 'word-host:closeSession',
+    activateSession: 'word-host:activateSession',
+    setBounds: 'word-host:setBounds',
+    setVisible: 'word-host:setVisible',
+    getConfig: 'word-host:getConfig',
+    reportState: 'word-host:reportState',
+    requestHide: 'word-host:requestHide',
+    setExpanded: 'word-host:setExpanded',
+    completeOpenFile: 'word-host:completeOpenFile',
+    completeFlush: 'word-host:completeFlush',
   },
   // Bridgic Agent Python daemon coordination — the live backend
   // control plane (discover / spawn / stop / clients). The renderer chats with
@@ -176,6 +224,7 @@ export const IPC = {
     // manually editing the requirements spec). Main strictly validates that the
     // path lands only inside that Build workspace, guarding against out-of-bounds writes.
     writeFile: 'fs:writeFile',
+    writePresentation: 'fs:writePresentation',
     writeWorkflowArchive: 'fs:writeWorkflowArchive',
     writeWorkflowRunArchive: 'fs:writeWorkflowRunArchive',
   },
@@ -190,6 +239,18 @@ export const IPC = {
     windowFullScreenChanged: 'window-full-screen-changed',
     windowCloseRequested: 'window-close-requested',
     embeddedBrowserChanged: 'embedded-browser-changed',
+    embeddedPowerPointChanged: 'embedded-powerpoint-changed',
+    powerPointCloseRequested: 'powerpoint-close-requested',
+    powerPointExpandedChanged: 'powerpoint-expanded-changed',
+    excelHostChanged: 'excel-host-changed',
+    excelHostConfigChanged: 'excel-host-config-changed',
+    excelWorkbookOpenRequested: 'excel-workbook-open-requested',
+    wordHostChanged: 'word-host-changed',
+    wordHostHideRequested: 'word-host-hide-requested',
+    wordHostExpandedChanged: 'word-host-expanded-changed',
+    wordHostConfigChanged: 'word-host-config-changed',
+    wordHostOpenFileRequested: 'word-host-open-file-requested',
+    wordHostFlushRequested: 'word-host-flush-requested',
     // A watched session-file directory changed on disk → renderer re-reads it.
     fsChanged: 'fs-changed',
   },

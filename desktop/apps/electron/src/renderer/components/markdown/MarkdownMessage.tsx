@@ -91,7 +91,7 @@ const SANITIZE_SCHEMA = {
   protocols: {
     ...defaultSchema.protocols,
     // file:// local file links inside LLM body text: allow the file protocol on href so the link survives
-    // sanitize, then let the custom `a` component below take over the click and route it through openPath
+    // sanitize, then let the custom `a` component below route it through the shared file opener
     // (see fileUrlToTarget). file: as an href is not an XSS vector, and the click preventDefaults so it
     // never really navigates, which makes allowing it safe.
     href: [...(defaultSchema.protocols?.href ?? []), 'file'],
@@ -102,7 +102,7 @@ const SANITIZE_SCHEMA = {
 /** react-markdown's urlTransform: the default (defaultUrlTransform) blanks out hrefs with
  *  non-allow-listed protocols such as file: — and that cleaning happens before sanitize and before
  *  the custom `a` component. Allow file:// through (local file links, whose clicks the `a` component
- *  below routes to openPath) and keep the default cleaning for every other URL. */
+ *  below routes to the file opener) and keep the default cleaning for every other URL. */
 function transformUrl(url: string): string {
   return fileUrlToTarget(url) ? url : defaultUrlTransform(url)
 }
@@ -124,8 +124,8 @@ const MarkdownBlock = memo(function MarkdownBlock({
   const components = useMemo<Components>(
     () => ({
       a: ({ href, title, children }) => {
-        // file:// local file links go to FileLink: the click goes through the openPath channel (confirmation
-        // dialog + remembering + failure toast), and on hover it additionally exposes "reveal in file manager
+        // file:// local file links go to FileLink: the click routes DOCX into Word and keeps the confirmed system
+        // opener for other file types; on hover it additionally exposes "reveal in file manager
         // / copy path" plus a full-path tooltip. It does not widen openExternal's scheme allow-list.
         const fileTarget = href ? fileUrlToTarget(href) : null
         if (fileTarget) {

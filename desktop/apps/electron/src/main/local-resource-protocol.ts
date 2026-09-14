@@ -15,6 +15,7 @@ export interface LocalResourceHandlerDependencies {
     init: RequestInit & { bypassCustomProtocolHandlers?: boolean },
   ) => Promise<Response>
   statFile?: (path: string) => Promise<FileStat>
+  getFetchOrigin?: () => string | undefined
 }
 
 function response(status: number, headers?: HeadersInit): Response {
@@ -90,6 +91,8 @@ export function createLocalResourceHandler(
 
     const sourceUrl = parseSource(request.url, expectedToken)
     if (!sourceUrl) return response(403)
+    const origin = request.headers.get('origin')
+    if (origin !== null && origin !== dependencies.getFetchOrigin?.()) return response(403)
 
     let sourceStat: FileStat
     try {
@@ -106,6 +109,9 @@ export function createLocalResourceHandler(
         bypassCustomProtocolHandlers: true,
       })
       const headers = new Headers(forwarded.headers)
+      // Only the current main-window origin may fetch token-authorized bytes.
+      headers.delete('Access-Control-Allow-Origin')
+      if (origin !== null) headers.set('Access-Control-Allow-Origin', origin)
       headers.set('Cache-Control', 'no-store')
       headers.set('X-Content-Type-Options', 'nosniff')
       return new Response(forwarded.body, {
@@ -127,6 +133,8 @@ export function registerLocalResourceScheme(
     {
       scheme: LOCAL_RESOURCE_SCHEME,
       privileges: {
+        supportFetchAPI: true,
+        corsEnabled: true,
         stream: true,
       },
     },
@@ -137,8 +145,10 @@ export function registerLocalResourceScheme(
 export function installLocalResourceProtocol(
   browserSession: Pick<Session, 'fetch' | 'protocol'>,
   token: string,
+  getFetchOrigin?: () => string | undefined,
 ): void {
   const handler = createLocalResourceHandler(token, {
+    getFetchOrigin,
     fetchFile: (input, init) => browserSession.fetch(input, init),
   })
   browserSession.protocol.handle(LOCAL_RESOURCE_SCHEME, handler)

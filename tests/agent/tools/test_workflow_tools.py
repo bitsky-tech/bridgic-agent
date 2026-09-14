@@ -9,8 +9,8 @@ from src.amphi_agent.tools._workflow import (
     list_workflow_runs,
     read_workflow_run,
     remove_workflow,
-    report_workflow_step,
 )
+from src.amphi_agent.tools.workflow import report_workflow_step
 from src.amphi_store import UserInput, WorkflowRunStatus
 from tests.agent.tools._harness import ToolHarness
 

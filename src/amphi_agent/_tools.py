@@ -7,7 +7,9 @@ from .tools import (
     BROWSER_BASIC_TOOL_NAMES,
     BROWSER_TOOL_NAMES,
     SKILLS_ADVANCED_TOOL_NAMES,
+    SKILLS_BASIC_TOOL_NAMES,
     WORKSPACE_ADVANCED_TOOL_NAMES,
+    WORKSPACE_BASIC_TOOL_NAMES,
     bash_tool,
     browser_tool_specs,
     create_schedule_tool,
@@ -27,11 +29,14 @@ from .tools import (
     read_file_tool,
     read_workflow_run_tool,
     request_build_tool,
+    request_presentation_tool,
     request_run_workflow_tool,
     request_human_choice_tool,
     request_human_task_confirm_tool,
     request_human_workflow_confirm_tool,
     report_workflow_step_tool,
+    report_presentation_step_tool,
+    ppt_rag_tool,
     run_subagent_tool,
     start_subagent_tool,
     skills_tool_specs,
@@ -68,6 +73,7 @@ class ToolLibrary:
             *workspace_tool_specs,
             *skills_tool_specs,
             request_build_tool,
+            request_presentation_tool,
             request_run_workflow_tool,
             request_human_choice_tool,
             request_human_task_confirm_tool,
@@ -80,6 +86,8 @@ class ToolLibrary:
             remove_workflow_tool,
             update_schedule_tool,
             report_workflow_step_tool,
+            report_presentation_step_tool,
+            ppt_rag_tool,
             list_workflow_runs_tool,
             read_workflow_run_tool,
             run_subagent_tool,
@@ -113,6 +121,20 @@ class ToolLibrary:
 
     def get_browser_tools(self, *, include_advanced: bool = False) -> List[ToolSpec]:
         names = BROWSER_TOOL_NAMES if include_advanced else BROWSER_BASIC_TOOL_NAMES
+        return self.select(names)
+
+    def get_workspace_tools(self, *, include_advanced: bool = False) -> List[ToolSpec]:
+        """Return Workspace tools according to their lazy-load state."""
+        names = WORKSPACE_BASIC_TOOL_NAMES
+        if include_advanced:
+            names |= WORKSPACE_ADVANCED_TOOL_NAMES
+        return self.select(names)
+
+    def get_skills_tools(self, *, include_advanced: bool = False) -> List[ToolSpec]:
+        """Return Skill tools according to their lazy-load state."""
+        names = SKILLS_BASIC_TOOL_NAMES
+        if include_advanced:
+            names |= SKILLS_ADVANCED_TOOL_NAMES
         return self.select(names)
 
 

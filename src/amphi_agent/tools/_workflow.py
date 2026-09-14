@@ -1,5 +1,6 @@
+"""Product-level tools for saved Workflows and published Run results."""
+
 import json
-from typing import List, Literal, Optional
 
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
@@ -75,46 +76,6 @@ async def remove_workflow(workflow_id: str) -> str:
         f"Removed Workflow {label} and its saved source package. "
         "Published Workflow Run results were retained."
     )
-
-
-class WorkflowStepReport:
-    """The terminal result of one Workflow execution section."""
-
-    def __init__(self, status: Literal["success", "failure"], summary: str, evidence: List[str]) -> None:
-        self.status = status
-        self.summary = summary
-        self.evidence = evidence
-
-
-async def report_workflow_step(
-    status: Literal["success", "failure"],
-    summary: str,
-    evidence: Optional[List[str]] = None,
-) -> WorkflowStepReport:
-    """Finish the current Workflow section and advance or stop the run.
-
-    Parameters
-    ----------
-    status : {"success", "failure"}
-        Whether the current execution section completed as instructed. Report
-        failure when the requested outcome cannot be completed safely or after
-        reasonable recovery attempts.
-    summary : str
-        Concise account of what happened. On failure, include the concrete
-        blocker or diagnosis and any attempted recovery when useful.
-    evidence : list[str], optional
-        Relevant output paths, command results, or observations.
-
-    Returns
-    -------
-    WorkflowStepReport
-        Structured step result consumed by the Agent runtime.
-    """
-    summary = summary.strip()
-    if not summary:
-        raise WorkflowToolRejection("report_workflow_step rejected: `summary` must be non-empty.")
-    clean_evidence = [str(item).strip() for item in evidence or [] if str(item).strip()]
-    return WorkflowStepReport(status, summary, clean_evidence)
 
 
 async def list_workflow_runs(workflow_id: str = "", query: str = "", limit: int = 20) -> str:
@@ -196,14 +157,13 @@ async def read_workflow_run(run_id: str, path: str = "") -> str:
 
 edit_workflow_tool = FunctionToolSpec.from_raw(edit_workflow)
 remove_workflow_tool = FunctionToolSpec.from_raw(remove_workflow)
-report_workflow_step_tool = FunctionToolSpec.from_raw(report_workflow_step)
 list_workflow_runs_tool = FunctionToolSpec.from_raw(list_workflow_runs)
 read_workflow_run_tool = FunctionToolSpec.from_raw(read_workflow_run)
 
 
 __all__ = [
+    "WorkflowToolRejection",
     "EditWorkflow",
-    "WorkflowStepReport",
     "edit_workflow",
     "edit_workflow_tool",
     "list_workflow_runs",
@@ -212,6 +172,4 @@ __all__ = [
     "read_workflow_run_tool",
     "remove_workflow",
     "remove_workflow_tool",
-    "report_workflow_step",
-    "report_workflow_step_tool",
 ]

@@ -1,5 +1,5 @@
 import { Provider as JotaiProvider } from 'jotai'
-import { StrictMode } from 'react'
+import { lazy, Suspense, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
 import App from './App'
@@ -26,6 +26,9 @@ window.addEventListener('unhandledrejection', (ev) => {
   rlog.error('[window.unhandledrejection]', ev.reason)
 })
 
+// The production build folds this branch away, including the debug module import.
+const DebugApp = __DESKTOP_DEBUG__ ? lazy(() => import('./debug/DebugApp')) : null
+
 const root = document.getElementById('root')
 if (!root) throw new Error('#root not found in index.html')
 
@@ -34,7 +37,7 @@ createRoot(root).render(
     <ErrorBoundary>
       <JotaiProvider>
         <I18nextProvider i18n={i18n}>
-          <App />
+          {DebugApp ? <Suspense fallback={null}><DebugApp /></Suspense> : <App />}
         </I18nextProvider>
       </JotaiProvider>
     </ErrorBoundary>

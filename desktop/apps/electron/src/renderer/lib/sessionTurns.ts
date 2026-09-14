@@ -133,6 +133,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
   const spans: { start: number; marker: number }[] = []
   const state = turn.agent_state ?? {}
   const think = object(state.think)
+  const editWorkflowId = think.mode === 'build' ? string(think.workflow_id) : ''
   const interaction = object(state.interaction)
   const showPending = context.showPendingInteraction ?? false
   const openChoice = !terminal(turn) && array(interaction.questions).length > 0
@@ -344,10 +345,11 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
           type: 'task_confirm', requestId: string(payload.request_id) || `${turn.session_id}:${turn.session_ordinal}:task-confirm`,
           taskMarkdown: string(payload.task_markdown).trim(), status: (payload.status || 'pending') as 'pending' | 'confirmed' | 'revision_requested',
           feedback: string(payload.feedback) || null,
-          ...(payload.operation ? { operation: payload.operation as 'create' | 'edit' } : {}),
-          ...(payload.workflow_id || think.mode === 'build' && think.workflow_id ? { workflowId: string(payload.workflow_id || think.workflow_id) } : {}),
-          ...(payload.previous_task_markdown != null ? { previousTaskMarkdown: string(payload.previous_task_markdown) } : {}),
-          ...(payload.original_task_markdown != null ? { originalTaskMarkdown: string(payload.original_task_markdown) } : {}),
+          ...(editWorkflowId ? { operation: 'edit' as const, workflowId: editWorkflowId } : {}),
+          ...('operation' in payload ? { operation: (payload.operation || 'create') as 'create' | 'edit' } : {}),
+          ...('workflow_id' in payload ? { workflowId: payload.workflow_id == null ? null : string(payload.workflow_id) } : {}),
+          ...('previous_task_markdown' in payload ? { previousTaskMarkdown: payload.previous_task_markdown == null ? null : string(payload.previous_task_markdown) } : {}),
+          ...('original_task_markdown' in payload ? { originalTaskMarkdown: payload.original_task_markdown == null ? null : string(payload.original_task_markdown) } : {}),
         })
         continue
       }
@@ -386,6 +388,24 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
         }, ...(children.length ? { subagents: children.map((child) => childBlock(child, child.title)) } : {}),
       })
       toolIndex += 1
+      // Presentation tools retain their execution card before the associated human interaction.
+      if (name === 'report_presentation_step' && string(payload.outline_confirmation_id).trim()) {
+        const status = string(payload.status || 'awaiting_outline_confirmation')
+        addInteraction({
+          type: 'presentation_outline_confirm', requestId: string(payload.outline_confirmation_id).trim(),
+          status: (status === 'awaiting_outline_confirmation' ? 'pending' : status) as Extract<MessageBlock, { type: 'presentation_outline_confirm' }>['status'],
+          feedback: payload.feedback == null ? null : string(payload.feedback),
+        })
+      }
+      if (name === 'ppt_rag' && string(payload.template_selection_id).trim()) {
+        const status = string(payload.status || 'awaiting_template_selection')
+        addInteraction({
+          type: 'presentation_template_selection', requestId: string(payload.template_selection_id).trim(),
+          status: (status === 'awaiting_template_selection' ? 'pending' : status) as Extract<MessageBlock, { type: 'presentation_template_selection' }>['status'],
+          selectedTemplateId: payload.selected_template_id == null ? null : string(payload.selected_template_id),
+          feedback: payload.feedback == null ? null : string(payload.feedback),
+        })
+      }
     }
     const result = object(round.workflow_result)
     if (result.run_id) {

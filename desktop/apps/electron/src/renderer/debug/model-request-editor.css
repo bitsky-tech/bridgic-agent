@@ -1,0 +1,32 @@
+.debug-model-editor { display: grid; gap: 12px; min-width: 0; color: var(--text-secondary); font-size: 12px; }
+.debug-model-heading, .debug-model-section-heading, .debug-model-message-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.debug-model-heading strong, .debug-model-section-heading strong, .debug-model-message-heading strong { color: var(--text-primary); font-weight: 600; }
+.debug-model-heading > span { margin-left: auto; color: var(--text-accent-purple); font-size: 10px; }
+.debug-model-reset { justify-self: end; color: var(--text-accent); font-size: 11px; padding: 3px 0; }
+.debug-model-section-heading > code { margin-left: auto; min-width: 0; overflow-wrap: anywhere; color: var(--text-tertiary); font-size: 10px; }
+.debug-model-note { margin: 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.6; }
+.debug-model-prompts, .debug-model-message-list, .debug-model-settings { display: grid; gap: 10px; min-width: 0; }
+.debug-model-message { display: grid; gap: 9px; padding: 10px; min-width: 0; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-surface); }
+.debug-model-message-heading > button { display: inline-flex; margin-left: auto; padding: 4px; color: var(--text-tertiary); border-radius: 4px; }
+.debug-model-message-heading > button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.debug-model-field { display: grid; gap: 6px; min-width: 0; }
+.debug-model-field > span, .debug-model-role { color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.debug-model-field > span > code { margin-left: 5px; color: var(--text-tertiary); font-size: 10px; }
+.debug-model-field > textarea, .debug-model-field > input, .debug-model-role > select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--bg-input); color: var(--text-primary); font: inherit; line-height: 1.6; }
+.debug-model-field > textarea { resize: vertical; min-height: 88px; max-height: 640px; }
+.debug-model-field > .debug-model-json-input { font-family: monospace; font-size: 11px; tab-size: 2; }
+.debug-model-role { display: flex; align-items: center; gap: 8px; }
+.debug-model-role > select { width: auto; padding: 3px 6px; }
+.debug-model-editor :is(button, input, textarea, select, summary):focus-visible { outline: 2px solid var(--text-accent-purple); outline-offset: 2px; }
+.debug-model-editor button:disabled { cursor: not-allowed; opacity: .55; }
+.debug-model-extra > summary, .debug-model-raw > summary { cursor: pointer; padding: 5px 0; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.debug-model-extra[open] { display: grid; gap: 8px; }
+.debug-model-raw > pre { margin: 6px 0 0; max-height: 380px; overflow: auto; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-hover); font-size: 10px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.debug-model-add, .debug-model-empty > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: fit-content; padding: 6px 9px; border: 1px solid var(--border-default); border-radius: 5px; color: var(--text-accent); }
+.debug-model-empty { padding: 12px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-hover); }
+.debug-model-empty > p { margin: 0 0 10px; line-height: 1.7; }
+.debug-model-run { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.debug-model-run > button { padding: 7px 12px; border-radius: 5px; background: var(--bg-active); color: var(--text-primary); font-weight: 600; }
+.debug-model-run > span { color: var(--text-tertiary); font-size: 11px; }
+.debug-model-field > .debug-model-error { color: var(--status-error); }
+.debug-model-field > [aria-invalid=true] { border-color: var(--status-error); }

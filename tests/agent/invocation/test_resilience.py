@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from src.amphi_agent import DEFAULT_MAX_ROUNDS, AgentInvocation, InvocationDisposition, InvocationTraceLimitError
-from src.amphi_agent._state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
+from src.amphi_agent.cognitive.state import AgentState, AwaitingFeedback, AwaitingSubAgent, SubAgentCall
 from src.amphi_agent.runtime._environment import AppCommandEnvironmentSnapshot, app_command_environment
 from src.amphi_service.runtime._session_events import SessionEventBroker
 from src.amphi_service.runtime._system_events import SystemEventBroker
@@ -31,7 +31,7 @@ USER_ID = "local"
 
 
 async def test_code_round_limit(agent_store: None, agent_model: str, test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real Invocation crosses 50 rounds and exhausts its first ThinkUnit at the code limit."""
+    """The real Invocation finishes 201 tool rounds and recovers only at the 200-round code limit."""
     class StaticLlms:
         def __init__(self, llm: ScriptedLlm) -> None:
             self._llm = llm
@@ -71,18 +71,19 @@ async def test_code_round_limit(agent_store: None, agent_model: str, test_sandbo
     llm.enqueue_text("Finished after the code-controlled boundary.")
     invocation = AgentInvocation(StaticLlms(llm), SessionEventBroker(), SystemEventBroker())
     try:
-        result = await (await invocation.arun(record.id, "Exercise the configured loop limit."))
+        result = await (await invocation.arun(record.id, "Exercise the code-controlled loop limit."))
         assert result.outcome.disposition is InvocationDisposition.COMPLETED
         assert result.outcome.answer == "Finished after the code-controlled boundary."
         assert len(llm.turn_calls) == DEFAULT_MAX_ROUNDS + 2
         turn = await SessionTurnRepository().latest(record.id, USER_ID)
         assert turn is not None
+        assert turn.max_rounds == DEFAULT_MAX_ROUNDS
         rounds = turn.ota_records or []
         assert len(rounds) == DEFAULT_MAX_ROUNDS + 2
         steps = [step for row in rounds for step in (row.get("action_result") or {}).get("results", [])]
         assert len(steps) == DEFAULT_MAX_ROUNDS + 1
         assert all(step["success"] for step in steps)
-        # Existing empty-answer recovery starts only after the complete 200-round unit.
+        # Recovery belongs to the exhausted ThinkUnit, not the former user preference.
         recoveries = [
             index + 1 for index, row in enumerate(rounds)
             if "The previous round ended without a user-visible response." in (row.get("observation_result") or "")

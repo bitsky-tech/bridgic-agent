@@ -31,10 +31,14 @@ import { useFsWatchBridge } from './hooks/useFsWatchBridge'
 import { useWsConnection } from './hooks/useWsConnection'
 import { useSpecCommentPersistence } from './hooks/useSpecCommentPersistence'
 import { useAutoOpenTaskReview } from './hooks/useAutoOpenTaskReview'
+import { useAutoOpenPresentationMode } from './hooks/useAutoOpenPresentationMode'
 import { useAutoOpenWorkflowRunDetails } from './hooks/useAutoOpenWorkflowRunDetails'
 import { useCollapseNewSessionWorkbench } from './hooks/useCollapseNewSessionWorkbench'
 import { useRememberRightPanelState } from './hooks/useRememberRightPanelState'
 import { useEmbeddedBrowserBridge } from './hooks/useEmbeddedBrowserBridge'
+import { useEmbeddedPowerPointBridge } from './hooks/useEmbeddedPowerPointBridge'
+import { useExcelHostBridge } from './hooks/useExcelHostBridge'
+import { useWordHostBridge } from './hooks/useWordHostBridge'
 import {
   ConfirmDialog,
   ExternalLinkDialog,
@@ -50,12 +54,14 @@ import { CenterView } from './components/app/CenterView'
 import {
   BrowserAttentionAnnouncer,
   FilesAttentionAnnouncer,
+  PowerPointAttentionAnnouncer,
   SessionResourcePanel,
 } from './components/app/SessionResourcePanel'
 import { SidebarContainer } from './components/app/SidebarContainer'
 import { AppWorkspaceLayout } from './components/app/AppWorkspaceLayout'
+import type { DesktopAppExtensions } from './components/app/DesktopAppExtensions'
 
-export default function App() {
+export default function App({ extensions }: { extensions?: DesktopAppExtensions } = {}) {
   // Cross-cutting bridges + first-mount lifecycle. All side-effecting; each
   // hook owns its own atoms + effect (see hooks/use-*.ts). App stays a pure
   // view orchestrator below.
@@ -78,12 +84,16 @@ export default function App() {
   useWsConnection()
   useSpecCommentPersistence()
   useAutoOpenTaskReview()
+  useAutoOpenPresentationMode()
   useAutoOpenWorkflowRunDetails()
   // Must run before the new-Session collapse effect: first snapshot the
   // destination Session's inherited state, then apply its rail-only default.
   useRememberRightPanelState()
   useCollapseNewSessionWorkbench()
   useEmbeddedBrowserBridge()
+  useEmbeddedPowerPointBridge()
+  useExcelHostBridge()
+  useWordHostBridge()
 
   // GatewayBootGate gates the entire UI on Bridgic Agent daemon readiness.
   // Wrapping includes the modal stack: any modal opened mid-session would
@@ -93,11 +103,12 @@ export default function App() {
     <>
       <BrowserAttentionAnnouncer />
       <FilesAttentionAnnouncer />
+      <PowerPointAttentionAnnouncer />
       <GatewayBootGate>
         <AppWorkspaceLayout
           left={<SidebarContainer />}
-          center={<CenterView />}
-          right={<SessionResourcePanel />}
+          center={<CenterView ConversationHistory={extensions?.ConversationHistory} />}
+          right={<SessionResourcePanel extensions={extensions?.sessionSurfaces} />}
         />
         <ActiveModalHost />
         <ScheduleOverlays />

@@ -36,6 +36,20 @@ Set `BRIDGIC_AGENT_LAB_PORT` before either command to use a different local brow
 
 `state.db` currently persists cumulative input/output token totals and the latest model-call occupancy in each Turn's `context_usage`, not a usage snapshot per OTA round. The latest snapshot may contain cache-read tokens, but it cannot be assigned to every reconstructed request and does not retain per-round cache creation details, so the Lab's round-by-round cache hit/miss values remain structural estimates. Each model-request row shows an estimated input size. Output is shown only when a completed Turn contains exactly one model request, where the Turn total can be assigned without splitting; multi-request Turns display it as unavailable. If a Turn has no earlier same-model request to compare with, the Lab shows an explicit “no comparable request” state instead of a misleading 0% result. The read-only data source also accepts the legacy `input_tokens` / `output_tokens` columns when inspecting a database that has not yet been migrated by the backend.
 
+## Execution experiments
+
+The independent Execution Experiments tab is a frontend prototype using fixed example data, not database traces or a running Agent service. Each mode keeps its own test sessions in the left sidebar. The center is a conversation: user messages are right-aligned, and each Agent response uses the original Bridgic logo above its execution tree. Compact tool rows open and locate the matching right-hand debugger card; round links open the corresponding Agent round.
+
+Compact round cards retain duration, input/output tokens, and cache hit rate even when collapsed. Cache hit rate is cache-read tokens divided by input tokens. The fixed PPT preview uses explicitly marked illustrative metrics; new simulated turns display unavailable values rather than borrowing those numbers. The same metrics appear in the round debugger.
+
+Round controls are separate from model content. Response text is rendered as prose, and nonempty Thinking has its own collapsed section. Neither channel falls back to a title, summary, decision, or tool result. The fixed PPT example includes response text and Thinking copied verbatim from its historical database record, preserving the original language. Captured empty text is distinct from unavailable data. Tools, workflow notes, and metrics remain illustrative; authored workflow notes are labeled as demo notes in the Cognitive inspector. New timer-based tests do not borrow the historical responses.
+
+The desktop-style right rail provides Session information, Tool calls, and Agent rounds. Tool records can be filtered by name, execution, and status, then opened to inspect arguments, results, errors, and recorded timing. Agent rounds group illustrative prompt messages, example tool definitions, returned calls, and Cognitive decisions. Missing model, timing, or exact request data is explicitly unavailable. General human choices and stage-specific confirmations remain available as replay content inside their tool details; key artifacts are accessible from the corresponding records. The panel is resizable and overlays the conversation on narrow screens.
+
+Argument and prompt edits create separate simulated request receipts; they never replace the original record, invoke a tool, call a model, or produce real files. Real standalone tool and round execution still require backend endpoints. The browser/Office Electron environment is not added by this prototype.
+
+Each session holds multiple user messages and execution turns. The composer can stop the current turn and append a follow-up within the same session. The simulated continuation policy either reassesses from the first stage or continues from the previous position. Each turn retains its own stop boundary; context previews exclude future messages. The original PPT fixture remains the first execution snapshot, while subsequent stages use clearly marked preset examples. Composite turn/round/call identities keep repeated tool names separate. Switching Lab tabs preserves in-memory sessions; reloading resets them. These transitions do not test actual Agent cancellation or recovery.
+
 ## Local data API
 
 All routes are same-origin, read-only `GET` requests:
@@ -66,7 +80,7 @@ tools:
   visible function definitions sent separately beside messages
 ```
 
-The eight persona variants are complete static snapshots of the modular prompt source rooted at `src/amphi_agent/_prompt.py`, pinned by a source-graph SHA-256 and checked byte-for-byte in tests. Prompt diff keeps ordered Message blocks and the unordered Tool surface in separate comparison sections, so a Tool Schema change is not reported as the last Message change. See `server/prompt/README.md` for the synchronization command and internal reconstruction model.
+The seven persona variants are complete static snapshots read directly from `src/amphi_agent/prompts/`, pinned by a source-graph SHA-256 and checked byte-for-byte in tests. Prompt diff keeps ordered Message blocks and the unordered Tool surface in separate comparison sections, so a Tool Schema change is not reported as the last Message change. See `server/prompt/README.md` for the synchronization command and internal reconstruction model.
 
 ## Verify
 

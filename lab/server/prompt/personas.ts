@@ -57,13 +57,20 @@ export function renderPersona(
     ? "workflowExecute"
     : stage;
   const injected = snapshot?.[key];
-  const template = injected ?? DEFAULT_PERSONAS[key];
+  let template = injected ?? DEFAULT_PERSONAS[key];
+  const guidance = subAgentGuidance(toolNames);
+  if ((stage === "main" || stage === "child") && !guidance) {
+    template = template.replace(
+      new RegExp(`^[ \\t]*${SUB_AGENT_GUIDANCE_PLACEHOLDER}[ \\t]*(?:\\r\\n|\\r|\\n|$)`, "gm"),
+      "",
+    );
+  }
   const renderedNames = formatToolNames(toolNames);
   return {
     content: template
       .replaceAll(MAIN_TOOL_NAMES_PLACEHOLDER, renderedNames)
       .replaceAll(STAGE_TOOL_NAMES_PLACEHOLDER, renderedNames)
-      .replaceAll(SUB_AGENT_GUIDANCE_PLACEHOLDER, subAgentGuidance(toolNames))
+      .replaceAll(SUB_AGENT_GUIDANCE_PLACEHOLDER, guidance)
       .replaceAll(UI_LANGUAGE_PLACEHOLDER, uiLanguage)
       .trim(),
     version: snapshot?.version ?? DEFAULT_PERSONAS.version,

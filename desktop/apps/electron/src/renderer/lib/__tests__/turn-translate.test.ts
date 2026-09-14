@@ -514,6 +514,42 @@ describe('task confirm request routing', () => {
   })
 })
 
+describe('presentation outline confirmation routing', () => {
+  it('maps the outline review request into a framework interaction event', () => {
+    const { events, warnings, state } = run([{
+      event: 'presentation_outline_confirm_request',
+      data: { request_id: 'outline-1' },
+    }])
+
+    expect(types(events)).toEqual(['message_start', 'presentation_outline_confirm_request'])
+    const event = events[1]
+    if (event?.type !== 'presentation_outline_confirm_request') {
+      throw new Error('expected presentation outline confirmation')
+    }
+    expect(event.requestId).toBe('outline-1')
+    expect(state.sawContent).toBe(true)
+    expect(warnings).toEqual([])
+  })
+})
+
+describe('presentation template selection routing', () => {
+  it('maps the template-selection request into a framework interaction event', () => {
+    const { events, warnings, state } = run([{
+      event: 'presentation_template_selection_request',
+      data: { request_id: 'template-selection-1' },
+    }])
+
+    expect(types(events)).toEqual(['message_start', 'presentation_template_selection_request'])
+    const event = events[1]
+    if (event?.type !== 'presentation_template_selection_request') {
+      throw new Error('expected presentation template selection')
+    }
+    expect(event.requestId).toBe('template-selection-1')
+    expect(state.sawContent).toBe(true)
+    expect(warnings).toEqual([])
+  })
+})
+
 describe('stage frames', () => {
   it('maps stage → stage event carrying the two-layer {mode, stage}', () => {
     const { events, warnings } = run([
@@ -551,6 +587,130 @@ describe('stage frames', () => {
     if (stage?.type !== 'stage') throw new Error('expected stage')
     expect(stage.position).toEqual({ mode: 'run_workflow', stage: 'execute' })
     expect(warnings).toEqual([])
+  })
+
+  it('carries the presentation pipeline stage', () => {
+    const { events } = translateTurnEvent(
+      {
+        event: 'stage',
+        data: {
+          mode: 'presentation',
+          stage: 'ppt_plan',
+          presentation_goal: 'Explain the strategy',
+          presentation_step_index: 2,
+          presentation_reports: [{
+            stage: 'ppt_plan',
+            step_id: 'design_visual_direction',
+            summary: 'Selected a restrained editorial visual system.',
+            evidence: ['visual direction'],
+          }],
+          presentation_sources: [{
+            id: 'source-001',
+            kind: 'web',
+            title: 'Primary source',
+            locator: 'https://example.com/source',
+            usage: 'Supports the opening',
+          }],
+          presentation_outline: [{
+            id: 'chapter-001',
+            title: 'Opening',
+            slides: [{
+              id: 'slide-001',
+              title: 'Why this matters',
+              key_message: 'Set the stakes.',
+              content_outline: ['Frame the decision.', 'Show why it matters now.'],
+              source_ids: ['source-001'],
+            }],
+          }],
+          presentation_outline_confirmed: false,
+          presentation_outline_confirmation_id: 'presentation_outline_1',
+          presentation_template_candidates: [{
+            template_id: 'template-editorial-1',
+            version: 'sha256:test',
+            title: 'Editorial Research',
+            aspect_ratio: '16:9',
+            slide_count: 18,
+            semantic_tags: ['editorial'],
+            strengths: ['timeline'],
+            colors: ['#F7F4EE', '#25324A'],
+            fonts: ['Aptos'],
+            preview_paths: [],
+            role_coverage: 0.8,
+            agentic_fit: 'strong',
+            agentic_reason: 'Fits the research narrative.',
+            agentic_use_for_roles: ['cover', 'timeline'],
+            agentic_risks: [],
+            structural_evidence: { representative_slides: [1, 3] },
+            materialize_ref: { provider: 'local', path: '/templates/editorial.pptx' },
+          }],
+          presentation_template_selection_id: 'template-selection-1',
+          presentation_template_selection_status: 'pending',
+          presentation_selected_template: null,
+        },
+      },
+      'message-presentation',
+      initialTranslatorState,
+    )
+
+    const stage = events.find((event) => event.type === 'stage')
+    expect(stage).toEqual({
+      type: 'stage',
+      position: {
+        mode: 'presentation',
+        stage: 'ppt_plan',
+        presentationGoal: 'Explain the strategy',
+        presentationStepIndex: 2,
+        presentationReports: [{
+          stage: 'ppt_plan',
+          stepId: 'design_visual_direction',
+          summary: 'Selected a restrained editorial visual system.',
+          evidence: ['visual direction'],
+        }],
+        presentationSources: [{
+          id: 'source-001',
+          kind: 'web',
+          title: 'Primary source',
+          locator: 'https://example.com/source',
+          usage: 'Supports the opening',
+        }],
+        presentationOutline: [{
+          id: 'chapter-001',
+          title: 'Opening',
+          slides: [{
+            id: 'slide-001',
+            title: 'Why this matters',
+            keyMessage: 'Set the stakes.',
+            contentOutline: ['Frame the decision.', 'Show why it matters now.'],
+            sourceIds: ['source-001'],
+          }],
+        }],
+        presentationOutlineConfirmed: false,
+        presentationOutlineConfirmationId: 'presentation_outline_1',
+        presentationTemplateCandidates: [{
+          templateId: 'template-editorial-1',
+          version: 'sha256:test',
+          title: 'Editorial Research',
+          aspectRatio: '16:9',
+          slideCount: 18,
+          semanticTags: ['editorial'],
+          strengths: ['timeline'],
+          colors: ['#F7F4EE', '#25324A'],
+          fonts: ['Aptos'],
+          previewPaths: [],
+          roleCoverage: 0.8,
+          agenticFit: 'strong',
+          agenticReason: 'Fits the research narrative.',
+          agenticUseForRoles: ['cover', 'timeline'],
+          agenticRisks: [],
+          structuralEvidence: { representative_slides: [1, 3] },
+          materializeRef: { provider: 'local', path: '/templates/editorial.pptx' },
+        }],
+        presentationTemplateSelectionId: 'template-selection-1',
+        presentationTemplateSelectionStatus: 'pending',
+        presentationTemplateSelectionError: null,
+        presentationSelectedTemplate: null,
+      },
+    })
   })
 
   it('carries the normal presentation frame (mode:normal, stage:null) through', () => {

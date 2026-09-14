@@ -1,21 +1,22 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from bridgic.amphibious import Context, OTAContext
 
-from ._browser import SessionBrowser
+from .browser import SessionBrowser
+from .powerpoint import SessionPowerPoint
 from ._session import Session
 from ._memory import Memory
 from ._llm_provider import LlmProvider
 from ._schedules import ScheduleLibrary
 from ._skills import SkillLibrary
-from ._state import AgentState
+from .cognitive.state import AgentState
 from ._workspace import Workspace
 from ._workflow_run import WorkflowRunLibrary
 from ._workflows import WorkflowLibrary
 
 if TYPE_CHECKING:
-    from ._state import AwaitingSubAgent, InStage, InteractionState
+    from .cognitive.state import AwaitingSubAgent, InStage, InteractionState
     from ._invocation import AgentInvocation
 else:
     AgentInvocation = Any
@@ -24,6 +25,7 @@ __all__ = [
     "AmphiOTAContext",
     "AmphiContext",
     "ContextUsageBreakdown",
+    "ContextUsageReference",
     "ContextUsageSnapshot",
 ]
 
@@ -129,6 +131,9 @@ class AmphiContext(Context):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    # Runtime templates supplied by the engine; never part of persisted context.
+    _cognitive_workers: Dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
+
     session: Session = Field(default_factory=Session)
     memory: Optional[Memory] = None
     schedules: Optional[ScheduleLibrary] = None
@@ -137,6 +142,7 @@ class AmphiContext(Context):
     workflow_runs: Optional[WorkflowRunLibrary] = None
     workspace: Optional[Workspace] = None
     browser: Optional[SessionBrowser] = None
+    powerpoint: Optional[SessionPowerPoint] = None
     invocations: Optional[AgentInvocation] = None
     llm_provider: LlmProvider = Field(default_factory=LlmProvider)
     # User/trusted-Invocation base mode; the active Think may override it at admission time.

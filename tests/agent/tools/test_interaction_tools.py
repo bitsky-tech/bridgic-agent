@@ -3,14 +3,14 @@ import json
 import pytest
 
 from src.amphi_agent.tools._help import help as product_help
-from src.amphi_agent.tools._request_human import (
-    RequestHumanRejection,
+from src.amphi_agent.tools.build import (
     request_build,
-    request_human_choice,
     request_human_task_confirm,
     request_human_workflow_confirm,
-    request_run_workflow,
 )
+from src.amphi_agent.tools.ppt import PresentationToolRejection, report_presentation_step, request_presentation
+from src.amphi_agent.tools._request_human import RequestHumanRejection, request_human_choice
+from src.amphi_agent.tools.workflow import request_run_workflow
 from src.amphi_agent.tools._subagent import run_subagent, start_subagent
 from src.amphi_agent.tools._switch import switch
 
@@ -53,7 +53,7 @@ async def test_workflow_request() -> None:
     Checks:
     1. Direct Run actions preserve the selected Workflow and omit blank reasons.
     2. An ambiguous Run action carries the explanation needed by the user.
-    3. Missing identifiers, missing ask reasons, and oversized reasons are rejected.
+    3. Invalid arguments and former direct resume or restart actions are rejected.
     """
     # Check 1: Direct Run actions preserve the selected Workflow and omit blank reasons.
     direct = await request_run_workflow(" workflow-1 ", action="start")
@@ -63,13 +63,54 @@ async def test_workflow_request() -> None:
     ask = await request_run_workflow("workflow-1", action="ask", reason=" Continue the pinned run? ")
     assert (ask.action, ask.reason) == ("ask", "Continue the pinned run?")
 
-    # Check 3: Missing identifiers, missing ask reasons, and oversized reasons are rejected.
+    # Check 3: Invalid arguments and former direct resume or restart actions are rejected.
     with pytest.raises(RequestHumanRejection, match="workflow_id.*non-empty"):
         await request_run_workflow(" ")
-    with pytest.raises(RequestHumanRejection, match="reason.*ambiguous"):
+    with pytest.raises(RequestHumanRejection, match="reason.*unfinished Run choice"):
         await request_run_workflow("workflow-1", action="ask")
     with pytest.raises(RequestHumanRejection, match="exceeds 300"):
         await request_run_workflow("workflow-1", reason="x" * 301)
+    for action in ("resume", "restart"):
+        with pytest.raises(RequestHumanRejection, match="action"):
+            await request_run_workflow("workflow-1", action=action)
+
+
+async def test_presentation_request() -> None:
+    """Presentation entry keeps a concise goal and rejects empty requests."""
+    request = await request_presentation("  Create a product launch deck  ")
+
+    assert request.goal == "Create a product launch deck"
+    with pytest.raises(RequestHumanRejection, match="goal.*non-empty"):
+        await request_presentation("  ")
+
+
+async def test_presentation_step_report() -> None:
+    """Presentation progress keeps concrete summaries and repairs string-shaped evidence."""
+    report = await report_presentation_step(
+        "  Selected an editorial visual system.  ",
+        ["  visual direction  ", "", "https://example.com/reference"],
+        '{"theme": "editorial"}',
+    )
+
+    assert report.summary == "Selected an editorial visual system."
+    assert report.evidence == ["visual direction", "https://example.com/reference"]
+    assert report.data == {"theme": "editorial"}
+    transported = await report_presentation_step(
+        "Collected a primary source.",
+        data='{"sources": [{"kind": "web", "title": "Primary reference"}]}',
+    )
+    assert transported.data == {
+        "sources": [{"kind": "web", "title": "Primary reference"}],
+    }
+    legacy = await report_presentation_step(
+        "Recorded the durable brief.",
+        "['.presentation/brief.md']",  # type: ignore[arg-type]
+    )
+    assert legacy.evidence == [".presentation/brief.md"]
+    with pytest.raises(PresentationToolRejection, match="summary.*non-empty"):
+        await report_presentation_step("  ")
+    with pytest.raises(PresentationToolRejection, match="data.*JSON object string"):
+        await report_presentation_step("Invalid data.", data="not-an-object")
 
 
 async def test_choice_card() -> None:

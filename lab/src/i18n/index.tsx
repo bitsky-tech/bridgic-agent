@@ -23,6 +23,8 @@ interface I18nContextValue {
   formatNumber: (value: number) => string
 }
 
+export type Translator = I18nContextValue['t']
+
 const storageKey = 'bridgic-agent-lab.locale'
 const dictionaries: Record<Locale, Record<TranslationKey, string>> = {
   'en-US': en,
@@ -50,6 +52,10 @@ export function translate(locale: Locale, key: TranslationKey, params: Translati
     const value = params[name]
     return value === undefined ? placeholder : String(value)
   })
+}
+
+export function createTranslator(locale: Locale): Translator {
+  return (key, params) => translate(locale, key, params)
 }
 
 export function localeSelfName(locale: Locale): string {

@@ -42,7 +42,7 @@ import {
   removeMountAtom,
   requestMentionInsertAtom,
 } from '@/atoms/mounts'
-import { requestFileOpenAtom } from '@/atoms/fileOpen'
+import { isPowerPointFileTarget, requestSessionFileOpenAtom } from '@/atoms/fileOpen'
 import type { DirTreeNode } from '@shared/dir-tree'
 import type { MountSummary } from '@/lib/amphiClient'
 
@@ -124,7 +124,7 @@ export function SessionAssetsPanel({
   const pickAndMount = useSetAtom(pickAndMountAtom)
   const removeMount = useSetAtom(removeMountAtom)
   const requestMentionInsert = useSetAtom(requestMentionInsertAtom)
-  const requestFileOpen = useSetAtom(requestFileOpenAtom)
+  const requestSessionFileOpen = useSetAtom(requestSessionFileOpenAtom)
   const showToast = useSetAtom(showToastAtom)
   const [addOpen, setAddOpen] = useState(false)
   // At most one row's menu is open at a time (a single value rather than per-row state).
@@ -213,6 +213,7 @@ export function SessionAssetsPanel({
           query={query.trim()}
           mounts={mounts}
           onCopyPath={copyAbsPath}
+          onOpen={requestSessionFileOpen}
           onReveal={revealAbsPath}
         />
       ) : (
@@ -226,7 +227,7 @@ export function SessionAssetsPanel({
           onRemove={remove}
           onMentionRoot={addToChat}
           onMentionChild={addChildToChat}
-          onOpen={requestFileOpen}
+          onOpen={requestSessionFileOpen}
         />
       )}
     </div>
@@ -292,6 +293,7 @@ function MountList({
           onRevealChild={(node) => onReveal(`${m.path}/${node.relPath}`)}
           onOpenRoot={() => onOpen({ path: m.path, name: m.name })}
           onOpenChild={(node) => onOpen({ path: `${m.path}/${node.relPath}`, name: node.name })}
+          openOnSingleClick={(name) => isPowerPointFileTarget({ name })}
         />
       ))}
     </div>

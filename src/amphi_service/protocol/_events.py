@@ -189,12 +189,9 @@ class StageEvent(TurnEvent):
     """The turn's thinking position moved — the two-layer think loop's position.
 
     Emitted by ``on_agent`` each time it aims a think unit. ``mode`` is the loop
-    (``"normal"`` plain chat | ``"build"`` the pipeline); ``stage`` is the unit
-    within it (``"main"`` for normal; ``"clarify"`` | ``"explore"`` |
-    ``"generate"`` | ``"verify"`` for build; ``null`` on the close frame a clean
-    build exit emits on its way back to normal). A client
-    drives its focus-mode rail off this: show the rail while ``mode == "build"``,
-    highlight ``stage``. Stage names ARE the wire names (no ``_think`` suffix).
+    (normal chat or a dedicated pipeline); ``stage`` is the unit within it.
+    Presentation progress is projected from the runtime-owned cognitive state,
+    so clients never infer the cursor from model prose or tool arguments.
     """
 
     name: ClassVar[str] = "stage"
@@ -202,11 +199,38 @@ class StageEvent(TurnEvent):
     mode: str
     stage: Optional[str] = None
     workflow_id: Optional[str] = None
+    presentation_goal: Optional[str] = None
+    presentation_step_index: Optional[int] = None
+    presentation_reports: Optional[List[Dict[str, Any]]] = None
+    presentation_sources: Optional[List[Dict[str, Any]]] = None
+    presentation_outline: Optional[List[Dict[str, Any]]] = None
+    presentation_outline_confirmed: Optional[bool] = None
+    presentation_outline_confirmation_id: Optional[str] = None
+    presentation_template_candidates: Optional[List[Dict[str, Any]]] = None
+    presentation_template_selection_id: Optional[str] = None
+    presentation_template_selection_status: Optional[str] = None
+    presentation_template_selection_error: Optional[str] = None
+    presentation_selected_template: Optional[Dict[str, Any]] = None
 
     def payload(self) -> Dict[str, Any]:
         payload = {"mode": self.mode, "stage": self.stage}
         if self.workflow_id:
             payload["workflow_id"] = self.workflow_id
+        if self.mode == "presentation":
+            payload.update({
+                "presentation_goal": self.presentation_goal,
+                "presentation_step_index": self.presentation_step_index or 0,
+                "presentation_reports": self.presentation_reports or [],
+                "presentation_sources": self.presentation_sources or [],
+                "presentation_outline": self.presentation_outline or [],
+                "presentation_outline_confirmed": bool(self.presentation_outline_confirmed),
+                "presentation_outline_confirmation_id": self.presentation_outline_confirmation_id,
+                "presentation_template_candidates": self.presentation_template_candidates or [],
+                "presentation_template_selection_id": self.presentation_template_selection_id,
+                "presentation_template_selection_status": self.presentation_template_selection_status or "idle",
+                "presentation_template_selection_error": self.presentation_template_selection_error,
+                "presentation_selected_template": self.presentation_selected_template,
+            })
         return payload
 
 
@@ -383,6 +407,30 @@ class TaskConfirmRequestEvent(TurnEvent):
             "workflow_id": self.workflow_id,
             "original_task_markdown": self.original_task_markdown,
         }
+
+
+@dataclass(frozen=True)
+class PresentationOutlineConfirmRequestEvent(TurnEvent):
+    """Presentation Plan asks the user to review its editable slide outline."""
+
+    name: ClassVar[str] = "presentation_outline_confirm_request"
+
+    request_id: str
+
+    def payload(self) -> Dict[str, Any]:
+        return {"request_id": self.request_id}
+
+
+@dataclass(frozen=True)
+class PresentationTemplateSelectionRequestEvent(TurnEvent):
+    """Presentation Plan asks the user to choose from verified templates."""
+
+    name: ClassVar[str] = "presentation_template_selection_request"
+
+    request_id: str
+
+    def payload(self) -> Dict[str, Any]:
+        return {"request_id": self.request_id}
 
 
 @dataclass(frozen=True)
@@ -620,6 +668,8 @@ __all__ = [
     "PermissionRequestEvent",
     "BuildConfirmRequestEvent",
     "TaskConfirmRequestEvent",
+    "PresentationOutlineConfirmRequestEvent",
+    "PresentationTemplateSelectionRequestEvent",
     "WorkflowConfirmRequestEvent",
     "FinalEvent",
     "CancelledEvent",

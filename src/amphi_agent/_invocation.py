@@ -12,8 +12,11 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
+from bridgic.amphibious import OTARecord
+
 from ._agent import DEFAULT_MAX_ROUNDS, AmphiAgent
-from ._browser import BrowserHost
+from .browser import BrowserHost
+from .powerpoint import PowerPointHost
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._error import PublicAgentError
 from ._memory import Memory
@@ -23,21 +26,18 @@ from ._session import Session
 from ._skills import SkillLibrary
 from ._workflows import WorkflowLibrary
 from ._workflow_run import WorkflowRunLibrary
-from ._state import (
+from .cognitive.state import (
     AgentResult,
-    AwaitingBuildConfirm,
-    AwaitingBuildConflict,
-    AwaitingWorkflowRunChoice,
     AwaitingFeedback,
     AwaitingPermission,
-    AwaitingTaskConfirm,
-    AwaitingWorkflowConfirm,
     AwaitingSubAgent,
-    BuildStageState,
     SubAgentCall,
     SubAgentResult,
     SubAgentsCompleted,
 )
+from .cognitive.normal.state import AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice
+from .cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection
+from .cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
 from ._workspace import AppEnvironmentStatus, Workspace
 from ..amphi_service.protocol import (
     CancelledEvent,
@@ -62,7 +62,7 @@ from ..amphi_store import (
 )
 
 if TYPE_CHECKING:
-    from ._state import InteractionState
+    from .cognitive.state import InteractionState
     from ..amphi_service.runtime._session_events import SessionEventBroker
     from ..amphi_service.runtime._system_events import SystemEventBroker
 
@@ -218,6 +218,9 @@ class AgentInvocation:
     browser_host : BrowserHost, optional
         App-owned browser host. A private host is created only for standalone
         Invocation use and is closed by :meth:`shutdown`.
+    powerpoint_host : PowerPointHost, optional
+        App-owned PowerPoint host. A private host is created only for standalone
+        Invocation use and is closed by :meth:`shutdown`.
     max_concurrent_children : int
         Per-root Session limit for simultaneously executing Child Agent attempts.
     """
@@ -230,6 +233,8 @@ class AgentInvocation:
     INTERACTION_ANSWER_TYPES = frozenset({
         "build_confirm",
         "permission_answer",
+        "presentation_outline_confirm",
+        "presentation_template_selection",
         "task_confirm",
         "workflow_confirm",
         "choice_answer",
@@ -246,6 +251,7 @@ class AgentInvocation:
         turn_repository: Optional[SessionTurnRepository] = None,
         mount_repository: Optional[SessionMountRepository] = None,
         browser_host: Optional[BrowserHost] = None,
+        powerpoint_host: Optional[PowerPointHost] = None,
         max_concurrent_children: int = MAX_CONCURRENT_CHILDREN,
     ) -> None:
         # Agent invocation task management
@@ -262,6 +268,8 @@ class AgentInvocation:
         self._mounts = mount_repository or SessionMountRepository()
         self._owns_browser_host = browser_host is None
         self._browser_host = browser_host or BrowserHost()
+        self._owns_powerpoint_host = powerpoint_host is None
+        self._powerpoint_host = powerpoint_host or PowerPointHost()
         self._session_events = session_events
         self._system_events = system_events
         self._history_renderer = history_renderer
@@ -615,6 +623,12 @@ class AgentInvocation:
             expected_type = "workflow_confirm"
             pending = interaction.get("workflow_confirm")
             expected_id = pending.get("request_id") if isinstance(pending, dict) else None
+        elif interaction.get("presentation_outline_confirm") is True:
+            expected_type = "presentation_outline_confirm"
+            expected_id = interaction.get("request_id")
+        elif interaction.get("presentation_template_selection") is True:
+            expected_type = "presentation_template_selection"
+            expected_id = interaction.get("request_id")
 
         if expected_type is not None:
             request_id = cls._input_field(user_input, "request_id")
@@ -772,6 +786,7 @@ class AgentInvocation:
                     record.id,
                     tool_result_dir=workspace.tool_result_dir,
                 ),
+                powerpoint=self._powerpoint_host.for_session(record.id, workspace_root=workspace.work_dir),
                 invocations=self,
                 llm_provider=llm_provider,
                 execution_mode=execution_mode,
@@ -798,6 +813,13 @@ class AgentInvocation:
                         stream,
                     )
                 )
+
+            pending_turn = (
+                previous_turns[-1]
+                if previous_turns and not previous_turns[-1].status.is_terminal
+                else None
+            )
+            pending_dump = pending_turn.ota_context_dump() if pending_turn is not None else {}
 
             # Run the agent turn logic
             try:
@@ -826,7 +848,19 @@ class AgentInvocation:
                     await discard_prepared_children()
                 raise
             except Exception as exc:
-                error_message = self._error_message(exc)
+                public_error = PublicAgentError.from_exception(exc)
+                error_message = public_error.message
+                if public_error.code == "resume_unavailable" and pending_turn is not None:
+                    # Retire the old interaction without losing its original task or trace.
+                    # Keep the current Think, which may already reflect a durable cursor.
+                    ota_context.user_input = agent._renderable_user_input(pending_turn.user_input)
+                    ota_context.ota_record = [
+                        OTARecord.model_validate(value)
+                        for value in pending_dump.get("ota_record") or []
+                    ]
+                    ota_context.transition_interaction(None)
+                    ota_context.transition_subagents(None)
+                    context.session = Session(record, turns=previous_turns[:-1])
                 try:
                     await self._persist_turn_result(
                         user.id,
@@ -1447,6 +1481,7 @@ class AgentInvocation:
         await self.cancel(record.id)
         await self._delete_workspace_workflow_runs(tree)
         await self._browser_host.release_sessions(item.id for item in tree)
+        await self._powerpoint_host.release_sessions(item.id for item in tree)
         for item in reversed(tree):
             await self._turns.delete_for_session(item.user_id, item.id)
             await self._mounts.delete_for_session(item.id, item.user_id)
@@ -1463,6 +1498,7 @@ class AgentInvocation:
         await self.cancel(record.id)
         await self._delete_workspace_workflow_runs(tree)
         await self._browser_host.release_sessions(item.id for item in tree)
+        await self._powerpoint_host.release_sessions(item.id for item in tree)
         for child in reversed(tree[1:]):
             await self._turns.delete_for_session(child.user_id, child.id)
             await self._mounts.delete_for_session(child.id, child.user_id)
@@ -1490,6 +1526,8 @@ class AgentInvocation:
             await asyncio.gather(*background, return_exceptions=True)
         if self._owns_browser_host:
             await self._browser_host.shutdown()
+        if self._owns_powerpoint_host:
+            await self._powerpoint_host.shutdown()
 
     def is_running(self, session_id: str) -> bool:
         """Return whether this process owns an active task for the Session."""
@@ -1622,6 +1660,16 @@ class AgentInvocation:
                 workflow_id=payload.get("workflow_id"),
                 original_task_markdown=payload.get("original_task_markdown"),
             )
+        elif isinstance(interaction, AwaitingPresentationOutlineConfirm):
+            publisher.publish(
+                "presentation_outline_confirm_request",
+                request_id=interaction.request_id,
+            )
+        elif isinstance(interaction, AwaitingPresentationTemplateSelection):
+            publisher.publish(
+                "presentation_template_selection_request",
+                request_id=interaction.request_id,
+            )
         elif isinstance(interaction, AwaitingWorkflowConfirm):
             payload = interaction.workflow_confirm or {}
             publisher.publish(
@@ -1737,6 +1785,20 @@ class AgentInvocation:
             if ota_context.interaction_status != agent_result:
                 raise InvocationStateError(
                     "Agent Workflow Run choice does not match its interaction state"
+                )
+            disposition = InvocationDisposition.AWAITING_FEEDBACK
+            answer = ""
+        elif isinstance(agent_result, AwaitingPresentationOutlineConfirm):
+            if ota_context.interaction_status != agent_result:
+                raise InvocationStateError(
+                    "Agent presentation outline result does not match its interaction state"
+                )
+            disposition = InvocationDisposition.AWAITING_FEEDBACK
+            answer = ""
+        elif isinstance(agent_result, AwaitingPresentationTemplateSelection):
+            if ota_context.interaction_status != agent_result:
+                raise InvocationStateError(
+                    "Agent presentation template result does not match its interaction state"
                 )
             disposition = InvocationDisposition.AWAITING_FEEDBACK
             answer = ""

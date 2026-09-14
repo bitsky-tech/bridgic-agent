@@ -182,6 +182,61 @@ class WsTaskConfirmMessage(BaseModel):
     feedback: Optional[str] = None
 
 
+class WsPresentationSlideOutline(BaseModel):
+    """One user-edited slide sent back from the Plan outline surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    purpose: Optional[str] = Field(default=None, max_length=1_000)
+    key_message: Optional[str] = Field(default=None, max_length=2_000)
+    content_outline: List[str] = Field(default_factory=list, max_length=8)
+    source_ids: List[str] = Field(default_factory=list, max_length=30)
+
+
+class WsPresentationChapterOutline(BaseModel):
+    """One user-edited chapter sent back from the Plan outline surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    summary: Optional[str] = Field(default=None, max_length=2_000)
+    slides: List[WsPresentationSlideOutline] = Field(default_factory=list, max_length=80)
+
+
+class WsPresentationOutlineConfirmMessage(BaseModel):
+    """Resume Plan with the complete outline edited in the presentation pane."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    type: Literal["presentation_outline_confirm"] = "presentation_outline_confirm"
+    session_id: str
+    request_id: str
+    chapters: List[WsPresentationChapterOutline] = Field(min_length=1, max_length=20)
+
+
+class WsPresentationTemplateSelectionMessage(BaseModel):
+    """Resume Plan after selecting, skipping, or refreshing template candidates."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    type: Literal["presentation_template_selection"] = "presentation_template_selection"
+    session_id: str
+    request_id: str
+    action: Literal["select", "skip", "refresh"]
+    template_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_template_id(self) -> "WsPresentationTemplateSelectionMessage":
+        if self.action == "select" and not str(self.template_id or "").strip():
+            raise ValueError("template_id is required when selecting a presentation template")
+        if self.action != "select" and self.template_id is not None:
+            raise ValueError("template_id is only valid when selecting a presentation template")
+        return self
+
+
 class WsChoiceAnswerItem(BaseModel):
     """One question's resolved answer. ``index`` is the question's position in the
     card's ``questions`` list. Exactly one of ``option_id`` (a clicked option's
@@ -262,6 +317,8 @@ WsClientMessage = Union[
     WsChatMessage,
     WsBuildConfirmMessage,
     WsTaskConfirmMessage,
+    WsPresentationOutlineConfirmMessage,
+    WsPresentationTemplateSelectionMessage,
     WsWorkflowConfirmMessage,
     WsPermissionAnswer,
     WsChoiceAnswerMessage,
@@ -276,6 +333,8 @@ _BY_TYPE: Dict[str, type] = {
     "chat": WsChatMessage,
     "build_confirm": WsBuildConfirmMessage,
     "task_confirm": WsTaskConfirmMessage,
+    "presentation_outline_confirm": WsPresentationOutlineConfirmMessage,
+    "presentation_template_selection": WsPresentationTemplateSelectionMessage,
     "workflow_confirm": WsWorkflowConfirmMessage,
     "permission_answer": WsPermissionAnswer,
     "choice_answer": WsChoiceAnswerMessage,
@@ -337,6 +396,10 @@ __all__ = [
     "WsChatBlock",
     "WsChatMessage",
     "WsBuildConfirmMessage",
+    "WsPresentationChapterOutline",
+    "WsPresentationOutlineConfirmMessage",
+    "WsPresentationTemplateSelectionMessage",
+    "WsPresentationSlideOutline",
     "WsWorkflowConfirmMessage",
     "WsPermissionAnswerItem",
     "WsPermissionAnswer",

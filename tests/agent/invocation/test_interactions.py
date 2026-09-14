@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import sys
+import json
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -12,22 +13,17 @@ from typing import Any
 import pytest
 
 from src.amphi_agent._agent import AmphiAgent
+from src.amphi_agent._error import PublicAgentError
 from src.amphi_agent._invocation import (
     AgentInvocation,
     InvocationDisposition,
     InvocationRunResult,
     InvocationStaleAnswerError,
 )
-from src.amphi_agent._state import (
-    AgentState,
-    AwaitingBuildConfirm,
-    AwaitingBuildConflict,
-    AwaitingTaskConfirm,
-    AwaitingWorkflowConfirm,
-    AwaitingWorkflowRunChoice,
-    BuildStageState,
-    SubAgentsCompleted,
-)
+from src.amphi_agent.cognitive.state import AgentState, SubAgentsCompleted
+from src.amphi_agent.cognitive.normal.state import AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice
+from src.amphi_agent.cognitive.build.state import AwaitingWorkflowConfirm, BuildStageState
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_agent._workflow_run import WorkflowRunLibrary
 from src.amphi_agent._workflows import WorkflowLibrary
 from src.amphi_agent._workspace import RunWorkflowState, Workspace
@@ -37,6 +33,7 @@ from src.amphi_agent.runtime._environment import (
 )
 from src.amphi_service.runtime._session_events import SessionEventBroker
 from src.amphi_service.runtime._system_events import SystemEventBroker
+from src.amphi_service.protocol import ErrorEvent, StageEvent, ToolEvent, TurnEvent
 from src.amphi_store import (
     SessionRecord,
     SessionRepository,
@@ -465,16 +462,167 @@ async def test_run_choice(interactions: _Harness) -> None:
     assert checkpoint.generation == "retained-generation"
 
 
+@pytest.mark.parametrize("mode", ["build", "run_workflow"])
+async def test_unsupported_legacy_card_can_continue_from_saved_progress(interactions: _Harness, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Reject an obsolete card without losing its logical Turn or forcing its worker back to Main."""
+    record = await interactions.create_session(f"legacy-card-{mode}")
+    workspace = await interactions.workspace(record)
+    original_input = UserInput(
+        text="Continue preparing the original report.",
+        blocks=[{"type": "text", "value": "Retain the checked material already collected."}],
+    )
+    if mode == "build":
+        build = await workspace.prepare_build_space("create", stage="clarify")
+        _write_package(build.root)
+        marker = build.root / "retained.txt"
+        restored_think = BuildStageState(stage="clarify")
+        workspace.close_build_space()
+        old_tool = "request_build"
+        arguments = {
+            "goal": "Create a different reusable workflow",
+            "mode": "ask",
+            "reason": "An unfinished Build already exists",
+        }
+        selected_option = "replace_new"
+        checkpoint = workspace.build_checkpoint()
+    else:
+        source = interactions.paths.root / "legacy-workflow-source"
+        _write_package(source)
+        workflows = await WorkflowLibrary(USER_ID).load()
+        saved = await workflows.materialize_workflow(
+            source,
+            workflow_id=None,
+            source_session_id=record.id,
+            source_turn_id="seed-legacy-run",
+            name="Checked Report",
+            description="Create a checked report",
+        )
+        workflow_runs = await WorkflowRunLibrary(USER_ID).load()
+        initial_state = RunWorkflowState(
+            workflow_id=saved.workflow_id,
+            generation="retained-generation",
+            workflow_name=saved.name,
+            workflow_input=original_input,
+        )
+
+        def populate(root: Path) -> None:
+            workflow_runs.populate_run_workflow(root, saved.root)
+
+        run_space = await workspace.prepare_run_workflow_space("create", initial_state=initial_state, populate=populate)
+        marker = run_space.root / "retained.txt"
+        restored_think = WorkflowStageState(workflow_id=saved.workflow_id, generation=initial_state.generation)
+        workspace.close_run_workflow_space()
+        old_tool = "request_run_workflow"
+        arguments = {
+            "workflow_id": saved.workflow_id,
+            "action": "ask",
+            "reason": "An unfinished Run already exists",
+        }
+        selected_option = "restart"
+        checkpoint = workspace.run_workflow_checkpoint()
+    marker.write_text("Retain the original work.\n", encoding="utf-8")
+    interactions.llm.enqueue_tool(old_tool, arguments, call_id="obsolete-entry-card")
+    choice = await interactions.run(record.id, original_input)
+    pending = await interactions.turns.latest(record.id, USER_ID)
+    assert pending is not None
+    assert pending.status is TurnStatus.AWAITING_HUMAN
+    assert isinstance(choice.interaction, (AwaitingBuildConflict, AwaitingWorkflowRunChoice))
+    assert selected_option in {
+        option["id"]
+        for question in choice.interaction.questions
+        for option in question["options"]
+    }
+
+    # Simulate the old persisted routing while retaining the real card and its trace.
+    pending.agent_state = {**pending.agent_state, "think": restored_think.model_dump(mode="json")}
+    async with interactions.turns._session() as database:
+        await database.merge(pending)
+        await database.commit()
+    original_trace = deepcopy(pending.ota_records)
+    previous_call_count = len(interactions.llm.turn_calls)
+    events: list[TurnEvent] = []
+    publish_event = SessionEventBroker.Publisher.publish_event
+
+    def capture_event(publisher: SessionEventBroker.Publisher, event: TurnEvent) -> None:
+        if publisher.session_id == record.id:
+            events.append(event)
+        publish_event(publisher, event)
+
+    monkeypatch.setattr(SessionEventBroker.Publisher, "publish_event", capture_event)
+    with pytest.raises(Exception) as rejected:
+        await interactions.run(record.id, {
+            "type": "choice_answer",
+            "request_id": choice.interaction.request_id,
+            "answers": [{"index": 0, "option_id": selected_option}],
+        })
+
+    public_error = PublicAgentError.from_exception(rejected.value)
+    assert public_error.code == "resume_unavailable"
+    errors = [event for event in events if isinstance(event, ErrorEvent)]
+    assert len(errors) == 1
+    assert errors[0].message == public_error.message
+    assert "continue" in errors[0].message.lower()
+    assert len(interactions.llm.turn_calls) == previous_call_count
+    assert not any(isinstance(event, ToolEvent) for event in events)
+    turns = await interactions.turns.list_conversation(USER_ID, record.id)
+    assert len(turns) == 1
+    failed = turns[0]
+    assert failed.status is TurnStatus.FAILED
+    assert failed.session_ordinal == pending.session_ordinal
+    assert failed.user_input == pending.user_input == original_input
+    assert failed.agent_state["think"] == restored_think.model_dump(mode="json")
+    assert failed.agent_state["interaction"] is None
+    assert failed.agent_state["subagents"] is None
+    assert failed.error == public_error.message
+    preserved_trace = deepcopy(failed.ota_records)
+    for records in (original_trace, preserved_trace):
+        for ota_record in records:
+            ota_record.pop("turn_duration_ms", None)
+    assert preserved_trace == original_trace
+    assert marker.read_text(encoding="utf-8") == "Retain the original work.\n"
+    assert (workspace.build_checkpoint() if mode == "build" else workspace.run_workflow_checkpoint()) == checkpoint
+
+    # The next ordinary input asks the original worker to reason about its saved task again.
+    events.clear()
+    interactions.llm.enqueue_tool("request_human_choice", {
+        "questions": json.dumps([{
+            "question": "Which report section should be completed next?",
+            "options": [{"label": "Summary"}, {"label": "Evidence"}],
+        }]),
+        "prompt": "Choose the next section of the retained report.",
+    }, call_id="new-question-after-continue")
+    continued = await interactions.run(record.id, "continue")
+
+    assert continued.outcome.disposition is InvocationDisposition.AWAITING_FEEDBACK
+    assert len(interactions.llm.turn_calls) == previous_call_count + 1
+    assert [(event.mode, event.stage) for event in events if isinstance(event, StageEvent)] == [(mode, restored_think.stage)]
+    turns = await interactions.turns.list_conversation(USER_ID, record.id)
+    assert len(turns) == 2
+    assert turns[0].status is TurnStatus.FAILED
+    assert turns[1].status is TurnStatus.AWAITING_HUMAN
+    assert turns[1].user_input.text == "continue"
+    assert turns[1].agent_state["think"] == restored_think.model_dump(mode="json")
+    assert "questions" in turns[1].agent_state["interaction"]
+    assert [
+        step["tool_name"]
+        for ota_record in turns[1].ota_records
+        for step in (ota_record.get("action_result") or {}).get("results", [])
+    ] == ["request_human_choice"]
+    assert marker.read_text(encoding="utf-8") == "Retain the original work.\n"
+
+
 @pytest.mark.parametrize("answer_type", ["permission_answer", "choice_answer", "chat", "subagents"])
 @pytest.mark.parametrize("run_state", ["completed", "failed", "gone", "publication_error"])
+@pytest.mark.parametrize("scoped", [False, True], ids=["unscoped", "legacy-scope"])
 async def test_resume_retired_validation_turn(
     interactions: _Harness,
     agent_model: str,
     monkeypatch: pytest.MonkeyPatch,
     answer_type: str,
     run_state: str,
+    scoped: bool,
 ) -> None:
-    """Resume an old approval on the original Turn without replaying validation tools."""
+    """Preserve legacy evidence and replies in model input across settlement and retry."""
     async def reject_tool_replay(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("Retired validation tools must not execute")
 
@@ -525,7 +673,22 @@ async def test_resume_retired_validation_turn(
         await workspace.discard_run_workflow(expected_generation=initial_state.generation)
     workspace.close_run_workflow_space()
 
-    prior_round = {"observation_result": "The original report was created."}
+    evidence = "Retained validation evidence from the original report."
+    prior_round = {
+        "think_result": {"step_content": "Inspect the existing report.", "tool_calls": [{
+            "call_id": "legacy-read-report",
+            "tool": "read_file",
+            "tool_arguments": [{"name": "path", "value": str(active.root / "result" / "report.txt")}],
+        }]},
+        "action_result": {"results": [{
+            "tool_id": "legacy-read-report",
+            "tool_name": "read_file",
+            "tool_arguments": {"path": str(active.root / "result" / "report.txt")},
+            "tool_result": evidence,
+            "success": True,
+        }]},
+        "observation_result": "The original report was created.",
+    }
     questions = [{"question": "Run the final validation?", "options": [{"id": "yes", "label": "Yes"}]}]
     permission = answer_type == "permission_answer"
     tool = "bash" if permission else "request_human_choice"
@@ -548,6 +711,10 @@ async def test_resume_retired_validation_turn(
             "success": True,
         }]},
     }
+    legacy_scope = {"mode": "run_workflow", "stage": "validate"} if scoped else None
+    if legacy_scope is not None:
+        prior_round["think_scope"] = dict(legacy_scope)
+        held_round["think_scope"] = dict(legacy_scope)
     interaction = {"request_id": "legacy-request"}
     if permission:
         interaction["permission"] = {"calls": [call], "verdicts": ["ask"], "items": [{"call_index": 0}]}
@@ -593,19 +760,24 @@ async def test_resume_retired_validation_turn(
     reply = {"type": answer_type, "request_id": "legacy-request"}
     if permission:
         reply["answers"] = [{"call_index": 0, "decision": "allow", "instruction": "Keep the original report unchanged."}]
+        expected_reply = "Keep the original report unchanged."
     elif answer_type == "choice_answer":
         reply["answers"] = [{"index": 0, "option_id": "yes"}]
+        expected_reply = "Run the final validation?: Yes"
     elif answer_type == "subagents":
         reply = SubAgentsCompleted.model_validate({"results": [{
             "tool_call_id": call["call_id"], "status": "completed", "answer": "The child finished checking.",
         }]})
+        expected_reply = "The child finished checking."
     else:
         reply["input"] = "Continue with the existing report."
+        expected_reply = reply["input"]
     monkeypatch.setattr(AmphiAgent, "action_tool_call", reject_tool_replay)
     if run_state == "publication_error":
-        monkeypatch.setattr(WorkflowRunLibrary, "publish_run_workflow", fail_publication)
-        with pytest.raises(OSError, match="Publication unavailable"):
-            await interactions.run(record.id, reply)
+        with monkeypatch.context() as publication_patch:
+            publication_patch.setattr(WorkflowRunLibrary, "publish_run_workflow", fail_publication)
+            with pytest.raises(OSError, match="Publication unavailable"):
+                await interactions.run(record.id, reply)
     else:
         interactions.llm.enqueue_text("The report is ready.", input_tokens=10, output_tokens=2)
         resumed = await interactions.run(record.id, reply)
@@ -624,6 +796,8 @@ async def test_resume_retired_validation_turn(
     assert completed.duration_ms >= 1234
     assert completed.ota_records[0]["observation_result"] == prior_round["observation_result"]
     held = completed.ota_records[1]
+    assert completed.ota_records[0].get("think_scope") == legacy_scope
+    assert held.get("think_scope") == legacy_scope
     step = held["action_result"]["results"][0]
     assert step["tool_id"] == call["call_id"]
     if permission:
@@ -645,7 +819,25 @@ async def test_resume_retired_validation_turn(
         assert completed.error
         assert workspace.has_run_workflow
         assert (active.root / "result" / "report.txt").read_text(encoding="utf-8") == "Original report\n"
-        return
+        failed_turn = completed
+        interactions.llm.enqueue_text("The report is ready after retry.")
+        resumed = await interactions.run(record.id, "Continue")
+        assert resumed.outcome.disposition is InvocationDisposition.COMPLETED
+        assert resumed.interaction is None
+        turns = await interactions.turns.list_conversation(USER_ID, record.id)
+        assert len(turns) == 3
+        assert turns[0].id == previous.id
+        assert turns[1] == failed_turn
+        completed = turns[-1]
+        assert completed.session_ordinal == failed_turn.session_ordinal + 1
+        assert completed.user_input.text == "Continue"
+
+    model_context = json.dumps([
+        message.model_dump(mode="json") for message in interactions.llm.turn_calls[-1].messages
+    ])
+    assert original.text in model_context
+    assert evidence in model_context
+    assert expected_reply in model_context
     assert completed.status is TurnStatus.COMPLETED
     assert completed.agent_state["think"] == {"mode": "normal", "stage": "main"}
     assert not workspace.has_run_workflow
@@ -659,7 +851,7 @@ async def test_resume_retired_validation_turn(
         assert len(workflow_runs.runs()) == 1
         published = workflow_runs.get(stamps[0]["run_id"])
         assert published is not None
-        assert published.status.value == run_state
+        assert published.status.value == ("completed" if run_state == "publication_error" else run_state)
         assert published.read_file("result/report.txt") == "Original report\n"
     if answer_type in {"permission_answer", "choice_answer"}:
         with pytest.raises(InvocationStaleAnswerError):

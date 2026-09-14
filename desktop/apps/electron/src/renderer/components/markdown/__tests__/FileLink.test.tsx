@@ -18,19 +18,21 @@ Object.defineProperty(w.navigator, 'clipboard', { value: { writeText }, configur
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-const { Provider } = await import('jotai')
+const { createStore, Provider } = await import('jotai')
+const { pendingExcelWorkbookOpenRequestsAtom } = await import('@/atoms/excel')
+const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { FileLink } = await import('../FileLink')
 
 const TARGET = { path: '/Users/me/out/最终报告 v3.pdf', name: '最终报告 v3.pdf' }
 
-async function renderLink() {
+async function renderLink(target = TARGET, store = createStore()) {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => {
     root.render(
-      <Provider>
-        <FileLink target={TARGET}>报告</FileLink>
+      <Provider store={store}>
+        <FileLink target={target}>报告</FileLink>
       </Provider>,
     )
   })
@@ -62,6 +64,23 @@ describe('FileLink', () => {
       button?.click()
     })
     expect(writeText).toHaveBeenCalledWith(TARGET.path)
+  })
+
+  it('routes an Agent-created workbook link into the current Session Excel workbench', async () => {
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-agent-output')
+    const target = { path: '/Users/me/out/analysis.xlsx', name: 'analysis.xlsx' }
+    const host = await renderLink(target, store)
+
+    await act(async () => {
+      host.querySelector<HTMLAnchorElement>('a')?.click()
+    })
+
+    expect(store.get(pendingExcelWorkbookOpenRequestsAtom)).toEqual([{
+      requestId: expect.any(Number),
+      sessionId: 'session-agent-output',
+      path: target.path,
+    }])
   })
 
   it('keeps both actions mounted so hover never shifts the surrounding text', async () => {

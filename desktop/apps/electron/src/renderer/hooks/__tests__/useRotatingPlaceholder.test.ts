@@ -10,8 +10,12 @@
 import { describe, it, expect } from 'bun:test'
 
 import { composerTips } from '../useRotatingPlaceholder'
+import { i18n } from '@/lib/i18n'
 
+const previousLanguage = i18n.language
+await i18n.changeLanguage('zh')
 const COMPOSER_TIPS = composerTips()
+await i18n.changeLanguage(previousLanguage)
 
 describe('COMPOSER_TIPS', () => {
   it('keeps the original static copy first', () => {
