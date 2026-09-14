@@ -15,9 +15,10 @@ function updateField(setDraft: DraftSetter, path: RequestPath, value: unknown) {
   setDraft((current) => ({ ...current, edited: true, request: setRequestValue(current.request, path, value) }))
 }
 
-function JsonEditor({ draft, setDraft, path, label, value, apply, objectOnly = false, bufferPrefix = 'value' }: EditorState & {
+function JsonEditor({ draft, setDraft, path, label, value, apply, readValue, objectOnly = false, bufferPrefix = 'value' }: EditorState & {
   path: RequestPath; label: string; value: unknown; objectOnly?: boolean; bufferPrefix?: string
   apply?: (request: ModelRequestDraft['request'], value: unknown) => ModelRequestDraft['request']
+  readValue?: (request: ModelRequestDraft['request']) => unknown
 }) {
   const text = useDebugText()
   const bufferKey = `${bufferPrefix}:${JSON.stringify(path)}`
@@ -34,6 +35,11 @@ function JsonEditor({ draft, setDraft, path, label, value, apply, objectOnly = f
             const parsed: unknown = JSON.parse(source)
             if (objectOnly && !isRequestObject(parsed)) throw new Error('Expected an object')
             next.request = apply ? apply(current.request, parsed) : setRequestValue(current.request, path, parsed)
+            if (readValue) {
+              const appliedValue = readValue(next.request)
+              // Newly recognized fields move to their own editors; keep only this editor's fields in its buffer.
+              if (asJson(appliedValue) !== asJson(parsed)) next.buffers[bufferKey] = asJson(appliedValue)
+            }
             delete next.errors[bufferKey]
           } catch { next.errors[bufferKey] = true }
           return next
@@ -93,7 +99,7 @@ export function ModelRequestEditor({ round }: { round: TraceRound }) {
   const text = useDebugText()
   const [draft, setDraft] = useDebugDraft<ModelRequestDraft>(`model:${round.id}`, () => createModelRequestDraft(round.recordedRequest))
   const snapshot = inspectModelRequest(draft.request)
-  const ready = snapshot.hasPrompt || draft.manual
+  const ready = inspectModelRequest(draft.original).hasPrompt || draft.manual || draft.edited
   const modelFields = snapshot.models.length ? snapshot.models : [{ path: [...snapshot.primary.path, 'model'], value: undefined }]
   const toolsFields = snapshot.tools.length ? snapshot.tools : [{ path: [...snapshot.primary.path, 'tools'], value: undefined }]
   const hasErrors = Object.values(draft.errors).some(Boolean)
@@ -137,7 +143,11 @@ export function ModelRequestEditor({ round }: { round: TraceRound }) {
         {snapshot.containers.filter((container) => container === snapshot.primary || Object.keys(requestOtherFields(container.value)).length).map((container) => <JsonEditor
           key={fieldName(container.path)} draft={draft} setDraft={setDraft} path={container.path} value={requestOtherFields(container.value)} objectOnly bufferPrefix="parameters"
           label={`${text('参数与其他字段', 'Parameters & other fields')} · ${fieldName(container.path)}`}
-          apply={(request, value) => replaceRequestOtherFields(request, container.path, value)} />)}
+          apply={(request, value) => replaceRequestOtherFields(request, container.path, value)}
+          readValue={(request) => {
+            const value = requestValue(request, container.path)
+            return isRequestObject(value) ? requestOtherFields(value) : value
+          }} />)}
       </div>
       <details className="debug-model-extra"><summary>{text('工具定义', 'Tool definitions')}</summary>
         <p className="debug-model-note">{text('保留工具 schema 的原始格式；单次模型调用不会自动执行工具。', 'Tool schemas retain their original format. A single model call will not automatically execute tools.')}</p>

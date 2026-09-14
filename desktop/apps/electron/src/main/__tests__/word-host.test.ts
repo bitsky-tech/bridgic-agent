@@ -271,24 +271,149 @@ describe('Session-owned Word host', () => {
     expect(views[0]!.webContents.windowOpen?.({ url: 'https://example.com' }).action).toBe('deny')
   })
 
-  it('keeps editor reloads in the owned view without opening browser tabs', async () => {
+  it('checkpoints the owning editor once before reloading and waits for the new workspace to restore', async () => {
     const opened: string[] = []
-    const { host, views } = fixture(undefined, (url) => opened.push(url))
+    const loads: string[] = []
+    const { host, views } = fixture(async (_view, sessionId) => { loads.push(sessionId) }, (url) => opened.push(url))
     await host.ensureSession('a')
+    await host.ensureSession('b')
     const contents = views[0]!.webContents
     for (const url of ['http://localhost:5273/word.html?sessionId=a', 'file:///application/word.html?sessionId=a']) {
       contents.url = url
+      host.reportState(1, { documentCount: 1, persistenceStatus: 'saved' })
+      const previousLoads = loads.length
+      const previousFlushes = flushTickets(views[0]!).length
       let prevented = false
       contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, url)
-      expect(prevented).toBe(false)
+      contents.emit('will-navigate', { preventDefault: () => undefined }, url)
+      await settle()
+      expect(prevented).toBe(true)
+      expect(loads).toHaveLength(previousLoads)
+      expect(flushTickets(views[0]!)).toHaveLength(previousFlushes + 1)
+      expect(flushTickets(views[1]!)).toEqual([])
       expect(contents.windowOpen?.({ url }).action).toBe('deny')
       expect(opened).toEqual([])
+      host.completeFlush(1, flushTickets(views[0]!).at(-1)!, true)
+      await settle()
+      expect(loads).toHaveLength(previousLoads + 1)
+      expect(loads.at(-1)).toBe('a')
+      expect(host.snapshot().sessions[0]?.documentCount).toBeNull()
+      expect(host.snapshot().sessions[0]?.persistenceStatus).toBeNull()
+
+      const previousOpens = openTickets(views[0]!).length
+      const opening = host.openFile('a', request)
+      await settle()
+      expect(openTickets(views[0]!)).toHaveLength(previousOpens)
+      host.reportState(1, { documentCount: 1, persistenceStatus: 'saved' })
+      host.completeOpenFile(1, openTickets(views[0]!).at(-1)!.id)
+      await opening
     }
     host.closeSession('a')
     let prevented = false
     contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, contents.url)
     expect(prevented).toBe(true)
     expect(opened).toEqual([])
+  })
+
+  it('retains the editor when a reload checkpoint fails or times out and permits a later retry', async () => {
+    let loads = 0
+    const { host, views } = fixture(async () => { loads += 1 })
+    await host.ensureSession('a')
+    host.reportState(1, { documentCount: 1, persistenceStatus: 'error' })
+    const contents = views[0]!.webContents
+    const reload = () => contents.emit('will-navigate', { preventDefault: () => undefined }, contents.url)
+    reload()
+    await settle()
+    host.completeFlush(1, flushTickets(views[0]!).at(-1)!, false)
+    await settle()
+    expect(loads).toBe(1)
+    expect(host.snapshot().sessions[0]?.documentCount).toBe(1)
+    const timeoutCallbacks: Array<() => void> = []
+    const originalSetTimeout = globalThis.setTimeout
+    const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
+      if (delay === WORD_FLUSH_TIMEOUT_MS) {
+        timeoutCallbacks.push(callback)
+        return 0 as unknown as ReturnType<typeof setTimeout>
+      }
+      return originalSetTimeout(callback, delay)
+    }) as typeof setTimeout)
+    const warn = spyOn(windowLog, 'warn').mockImplementation(() => undefined)
+    try {
+      reload()
+      await settle()
+      for (const callback of timeoutCallbacks) callback()
+      await settle()
+      expect(loads).toBe(1)
+      expect(contents.destroyed).toBe(false)
+    } finally { timerSpy.mockRestore(); warn.mockRestore() }
+    reload()
+    await settle()
+    host.completeFlush(1, flushTickets(views[0]!).at(-1)!, true)
+    await settle()
+    expect(loads).toBe(2)
+  })
+
+  it('does not interrupt a document import received after the reload checkpoint', async () => {
+    let loads = 0
+    const { host, views } = fixture(async () => { loads += 1 })
+    await host.ensureSession('a')
+    host.reportState(1, { documentCount: 1, persistenceStatus: 'saved' })
+    const contents = views[0]!.webContents
+    contents.emit('will-navigate', { preventDefault: () => undefined }, contents.url)
+    await settle()
+    const opening = host.openFile('a', request)
+    await settle()
+    host.completeFlush(1, flushTickets(views[0]!)[0]!, true)
+    await settle()
+    expect(loads).toBe(1)
+    expect(host.snapshot().sessions[0]?.documentCount).toBe(1)
+    host.completeOpenFile(1, openTickets(views[0]!)[0]!.id)
+    await opening
+  })
+
+  it('cancels a pending reload when input arrives after the native snapshot was captured', async () => {
+    for (const inputEvent of ['before-input-event', 'before-mouse-event']) {
+      let loads = 0
+      const { host, views } = fixture(async () => { loads += 1 })
+      await host.ensureSession('a')
+      host.reportState(1, { documentCount: 1, persistenceStatus: 'saved' })
+      const contents = views[0]!.webContents
+      const reload = () => contents.emit('will-navigate', { preventDefault: () => undefined }, contents.url)
+      reload()
+      await settle()
+      // The renderer is waiting for storage, but a new edit's debounced native
+      // snapshot has not reached the host's persistence status yet.
+      let inputBlocked = false
+      contents.emit(inputEvent, { preventDefault: () => { inputBlocked = true } }, {})
+      host.completeFlush(1, flushTickets(views[0]!)[0]!, true)
+      await settle()
+      expect(inputBlocked).toBe(false)
+      expect(loads).toBe(1)
+      expect(host.snapshot().sessions[0]?.documentCount).toBe(1)
+      reload()
+      await settle()
+      host.completeFlush(1, flushTickets(views[0]!).at(-1)!, true)
+      await settle()
+      expect(loads).toBe(2)
+    }
+  })
+
+  it('does not reload a closed or crashed editor after its checkpoint was acknowledged', async () => {
+    for (const interrupted of ['closed', 'crashed'] as const) {
+      let loads = 0
+      const { host, views } = fixture(async () => { loads += 1 })
+      await host.ensureSession('a')
+      host.reportState(1, { documentCount: 1, persistenceStatus: 'saved' })
+      const contents = views[0]!.webContents
+      contents.emit('will-navigate', { preventDefault: () => undefined }, contents.url)
+      await settle()
+      host.completeFlush(1, flushTickets(views[0]!)[0]!, true)
+      if (interrupted === 'closed') host.closeSession('a')
+      else contents.emit('render-process-gone')
+      await settle()
+      expect(loads).toBe(interrupted === 'closed' ? 1 : 2)
+      if (interrupted === 'closed') expect(host.snapshot().sessions).toEqual([])
+    }
   })
 
   it('opens document links externally while preventing child windows and editor navigation', async () => {

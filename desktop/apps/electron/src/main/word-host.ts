@@ -242,12 +242,37 @@ export class WordHost {
       forwardExternal(url)
       return { action: 'deny' }
     })
+    let reloadPending = false
+    let reloadInterrupted = false
+    // Continuing to edit cancels the pending reload rather than dropping input
+    // that arrived after the renderer captured its native document snapshot.
+    contents.on('before-input-event', () => { if (reloadPending) reloadInterrupted = true })
+    contents.on('before-mouse-event', () => { if (reloadPending) reloadInterrupted = true })
     contents.on('will-navigate', (event, url) => {
-      // Vite refreshes the current editor URL on changes, including test files.
-      // Keep that reload in its Session-owned view instead of opening a browser.
-      if (this.sessions.owns(record) && !contents.isDestroyed() && !record.crashed && url === contents.getURL()) return
       event.preventDefault()
-      forwardExternal(url)
+      if (url !== contents.getURL()) { forwardExternal(url); return }
+      if (!this.sessions.owns(record) || contents.isDestroyed() || record.crashed || reloadPending) return
+      // Vite reloads must checkpoint native edits and durable recovery storage
+      // before replacing the renderer, just like closing the application.
+      reloadPending = true
+      reloadInterrupted = false
+      const ready = record.ready
+      void (async () => {
+        try {
+          if (!await this.withTimeout(this.flushRecord(record), WORD_FLUSH_TIMEOUT_MS, 'Word workspace flush timed out')) return
+          if (reloadInterrupted || !this.sessions.owns(record) || contents.isDestroyed() || record.crashed
+            || record.ready !== ready || contents.getURL() !== url) return
+          // A request received after the checkpoint must finish in this renderer.
+          if (record.pendingOpen.size || record.pendingFlush.size) return
+          record.documentCount = null
+          record.persistenceStatus = null
+          await this.sessions.reload(record, (item) => this.loadRecord(item))
+        } catch (error) {
+          windowLog.warn(`[word-host] reload failed session=${sessionId}`, error)
+        } finally {
+          reloadPending = false
+        }
+      })()
     })
     contents.on('will-redirect', (event) => event.preventDefault())
     contents.on('did-start-loading', () => {

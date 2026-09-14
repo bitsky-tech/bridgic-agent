@@ -86,8 +86,8 @@ export function createModelRequestDraft(recorded: RequestObject): ModelRequestDr
 }
 
 export function startManualModelRequest(draft: ModelRequestDraft): ModelRequestDraft {
-  const { primary, hasPrompt } = inspectModelRequest(draft.request)
-  const manual = draft.manual || !hasPrompt
+  const { primary } = inspectModelRequest(draft.request)
+  const manual = draft.manual || !inspectModelRequest(draft.original).hasPrompt
   // Leave malformed or provider-specific historical fields intact as well.
   const key = ['messages', 'request_messages', 'prompt_messages'].find((name) => !Object.hasOwn(primary.value, name))
   if (key) return { ...draft, manual, edited: true,

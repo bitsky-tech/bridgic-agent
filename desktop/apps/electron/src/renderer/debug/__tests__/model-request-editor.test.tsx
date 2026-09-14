@@ -119,6 +119,36 @@ describe('ModelRequestEditor', () => {
     await view.unmount()
   })
 
+  it('moves newly added request containers out of the parent parameter buffer and keeps both editors editable', async () => {
+    const historical = { messages: [{ role: 'user', content: 'Original prompt' }], vendor: { opaque: [false, null] } }
+    const view = await mount(round(historical))
+    const parentLabel = 'Parameters & other fields · request'
+    const childLabel = 'Parameters & other fields · model_options'
+    await input(editor(view.host, parentLabel), JSON.stringify({ vendor: historical.vendor, model_options: { temperature: 0.2, provider_flag: 'keep' } }))
+    expect(JSON.parse(editor(view.host, parentLabel).value)).toEqual({ vendor: historical.vendor })
+    expect(JSON.parse(editor(view.host, childLabel).value)).toEqual({ temperature: 0.2, provider_flag: 'keep' })
+    await input(editor(view.host, childLabel), '{"temperature":0.8,"provider_flag":"keep"}')
+    await input(editor(view.host, parentLabel), JSON.stringify({ ...JSON.parse(editor(view.host, parentLabel).value), max_tokens: 2048 }))
+    expect(view.host.querySelector('[role=alert]')).toBeNull()
+    expect(preview(view.host)).toEqual({ ...historical, model_options: { temperature: 0.8, provider_flag: 'keep' }, max_tokens: 2048 })
+
+    await input(editor(view.host, parentLabel), '{"vendor":')
+    await input(editor(view.host, childLabel), '{"temperature":0.4,"provider_flag":"keep"}')
+    expect(editor(view.host, parentLabel).value).toBe('{"vendor":')
+    expect(editor(view.host, parentLabel).getAttribute('aria-invalid')).toBe('true')
+    expect(preview(view.host)).toBeNull()
+    await input(editor(view.host, parentLabel), JSON.stringify({ vendor: historical.vendor, max_tokens: 4096 }))
+    expect(preview(view.host).model_options).toEqual({ temperature: 0.4, provider_flag: 'keep' })
+
+    await input(editor(view.host, parentLabel), '{"model_options":{"temperature":1}}')
+    expect(editor(view.host, parentLabel).getAttribute('aria-invalid')).toBe('true')
+    expect(JSON.parse(editor(view.host, childLabel).value)).toEqual({ temperature: 0.4, provider_flag: 'keep' })
+    await input(editor(view.host, parentLabel), JSON.stringify({ vendor: historical.vendor, max_tokens: 4096 }))
+    expect(view.host.querySelector('[role=alert]')).toBeNull()
+    expect(preview(view.host, 'Original request · Recorded fields')).toEqual(historical)
+    await view.unmount()
+  })
+
   it('adds and removes messages and edits roles without affecting the recorded request', async () => {
     const stored = { system_prompt: '  Exact instruction\n', prompt_messages: [{ role: 'user', content: 'Question' }] }
     const view = await mount(round(stored))
@@ -138,6 +168,30 @@ describe('ModelRequestEditor', () => {
     await act(async () => button(view.host, 'Add message list').click())
     expect(view.host.textContent).not.toContain('Historical prompt remains unavailable')
     expect(preview(view.host)).toEqual({ system_prompt: 'Original instructions', prompt: 'Original question', messages: [{ role: 'user', content: '' }] })
+    await view.unmount()
+  })
+
+  it('keeps a recorded block prompt editable and restorable after replacing it with null', async () => {
+    const historical = { prompt: [{ type: 'text', text: 'Original' }], vendor: { keep: true } }
+    const stored = round(historical)
+    const view = await mount(stored)
+    await input(editor(view.host, 'prompt (JSON)'), 'null')
+    expect(editor(view.host, 'prompt (JSON)').value).toBe('null')
+    expect(button(view.host, 'Restore original request').disabled).toBe(false)
+    expect(view.host.textContent).not.toContain('No readable prompt was saved')
+    expect(view.host.textContent).not.toContain('Historical prompt remains unavailable')
+    expect(preview(view.host)).toEqual({ ...historical, prompt: null })
+    await view.render(null)
+    await view.render(stored)
+    expect(editor(view.host, 'prompt (JSON)').value).toBe('null')
+    await act(async () => button(view.host, 'Add message list').click())
+    expect(view.host.textContent).not.toContain('Manually created draft')
+    expect(view.host.textContent).not.toContain('Historical prompt remains unavailable')
+    expect(preview(view.host)).toEqual({ ...historical, prompt: null, messages: [{ role: 'user', content: '' }] })
+    await act(async () => button(view.host, 'Restore original request').click())
+    expect(JSON.parse(editor(view.host, 'prompt (JSON)').value)).toEqual(historical.prompt)
+    expect(preview(view.host)).toEqual(historical)
+    expect(button(view.host, 'Restore original request').disabled).toBe(true)
     await view.unmount()
   })
 

@@ -54,6 +54,16 @@ describe('recorded model request drafts', () => {
     expect(inspectModelRequest(manual.request).hasPrompt).toBe(true)
   })
 
+  it('uses the historical prompt to classify a draft after the editable prompt changes shape', () => {
+    const historical = { prompt: [{ type: 'text', text: 'Original' }] }
+    const draft = createModelRequestDraft(historical)
+    const changed = { ...draft, edited: true, request: setRequestValue(draft.request, ['prompt'], null) }
+    const extended = startManualModelRequest(changed)
+    expect(extended.manual).toBe(false)
+    expect(extended.request).toEqual({ prompt: null, messages: [{ role: 'user', content: '' }] })
+    expect(extended.original).toEqual(historical)
+  })
+
   it('preserves literal JSON keys without changing object prototypes', () => {
     const original = JSON.parse('{"request":{"messages":[],"__proto__":{"keep":true}}}')
     const changed = setRequestValue(original, ['request', '__proto__', 'keep'], false)
