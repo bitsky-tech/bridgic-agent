@@ -10,6 +10,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { i18n } = await import('@/lib/i18n')
+const { I18nextProvider } = await import('react-i18next')
 const {
   PresentationInsertDialogs,
   parsePresentationChartSeries,
@@ -51,13 +52,15 @@ async function mountDialog(props: Partial<Parameters<typeof PresentationInsertDi
   const submitted: PresentationInsertDialogValue[] = []
   await act(async () => {
     root.render(
-      <PresentationInsertDialogs
-        open="table"
-        slides={[{ id: 'slide-1', name: 'Cover' }, { id: 'slide-2', name: 'Details' }]}
-        onClose={() => undefined}
-        onSubmit={(value) => submitted.push(value)}
-        {...props}
-      />,
+      <I18nextProvider i18n={i18n}>
+        <PresentationInsertDialogs
+          open="table"
+          slides={[{ id: 'slide-1', name: 'Cover' }, { id: 'slide-2', name: 'Details' }]}
+          onClose={() => undefined}
+          onSubmit={(value) => submitted.push(value)}
+          {...props}
+        />
+      </I18nextProvider>,
     )
   })
   return { root, submitted }
