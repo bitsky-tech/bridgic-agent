@@ -216,8 +216,8 @@ export function WordRibbon({
                     <option value="Georgia">Georgia</option>
                     <option value="Helvetica Neue">Helvetica Neue</option>
                     <option value="Times New Roman">Times New Roman</option>
-                    <option value="PingFang SC">苹方-简</option>
-                    <option value="Songti SC">宋体-简</option>
+                    <option value="PingFang SC">{t('word.font.pingFangSC')}</option>
+                    <option value="Songti SC">{t('word.font.songtiSC')}</option>
                   </RibbonSelect>
                   <RibbonSelect
                     ariaLabel={t('word.fontSize')}

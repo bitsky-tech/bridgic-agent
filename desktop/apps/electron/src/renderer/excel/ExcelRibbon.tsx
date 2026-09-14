@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react'
+import { useTranslation } from 'react-i18next'
+import { i18n } from '../lib/i18n'
 import { createPortal } from 'react-dom'
 import {
   AlignCenter,
@@ -191,110 +193,6 @@ interface RibbonCopy {
   }
 }
 
-const zhCN: RibbonCopy = {
-  tabs: { home: '开始', insert: '插入', data: '数据', formulas: '公式', view: '视图' },
-  groups: {
-    history: '编辑', font: '字体', alignment: '对齐', number: '数字', styles: '样式',
-    pivot: '数据分析', cells: '单元格', rowsColumns: '行和列', charts: '图表', linksMedia: '链接与媒体',
-    workbook: '工作簿', media: '媒体', organize: '排序和筛选',
-    rules: '数据工具', formulaQuick: '函数库', formulaCategories: '函数分类',
-  },
-  actions: {
-    undo: '撤销', redo: '重做', 'font-family': '字体', 'font-size': '字号', bold: '加粗', italic: '斜体',
-    underline: '下划线', strikethrough: '删除线', 'font-color': '字体颜色', 'fill-color': '填充颜色',
-    borders: '所有边框', 'align-left': '左对齐', 'align-center': '居中', 'align-right': '右对齐',
-    'align-top': '顶端对齐', 'align-middle': '垂直居中', 'align-bottom': '底端对齐', 'rotate-text': '文字旋转 45°',
-    wrap: '自动换行', 'merge-center': '合并后居中', 'merge-cells': '合并单元格',
-    'merge-across': '跨列合并', unmerge: '取消合并', 'number-format': '数字格式', percent: '百分比',
-    currency: '货币', 'thousands-separator': '千位分隔样式', 'increase-decimal': '增加小数位',
-    'decrease-decimal': '减少小数位', 'clear-format': '清除格式', 'insert-row-above': '在上方插入行',
-    'insert-row-below': '在下方插入行', 'insert-column-left': '在左侧插入列',
-    'insert-column-right': '在右侧插入列', 'insert-cells-right': '插入单元格，现有单元格右移',
-    'insert-cells-down': '插入单元格，现有单元格下移', 'insert-sheet': '新建工作表',
-    'insert-image': '插入图片', 'insert-hyperlink': '网络链接', 'insert-chart': '统计图表',
-    'insert-pivot-table': '数据透视表',
-    'toggle-filter': '启用筛选', 'clear-filter': '清除筛选条件', 'remove-filter': '关闭筛选', 'sort-ascending': '升序',
-    'sort-descending': '降序', 'data-validation': '数据验证', 'conditional-formatting': '条件格式',
-    'formula-sum': '自动求和', 'formula-average': '平均值', 'formula-count': '计数',
-    'formula-max': '最大值', 'formula-min': '最小值', 'formula-insert': '插入函数', 'formula-more': '全部函数',
-    'highlight-row-column': '高亮所在行列', 'highlight-row': '仅高亮所在行',
-    'highlight-column': '仅高亮所在列', 'highlight-none': '关闭行列高亮',
-    'set-row-height': '设置选中行高', 'set-column-width': '设置选中列宽',
-    'auto-fit-rows': '自动调整选中行高', 'auto-fit-columns': '自动调整选中列宽',
-    'toggle-gridlines': '显示网格线', 'toggle-zero-values': '显示零值', 'toggle-dark-mode': '深色显示',
-    'set-zoom': '显示比例', 'freeze-selection': '冻结至当前单元格',
-    'freeze-first-row': '冻结首行', 'freeze-first-column': '冻结首列', unfreeze: '取消冻结',
-  },
-  formulaCategories: {
-    common: '常用', financial: '财务', logical: '逻辑', text: '文本', date: '日期与时间',
-    lookup: '查找与引用', math: '数学', statistical: '统计',
-  },
-  chartTypes: {
-    column: '柱状图', bar: '条形图', line: '折线图', area: '面积图', pie: '饼图',
-    doughnut: '环形图', scatter: '散点图',
-  },
-  dimensionsMenu: '行高列宽',
-  freezeMenu: '冻结窗格',
-  mergeMenu: '更多合并选项',
-  filterMenu: '筛选',
-  sortMenu: '排序',
-  recentFunctions: '最近使用',
-  quick: { chart: '图表', image: '图片', insert: '插入', pivot: '透视表' },
-}
-
-const enUS: RibbonCopy = {
-  tabs: { home: 'Home', insert: 'Insert', data: 'Data', formulas: 'Formulas', view: 'View' },
-  groups: {
-    history: 'Edit', font: 'Font', alignment: 'Alignment', number: 'Number', styles: 'Styles',
-    pivot: 'Data analysis', cells: 'Cells', rowsColumns: 'Rows & columns', charts: 'Charts',
-    linksMedia: 'Links & media', workbook: 'Workbook', media: 'Media', organize: 'Sort & filter',
-    rules: 'Data tools', formulaQuick: 'Function library', formulaCategories: 'Categories',
-  },
-  actions: {
-    undo: 'Undo', redo: 'Redo', 'font-family': 'Font', 'font-size': 'Font size', bold: 'Bold', italic: 'Italic',
-    underline: 'Underline', strikethrough: 'Strikethrough', 'font-color': 'Font color', 'fill-color': 'Fill color',
-    borders: 'All borders', 'align-left': 'Align left', 'align-center': 'Center', 'align-right': 'Align right',
-    'align-top': 'Align top', 'align-middle': 'Align middle', 'align-bottom': 'Align bottom',
-    'rotate-text': 'Rotate text 45°', wrap: 'Wrap text', 'merge-center': 'Merge & center', 'merge-cells': 'Merge cells',
-    'merge-across': 'Merge across', unmerge: 'Unmerge cells', 'number-format': 'Number format', percent: 'Percent',
-    currency: 'Currency', 'thousands-separator': 'Thousands separator', 'increase-decimal': 'Increase decimal',
-    'decrease-decimal': 'Decrease decimal', 'clear-format': 'Clear formatting', 'insert-row-above': 'Insert row above',
-    'insert-row-below': 'Insert row below', 'insert-column-left': 'Insert column left',
-    'insert-column-right': 'Insert column right', 'insert-cells-right': 'Insert cells and shift right',
-    'insert-cells-down': 'Insert cells and shift down', 'insert-sheet': 'New sheet', 'insert-image': 'Insert image',
-    'insert-hyperlink': 'Hyperlink', 'insert-chart': 'Statistical chart', 'insert-pivot-table': 'Pivot table',
-    'toggle-filter': 'Enable filter', 'clear-filter': 'Clear filter criteria', 'remove-filter': 'Turn off filter',
-    'sort-ascending': 'Sort ascending',
-    'sort-descending': 'Sort descending', 'data-validation': 'Data validation',
-    'conditional-formatting': 'Conditional formatting', 'formula-sum': 'AutoSum', 'formula-average': 'Average',
-    'formula-count': 'Count', 'formula-max': 'Maximum', 'formula-min': 'Minimum',
-    'formula-insert': 'Insert function', 'formula-more': 'All functions',
-    'highlight-row-column': 'Highlight current row and column', 'highlight-row': 'Highlight current row only',
-    'highlight-column': 'Highlight current column only', 'highlight-none': 'Turn off row and column highlight',
-    'set-row-height': 'Set selected row height', 'set-column-width': 'Set selected column width',
-    'auto-fit-rows': 'Auto-fit selected row height', 'auto-fit-columns': 'Auto-fit selected column width',
-    'toggle-gridlines': 'Show gridlines', 'toggle-zero-values': 'Show zero values',
-    'toggle-dark-mode': 'Dark display', 'set-zoom': 'Zoom', 'freeze-selection': 'Freeze at current cell',
-    'freeze-first-row': 'Freeze first row',
-    'freeze-first-column': 'Freeze first column', unfreeze: 'Unfreeze',
-  },
-  formulaCategories: {
-    common: 'Common', financial: 'Financial', logical: 'Logical', text: 'Text', date: 'Date & time',
-    lookup: 'Lookup & reference', math: 'Math', statistical: 'Statistical',
-  },
-  chartTypes: {
-    column: 'Column', bar: 'Bar', line: 'Line', area: 'Area', pie: 'Pie',
-    doughnut: 'Doughnut', scatter: 'Scatter',
-  },
-  dimensionsMenu: 'Row height & column width',
-  freezeMenu: 'Freeze panes',
-  mergeMenu: 'More merge options',
-  filterMenu: 'Filter',
-  sortMenu: 'Sort',
-  recentFunctions: 'Recently used',
-  quick: { chart: 'Chart', image: 'Image', insert: 'Insert', pivot: 'Pivot' },
-}
-
 const tabs: ExcelRibbonTab[] = ['home', 'insert', 'data', 'formulas', 'view']
 const HIGHLIGHT_ACTIONS: Record<ExcelHighlightMode, ExcelRibbonAction> = {
   both: 'highlight-row-column',
@@ -316,7 +214,8 @@ export function ExcelRibbon({
   selectionValue,
   viewState = { darkMode: false, gridlines: true, highlightMode: 'none', showZeros: true, zoom: 1 },
 }: ExcelRibbonProps) {
-  const copy = locale === 'zh-CN' ? zhCN : enUS
+  const { t } = useTranslation(undefined, { i18n, lng: locale })
+  const copy = t('excel.ribbon', { returnObjects: true }) as RibbonCopy
   const action = (id: ExcelRibbonAction, value?: ExcelRibbonActionValue) => onAction(id, value)
   const highlightAction = HIGHLIGHT_ACTIONS[viewState.highlightMode]
 

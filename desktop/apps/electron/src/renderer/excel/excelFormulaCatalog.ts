@@ -1,3 +1,4 @@
+import { i18n } from '../lib/i18n'
 import { ALL_IMPLEMENTED_FUNCTIONS, ALL_IMPLEMENTED_FUNCTIONS_SET } from '@univerjs/engine-formula'
 import formulaEnUS from '@univerjs/sheets-formula/locale/en-US'
 import formulaZhCN from '@univerjs/sheets-formula/locale/zh-CN'
@@ -95,9 +96,9 @@ export function excelFormulaLibrary(locale: ExcelHostConfig['locale']): ExcelFor
     while (parameters.length < minParameters) {
       const index = parameters.length
       parameters.push({
-        detail: locale === 'zh-CN' ? '请输入此函数所需的参数。' : 'Enter the argument required by this function.',
+        detail: i18n.t('excel.formula.argumentRequired', { lng: locale }),
         key: `argument${index + 1}`,
-        name: locale === 'zh-CN' ? `参数 ${index + 1}` : `Argument ${index + 1}`,
+        name: i18n.t('excel.formula.argumentName', { lng: locale, index: index + 1 }),
         required: true,
       })
     }

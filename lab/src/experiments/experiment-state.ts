@@ -1,3 +1,4 @@
+import presentationPreview from './fixtures/presentation-preview.json'
 import { getDemoScenarios, type ScenarioId } from './demo-data'
 
 export type InspectorPanel = 'cognitive' | 'prompt' | 'tools'
@@ -70,14 +71,14 @@ export function createExperimentPreviewState(): ExperimentState {
     ...mode,
     sessions: [{
       id: PRESENTATION_DEMO_SESSION_ID,
-      input: '帮我做一个讲解佛教的 PPT',
+      input: presentationPreview.input,
       createdAt: Date.parse('2026-09-08T19:00:00+08:00'),
       status: 'awaiting',
       completedStages: 1,
       draft: '',
       turns: [{
         id: `${PRESENTATION_DEMO_SESSION_ID}:turn-1`,
-        input: '帮我做一个讲解佛教的 PPT',
+        input: presentationPreview.input,
         startedAt: Date.parse('2026-09-08T19:00:00+08:00'),
         status: 'awaiting',
         startStageIndex: 0,

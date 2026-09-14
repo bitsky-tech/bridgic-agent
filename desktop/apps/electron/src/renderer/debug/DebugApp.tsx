@@ -12,8 +12,8 @@ export default function DebugApp() {
   const extensions = useMemo<DesktopAppExtensions>(() => ({
     ConversationHistory: DebugConversation,
     sessionSurfaces: [
-      { id: 'extension:debug-tools', placement: 'agent', label: text('工具调用', 'Tool calls'), icon: <Wrench size={17} />, Content: DebugToolsPanel },
-      { id: 'extension:debug-rounds', placement: 'agent', label: text('Agent 循环', 'Agent rounds'), icon: <Repeat2 size={17} />, Content: DebugRoundsPanel },
+      { id: 'extension:debug-tools', placement: 'agent', label: text('toolCalls'), icon: <Wrench size={17} />, Content: DebugToolsPanel },
+      { id: 'extension:debug-rounds', placement: 'agent', label: text('agentRounds'), icon: <Repeat2 size={17} />, Content: DebugRoundsPanel },
     ],
   }), [text])
   return <DebugSessionProvider><App extensions={extensions} /></DebugSessionProvider>

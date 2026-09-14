@@ -9,9 +9,12 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider, useAtomValue } = await import('jotai')
+const { I18nextProvider } = await import('react-i18next')
+const { createInstance } = await import('i18next')
+const { i18n } = await import('@/lib/i18n')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
-const { DebugSessionProvider, useDebugSession } = await import('../DebugSessionProvider')
+const { DebugSessionProvider, useDebugSession, useDebugText } = await import('../DebugSessionProvider')
 const { DebugToolsPanel, DebugRoundsPanel } = await import('../DebugPanel')
 
 const originalFetch = globalThis.fetch
@@ -103,6 +106,28 @@ async function click(host: HTMLElement, text: string) {
   expect(button).toBeDefined()
   await act(async () => button!.click())
 }
+
+test('uses the resolved settings locale and app catalog under an unrelated translation provider', async () => {
+  const foreignI18n = createInstance()
+  await foreignI18n.init({ lng: 'en', resources: { en: { translation: { debug: { remainingArguments: 'Foreign catalog' } } } } })
+  const appLanguage = i18n.language
+  const store = createStore()
+  store.set(settingsAtom, { ...store.get(settingsAtom), locale: 'zh-HK' })
+  function Probe() {
+    const text = useDebugText()
+    return <span>{text('remainingArguments', { n: 3 })}</span>
+  }
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  mounted.push(root)
+  await act(async () => root.render(<I18nextProvider i18n={foreignI18n}><Provider store={store}><Probe /></Provider></I18nextProvider>))
+  expect(host.textContent).toBe('查看其余 3 项参数')
+  await act(async () => store.set(settingsAtom, { ...store.get(settingsAtom), locale: 'en-GB' }))
+  expect(host.textContent).toBe('View 3 more arguments')
+  expect(i18n.language).toBe(appLanguage)
+  expect(foreignI18n.language).toBe('en')
+})
 
 describe('DebugSessionProvider session and pagination ownership', () => {
   test('aborts an old session read and ignores its late response after the next session loads', async () => {

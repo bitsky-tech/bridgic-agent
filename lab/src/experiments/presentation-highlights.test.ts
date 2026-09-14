@@ -3,6 +3,18 @@ import { getPresentationHighlights } from './presentation-highlights'
 import { getPresentationTrace } from './presentation-trace-data'
 
 describe('presentation highlights', () => {
+  test('matches historical Chinese question headers independently of the interface locale', () => {
+    const trace = getPresentationTrace('zh-CN')
+    const choice = getPresentationHighlights(trace, 'en-US').interactions[0]!
+    if (choice.kind !== 'human-choice') throw new Error('Expected a human choice')
+    expect(choice.questions.map(({ header, answer }) => ({ header, answer }))).toEqual([
+      { header: '受众', answer: '中学生' },
+      { header: '使用方式', answer: 'Self-paced reading' },
+    ])
+    expect(choice.status).toBe('answered')
+    expect(choice.summary).toBe('受众: 中学生; 使用方式: Self-paced reading')
+  })
+
   test('uses recorded answers and the actual outline trigger without treating agent work as confirmation', () => {
     const { interactions, artifacts } = getPresentationHighlights(getPresentationTrace('zh-CN'), 'zh-CN')
     expect(interactions.map(({ roundId, kind, status }) => ({ roundId, kind, status }))).toEqual([

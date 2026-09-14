@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+import { i18n } from '../lib/i18n'
 import {
   useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
 } from 'react'
@@ -67,53 +69,6 @@ interface Copy {
   emptyDetail: string
 }
 
-const COPY: Record<ExcelHostConfig['locale'], Copy> = {
-  'en-US': {
-    close: 'Close workbook',
-    documentTabs: 'Excel workbook tabs',
-    closeUnsaved: 'This workbook has unsaved changes. Close it and discard those changes?',
-    dismissError: 'Dismiss error',
-    dismissNotice: 'Dismiss message',
-    lossyOverwrite: 'This file contains Excel objects that cannot be reproduced safely ({features}). The original will not be overwritten. Use Save as to create a simplified copy.',
-    lossySaveAs: 'This workbook contains Excel objects that cannot be reproduced safely ({features}). Save a simplified copy without those objects?',
-    new: 'New',
-    open: 'Open',
-    openFailed: 'Could not open this workbook',
-    recoveryReadFailed: 'Could not restore the workbooks.',
-    recoveryWriteFailed: 'Could not update workbook recovery state.',
-    retryRecovery: 'Retry',
-    saveAs: 'Save as',
-    saveConflict: 'The file changed on disk. Use Save as to keep both versions.',
-    saveFailed: 'Could not save this workbook',
-    unsaved: 'Unsaved changes',
-    workbook: 'Workbook',
-    emptyTitle: 'No workbook tabs',
-    emptyDetail: 'Create a workbook or open an existing .xlsx file.',
-  },
-  'zh-CN': {
-    close: '关闭工作簿',
-    documentTabs: 'Excel 工作簿标签',
-    closeUnsaved: '此工作簿有未保存的更改。要关闭并放弃这些更改吗？',
-    dismissError: '关闭错误提示',
-    dismissNotice: '关闭操作提示',
-    lossyOverwrite: '此文件包含当前无法安全还原的 Excel 对象（{features}）。为保护原文件，不会执行覆盖保存；请使用“另存为”创建简化副本。',
-    lossySaveAs: '此工作簿包含当前无法安全还原的 Excel 对象（{features}）。是否另存一个不含这些对象的简化副本？',
-    new: '新建',
-    open: '打开',
-    openFailed: '无法打开此工作簿',
-    recoveryReadFailed: '无法恢复工作簿。',
-    recoveryWriteFailed: '无法保存工作簿恢复状态。',
-    retryRecovery: '重试',
-    saveAs: '另存为',
-    saveConflict: '磁盘中的文件已被修改。请使用“另存为”保留两个版本。',
-    saveFailed: '无法保存此工作簿',
-    unsaved: '有未保存的更改',
-    workbook: '工作簿',
-    emptyTitle: '没有工作簿标签页',
-    emptyDetail: '新建工作簿，或打开已有的 .xlsx 文件。',
-  },
-}
-
 function readConfig(): ExcelHostConfig {
   const params = new URLSearchParams(window.location.search)
   const locale = params.get('locale') === 'zh-CN' ? 'zh-CN' : 'en-US'
@@ -122,7 +77,7 @@ function readConfig(): ExcelHostConfig {
 }
 
 function newWorkbookTab(config: ExcelHostConfig, ordinal: number): WorkbookTab {
-  const name = config.locale === 'zh-CN' ? `工作簿 ${ordinal}` : `Workbook ${ordinal}`
+  const name = i18n.t('excel.host.newWorkbookName', { lng: config.locale, ordinal })
   return {
     tabId: crypto.randomUUID(),
     documentId: null,
@@ -205,7 +160,8 @@ export function ExcelHostApp() {
   const nextNoticeId = useRef(1)
   const externalWorkbookOpenPendingRef = useRef(false)
   const editorRef = useRef<SheetEditorHandle>(null)
-  const copy = COPY[config.locale]
+  const { t } = useTranslation(undefined, { i18n, lng: config.locale })
+  const copy = t('excel.host', { returnObjects: true }) as Copy
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.tabId === activeTabId) ?? null,
     [activeTabId, tabs],
@@ -439,10 +395,10 @@ export function ExcelHostApp() {
           prepare: async () => {
             const featureList = incompatible.join(', ')
             if (incompatible.length > 0 && !saveAs) {
-              throw new OfficeOperationError('unsupported_format', copy.lossyOverwrite.replace('{features}', featureList))
+              throw new OfficeOperationError('unsupported_format', t('excel.host.lossyOverwrite', { features: featureList }))
             }
             if (incompatible.length > 0 && saveAs
-              && !window.confirm(copy.lossySaveAs.replace('{features}', featureList))) return null
+              && !window.confirm(t('excel.host.lossySaveAs', { features: featureList }))) return null
             return exportXlsx(snapshot, { allowLossy: saveAs })
           },
         })
@@ -474,8 +430,7 @@ export function ExcelHostApp() {
     })
   ), [
     api,
-    copy.lossyOverwrite,
-    copy.lossySaveAs,
+    t,
     copy.saveConflict,
     copy.saveFailed,
     executeWorkspaceOperation,

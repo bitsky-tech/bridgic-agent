@@ -16,9 +16,9 @@ function RoundCard({ round }: { round: TraceRound }) {
   const text = useDebugText()
   return <details open className="debug-round-card" id={debugRoundElementId(round.id)} tabIndex={-1}>
     <summary>
-      <ChevronDown size={13} /><code>{roundLabel(round)}</code><span>{text('模型响应', 'Model response')}</span>
+      <ChevronDown size={13} /><code>{roundLabel(round)}</code><span>{text('modelResponse')}</span>
       <button type="button" onClick={(event) => { event.preventDefault(); inspect('rounds', round.id) }}>
-        {text('详情', 'Inspect')} <ExternalLink size={12} />
+        {text('inspect')} <ExternalLink size={12} />
       </button>
     </summary>
     <div className="debug-round-body">
@@ -53,7 +53,7 @@ function TurnBody({ message, rounds, original, sessionId }: { message: Message; 
   </div>
   // Keep incomplete transcript mappings inspectable without placing the entire
   // product execution timeline ahead of the developer trace.
-  if (hasUnrecordedContent || !rounds.some((round) => round.body?.trim())) return <>{trace}<details className="debug-product-trace"><summary>{text('产品会话记录', 'Product conversation record')}</summary>{original}</details></>
+  if (hasUnrecordedContent || !rounds.some((round) => round.body?.trim())) return <>{trace}<details className="debug-product-trace"><summary>{text('productConversationRecord')}</summary>{original}</details></>
   return <>{trace}{finalAnswer?.trim() && !rounds.some((round) => round.body === finalAnswer)
     ? <div className="debug-final-answer"><MarkdownMessage content={finalAnswer} /></div> : null}
     {productBlocks.length ? <MessageContent blocks={productBlocks} finalAnswer={null} sessionId={sessionId} processPresentation="inline"
@@ -76,13 +76,13 @@ export function DebugConversation({ sessionId }: ConversationHistoryProps) {
     return owners
   }, [messages])
   return <div className="debug-conversation" data-testid="desktop-debug-conversation">
-    <WorkbenchToolHeader title={text('调试会话', 'Debug conversation')} icon={<FlaskConical size={16} />}
+    <WorkbenchToolHeader title={text('debugConversation')} icon={<FlaskConical size={16} />}
       iconClassName="text-text-accent-purple" actions={<div className="debug-view-switch">
-        <button type="button" aria-pressed={executionView} onClick={() => setExecutionView(true)}>{text('执行视图', 'Execution')}</button>
-        <button type="button" aria-pressed={!executionView} onClick={() => setExecutionView(false)}>{text('对话视图', 'Conversation')}</button>
+        <button type="button" aria-pressed={executionView} onClick={() => setExecutionView(true)}>{text('execution')}</button>
+        <button type="button" aria-pressed={!executionView} onClick={() => setExecutionView(false)}>{text('conversation')}</button>
       </div>} />
-    {debug.error || debug.notice ? <div role="status" className="debug-notice">{debug.notice ?? text('执行记录读取失败，聊天仍可正常使用。', 'Trace unavailable. Chat remains available.')} {debug.error}</div> : null}
-    {debug.hasMore ? <button className="debug-load-earlier" type="button" disabled={debug.loading} onClick={debug.loadMore}>{text('加载更早的执行记录', 'Load earlier execution records')}</button> : null}
+    {debug.error || debug.notice ? <div role="status" className="debug-notice">{debug.notice ?? text('traceUnavailableNotice')} {debug.error}</div> : null}
+    {debug.hasMore ? <button className="debug-load-earlier" type="button" disabled={debug.loading} onClick={debug.loadMore}>{text('loadEarlierExecutionRecords')}</button> : null}
     <div className="debug-conversation-content">
       <Pipeline
         revealRequest={debug.reveal}

@@ -14,15 +14,15 @@ export function StageFilter({ rounds, value, onChange }: {
   const text = useDebugText()
   const stages = [...new Map(rounds.map((round) => [roundStageKey(round), round])).values()]
   const options = stages.map((round) => {
-    let label = round.stage ?? text('未记录阶段', 'Stage not recorded')
+    let label = round.stage ?? text('stageNotRecorded')
     if (stages.some((other) => other.stage === round.stage && other.mode !== round.mode)) {
-      label += ` · ${round.mode ?? text('未记录模式', 'Mode not recorded')}`
+      label += ` · ${round.mode ?? text('modeNotRecorded')}`
     }
     return { value: roundStageKey(round), label }
   })
 
   return <div className="mt-2.5">
-    <WorkbenchScopeButtons ariaLabel={text('按阶段筛选', 'Filter by stage')} value={value} onChange={onChange}
-      options={[{ value: '', label: text('全部阶段', 'All stages') }, ...options]} />
+    <WorkbenchScopeButtons ariaLabel={text('filterByStage')} value={value} onChange={onChange}
+      options={[{ value: '', label: text('allStages') }, ...options]} />
   </div>
 }

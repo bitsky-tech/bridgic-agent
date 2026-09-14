@@ -38,8 +38,7 @@ function callTarget(call: PresentationTraceCall): string {
 }
 
 export function TraceExecutionTree({ rounds, focusRequest, onFocusHandled, onArtifact, onOpenTool, onOpenRound }: Props) {
-  const { locale } = useI18n()
-  const t = (zh: string, en: string) => locale === 'zh-CN' ? zh : en
+  const { t } = useI18n()
   const treeId = useId()
   const nodeRefs = useRef(new Map<string, HTMLElement>())
   const branchRefs = useRef(new Map<string, HTMLButtonElement>())
@@ -48,19 +47,18 @@ export function TraceExecutionTree({ rounds, focusRequest, onFocusHandled, onArt
   const [focusedRound, setFocusedRound] = useState<string | null>(null)
   const [preparedFocus, setPreparedFocus] = useState<TraceTreeFocus | null>(null)
   const groups = useMemo<ExecutionBranch[]>(() => {
-    const tr = (zh: string, en: string) => locale === 'zh-CN' ? zh : en
-    const entry = { id: 'entry', title: tr('流程入口', 'Workflow entry'), description: tr('从普通模式交接到 PPT Agent', 'Hand off from normal mode to the PPT Agent'), code: 'normal → presentation', rounds: rounds.filter(round => round.stage === 'main') }
+    const entry = { id: 'entry', title: t('experiments.workflowEntry'), description: t('experiments.handOffFromNormalModeToThePptAgent'), code: 'normal → presentation', rounds: rounds.filter(round => round.stage === 'main') }
     const planRounds = rounds.filter(round => round.stage === 'ppt_plan')
     return [entry,
-      { id: 'ppt_brief', title: tr('明确需求', 'Define the brief'), description: tr('确认受众 → 写入与核对简报 → 交接规划', 'Confirm audience → write and check brief → hand off to planning'), code: 'ppt_brief', status: 'complete', rounds: rounds.filter(round => round.stage === 'ppt_brief') },
-      { id: 'ppt_plan', title: tr('规划页面', 'Plan the slides'), description: tr('准备资料与逐页大纲，当前等待大纲确认。', 'Prepare sources and the slide outline; currently awaiting outline confirmation.'), code: 'ppt_plan', status: 'waiting', rounds: [], children: [
-        { id: 'collect_evidence', title: tr('获取与整理资料', 'Gather and organize sources'), description: tr('搜索 → 直接访问 → 更换来源 → 提交资料报告', 'Search → direct fetch → try other sources → submit report'), code: 'collect_evidence', rounds: planRounds.filter(round => round.id !== 'R10') },
-        { id: 'map_slides', title: tr('组织逐页大纲', 'Build the slide outline'), description: tr('提交页面结构，等待用户确认', 'Submit the slide structure and await confirmation'), code: 'map_slides', rounds: planRounds.filter(round => round.id === 'R10') },
+      { id: 'ppt_brief', title: t('experiments.defineTheBrief'), description: t('experiments.confirmAudienceWriteAndCheckBriefHandToPlanning'), code: 'ppt_brief', status: 'complete', rounds: rounds.filter(round => round.stage === 'ppt_brief') },
+      { id: 'ppt_plan', title: t('experiments.planTheSlides'), description: t('experiments.prepareSourcesAndTheSlideOutlineCurrentlyOutlineConfirmation'), code: 'ppt_plan', status: 'waiting', rounds: [], children: [
+        { id: 'collect_evidence', title: t('experiments.gatherAndOrganizeSources'), description: t('experiments.searchDirectFetchTryOtherSourcesSubmitReport'), code: 'collect_evidence', rounds: planRounds.filter(round => round.id !== 'R10') },
+        { id: 'map_slides', title: t('experiments.buildTheSlideOutline'), description: t('experiments.submitTheSlideStructureAndAwaitConfirmation'), code: 'map_slides', rounds: planRounds.filter(round => round.id === 'R10') },
       ] },
-      { id: 'ppt_compose', title: tr('制作内容', 'Compose the presentation'), description: tr('大纲确认后进入，目前还没有页面制作记录。', 'Begins after outline confirmation; no slide composition has been recorded.'), code: 'ppt_compose', status: 'pending', rounds: [] },
-      { id: 'ppt_review', title: tr('检查交付', 'Review the result'), description: tr('页面制作完成后进入，目前还没有检查或交付记录。', 'Begins after composition; no review or delivery has been recorded.'), code: 'ppt_review', status: 'pending', rounds: [] },
+      { id: 'ppt_compose', title: t('experiments.composeThePresentation'), description: t('experiments.beginsAfterOutlineConfirmationNoSlideCompositionBeenRecorded'), code: 'ppt_compose', status: 'pending', rounds: [] },
+      { id: 'ppt_review', title: t('experiments.reviewTheResult'), description: t('experiments.beginsAfterCompositionNoReviewOrDeliveryBeenRecorded'), code: 'ppt_review', status: 'pending', rounds: [] },
     ]
-  }, [rounds, locale])
+  }, [rounds, t])
 
   useEffect(() => {
     if (!focusRequest) return
@@ -113,25 +111,25 @@ export function TraceExecutionTree({ rounds, focusRequest, onFocusHandled, onArt
     const expanded = !collapsedBranches.has(group.id)
     const count = group.rounds.length + (group.children ?? []).reduce((total, child) => total + child.rounds.length, 0)
     return <li key={group.id} className={`exec-branch${group.status ? ' exec-stage' : ''}`} data-stage-id={group.status ? group.id : undefined}>
-        <button ref={node => { if (node) branchRefs.current.set(group.id, node); else branchRefs.current.delete(group.id) }} className="exec-branch-toggle" aria-expanded={expanded} aria-controls={`${treeId}-${group.id}`} onClick={() => toggleBranch(group.id)}><ChevronRight size={14} className="exec-chevron" /><Layers3 size={16} className="exec-branch-icon" /><span className="exec-branch-copy"><strong>{group.title}<code>{group.code}</code></strong><small>{group.description}</small></span><span className="exec-meta">{group.status && <span className={`exec-stage-status is-${group.status}`}>{group.status === 'complete' ? <Check size={12} /> : <Clock3 size={12} />}{group.status === 'complete' ? t('已完成', 'Complete') : group.status === 'waiting' ? t('等待确认', 'Awaiting confirmation') : t('尚未执行', 'Not started')}</span>}{count > 0 && <span>{count} {t('次响应', 'responses')}</span>}</span></button>
+        <button ref={node => { if (node) branchRefs.current.set(group.id, node); else branchRefs.current.delete(group.id) }} className="exec-branch-toggle" aria-expanded={expanded} aria-controls={`${treeId}-${group.id}`} onClick={() => toggleBranch(group.id)}><ChevronRight size={14} className="exec-chevron" /><Layers3 size={16} className="exec-branch-icon" /><span className="exec-branch-copy"><strong>{group.title}<code>{group.code}</code></strong><small>{group.description}</small></span><span className="exec-meta">{group.status && <span className={`exec-stage-status is-${group.status}`}>{group.status === 'complete' ? <Check size={12} /> : <Clock3 size={12} />}{group.status === 'complete' ? t('experiments.complete') : group.status === 'waiting' ? t('experiments.stageAwaitingConfirmation') : t('experiments.notStarted')}</span>}{count > 0 && <span>{count} {t('experiments.responses')}</span>}</span></button>
         <div className="exec-branch-body" id={`${treeId}-${group.id}`} hidden={!expanded}>
         {group.children && <ul className="exec-branches exec-subbranches">{group.children.map(renderBranch)}</ul>}
-        {group.status === 'pending' && <p className="exec-pending-note">{t('等待上游阶段完成后，执行记录会出现在这里。', 'Execution records will appear here after the preceding stages finish.')}</p>}
+        {group.status === 'pending' && <p className="exec-pending-note">{t('experiments.executionRecordsWillAppearHereAfterTheStagesFinish')}</p>}
         {group.rounds.length > 0 && <ul className="exec-rounds">
           {group.rounds.map(round => {
             const open = !collapsedRounds.has(round.id)
             const artifact: Artifact | null = round.id === 'R10' ? 'outline' : round.id === 'R09' ? 'sources' : ['R03', 'R04'].includes(round.id) ? 'brief' : null
             return <li key={round.id} className={`exec-round${focusedRound === round.id ? ' is-focused' : ''}`}>
-              <article className="exec-round-card" aria-label={t(`循环 ${round.id}`, `Round ${round.id}`)} tabIndex={-1} ref={node => { if (node) nodeRefs.current.set(round.id, node); else nodeRefs.current.delete(round.id) }}>
-                <div className="exec-round-heading"><button className="exec-round-toggle" aria-label={t(`展开或收起循环 ${round.id}`, `Expand or collapse round ${round.id}`)} aria-expanded={open} aria-controls={`${treeId}-${round.id}-body`} onClick={() => toggleRound(round.id)}><ChevronRight size={13} className="exec-chevron" /><code className="exec-round-id">{round.id}</code><span className="exec-round-label">{t('模型响应', 'Model response')}</span></button><button className="exec-round-link" aria-label={t(`查看循环 ${round.id}`, `Inspect round ${round.id}`)} title={t('查看循环详情', 'Inspect round details')} disabled={!onOpenRound} onClick={() => onOpenRound?.(round.id)}>{t('详情', 'Details')}<ArrowUpRight size={12} /></button></div>
+              <article className="exec-round-card" aria-label={t('experiments.roundRound', { round: round.id })} tabIndex={-1} ref={node => { if (node) nodeRefs.current.set(round.id, node); else nodeRefs.current.delete(round.id) }}>
+                <div className="exec-round-heading"><button className="exec-round-toggle" aria-label={t('experiments.expandOrCollapseRoundRound', { round: round.id })} aria-expanded={open} aria-controls={`${treeId}-${round.id}-body`} onClick={() => toggleRound(round.id)}><ChevronRight size={13} className="exec-chevron" /><code className="exec-round-id">{round.id}</code><span className="exec-round-label">{t('experiments.traceModelResponse')}</span></button><button className="exec-round-link" aria-label={t('experiments.inspectRoundRound', { round: round.id })} title={t('experiments.inspectRoundDetails')} disabled={!onOpenRound} onClick={() => onOpenRound?.(round.id)}>{t('experiments.details')}<ArrowUpRight size={12} /></button></div>
                 <div className="exec-round-body" id={`${treeId}-${round.id}-body`} hidden={!open}>
                   <ModelResponseContent output={round.output} thinking={round.thinking} outputFidelity={round.outputFidelity} thinkingFidelity={round.thinkingFidelity} />
-                  <ul className="exec-calls" aria-label={t(`${round.title}的工具调用`, `Tool calls for ${round.title}`)}>{round.calls.map((call, callIndex) => <li key={call.id} className="exec-call">
-                    <button className="exec-call-summary" data-round-id={round.id} data-call-id={call.id} disabled={!onOpenTool} onClick={() => onOpenTool?.(round.id, call.id)} aria-label={t(`查看工具调用 ${call.name} · ${round.id} · ${callIndex + 1}`, `Inspect tool call ${call.name} · ${round.id} · ${callIndex + 1}`)}>
-                      <Wrench size={13} className="exec-tool-icon" /><code>{call.name}</code><span className="exec-call-target" title={callTarget(call)}>{callTarget(call)}</span><span className={`exec-call-status ${call.status === 'error' ? 'is-error' : 'is-success'}`}>{call.status === 'error' ? <AlertCircle size={12} /> : <Check size={12} />}{call.status === 'error' ? call.error?.startsWith('HTTP') ? call.error : t('失败', 'Failed') : t('成功', 'Succeeded')}</span><ChevronRight size={12} className="exec-chevron" />
+                  <ul className="exec-calls" aria-label={t('experiments.toolCallsForRound', { round: round.title })}>{round.calls.map((call, callIndex) => <li key={call.id} className="exec-call">
+                    <button className="exec-call-summary" data-round-id={round.id} data-call-id={call.id} disabled={!onOpenTool} onClick={() => onOpenTool?.(round.id, call.id)} aria-label={t('experiments.inspectToolCallToolRoundCallordinal', { tool: call.name, round: round.id, callOrdinal: callIndex + 1 })}>
+                      <Wrench size={13} className="exec-tool-icon" /><code>{call.name}</code><span className="exec-call-target" title={callTarget(call)}>{callTarget(call)}</span><span className={`exec-call-status ${call.status === 'error' ? 'is-error' : 'is-success'}`}>{call.status === 'error' ? <AlertCircle size={12} /> : <Check size={12} />}{call.status === 'error' ? call.error?.startsWith('HTTP') ? call.error : t('experiments.failed') : t('experiments.succeeded')}</span><ChevronRight size={12} className="exec-chevron" />
                     </button>
                   </li>)}</ul>
-                  {artifact && <button className="exec-artifact-link" onClick={() => onArtifact(artifact)}><FileText size={13} />{artifact === 'outline' ? t('预览大纲 · 4 章 / 11 页', 'Preview outline · 4 chapters / 11 slides') : artifact === 'brief' ? t('查看需求简报', 'Read the brief') : t('查看资料与引用', 'Inspect sources')}<ArrowRight size={12} /></button>}
+                  {artifact && <button className="exec-artifact-link" onClick={() => onArtifact(artifact)}><FileText size={13} />{artifact === 'outline' ? t('experiments.previewOutline4Chapters11Slides') : artifact === 'brief' ? t('experiments.readTheBrief') : t('experiments.inspectSources')}<ArrowRight size={12} /></button>}
                 </div>
                 <footer className="exec-round-footer"><RoundMetricsBar metrics={round.metrics} /></footer>
               </article>
@@ -141,9 +139,9 @@ export function TraceExecutionTree({ rounds, focusRequest, onFocusHandled, onArt
         </div>
       </li>
   }
-  return <section className="exec-tree" aria-label={t('Agent 执行过程', 'Agent execution process')}>
-    <header className="exec-tree-heading"><div><h2>{t('Agent 执行过程', 'Agent execution process')}</h2><p>{t('按阶段查看执行过程，点击工具或循环查看详情。', 'Follow each stage and select a tool or round for details.')}</p></div><div className="exec-tree-controls"><button onClick={() => { setCollapsedBranches(new Set()); setCollapsedRounds(new Set()) }}>{t('展开过程', 'Expand process')}</button><button onClick={() => setCollapsedBranches(new Set(groups.map(group => group.id)))}>{t('收起过程', 'Collapse process')}</button></div></header>
-    <div className="exec-tree-root"><BrainCircuit size={19} /><strong>PPT Agent</strong><span>{t('完整流程 · 4 个阶段', 'Full workflow · 4 stages')}</span><code>presentation</code></div>
+  return <section className="exec-tree" aria-label={t('experiments.agentExecutionProcess')}>
+    <header className="exec-tree-heading"><div><h2>{t('experiments.agentExecutionProcess')}</h2><p>{t('experiments.followEachStageAndSelectAToolForDetails')}</p></div><div className="exec-tree-controls"><button onClick={() => { setCollapsedBranches(new Set()); setCollapsedRounds(new Set()) }}>{t('experiments.expandProcess')}</button><button onClick={() => setCollapsedBranches(new Set(groups.map(group => group.id)))}>{t('experiments.collapseProcess')}</button></div></header>
+    <div className="exec-tree-root"><BrainCircuit size={19} /><strong>PPT Agent</strong><span>{t('experiments.fullWorkflow4Stages')}</span><code>presentation</code></div>
     <ul className="exec-branches">{groups.map(renderBranch)}</ul>
   </section>
 }

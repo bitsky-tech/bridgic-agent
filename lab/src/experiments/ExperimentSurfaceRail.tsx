@@ -19,27 +19,26 @@ const darkLogo = new URL('../../../desktop/apps/electron/src/renderer/assets/ico
 
 /** Lab adapter for the desktop Session rail's dimensions, icon states, and navigation. */
 export function ExperimentSurfaceRail({ active, onSelect, hasSession, hasTools, hasRounds, panelId }: ExperimentSurfaceRailProps) {
-  const { locale } = useI18n()
-  const t = (zh: string, en: string) => locale === 'zh-CN' ? zh : en
+  const { t } = useI18n()
   const entries = [
     {
       id: 'agent',
       label: 'Bridgic',
-      description: t('Bridgic · 会话信息', 'Bridgic · Session information'),
+      description: t('experiments.bridgicSessionInformation'),
       available: hasSession,
       icon: <><img className="experiment-brand-light" src={lightLogo} alt="" width={18} height={18} draggable={false} /><img className="experiment-brand-dark" src={darkLogo} alt="" width={18} height={18} draggable={false} /></>,
     },
     {
       id: 'tools',
-      label: t('工具调用', 'Tools'),
-      description: t('工具调用', 'Tool calls'),
+      label: t('experiments.tools'),
+      description: t('experiments.toolCalls'),
       available: hasTools,
       icon: <Wrench size={17} />,
     },
     {
       id: 'rounds',
-      label: t('Agent 循环', 'Rounds'),
-      description: t('Agent 循环', 'Agent rounds'),
+      label: t('experiments.rounds'),
+      description: t('experiments.agentRounds'),
       available: hasRounds,
       icon: <Repeat2 size={17} />,
     },
@@ -67,8 +66,8 @@ export function ExperimentSurfaceRail({ active, onSelect, hasSession, hasTools, 
     if (entry.id !== active) onSelect(entry.id)
   }
 
-  return <aside className="experiment-surface-rail" data-presentation={active ? 'attached' : 'floating'} aria-label={t('实验工作台', 'Experiment workbench')}>
-    <div className="experiment-tool-dock" role="tablist" aria-orientation="vertical" aria-label={t('实验侧面板', 'Experiment side panels')}>
+  return <aside className="experiment-surface-rail" data-presentation={active ? 'attached' : 'floating'} aria-label={t('experiments.experimentWorkbench')}>
+    <div className="experiment-tool-dock" role="tablist" aria-orientation="vertical" aria-label={t('experiments.experimentSidePanels')}>
       {entries.map(entry => {
         const selected = active === entry.id
         const state = selected ? 'active' : entry.available ? 'background-open' : undefined

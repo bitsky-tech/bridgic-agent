@@ -1,3 +1,4 @@
+import { i18n } from '../lib/i18n'
 export type ExcelCellValue = string | number | boolean | null
 
 export type ExcelChartType =
@@ -199,42 +200,7 @@ export function normalizeHyperlinkUrl(value: string): string {
 
 export function excelInsertValidationMessage(cause: unknown, locale: 'en-US' | 'zh-CN'): string | null {
   if (!(cause instanceof ExcelInsertValidationError)) return null
-  const messages: Record<ExcelInsertValidationCode, { en: string; zh: string }> = {
-    'chart-data-required': {
-      en: 'Select a range containing numeric data, then insert the chart again.',
-      zh: '请先选中包含数值的数据区域，再插入图表。',
-    },
-    'hyperlink-invalid': {
-      en: 'Enter a valid web or email address.',
-      zh: '请输入有效的网页或邮件地址。',
-    },
-    'hyperlink-protocol-unsupported': {
-      en: 'Links can use http, https, or mailto addresses.',
-      zh: '链接仅支持 http、https 或 mailto 地址。',
-    },
-    'hyperlink-url-required': {
-      en: 'Enter the address you want to link to.',
-      zh: '请输入要链接到的网络地址。',
-    },
-    'pie-positive-data-required': {
-      en: 'Pie charts need at least one numeric value greater than zero.',
-      zh: '饼图需要至少一个大于 0 的数值，请调整所选数据。',
-    },
-    'pivot-data-required': {
-      en: 'Select a range with a header row and at least one data row.',
-      zh: '请先选择包含标题行和至少一行数据的数据区域。',
-    },
-    'pivot-field-invalid': {
-      en: 'The pivot fields changed. Review the field selection and try again.',
-      zh: '数据透视表字段已发生变化，请重新选择后再试。',
-    },
-    'scatter-data-required': {
-      en: 'Scatter charts need numeric X and Y values in at least two columns.',
-      zh: '散点图需要至少两列数值，分别作为 X 和 Y 数据。',
-    },
-  }
-  const message = messages[cause.code]
-  return locale === 'zh-CN' ? message.zh : message.en
+  return i18n.t(`excel.insertErrors.${cause.code}`, { lng: locale })
 }
 
 interface ChartSeries {

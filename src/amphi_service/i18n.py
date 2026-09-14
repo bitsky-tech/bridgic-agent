@@ -781,6 +781,7 @@ class BackendI18n:
         "agent.schedule.invalid_cron": {"zh": "无效的 cron 表达式 {cron!r}；请使用六字段格式：秒 分 时 日 月 周。", "en": "Invalid cron expression {cron!r}; use six fields: sec min hour dom mon dow."},
         "agent.schedule.catalogue_unavailable": {"zh": "当前 Agent 上下文中没有可用的定时任务目录。", "en": "No schedule catalogue is available in this Agent context."},
         "agent.schedule.invalid_enabled": {"zh": "无效的 enabled 值：{value!r}。省略该字段可跳过筛选，或传入 true / false。", "en": "Invalid value for enabled: {value!r}. Omit the field to skip filtering, or pass true / false."},
+        "ppt.template.numeric_title": {"zh": "{family}模板 {number}", "en": "{family} template {number}"},
         "chat.reply_in_progress": {
             "zh": "当前回复仍在生成，请等待完成或先停止，再发送新消息。",
             "en": "A reply is still being generated. Wait for it to finish or stop it before sending another message.",

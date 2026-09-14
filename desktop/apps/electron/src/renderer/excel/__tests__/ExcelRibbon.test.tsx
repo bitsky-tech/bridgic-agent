@@ -7,11 +7,47 @@ GlobalRegistrator.register()
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { ExcelRibbon } = await import('../ExcelRibbon')
+const { createInstance } = await import('i18next')
+const { getI18n, setI18n } = await import('react-i18next')
 
 afterEach(() => document.body.replaceChildren())
 afterAll(async () => GlobalRegistrator.unregister())
 
 describe('ExcelRibbon', () => {
+  it('uses the app catalog and Session locale when another editor replaces the default translator', async () => {
+    const foreignI18n = createInstance()
+    await foreignI18n.init({ lng: 'en', resources: { en: { translation: {} } } })
+    const previousI18n = getI18n()
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const render = (locale: 'en-US' | 'zh-CN') => root.render(
+      <ExcelRibbon
+        activeTab="home"
+        disabled={false}
+        locale={locale}
+        onAction={jest.fn()}
+        onActiveTabChange={jest.fn()}
+        onAddressSubmit={jest.fn()}
+        onFormulaSubmit={jest.fn()}
+        selectionAddress="A1"
+        selectionValue=""
+      />,
+    )
+
+    try {
+      setI18n(foreignI18n)
+      await act(async () => render('en-US'))
+      expect(host.querySelector('[aria-label="Bold"]')).not.toBeNull()
+      await act(async () => render('zh-CN'))
+      expect(host.querySelector('[aria-label="加粗"]')).not.toBeNull()
+      expect(foreignI18n.language).toBe('en')
+    } finally {
+      await act(async () => root.unmount())
+      setI18n(previousI18n)
+    }
+  })
+
   it('matches the presentation workbench hierarchy and exposes the open-source feature categories', async () => {
     const host = document.createElement('div')
     document.body.append(host)

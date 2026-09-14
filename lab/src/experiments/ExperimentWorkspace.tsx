@@ -16,8 +16,7 @@ import { SessionComposer } from './SessionComposer'
 import { debugCallId, debugRoundId } from './debug-record-types'
 
 export function ExperimentWorkspace() {
-  const { locale } = useI18n()
-  const tr = (zh: string, en: string) => locale === 'zh-CN' ? zh : en
+  const { locale, t } = useI18n()
   const scenarios = useMemo(() => getDemoScenarios(locale), [locale])
   const [state, dispatch] = useReducer(experimentReducer, undefined, createExperimentPreviewState)
   const [navigatorOpen, setNavigatorOpen] = useState(false)
@@ -85,11 +84,11 @@ export function ExperimentWorkspace() {
     setPanel(nextPanel)
   }
   return (
-    <main className="debug-workspace" aria-label={tr('执行实验', 'Experiments')} onKeyDown={event => {
+    <main className="debug-workspace" aria-label={t('experiments.experiments')} onKeyDown={event => {
       if (event.key === 'Escape') setNavigatorOpen(false)
     }}>
       <header className="dbg-agent-tabs-bar">
-        <div ref={tabsRef} className="dbg-agent-tabs" role="tablist" aria-label={tr('Agent 模式', 'Agent modes')}>
+        <div ref={tabsRef} className="dbg-agent-tabs" role="tablist" aria-label={t('experiments.agentModes')}>
           {state.modes.map((mode, index) => <div className={`dbg-agent-tab ${mode.id === activeMode.id ? 'is-active' : ''}`} key={mode.id}>
             <button id={`dbg-agent-tab-${mode.id}`} role="tab" aria-selected={mode.id === activeMode.id} aria-controls="dbg-agent-content" tabIndex={mode.id === activeMode.id ? 0 : -1} onClick={() => {
               dispatch({ type: 'select-mode', modeId: mode.id }); setTraceFocus(null); setTimelineFocus(null); setNavigatorOpen(false)
@@ -110,16 +109,16 @@ export function ExperimentWorkspace() {
             </button>
           </div>)}
         </div>
-        <span className="dbg-tabs-note"><FlaskConical size={13} />{tr('前端演示', 'Frontend demo')}</span>
+        <span className="dbg-tabs-note"><FlaskConical size={13} />{t('experiments.frontendDemo')}</span>
       </header>
 
       {scenario && selectedStage && <div className="dbg-layout" id="dbg-agent-content" role="tabpanel" aria-labelledby={`dbg-agent-tab-${activeMode.id}`}>
-        {navigatorOpen && <button className="dbg-nav-backdrop" aria-label={tr('收起会话列表', 'Dismiss session list')} onClick={() => setNavigatorOpen(false)} />}
-        <aside className={`dbg-navigator ${navigatorOpen ? 'is-open' : ''}`} aria-label={tr('测试会话', 'Test sessions')}>
-          <div className="dbg-navigator-top"><button className="dbg-button dbg-new-test" onClick={newTest}><Plus size={15} />{tr('新建测试', 'New test')}</button><button className="dbg-icon-button dbg-mobile-close" aria-label={tr('关闭导航', 'Close navigation')} onClick={() => setNavigatorOpen(false)}><X size={16} /></button></div>
-          <div className="dbg-history-header"><span>{tr('本次演示记录', 'DEMO SESSIONS')}<small>{activeMode.sessions.length}</small></span><MessageSquare size={13} /></div>
-          <div className="dbg-session-list" aria-label={tr('测试会话列表', 'Test session list')}>
-            {activeMode.sessions.length === 0 ? <div className="dbg-empty-history"><MessageSquare size={19} /><p>{tr('还没有测试会话', 'No test sessions yet')}</p><span>{tr('新建测试后，可以在同一会话里反复追加消息。', 'Start a test, then send follow-up messages in the same session.')}</span></div> : [...activeMode.sessions].reverse().map(session => <SessionHistoryItem
+        {navigatorOpen && <button className="dbg-nav-backdrop" aria-label={t('experiments.dismissSessionList')} onClick={() => setNavigatorOpen(false)} />}
+        <aside className={`dbg-navigator ${navigatorOpen ? 'is-open' : ''}`} aria-label={t('experiments.testSessions')}>
+          <div className="dbg-navigator-top"><button className="dbg-button dbg-new-test" onClick={newTest}><Plus size={15} />{t('experiments.newTest')}</button><button className="dbg-icon-button dbg-mobile-close" aria-label={t('experiments.closeNavigation')} onClick={() => setNavigatorOpen(false)}><X size={16} /></button></div>
+          <div className="dbg-history-header"><span>{t('experiments.demoSessions')}<small>{activeMode.sessions.length}</small></span><MessageSquare size={13} /></div>
+          <div className="dbg-session-list" aria-label={t('experiments.testSessionList')}>
+            {activeMode.sessions.length === 0 ? <div className="dbg-empty-history"><MessageSquare size={19} /><p>{t('experiments.noTestSessionsYet')}</p><span>{t('experiments.startATestThenSendFollowUpSameSession')}</span></div> : [...activeMode.sessions].reverse().map(session => <SessionHistoryItem
               key={`${activeMode.id}:${session.id}`}
               session={session}
               active={session.id === activeSession?.id}
@@ -129,12 +128,12 @@ export function ExperimentWorkspace() {
         </aside>
 
         <ExperimentWorkbench key={activeMode.id} session={activeSession} modeId={activeMode.id} modeLabel={scenario.title} trace={activeTrace} scenario={scenario} onInspectRound={inspectTraceRound} onInspectStage={inspectSessionStage}>
-          {({ onArtifact, onOpenTool, onOpenRound, records }) => <section className="dbg-main" aria-label={tr('测试工作区', 'Test workspace')}>
+          {({ onArtifact, onOpenTool, onOpenRound, records }) => <section className="dbg-main" aria-label={t('experiments.testWorkspace')}>
           {activeSession ? <>
             <div className="trace-review">
               <div className="trace-review-content">
                 <header className="experiment-trace-header">
-                  <span className="dbg-eyebrow"><button className="dbg-icon-button dbg-mobile-nav-button" aria-label={tr('测试会话', 'Test sessions')} onClick={() => setNavigatorOpen(true)}><Layers3 size={17} /></button>{scenario.title} · {tr('会话执行记录', 'SESSION EXECUTION')}</span>
+                  <span className="dbg-eyebrow"><button className="dbg-icon-button dbg-mobile-nav-button" aria-label={t('experiments.testSessions')} onClick={() => setNavigatorOpen(true)}><Layers3 size={17} /></button>{scenario.title} · {t('experiments.sessionExecution')}</span>
                 </header>
                 <SessionExecutionTimeline session={activeSession} scenario={scenario} debugRecords={records} onOpenTool={onOpenTool} onOpenRound={onOpenRound} focusRequest={timelineFocus} onFocusHandled={() => setTimelineFocus(null)} onStageChange={stageId => dispatch({ type: 'select-stage', modeId: activeMode.id, stageId })}
                   initialTrace={activeTrace ? <PresentationTraceView embedded trace={activeTrace} onArtifact={onArtifact} onOpenTool={(roundId, callId) => onOpenTool(debugCallId(activeSession.turns[0]!.id, roundId, callId))} onOpenRound={roundId => onOpenRound(debugRoundId(activeSession.turns[0]!.id, roundId))} panel={panel} focusRequest={traceFocus} onFocusChange={setTraceFocus} onPanelChange={setPanel} onStageChange={stageId => dispatch({ type: 'select-stage', modeId: activeMode.id, stageId })} onOpenNavigator={() => setNavigatorOpen(true)} /> : undefined} />
@@ -153,19 +152,19 @@ export function ExperimentWorkspace() {
                 setTimelineFocus({ stageId, turnId })
               }} />
           </> : <div className="dbg-task-screen" key={activeMode.id}>
-            <button className="dbg-button dbg-mobile-nav-button" onClick={() => setNavigatorOpen(true)}><Layers3 size={15} />{tr('测试会话', 'Test sessions')}</button>
+            <button className="dbg-button dbg-mobile-nav-button" onClick={() => setNavigatorOpen(true)}><Layers3 size={15} />{t('experiments.testSessions')}</button>
             <div className="dbg-task-start">
               <div className="dbg-task-mode"><BrainCircuit size={23} /></div>
               <span className="dbg-eyebrow">{scenario.title} <code>{scenario.id}</code></span>
-              <h1>{tr('从一个测试任务开始', 'Start with a test task')}</h1>
-              <p>{tr('运行后，沿着 Cognitive、Prompt 和 Tools 查看执行过程。', 'Run a task, then inspect its execution through Cognitive, Prompt, and Tools.')}</p>
+              <h1>{t('experiments.startWithATestTask')}</h1>
+              <p>{t('experiments.runATaskThenInspectItsExecutionAndTools')}</p>
               <form className="dbg-task-composer" onSubmit={event => { event.preventDefault(); dispatch({ type: 'start-session', modeId: activeMode.id, id: crypto.randomUUID(), createdAt: Date.now() }) }}>
-                <label htmlFor="dbg-task-input">{tr('测试任务', 'Test task')}</label>
-                <textarea ref={taskRef} id="dbg-task-input" placeholder={tr('请输入测试任务', 'Enter a test task')} value={activeMode.draft} maxLength={10000} rows={5} onChange={event => dispatch({ type: 'set-draft', modeId: activeMode.id, input: event.target.value })} />
-                <div className="dbg-composer-actions"><button type="button" className="dbg-text-button" onClick={() => { dispatch({ type: 'set-draft', modeId: activeMode.id, input: scenario.input }); taskRef.current?.focus() }}>{tr('填入示例任务', 'Use an example task')}</button><button className="dbg-button dbg-primary" type="submit" disabled={!activeMode.draft.trim() || !!runningSession}><Play size={14} fill="currentColor" />{tr('运行', 'Run')}</button></div>
+                <label htmlFor="dbg-task-input">{t('experiments.testTask')}</label>
+                <textarea ref={taskRef} id="dbg-task-input" placeholder={t('experiments.enterATestTask')} value={activeMode.draft} maxLength={10000} rows={5} onChange={event => dispatch({ type: 'set-draft', modeId: activeMode.id, input: event.target.value })} />
+                <div className="dbg-composer-actions"><button type="button" className="dbg-text-button" onClick={() => { dispatch({ type: 'set-draft', modeId: activeMode.id, input: scenario.input }); taskRef.current?.focus() }}>{t('experiments.useAnExampleTask')}</button><button className="dbg-button dbg-primary" type="submit" disabled={!activeMode.draft.trim() || !!runningSession}><Play size={14} fill="currentColor" />{t('experiments.run')}</button></div>
               </form>
-              {runningSession && <div className="dbg-pending-session"><LoaderCircle className="dbg-spin" size={14} /><span>{tr('此模式还有一个测试正在演示。', 'A test in this mode is still running.')}</span><button className="dbg-text-button" onClick={() => chooseSession(runningSession)}>{tr('查看', 'View')}<ArrowRight size={12} /></button></div>}
-              <div className="dbg-task-footnote"><span><MessageSquare size={13} />{tr('新建会话后可连续发送消息', 'Continue messaging within each test session')}</span><span><FlaskConical size={13} />{tr('前端演示 · 结果为预设示例', 'Frontend demo · predefined results')}</span></div>
+              {runningSession && <div className="dbg-pending-session"><LoaderCircle className="dbg-spin" size={14} /><span>{t('experiments.aTestInThisModeIsStillRunning')}</span><button className="dbg-text-button" onClick={() => chooseSession(runningSession)}>{t('experiments.view')}<ArrowRight size={12} /></button></div>}
+              <div className="dbg-task-footnote"><span><MessageSquare size={13} />{t('experiments.continueMessagingWithinEachTestSession')}</span><span><FlaskConical size={13} />{t('experiments.frontendDemoPredefinedResults')}</span></div>
             </div>
           </div>}
         </section>}

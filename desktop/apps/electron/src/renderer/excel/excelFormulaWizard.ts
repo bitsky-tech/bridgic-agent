@@ -1,3 +1,4 @@
+import { i18n } from '../lib/i18n'
 import type { ExcelHostConfig } from '../../shared/types'
 import type { ExcelFormulaDescriptor } from './excelFormulaCatalog'
 
@@ -91,21 +92,7 @@ export function formulaPreviewResult(cell: unknown): ExcelFormulaPreviewResult {
 }
 
 export function formulaPreviewErrorMessage(errorCode: string, locale: ExcelHostConfig['locale']): string {
-  const zh = locale === 'zh-CN'
-  const messages: Record<string, [string, string]> = {
-    '#CALC!': ['当前函数无法完成计算，请检查参数。', 'The function could not complete its calculation. Check its arguments.'],
-    '#CYCLE!': ['公式引用了自身，会产生循环引用。', 'The formula refers to itself and creates a circular reference.'],
-    '#DIV/0!': ['除数为 0 或所引用的单元格为空。', 'The divisor is zero or refers to an empty cell.'],
-    '#ERROR!': ['公式无法计算，请检查语法和参数。', 'The formula could not be calculated. Check its syntax and arguments.'],
-    '#GETTING_DATA': ['公式正在等待数据。', 'The formula is waiting for data.'],
-    '#N/A': ['没有找到匹配的数据。', 'No matching data was found.'],
-    '#NAME?': ['函数名、命名区域或文本参数无法识别；文本值请使用双引号。', 'A function, named range, or text argument is not recognized; wrap text values in double quotes.'],
-    '#NULL!': ['区域交集运算没有找到交叉单元格。', 'The range intersection does not contain a common cell.'],
-    '#NUM!': ['数值参数超出函数允许的范围。', 'A numeric argument is outside the range accepted by the function.'],
-    '#REF!': ['公式中包含无效或已删除的单元格引用。', 'The formula contains an invalid or deleted cell reference.'],
-    '#SPILL!': ['数组结果所需的区域已被其他数据占用。', 'The array result cannot expand because its destination range is occupied.'],
-    '#VALUE!': ['参数类型、数量或区域尺寸不符合该函数的要求。', 'An argument type, count, or range size is not valid for this function.'],
-  }
-  return messages[errorCode]?.[zh ? 0 : 1]
-    ?? (zh ? `无法计算此公式（${errorCode}）。` : `This formula could not be calculated (${errorCode}).`)
+  return FORMULA_ERROR_CODES.has(errorCode)
+    ? i18n.t(`excel.formula.errors.${errorCode}`, { lng: locale })
+    : i18n.t('excel.formula.unknownError', { lng: locale, errorCode })
 }

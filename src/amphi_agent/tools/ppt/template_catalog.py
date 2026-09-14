@@ -19,6 +19,15 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence
 from xml.etree import ElementTree
 
+if __package__:
+    from ....amphi_service.i18n import backend_i18n
+else:
+    # Retain the direct-script indexing entry point alongside package execution.
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from src.amphi_service.i18n import backend_i18n
+
 
 PPT_RAG_SCHEMA_VERSION = 3
 PPT_RAG_INDEXER_VERSION = 6
@@ -540,7 +549,12 @@ def _index_template(path: Path, source_root: Path, source_id: str, brand_scope: 
     preview_score = 1.0 if previews else 0.0
     size_score = 1.0 if 5 <= slide_count <= 60 else 0.65
     quality_score = round(0.45 + 0.25 * coverage + 0.15 * preview_score + 0.15 * size_score, 4)
-    title = path.stem if not path.stem.isdigit() else f"{relative_path.parent.name if relative_path.parent != Path('.') else '北京大学'}模板 {path.stem}"
+    # Keep indexed source titles stable across request locales and index refreshes.
+    title = path.stem if not path.stem.isdigit() else backend_i18n.text(
+        "ppt.template.numeric_title", locale="zh",
+        family=relative_path.parent.name if relative_path.parent != Path('.') else _SEMANTIC_TAGS["peking-university"][0],
+        number=path.stem,
+    )
     template = {
         "id": template_id,
         "source_id": source_id,

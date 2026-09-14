@@ -3,6 +3,7 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { activeSessionIdAtom } from '@/atoms/sessions'
 import { currentMessagesAtom, currentStreamingAtom } from '@/atoms/agent'
 import { localeAtom } from '@/atoms/locale'
+import { i18n } from '@/lib/i18n'
 import { requestSessionWorkbenchSurfaceOpenAtom } from '@/atoms/workbench'
 import type { PipelineRevealRequest } from '@/components/amphi/Pipeline'
 import type { DesktopDebugTurn } from '@shared/debug-types'
@@ -36,7 +37,7 @@ const EMPTY_TURNS: DesktopDebugTurn[] = []
 
 export function useDebugText() {
   const locale = useAtomValue(localeAtom).resolved
-  return useCallback((zh: string, en: string) => locale === 'zh' ? zh : en, [locale])
+  return useMemo(() => i18n.getFixedT(locale, 'translation', 'debug'), [locale])
 }
 
 export const debugRoundElementId = (id: string) => `desktop-debug-round-${encodeURIComponent(id)}`
@@ -139,7 +140,7 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
     setReveal({ sessionId, turnId: round.turnId, targetId: debugRoundElementId(round.id), nonce: ++interactionNonce.current })
   }, [sessionId, records, store])
   const revealFailed = useCallback(() => {
-    if (sessionId) setNotice({ sessionId, text: text('暂时无法定位到这条消息，请稍后重试。', 'Unable to locate this message. Try again shortly.') })
+    if (sessionId) setNotice({ sessionId, text: text('locateFailed') })
   }, [sessionId, text])
 
   return <Context.Provider value={{

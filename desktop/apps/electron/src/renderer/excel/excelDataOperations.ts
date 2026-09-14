@@ -1,3 +1,4 @@
+import { i18n } from '../lib/i18n'
 import type { IRange } from '@univerjs/core'
 
 type GridRange = Pick<IRange, 'endColumn' | 'endRow' | 'startColumn' | 'startRow'>
@@ -104,14 +105,5 @@ export function detectTableFooterRows(values: unknown[][]): number {
 
 export function excelDataOperationMessage(cause: unknown, locale: 'en-US' | 'zh-CN'): string | null {
   if (!(cause instanceof ExcelDataOperationError)) return null
-  const messages = locale === 'zh-CN' ? {
-    'filter-range-required': '请先选中包含表头和至少一行数据的区域。',
-    'filter-not-active': '当前工作表还没有启用筛选。',
-    'sort-range-required': '请先选中包含表头和至少两行数据的区域。',
-  } : {
-    'filter-range-required': 'Select a range with a header and at least one data row first.',
-    'filter-not-active': 'Filtering is not enabled on this sheet yet.',
-    'sort-range-required': 'Select a range with a header and at least two data rows first.',
-  }
-  return messages[cause.code]
+  return i18n.t(`excel.dataErrors.${cause.code}`, { lng: locale })
 }

@@ -22,31 +22,31 @@ function ToolDetail({ call }: { call: TraceToolCall }) {
   const input = userInputText(turns.find((turn) => turn.id === call.turnId)?.userInput)
   return <div className="debug-detail debug-tool-detail">
     <div className="debug-tool-identity">
-      <h3><span className="debug-tool-identity-icon"><Wrench size={17} /></span><span>{call.name ?? text('未知工具', 'Unknown tool')}</span></h3>
-      <div className="debug-tool-run-meta"><TraceStatusLabel status={call.status} /><span><Clock3 size={12} />{text('耗时', 'Duration')} {duration(call.durationMs)}</span></div>
+      <h3><span className="debug-tool-identity-icon"><Wrench size={17} /></span><span>{call.name ?? text('unknownTool')}</span></h3>
+      <div className="debug-tool-run-meta"><TraceStatusLabel status={call.status} /><span><Clock3 size={12} />{text('duration')} {duration(call.durationMs)}</span></div>
     </div>
     <section className="debug-inspector-card debug-inspector-source">
-      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('调用来源', 'Call source')}</h4><span className="debug-inspector-caption">Turn {turnLabel(call.turnOrdinal)}</span></div>
+      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('callSource')}</h4><span className="debug-inspector-caption">Turn {turnLabel(call.turnOrdinal)}</span></div>
       <div className="debug-inspector-body">
-        <p className="debug-inspector-message">{input ?? text('这次用户输入未记录', 'User input was not recorded')}</p>
+        <p className="debug-inspector-message">{input ?? text('userInputNotRecorded')}</p>
         <dl className="debug-tool-origin">
-          <div><dt>{text('循环', 'Round')}</dt><dd>{roundLabel(round)}</dd></div>
+          <div><dt>{text('round')}</dt><dd>{roundLabel(round)}</dd></div>
           {round?.stage ? <div><dt>Stage</dt><dd>{round.stage}</dd></div> : null}
-          {round?.mode ? <div><dt>{text('模式', 'Mode')}</dt><dd>{round.mode}</dd></div> : null}
+          {round?.mode ? <div><dt>{text('mode')}</dt><dd>{round.mode}</dd></div> : null}
         </dl>
       </div>
       {round ? <div className="debug-inspector-actions">
-        <button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('定位到对话', 'Locate in chat')}</button>
-        <button type="button" onClick={() => inspect('rounds', round.id)}><Repeat2 size={13} />{text('查看所属循环', 'Inspect round')}</button>
+        <button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('locateInChat')}</button>
+        <button type="button" onClick={() => inspect('rounds', round.id)}><Repeat2 size={13} />{text('inspectRound')}</button>
       </div> : null}
     </section>
     <ToolCallEditor call={call} />
     <details className="debug-inspector-card debug-tool-result" open>
-      <summary className="debug-inspector-heading"><FileOutput size={15} aria-hidden="true" /><h4>{text('执行结果', 'Result')}</h4><ChevronDown className="debug-inspector-chevron" size={14} aria-hidden="true" /></summary>
+      <summary className="debug-inspector-heading"><FileOutput size={15} aria-hidden="true" /><h4>{text('result')}</h4><ChevronDown className="debug-inspector-chevron" size={14} aria-hidden="true" /></summary>
       <div className="debug-inspector-body">
-        <pre>{call.hasResult && call.result !== undefined ? JSON.stringify(call.result, null, 2) : text('未记录', 'Not recorded')}</pre>
+        <pre>{call.hasResult && call.result !== undefined ? JSON.stringify(call.result, null, 2) : text('notRecorded')}</pre>
       {call.error !== undefined && call.error !== null ? <div className="debug-tool-result-error">
-        <strong>{text('错误', 'Error')}</strong><pre>{JSON.stringify(call.error, null, 2)}</pre>
+        <strong>{text('error')}</strong><pre>{JSON.stringify(call.error, null, 2)}</pre>
       </div> : null}
       </div>
     </details>
@@ -57,34 +57,34 @@ function RoundDetail({ round }: { round: TraceRound }) {
   const text = useDebugText()
   const { turns, inspect, locate } = useDebugSession()
   const [tab, setTab] = useState<'output' | 'request' | 'raw'>('output')
-  const tabs = { output: text('输出与调用', 'Output & calls'), request: text('模型请求', 'Model request'), raw: text('原始记录', 'Raw record') }
+  const tabs = { output: text('outputCalls'), request: text('modelRequest'), raw: text('rawRecord') }
   let tabContent
   if (tab === 'output') tabContent = <div role="tabpanel" className="debug-round-tab-content">
     <section className="debug-inspector-card debug-round-output">
-      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('模型输出', 'Model output')}</h4></div>
+      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('modelOutput')}</h4></div>
       <div className="debug-inspector-body">
         <RoundResponse round={round} />
-        {!round.body?.trim() && !round.thinking?.trim() && round.calls.length > 0 ? <p className="debug-muted">{text('未记录可展示的模型文本', 'No displayable model text recorded')}</p> : null}
+        {!round.body?.trim() && !round.thinking?.trim() && round.calls.length > 0 ? <p className="debug-muted">{text('noModelText')}</p> : null}
       </div>
     </section>
     <RoundToolCalls calls={round.calls} onInspect={(call) => inspect('tools', call.id)} />
-    {round.actDurationMs != null ? <p className="debug-round-action-time"><Clock3 size={12} />{text('整组工具执行耗时', 'Action group duration')} <span>{duration(round.actDurationMs)}</span></p> : null}
+    {round.actDurationMs != null ? <p className="debug-round-action-time"><Clock3 size={12} />{text('actionGroupDuration')} <span>{duration(round.actDurationMs)}</span></p> : null}
   </div>
   else if (tab === 'request') tabContent = <div role="tabpanel" className="debug-round-tab-content debug-round-request">
     <ModelRequestEditor round={round} />
   </div>
   else tabContent = <div role="tabpanel" className="debug-round-tab-content debug-round-raw">
-    <JsonRecord title={text('循环记录', 'Round record')} value={round.raw} />
-    <JsonRecord title={text('用量字段来源', 'Usage sources')} value={round.usageSources} open={false} />
-    <JsonRecord title={text('用量字段检查', 'Usage validation')} value={round.usageIssues} open={false} />
+    <JsonRecord title={text('roundRecord')} value={round.raw} />
+    <JsonRecord title={text('usageSources')} value={round.usageSources} open={false} />
+    <JsonRecord title={text('usageValidation')} value={round.usageIssues} open={false} />
   </div>
   return <div className="debug-detail debug-round-detail">
     <RoundOverview round={round} />
     <TurnContext turn={turns.find((turn) => turn.id === round.turnId)} ordinal={round.turnOrdinal}>
-      <div className="debug-inspector-actions"><button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('定位到对话', 'Locate in chat')}</button>
-        <button type="button" className="debug-round-edit-action" onClick={() => setTab('request')}><Pencil size={13} />{text('编辑请求并调试', 'Edit request & debug')}</button></div>
+      <div className="debug-inspector-actions"><button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('locateInChat')}</button>
+        <button type="button" className="debug-round-edit-action" onClick={() => setTab('request')}><Pencil size={13} />{text('editRequestDebug')}</button></div>
     </TurnContext>
-    <div role="tablist" aria-label={text('循环详情', 'Round details')} className="debug-round-tabs">
+    <div role="tablist" aria-label={text('roundDetails')} className="debug-round-tabs">
       {(['output', 'request', 'raw'] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{tabs[value]}</button>)}
     </div>
     {tabContent}
@@ -140,38 +140,38 @@ function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & 
   let detail
   if (selectedCall) detail = <ToolDetail key={selectedCall.id} call={selectedCall} />
   else if (selectedRound) detail = <RoundDetail key={selectedRound.id} round={selectedRound} />
-  let emptyText = text('当前会话还没有已保存的执行记录', 'No saved execution records in this session')
-  if (debug.loading) emptyText = text('正在读取执行记录…', 'Loading execution records…')
-  else if (query || toolName || stage || status !== 'all') emptyText = text('没有匹配的记录', 'No matching records')
+  let emptyText = text('noSavedRecords')
+  if (debug.loading) emptyText = text('loadingExecutionRecords')
+  else if (query || toolName || stage || status !== 'all') emptyText = text('noMatchingRecords')
 
   return <WorkbenchToolSurface testId={`desktop-debug-${kind}`}>
-    <WorkbenchToolHeader title={tools ? text('工具调用', 'Tool calls') : text('Agent 循环', 'Agent rounds')}
+    <WorkbenchToolHeader title={tools ? text('toolCalls') : text('agentRounds')}
       icon={tools ? <Wrench size={16} /> : <Repeat2 size={16} />}
-      actions={<button type="button" aria-label={text('关闭面板', 'Close panel')} onClick={onClose}><X size={16} /></button>} />
+      actions={<button type="button" aria-label={text('closePanel')} onClick={onClose}><X size={16} /></button>} />
     <WorkbenchToolScrollArea className="debug-panel">
-      {debug.error ? <p role="alert" className="debug-notice">{text('读取失败', 'Read failed')} · {debug.error}</p> : null}
+      {debug.error ? <p role="alert" className="debug-notice">{text('readFailed')} · {debug.error}</p> : null}
       {selectedCall || selectedRound ? <>
-        <button className="debug-back" type="button" onClick={() => setDetailId(null)}><ArrowLeft size={13} />{text('返回列表', 'Back to list')}</button>
+        <button className="debug-back" type="button" onClick={() => setDetailId(null)}><ArrowLeft size={13} />{text('backToList')}</button>
         {detail}
       </> : <>
-        <WorkbenchSearchField query={query} onQueryChange={setQuery} clearLabel={text('清空搜索', 'Clear search')} searchPlaceholder={tools ? text('搜索工具名称或调用 ID…', 'Search tool name or call ID…') : text('搜索用户消息、输出或工具…', 'Search user input, output or tools…')} />
+        <WorkbenchSearchField query={query} onQueryChange={setQuery} clearLabel={text('clearSearch')} searchPlaceholder={tools ? text('searchToolNameOrCallId') : text('searchUserInputOutputOrTools')} />
         {!tools ? <StageFilter rounds={debug.records.rounds} value={stage} onChange={(value) => { setStage(value); setFocusedId(null) }} /> : null}
         <div className="debug-list-filters">
-          <span>{text('当前会话', 'Current session')} · {tools ? debug.records.calls.length : `${groupRoundsByTurn(debug.turns, rounds).length} Turn · ${rounds.length} ${text('轮', 'rounds')}`}</span>
-          {tools ? <><select aria-label={text('按工具名称筛选', 'Filter by tool')} value={toolName} onChange={(event) => setToolName(event.target.value)}><option value="">{text('全部工具', 'All tools')}</option>{names.map((name) => <option key={name}>{name}</option>)}</select>
-            <select aria-label={text('按状态筛选', 'Filter by status')} value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">{text('全部状态', 'All statuses')}</option><option value="error">{text('失败', 'Failed')}</option><option value="success">{text('成功', 'Success')}</option><option value="unknown">{text('结果未记录', 'No result')}</option></select></> : null}
+          <span>{text('currentSession')} · {tools ? debug.records.calls.length : `${groupRoundsByTurn(debug.turns, rounds).length} Turn · ${rounds.length} ${text('rounds')}`}</span>
+          {tools ? <><select aria-label={text('filterByTool')} value={toolName} onChange={(event) => setToolName(event.target.value)}><option value="">{text('allTools')}</option>{names.map((name) => <option key={name}>{name}</option>)}</select>
+            <select aria-label={text('filterByStatus')} value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">{text('allStatuses')}</option><option value="error">{text('failed')}</option><option value="success">{text('success')}</option><option value="unknown">{text('noResult')}</option></select></> : null}
         </div>
-        {debug.hasMore ? <button type="button" className="debug-load-earlier" disabled={debug.loading} onClick={debug.loadMore}>{text('加载更早的记录', 'Load earlier records')}</button> : null}
+        {debug.hasMore ? <button type="button" className="debug-load-earlier" disabled={debug.loading} onClick={debug.loadMore}>{text('loadEarlierRecords')}</button> : null}
         <div ref={listRef} className="debug-record-list">
           {tools ? calls.map((call) => <button key={call.id} type="button" data-debug-record={call.id} className={`debug-record-card ${focusedId === call.id ? 'is-focused' : ''}`} onClick={() => setDetailId(call.id)}>
-            <strong><Wrench size={15} /><code>{call.name ?? text('未知工具', 'Unknown tool')}</code><ExternalLink size={12} /></strong>
+            <strong><Wrench size={15} /><code>{call.name ?? text('unknownTool')}</code><ExternalLink size={12} /></strong>
             <div className="debug-detail-meta"><TraceStatusLabel status={call.status} /><span>{duration(call.durationMs)}</span></div>
             <div className="debug-record-footer"><span>Turn {turnLabel(call.turnOrdinal)} · {roundLabel(debug.records.rounds.find((round) => round.id === call.roundId))}</span><code>{call.sourceCallId ?? '—'}</code></div>
           </button>) : <RoundTurnList turns={debug.turns} rounds={rounds} focusedId={focusedId} onSelect={setDetailId} />}
         </div>
         {(tools ? calls : rounds).length === 0 ? <p className="debug-empty">{emptyText}</p> : null}
-        <p className="debug-list-note">{text('已保存的实际记录 · 缺失字段显示为 —', 'Saved execution records · Missing fields appear as —')}</p>
-        {debug.records.issues.length ? <p className="debug-notice">{text('部分历史记录格式不完整', 'Some historical records are incomplete')} · {debug.records.issues.length}</p> : null}
+        <p className="debug-list-note">{text('savedRecordsNotice')}</p>
+        {debug.records.issues.length ? <p className="debug-notice">{text('incompleteRecordsNotice')} · {debug.records.issues.length}</p> : null}
       </>}
     </WorkbenchToolScrollArea>
   </WorkbenchToolSurface>

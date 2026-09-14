@@ -19,8 +19,7 @@ export function PresentationTraceView({ trace, panel, focusRequest, onFocusChang
   onOpenRound?: (roundId: string) => void
   embedded?: boolean
 }) {
-  const { locale } = useI18n()
-  const t = (zh: string, en: string) => locale === 'zh-CN' ? zh : en
+  const { t } = useI18n()
   const handleFocus = useCallback(() => onFocusChange(null), [onFocusChange])
 
   function inspectRound(roundId: string, nextPanel: InspectorPanel = panel) {
@@ -34,12 +33,12 @@ export function PresentationTraceView({ trace, panel, focusRequest, onFocusChang
   return <div className={embedded ? 'session-recorded-trace' : 'trace-review'}>
     <div className={embedded ? undefined : 'trace-review-content'}>
       {!embedded && <header className="experiment-trace-header">
-        <span className="dbg-eyebrow">{t('PPT 编排 · 模拟记录', 'PPT ORCHESTRATION · MOCK RECORD')}</span>
-        <h1><button className="dbg-icon-button dbg-mobile-nav-button" aria-label={t('阶段与会话', 'Stages and sessions')} onClick={onOpenNavigator}><Layers3 size={17} /></button>{trace.title}</h1>
-        <div className="experiment-trace-task"><span>{t('原始任务', 'Original task')}</span><p>{trace.input}</p><button className="dbg-text-button" onClick={() => inspectRound('R01', 'cognitive')} aria-label={t('查看流程入口', 'Inspect workflow entry')}><ArrowRight size={14} /></button></div>
+        <span className="dbg-eyebrow">{t('experiments.pptOrchestrationMockRecord')}</span>
+        <h1><button className="dbg-icon-button dbg-mobile-nav-button" aria-label={t('experiments.stagesAndSessions')} onClick={onOpenNavigator}><Layers3 size={17} /></button>{trace.title}</h1>
+        <div className="experiment-trace-task"><span>{t('experiments.originalTask')}</span><p>{trace.input}</p><button className="dbg-text-button" onClick={() => inspectRound('R01', 'cognitive')} aria-label={t('experiments.inspectWorkflowEntry')}><ArrowRight size={14} /></button></div>
       </header>}
       <TraceExecutionTree rounds={trace.rounds} focusRequest={focusRequest} onFocusHandled={handleFocus} onPanelChange={onPanelChange} onArtifact={onArtifact} onInspectRound={inspectRound} onOpenTool={onOpenTool} onOpenRound={onOpenRound} />
-      <p className="trace-bottom-note"><FlaskConical size={12} />{t('正文与 Thinking 为历史快照；工具、流程说明与指标仍为示例，未连接执行服务。', 'Response text and Thinking are historical snapshots; tools, workflow notes, and metrics remain examples, with no execution service connected.')}</p>
+      <p className="trace-bottom-note"><FlaskConical size={12} />{t('experiments.responseTextAndThinkingAreHistoricalSnapshotsServiceConnected')}</p>
     </div>
   </div>
 }
