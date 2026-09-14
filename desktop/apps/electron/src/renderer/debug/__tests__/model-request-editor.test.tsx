@@ -122,7 +122,7 @@ describe('ModelRequestEditor', () => {
   it('moves newly added request containers out of the parent parameter buffer and keeps both editors editable', async () => {
     const historical = { messages: [{ role: 'user', content: 'Original prompt' }], vendor: { opaque: [false, null] } }
     const view = await mount(round(historical))
-    const parentLabel = 'Parameters & other fields · request'
+    const parentLabel = 'Parameters & other fields · $'
     const childLabel = 'Parameters & other fields · model_options'
     await input(editor(view.host, parentLabel), JSON.stringify({ vendor: historical.vendor, model_options: { temperature: 0.2, provider_flag: 'keep' } }))
     expect(JSON.parse(editor(view.host, parentLabel).value)).toEqual({ vendor: historical.vendor })
@@ -145,6 +145,45 @@ describe('ModelRequestEditor', () => {
     expect(JSON.parse(editor(view.host, childLabel).value)).toEqual({ temperature: 0.4, provider_flag: 'keep' })
     await input(editor(view.host, parentLabel), JSON.stringify({ vendor: historical.vendor, max_tokens: 4096 }))
     expect(view.host.querySelector('[role=alert]')).toBeNull()
+    expect(preview(view.host, 'Original request · Recorded fields')).toEqual(historical)
+    await view.unmount()
+  })
+
+  it('keeps a newly created empty parameter container editable through clearing and refilling', async () => {
+    const historical = { request: { messages: [{ role: 'user', content: 'Original' }], temperature: 0.2 } }
+    const view = await mount(round(historical))
+    const parentLabel = 'Parameters & other fields · request'
+    const childLabel = 'Parameters & other fields · request.model_options'
+    await input(editor(view.host, parentLabel), '{"temperature":0.2,"model_options":{}}')
+    const child = editor(view.host, childLabel)
+    expect(JSON.parse(child.value)).toEqual({})
+    expect(JSON.parse(editor(view.host, parentLabel).value)).toEqual({ temperature: 0.2 })
+    await input(child, '{"max_tokens":1024}')
+    await input(child, '{}')
+    expect(editor(view.host, childLabel)).toBe(child)
+    expect(JSON.parse(child.value)).toEqual({})
+    await input(child, '{"max_tokens":2048}')
+    expect(view.host.querySelector('[role=alert]')).toBeNull()
+    expect(preview(view.host)).toEqual({ request: { ...historical.request, model_options: { max_tokens: 2048 } } })
+    expect(preview(view.host, 'Original request · Recorded fields')).toEqual(historical)
+    await view.unmount()
+  })
+
+  it('exposes distinct parameter editors for the root and each nested wrapper even without local fields', async () => {
+    const historical = { request: { messages: [], model_options: { payload: {} } } }
+    const view = await mount(round(historical))
+    const label = (path: string) => `Parameters & other fields · ${path}`
+    const paths = ['$', 'request', 'request.model_options', 'request.model_options.payload']
+    const labels = [...view.host.querySelectorAll('textarea')].map(element => element.getAttribute('aria-label'))
+    for (const path of paths) expect(labels.filter(value => value === label(path))).toHaveLength(1)
+    await input(editor(view.host, label('$')), '{"trace":false}')
+    await input(editor(view.host, label('request')), '{"temperature":0.4}')
+    await input(editor(view.host, label('request.model_options')), '{"provider_flag":true}')
+    await input(editor(view.host, label('request.model_options.payload')), '{"max_tokens":1024}')
+    await input(editor(view.host, label('request.model_options')), '{}')
+    expect(view.host.querySelector('[role=alert]')).toBeNull()
+    expect(preview(view.host)).toEqual({ trace: false, request: { messages: [], temperature: 0.4, model_options: { payload: { max_tokens: 1024 } } } })
+    expect(JSON.parse(editor(view.host, label('request.model_options')).value)).toEqual({})
     expect(preview(view.host, 'Original request · Recorded fields')).toEqual(historical)
     await view.unmount()
   })

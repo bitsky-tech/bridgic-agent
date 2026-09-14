@@ -8,7 +8,7 @@ import './model-request-editor.css'
 
 type DraftSetter = Dispatch<SetStateAction<ModelRequestDraft>>
 interface EditorState { draft: ModelRequestDraft; setDraft: DraftSetter }
-const fieldName = (path: RequestPath) => path.join('.') || 'request'
+const fieldName = (path: RequestPath) => path.join('.') || '$'
 const asJson = (value: unknown) => value === undefined ? '' : JSON.stringify(value, null, 2)
 
 function updateField(setDraft: DraftSetter, path: RequestPath, value: unknown) {
@@ -140,8 +140,8 @@ export function ModelRequestEditor({ round }: { round: TraceRound }) {
             onChange={(event) => updateField(setDraft, field.path, event.target.value)} />
         </label> : <JsonEditor key={fieldName(field.path)} draft={draft} setDraft={setDraft} path={field.path} value={field.value} label={fieldName(field.path)} />)}
         <p className="debug-model-note">{text('参数保持原字段与层级，可编辑 temperature、max_tokens 及供应商特有选项；未记录的值不会自动补齐。', 'Parameters retain their original keys and nesting, including temperature, max_tokens and provider options. Unrecorded values are not filled in.')}</p>
-        {snapshot.containers.filter((container) => container === snapshot.primary || Object.keys(requestOtherFields(container.value)).length).map((container) => <JsonEditor
-          key={fieldName(container.path)} draft={draft} setDraft={setDraft} path={container.path} value={requestOtherFields(container.value)} objectOnly bufferPrefix="parameters"
+        {snapshot.containers.map((container) => <JsonEditor
+          key={JSON.stringify(container.path)} draft={draft} setDraft={setDraft} path={container.path} value={requestOtherFields(container.value)} objectOnly bufferPrefix="parameters"
           label={`${text('参数与其他字段', 'Parameters & other fields')} · ${fieldName(container.path)}`}
           apply={(request, value) => replaceRequestOtherFields(request, container.path, value)}
           readValue={(request) => {
