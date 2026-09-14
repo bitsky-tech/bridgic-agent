@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import math
@@ -19,14 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence
 from xml.etree import ElementTree
 
-if __package__:
-    from ....amphi_service.i18n import backend_i18n
-else:
-    # Retain the direct-script indexing entry point alongside package execution.
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from src.amphi_service.i18n import backend_i18n
+from ....amphi_service.i18n import backend_i18n
 
 
 PPT_RAG_SCHEMA_VERSION = 3
@@ -821,10 +813,7 @@ class LocalPPTTemplateCatalog:
 
     def load(self) -> Dict[str, Any]:
         if not self.index_path.is_file():
-            raise RuntimeError(
-                f"PPT template index is missing: {self.index_path}. "
-                "Build it with `python -m src.amphi_ppt_rag index --source <template-directory>`."
-            )
+            raise RuntimeError(f"PPT template index is missing: {self.index_path}.")
         try:
             payload = json.loads(self.index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -978,25 +967,6 @@ def get_ppt_template_catalog() -> PPTTemplateCatalog:
     return LocalPPTTemplateCatalog()
 
 
-def ppt_rag_cli(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Build the local PPT template RAG index.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    build = subparsers.add_parser("index", help="Index a local directory of PPTX/POTX templates.")
-    build.add_argument("--source", type=Path, required=True)
-    build.add_argument("--output", type=Path, default=None)
-    build.add_argument("--source-id", default="local-seed")
-    build.add_argument("--brand-scope", default=None)
-    build.add_argument("--license-scope", default="local_test_only")
-    args = parser.parse_args(argv)
-    payload = build_ppt_template_index(args.source, args.output, args.source_id, args.brand_scope, args.license_scope)
-    print(json.dumps({"output": str((args.output or default_ppt_rag_index_path()).expanduser()), **payload["stats"]}, ensure_ascii=False, indent=2))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(ppt_rag_cli())
-
-
 __all__ = [
     "LocalPPTTemplateCatalog",
     "PPTTemplateCatalog",
@@ -1007,5 +977,4 @@ __all__ = [
     "default_ppt_rag_index_path",
     "get_ppt_template_catalog",
     "infer_page_roles",
-    "ppt_rag_cli",
 ]
