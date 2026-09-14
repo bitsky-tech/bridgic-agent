@@ -228,6 +228,7 @@ export class WordHost {
     const contents = view.webContents
     const forwardExternal = (url: string) => {
       if (!this.sessions.owns(record) || contents.isDestroyed() || record.crashed) return
+      if (url === contents.getURL()) return
       let parsed: URL
       try { parsed = parseExternalUrl(url) } catch { return }
       try {
@@ -242,6 +243,9 @@ export class WordHost {
       return { action: 'deny' }
     })
     contents.on('will-navigate', (event, url) => {
+      // Vite refreshes the current editor URL on changes, including test files.
+      // Keep that reload in its Session-owned view instead of opening a browser.
+      if (this.sessions.owns(record) && !contents.isDestroyed() && !record.crashed && url === contents.getURL()) return
       event.preventDefault()
       forwardExternal(url)
     })

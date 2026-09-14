@@ -1,0 +1,27 @@
+.debug-round-detail { display: grid; gap: 14px; min-width: 0; }
+.debug-round-detail .debug-round-edit-action { margin-left: auto; color: var(--text-accent-purple); background: var(--accent-purple-subtle); }
+.debug-round-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-hover); }
+.debug-round-tabs > button { min-width: 0; padding: 7px 4px; border-radius: 5px; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.debug-round-tabs > button:hover { color: var(--text-primary); }
+.debug-round-tabs > [aria-selected=true] { background: var(--bg-surface); color: var(--text-accent-purple); box-shadow: var(--shadow-sm); font-weight: 600; }
+.debug-round-tabs > button:focus-visible { outline: 2px solid var(--text-accent-purple); outline-offset: 1px; }
+.debug-round-tab-content { display: grid; gap: 14px; min-width: 0; }
+.debug-round-output > .debug-inspector-heading { border-bottom: 1px solid var(--border-subtle); }
+.debug-round-output > .debug-inspector-heading > svg { color: var(--text-accent-purple); }
+.debug-round-output .debug-thinking { padding-bottom: 10px; margin: 0 0 10px; border-bottom: 1px solid var(--border-subtle); }
+.debug-round-output .debug-thinking > summary { padding: 0; font-size: var(--text-xs); color: var(--text-secondary); }
+.debug-round-output .debug-thinking > summary:focus-visible { outline: 2px solid var(--text-accent-purple); outline-offset: 3px; }
+.debug-round-output .debug-inspector-body > .debug-muted { margin: 0; }
+.debug-round-tab-content > .debug-round-tool-calls { margin-top: 0; }
+.debug-round-action-time { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0; font-size: var(--text-2xs); color: var(--text-tertiary); }
+.debug-round-action-time > span { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.debug-round-request { padding: 14px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-surface); }
+.debug-round-request .debug-model-editor { font-size: var(--text-xs); }
+.debug-round-request .debug-model-heading { flex-wrap: wrap; gap: 6px 10px; }
+.debug-round-request .debug-model-heading > span { font-size: var(--text-2xs); }
+.debug-round-raw > .debug-json { margin: 0; border-color: var(--border-default); border-radius: 10px; }
+.debug-round-raw > .debug-json > summary { padding: 12px 14px; color: var(--text-primary); background: var(--bg-surface); font-size: var(--text-xs); font-weight: 600; }
+.debug-round-raw > .debug-json[open] > summary { border-bottom: 1px solid var(--border-subtle); }
+.debug-round-raw > .debug-json > summary:hover { background: var(--bg-hover); }
+.debug-round-raw > .debug-json > summary:focus-visible { outline: 2px solid var(--text-accent-purple); outline-offset: -3px; border-radius: 9px; }
+.debug-round-raw > .debug-json > pre { padding: 14px; }

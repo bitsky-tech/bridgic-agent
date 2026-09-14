@@ -1,0 +1,18 @@
+.debug-round-overview { min-width: 0; }
+.debug-round-overview-heading { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.debug-round-overview-icon { display: inline-flex; flex: 0 0 30px; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; background: var(--accent-purple-subtle); color: var(--text-accent-purple); }
+.debug-round-overview-identity { flex: 1; min-width: 0; }
+.debug-round-overview .debug-round-overview-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 7px; margin: 0; color: var(--text-primary); font-size: var(--text-md); font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.debug-round-overview-title > code { color: var(--text-accent-purple); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.debug-round-overview-metadata { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 4px 0 0; font-size: var(--text-2xs); line-height: 1.6; }
+.debug-round-overview-metadata > div { display: flex; align-items: baseline; gap: 4px; min-width: 0; max-width: 100%; }
+.debug-round-overview-metadata dt { flex-shrink: 0; color: var(--text-tertiary); }
+.debug-round-overview-metadata dd { min-width: 0; margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.debug-round-overview-metadata code { font-size: inherit; }
+.debug-round-overview-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; margin: 12px 0 0; padding: 9px 0; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-surface); }
+.debug-round-overview-metrics > div { min-width: 0; padding: 0 9px; }
+.debug-round-overview-metrics > div + div { border-left: 1px solid var(--border-subtle); }
+.debug-round-overview-metrics dt { color: var(--text-tertiary); font-size: var(--text-2xs); line-height: 1.5; overflow-wrap: anywhere; }
+.debug-round-overview-metrics dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 5px; min-width: 0; margin: 4px 0 0; color: var(--text-primary); font-size: var(--text-sm); font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.5; overflow-wrap: anywhere; }
+.debug-round-overview-metrics dd > span, .debug-round-overview-metrics dd > small { min-width: 0; }
+.debug-round-overview-metrics dd > small { color: var(--text-tertiary); font-size: var(--text-2xs); font-weight: 400; }

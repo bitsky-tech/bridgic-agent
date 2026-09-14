@@ -46,18 +46,18 @@ describe('userInputText', () => {
 })
 
 describe('groupRoundsByTurn', () => {
-  test('separates the R01 of two actual Turns and orders latest Turns first with rounds ascending', () => {
+  test('separates the R01 of two actual Turns and orders Turns and rounds chronologically', () => {
     const earlier = turn('first-turn', 0, { text: 'First task' }, ['First R01', 'First R02'])
     const later = turn('second-turn', 1, { text: 'Second task' }, ['Second R01', 'Second R02'])
     const rounds = buildTraceRecords([earlier, later]).rounds
     const unordered = [rounds[3]!, rounds[1]!, rounds[2]!, rounds[0]!]
     const before = JSON.stringify({ turns: [earlier, later], rounds: unordered })
     const groups = groupRoundsByTurn([earlier, later], unordered)
-    expect(groups.map(group => group.turnId)).toEqual(['second-turn', 'first-turn'])
+    expect(groups.map(group => group.turnId)).toEqual(['first-turn', 'second-turn'])
     expect(groups.map(group => group.rounds.map(round => round.ordinal))).toEqual([[1, 2], [1, 2]])
-    expect(groups.map(group => userInputText(group.turn?.userInput))).toEqual(['Second task', 'First task'])
+    expect(groups.map(group => userInputText(group.turn?.userInput))).toEqual(['First task', 'Second task'])
     expect(groups[0]!.rounds[0]!.id).not.toBe(groups[1]!.rounds[0]!.id)
-    expect(groups[0]!.turn).toBe(later)
+    expect(groups[0]!.turn).toBe(earlier)
     expect(JSON.stringify({ turns: [earlier, later], rounds: unordered })).toBe(before)
   })
 
@@ -66,11 +66,11 @@ describe('groupRoundsByTurn', () => {
     const missing = turn('orphan', 4, 'Not supplied to grouping')
     const rounds = buildTraceRecords([known, missing]).rounds
     const groups = groupRoundsByTurn([known], rounds)
-    expect(groups.map(group => [group.turnId, group.turnOrdinal])).toEqual([['orphan', 4], ['known', 0]])
-    expect(groups[0]!.turn).toBeUndefined()
+    expect(groups.map(group => [group.turnId, group.turnOrdinal])).toEqual([['known', 0], ['orphan', 4]])
+    expect(groups[1]!.turn).toBeUndefined()
     expect(userInputText(groups[0]!.turn?.userInput)).toBeNull()
     expect(userInputText(groups[1]!.turn?.userInput)).toBeNull()
-    expect(groups[0]!.rounds[0]).toBe(rounds[1])
+    expect(groups[1]!.rounds[0]).toBe(rounds[1])
   })
 
   test('uses actual IDs for equal ordinals and leaves Turns without recorded rounds out of the list', () => {
@@ -78,7 +78,7 @@ describe('groupRoundsByTurn', () => {
     const second = turn('b', 0, 'B')
     const empty = turn('empty', 99, 'No round yet', [])
     const groups = groupRoundsByTurn([first, second, empty], buildTraceRecords([first, second, empty]).rounds)
-    expect(groups.map(group => group.turnId)).toEqual(['b', 'a'])
+    expect(groups.map(group => group.turnId)).toEqual(['a', 'b'])
     expect(groupRoundsByTurn([first], [])).toEqual([])
   })
 })

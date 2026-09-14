@@ -5,6 +5,7 @@ import { Pipeline, type Message } from '@/components/amphi/Pipeline'
 import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
 import { MessageContent } from '@/components/amphi/MessageContent'
 import type { ConversationHistoryProps } from '@/components/app/DesktopAppExtensions'
+import { WorkbenchToolHeader } from '@/components/app/WorkbenchToolPrimitives'
 import { currentMessagesAtom } from '@/atoms/agent'
 import { debugRoundElementId, useDebugSession, useDebugText } from './DebugSessionProvider'
 import { RoundMetrics, RoundResponse, ToolRow, roundLabel } from './TraceParts'
@@ -75,13 +76,11 @@ export function DebugConversation({ sessionId }: ConversationHistoryProps) {
     return owners
   }, [messages])
   return <div className="debug-conversation" data-testid="desktop-debug-conversation">
-    <header className="debug-conversation-header">
-      <span><FlaskConical size={14} />{text('调试会话', 'Debug conversation')}</span>
-      <div className="debug-view-switch">
+    <WorkbenchToolHeader title={text('调试会话', 'Debug conversation')} icon={<FlaskConical size={16} />}
+      iconClassName="text-text-accent-purple" actions={<div className="debug-view-switch">
         <button type="button" aria-pressed={executionView} onClick={() => setExecutionView(true)}>{text('执行视图', 'Execution')}</button>
         <button type="button" aria-pressed={!executionView} onClick={() => setExecutionView(false)}>{text('对话视图', 'Conversation')}</button>
-      </div>
-    </header>
+      </div>} />
     {debug.error || debug.notice ? <div role="status" className="debug-notice">{debug.notice ?? text('执行记录读取失败，聊天仍可正常使用。', 'Trace unavailable. Chat remains available.')} {debug.error}</div> : null}
     {debug.hasMore ? <button className="debug-load-earlier" type="button" disabled={debug.loading} onClick={debug.loadMore}>{text('加载更早的执行记录', 'Load earlier execution records')}</button> : null}
     <div className="debug-conversation-content">

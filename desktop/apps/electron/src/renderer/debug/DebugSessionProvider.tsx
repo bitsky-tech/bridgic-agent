@@ -9,6 +9,7 @@ import type { DesktopDebugTurn } from '@shared/debug-types'
 import { buildTraceRecords } from './trace-records'
 import { fetchTracePage } from './trace-client'
 import type { TraceRecords, TraceRound } from './types'
+import { DebugDraftProvider } from './DebugDrafts'
 
 export type DebugPanelKind = 'tools' | 'rounds'
 interface Selection { sessionId: string; kind: DebugPanelKind; id: string; nonce: number }
@@ -153,7 +154,7 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
     loadMore: () => {
       if (sessionId && store.get(activeSessionIdAtom) === sessionId && !loading && state.hasMore) setDepth({ sessionId, value: pages + 1 })
     },
-  }}>{children}</Context.Provider>
+  }}><DebugDraftProvider sessionId={sessionId}>{children}</DebugDraftProvider></Context.Provider>
 }
 
 export function useDebugSession() {

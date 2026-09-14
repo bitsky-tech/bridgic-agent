@@ -11,6 +11,7 @@ type Listener = (...args: unknown[]) => void
 class FakeContents {
   destroyed = false
   zoom = 0
+  url = 'http://localhost:5273/word.html?sessionId=a'
   sent: Array<[string, unknown]> = []
   listeners = new Map<string, Listener[]>()
   windowOpen: ((details: { url: string }) => { action: string }) | null = null
@@ -27,6 +28,7 @@ class FakeContents {
   setWindowOpenHandler(handler: (details: { url: string }) => { action: string }): void { this.windowOpen = handler }
   isDestroyed(): boolean { return this.destroyed }
   isLoading(): boolean { return false }
+  getURL(): string { return this.url }
   send(channel: string, value: unknown): void { this.sent.push([channel, value]) }
   on(event: string, listener: Listener): void { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]) }
   once(event: string, listener: Listener): void { this.on(event, listener) }
@@ -267,6 +269,26 @@ describe('Session-owned Word host', () => {
     views[0]!.webContents.emit('will-navigate', { preventDefault: () => { prevented = true } }, 'https://example.com/word.html')
     expect(prevented).toBe(true)
     expect(views[0]!.webContents.windowOpen?.({ url: 'https://example.com' }).action).toBe('deny')
+  })
+
+  it('keeps editor reloads in the owned view without opening browser tabs', async () => {
+    const opened: string[] = []
+    const { host, views } = fixture(undefined, (url) => opened.push(url))
+    await host.ensureSession('a')
+    const contents = views[0]!.webContents
+    for (const url of ['http://localhost:5273/word.html?sessionId=a', 'file:///application/word.html?sessionId=a']) {
+      contents.url = url
+      let prevented = false
+      contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, url)
+      expect(prevented).toBe(false)
+      expect(contents.windowOpen?.({ url }).action).toBe('deny')
+      expect(opened).toEqual([])
+    }
+    host.closeSession('a')
+    let prevented = false
+    contents.emit('will-navigate', { preventDefault: () => { prevented = true } }, contents.url)
+    expect(prevented).toBe(true)
+    expect(opened).toEqual([])
   })
 
   it('opens document links externally while preventing child windows and editor navigation', async () => {

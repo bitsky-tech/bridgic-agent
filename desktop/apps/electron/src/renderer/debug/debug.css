@@ -1,8 +1,6 @@
 .debug-conversation { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .debug-conversation-content { min-height: 0; flex: 1; }
-.debug-conversation-header { display: flex; align-items: center; gap: 12px; padding: 10px 24px; border-bottom: 1px solid var(--border-subtle); font-size: 12px; color: var(--text-tertiary); }
-.debug-conversation-header > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-accent-purple); }
-.debug-view-switch { margin-left: auto; display: flex; gap: 3px; }
+.debug-view-switch { margin-left: auto; display: flex; gap: 3px; font-size: 12px; color: var(--text-tertiary); }
 .debug-view-switch button { padding: 4px 8px; border-radius: 5px; }
 .debug-view-switch [aria-pressed=true] { background: var(--bg-hover); color: var(--text-primary); }
 .debug-muted, .debug-list-note { color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
@@ -66,9 +64,6 @@
 .debug-round-tools > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .debug-round-call-count { flex-shrink: 0; margin-left: auto; color: var(--text-tertiary); }
 .debug-round-preview > .debug-metrics { padding-top: 8px; border-top: 1px solid var(--border-subtle); }
-.debug-turn-context { margin: 12px 0; padding: 10px; border-radius: 7px; background: var(--accent-purple-subtle); }
-.debug-turn-context > span { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-accent-purple); }
-.debug-turn-context > p { margin: 7px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .debug-record-card { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-surface); text-align: left; }
 .debug-record-card:hover { background: var(--bg-hover); }
 .debug-record-card.is-focused { border-color: var(--text-accent-purple); background: var(--accent-purple-subtle); }
@@ -88,12 +83,9 @@
 .debug-detail > .debug-muted { margin: 8px 0; }
 .debug-detail-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
 .debug-detail-actions button { display: inline-flex; align-items: center; gap: 5px; color: var(--text-accent); font-size: 11px; }
-.debug-detail-tabs { display: flex; gap: 12px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 12px; }
-.debug-detail-tabs button { padding: 9px 3px; color: var(--text-tertiary); border-bottom: 2px solid transparent; }
-.debug-detail-tabs [aria-selected=true] { color: var(--text-accent-purple); border-color: var(--text-accent-purple); }
 .debug-json { min-width: 0; margin: 12px 0; border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; }
 .debug-json summary { padding: 9px 10px; background: var(--bg-hover); cursor: pointer; color: var(--text-secondary); }
 .debug-json pre { margin: 0; padding: 10px; max-height: 450px; overflow: auto; font-size: 11px; line-height: 1.65; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
 .debug-empty { padding: 24px 10px; color: var(--text-tertiary); text-align: center; line-height: 1.8; }
 .debug-list-note { margin: 14px 0 5px; font-size: 10px; text-align: center; }
-@media (max-width: 800px) { .debug-conversation-header { padding-inline: 12px; gap: 6px; } .debug-tool-summary { display: none; } .debug-tool-row .debug-status { margin-left: auto; } }
+@media (max-width: 800px) { .debug-tool-summary { display: none; } .debug-tool-row .debug-status { margin-left: auto; } }

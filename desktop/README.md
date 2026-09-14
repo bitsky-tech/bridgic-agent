@@ -105,15 +105,22 @@ instance before switching modes.
 The execution view groups recorded model responses by cognitive stage and keeps
 Desktop Markdown, Thinking, message actions and interaction cards. Tool rows and
 round details open the corresponding right-side inspector. Inspectors support
-tool-name/status filtering, raw arguments/results, recorded usage, and navigation
-back to older conversation messages. The conversation view remains available in
-the debug header for comparison.
+chronological Turn/round/tool order, stage and tool-name/status filtering,
+recorded usage, and navigation back to older conversation messages. Tool arguments
+are editable forms; model requests expose recorded messages and request options.
+Edits stay in local drafts across inspector navigation and automatic refresh;
+switching sessions clears those drafts and never changes recorded history. The
+conversation view remains available in the debug header for comparison.
 
 Debug starts a loopback read-only SQLite service inside the existing Bun
 launcher. It reads `~/.bridgic/AmphiAgent/state.db` (or
 `BRIDGIC_AGENT_STATE_DB`) and refreshes while a Turn runs. No mock records or
 reconstructed model requests are presented as captured data: missing Prompt,
-duration and usage fields remain unavailable. Tool replay is not implemented.
+duration and usage fields remain unavailable. Missing historical Prompts can be
+replaced by a manually authored debug draft, clearly marked as new input. Tool
+execution and single LLM calls are not connected yet; their buttons remain
+disabled. See the proposed [debug API contract](docs/debug-api-contract.md) for
+the fuller history and replay capabilities required from the backend.
 
 The renderer's debug entry is enabled only by the explicit debug launcher.
 Production builds fix the flag to false and exclude debug modules and styles,
@@ -124,7 +131,7 @@ even if the build environment contains debug variables.
 | Command | What it does |
 |---|---|
 | `bun run dev` | Start the app in dev mode (Vite + Electron + HMR). |
-| `bun run debug` | Start the same Desktop with execution traces and read-only inspectors. |
+| `bun run debug` | Start the same Desktop with execution traces, inspectors and local debug drafts. |
 | `bun run dev:resources` | Validate/fetch host uv, Python, and Node resources without starting Electron. |
 | `bun run typecheck` | Strict TS check across all workspaces. |
 | `bun run lint` | ESLint over apps/packages/scripts. |

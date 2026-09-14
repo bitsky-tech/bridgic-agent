@@ -73,7 +73,7 @@ export function groupRoundsByTurn(turns: readonly DesktopDebugTurn[], rounds: re
   for (const group of groups.values()) {
     group.rounds.sort((a, b) => a.ordinal - b.ordinal || a.id.localeCompare(b.id))
   }
-  return [...groups.values()].sort((a, b) => b.turnOrdinal - a.turnOrdinal || b.turnId.localeCompare(a.turnId))
+  return [...groups.values()].sort((a, b) => a.turnOrdinal - b.turnOrdinal || a.turnId.localeCompare(b.turnId))
 }
 
 /** Compact previews use saved response text first; the caller localizes fallbacks. */

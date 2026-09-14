@@ -1,16 +1,18 @@
 import { ChevronDown, ExternalLink, MessageSquare, Repeat2, Wrench } from 'lucide-react'
+import type { ReactNode } from 'react'
 import type { DesktopDebugTurn } from '@shared/debug-types'
 import { useDebugText } from './DebugSessionProvider'
 import { RoundMetrics, roundLabel, turnLabel } from './TraceParts'
 import { groupRoundsByTurn, roundPreview, userInputText } from './trace-presentation'
 import type { TraceRound } from './types'
 
-export function TurnContext({ turn, ordinal }: { turn?: DesktopDebugTurn; ordinal: number }) {
+export function TurnContext({ turn, ordinal, children }: { turn?: DesktopDebugTurn; ordinal: number; children?: ReactNode }) {
   const text = useDebugText()
   const input = userInputText(turn?.userInput)
-  return <div className="debug-turn-context">
-    <span><MessageSquare size={13} />Turn {turnLabel(ordinal)} · {text('用户输入', 'User input')}</span>
-    <p>{input ?? text('这次用户输入未记录', 'User input was not recorded')}</p>
+  return <div className="debug-turn-context debug-inspector-card debug-inspector-source">
+    <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('用户输入', 'User input')}</h4><span className="debug-inspector-caption">Turn {turnLabel(ordinal)}</span></div>
+    <div className="debug-inspector-body"><p className="debug-inspector-message">{input ?? text('这次用户输入未记录', 'User input was not recorded')}</p></div>
+    {children}
   </div>
 }
 

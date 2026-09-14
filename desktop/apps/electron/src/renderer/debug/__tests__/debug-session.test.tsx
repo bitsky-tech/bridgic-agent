@@ -172,6 +172,17 @@ describe('DebugSessionProvider session and pagination ownership', () => {
 })
 
 describe('DebugPanel filters and inspection', () => {
+  test('orders tools by Turn, round and call position, including after loading earlier records', async () => {
+    const rows = [turn('early', 0), turn('middle', 1), turn('late', 2)]
+    rows[0]!.otaRecords = [...rows[0]!.otaRecords as unknown[], { think_result: { tool_calls: [{ call_id: 'early-next', tool: 'finish', tool_arguments: {} }] } }]
+    databaseFetch(() => rows)
+    const view = await mount('tools')
+    const ids = () => [...view.host.querySelectorAll<HTMLElement>('[data-debug-record]')].map(card => card.querySelector('.debug-record-footer code')?.textContent)
+    expect(ids()).toEqual(['middle-success', 'middle-missing', 'middle-failed', 'late-success', 'late-missing', 'late-failed'])
+    await act(async () => { view.current.loadMore(); await Promise.resolve() })
+    expect(ids()).toEqual(['early-success', 'early-missing', 'early-failed', 'early-next', 'middle-success', 'middle-missing', 'middle-failed', 'late-success', 'late-missing', 'late-failed'])
+  })
+
   test('filters actual unknown/error results, resets filters for inspect, and keeps detail across hide/show', async () => {
     databaseFetch(() => [turn('alpha', 0)])
     const view = await mount('tools')
@@ -190,8 +201,7 @@ describe('DebugPanel filters and inspection', () => {
     const card = [...view.host.querySelectorAll<HTMLButtonElement>('[data-debug-record]')].find(value => value.dataset.debugRecord === call.id)!
     expect(card.classList.contains('is-focused')).toBe(true)
     await act(async () => card.click())
-    const argumentsRecord = [...view.host.querySelectorAll('details')].find(value => value.querySelector('summary')?.textContent === 'Arguments')!
-    expect(argumentsRecord.querySelector('pre')!.textContent).toContain('"name": "path"')
+    expect(view.host.querySelector<HTMLTextAreaElement>('.debug-tool-editor textarea')?.value).toBe('/tmp/recorded.txt')
     const resultRecord = [...view.host.querySelectorAll('details')].find(value => value.querySelector('summary')?.textContent === 'Result')!
     expect(resultRecord.querySelector('pre')!.textContent).toBe('""')
     await view.render(false)
@@ -226,7 +236,7 @@ describe('DebugPanel filters and inspection', () => {
     const view = await mount('rounds')
     await act(async () => view.host.querySelector<HTMLButtonElement>('[data-debug-record]')!.click())
     await click(view.host, 'Model request')
-    expect(view.host.textContent).toContain('did not retain the model request')
+    expect(view.host.textContent).toContain('No readable prompt was saved')
     await click(view.host, 'Raw record')
     expect(view.host.querySelector('[role="tabpanel"] pre')!.textContent).toContain('"think_scope"')
     expect(view.host.querySelector('[role="tabpanel"] pre')!.textContent).toContain('"tool_arguments": null')
@@ -235,6 +245,23 @@ describe('DebugPanel filters and inspection', () => {
     await view.switchSession('b')
     expect(view.host.querySelector('.debug-detail')).toBeNull()
     expect(view.current.reveal).toBeNull()
+  })
+
+  test('previews each tool outcome in a round and inspects the exact call among repeated tool names', async () => {
+    databaseFetch(() => [turn('preview-turn', 0)])
+    const view = await mount('rounds')
+    await act(async () => view.host.querySelector<HTMLButtonElement>('[data-debug-record]')!.click())
+    const cards = [...view.host.querySelectorAll<HTMLElement>('[data-debug-tool-preview]')]
+    expect(cards).toHaveLength(3)
+    expect(cards[0]!.querySelector('dt')?.textContent).toBe('path')
+    expect(cards[0]!.querySelector('dd')?.textContent).toBe('/tmp/recorded.txt')
+    expect(cards[0]!.querySelector('.debug-round-tool-outcome p')?.textContent).toBe('""')
+    expect(cards[1]!.querySelector('dd')?.textContent).toBe('null')
+    expect(cards[1]!.querySelector('.debug-round-tool-outcome p')?.textContent).toBe('No execution result recorded')
+    expect(cards[2]!.querySelector('.debug-round-tool-outcome p')?.textContent).toBe('Recorded failure')
+    const missingCall = view.current.records.calls.find(call => call.sourceCallId === 'preview-turn-missing')!
+    await act(async () => cards[1]!.querySelector<HTMLButtonElement>('button')!.click())
+    expect(view.current.selection).toMatchObject({ kind: 'tools', id: missingCall.id })
   })
 })
 
@@ -266,22 +293,22 @@ describe('DebugRoundsPanel Turn grouping', () => {
     })
   }
 
-  test('groups each Turn with its user input and independent ascending R01/R02 cards, newest Turn first', async () => {
+  test('groups each Turn with its user input and independent ascending R01/R02 cards, chronological Turn order', async () => {
     databaseFetch(groupedTurns)
     const view = await mount('rounds')
     const groups = [...view.host.querySelectorAll<HTMLDetailsElement>('[data-debug-turn]')]
-    expect(groups.map(group => group.dataset.debugTurn)).toEqual(['budget-turn', 'plan-turn'])
-    expect(groups.map(group => group.querySelector('.debug-turn-heading strong')?.textContent)).toEqual(['Turn 2', 'Turn 1'])
-    expect(groups.map(group => group.querySelector('.debug-turn-input')?.textContent)).toEqual(['Reconcile the budget totals', 'Plan the launch agenda'])
+    expect(groups.map(group => group.dataset.debugTurn)).toEqual(['plan-turn', 'budget-turn'])
+    expect(groups.map(group => group.querySelector('.debug-turn-heading strong')?.textContent)).toEqual(['Turn 1', 'Turn 2'])
+    expect(groups.map(group => group.querySelector('.debug-turn-input')?.textContent)).toEqual(['Plan the launch agenda', 'Reconcile the budget totals'])
     expect(groups.map(group => [...group.querySelectorAll('.debug-record-card strong code')].map(code => code.textContent))).toEqual([['R01', 'R02'], ['R01', 'R02']])
     expect(groups.map(group => [...group.querySelectorAll<HTMLElement>('[data-debug-record]')].map(card => card.dataset.debugRecord))).toEqual([
-      ['budget-turn:round:1', 'budget-turn:round:2'], ['plan-turn:round:1', 'plan-turn:round:2'],
+      ['plan-turn:round:1', 'plan-turn:round:2'], ['budget-turn:round:1', 'budget-turn:round:2'],
     ])
     const cards = [...view.host.querySelectorAll<HTMLElement>('[data-debug-record]')]
     expect(cards.map(card => card.querySelector('.debug-round-excerpt')?.textContent)).toEqual([
-      'Drafted the budget report', 'Checked all budget totals', 'Outlined the launch agenda', 'Returned tool calls',
+      'Outlined the launch agenda', 'Returned tool calls', 'Drafted the budget report', 'Checked all budget totals',
     ])
-    expect(cards[3]!.querySelector('.debug-round-tools')?.textContent).toContain('read_file · write_file')
+    expect(cards[1]!.querySelector('.debug-round-tools')?.textContent).toContain('read_file · write_file')
     expect(view.host.querySelector('.debug-round-stage')).toBeNull()
   })
 
@@ -391,9 +418,9 @@ describe('DebugRoundsPanel stage filters', () => {
     expect(labels).not.toContain('General chat')
     expect(stageGroup(view.host).querySelector('[aria-selected="true"]')?.textContent).toBe('All stages')
     await selectStage(view.host, 'plan · build')
-    expect(recordIds(view.host)).toEqual(['a-budget:round:1', 'a-launch:round:2'])
+    expect(recordIds(view.host)).toEqual(['a-launch:round:2', 'a-budget:round:1'])
     await selectStage(view.host, 'plan · workflow')
-    expect(recordIds(view.host)).toEqual(['a-budget:round:2', 'a-launch:round:3'])
+    expect(recordIds(view.host)).toEqual(['a-launch:round:3', 'a-budget:round:2'])
     expect(stageGroup(view.host).querySelectorAll('[aria-selected="true"]')).toHaveLength(1)
     await selectStage(view.host, 'main')
     expect(recordIds(view.host)).toEqual(['a-launch:round:1'])
