@@ -60,7 +60,7 @@ def _pending_context(root: Path, interaction: Any, tool: str, payload: dict) -> 
 
 @pytest.mark.parametrize("entry", ["build", "presentation", "run_workflow"])
 async def test_direct_entry_writes_a_generic_handoff(monkeypatch: pytest.MonkeyPatch, entry: str) -> None:
-    async def enter_run(ota, context, workflow_id, action, agent):
+    async def enter_run(ota, context, workflow_id, action):
         ota.transition_think(WorkflowStageState(workflow_id=workflow_id, generation="generation"))
         return {"workflow_id": workflow_id, "workflow_name": "Saved report", "execution_steps": []}, "started"
 
@@ -185,7 +185,7 @@ async def test_build_conflict_handoff_respects_the_chosen_intent(tmp_path: Path,
 
 @pytest.mark.parametrize("answer", ["resume", "restart", "chat", "failure"])
 async def test_workflow_choice_handoff_follows_the_resolved_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
-    async def enter_run(ota, context, workflow_id, action, agent):
+    async def enter_run(ota, context, workflow_id, action):
         if answer == "failure":
             raise RuntimeError("Selected Workflow is unavailable")
         ota.transition_think(WorkflowStageState(workflow_id=workflow_id, generation="generation"))

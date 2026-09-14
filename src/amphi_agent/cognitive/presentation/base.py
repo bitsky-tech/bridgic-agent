@@ -80,9 +80,9 @@ class PresentationThink(BaseThink):
                 sig["reason"] = self._handoff_reason(ota_context, context, sig.get("reason") or "")
                 ota_context.transition_think(next_status)
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
-                    agent._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
+                    self._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
                 if isinstance(next_status, NormalStageState):
-                    agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
+                    self._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
             elif step.tool_name == "report_presentation_step":
                 result = step.tool_result
                 current_status = ota_context.think_status

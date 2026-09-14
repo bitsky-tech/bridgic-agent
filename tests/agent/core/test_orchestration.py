@@ -1701,7 +1701,7 @@ async def test_manual_run_resume(
         await orchestration.agent.init_state(resumed, orchestration.context)
     else:
         fields, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
-            request, orchestration.context, saved.workflow_id, "resume", orchestration.agent,
+            request, orchestration.context, saved.workflow_id, "resume",
         )
         request.action_result.results[0].tool_result = {**fields, "status": resolved_action}
         resumed = request

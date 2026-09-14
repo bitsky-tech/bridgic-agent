@@ -4,7 +4,6 @@ import logging
 import secrets
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -871,58 +870,6 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 ),
             })
         ota_context.stream.publish("stage", **payload)
-
-    @staticmethod
-    def _stamp_mode_exit(
-        ota_context: AmphiOTAContext,
-        status: Any,
-        reason: Optional[str],
-        *,
-        retained: bool = True,
-    ) -> None:
-        """Record enough context for Main to close or redirect the special task."""
-        note = f"[mode transition] `{status.mode}` stage `{status.stage}` returned control to Main."
-        if reason:
-            note += f" Reason: {str(reason).strip()}"
-        if isinstance(status, BuildStageState) and retained:
-            note += " The unfinished Build workspace was retained."
-        record = ota_context._current_record()
-        existing = getattr(record, "observation_result", None)
-        record.observation_result = f"{existing}\n{note}" if existing else note
-
-    @staticmethod
-    def _stamp_published_directory_handoff(
-        ota_context: AmphiOTAContext,
-        *,
-        publication: str,
-        published_directory: Path,
-        relative_paths: str,
-        temporary_workspace: str,
-    ) -> None:
-        """Tell Main that a deleted workspace was published and already presented."""
-        note = (
-            f"[artifact publication]\n{publication}:\n"
-            f"{Path(published_directory).expanduser().resolve()}\n\n"
-            f"{relative_paths} The original temporary {temporary_workspace} workspace was "
-            "deleted. The published location above is internal handoff context. The UI already "
-            "presented the published artifacts in a dedicated card. In the final answer, "
-            "briefly summarize the outcome without repeating or linking the published "
-            "directory, artifact paths, file URIs, or artifact Markdown links."
-        )
-        record = ota_context._current_record()
-        existing = getattr(record, "observation_result", None)
-        record.observation_result = f"{existing}\n{note}" if existing else note
-
-    @staticmethod
-    def _stamp_stage_handoff(ota_context: AmphiOTAContext, source: Any, target: Any, reason: str) -> None:
-        """Expose a source Think's self-contained handoff to the newly active Think."""
-        note = (
-            f"[stage handoff] `{source.mode}/{source.stage}` → "
-            f"`{target.mode}/{target.stage}`\n{str(reason).strip()}"
-        )
-        record = ota_context._current_record()
-        existing = getattr(record, "observation_result", None)
-        record.observation_result = f"{existing}\n{note}" if existing else note
 
     @staticmethod
     def _get_current_ota_permission_status(ota_context: AmphiOTAContext) -> RoundPermission:

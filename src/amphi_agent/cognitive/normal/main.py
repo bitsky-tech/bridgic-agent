@@ -114,7 +114,7 @@ class MainThink(BaseThink):
             })
             target_status = ota_context.think_status
             if confirmed and target_status != source_status:
-                agent._stamp_stage_handoff(
+                self._stamp_stage_handoff(
                     ota_context, source_status, target_status,
                     f"Workflow goal: {pending.goal}\n{message}",
                 )
@@ -243,7 +243,7 @@ class MainThink(BaseThink):
                             for index, option in enumerate(question.get("options") or [], 1)
                         )
                         lines.append(f"Question: {text}" + (f" Options: {options}" if options else ""))
-                agent._stamp_stage_handoff(ota_context, source_status, target_status, "\n".join(lines))
+                self._stamp_stage_handoff(ota_context, source_status, target_status, "\n".join(lines))
 
             ota_context.transition_interaction(None)
             context.session = context.session.without_last()
@@ -287,7 +287,6 @@ class MainThink(BaseThink):
                         context,
                         selected_workflow_id,
                         selected_action,
-                        agent,
                     )
                     action = selected_action
                     message = (
@@ -343,7 +342,7 @@ class MainThink(BaseThink):
 
             target_status = ota_context.think_status
             if action in {"resume", "restart"} and target_status != source_status:
-                agent._stamp_stage_handoff(
+                self._stamp_stage_handoff(
                     ota_context, source_status, target_status,
                     f"Workflow `{result_fields['workflow_name']}` (`{result_fields['workflow_id']}`) "
                     f"{result_fields['resolved_action']}.\n{message}\n{user_message}\n{choice.reason or ''}",
@@ -450,7 +449,7 @@ class MainThink(BaseThink):
                     }
                     target_status = ota_context.think_status
                     if target_status != source_status:
-                        agent._stamp_stage_handoff(
+                        self._stamp_stage_handoff(
                             ota_context, source_status, target_status,
                             f"Workflow goal: {result.goal}\n{step.tool_result['message']}",
                         )
@@ -581,7 +580,6 @@ class MainThink(BaseThink):
                         context,
                         result.workflow_id,
                         "restart" if retained is not None else "start",
-                        agent,
                     )
                     step.tool_result = {
                         **result_fields,
@@ -590,7 +588,7 @@ class MainThink(BaseThink):
                     }
                     target_status = ota_context.think_status
                     if target_status != source_status:
-                        agent._stamp_stage_handoff(
+                        self._stamp_stage_handoff(
                             ota_context, source_status, target_status,
                             f"Workflow `{result_fields['workflow_name']}` (`{result_fields['workflow_id']}`) {resolved_action}.\n"
                             f"{result.reason or ''}",
@@ -662,7 +660,7 @@ class MainThink(BaseThink):
                     }
                     target_status = ota_context.think_status
                     if not competing and isinstance(target_status, BuildStageState) and target_status != source_status:
-                        agent._stamp_stage_handoff(
+                        self._stamp_stage_handoff(
                             ota_context,
                             source_status,
                             target_status,
@@ -683,7 +681,7 @@ class MainThink(BaseThink):
                     }
                     target_status = ota_context.think_status
                     if target_status != source_status:
-                        agent._stamp_stage_handoff(
+                        self._stamp_stage_handoff(
                             ota_context, source_status, target_status,
                             f"Presentation goal: {result.goal}\n{step.tool_result['message']}",
                         )

@@ -67,11 +67,11 @@ class BuildThink(BaseThink):
                 )
                 ota_context.transition_think(next_status)
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
-                    agent._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
+                    self._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])
                 if isinstance(next_status, BuildStageState):
                     await self.sync_build_space(ota_context, context)
                 elif isinstance(next_status, NormalStageState):
-                    agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
+                    self._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
                     self.close_build_bindings(context)
 
     async def handle_think_unit_result(
@@ -244,6 +244,14 @@ class BuildThink(BaseThink):
     ############################################################################
     # Helpers
     ############################################################################
+
+    @classmethod
+    def _stamp_mode_exit(cls, ota_context: AmphiOTAContext, status: BuildStageState, reason: Optional[str], *, retained: bool = True) -> None:
+        """Include whether the unfinished Build remains available after returning to Main."""
+        super()._stamp_mode_exit(ota_context, status, reason)
+        if retained:
+            ota_context._current_record().observation_result += " The unfinished Build workspace was retained."
+
     async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Validate explicit handoffs within the current Build."""
         resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)

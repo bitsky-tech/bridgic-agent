@@ -188,13 +188,13 @@ class VerifyThink(BuildThink):
                 if workspace is not None:
                     await workspace.discard_build()
                 if isinstance(current, BuildStageState):
-                    agent._stamp_mode_exit(
+                    self._stamp_mode_exit(
                         ota_context,
                         current,
                         str(result["message"]),
                         retained=False,
                     )
-                agent._stamp_published_directory_handoff(
+                self._stamp_published_directory_handoff(
                     ota_context,
                     publication="The Workflow package under .build was published to",
                     published_directory=workflow.root,

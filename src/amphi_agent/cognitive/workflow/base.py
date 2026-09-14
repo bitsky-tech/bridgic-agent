@@ -85,7 +85,7 @@ class WorkflowRunThink(BaseThink):
                 ota_context.transition_think(NormalStageState())
             else:
                 ota_context.transition_think(projected)
-                await self._settle_workflow_boundary(ota_context, context, agent)
+                await self._settle_workflow_boundary(ota_context, context)
         if not retired_validation:
             await super().init_state(ota_context, context, previous_turn, agent)
 
@@ -110,7 +110,7 @@ class WorkflowRunThink(BaseThink):
                     confirmation_tools=("request_run_workflow",),
                 )
                 ota_context.transition_think(NormalStageState())
-                agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
+                self._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
                 self._close_run_workflow_bindings(context)
 
             elif step.tool_name == "report_workflow_step":
@@ -215,7 +215,6 @@ class WorkflowRunThink(BaseThink):
                             ota_context,
                             context,
                             current_status,
-                            agent,
                             generation=current_status.generation,
                             summary=terminal_summary,
                             published=published,
@@ -228,7 +227,7 @@ class WorkflowRunThink(BaseThink):
                             step_index=state.step_index,
                         )
                         ota_context.transition_think(next_status)
-                        published = await self._settle_workflow_boundary(ota_context, context, agent)
+                        published = await self._settle_workflow_boundary(ota_context, context)
                         if published is not None:
                             step.tool_result = {
                                 **step.tool_result,
@@ -601,7 +600,6 @@ class WorkflowRunThink(BaseThink):
         context: AmphiContext,
         workflow_id: str,
         action: str,
-        agent: "AmphiAgent",
     ) -> tuple[Dict[str, Any], str]:
         """Enter or resume a Run and return action fields after settling its boundary."""
         if context.session.is_child:
@@ -688,7 +686,7 @@ class WorkflowRunThink(BaseThink):
             "workflow_name": source.name,
             **cls._workflow_sections(source),
         }
-        published = await cls._settle_workflow_boundary(ota_context, context, agent)
+        published = await cls._settle_workflow_boundary(ota_context, context)
         if published is not None:
             result_fields.update({
                 "run_id": published.run_id,
@@ -824,7 +822,7 @@ class WorkflowRunThink(BaseThink):
         )
 
     @classmethod
-    async def _settle_workflow_boundary(cls, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> Optional[Any]:
+    async def _settle_workflow_boundary(cls, ota_context: AmphiOTAContext, context: AmphiContext) -> Optional[Any]:
         """Advance or publish a Workflow whose durable cursor is at a boundary.
 
         Returns
@@ -871,7 +869,6 @@ class WorkflowRunThink(BaseThink):
             ota_context,
             context,
             status,
-            agent,
             generation=status.generation,
             summary=terminal_summary,
             published=published,
@@ -901,7 +898,6 @@ class WorkflowRunThink(BaseThink):
         ota_context: AmphiOTAContext,
         context: AmphiContext,
         status: WorkflowStageState,
-        agent: "AmphiAgent",
         *,
         generation: str,
         summary: str,
@@ -927,7 +923,7 @@ class WorkflowRunThink(BaseThink):
             published,
             result_file_count,
         )
-        agent._stamp_published_directory_handoff(
+        cls._stamp_published_directory_handoff(
             ota_context,
             publication=(
                 "The artifacts under .run/result and .run/background/work "
@@ -949,12 +945,7 @@ class WorkflowRunThink(BaseThink):
                 result_file_count=result_file_count,
                 summary=summary,
             )
-        agent._stamp_mode_exit(
-            ota_context,
-            status,
-            summary,
-            retained=False,
-        )
+        cls._stamp_mode_exit(ota_context, status, summary)
         cls._close_run_workflow_bindings(context)
         ota_context.transition_think(NormalStageState())
 

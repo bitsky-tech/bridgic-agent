@@ -499,8 +499,9 @@ async def test_normal_receives_build_exit_and_artifact_paths_not_build_logs(test
         "normal": {"main": {"turn_summary": "NORMAL SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [1]}},
         "build": {"generate": {"turn_summary": "BUILD SUMMARY", "turn_through_round": 1, "turn_covered_rounds": [2]}},
     }}})
-    AmphiAgent._stamp_mode_exit(current, BuildStageState(stage="verify"), "Validated successfully; report completion.")
-    AmphiAgent._stamp_published_directory_handoff(
+    worker = VerifyThink()
+    worker._stamp_mode_exit(current, BuildStageState(stage="verify"), "Validated successfully; report completion.")
+    worker._stamp_published_directory_handoff(
         current, publication="Workflow published", published_directory=test_sandbox.root / "published",
         relative_paths="workflow/WORKFLOW.md", temporary_workspace=".build",
     )
