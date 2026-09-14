@@ -77,6 +77,7 @@ class PresentationThink(BaseThink):
                     })
                     if target_index <= current_index:
                         self.invalidate_artifacts(context, PRESENTATION_STAGE_ORDER[target_index:])
+                sig["reason"] = self._handoff_reason(ota_context, context, sig.get("reason") or "")
                 ota_context.transition_think(next_status)
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
                     agent._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])

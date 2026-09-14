@@ -64,6 +64,10 @@ class WorkflowRunThink(BaseThink):
                     raise ValueError(
                         "Workflow stages advance automatically; switch only exits to normal mode."
                     )
+                sig["reason"] = self._handoff_reason(
+                    ota_context, context, sig.get("reason") or "",
+                    confirmation_tools=("request_run_workflow",),
+                )
                 ota_context.transition_think(NormalStageState())
                 agent._stamp_mode_exit(ota_context, current_status, sig.get("reason"))
                 self._close_run_workflow_bindings(context)

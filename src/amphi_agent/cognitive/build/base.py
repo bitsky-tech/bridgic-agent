@@ -62,6 +62,10 @@ class BuildThink(BaseThink):
                     raise RuntimeError(f"Cannot switch from `{current_status.mode}` to `{target_mode}`.")
                 else:
                     next_status = current_status.model_copy(update={"stage": str(sig.get("stage"))})
+                sig["reason"] = self._handoff_reason(
+                    ota_context, context, sig.get("reason") or "",
+                    confirmation_tools=("request_build", "request_human_task_confirm", "request_human_workflow_confirm"),
+                )
                 ota_context.transition_think(next_status)
                 if sig.get("reason") and not isinstance(next_status, NormalStageState):
                     agent._stamp_stage_handoff(ota_context, current_status, next_status, sig["reason"])

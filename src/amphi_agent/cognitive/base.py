@@ -1626,6 +1626,101 @@ class BaseThink(CognitiveWorker):
     # Helpers
     ############################################################################
 
+    def _handoff_reason(self, ota_context: AmphiOTAContext, context: AmphiContext, reason: str, *, confirmation_tools: Sequence[str] = ()) -> str:
+        """Append saved replies from this continuous mode visit to a switch reason."""
+        source = ota_context.think_status
+
+        def outcomes():
+            def records():
+                # Compaction changes prompt views, not the original interaction records.
+                yield from reversed(ota_context.ota_record)
+                for turn in reversed(context.session.get_all()):
+                    think = (turn.agent_state or {}).get("think") or {}
+                    if not turn.status.is_terminal or think.get("mode") != source.mode:
+                        break
+                    if any(think.get(key) != getattr(source, key, None) for key in ("workflow_id", "generation")):
+                        break
+                    yield from reversed(turn.ota_records or [])
+
+            for record in records():
+                owner = self._record_scope(record)
+                observation = str(_view(record, "observation_result") or "")
+                handoff = re.search(r"\[stage handoff\] `([^`]+)` → `([^`]+)`", observation)
+                entry = bool(handoff and handoff[1].split("/")[0] != source.mode and handoff[2].split("/")[0] == source.mode)
+                if owner and owner[0] != source.mode and not entry:
+                    break
+                for step in reversed(_view(_view(record, "action_result"), "results") or []):
+                    if _view(step, "success") is False or _view(step, "error"):
+                        continue
+                    name, result = _view(step, "tool_name"), _view(step, "tool_result")
+                    arguments = _view(step, "tool_arguments") or {}
+                    if isinstance(arguments, list):
+                        arguments = {_view(arg, "name"): _view(arg, "value") for arg in arguments}
+                    prompt, questions = "", []
+                    if name == "request_human_choice" and isinstance(result, str) and result.strip():
+                        lines = [f"Answer: {result.strip()}"]
+                        prompt = str(_view(arguments, "prompt") or "")
+                        questions = RequestHumanChoice.coerce_questions(_view(arguments, "questions"))
+                    elif name in confirmation_tools and isinstance(result, dict):
+                        status = result.get("status")
+                        if status not in {"confirmed", "cancelled", "resolved", "not_answered", "revision_requested", "save_failed"}:
+                            continue
+                        lines = []
+                        for key in ("message", "feedback", "user_message", "response"):
+                            text = str(result.get(key) or "").strip()
+                            if text and not any(text in line for line in lines):
+                                lines.append(text)
+                        if status == "not_answered" and not lines:
+                            continue
+                        if not lines:
+                            lines.append(f"Outcome: {str(result.get('action') or status).replace('_', ' ')}.")
+                        prompt = str(result.get("reason") or "")
+                        questions = RequestHumanChoice.coerce_questions(result.get("questions"))
+                    else:
+                        continue
+                    original_reply = "\n".join(lines)
+                    lines = [
+                        line if len(line) <= 1_000 else line[:900] + " … [truncated; see the Session transcript]"
+                        for line in lines
+                    ]
+                    # Preserve the question and options that make free-form replies meaningful.
+                    for question in questions:
+                        text = str(_view(question, "question") or "").strip()
+                        if not text:
+                            continue
+                        options = "; ".join(
+                            f"{index}. {_view(option, 'label')}"
+                            + (f" — {_view(option, 'description')}" if _view(option, "description") else "")
+                            for index, option in enumerate(_view(question, "options") or [], 1)
+                        )
+                        lines.append(f"Question: {text}" + (f" Options: {options}" if options else ""))
+                    if prompt:
+                        lines.append(f"Context: {prompt}")
+                    yield f"- {name}: " + "\n  ".join(lines), original_reply
+                if entry:
+                    break
+
+        items: List[str] = []
+        seen: set[Tuple[str, str]] = set()
+        size = 0
+        omitted = False
+        for item, original_reply in outcomes():
+            if (item, original_reply) in seen:
+                continue
+            seen.add((item, original_reply))
+            # Keep the newest reply's question and context, even above the soft budget.
+            if len(items) >= 8 or (items and size + len(item) > 4_000):
+                omitted = True
+                break
+            items.append(item)
+            size += len(item)
+        if not items:
+            return reason
+        note = "[user interaction outcomes; oldest to newest]\n" + "\n".join(reversed(items))
+        if omitted:
+            note += "\nAdditional details omitted; see the Session transcript."
+        return f"{reason}\n\n{note}" if reason else note
+
     @staticmethod
     def _estimate_request_tokens(messages: Sequence[Message], tools: Sequence[Any]) -> int:
         """Conservatively estimate final request tokens when no provider counter exists."""
