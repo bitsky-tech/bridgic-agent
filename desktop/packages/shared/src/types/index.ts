@@ -24,6 +24,7 @@ export {
 
 export type {
   AgentMessage,
+  SessionTurnRecord,
   AgentMessageOptions,
   AgentTurnStatus,
   AgentMessageToolCall,

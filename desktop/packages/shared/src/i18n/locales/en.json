@@ -1649,6 +1649,7 @@
       "card": {
         "answerLabel": "Your answer",
         "buildConfirmedBadge": "Build confirmed",
+        "buildConflictTitle": "Unfinished build handling",
         "buildDesc": "Whether to turn this task into a reusable workflow",
         "buildOnceBadge": "Run once",
         "buildTitle": "Workflow build confirmation",
@@ -1660,6 +1661,7 @@
         "qaListLabel": "Confirmed questions and answers",
         "qaTitle": "Requirements confirmation",
         "questionLabel": "Agent asked you",
+        "runTitle": "Workflow run options",
         "taskRevisedBadge": "Revision requested",
         "taskTitle": "Task specification confirmation",
         "workflowTitle": "Workflow save confirmation"

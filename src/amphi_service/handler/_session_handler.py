@@ -4,7 +4,7 @@ import json
 import os
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from fastapi import HTTPException, Response, status
 
@@ -191,9 +191,8 @@ class SessionDetailHandler(BaseHandler):
 class SessionMessagesHandler(BaseHandler):
     """Bind: ``GET /sessions/{session_id}/messages``.
 
-    The session's full transcript as frontend ``AgentMessage`` dicts — the
-    daemon is the source of truth, so the GUI hydrates from here rather than
-    from local storage.
+    ``format=turns`` returns complete durable records for client-side display.
+    The default message projection remains available for older clients.
     """
 
     tags = ["sessions"]
@@ -203,6 +202,7 @@ class SessionMessagesHandler(BaseHandler):
         session_id: str,
         before_ordinal: Optional[int] = None,
         limit: Optional[int] = None,
+        format: Literal["messages", "turns"] = "messages",
     ) -> Response:
         user = await self.require_user()
         record = await self.require_session(session_id, user)
@@ -221,33 +221,56 @@ class SessionMessagesHandler(BaseHandler):
         # last turn is mid-history, so pending/thinking would be wrong there.
         is_tail_page = before_ordinal is None
         children = await SessionRepository().list_children(user.id, record.id)
+        # Foreground children belong to calls in this page, not the whole Session.
+        # Background children remain available to the separate hierarchy pane.
+        page_call_ids = {
+            action.get("tool_id")
+            for turn in turns
+            for round in turn.ota_records or []
+            for action in (round.get("action_result") or {}).get("results") or []
+            if action.get("tool_id")
+        }
+        related_children = [
+            child for child in children
+            if child.subagent_mode is SubAgentMode.BACKGROUND or child.parent_call_id in page_call_ids
+        ]
         child_turns = await asyncio.gather(*(
-            repository.latest(child.id, user.id) for child in children
+            repository.latest(child.id, user.id) for child in related_children
         ))
         subagents: Dict[str, List[_SubagentProjection]] = {}
-        for child, turn in zip(children, child_turns):
+        for child, turn in zip(related_children, child_turns):
             if child.parent_call_id and child.subagent_mode is not SubAgentMode.BACKGROUND:
                 subagents.setdefault(child.parent_call_id, []).append(
                     (child.id, turn, child.title or ""),
                 )
         child_turn_by_id = {
             child.id: turn
-            for child, turn in zip(children, child_turns)
+            for child, turn in zip(related_children, child_turns)
         }
 
         def child_status(child: SessionRecord) -> str:
             turn = child_turn_by_id.get(child.id)
             return turn.status.value if turn is not None else "unknown"
 
+        show_pending = is_tail_page and record.status is SessionStatus.AWAITING
+        if format == "turns":
+            transcript = {
+                "turns": [turn.model_dump(mode="json") for turn in turns],
+                "session_status": record.status.value,
+                "subagents": {
+                    call_id: [
+                        {"session_id": child_id, "turn": turn.model_dump(mode="json") if turn else None, "title": title}
+                        for child_id, turn, title in children
+                    ]
+                    for call_id, children in subagents.items()
+                },
+            }
+        else:
+            transcript = {"messages": session_to_agent_messages(
+                session_id, turns, subagents, show_pending_interaction=show_pending,
+            )}
         return self.response({
-            "messages": session_to_agent_messages(
-                session_id,
-                turns,
-                subagents,
-                show_pending_interaction=(
-                    is_tail_page and record.status is SessionStatus.AWAITING
-                ),
-            ),
+            **transcript,
             # Keep the parked Turn durable until its resumed Invocation settles,
             # but do not replay its question after AgentInvocation accepted the
             # answer and cleared the Session's awaiting projection.

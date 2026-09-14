@@ -586,7 +586,22 @@ describe('AmphiClient session transcript', () => {
 
   it('rehydrates persisted presentation production progress', async () => {
     installFetchStub({
-      messages: [],
+      turns: [{
+        id: 'ppt-turn', session_id: 'session_1', session_ordinal: 0,
+        user_input: { text: 'Explain the strategy', blocks: [] },
+        status: 'completed', created_at: '2026-09-14T00:00:00Z',
+        final_answer: 'The outline and template are ready.', agent_state: null,
+        ota_records: [{
+          think_scope: { mode: 'presentation', stage: 'ppt_plan' },
+          action_result: { results: [
+            { tool_name: 'report_presentation_step', tool_id: 'outline-tool', tool_arguments: {}, success: true,
+              tool_result: { outline_confirmation_id: 'outline-1', status: 'confirmed', feedback: 'Keep the introduction short.' } },
+            { tool_name: 'ppt_rag', tool_id: 'template-tool', tool_arguments: {}, success: true,
+              tool_result: { template_selection_id: 'template-1', status: 'selected', selected_template_id: 'minimal' } },
+          ] },
+        }],
+      }],
+      session_status: 'idle',
       pending_request: null,
       thinking_mode: {
         mode: 'presentation',
@@ -654,6 +669,51 @@ describe('AmphiClient session transcript', () => {
       presentationOutlineConfirmed: true,
       presentationOutlineConfirmationId: null,
     })
+    expect(new URL(captured[0]!.url).searchParams.get('format')).toBe('turns')
+    const blocks = transcript.messages.find((message) => message.role === 'assistant')!.blocks!
+    expect(blocks.map((block) => block.type)).toEqual([
+      'tool', 'presentation_outline_confirm', 'tool', 'presentation_template_selection',
+    ])
+    expect(blocks[1]).toMatchObject({ requestId: 'outline-1', status: 'confirmed', feedback: 'Keep the introduction short.' })
+    expect(blocks[3]).toMatchObject({ requestId: 'template-1', status: 'selected', selectedTemplateId: 'minimal' })
+  })
+
+  it('shows pending PPT cards only on the current awaiting Turn page', async () => {
+    installFetchStub({
+      turns: [{
+        id: 'pending-ppt', session_id: 'session_1', session_ordinal: 3,
+        user_input: { text: 'Choose a template', blocks: [] },
+        status: 'awaiting_human', created_at: '2026-09-14T00:00:00Z',
+        agent_state: null,
+        ota_records: [{ action_result: { results: [{
+          tool_name: 'ppt_rag', tool_id: 'template-tool', tool_arguments: {}, success: true,
+          tool_result: { template_selection_id: 'template-1', status: 'awaiting_template_selection' },
+        }] } }],
+      }],
+      session_status: 'awaiting', has_more: true, next_before: 3,
+    })
+    const client = new AmphiClient({ baseUrl: 'http://x', token: 'tok' })
+
+    const latest = await client.getSessionMessages('session_1', { limit: 20 })
+    const older = await client.getSessionMessages('session_1', { limit: 20, beforeOrdinal: 4 })
+
+    expect(latest.messages[1]!.blocks!.map((block) => block.type)).toEqual(['tool', 'presentation_template_selection'])
+    expect(older.messages[1]!.blocks!.map((block) => block.type)).toEqual(['tool'])
+    expect(older.hasMore).toBe(true)
+    expect(older.nextBefore).toBe(3)
+    const query = new URL(captured[1]!.url).searchParams
+    expect(Object.fromEntries(query)).toEqual({ format: 'turns', limit: '20', before_ordinal: '4' })
+  })
+
+  it('keeps the message projection from daemons without durable Turn responses', async () => {
+    const messages = [{
+      id: 'legacy-reply', role: 'assistant' as const, text: 'Previously saved answer.',
+      toolCalls: [], done: true, createdAt: 0,
+    }]
+    installFetchStub({ messages })
+    const client = new AmphiClient({ baseUrl: 'http://x', token: 'tok' })
+
+    expect((await client.getSessionMessages('session_1')).messages).toEqual(messages)
   })
 
   it('rehydrates the latest durable context usage snapshot', async () => {

@@ -96,6 +96,7 @@ export function MessageContent({
           presentation={processPresentation}
           blocks={process}
           streaming={streaming}
+          active={streaming || waitingForSubagent || waitingForHumanRequest || hasPendingPermission || hasPendingReview}
           defaultOpen={
             hasPendingPermission ||
             hasPendingReview ||
