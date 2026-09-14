@@ -121,13 +121,13 @@ async def test_llm_tool_surface() -> None:
     assert actual_schemas == expected_schemas
 
 
-@pytest.mark.parametrize(("worker_type", "stage", "label", "expects_report"), [
-    (PresentationBriefThink, "ppt_brief", "Brief", False),
-    (PresentationPlanThink, "ppt_plan", "Plan", True),
-    (PresentationComposeThink, "ppt_compose", "Compose", True),
-    (PresentationReviewThink, "ppt_review", "Review", True),
+@pytest.mark.parametrize(("worker_type", "stage", "expects_report"), [
+    (PresentationBriefThink, "ppt_brief", False),
+    (PresentationPlanThink, "ppt_plan", True),
+    (PresentationComposeThink, "ppt_compose", True),
+    (PresentationReviewThink, "ppt_review", True),
 ])
-async def test_presentation_llm_tool_surface(worker_type: Any, stage: str, label: str, expects_report: bool) -> None:
+async def test_presentation_llm_tool_surface(worker_type: Any, stage: str, expects_report: bool) -> None:
     """Every presentation stage advertises and sends the same tools to the model."""
     llm = _RecordingLlm()
     ota_context = AmphiOTAContext(
@@ -138,11 +138,8 @@ async def test_presentation_llm_tool_surface(worker_type: Any, stage: str, label
 
     await worker_type(llm).thinking(ota_context, _context())
 
-    marker = f"The tools currently available in {label} are: "
-    prompt_names = tuple(re.findall(
-        r"`([^`]+)`",
-        llm.messages[0].content.split(marker, maxsplit=1)[1].split(". Call them directly.", maxsplit=1)[0],
-    ))
+    assert f"# Current stage: {stage}" in llm.messages[0].content
+    prompt_names = _prompt_tool_names(llm.messages[0].content)
     recorded_names = tuple(spec.tool_name for spec in ota_context.tools)
     expected_schemas = [spec.to_tool().model_dump() for spec in ota_context.tools]
     actual_schemas = [tool.model_dump() for tool in llm.tools]

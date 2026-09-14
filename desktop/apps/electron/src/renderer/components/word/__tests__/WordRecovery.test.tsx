@@ -10,6 +10,7 @@ const { createRoot } = await import('react-dom/client')
 const { createWordWorkspace } = await import('@/lib/wordDomain')
 const { appendTextBlockToSnapshot, getUniverDocumentText } = await import('@/lib/wordUniverModel')
 const { loadPersistedWordWorkspace } = await import('@/lib/wordPersistence')
+const originalWordEditor = (await import('../WordEditor')).WordEditor
 let commitOnCleanup = false
 
 mock.module('../WordEditor', () => ({
@@ -23,7 +24,10 @@ mock.module('../WordEditor', () => ({
   },
 }))
 
-const { SessionWordEditor } = await import('../SessionWordEditor')
+// Earlier suites may have resolved this module's React.lazy editor already.
+// A separate module instance lets this suite exercise its own editor mock.
+const recoveryModulePath = '../SessionWordEditor.tsx?word-recovery-test'
+const { SessionWordEditor } = await import(recoveryModulePath) as typeof import('../SessionWordEditor')
 
 async function waitForElement(host: HTMLElement, selector: string) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -38,7 +42,10 @@ afterEach(() => {
   window.localStorage.clear()
   delete window.__bridgicWord
 })
-afterAll(async () => { await GlobalRegistrator.unregister() })
+afterAll(async () => {
+  mock.module('../WordEditor', () => ({ WordEditor: originalWordEditor }))
+  await GlobalRegistrator.unregister()
+})
 
 describe('Word recovery lifecycle', () => {
   it('preserves unreadable storage, rejects flush, and restores the existing documents after retry', async () => {

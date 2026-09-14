@@ -7,6 +7,7 @@ GlobalRegistrator.register()
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider, useAtomValue } = await import('jotai')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
@@ -261,7 +262,7 @@ describe('DebugRoundsPanel Turn grouping', () => {
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Search user input, output or tools…"]')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
-      input.dispatchEvent(new Event('input', { bubbles: true }))
+      Simulate.change(input)
     })
   }
 
@@ -367,7 +368,7 @@ describe('DebugRoundsPanel stage filters', () => {
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Search user input, output or tools…"]')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
-      input.dispatchEvent(new Event('input', { bubbles: true }))
+      Simulate.change(input)
     })
   }
 

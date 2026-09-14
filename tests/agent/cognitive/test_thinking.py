@@ -253,6 +253,7 @@ async def test_context_usage_falls_back_to_a_conservative_estimate(test_sandbox:
     assert ota_context.context_usage.output_tokens == 0
     assert ota_context.context_usage.occupied_input_tokens == events[0]["input_tokens"]
     assert ota_context.context_usage.occupied_output_tokens == events[0]["output_tokens"]
+    assert ota_context.context_usage.stage_references == {}
 
 
 @pytest.mark.parametrize(("source", "estimate"), [
