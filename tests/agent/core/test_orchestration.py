@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall
 from bridgic.amphibious._type import ThinkResult
+from bridgic.core.model.types import ToolCallBlock, ToolResultBlock
 
 from src.amphi_agent import (
     AmphiAgent,
@@ -17,6 +18,7 @@ from src.amphi_agent import (
     WorkflowRunLibrary,
 )
 from src.amphi_agent.cognitive.normal.state import AwaitingBuildConflict, AwaitingWorkflowRunChoice, NormalStageState
+from src.amphi_agent.cognitive import ExploreThink
 from src.amphi_agent.cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection, PresentationStageState
 from src.amphi_agent.cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
 from src.amphi_agent.cognitive.state import RoundPermission
@@ -1039,6 +1041,7 @@ async def test_competing_workflow_edit_stays_in_main_until_the_user_chooses(orch
         "edit-retained", "edit_workflow", workflow_id=retained.workflow_id,
     ))
     assert entered.success is True
+    assert "[stage handoff] `normal/main` → `build/clarify`" in ota_context.ota_record[-1].observation_result
     build = orchestration.workspace.build
     assert build is not None
     build.set_stage("explore", retained.workflow_id)
@@ -1055,6 +1058,16 @@ async def test_competing_workflow_edit_stays_in_main_until_the_user_chooses(orch
     assert ota_context.think_status == BuildStageState(stage="explore", workflow_id=retained.workflow_id)
     assert orchestration.workspace.build_checkpoint() == checkpoint
     assert marker.read_text(encoding="utf-8") == "Keep this unfinished work.\n"
+    entry_record = ota_context.ota_record[-1]
+    assert "[stage handoff] `normal/main` → `build/explore`" in entry_record.observation_result
+    assert reopened.tool_result["message"] in entry_record.observation_result
+    assert retained.workflow_id in entry_record.observation_result and retained.name in entry_record.observation_result
+    entry_record.think_scope = {"mode": "normal", "stage": "main"}
+    entry_record.think_result.step_content = "PRIVATE NORMAL EDIT TRACE"
+    handoff = ExploreThink().turn_messages_block(ota_context.model_copy(update={"ota_record": [entry_record]}), orchestration.context)
+    assert len(handoff) == 1
+    assert "[stage handoff]" in handoff[0].content and "PRIVATE NORMAL" not in handoff[0].content
+    assert not any(isinstance(block, (ToolCallBlock, ToolResultBlock)) for message in handoff for block in message.blocks)
     await _execute_call(orchestration, ota_context, _call("leave-retained-edit", "switch", mode="normal"))
 
     selected = await _execute_call(orchestration, ota_context, _call(
@@ -1067,6 +1080,7 @@ async def test_competing_workflow_edit_stays_in_main_until_the_user_chooses(orch
     assert orchestration.workspace.build is None
     assert orchestration.workflows.package is None
     assert marker.read_text(encoding="utf-8") == "Keep this unfinished work.\n"
+    assert "[stage handoff]" not in (ota_context.ota_record[-1].observation_result or "")
 
     proposed = await _execute_call(orchestration, ota_context, _call(
         "resolve-edit-conflict", "request_build", goal="Edit the newly selected Workflow", mode="ask",

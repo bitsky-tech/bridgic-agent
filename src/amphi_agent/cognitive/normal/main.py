@@ -100,6 +100,7 @@ class MainThink(BaseThink):
             message = (
                 "The user chose to keep this as a one-off task. Continue the original request in Main."
             )
+            source_status = ota_context.think_status
             if confirmed:
                 ota_context.transition_think(BuildStageState(stage="clarify"))
                 await BuildThink.sync_build_space(ota_context, context, create=True)
@@ -111,6 +112,12 @@ class MainThink(BaseThink):
                 "status": "confirmed" if confirmed else "cancelled",
                 "message": message,
             })
+            target_status = ota_context.think_status
+            if confirmed and target_status != source_status:
+                agent._stamp_stage_handoff(
+                    ota_context, source_status, target_status,
+                    f"Workflow goal: {pending.goal}\n{message}",
+                )
 
             ota_context.transition_interaction(None)
             context.session = context.session.without_last()
@@ -122,6 +129,7 @@ class MainThink(BaseThink):
             if workspace is None:
                 raise RuntimeError("Cannot resolve a Build conflict without a Workspace.")
             ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
+            source_status = ota_context.think_status
 
             selected_action = self._choice_selection(
                 ota_context.user_input,
@@ -215,6 +223,28 @@ class MainThink(BaseThink):
             else:
                 ota_context.ota_record.append(OTARecord(observation_result=f"[build] {message}"))
 
+            target_status = ota_context.think_status
+            if target_status != source_status:
+                lines = [message]
+                if action not in {"keep", "not_answered"} and request is not None:
+                    if goal := request["tool_result"].get("goal"):
+                        lines.insert(0, f"Workflow goal: {goal}")
+                if user_message and user_message not in message:
+                    lines.append(user_message)
+                if action == "not_answered":
+                    if conflict.reason:
+                        lines.append(f"Context: {conflict.reason}")
+                    for question in conflict.questions:
+                        text = str(question.get("question") or "").strip()
+                        if not text:
+                            continue
+                        options = "; ".join(
+                            f"{index}. {_view(option, 'label')}"
+                            for index, option in enumerate(question.get("options") or [], 1)
+                        )
+                        lines.append(f"Question: {text}" + (f" Options: {options}" if options else ""))
+                agent._stamp_stage_handoff(ota_context, source_status, target_status, "\n".join(lines))
+
             ota_context.transition_interaction(None)
             context.session = context.session.without_last()
             ota_context.user_input = original_user_input
@@ -225,6 +255,7 @@ class MainThink(BaseThink):
             ota_context.ota_record = [OTARecord.model_validate(record) for record in rounds]
             context.session = context.session.without_last()
             ota_context.user_input = original_user_input
+            source_status = ota_context.think_status
 
             selected_action = self._choice_selection(
                 answer_input,
@@ -310,6 +341,14 @@ class MainThink(BaseThink):
                 ota_context.ota_record.append(OTARecord(
                     observation_result=f"[workflow re-entry] {message}",
                 ))
+
+            target_status = ota_context.think_status
+            if action in {"resume", "restart"} and target_status != source_status:
+                agent._stamp_stage_handoff(
+                    ota_context, source_status, target_status,
+                    f"Workflow `{result_fields['workflow_name']}` (`{result_fields['workflow_id']}`) "
+                    f"{result_fields['resolved_action']}.\n{message}\n{user_message}\n{choice.reason or ''}",
+                )
 
             ota_context.transition_interaction(None)
 
@@ -398,6 +437,7 @@ class MainThink(BaseThink):
             if isinstance(result, RequestBuild):
                 if result.mode == "start":
                     workflow_id = requested_edit_workflow_id()
+                    source_status = ota_context.think_status
                     ota_context.transition_think(BuildStageState(
                         stage="clarify",
                         workflow_id=workflow_id,
@@ -409,6 +449,12 @@ class MainThink(BaseThink):
                         **({"workflow_id": workflow_id} if workflow_id else {}),
                         "message": "The user's explicit Workflow request entered a new Build.",
                     }
+                    target_status = ota_context.think_status
+                    if target_status != source_status:
+                        agent._stamp_stage_handoff(
+                            ota_context, source_status, target_status,
+                            f"Workflow goal: {result.goal}\n{step.tool_result['message']}",
+                        )
                 else:
                     workspace = context.workspace
                     retained = workspace.build_checkpoint() if workspace is not None else None
@@ -530,6 +576,7 @@ class MainThink(BaseThink):
                 else:
                     workspace = context.workspace
                     retained = workspace.run_workflow_checkpoint() if workspace is not None else None
+                    source_status = ota_context.think_status
                     source, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
                         ota_context,
                         context,
@@ -543,6 +590,13 @@ class MainThink(BaseThink):
                         "status": resolved_action,
                         "reason": result.reason,
                     }
+                    target_status = ota_context.think_status
+                    if target_status != source_status:
+                        agent._stamp_stage_handoff(
+                            ota_context, source_status, target_status,
+                            f"Workflow `{source.name}` (`{source.workflow_id}`) {resolved_action}.\n"
+                            f"{result.reason or ''}",
+                        )
 
 
         async def enter_or_resume_build(ota_context: AmphiOTAContext, context: AmphiContext, workflow_id: Optional[str] = None) -> Optional[BuildStageState]:
@@ -586,6 +640,7 @@ class MainThink(BaseThink):
                     workflow = workflows.get(result.workflow_id) if workflows is not None else None
                     if workflows is not None and session_id:
                         await workflows.associate_session(session_id, result.workflow_id)
+                    source_status = ota_context.think_status
                     existing = await enter_or_resume_build(
                         ota_context,
                         context,
@@ -607,9 +662,19 @@ class MainThink(BaseThink):
                             )
                         ),
                     }
+                    target_status = ota_context.think_status
+                    if not competing and isinstance(target_status, BuildStageState) and target_status != source_status:
+                        agent._stamp_stage_handoff(
+                            ota_context,
+                            source_status,
+                            target_status,
+                            f"Editing Workflow `{step.tool_result['workflow_name']}` (`{result.workflow_id}`). "
+                            f"{step.tool_result['message']}",
+                        )
             elif step.tool_name == "request_presentation":
                 result = step.tool_result
                 if isinstance(result, RequestPresentation):
+                    source_status = ota_context.think_status
                     PresentationThink.invalidate_artifacts(context, PRESENTATION_STAGE_ORDER)
                     ota_context.transition_think(PresentationStageState(goal=result.goal))
                     step.tool_result = {
@@ -618,6 +683,12 @@ class MainThink(BaseThink):
                         "goal": result.goal,
                         "message": "The presentation request entered the dedicated pipeline.",
                     }
+                    target_status = ota_context.think_status
+                    if target_status != source_status:
+                        agent._stamp_stage_handoff(
+                            ota_context, source_status, target_status,
+                            f"Presentation goal: {result.goal}\n{step.tool_result['message']}",
+                        )
             elif step.tool_name == "request_run_workflow":
                 await handle_workflow_run_request(step, ota_context, context, agent)
 

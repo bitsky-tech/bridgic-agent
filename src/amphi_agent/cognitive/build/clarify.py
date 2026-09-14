@@ -230,6 +230,13 @@ class ClarifyThink(BuildThink):
         return replace(outcome, continuation=nudge)
 
     ############################################################################
+    # Context estimation and compaction
+    ############################################################################
+    def history_scopes(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Tuple[str, str]]:
+        """Read Normal and Clarify history; each owner supplies its own compaction policy."""
+        return [("normal", "main"), *super().history_scopes(ota_context, context)]
+
+    ############################################################################
     # Dynamic prompt assembly
     ############################################################################
     async def assemble_messages(
@@ -249,8 +256,8 @@ class ClarifyThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, stage-scoped conversation, user input, and
-            turn trace.
+            Persona, live context, Normal and Clarify history, user input, and
+            source-owned summaries and retained rounds.
 
         Notes
         -----
@@ -259,9 +266,11 @@ class ClarifyThink(BuildThink):
             SYSTEM  clarify persona
                     + <context> containing transcript, skills, artifacts, memory,
                       Build workspace, and Session workspace
-            ...     persisted session messages in their native roles
+            ...     Normal and Clarify Session summaries and retained history,
+                    merged in journal order with independent coverage
             USER    current user input
-            ...     current-Clarify assistant and tool-result messages
+            ...     Normal and Clarify Turn summaries and retained rounds,
+                    each governed by its owner's compaction
 
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
@@ -275,16 +284,10 @@ class ClarifyThink(BuildThink):
             self.system_block(ota_context, context), umbrella,
         ) if block)
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "clarify",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     ############################################################################

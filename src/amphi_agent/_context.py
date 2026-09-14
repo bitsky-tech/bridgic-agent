@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from bridgic.amphibious import Context, OTAContext
 
 from .browser import SessionBrowser
@@ -25,6 +25,7 @@ __all__ = [
     "AmphiOTAContext",
     "AmphiContext",
     "ContextUsageBreakdown",
+    "ContextUsageReference",
     "ContextUsageSnapshot",
 ]
 
@@ -44,8 +45,16 @@ class ContextUsageBreakdown(BaseModel):
     current_input_tokens: int = 0
 
 
+class ContextUsageReference(BaseModel):
+    """A stage's latest provider input count and the estimate of that same request."""
+
+    model_id: str = ""
+    input_tokens: int = Field(default=0, ge=0)
+    estimated_input_tokens: int = Field(default=0, ge=0)
+
+
 class ContextUsageSnapshot(BaseModel):
-    """Turn totals plus the latest call's input occupancy and composition."""
+    """Turn totals, latest displayed occupancy, and stage-owned compaction references."""
 
     model_id: str = ""
     input_tokens: int = 0
@@ -59,6 +68,7 @@ class ContextUsageSnapshot(BaseModel):
     source: Literal["provider", "estimated"] = "estimated"
     estimated_occupied_tokens: int = 0
     breakdown: ContextUsageBreakdown = Field(default_factory=ContextUsageBreakdown)
+    stage_references: Dict[str, Dict[str, ContextUsageReference]] = Field(default_factory=dict)
 
 
 class AmphiOTAContext(OTAContext):
@@ -120,6 +130,9 @@ class AmphiContext(Context):
     by the per-concern module functions the worker calls directly."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # Runtime templates supplied by the engine; never part of persisted context.
+    _cognitive_workers: Dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
 
     session: Session = Field(default_factory=Session)
     memory: Optional[Memory] = None

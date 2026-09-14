@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bridgic.amphibious import StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
@@ -225,7 +225,7 @@ class WorkflowRunThink(BaseThink):
         ota_context: AmphiOTAContext,
         context: AmphiContext,
     ) -> List[Message]:
-        """Assemble one Workflow Run round from its stage-owned tool surface."""
+        """Assemble one Workflow Run round with stage-owned history and tools."""
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.context_blocks(ota_context, context)
         umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
@@ -233,15 +233,10 @@ class WorkflowRunThink(BaseThink):
             self.system_block(ota_context, context), umbrella,
         ) if block)
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "run_workflow",
-            self.workflow_stage,
-        )
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     ##############
@@ -923,23 +918,5 @@ class WorkflowRunThink(BaseThink):
         ):
             raise RuntimeError("Workflow cognitive state does not match `.run/.state.json`.")
         return source
-
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Keep only the active automatic Workflow stage's trace."""
-        boundary = next((
-            index
-            for index in range(len(ota_context.ota_record) - 1, -1, -1)
-            if (
-                (scope := self._record_think_scope(ota_context.ota_record[index]))
-                is not None
-                and scope[0] == mode
-                and scope[1] != stage
-            )
-        ), None)
-        if boundary is None:
-            return ota_context, None
-        return ota_context.model_copy(update={
-            "ota_record": list(ota_context.ota_record[boundary + 1:]),
-        }), boundary
 
 __all__ = ["WorkflowRunThink"]

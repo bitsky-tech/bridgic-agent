@@ -43,8 +43,8 @@ class GenerateThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, Session history, upstream artifacts, user
-            input, and the current Generate trace.
+            Persona, live context, stage-owned Session history, upstream artifacts,
+            user input, and retained Generate rounds and summaries.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -58,16 +58,10 @@ class GenerateThink(BuildThink):
             self.system_block(ota_context, context), umbrella,
         ) if block)
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "generate",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     ############################################################################

@@ -159,7 +159,17 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         so this boundary retains the typed value emitted by :meth:`on_agent`.
         """
         self._agent_result = None
-        await super().arun(llm=llm, context=context, ota_context=ota_context, **kwargs)
+        previous_workers = context._cognitive_workers
+        context._cognitive_workers = {
+            (stage.mode, stage.stage): getattr(self, stage.stage)._worker_template
+            for stage in get_cognitive_stages()
+        }
+        if context.session.is_child:
+            context._cognitive_workers[("normal", "main")] = self.subagent._worker_template
+        try:
+            await super().arun(llm=llm, context=context, ota_context=ota_context, **kwargs)
+        finally:
+            context._cognitive_workers = previous_workers
         if self._agent_result is None:
             raise RuntimeError("Agent run completed without a structured result")
         return self._agent_result

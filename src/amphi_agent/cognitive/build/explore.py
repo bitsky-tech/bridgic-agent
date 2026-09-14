@@ -44,8 +44,8 @@ class ExploreThink(BuildThink):
         Returns
         -------
         List[Message]
-            Persona, live context, Session history, task artifact, user input,
-            and the current Explore trace.
+            Persona, live context, stage-owned Session history, task artifact,
+            user input, and retained Explore rounds and summaries.
         """
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.build_context_blocks(
@@ -58,16 +58,10 @@ class ExploreThink(BuildThink):
             self.system_block(ota_context, context), umbrella,
         ) if block)
 
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "build",
-            "explore",
-        )
-
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     ############################################################################

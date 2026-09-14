@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Iterable, Dict, List, Optional
 
 from bridgic.amphibious import StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
@@ -170,7 +170,7 @@ class PresentationThink(BaseThink):
     # Dynamic prompt assembly
     ############################################################################
     async def assemble_messages(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[Message]:
-        """Assemble every presentation stage with its exact runtime tool surface."""
+        """Assemble each presentation stage with its own history and tool surface."""
         ota_context.tools = list(self.select_tools(ota_context, context))
         blocks = await self.context_blocks(ota_context, context)
         umbrella = "<context>\n" + "\n\n".join(block for block in blocks if block) + "\n</context>"
@@ -181,12 +181,7 @@ class PresentationThink(BaseThink):
         messages = [Message.from_text(system, role=Role.SYSTEM)]
         messages += await self.session_messages_block(ota_context, context)
         messages.append(await self.current_user_message(ota_context, context))
-        turn_context, _ = self._stage_turn_context(
-            ota_context,
-            "presentation",
-            self.state(ota_context).stage,
-        )
-        messages += self.turn_messages_block(turn_context, context)
+        messages += self.turn_messages_block(ota_context, context)
         return messages
 
     ##############
@@ -457,47 +452,3 @@ class PresentationThink(BaseThink):
                 raise RuntimeError(
                     f"Cannot invalidate stale Presentation artifact `{relative}`: {exc}."
                 ) from exc
-
-    def _stage_turn_context(self, ota_context: AmphiOTAContext, mode: str, stage: str) -> Tuple[AmphiOTAContext, Optional[int]]:
-        """Project the current Turn to the active presentation stage and its handoff."""
-        def switches_to_target(record: Any) -> bool:
-            steps = _view(_view(record, "action_result"), "results") or []
-            for step in steps:
-                if _view(step, "tool_name") != "switch" or _view(step, "success") is False:
-                    continue
-                arguments = _view(step, "tool_arguments") or {}
-                result = _view(step, "tool_result") or {}
-                if str(_view(result, "stage") or _view(arguments, "stage") or "") == stage:
-                    return True
-            return False
-
-        records = ota_context.ota_record
-        scopes = [self._record_think_scope(record) for record in records]
-        target_scope = (mode, stage)
-        mode_indexes = [
-            index for index, scope in enumerate(scopes)
-            if scope is not None and scope[0] == mode
-        ]
-        selected = set(range(len(records))) if not mode_indexes else set()
-        if mode_indexes and scopes[mode_indexes[0]] == target_scope:
-            selected.update(range(mode_indexes[0]))
-        transitions: List[int] = []
-        for index, (record, scope) in enumerate(zip(records, scopes)):
-            if scope == target_scope:
-                selected.add(index)
-            if switches_to_target(record):
-                selected.add(index)
-                transitions.append(index)
-                continue
-            next_scope = scopes[index + 1] if index + 1 < len(scopes) else target_scope
-            if next_scope == target_scope and scope != target_scope:
-                transitions.append(index)
-                if scope is None or scope[0] != mode:
-                    selected.add(index)
-        projected = [record for index, record in enumerate(records) if index in selected]
-        turn_context = (
-            ota_context
-            if len(projected) == len(records)
-            else ota_context.model_copy(update={"ota_record": projected})
-        )
-        return turn_context, transitions[-1] if transitions else None
