@@ -1,9 +1,22 @@
+import json
 import os
+import re
 import time
 
 import pytest
+from bridgic.amphibious import ActionResult, ActionStepResult
 
-from src.amphi_agent.tools._filesystem import edit_file, glob, grep, read_file, write_file
+from src.amphi_agent import AmphiAgent
+from src.amphi_agent.tools import _filesystem
+from src.amphi_agent.tools._filesystem import (
+    DEFAULT_MAX_LINES,
+    READ_FILE_MAX_CHARS,
+    edit_file,
+    glob,
+    grep,
+    read_file,
+    write_file,
+)
 from tests.agent.tools._harness import ToolHarness
 
 
@@ -31,7 +44,13 @@ async def test_file_lifecycle(tool_harness: ToolHarness) -> None:
 
     # Check 2: Reading returns numbered content and records the file for a targeted edit.
     numbered = await read_file("notes/item.txt")
-    assert numbered.splitlines() == ["     1\tAlpha", "     2\tBeta"]
+    assert numbered.splitlines() == [
+        f"File: {json.dumps(str(target), ensure_ascii=False)}",
+        "Lines: 1-2 of 2 (0 lines remaining).",
+        "",
+        "     1\tAlpha",
+        "     2\tBeta",
+    ]
 
     # Check 3: A targeted edit changes only the requested text in the persisted file.
     edited = await edit_file("notes/item.txt", "Beta", "Gamma")
@@ -130,30 +149,171 @@ async def test_read_window(tool_harness: ToolHarness) -> None:
     }
 
     Checks:
-    1. Offset and limit return the requested numbered window with a remainder marker.
+    1. Offset and limit return the actual numbered window and remaining line count.
     2. Oversized individual lines are bounded without losing their line number.
     3. Empty files and offsets past EOF return explicit non-error results.
     """
     await write_file("window.txt", "one\ntwo\nthree\nfour\n")
 
-    # Check 1: Offset and limit return the requested numbered window with a remainder marker.
+    # Check 1: The result reports read facts without prescribing the next tool call.
     window = await read_file("window.txt", offset=2, limit=2)
     assert window.splitlines() == [
+        f"File: {json.dumps(str(tool_harness.workspace.work_dir / 'window.txt'), ensure_ascii=False)}",
+        "Lines: 2-3 of 4 (1 lines remaining).",
+        "",
         "     2\ttwo",
         "     3\tthree",
-        "... [1 more lines; pass offset/limit to read further]",
+        "",
+        "[Output truncated: reached the 2-line read limit. Remaining file lines not shown: 1.]",
     ]
 
     # Check 2: Oversized individual lines are bounded without losing their line number.
     await write_file("long.txt", "x" * 2_100)
     long_line = await read_file("long.txt")
-    assert long_line.startswith("     1\t" + "x" * 2_000)
-    assert long_line.endswith("...[line truncated]")
+    assert long_line.split("\n\n", 1)[1].startswith("     1\t" + "x" * 2_000)
+    assert long_line.endswith(
+        "...[line truncated: 2100 characters exceed the 2000-character line limit; "
+        "100 characters not shown]"
+    )
+    assert "Remaining file lines not shown" not in long_line
 
     # Check 3: Empty files and offsets past EOF return explicit non-error results.
     await write_file("empty.txt", "")
     assert await read_file("empty.txt") == "(File exists but is empty.)"
     assert await read_file("window.txt", offset=20) == "(Offset 20 is past the end of the file [4 lines].)"
+
+
+@pytest.mark.parametrize("limit", [0, 500, 100_000])
+async def test_large_file_pages(tool_harness: ToolHarness, limit: int) -> None:
+    """Read every source line once without spooling or accumulating line prefixes."""
+    target = tool_harness.workspace.work_dir / "requirements.txt"
+    lines = [f'Requirement {index}: 中文内容 with "quoted" details ' * 2 for index in range(1464)]
+    target.write_text("\n".join(lines), encoding="utf-8")
+    collected: list[str] = []
+    offset = 1
+    page_count = 0
+
+    while len(collected) < len(lines):
+        output = await read_file("requirements.txt", offset=offset, limit=limit)
+        assert len(output) <= READ_FILE_MAX_CHARS
+        assert output.startswith(f"File: {json.dumps(str(target), ensure_ascii=False)}\n")
+        assert "pass offset/limit" not in output
+        assert "next_offset" not in output
+        rows = re.findall(r"^\s*(\d+)\t(.*)$", output, re.MULTILINE)
+        assert rows
+        indices = [int(index) for index, _ in rows]
+        assert indices == list(range(offset, offset + len(rows)))
+        end = indices[-1]
+        assert f"Lines: {offset}-{end} of 1464 ({1464 - end} lines remaining)." in output
+        assert [content for _, content in rows] == lines[offset - 1:end]
+        if end < len(lines):
+            assert output.endswith(
+                f"[Output truncated: reached the {READ_FILE_MAX_CHARS}-character response limit. "
+                f"Remaining file lines not shown: {1464 - end}.]"
+            )
+        else:
+            assert "[Output truncated:" not in output
+
+        step = ActionStepResult(
+            tool_id=f"read-{offset}", tool_name="read_file",
+            tool_arguments={"file_path": "requirements.txt", "offset": offset, "limit": limit},
+            tool_result=output,
+        )
+        AmphiAgent._save_large_tool_results(ActionResult(results=[step]), tool_harness.context)
+        assert step.tool_result == output
+        collected.extend(content for _, content in rows)
+        offset = end + 1
+        page_count += 1
+
+    assert page_count > 1
+    assert collected == lines
+    assert target.read_text(encoding="utf-8") == "\n".join(lines)
+    assert not list(tool_harness.workspace.tool_result_dir.rglob("*.txt"))
+    assert await read_file("requirements.txt", offset=offset) == (
+        "(Offset 1465 is past the end of the file [1464 lines].)"
+    )
+
+
+async def test_read_line_limit_and_long_lines(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Line and character limits both report the actual source range and truncation."""
+    await write_file("blank.txt", "\n" * (DEFAULT_MAX_LINES + 1))
+    # Isolate the line cap from platform-dependent absolute path lengths.
+    with monkeypatch.context() as patch:
+        patch.setattr(_filesystem, "READ_FILE_MAX_CHARS", READ_FILE_MAX_CHARS * 2)
+        blank = await read_file("blank.txt")
+    assert len(re.findall(r"^\s*\d+\t", blank, re.MULTILINE)) == DEFAULT_MAX_LINES
+    assert f"Lines: 1-{DEFAULT_MAX_LINES} of {DEFAULT_MAX_LINES + 1} (1 lines remaining)." in blank
+    assert blank.endswith(
+        f"[Output truncated: reached the {DEFAULT_MAX_LINES}-line read limit. "
+        "Remaining file lines not shown: 1.]"
+    )
+    assert len(blank) <= READ_FILE_MAX_CHARS * 2
+
+    await write_file("long.txt", ("中" * 2100 + "\n") * 100)
+    output = await read_file("long.txt", offset=90, limit=10)
+    rows = re.findall(r"^\s*(\d+)\t(.*)$", output, re.MULTILINE)
+    assert 0 < len(rows) < 10
+    assert rows[0][0] == "90"
+    assert all(content == "中" * 2000 + (
+        "...[line truncated: 2100 characters exceed the 2000-character line limit; "
+        "100 characters not shown]"
+    ) for _, content in rows)
+    assert output.endswith(
+        f"[Output truncated: reached the {READ_FILE_MAX_CHARS}-character response limit. "
+        f"Remaining file lines not shown: {100 - int(rows[-1][0])}.]"
+    )
+    assert len(output) <= READ_FILE_MAX_CHARS
+
+
+async def test_read_reports_absolute_source_path(tool_harness: ToolHarness) -> None:
+    """Relative and absolute inputs identify the same complete source path."""
+    target = tool_harness.workspace.work_dir / "notes" / "requirements.txt"
+    await write_file("notes/requirements.txt", "first\nsecond\n")
+    relative = await read_file("notes/../notes/requirements.txt", limit=1)
+    absolute = await read_file(str(target), limit=1)
+    assert relative == absolute
+    assert json.loads(relative.splitlines()[0].removeprefix("File: ")) == str(target)
+    assert relative.endswith(
+        "[Output truncated: reached the 1-line read limit. Remaining file lines not shown: 1.]"
+    )
+    assert "pass offset/limit" not in relative
+    assert "next_offset" not in relative
+
+
+@pytest.mark.parametrize("extra_characters", [0, 1])
+async def test_read_complete_response_at_character_boundary(tool_harness: ToolHarness, extra_characters: int) -> None:
+    """A complete response at the cap needs no space reserved for a truncation notice."""
+    target = tool_harness.workspace.work_dir / "boundary.txt"
+    header = (
+        f"File: {json.dumps(str(target), ensure_ascii=False)}\n"
+        "Lines: 1-17 of 17 (0 lines remaining).\n\n"
+    )
+    lines = ["x" * 1000] * 15 + ["", "tail"]
+    numbered = "\n".join(f"{index:6d}\t{line}" for index, line in enumerate(lines, 1))
+    padding = READ_FILE_MAX_CHARS - len(header + numbered) + extra_characters
+    assert 0 < padding < 2000
+    lines[15] = "y" * padding
+    target.write_text("\n".join(lines), encoding="utf-8")
+    complete = header + "\n".join(f"{index:6d}\t{line}" for index, line in enumerate(lines, 1))
+    assert len(complete) == READ_FILE_MAX_CHARS + extra_characters
+
+    output = await read_file(str(target))
+    if extra_characters == 0:
+        assert output == complete
+    else:
+        assert len(output) <= READ_FILE_MAX_CHARS
+        rows = re.findall(r"^\s*(\d+)\t(.*)$", output, re.MULTILINE)
+        assert rows
+        end = int(rows[-1][0])
+        assert end < len(lines)
+        assert [content for _, content in rows] == lines[:end]
+        assert output.endswith(
+            f"[Output truncated: reached the {READ_FILE_MAX_CHARS}-character response limit. "
+            f"Remaining file lines not shown: {len(lines) - end}.]"
+        )
+        remaining = await read_file(str(target), offset=end + 1)
+        remaining_rows = re.findall(r"^\s*(\d+)\t(.*)$", remaining, re.MULTILINE)
+        assert [content for _, content in rows + remaining_rows] == lines
 
 
 async def test_file_search(tool_harness: ToolHarness) -> None:

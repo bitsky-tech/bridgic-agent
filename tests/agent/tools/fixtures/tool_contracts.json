@@ -90,7 +90,7 @@
   ],
   "registered_schemas": {
     "bash": "6cf53112ff82208ff4bffc46e4e4f3e2c03f8ac76203f37d8a079fe130dde498",
-    "read_file": "fd9f5b20e1bb18c49feb9ed0d6f2dc56e217711bd2e96431b6d4145be1ca7bf8",
+    "read_file": "db391544176c293dba60cd8f78c8cfc51e9700a0c882bc1771166cda389af254",
     "write_file": "67d473c5f7ff2cd83a5345b0e86e2bdf86bd93dbea73a5398fc25afe61e75d0a",
     "edit_file": "837705e61d08970320ae443a9b9665adea31592f906a8b59106e203e670cd8a5",
     "glob": "30025ae68746ec6168762e1f32a652ed305cff86fa742c00b5f26b280f2237b2",

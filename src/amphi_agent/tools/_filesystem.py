@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from pathlib import Path
@@ -19,6 +20,7 @@ FILE_SYSTEM_TOOL_NAMES = frozenset({
 # read from crowding out the rest of the context.
 DEFAULT_MAX_LINES: int = 2000
 MAX_LINE_LENGTH: int = 2000
+READ_FILE_MAX_CHARS: int = 16 * 1024
 MAX_FILE_BYTES: int = 5 * 1024 * 1024  # 5 MB
 # Search-tool caps — bound output so a sloppy pattern can't flood the prompt.
 GLOB_MAX_RESULTS: int = 100
@@ -133,19 +135,20 @@ def _check_read_before_modify(abs_path: str) -> None:
 async def read_file(file_path: str, offset: int = 0, limit: int = 0) -> str:
     """Read a file from the workspace and return its content with line numbers.
 
-    Output is ``cat -n`` style (line numbers) so a later edit_file can quote a
-    uniquely-locatable ``old_string``. Reading a file also marks it safe to
-    modify (write_file / edit_file require a prior read).
+    Output includes the absolute source path, actual line range, total line count, and
+    numbered content. The complete response is capped at 16384 characters;
+    individual lines are capped at 2000 characters and marked when truncated.
+    Reading also records the file for a later edit_file operation.
 
     Args:
         file_path: Path relative to the Session work directory shown in
             ``<Workspace>``, or an absolute path.
         offset: 1-based line to start at; 0 starts at the first line.
-        limit: Max lines to return; 0 uses the default cap of 2000.
+        limit: Max lines to return; 0 uses 2000. The character cap may return fewer.
 
     Returns:
-        The numbered content (with a marker when truncated), or a notice for an
-        empty file / out-of-range offset.
+        The actual read range and numbered content, with the applicable limit
+        and omitted content counts, or an empty-file / out-of-range notice.
     """
     abs_path = _resolve_file(file_path)
     if not os.path.exists(abs_path):
@@ -167,20 +170,59 @@ async def read_file(file_path: str, offset: int = 0, limit: int = 0) -> str:
     start = max(offset - 1, 0) if offset > 0 else 0
     if start >= len(lines):
         return f"(Offset {offset} is past the end of the file [{len(lines)} lines].)"
-    end = min(start + (limit if limit > 0 else DEFAULT_MAX_LINES), len(lines))
+    line_limit = limit if limit > 0 else DEFAULT_MAX_LINES
+    requested_end = min(start + line_limit, len(lines))
+    source = json.dumps(abs_path, ensure_ascii=False)
+
+    def render_metadata(end: int) -> Tuple[str, str]:
+        header = (
+            f"File: {source}\n"
+            f"Lines: {start + 1}-{end} of {len(lines)} "
+            f"({len(lines) - end} lines remaining).\n\n"
+        )
+        notice = ""
+        if end < len(lines):
+            reached_limit = (
+                f"{READ_FILE_MAX_CHARS}-character response limit"
+                if end < requested_end else f"{line_limit}-line read limit"
+            )
+            notice = (
+                f"\n\n[Output truncated: reached the {reached_limit}. "
+                f"Remaining file lines not shown: {len(lines) - end}.]"
+            )
+        return header, notice
 
     rendered: List[str] = []
-    for idx, line in enumerate(lines[start:end], start=start + 1):
+    rendered_chars = 0
+    for idx in range(start, requested_end):
+        line = lines[idx]
         if line.endswith("\n"):
             line = line[:-1]
         if len(line) > MAX_LINE_LENGTH:
-            line = line[:MAX_LINE_LENGTH] + "...[line truncated]"
-        rendered.append(f"{idx:6d}\t{line}")
-    if end < len(lines):
-        rendered.append(
-            f"... [{len(lines) - end} more lines; pass offset/limit to read further]"
-        )
-    return "\n".join(rendered)
+            original_length = len(line)
+            line = line[:MAX_LINE_LENGTH] + (
+                f"...[line truncated: {original_length} characters exceed the "
+                f"{MAX_LINE_LENGTH}-character line limit; "
+                f"{original_length - MAX_LINE_LENGTH} characters not shown]"
+            )
+        numbered = f"{idx + 1:6d}\t{line}"
+        added_chars = len(numbered) + (1 if rendered else 0)
+        if rendered_chars + added_chars > READ_FILE_MAX_CHARS:
+            break
+        rendered.append(numbered)
+        rendered_chars += added_chars
+
+    # Fit the actual metadata after collecting content: a complete file needs
+    # no truncation notice. Count incrementally and join the body only once.
+    while rendered:
+        end = start + len(rendered)
+        header, notice = render_metadata(end)
+        if len(header) + rendered_chars + len(notice) <= READ_FILE_MAX_CHARS:
+            return header + "\n".join(rendered) + notice
+        rendered_chars -= len(rendered.pop())
+        if rendered:
+            rendered_chars -= 1
+    raise ValueError("File path is too long to include content within the read output limit.")
 
 
 async def write_file(file_path: str, content: str) -> str:

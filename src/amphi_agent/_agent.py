@@ -1043,6 +1043,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         day_dir = base_dir / datetime.now().strftime("%Y-%m-%d")
         for step in getattr(result, "results", None) or []:
             failed = getattr(step, "success", True) is False
+            # Successful reads bound their output; persisting it would make later
+            # reads paginate a formatted copy instead of the original source.
+            if not failed and step.tool_name == "read_file":
+                continue
             if not failed and step.tool_name == "ppt_rag":
                 # Plan consumes the complete shortlist in handle_action_result and
                 # replaces it with a compact template-selection receipt.
