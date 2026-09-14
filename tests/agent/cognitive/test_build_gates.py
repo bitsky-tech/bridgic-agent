@@ -18,7 +18,7 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     {
       "clarify": {
         "missing_task": "blocked",
-        "malformed_diagram": "blocked",
+        "malformed_optional_diagram": "allowed",
         "reviewed_task": "confirmable"
       },
       "explore": {"missing_plan": "blocked", "written_plan": "generate_allowed"},
@@ -27,10 +27,10 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     }
 
     Checks:
-    1. Clarify requires a structurally valid task before confirmation.
+    1. Clarify requires a readable task before confirmation without policing optional diagrams.
     2. Explore hands off only after a valid implementation plan exists.
     3. Generate hands off only after the Workflow package is executable and validatable.
-    4. Verify requests final confirmation only after a valid report ends in PASS.
+    4. Verify requires an explicit PASS verdict and allows additional notes afterward.
     """
     workspace = make_workspace(test_sandbox, "build-gates")
     build = await workspace.prepare_build_space("create", stage="clarify")
@@ -47,8 +47,11 @@ async def test_build_gates(test_sandbox: IsolatedPaths) -> None:
     def write(name: str, body: str) -> None:
         (build.root / name).write_text(body, encoding="utf-8")
 
-    # Check 1: Clarify requires a valid task before confirmation.
+    # Check 1: Clarify requires a readable, non-empty task before confirmation.
     assert "write task.md" in (await legality_reason(clarify, confirm_task, None, context) or "")
+    for invalid_task in (b" \n\t", b"\xff"):
+        (build.root / "task.md").write_bytes(invalid_task)
+        assert "write task.md" in (await legality_reason(clarify, confirm_task, None, context) or "")
     write(
         "task.md",
         """# Report workflow
@@ -62,9 +65,7 @@ Input -->
 ```
 """,
     )
-    assert "connector without nodes" in (
-        await legality_reason(clarify, confirm_task, None, context) or ""
-    )
+    assert await legality_reason(clarify, confirm_task, None, context) is None
     write(
         "task.md",
         """# Report workflow
@@ -80,6 +81,10 @@ Collect the inputs, prepare the report, and deliver it.
 
 ## Final deliverables
 A report containing the requested summary.
+
+# Additional context
+## CODE: optional implementation note
+Formatting conventions do not prevent task review.
 """,
     )
     assert await legality_reason(clarify, confirm_task, None, context) is None
@@ -101,6 +106,9 @@ A report containing the requested summary.
 
 ## Steps
 Read the input, create the report, and validate its contents.
+
+# Extra notes
+Additional headings and content are allowed.
 """,
     )
     assert await legality_reason(explore, generate, None, context) is None
@@ -112,9 +120,13 @@ Read the input, create the report, and validate its contents.
         await legality_reason(generate_worker, verify, None, context) or ""
     )
     write_workflow_source(build.root)
+    source = build.root / "workflow"
+    (source / "scripts").mkdir()
+    (source / "scripts" / "unused.py").write_text("def obsolete(:\n", encoding="utf-8")
+    (source / "VALIDATE.md").write_bytes(b"Unused scripts/missing.py\n\xff")
     assert await legality_reason(generate_worker, verify, None, context) is None
 
-    # Check 4: Verify requests final confirmation only after a valid report ends in PASS.
+    # Check 4: Verify requires the last explicit verdict outside code blocks to be PASS.
     verify_worker = VerifyThink()
     confirm_workflow = tool_call("request_human_workflow_confirm")
     assert "write verify.md" in (
@@ -130,9 +142,18 @@ The isolated checks completed, but one Workflow check failed.
 FAIL
 """,
     )
-    assert "followed by `PASS`" in (
+    assert "explicit overall `PASS`" in (
         await legality_reason(verify_worker, confirm_workflow, None, context) or ""
     )
+    for failed_report in (
+        "# Verification\n\n```text\nPASS\n```\n",
+        "# Verification\n\nPASS\n\nFAIL\n",
+        "# Verification\n\nFAIL\n\n~~~text\nPASS\n~~~\n",
+    ):
+        write("verify.md", failed_report)
+        assert "explicit overall `PASS`" in (
+            await legality_reason(verify_worker, confirm_workflow, None, context) or ""
+        )
     write(
         "verify.md",
         """# Verification
@@ -141,6 +162,19 @@ The isolated checks completed successfully.
 
 ## Overall verdict
 PASS
+
+# Additional details
+These notes must not invalidate a successful verdict.
+
+```text
+FAIL
+```
 """,
     )
     assert await legality_reason(verify_worker, confirm_workflow, None, context) is None
+    write("verify.md", "PASS\n\nAdditional notes without a prescribed heading.\n")
+    assert await legality_reason(verify_worker, confirm_workflow, None, context) is None
+    (source / "WORKFLOW.md").unlink()
+    assert "WORKFLOW.md" in (
+        await legality_reason(verify_worker, confirm_workflow, None, context) or ""
+    )

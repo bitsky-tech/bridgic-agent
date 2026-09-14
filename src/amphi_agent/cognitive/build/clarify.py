@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 
-import re
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from bridgic.amphibious import OTARecord, StepToolCall
@@ -32,14 +31,6 @@ class ClarifyThink(BuildThink):
     """Clarify requirements and maintain this build's task definition."""
 
     persona: str = CLARIFY_PERSONA
-
-    _MERMAID_DIAGRAM_TYPES = frozenset({
-        "architecture-beta", "block-beta", "classdiagram", "erdiagram", "gantt",
-        "gitgraph", "journey", "kanban", "mindmap", "packet-beta", "pie",
-        "quadrantchart", "radar-beta", "requirementdiagram", "sankey-beta",
-        "sequencediagram", "statediagram", "statediagram-v2", "timeline",
-        "treemap-beta", "xychart-beta", "zenuml",
-    })
 
     ############################################################################
     # The agent design
@@ -353,122 +344,7 @@ class ClarifyThink(BuildThink):
         return resolved
 
     def task_validation_reason(self, context: AmphiContext) -> Optional[str]:
-        """Validate the current task definition and any Mermaid diagrams it contains."""
-        def diagram_reason(source: str) -> Optional[str]:
-            lines = [
-                (number, line.strip())
-                for number, line in enumerate(source.splitlines(), start=1)
-                if line.strip() and not line.lstrip().startswith("%%")
-            ]
-            if not lines:
-                return "the diagram is empty."
-
-            header = lines[0][1]
-            kind = header.split(maxsplit=1)[0].casefold().rstrip(";")
-            flowchart = kind in {"flowchart", "graph"}
-            if flowchart:
-                if not re.fullmatch(
-                    r"(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\s*;?",
-                    header,
-                    re.IGNORECASE,
-                ):
-                    return "declare a valid flow direction, for example `flowchart TD`."
-            elif kind not in self._MERMAID_DIAGRAM_TYPES and not kind.startswith("c4"):
-                return f"`{header}` is not a recognized Mermaid diagram declaration."
-            if len(lines) == 1:
-                return "the diagram has a declaration but no content."
-
-            pairs = {")": "(", "]": "[", "}": "{"}
-            stack: List[Tuple[str, int]] = []
-            quoted = False
-            escaped = False
-            for line_number, line in enumerate(source.splitlines(), start=1):
-                if line.lstrip().startswith("%%"):
-                    continue
-                for character in line:
-                    if escaped:
-                        escaped = False
-                    elif character == "\\" and quoted:
-                        escaped = True
-                    elif character == '"':
-                        quoted = not quoted
-                    elif not quoted and character in "([{":
-                        stack.append((character, line_number))
-                    elif not quoted and character in pairs:
-                        if not stack or stack[-1][0] != pairs[character]:
-                            return f"line {line_number} has an unmatched `{character}`."
-                        stack.pop()
-            if quoted:
-                return "a double-quoted label is not closed."
-            if stack:
-                opener, line_number = stack[-1]
-                return f"line {line_number} has an unmatched `{opener}`."
-
-            if flowchart:
-                open_subgraphs = 0
-                edge = r"(?:<-->|<==>|-->|---|-\.->|==>|~~~|--[ox]|[ox]--[ox])"
-                for line_number, line in lines[1:]:
-                    if re.match(r"^subgraph(?:\s|$)", line, flags=re.IGNORECASE):
-                        open_subgraphs += 1
-                    elif line.casefold().rstrip(";") == "end":
-                        if open_subgraphs == 0:
-                            return f"line {line_number} has an unmatched `end`."
-                        open_subgraphs -= 1
-                    dangling = re.match(rf"^{edge}", line) or re.search(
-                        rf"{edge}(?:\|[^|]*\|)?\s*;?$",
-                        line,
-                    )
-                    if dangling:
-                        return f"line {line_number} has a connector without nodes on both sides."
-                if open_subgraphs:
-                    return "a `subgraph` block is missing its closing `end`."
-            return None
-
+        """Require a readable task definition without enforcing prose formatting."""
         package = self.build_package(context)
         body = package.read_document("task.md") if package is not None else None
-        if not body:
-            return "write task.md before requesting confirmation."
-        document_reason = self.human_document_reason("task.md", body)
-        if document_reason:
-            return document_reason
-
-        diagrams: List[Tuple[int, str]] = []
-        fence: Optional[str] = None
-        start_line = 0
-        source: List[str] = []
-
-        for line_number, line in enumerate(body.splitlines(), start=1):
-            stripped = line.strip()
-            if fence is None:
-                opening = re.fullmatch(r"(`{3,})\s*mermaid\s*", stripped, flags=re.IGNORECASE)
-                if opening:
-                    fence = opening.group(1)
-                    start_line = line_number
-                    source = []
-                elif re.match(r"`{3,}.*\bmermaid\b", stripped, flags=re.IGNORECASE):
-                    return (
-                        f"task.md line {line_number} has an invalid Mermaid fence; "
-                        "use a standalone ```mermaid opening fence."
-                    )
-                continue
-
-            if stripped == fence:
-                diagrams.append((start_line, "\n".join(source)))
-                fence = None
-                source = []
-            elif stripped.startswith(fence):
-                return (
-                    f"task.md line {line_number} has an invalid Mermaid closing fence; "
-                    f"close the block with {fence} on its own line."
-                )
-            else:
-                source.append(line)
-
-        if fence is not None:
-            return f"the Mermaid block opened at task.md line {start_line} is not closed."
-
-        for index, (line_number, diagram) in enumerate(diagrams, start=1):
-            reason = diagram_reason(diagram)
-            if reason:
-                return f"Mermaid diagram {index} at task.md line {line_number}: {reason}"
-        return None
+        return None if body else "write task.md before requesting confirmation."

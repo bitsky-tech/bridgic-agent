@@ -339,23 +339,29 @@ class VerifyThink(BuildThink):
                     "and the overall verification verdict before calling "
                     "request_human_workflow_confirm."
                 )
-            document_reason = self.human_document_reason("verify.md", body)
-            if document_reason:
-                return f"confirm rejected: {document_reason}"
 
             def overall_verdict() -> Optional[str]:
-                """Read a localized overall-verdict section at the document tail."""
-                lines = [line.strip() for line in body.splitlines() if line.strip()]
-                if len(lines) < 2 or not re.fullmatch(r"##\s+\S.*", lines[-2]):
-                    return None
-                return lines[-1].upper()
+                """Read the last explicit verdict outside code blocks, allowing later notes."""
+                verdict = None
+                fence = None
+                for line in body.splitlines():
+                    stripped = line.strip()
+                    marker = re.match(r"^(`{3,}|~{3,})", stripped)
+                    if marker:
+                        candidate = marker.group(1)
+                        if fence is None:
+                            fence = candidate
+                        elif candidate[0] == fence[0] and len(candidate) >= len(fence):
+                            fence = None
+                        continue
+                    if fence is None and stripped.upper() in {"PASS", "FAIL"}:
+                        verdict = stripped.upper()
+                return verdict
 
             if overall_verdict() != "PASS":
                 return (
-                    "confirm rejected: verify.md must end with a level-two heading meaning "
-                    "Overall verdict in the document language, followed by `PASS`. Do not "
-                    "mark PASS while safely testable behavior failed, Verify changed actual "
-                    "external state, or a safety limitation was hidden."
+                    "confirm rejected: verify.md must contain an explicit overall `PASS` verdict. "
+                    "Do not mark PASS while safely testable behavior failed or a safety limitation was hidden."
                 )
             reason = self.workflow_validation_reason(context)
             return f"confirm rejected: {reason}" if reason else None

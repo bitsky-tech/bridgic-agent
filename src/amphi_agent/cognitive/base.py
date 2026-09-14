@@ -1444,6 +1444,16 @@ class BaseThink(CognitiveWorker):
                 elif content:
                     final_answer = content
 
+                legacy_scope = _view(record, "think_scope")
+                if (_view(legacy_scope, "mode"), _view(legacy_scope, "stage")) == ("run_workflow", "validate"):
+                    # Retired validation now belongs to Main, including its replies and publication notes.
+                    observation = _view(record, "observation_result")
+                    if observation:
+                        if final_answer:
+                            messages.append(Message.from_text(final_answer, role=Role.AI))
+                            final_answer = ""
+                        messages.append(Message.from_text(str(observation), role=Role.AI))
+
             if final_answer:
                 messages.append(Message.from_text(final_answer, role=Role.AI))
             return messages
@@ -1857,6 +1867,9 @@ class BaseThink(CognitiveWorker):
         scope = _view(record, "think_scope")
         mode = str(_view(scope, "mode") or "").strip()
         stage = str(_view(scope, "stage") or "").strip()
+        if (mode, stage) == ("run_workflow", "validate"):
+            # Reinterpret retired history without rewriting its persisted owner.
+            return "normal", "main"
         if mode and stage:
             return mode, stage
         legacy = str(_view(record, "build_stage") or "").strip()

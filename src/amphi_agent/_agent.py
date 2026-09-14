@@ -600,7 +600,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         worker = self._current_think_worker(ota_context, context)
         await worker.init_state(ota_context, context, previous_turn, self)
 
-        if awaiting and previous_turn.status is TurnStatus.AWAITING_PERMISSION:
+        # Replay only while the worker has left the pending Turn in the Session.
+        remaining_turns = context.session.get_all()
+        if awaiting and previous_turn.status is TurnStatus.AWAITING_PERMISSION and remaining_turns and remaining_turns[-1].id == previous_turn.id:
             if not isinstance(interaction, dict) or "permission" not in interaction:
                 raise RuntimeError("The pending permission Turn has no permission state.")
             if input_type != "permission_answer":

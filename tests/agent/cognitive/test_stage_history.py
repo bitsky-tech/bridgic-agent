@@ -44,6 +44,68 @@ def _serialized(messages) -> str:
     return str([message.model_dump(mode="json") for message in messages])
 
 
+@pytest.mark.parametrize("mode,stage", [("normal", "main"), ("presentation", "ppt_review"), ("build", "explore"), ("run_workflow", "execute")])
+async def test_retired_workflow_validation_is_read_as_normal_history(test_sandbox: IsolatedPaths, mode: str, stage: str) -> None:
+    """Main retains legacy validation activity and notes without changing stored scope."""
+    validation = _round("run_workflow", "validate", "Retained validation evidence")
+    validation.action_result.results[0].tool_id = "legacy-validation-call"
+    validation.observation_result = "Published report location: /saved/report.txt"
+    note = OTARecord(
+        think_scope={"mode": "run_workflow", "stage": "validate", "session_history": "all_stages"},
+        think_result={"step_content": "Legacy final assessment", "tool_calls": []},
+        observation_result="Legacy assessment note",
+    )
+    records = [validation, note, _round("run_workflow", "execute", "PRIVATE EXECUTION"), _round("build", "validate", "PRIVATE BUILD")]
+    previous = _turn(0, records, AgentState())
+    before = deepcopy(previous.model_dump(mode="json"))
+    before_records = [record.model_dump(mode="json") for record in records]
+    context = _context(str(test_sandbox.sessions / "retired-validation-history"), [previous], 100_000)
+    think = {"mode": mode, "stage": stage}
+    if mode == "run_workflow":
+        think.update(workflow_id="workflow", generation="generation")
+    current = AmphiOTAContext(user_input="Continue", ota_record=records, state={"think": think})
+    current.tools = TOOL_LIBRARY.select(["read_file"])
+    worker = MainThink()
+
+    for messages in (worker.turn_messages_block(current, context), await worker.session_messages_block(current, context)):
+        text = _serialized(messages)
+        for marker in ("Retained validation evidence", "Published report location", "Legacy final assessment", "Legacy assessment note"):
+            assert (marker in text) == (mode == "normal" and stage == "main")
+        calls = [block for message in messages for block in message.blocks if isinstance(block, ToolCallBlock)]
+        results = [block for message in messages for block in message.blocks if isinstance(block, ToolResultBlock)]
+        assert sum(call.id == "legacy-validation-call" for call in calls) == int(mode == "normal" and stage == "main")
+        assert [call.id for call in calls] == [result.id for result in results]
+        if mode == "normal" and stage == "main":
+            assert text.index("Legacy final assessment") < text.index("Legacy assessment note")
+            assert "PRIVATE EXECUTION" not in text and "PRIVATE BUILD" not in text
+
+    assert previous.model_dump(mode="json") == before
+    assert [record.model_dump(mode="json") for record in records] == before_records
+
+
+async def test_normal_compaction_covers_retired_validation_without_reexpansion(test_sandbox: IsolatedPaths) -> None:
+    """Aliased records use Main's normal coverage while raw validation tags stay intact."""
+    records = [_round("run_workflow", "validate", "COVERED VALIDATION"), _round("run_workflow", "validate", "RETAINED VALIDATION")]
+    state = AgentState(context_compaction=ContextCompactionState(turn={"normal": {"main": {
+        "turn_summary": "Earlier validation summary", "turn_through_round": 1,
+        "turn_covered_rounds": [1], "turn_covered_raw_rounds": [1],
+    }}}))
+    previous = _turn(0, records, state)
+    before = deepcopy(previous.model_dump(mode="json"))
+    context = _context(str(test_sandbox.sessions / "retired-validation-compaction"), [previous], 100_000)
+    current = AmphiOTAContext(user_input="Continue", state=state, ota_record=records)
+    current.tools = TOOL_LIBRARY.select(["read_file"])
+    worker = MainThink()
+
+    for messages in (worker.turn_messages_block(current, context), await worker.session_messages_block(current, context)):
+        text = _serialized(messages)
+        assert "Earlier validation summary" in text
+        assert "COVERED VALIDATION" not in text
+        assert "RETAINED VALIDATION" in text
+    assert previous.model_dump(mode="json") == before
+    assert all(record.think_scope["stage"] == "validate" for record in current.ota_record)
+
+
 @pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "verify"), ("run_workflow", "execute"), ("presentation", "ppt_review")])
 @pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
 async def test_compacted_turn_tail_does_not_expand_in_session_history(test_sandbox: IsolatedPaths, mode: str, stage: str, status: TurnStatus) -> None:

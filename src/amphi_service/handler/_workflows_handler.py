@@ -36,7 +36,6 @@ class WorkflowDirectoryStore:
     ARCHIVE_MEDIA_TYPE = "application/vnd.bridgic.workflow+zip"
     ARCHIVE_MANIFEST = "manifest.json"
     SUPPORTED_ARCHIVE_FORMAT_VERSIONS = frozenset({1, 2})
-    LEGACY_RUNTIME_DIR_NAME = ".runtime"
     MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
     MAX_ARCHIVE_FILE_BYTES = 16 * 1024 * 1024
     MAX_ARCHIVE_CONTENT_BYTES = 64 * 1024 * 1024
@@ -84,9 +83,15 @@ class WorkflowDirectoryStore:
                 relative = PurePosixPath(file.path)
                 if "__pycache__" in relative.parts or relative.suffix in {".pyc", ".pyo"}:
                     continue
-                archive.writestr(f"{cls.SOURCE_DIR_NAME}/{relative.as_posix()}", file.content)
+                archive.writestr(
+                    f"{cls.SOURCE_DIR_NAME}/{relative.as_posix()}",
+                    package.source_root.joinpath(*relative.parts).read_bytes(),
+                )
             if program.readme is not None:
-                archive.writestr(f"{cls.SOURCE_DIR_NAME}/{cls.README_NAME}", program.readme)
+                archive.writestr(
+                    f"{cls.SOURCE_DIR_NAME}/{cls.README_NAME}",
+                    (package.source_root / cls.README_NAME).read_bytes(),
+                )
         content = output.getvalue()
         if len(content) > cls.MAX_ARCHIVE_BYTES:
             raise ValueError("Workflow archive exceeds 32 MiB")
@@ -137,17 +142,11 @@ class WorkflowDirectoryStore:
                     mode = (info.external_attr >> 16) & 0xFFFF
                     if stat_module.S_ISLNK(mode) or info.flag_bits & 0x1:
                         raise ValueError(f"Workflow archive contains unsupported file: {normalized}")
-                    ignored_legacy_runtime_entry = (
-                        relative.parts[0] == cls.LEGACY_RUNTIME_DIR_NAME
-                    )
-                    allowed = (
+                    package_entry = (
                         normalized == cls.ARCHIVE_MANIFEST
                         or normalized in cls.DOCUMENT_NAMES
                         or relative.parts[0] == cls.SOURCE_DIR_NAME
-                        or ignored_legacy_runtime_entry
                     )
-                    if not allowed:
-                        raise ValueError(f"Workflow archive contains unsupported path: {normalized}")
                     if info.is_dir():
                         continue
                     if info.file_size > cls.MAX_ARCHIVE_FILE_BYTES:
@@ -156,7 +155,7 @@ class WorkflowDirectoryStore:
                     if total_size > cls.MAX_ARCHIVE_CONTENT_BYTES:
                         raise ValueError("Workflow archive expands beyond 64 MiB")
                     data = archive.read(info)
-                    if ignored_legacy_runtime_entry:
+                    if not package_entry:
                         continue
                     target = temporary.joinpath(*relative.parts)
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -176,11 +175,11 @@ class WorkflowDirectoryStore:
             ):
                 raise ValueError("Workflow archive format is not supported")
             name = manifest.get("name")
-            if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
+            if not isinstance(name, str) or not name.strip():
                 raise ValueError("Workflow archive has an invalid name")
-            for key, limit in (("description", 500), ("domain", 100)):
+            for key in ("description", "domain"):
                 value = manifest.get(key)
-                if value is not None and (not isinstance(value, str) or len(value) > limit):
+                if value is not None and not isinstance(value, str):
                     raise ValueError(f"Workflow archive has an invalid {key}")
             manifest["name"] = name.strip()
 

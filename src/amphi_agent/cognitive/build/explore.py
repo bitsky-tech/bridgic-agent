@@ -104,8 +104,7 @@ class ExploreThink(BuildThink):
             package = self.build_package(context)
             body = package.read_document("explore.md") if package is not None else None
             if body:
-                reason = self.human_document_reason("explore.md", body)
-                return f"switch rejected: {reason}" if reason else None
+                return None
             return (
                 "switch rejected: write explore.md before handing off to "
                 "generate; it is the operation sequence generate builds from. Create "

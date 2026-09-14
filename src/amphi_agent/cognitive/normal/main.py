@@ -282,11 +282,12 @@ class MainThink(BaseThink):
 
             if selected_action is not None:
                 try:
-                    source, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
+                    result_fields, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
                         ota_context,
                         context,
                         selected_workflow_id,
                         selected_action,
+                        agent,
                     )
                     action = selected_action
                     message = (
@@ -298,9 +299,7 @@ class MainThink(BaseThink):
                         )
                     )
                     result_fields = {
-                        "workflow_id": source.workflow_id,
-                        "workflow_name": source.name,
-                        **WorkflowRunThink._workflow_sections(source),
+                        **result_fields,
                         "resolved_action": resolved_action,
                     }
                 except (RuntimeError, ValueError) as exc:
@@ -577,16 +576,15 @@ class MainThink(BaseThink):
                     workspace = context.workspace
                     retained = workspace.run_workflow_checkpoint() if workspace is not None else None
                     source_status = ota_context.think_status
-                    source, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
+                    result_fields, resolved_action = await WorkflowRunThink._enter_or_resume_run_workflow(
                         ota_context,
                         context,
                         result.workflow_id,
                         "restart" if retained is not None else "start",
+                        agent,
                     )
                     step.tool_result = {
-                        "workflow_id": source.workflow_id,
-                        "workflow_name": source.name,
-                        **WorkflowRunThink._workflow_sections(source),
+                        **result_fields,
                         "status": resolved_action,
                         "reason": result.reason,
                     }
@@ -594,7 +592,7 @@ class MainThink(BaseThink):
                     if target_status != source_status:
                         agent._stamp_stage_handoff(
                             ota_context, source_status, target_status,
-                            f"Workflow `{source.name}` (`{source.workflow_id}`) {resolved_action}.\n"
+                            f"Workflow `{result_fields['workflow_name']}` (`{result_fields['workflow_id']}`) {resolved_action}.\n"
                             f"{result.reason or ''}",
                         )
 

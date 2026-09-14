@@ -139,6 +139,23 @@ async def test_inherited_init_keeps_previous_turn_after_shared_feedback_resume(t
     assert previous_turn.ota_records[-1]["action_result"]["results"][0]["tool_result"] == questions
 
 
+async def test_permission_resume_rejects_missing_permission_state(test_sandbox: IsolatedPaths) -> None:
+    """A missing interaction is not evidence that a worker consumed the pending Turn."""
+    saved = AmphiOTAContext(user_input="Perform the requested action.")
+    pending = _turn(saved, TurnStatus.AWAITING_PERMISSION)
+    context = _context(test_sandbox.sessions / "cognitive-init", [pending])
+    incoming = AmphiOTAContext(user_input={
+        "type": "permission_answer",
+        "request_id": "approval",
+        "answers": [{"call_index": 0, "decision": "allow"}],
+    })
+
+    with pytest.raises(RuntimeError, match="pending permission Turn has no permission state"):
+        await AmphiAgent().init_state(incoming, context)
+
+    assert context.session.get_all() == [pending]
+
+
 async def test_permission_replay_initializes_capabilities_before_execution(test_sandbox: IsolatedPaths, registry) -> None:
     """An approval replay restores stage resources before selecting and executing its tools."""
     events: list[tuple[str, BaseThink | None]] = []

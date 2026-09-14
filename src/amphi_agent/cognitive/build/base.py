@@ -3,7 +3,6 @@
 from dataclasses import replace
 
 import json
-import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bridgic.amphibious import StepToolCall
@@ -342,42 +341,6 @@ class BuildThink(BaseThink):
             context.workspace.close_build_space()
         if context.workflows is not None:
             context.workflows.close_package()
-
-    @staticmethod
-    def human_document_reason(name: str, body: str) -> Optional[str]:
-        """Validate heading use in a human-facing Build document."""
-        level_one: List[int] = []
-        fence: Optional[str] = None
-        annotation = re.compile(
-            r"^\s*#{1,6}\s+`?(CODE|AGENT|STABLE|VOLATILE|HUMAN|sample)`?\s*[:=]",
-            flags=re.IGNORECASE,
-        )
-        for line_number, line in enumerate(body.splitlines(), start=1):
-            stripped = line.strip()
-            marker = re.match(r"^(`{3,}|~{3,})", stripped)
-            if marker:
-                candidate = marker.group(1)
-                if fence is None:
-                    fence = candidate
-                elif candidate[0] == fence[0] and len(candidate) >= len(fence):
-                    fence = None
-                continue
-            if fence is not None:
-                continue
-            if annotation.match(line):
-                return (
-                    f"{name} line {line_number} uses a machine annotation as a Markdown "
-                    "heading; write it as a list item with an inline-code marker instead."
-                )
-            if re.match(r"^#\s+\S", stripped):
-                level_one.append(line_number)
-        if len(level_one) > 1:
-            lines = ", ".join(str(line_number) for line_number in level_one)
-            return (
-                f"{name} has multiple level-one headings on lines {lines}; keep one "
-                "document title and use ## or ### for sections."
-            )
-        return None
 
     def workflow_validation_reason(
         self,

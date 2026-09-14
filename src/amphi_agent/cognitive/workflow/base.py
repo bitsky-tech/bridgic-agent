@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from bridgic.amphibious import StepToolCall
+from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord, StepToolCall
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.model.types import Message, Role
 
@@ -22,7 +22,7 @@ from ...prompts.render import render_stage_persona
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 from ...tools.workflow import WorkflowStepReport
 from ..._workspace import RunWorkflowState
-from ....amphi_store import SessionTurnRecord, UserInput, WorkflowRunStatus
+from ....amphi_store import SessionTurnRecord, TurnStatus, UserInput, WorkflowRunStatus
 
 if TYPE_CHECKING:
     from ..._agent import AmphiAgent
@@ -39,6 +39,46 @@ class WorkflowRunThink(BaseThink):
     ############################################################################
     async def init_state(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_turn: Optional[SessionTurnRecord], agent: "AmphiAgent") -> None:
         """Restore the durable Run cursor before resuming its parked interaction."""
+        previous_state = (previous_turn.agent_state or {}) if previous_turn is not None else {}
+        retired_validation = (previous_state.get("think") or {}).get("stage") == "validate"
+        if retired_validation and not previous_turn.status.is_terminal:
+            # Consume the held Turn before publication can fail, preserving its trace and replies.
+            approval_answers = agent._permission_answers(ota_context.user_input)
+            if previous_turn.status in {TurnStatus.AWAITING_HUMAN, TurnStatus.AWAITING_SUBAGENTS}:
+                await super().init_state(ota_context, context, previous_turn, agent)
+            else:
+                ota_context.ota_record = [OTARecord.model_validate(record) for record in previous_turn.ota_records or []]
+                context.session = context.session.without_last()
+                ota_context.user_input = agent._renderable_user_input(previous_turn.user_input)
+
+            note = "Skipped the retired Workflow validation phase; its pending tools must not be replayed."
+            if not ota_context.ota_record:
+                ota_context.ota_record.append(OTARecord())
+            held = ota_context.ota_record[-1]
+            if previous_turn.status is TurnStatus.AWAITING_PERMISSION:
+                for _, instruction in approval_answers.values():
+                    if instruction:
+                        note += f"\nUser approval note: {instruction}"
+                permission = (previous_state.get("interaction") or {}).get("permission") or {}
+                results = ActionResult.model_validate(held.action_result or {"results": []})
+                recorded_ids = {step.tool_id for step in results.results}
+                for raw_call in permission.get("calls") or []:
+                    call = StepToolCall.model_validate(raw_call)
+                    if call.call_id not in recorded_ids:
+                        results.results.append(ActionStepResult(
+                            tool_id=call.call_id,
+                            tool_name=call.tool,
+                            tool_arguments=agent._tool_args(call),
+                            tool_result=note,
+                            success=False,
+                            error=note,
+                        ))
+                        recorded_ids.add(call.call_id)
+                held.action_result = results.model_dump(mode="json")
+            held.observation_result = f"{held.observation_result}\n{note}" if held.observation_result else note
+            ota_context.transition_interaction(None)
+            ota_context.transition_subagents(None)
+
         if isinstance(ota_context.think_status, WorkflowStageState):
             projected = await self._hydrate_run_workflow(ota_context.think_status, context)
             if projected is None:
@@ -46,7 +86,8 @@ class WorkflowRunThink(BaseThink):
             else:
                 ota_context.transition_think(projected)
                 await self._settle_workflow_boundary(ota_context, context, agent)
-        await super().init_state(ota_context, context, previous_turn, agent)
+        if not retired_validation:
+            await super().init_state(ota_context, context, previous_turn, agent)
 
     async def handle_action_result(self, ota_context: AmphiOTAContext, context: AmphiContext, agent: "AmphiAgent") -> None:
         """Apply a Workflow section report or an explicit exit from its active Run."""
@@ -560,8 +601,9 @@ class WorkflowRunThink(BaseThink):
         context: AmphiContext,
         workflow_id: str,
         action: str,
-    ) -> tuple[Any, str]:
-        """Enter, resume, or atomically restart the Workspace-owned Run."""
+        agent: "AmphiAgent",
+    ) -> tuple[Dict[str, Any], str]:
+        """Enter or resume a Run and return action fields after settling its boundary."""
         if context.session.is_child:
             raise RuntimeError("Child Sessions cannot control Workflow Runs.")
         workflows = context.workflows
@@ -640,7 +682,21 @@ class WorkflowRunThink(BaseThink):
             stage=state.stage,
             step_index=state.step_index,
         ))
-        return source, resolved_action
+        # Terminal publication removes the active Run, so capture its source fields first.
+        result_fields = {
+            "workflow_id": source.workflow_id,
+            "workflow_name": source.name,
+            **cls._workflow_sections(source),
+        }
+        published = await cls._settle_workflow_boundary(ota_context, context, agent)
+        if published is not None:
+            result_fields.update({
+                "run_id": published.run_id,
+                "run_status": published.status.value,
+                "created_at": published.created_at.isoformat(),
+                "published_result_dir": str(published.result_dir.resolve()),
+            })
+        return result_fields, resolved_action
 
     @classmethod
     async def _hydrate_run_workflow(cls, status: WorkflowStageState, context: AmphiContext) -> Optional[WorkflowStageState]:
@@ -794,13 +850,22 @@ class WorkflowRunThink(BaseThink):
                 f"Workflow Run state points outside {status.stage} sections."
             )
 
+        run = context.workflow_runs.require_run_workflow()
+        failure = run.result_dir / "failure.md"
+        outcome = (
+            WorkflowRunStatus.FAILED
+            if failure.exists() or failure.is_symlink()
+            else WorkflowRunStatus.COMPLETED
+        )
         published = await cls._publish_workflow_run(
             context,
             status,
-            status=WorkflowRunStatus.COMPLETED,
+            status=outcome,
         )
         terminal_summary = (
             f"Workflow `{published.workflow_name}` completed all execution sections successfully."
+            if outcome is WorkflowRunStatus.COMPLETED
+            else f"Workflow `{published.workflow_name}` failed; its saved failure report was retained."
         )
         await cls._finish_workflow_run(
             ota_context,

@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, Iterable, List, Literal, Optional, Sequence
+from typing import Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
 from uuid import uuid4
 
 from dulwich import porcelain
@@ -1126,6 +1126,17 @@ class RunWorkflowSpace:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("Run state is invalid JSON") from exc
+        if isinstance(payload, dict) and payload.get("stage") == "validate":
+            from ._workflows import WorkflowPackage
+
+            # The retired validation phase began only after every execution step
+            # succeeded. Its index belongs to a different section list, so it
+            # must never become an execution index. Keep discovery read-only.
+            state = cls._validated_state({**payload, "stage": "execute"})
+            source = WorkflowPackage(path.parent / "source")
+            if not source.is_available:
+                raise ValueError("Legacy Run Workflow source is unavailable")
+            return state.model_copy(update={"step_index": len(source.execution_steps)})
         return cls._validated_state(payload)
 
     @staticmethod
