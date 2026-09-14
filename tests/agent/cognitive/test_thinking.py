@@ -159,7 +159,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
             "completion_tokens": 4,
             "prompt_tokens_details": {"cached_tokens": 12},
         },
-        (20, 4, 12),
+        (20, 4, 12, 0),
     ),
     (
         SimpleNamespace(
@@ -167,15 +167,15 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
             output_tokens=6,
             input_tokens_details=SimpleNamespace(cached_tokens=18),
         ),
-        (30, 6, 18),
+        (30, 6, 18, 0),
     ),
     (
         {"input_tokens": 9, "output_tokens": 2, "cached_input_tokens": 7},
-        (9, 2, 7),
+        (9, 2, 7, 0),
     ),
 ])
-def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tuple[int, int, int]) -> None:
-    """Provider-specific cache details converge on one latest-call count."""
+def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tuple[int, int, int, int]) -> None:
+    """Provider-specific cache details converge on one latest-call count, with no cache write."""
     assert MainThink._usage_values(usage) == expected
 
 

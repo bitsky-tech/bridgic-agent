@@ -225,6 +225,17 @@ export const Icons = {
       <rect x="10" y="3.6" width="3.4" height="8.8" rx="1" fill="currentColor" />
     </svg>
   ),
+  user: (s = 16) => (
+    <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
+      <circle cx="8" cy="5.5" r="2.75" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M3 13.5c0-2.2 2.2-3.5 5-3.5s5 1.3 5 3.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  ),
   link: (s = 16) => (
     <svg width={s} height={s} viewBox="0 0 16 16" fill="none">
       <path
