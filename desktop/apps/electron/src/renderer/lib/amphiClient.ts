@@ -27,6 +27,7 @@
  */
 
 import { z } from 'zod'
+import type { DesktopDebugToolResponse, ToolExecutionInput } from '@shared/debug-tool-types'
 import { sessionTurnsToMessages, resolveWorkflowStepMetadata, type SessionTurnChild } from './sessionTurns'
 import {
   AUTH_HEADER_NAME,
@@ -1039,6 +1040,14 @@ export class AmphiClient {
 
   async getVersion(): Promise<VersionResponse> {
     return this.fetchJson('/version')
+  }
+
+  async executeDebugTool(sessionId: string, input: ToolExecutionInput): Promise<DesktopDebugToolResponse> {
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/tools/execute`, {
+      // Tool runtimes own their timeouts; navigation must not imply cancellation.
+      method: 'POST', signal: new AbortController().signal,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+    })
   }
 
   async assembleDebugPrompt(sessionId: string, input: PromptAssemblyInput, signal?: AbortSignal): Promise<DesktopDebugPromptResponse> {

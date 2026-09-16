@@ -36,6 +36,22 @@ export function formatToolArguments(value: unknown): string | undefined {
   } catch { return undefined }
 }
 
+/** Normalize recorded name/value lists without silently dropping duplicate names. */
+export function toolExecutionArguments(value: unknown): Record<string, unknown> | null {
+  const properties = object(value)
+  if (properties) return properties
+  if (!Array.isArray(value)) return null
+  const entries: [string, unknown][] = []
+  const names = new Set<string>()
+  for (const item of value) {
+    const entry = object(item)
+    if (!entry || typeof entry.name !== 'string' || !entry.name || !Object.hasOwn(entry, 'value') || names.has(entry.name)) return null
+    names.add(entry.name)
+    entries.push([entry.name, entry.value])
+  }
+  return Object.fromEntries(entries)
+}
+
 /** The snapshot belongs to the draft, so later trace polls cannot overwrite edits. */
 export function createToolArgumentDraft(argumentsValue: unknown): ToolArgumentDraft {
   let original: unknown

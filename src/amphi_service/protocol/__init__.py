@@ -60,6 +60,7 @@ from ._schemas import (
     CreateSessionRequest,
     PatchScheduleRequest,
     RenameSessionRequest,
+    ExecuteSessionToolRequest,
     GetSessionPromptRequest,
     RenameWorkflowRequest,
     CreateMountRequest,
@@ -128,6 +129,7 @@ __all__ = [
     # Request models (input validation)
     "CreateSessionRequest",
     "RenameSessionRequest",
+    "ExecuteSessionToolRequest",
     "GetSessionPromptRequest",
     "RenameWorkflowRequest",
     "CreateMountRequest",

@@ -22,7 +22,7 @@ export interface TraceToolCall {
   hasResult: boolean
   pairing: 'id' | 'arguments' | 'missing' | 'unmatched'
   status: TraceStatus
-  /** Only a duration on this individual result, never the round's action total. */
+  /** A recorded per-call duration, either on the result or keyed by call id on the round. */
   durationMs: number | null
   rawCall: unknown
   rawResult: unknown

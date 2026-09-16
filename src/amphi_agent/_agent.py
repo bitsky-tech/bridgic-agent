@@ -20,6 +20,7 @@ from bridgic.amphibious import (
 )
 from bridgic.amphibious._amphibious_automa import _decision_to_matched_calls
 from bridgic.amphibious._type import ThinkResult  # the worker's decision (step_content + tool_calls)
+from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic import ConcurrentAutoma
 from bridgic.core.agentic.tool_specs import ToolSpec
 from bridgic.core.automa.args import ArgsMappingRule, InOrder
@@ -33,6 +34,7 @@ from .cognitive import (
 from ._context import AmphiContext, AmphiOTAContext, ContextUsageSnapshot
 from ._describe import describe_commands
 from ._error import AgentEmptyAnswerError
+from ._tools import ToolLibrary
 from .prompts.title import TITLE_PROMPT
 from .cognitive.state import (
     AgentResult,
@@ -399,6 +401,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
 
         # Push tool result to stream except internal control-flow tools
         if stream is not None and result is not None:
+            tool_durations = getattr(ota_context._current_record(), "tool_durations_ms", {}) or {}
             for step in getattr(result, "results", None) or []:
                 if step.tool_name in self.no_display_tools:
                     continue
@@ -408,7 +411,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                     success=bool(step.success),
                     error=step.error,
                     output=str(step.tool_result if step.tool_result is not None else ""),
-                    duration_ms=duration_ms,
+                    duration_ms=tool_durations.get(step.tool_id, 0),
                 )
 
         return result
@@ -439,37 +442,16 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             )
         )
 
-        async def run_one(tool_call: ToolCall, tool_spec: ToolSpec) -> ActionStepResult:
-            call_token = current_tool_call_id.set(tool_call.id)
-            mode_token = current_execution_mode.set(effective_execution_mode)
+        record = ota_context._current_record()
+        tool_durations = dict(getattr(record, "tool_durations_ms", {}) or {})
+        record.tool_durations_ms = tool_durations
+
+        async def run_one(call: ToolCall, spec: ToolSpec) -> ActionStepResult:
+            start = time.monotonic()
             try:
-                sandbox = ConcurrentAutoma()
-                sandbox.add_worker(
-                    key=f"tool_{tool_call.name}_{tool_call.id}",
-                    worker=tool_spec.create_worker(),
-                    args_mapping_rule=ArgsMappingRule.UNPACK,
-                )
-                try:
-                    results = await sandbox.arun(InOrder([tool_call.arguments]))
-                    return ActionStepResult(
-                        tool_id=tool_call.id,
-                        tool_name=tool_call.name,
-                        tool_arguments=tool_call.arguments,
-                        tool_result=results[0] if results else None,
-                        success=True,
-                    )
-                except Exception as exc:  # noqa: BLE001 - tool failures are action results
-                    return ActionStepResult(
-                        tool_id=tool_call.id,
-                        tool_name=tool_call.name,
-                        tool_arguments=tool_call.arguments,
-                        tool_result=None,
-                        success=False,
-                        error=str(exc),
-                    )
+                return await self._execute_tool_call(call, spec, effective_execution_mode)
             finally:
-                current_execution_mode.reset(mode_token)
-                current_tool_call_id.reset(call_token)
+                tool_durations[call.id] = int((time.monotonic() - start) * 1000)
 
         executed = await asyncio.gather(*(run_one(call, spec) for call, spec in matched))
         executed_by_id = {step.tool_id: step for step in executed}
@@ -495,6 +477,39 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 error=reason,
             ))
         return ActionResult(results=results)
+
+    async def _execute_tool_call(self, tool_call: ToolCall, tool_spec: ToolSpec, execution_mode: Optional[str]) -> ActionStepResult:
+        """Run a tool worker for either a normal action or an explicit debug request."""
+        call_token = current_tool_call_id.set(tool_call.id)
+        mode_token = current_execution_mode.set(execution_mode)
+        try:
+            sandbox = ConcurrentAutoma()
+            sandbox.add_worker(
+                key=f"tool_{tool_call.name}_{tool_call.id}",
+                worker=tool_spec.create_worker(),
+                args_mapping_rule=ArgsMappingRule.UNPACK,
+            )
+            try:
+                results = await sandbox.arun(InOrder([tool_call.arguments]))
+                return ActionStepResult(
+                    tool_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    tool_arguments=tool_call.arguments,
+                    tool_result=results[0] if results else None,
+                    success=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - tool failures are action results
+                return ActionStepResult(
+                    tool_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    tool_arguments=tool_call.arguments,
+                    tool_result=None,
+                    success=False,
+                    error=str(exc),
+                )
+        finally:
+            current_execution_mode.reset(mode_token)
+            current_tool_call_id.reset(call_token)
 
     async def after_action(self, ota_context: AmphiOTAContext, context: AmphiContext) -> None:
         """Fold all-denied rounds and delegate results through the active cognitive worker.
@@ -1066,6 +1081,28 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     ############################################################################
     # Agent Debugging Support
     ############################################################################
+    async def execute_tool(self, context: AmphiContext, tool_name: str, arguments: Dict[str, Any]) -> ActionStepResult:
+        """Execute one explicit debug call using the supplied Session resources."""
+        specs = ToolLibrary().select([tool_name])
+        if not specs:
+            raise ValueError(f"Unknown tool {tool_name!r}")
+        decision = ThinkResult(step_content="", tool_calls=[StepToolCall(
+            call_id=uuid4().hex, tool=tool_name,
+            tool_arguments=[{"name": name, "value": value} for name, value in arguments.items()],
+        )])
+        call, spec = _decision_to_matched_calls(decision, specs)[0]
+        # Keep native JSON values while applying the usual coercion to recorded strings.
+        call.arguments.update({name: value for name, value in arguments.items() if not isinstance(value, str)})
+        ota_context = AmphiOTAContext()
+        previous_context, previous_ota = self._current_context, self._current_ota_context
+        self._current_context, self._current_ota_context = context, ota_context
+        token = current_agent.set(self)
+        try:
+            return await self._execute_tool_call(call, spec, context.execution_mode)
+        finally:
+            current_agent.reset(token)
+            self._current_context, self._current_ota_context = previous_context, previous_ota
+
     async def get_prompt(self, context: AmphiContext, ota_context: AmphiOTAContext) -> Dict[str, Any]:
         """Return the worker's assembly from the supplied contexts."""
         worker = self._current_think_worker(ota_context, context)

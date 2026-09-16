@@ -1,7 +1,7 @@
 # Desktop debug API contract
 
-This document describes the read-only Turn observation path and on-demand
-Cognitive Prompt assembly, followed by proposed normalized trace and replay APIs.
+This document describes Turn observation, on-demand Cognitive Prompt assembly,
+and single-tool execution, followed by proposed normalized trace and replay APIs.
 
 ## Implemented debug paths
 
@@ -17,6 +17,12 @@ It reads the existing Desktop database and returns `DesktopDebugTurnsPage` from
 It rejects non-GET requests, requires the debug launcher's bearer token, and
 accepts only that launcher's renderer origin. This adapter is solely for raw
 Turn traces; it does not serve prompt data or execute tools or models.
+
+New tool executions record each call's elapsed milliseconds in the round's
+`tool_durations_ms` map, keyed by tool-call id. The inspector matches these
+durations by call id; explicit durations on individual results remain supported.
+`act_duration_ms` describes the whole action group and is never substituted for
+an individual tool's time. Older records without per-call timings show no duration.
 
 ### On-demand Cognitive Prompt API
 
@@ -114,6 +120,59 @@ database columns, tables, or migrations. Storage grows with the serialized state
 particularly the length of retained compaction summaries. Unsupported workers or
 insufficient round context return an error rather than a substituted Prompt.
 
+### Single-tool execution API
+
+`POST /api/debug/sessions/{sessionId}/tools/execute` runs one explicitly submitted
+tool call using the current Session resources:
+
+```ts
+type ToolExecutionInput = {
+  toolName: string
+  arguments: Record<string, unknown>
+}
+type ToolExecutionResponse = {
+  sessionId: string
+  durationMs: number
+  result: {
+    tool_id: string // A new id for this execution.
+    tool_name: string
+    tool_arguments: Record<string, unknown>
+    tool_result: unknown
+    success: boolean
+    error: string | null
+  }
+}
+```
+
+The normal backend bearer token and Session ownership check are required.
+The handler delegates to `self.invocations.execute_tool`; Invocation uses the
+shared `_load_context` resource loader and calls `AmphiAgent.execute_tool`.
+The Agent selects the current ToolSpec and reuses its ordinary single-tool
+worker runner. Recorded strings receive the existing argument coercion, while
+native JSON arrays, objects, booleans, numbers, and nulls retain their types.
+
+The explicit click executes the tool directly with the user's current execution
+mode. It does not enter model-driven admission, cognitive result processing, or
+the Turn loop. Control tools return their request data without opening a
+confirmation interaction or advancing a workflow. Tool-specific runtime checks
+still apply, including read-before-modify checks and required workflow state.
+
+Workspace files, mounts, browser pages, and Office targets are current resources;
+no historical restoration is attempted. Tool changes affect those resources.
+The endpoint does not create or overwrite conversation Turns or recorded calls.
+Unavailable resources retain their native errors. Completed calls, including
+tool failures, return HTTP 200 and `Cache-Control: no-store`; unavailable
+Sessions return 404, context-loading conflicts return 409, and malformed requests
+or unknown tool names return 422.
+
+The renderer submits only on a click, blocks repeat clicks while running, and
+keeps the result and submitted arguments in the current Session's panel memory.
+Inspector navigation does not cancel a running tool. Switching Sessions discards
+its local test state and ignores late results. There is no automatic retry,
+run-polling endpoint, cancellation contract, or 30-second transport timeout;
+individual tools retain their own runtime limits. A disconnected request cannot
+establish whether its tool already took effect.
+
 ## Proposed normalized trace and replay routes
 
 All proposed routes must use the existing backend bearer authentication and
@@ -125,7 +184,7 @@ the same backend, data, workspace, and native Session hosts as ordinary Desktop.
 | --- | --- |
 | `GET /api/debug/capabilities` | Advertise implemented debug operations. |
 | `GET /api/debug/sessions/{sessionId}/trace` | Read normalized, paginated Turn → round → tool traces. |
-| `POST /api/debug/sessions/{sessionId}/tool-runs` | Start one explicitly requested tool execution from an edited draft. |
+| `POST /api/debug/sessions/{sessionId}/tool-runs` | Future asynchronous tool run; the implemented synchronous endpoint is `tools/execute`. |
 | `POST /api/debug/sessions/{sessionId}/llm-runs` | Start one explicitly requested LLM call from an edited request draft. |
 | `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Read that debug run's status and result. |
 | `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Request cancellation, when supported. |
@@ -138,7 +197,7 @@ Capability values describe the deployed backend, not the presence of buttons:
   "promptAssembly": true,
   "traceRead": false,
   "liveTrace": false,
-  "toolRun": false,
+  "toolRun": true,
   "llmRun": false,
   "cancelRun": false
 }
@@ -146,8 +205,8 @@ Capability values describe the deployed backend, not the presence of buttons:
 
 The capability endpoint itself remains proposed. Once implemented, its values
 must describe the deployed backend rather than the presence of buttons. Until
-then, the implemented prompt routes and raw Turn adapter above are the only
-debug transports. Unsupported execution controls remain disabled. Production
+then, the implemented Prompt and tool execution routes and raw Turn adapter above
+are the debug transports. Model execution controls remain disabled. Production
 remains the ordinary Desktop renderer; a frontend debug switch is not
 authorization to expose backend execution routes.
 

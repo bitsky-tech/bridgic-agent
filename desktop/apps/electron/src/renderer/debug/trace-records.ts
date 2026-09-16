@@ -168,13 +168,17 @@ export function buildTraceRecords(turns: readonly TraceTurnInput[]): TraceRecord
       const addCall = (callValue: unknown, resultValue: unknown, hasResult: boolean, pairing: TraceToolCall['pairing'], key: string) => {
         const call = object(callValue)
         const result = object(resultValue)
+        const sourceCallId = identity(call ? field(call, 'call_id', 'callId') : field(result, 'tool_id', 'toolId'))
+        const resultDuration = field(result, 'duration_ms', 'durationMs')
+        const toolDuration = resultDuration === undefined && pairing === 'id' && sourceCallId
+          ? field(object(raw?.tool_durations_ms), sourceCallId) : resultDuration
         toolCalls.push({
           id: `${roundId}:${key}`, roundId, turnId: turn.id, turnOrdinal: turn.sessionOrdinal, ordinal: toolCalls.length + 1,
-          sourceCallId: identity(call ? field(call, 'call_id', 'callId') : field(result, 'tool_id', 'toolId')),
+          sourceCallId,
           name: text(call ? field(call, 'tool', 'name') : field(result, 'tool_name', 'toolName')) ?? null,
           arguments: field(call ?? result, 'tool_arguments', 'toolArguments', 'arguments'),
           result: field(result, 'tool_result', 'toolResult'), error: field(result, 'error'), hasResult, pairing,
-          status: hasResult ? resultStatus(resultValue) : 'unknown', durationMs: duration(field(result, 'duration_ms', 'durationMs')),
+          status: hasResult ? resultStatus(resultValue) : 'unknown', durationMs: duration(toolDuration),
           rawCall: callValue, rawResult: resultValue,
         })
       }

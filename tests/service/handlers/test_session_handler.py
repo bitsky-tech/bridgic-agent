@@ -495,6 +495,63 @@ async def test_message_pagination(service_client: httpx.AsyncClient) -> None:
     assert older["next_before"] == 0
 
 
+async def test_debug_tool_executes_current_workspace_through_the_api(service_client) -> None:
+    created = await create_session(service_client)
+    workspace = Path(created["workspace_root"]) / ".work"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "debug.txt").write_text("Current workspace data")
+    path = f"/api/debug/sessions/{created['id']}/tools/execute"
+    response = await service_client.post(path, json={"toolName": "read_file", "arguments": {"file_path": "debug.txt"}})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()
+    assert data["sessionId"] == created["id"]
+    assert data["result"]["success"], data
+    assert "Current workspace data" in data["result"]["tool_result"]
+    assert data["durationMs"] >= 0
+    failed = await service_client.post(path, json={"toolName": "read_file", "arguments": {"file_path": "missing.txt"}})
+    assert failed.status_code == 200
+    assert failed.json()["result"]["success"] is False
+    unknown = await service_client.post(path, json={"toolName": "unknown_tool", "arguments": {}})
+    assert unknown.status_code == 422
+    assert await SessionTurnRepository().list_conversation("local", created["id"]) == []
+
+
+async def test_debug_tool_requires_authentication_and_session_ownership(service_client, service_app, monkeypatch) -> None:
+    created = await create_session(service_client)
+    execute = AsyncMock()
+    monkeypatch.setattr(service_app.state.invocations, "execute_tool", execute)
+    payload = {"toolName": "read_file", "arguments": {"file_path": "debug.txt"}}
+    path = f"/api/debug/sessions/{created['id']}/tools/execute"
+    assert (await service_client.post(path, json=payload, headers={"Authorization": "Bearer invalid"})).status_code == 401
+    transport = httpx.ASGITransport(app=service_app.app, raise_app_exceptions=True)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as public_client:
+        assert (await public_client.post(path, json=payload)).status_code == 401
+    await UserRepository().ensure_seeded("tool-other-user")
+    await SessionRepository().save(SessionRecord(
+        id="tool-foreign-session", user_id="tool-other-user", workspace_root=created["workspace_root"],
+    ))
+    for hidden in ("tool-foreign-session", "missing-session"):
+        assert (await service_client.post(f"/api/debug/sessions/{hidden}/tools/execute", json=payload)).status_code == 404
+    execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("payload", [
+    {"toolName": "", "arguments": {}},
+    {"toolName": "read_file"},
+    {"toolName": "read_file", "arguments": None},
+    {"toolName": "read_file", "arguments": []},
+    {"toolName": "read_file", "arguments": {}, "executionMode": "full"},
+])
+async def test_debug_tool_rejects_invalid_requests(service_client, service_app, monkeypatch, payload) -> None:
+    created = await create_session(service_client)
+    execute = AsyncMock()
+    monkeypatch.setattr(service_app.state.invocations, "execute_tool", execute)
+    response = await service_client.post(f"/api/debug/sessions/{created['id']}/tools/execute", json=payload)
+    assert response.status_code == 422
+    execute.assert_not_awaited()
+
+
 async def test_debug_prompt_delegates_round_selection(service_client, service_app, monkeypatch) -> None:
     """Prompt analysis assembles one selected round without enabling capture."""
     created = await create_session(service_client)

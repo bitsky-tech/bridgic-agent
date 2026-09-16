@@ -131,6 +131,22 @@ describe('buildTraceRecords: persisted OTA data', () => {
     expect(records.calls.map(value => value.durationMs)).toEqual([0, null])
   })
 
+  test('reads per-call timing maps by identity and keeps absent or ambiguous timing unknown', () => {
+    const records = buildTraceRecords([turn([
+      { ...round([call('fast', {}), call('failed', {}), call('zero', {})], [
+        { ...result('failed', {}, null), success: false, error: 'Failure' },
+        result('zero', {}, ''), result('fast', {}, 'Done'),
+      ]), tool_durations_ms: { fast: 12, failed: 450, zero: 0 }, act_duration_ms: 480 },
+      { ...round([call('old', {})], [result('old', {}, 'Legacy')]), act_duration_ms: 100 },
+      { ...round([call('explicit', {})], [{ ...result('explicit', {}, ''), duration_ms: 7 }]), tool_durations_ms: { explicit: 9 } },
+      { ...round([call('bad', {})], [result('bad', {}, '')]), tool_durations_ms: { bad: -1 } },
+      { ...round([call('dup', {}), call('dup', {})], [result('dup', {}, '')]), tool_durations_ms: { dup: 22 } },
+    ])])
+    expect(records.calls.map(value => value.durationMs)).toEqual([12, 450, 0, null, 7, null, null, null, null])
+    expect(records.rounds[0]!.actDurationMs).toBe(480)
+    expect(records.rounds[0]!.calls[1]!.status).toBe('error')
+  })
+
   test('reads provider token fields with provenance, preserving reported zero and unreported cache', () => {
     const records = buildTraceRecords([turn([{ usage: { prompt_tokens: 0, completion_tokens: 4, total_tokens: 4, prompt_tokens_details: { cached_tokens: 0 } } }])])
     const record = records.rounds[0]!

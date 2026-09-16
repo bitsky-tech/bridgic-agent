@@ -109,9 +109,22 @@ chronological Turn/round/tool order, stage and tool-name/status filtering,
 recorded usage, and navigation back to older conversation messages. Tool arguments
 and recorded round requests have local draft editors. The Prompt analysis panel
 assembles messages, tool definitions, and semantic request options on demand as
-read-only data. Edits in the other inspectors stay in local drafts across
-navigation and automatic refresh. The conversation view remains available in
+read-only data. Tool arguments can be submitted with **Execute tool** to run once
+against the Session's current workspace, mounts, browser, and Office hosts.
+The test result and submitted arguments appear in the inspector; resource changes
+take effect immediately. Drafts and test results survive inspector navigation and
+automatic refresh within the selected Session. Model request edits remain drafts.
+The conversation view remains available in
 the debug header for comparison.
+
+Tool execution calls the authenticated
+`POST /api/debug/sessions/{sessionId}/tools/execute` endpoint with `toolName`
+and an `arguments` object. Invocation reuses `_load_context`, then delegates to
+`AmphiAgent.execute_tool` and the same single-tool worker runner used by ordinary
+actions. Recorded string parameters receive the existing type coercion; native
+JSON values retain their types. This does not restore historical files or pages,
+run a new Turn, or overwrite the recorded call. Existing tool prerequisites still
+apply; missing resources or state produce the tool's usual error.
 
 Prompt analysis lists the existing Session Turn rounds chronologically. Opening
 a round calls `POST /api/debug/sessions/{sessionId}/prompts` with its `turnId`,

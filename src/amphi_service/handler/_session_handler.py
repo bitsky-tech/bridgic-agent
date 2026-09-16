@@ -12,7 +12,7 @@ from ...amphi_agent import WorkflowPackage
 from ...amphi_agent._workflow_run import RunWorkflow
 from ...amphi_agent._workspace import Workspace
 from ..i18n import backend_i18n
-from ..protocol import CreateSessionRequest, GetSessionPromptRequest, RenameSessionRequest
+from ..protocol import CreateSessionRequest, ExecuteSessionToolRequest, GetSessionPromptRequest, RenameSessionRequest
 from ...amphi_store import (
     SessionRecord,
     SessionRepository,
@@ -342,6 +342,29 @@ class SessionMessagesHandler(BaseHandler):
             "step_index": checkpoint.step_index,
             "execution_steps": execution_steps,
         }
+
+
+class SessionDebugToolsHandler(BaseHandler):
+    """Execute a single tool using the authenticated Session's current resources."""
+
+    tags = ["debug"]
+
+    async def post(self, session_id: str, body: ExecuteSessionToolRequest) -> Response:
+        from ...amphi_agent import InvocationNotFoundError, InvocationStateError
+
+        user = await self.require_user()
+        record = await self.require_session(session_id, user)
+        try:
+            result = await self.invocations.execute_tool(record.id, body.tool_name, body.arguments)
+        except InvocationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvocationStateError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response = self.response(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 class SessionDebugPromptsHandler(BaseHandler):

@@ -1780,6 +1780,28 @@ class AgentInvocation:
     ############################################################################
     # Agent Debugging Support
     ############################################################################
+    async def execute_tool(self, session_id: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Run one tool against current resources without creating a conversation Turn."""
+        record = await self._sessions.load_by_id(session_id)
+        if record is None:
+            raise InvocationNotFoundError(f"Session {session_id!r} was not found")
+        user = await UserRepository().load(record.user_id)
+        if user is None:
+            raise InvocationNotFoundError("Session owner was not found")
+        context = await self._load_context(
+            record, "", [], model=user.current_model,
+            execution_mode=user.execution_mode, sync_builtins=False,
+        )
+        start = time.monotonic()
+        result = await AmphiAgent(verbose=False).execute_tool(context, tool_name, arguments)
+        return {
+            "sessionId": session_id,
+            "durationMs": int((time.monotonic() - start) * 1000),
+            "result": result.model_dump(
+                mode="json", fallback=lambda value: vars(value) if hasattr(value, "__dict__") else str(value),
+            ),
+        }
+
     async def get_prompt(self, session_id: str, turn_id: str, round_index: int, *, mode: str, stage: str) -> dict[str, Any]:
         """Pass the selected Turn's context to its Cognitive worker."""
         record = await self._sessions.load_by_id(session_id)

@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -32,6 +32,15 @@ class RenameSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     title: str = Field(min_length=1, max_length=200)
+
+
+class ExecuteSessionToolRequest(BaseModel):
+    """Execute a tool explicitly against the Session's current resources."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = Field(alias="toolName", min_length=1)
+    arguments: Dict[str, Any]
 
 
 class GetSessionPromptRequest(BaseModel):
