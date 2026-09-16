@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAtomValue } from 'jotai'
 import { currentStreamingAtom } from '@/atoms/agent'
 import { Activity, ArrowDownLeft, ArrowUpRight, ChartNoAxesCombined, Check, ChevronRight, CircleHelp, Layers3, RefreshCw, Repeat2, Wrench, X, XCircle, Zap } from 'lucide-react'
@@ -15,11 +15,12 @@ function usageLabel(total: UsageTotal) {
   return `${total.partial ? '≥ ' : ''}${total.value.toLocaleString()}`
 }
 
-function Overview({ onClose }: SessionWorkbenchExtensionProps) {
+function Overview({ active, onClose }: SessionWorkbenchExtensionProps) {
   const debug = useDebugSession()
+  const { hasMore, loading, error, loadAll } = debug
   const text = useDebugText()
   const streaming = Boolean(useAtomValue(currentStreamingAtom))
-  const [scope, setScope] = useState('latest')
+  const [scope, setScope] = useState('session')
   const ordered = useMemo(() => [...debug.turns].sort((a, b) => b.sessionOrdinal - a.sessionOrdinal || b.id.localeCompare(a.id)), [debug.turns])
   const selected = scope === 'latest' ? ordered[0] : ordered.find(turn => turn.id === scope)
   const turns = useMemo(() => scope === 'session' ? ordered : ordered.filter(turn => turn.id === selected?.id), [scope, ordered, selected?.id])
@@ -34,10 +35,9 @@ function Overview({ onClose }: SessionWorkbenchExtensionProps) {
   const successRate = tools.success + tools.failed > 0 ? tools.success / (tools.success + tools.failed) : null
   const maxStageRounds = Math.max(1, ...stages.map(stage => stage.rounds))
   const percentage = (value: number | null) => value === null ? '—' : `${(value * 100).toFixed(1)}%`
-  const scopeChange = (value: string) => {
-    setScope(value)
-    if (value === 'session') debug.loadAll()
-  }
+  useEffect(() => {
+    if (active && scope === 'session' && hasMore && !loading && !error) loadAll()
+  }, [active, scope, hasMore, loading, error, loadAll])
 
   return <WorkbenchToolSurface testId="desktop-debug-overview" className="debug-overview-surface">
     <WorkbenchToolHeader title={text('overview.title')} icon={<ChartNoAxesCombined size={16} />}
@@ -48,9 +48,9 @@ function Overview({ onClose }: SessionWorkbenchExtensionProps) {
     <WorkbenchToolScrollArea className="debug-overview">
       <div className="debug-overview-scope">
         <label htmlFor="debug-overview-scope">{text('overview.scope')}</label>
-        <select id="debug-overview-scope" value={scope} onChange={event => scopeChange(event.target.value)}>
-          <option value="latest">{text('overview.latestTurn')}{ordered[0] ? ` · Turn ${turnLabel(ordered[0].sessionOrdinal)}` : ''}</option>
+        <select id="debug-overview-scope" value={scope} onChange={event => setScope(event.target.value)}>
           <option value="session">{text('overview.entireSession')}</option>
+          <option value="latest">{text('overview.latestTurn')}{ordered[0] ? ` · Turn ${turnLabel(ordered[0].sessionOrdinal)}` : ''}</option>
           {ordered.map(turn => <option key={turn.id} value={turn.id}>Turn {turnLabel(turn.sessionOrdinal)} · {(userInputText(turn.userInput) ?? text('userInputNotRecorded')).slice(0, 60)}</option>)}
         </select>
       </div>

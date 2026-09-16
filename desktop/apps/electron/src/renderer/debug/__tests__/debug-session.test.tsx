@@ -114,26 +114,26 @@ describe('execution overview scope and refresh', () => {
     return { ...turn(id, ordinal, sessionId), contextUsage: { source: 'provider', input_tokens: tokens, output_tokens: 10 } }
   }
 
-  test('defaults to the latest Turn, switches history, and resets scope on a Session change', async () => {
+  test('defaults to the entire Session, switches history, and resets scope on a Session change', async () => {
     databaseFetch(() => [fixture('a-old', 0, 100), fixture('a-new', 1, 200), fixture('b-only', 0, 300, 'b')])
     const view = await mount('overview')
     const metric = () => view.host.querySelector('[data-metric="totalTokens"]')?.textContent
-    expect(metric()).toBe('210')
+    expect(view.host.querySelector('select')!.value).toBe('session')
+    expect(metric()).toBe('320')
     expect(view.host.textContent).toContain('Agent overview')
     expect(view.host.textContent).not.toContain('Prompt analysis')
     await choose(view.host.querySelector('select')!, 'a-old')
     expect(metric()).toBe('110')
     await view.switchSession('b')
-    expect(view.host.querySelector('select')!.value).toBe('latest')
+    expect(view.host.querySelector('select')!.value).toBe('session')
     expect(metric()).toBe('310')
     expect(view.host.textContent).not.toContain('a-old')
   })
 
-  test('loads every page before reporting complete Session totals and never requests prompts', async () => {
+  test('automatically loads every page for the default Session scope and never requests prompts', async () => {
     const requests = databaseFetch(() => [fixture('one', 0, 100), fixture('two', 1, 200), fixture('three', 2, 300)], 1)
     const view = await mount('overview')
-    expect(view.current.turns).toHaveLength(1)
-    await choose(view.host.querySelector('select')!, 'session')
+    expect(view.host.querySelector('select')!.value).toBe('session')
     expect(view.current.turns).toHaveLength(3)
     expect(view.current.hasMore).toBe(false)
     expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('630')
@@ -144,12 +144,14 @@ describe('execution overview scope and refresh', () => {
     expect(requests.every(url => url.pathname.endsWith('/turns'))).toBe(true)
   })
 
-  test('follows new Turns in latest scope but preserves an explicitly selected historical Turn', async () => {
+  test('follows new Turns in Session and latest scopes but preserves an explicitly selected historical Turn', async () => {
     const turns = [fixture('old', 0, 100)]
     databaseFetch(() => turns)
     const view = await mount('overview')
     turns.push(fixture('new', 1, 200))
     await act(async () => view.current.refresh())
+    expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('320')
+    await choose(view.host.querySelector('select')!, 'latest')
     expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('210')
     await choose(view.host.querySelector('select')!, 'old')
     turns.push(fixture('newer', 2, 300))

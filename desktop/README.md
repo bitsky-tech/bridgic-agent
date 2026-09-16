@@ -110,8 +110,8 @@ recorded usage, and navigation back to older conversation messages. Tool argumen
 and recorded round requests have local draft editors.
 
 The Agent overview panel summarizes token usage, model rounds, mode/stage visits,
-and tool outcomes. It defaults to the latest Turn, allows selecting historical
-Turns, and loads all trace pages before presenting complete Session totals.
+and tool outcomes. It defaults to the entire Session, automatically loads all
+trace pages for complete totals, and allows selecting the latest or historical Turns.
 New rounds store measured input/output and cache usage, plus model-call duration
 (including streaming and retries, excluding prompt assembly and tools). The
 execution cards and round inspector read these same per-round measurements.
