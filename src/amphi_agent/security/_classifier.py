@@ -401,10 +401,39 @@ def _build_user_prompt(
     return "\n".join(lines)
 
 
+def _bare_objects(text: str) -> Optional[list]:
+    """Read output that is nothing but JSON objects separated by commas / whitespace — the
+    array with its brackets dropped, which some models emit (a single bare object, or
+    ``{…},\\n{…}`` / ``{…}\\n{…}``). Returns ``None`` if anything else is in the text.
+
+    Accepting it does not open a fail-open path: :func:`_parse` still aligns the objects
+    by ``index`` and fails closed when they cannot cover every call."""
+    decoder = json.JSONDecoder()
+    objects: list = []
+    pos = 0
+    while pos < len(text):
+        try:
+            obj, pos = decoder.raw_decode(text, pos)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        objects.append(obj)
+        while pos < len(text) and text[pos] in " \t\r\n,":
+            pos += 1
+    if objects:
+        # Logged so the recovery is visible in the daemon log: on the success path nothing else
+        # records the raw output, which made "the model dropped the brackets and we recovered"
+        # indistinguishable from "the model emitted a proper array".
+        logger.info("[safety-classifier] output had no array brackets, recovered %d verdict object(s)", len(objects))
+    return objects or None
+
+
 def _extract_array(content: str) -> Optional[list]:
     """Extract the JSON array from the model output: first parse the whole thing directly
-    (a clean output), then fall back to slicing the first ``[...]`` out of the text (the
-    output came with extra prose). Returns ``None`` when neither works."""
+    (a clean output), then accept bare objects with the brackets dropped, then fall back to
+    slicing the first ``[...]`` out of the text (the output came with extra prose). Returns
+    ``None`` when none of these works."""
     text = (content or "").strip()
     if not text:
         return None
@@ -414,6 +443,9 @@ def _extract_array(content: str) -> Optional[list]:
             return data
     except (json.JSONDecodeError, ValueError):
         pass
+    objects = _bare_objects(text)
+    if objects is not None:
+        return objects
     match = re.search(r"\[.*\]", text, re.S)
     if match:
         try:
