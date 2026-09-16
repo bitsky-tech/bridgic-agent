@@ -125,9 +125,37 @@ Mode/stage entries count transitions within each Turn, while the model-call
 count follows recorded rounds. Tool outcomes distinguish success, failure, and
 unknown results; unpaired results do not inflate declared invocation counts.
 
-Edits in the tool and round inspectors stay in local drafts across navigation
-and automatic refresh. The conversation view remains available in the debug
-header for comparison.
+Opening a round shows its model request and recorded output inside an initially
+expanded **Model call** section. Its disclosure sits outside both cards, matching
+the **User input** section. The Cognitive request is assembled automatically. Messages (including native content
+blocks and metadata), tool schemas and options can be inspected and copied, or
+edited in a separate experiment. Assembly restores the saved round scope and
+prefers its recorded model;
+it uses current resources and excludes runtime-tail injection. It is not a
+historical HTTP capture. Collapsed **Tool execution** and **Raw record** sections below
+the output retain the recorded results and source data.
+
+The request inspector separates **Messages**, **Tool definitions**, and **Call
+parameters**. Messages and tools use searchable, paginated directories with one
+selected detail; only 20 directory rows and one full item render at a time.
+Message role filters preserve original positions, and inspector navigation keeps
+the selection and filters. Wider sidebars place the directory beside its detail;
+narrow sidebars stack them within bounded scroll areas. Complete request JSON is
+an alternate view opened from the request header, separate from these fields.
+
+**Debug experiment** opens a dedicated dialog with the request editor and results
+side by side. **Run experiment** submits the draft using the active provider; merely
+opening or closing the dialog never starts or cancels a run. The inspector always
+shows historical output, while the dialog keeps a separate result selection;
+experiments support cancellation and retain submitted requests, outputs and usage
+in `debug_model_runs`, outside conversation Turns and overview totals. Returned
+tool calls are displayed, never executed. A disconnected viewer can reconnect;
+unfinished runs are marked interrupted after a daemon restart. Tool re-execution
+remains unavailable. These routes require the updated Python daemon.
+
+Edits stay in local drafts across inspector navigation and automatic refresh;
+switching Sessions clears local drafts. The conversation view remains available
+in the debug header for comparison.
 
 See the [debug API contract](docs/debug-api-contract.md) for the assembly boundary
 and the separate history and replay capabilities.

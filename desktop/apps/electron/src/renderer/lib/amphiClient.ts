@@ -55,6 +55,7 @@ import type {
 } from '@shared/types'
 import { askUserQuestionSchema } from './askUserQuestionSchema'
 import { i18n } from './i18n'
+import type { CreateDebugModelRun, DebugModelRun, DebugPromptResponse, DebugRoundSource } from '@shared/debug-model-types'
 
 // ───── Request / response shapes mirrored from backend schemas ─────────────
 
@@ -1028,6 +1029,59 @@ export class AmphiClient {
     if (this.clientType) h[CLIENT_TYPE_HEADER] = this.clientType
     if (this.userAgent) h['User-Agent'] = this.userAgent
     return h
+  }
+
+  async assembleDebugPrompt(sessionId: string, source: Omit<DebugRoundSource, 'revision'>, signal?: AbortSignal): Promise<DebugPromptResponse> {
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/prompts`, {
+      method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(source),
+    })
+  }
+
+  async createDebugModelRun(sessionId: string, body: CreateDebugModelRun): Promise<DebugModelRun> {
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/llm-runs`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+  }
+
+  async listDebugModelRuns(sessionId: string, turnId: string, roundIndex: number, signal?: AbortSignal): Promise<DebugModelRun[]> {
+    const query = new URLSearchParams({ turnId, roundIndex: String(roundIndex) })
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/llm-runs?${query}`, { signal })
+  }
+
+  async getDebugModelRun(sessionId: string, runId: string, signal?: AbortSignal): Promise<DebugModelRun> {
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`, { signal })
+  }
+
+  async cancelDebugModelRun(sessionId: string, runId: string): Promise<DebugModelRun> {
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+  }
+
+  async watchDebugModelRun(sessionId: string, runId: string, onUpdate: (run: Omit<DebugModelRun, 'request'>) => void, signal: AbortSignal): Promise<void> {
+    const response = await this.fetchResponse(`/api/debug/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`, { signal })
+    if (!response.body) throw new Error('Missing experiment stream')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let pending = ''
+    let terminal = false
+    const consume = (line: string) => {
+      if (!line.trim()) return
+      const run = JSON.parse(line) as Omit<DebugModelRun, 'request'>
+      if (run.id !== runId || run.sessionId !== sessionId) throw new Error('Invalid experiment identity')
+      terminal = run.status !== 'running'
+      onUpdate(run)
+    }
+    try {
+      while (true) {
+        const { value, done } = await reader.read()
+        pending += decoder.decode(value, { stream: !done })
+        let newline: number
+        while ((newline = pending.indexOf('\n')) >= 0) {
+          consume(pending.slice(0, newline)); pending = pending.slice(newline + 1)
+        }
+        if (done) { consume(pending); break }
+      }
+      if (!terminal) throw new Error('Experiment stream disconnected')
+    } finally { await reader.cancel().catch(() => undefined); reader.releaseLock() }
   }
 
   // ───── Legacy unauthenticated probes ──────────────────────────────────────

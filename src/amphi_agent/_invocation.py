@@ -1782,6 +1782,7 @@ class AgentInvocation:
     ############################################################################
     async def get_prompt(self, session_id: str, turn_id: str, round_index: int, *, mode: str, stage: str) -> dict[str, Any]:
         """Pass the selected Turn's context to its Cognitive worker."""
+        from ..amphi_store._debug_run import debug_fingerprint
         record = await self._sessions.load_by_id(session_id)
         if record is None:
             raise InvocationNotFoundError(f"Session {session_id!r} was not found")
@@ -1804,8 +1805,9 @@ class AgentInvocation:
             raise InvocationNotFoundError("Session owner was not found")
         turns = await self._turns.list_conversation(user.id, record.id, before_ordinal=turn.session_ordinal)
         user_input = AmphiAgent._renderable_user_input(turn.user_input)
+        round_model = rounds[round_index].get("model_id") or rounds[round_index].get("model")
         context = await self._load_context(
-            record, user_input, turns, model=user.current_model,
+            record, user_input, turns, model=round_model or turn.model or user.current_model,
             execution_mode=turn.execution_mode or user.execution_mode, sync_builtins=False,
         )
         dump = turn.ota_context_dump()
@@ -1860,10 +1862,13 @@ class AgentInvocation:
                 "id": f"{turn.id}:round:{round_index + 1}",
                 "turnId": turn.id, "turnOrdinal": turn.session_ordinal, "roundIndex": round_index,
                 "mode": mode, "stage": stage, "availability": "assembled",
+                "revision": debug_fingerprint(rounds[round_index]),
+                "modelSource": "round" if round_model else "turn" if turn.model else "current",
+                "boundary": "cognitive_before_runtime_tail",
                 "request": {
                     "schemaVersion": 1, "kind": "cognitive",
                     "providerId": context.llm_provider.provider_id or None,
-                    "modelId": context.llm_provider.model_id or None, "protocol": None,
+                    "modelId": context.llm_provider.model_id or None, "protocol": user.protocol,
                     **request,
                 },
             },

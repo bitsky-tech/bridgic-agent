@@ -64,9 +64,12 @@ type AssembledPromptResponse = {
 }
 ```
 
-The frontend lists rounds from its existing Session trace, requests assembly only
-when a round or comparison baseline is selected, and keeps results in panel
-memory. It does not enable capture or request a persisted Prompt feed.
+The round inspector requests assembly automatically when a round is opened and
+caches it in Session-scoped panel memory. Responses also include a source-record
+`revision`, `modelSource` (`round`, `turn`, or `current`), and the explicit
+`boundary: cognitive_before_runtime_tail`. The assembled model prefers the round
+record, then the Turn, then the current model. Provider credentials and protocol
+come from the currently active provider. It does not enable HTTP request capture.
 
 The output is assembled using current Cognitive code, configuration, and Session
 resources. Conversation history stops before the selected response. Each new
@@ -114,7 +117,52 @@ database columns, tables, or migrations. Storage grows with the serialized state
 particularly the length of retained compaction summaries. Unsupported workers or
 insufficient round context return an error rather than a substituted Prompt.
 
-## Proposed normalized trace and replay routes
+### Model-only experiments
+
+The authenticated implementation now includes these independent debug routes:
+
+| Method and path | Purpose |
+| --- | --- |
+| `POST /api/debug/sessions/{sessionId}/llm-runs` | Submit one model-only experiment. |
+| `GET /api/debug/sessions/{sessionId}/llm-runs?turnId=...&roundIndex=...` | List this round's experiments. |
+| `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Read the current or durable result. |
+| `GET /api/debug/sessions/{sessionId}/runs/{runId}/events` | Stream replacement result snapshots as newline-delimited JSON. |
+| `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Cancel an active model call and retain its partial output. |
+
+Submission contains `clientRequestId`, a `source` with the same round selection
+plus `revision`, and `request: {model, providerId, protocol, messages, tools,
+extraBody}`. Messages and tools use the native Bridgic schema; simple role/content
+text messages are also accepted. Semantic options cannot override the model,
+messages, tools or transport credentials. Session ownership, source scope and
+revision, active-provider identity, and the absence of a running Agent Turn are
+validated. One experiment may run per Session. Duplicate submissions with the
+same id and body return the same run; reusing an id for different content fails.
+
+Reassembling a request updates untouched experiment drafts to the new messages,
+tools, model and parameters, even when the source-record revision is unchanged.
+Edited drafts retain their contents and JSON buffers, show a changed-assembly
+notice, and can be reset to the latest assembly. The role selector offers the
+native message roles: `system`, `user`, `assistant`, and `tool`.
+
+The response is a run snapshot with `id`, `sessionId`, `source`, submitted
+`request`, `createdAt`, `status`, `content`, `reasoning`, `toolCalls`, raw provider
+`usage`, `durationMs`, `error` and observed `retries`. Stream snapshots omit the
+immutable request and replace previous output instead of appending it again.
+The viewer can reopen the stream or query the run after a disconnect. The model
+task lives independently of the HTTP viewer. Initial and final snapshots are
+stored in the separate `debug_model_runs` table; a restarted service marks a
+previously running row `interrupted` without repeating the model call.
+Creation, state reads and Session-tree deletion share a lifecycle lock. Creation
+rechecks Session ownership and existence after model resolution; deletion waits
+for active experiments to finish persisting before removing their records. Reads
+cannot classify a newly persisted experiment as interrupted before its live task
+has been registered.
+
+Experiments never dispatch returned tools, continue the Agent loop, mutate source
+Turns or enter normal conversation totals. The original provider attempt's HTTP
+body and unobserved retry usage remain unavailable. Tool replay is still proposed.
+
+## Proposed normalized trace and tool replay routes
 
 All proposed routes must use the existing backend bearer authentication and
 current-user resolution. Each Session, Turn, round, tool call, and debug run must
@@ -126,9 +174,8 @@ the same backend, data, workspace, and native Session hosts as ordinary Desktop.
 | `GET /api/debug/capabilities` | Advertise implemented debug operations. |
 | `GET /api/debug/sessions/{sessionId}/trace` | Read normalized, paginated Turn → round → tool traces. |
 | `POST /api/debug/sessions/{sessionId}/tool-runs` | Start one explicitly requested tool execution from an edited draft. |
-| `POST /api/debug/sessions/{sessionId}/llm-runs` | Start one explicitly requested LLM call from an edited request draft. |
-| `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Read that debug run's status and result. |
-| `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Request cancellation, when supported. |
+| `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Extend the implemented model-run reader to tool runs. |
+| `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Extend model-run cancellation to supported tool runs. |
 
 Capability values describe the deployed backend, not the presence of buttons:
 
@@ -139,15 +186,15 @@ Capability values describe the deployed backend, not the presence of buttons:
   "traceRead": false,
   "liveTrace": false,
   "toolRun": false,
-  "llmRun": false,
-  "cancelRun": false
+  "llmRun": true,
+  "cancelRun": true
 }
 ```
 
-The capability endpoint itself remains proposed. Once implemented, its values
-must describe the deployed backend rather than the presence of buttons. Until
-then, the implemented prompt routes and raw Turn adapter above are the only
-debug transports. Unsupported execution controls remain disabled. Production
+The capability endpoint itself remains proposed. Its example values above
+describe the implemented model experiment routes. Once implemented, its values
+must describe the deployed backend rather than the presence of buttons.
+Tool execution controls remain disabled. Production
 remains the ordinary Desktop renderer; a frontend debug switch is not
 authorization to expose backend execution routes.
 
@@ -339,17 +386,16 @@ returns the same run; reuse with different input returns a conflict.
 }
 ```
 
-The `llm-runs` request uses the same envelope but references `modelAttemptId` and
-supplies the edited `AssembledCognitiveRequest` shape as `input.request`, with
-`input.basis: "assembled" | "user_authored"`. An assembled input uses the current
-Cognitive/runtime boundary described above; it is not a historical request. The
-UI must identify user-authored replacements and require missing execution
-parameters. Replay references a finalized source trace at the specified revisions. The
-backend rejects changed or unavailable source revisions rather than silently
-executing against a newer trace, and retains the accepted source link and draft.
+The example above is the proposed tool replay envelope. Implemented model runs
+use the `source` and `request` schema in the model experiment section above,
+with a source-record fingerprint rather than normalized trace revisions.
+Assembled input uses the current Cognitive/runtime boundary; it is not a
+historical request. Both forms retain the accepted source link and edited input
+and reject changed or unavailable source revisions.
 
-Both POSTs return `202` with `{ "runId": "debug_run_1", "status": "queued" }`.
-The run resource contains its `kind` (`tool` or `llm`), source reference,
+The proposed tool POST returns `202` with `{ "runId": "debug_run_1", "status": "queued" }`;
+the implemented model POST returns its full run snapshot. A future normalized
+run resource contains its `kind` (`tool` or `llm`), source reference,
 submitted input, revision, execution status, timing, result, usage where
 applicable, and error. Accepted draft input is immutable; another edit creates
 another run. A cancellation request is not proof that execution was cancelled;
@@ -376,4 +422,5 @@ would be a separate capability, not an implicit interpretation of `llm-runs`.
 The frontend can adopt the normalized trace through one transport adapter when
 the backend advertises support, while retaining the current raw-record adapter
 for older deployments. Draft editors and unavailable-state UI can be implemented
-now; actual execution stays disabled until the backend capability exists.
+now; tool execution stays disabled until its backend capability exists. Model
+experiments are already enabled through the implemented routes above.

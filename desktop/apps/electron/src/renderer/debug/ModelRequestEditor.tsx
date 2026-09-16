@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useDebugDraft } from './DebugDrafts'
 import { useDebugText } from './DebugSessionProvider'
@@ -62,12 +62,13 @@ function MessageEditor({ draft, setDraft, path, index, onRemove }: EditorState &
   const text = useDebugText()
   const message = requestValue(draft.request, path)
   const title = `${text('message')} ${index + 1}`
-  const roles = ['system', 'developer', 'user', 'assistant', 'tool']
+  const roles = ['system', 'user', 'assistant', 'tool']
   const canEditRole = isRequestObject(message) && (typeof message.role === 'string' || !Object.hasOwn(message, 'role'))
   let body
   if (isRequestObject(message) && canEditRole) {
     const role = typeof message.role === 'string' ? message.role : ''
-    const metadata = Object.fromEntries(Object.entries(message).filter(([key]) => key !== 'role' && key !== 'content'))
+    const contentKey = Array.isArray(message.blocks) ? 'blocks' : 'content'
+    const metadata = Object.fromEntries(Object.entries(message).filter(([key]) => key !== 'role' && key !== contentKey))
     body = <>
       <label className="debug-model-role"><span>role</span><select aria-label={`${title} role`} value={role}
         onChange={(event) => updateField(setDraft, [...path, 'role'], event.target.value)}>
@@ -75,14 +76,18 @@ function MessageEditor({ draft, setDraft, path, index, onRemove }: EditorState &
         {role && !roles.includes(role) ? <option value={role}>{role}</option> : null}
         {roles.map((value) => <option key={value}>{value}</option>)}
       </select></label>
-      <ContentEditor draft={draft} setDraft={setDraft} path={[...path, 'content']} label={`${title} content`} />
+      {contentKey === 'blocks' ? (message.blocks as unknown[]).map((block, blockIndex) =>
+        isRequestObject(block) && block.block_type === 'text' && typeof block.text === 'string'
+          ? <ContentEditor key={blockIndex} draft={draft} setDraft={setDraft} path={[...path, 'blocks', blockIndex, 'text']} label={`${title} · ${blockIndex + 1} content`} />
+          : <JsonEditor key={blockIndex} draft={draft} setDraft={setDraft} path={[...path, 'blocks', blockIndex]} value={block} label={`${title} · ${blockIndex + 1} (JSON)`} />)
+        : <ContentEditor draft={draft} setDraft={setDraft} path={[...path, 'content']} label={`${title} content`} />}
       <details className="debug-model-extra"><summary>{text('messageMetadata')} · {Object.keys(metadata).length}</summary>
         <JsonEditor draft={draft} setDraft={setDraft} path={path} value={metadata} label={`${title} ${text('metadata')}`} objectOnly bufferPrefix="metadata"
           apply={(request, value) => {
-            if (!isRequestObject(value) || Object.hasOwn(value, 'role') || Object.hasOwn(value, 'content')) throw new Error('Reserved message fields')
+            if (!isRequestObject(value) || Object.hasOwn(value, 'role') || Object.hasOwn(value, contentKey)) throw new Error('Reserved message fields')
             const current = requestValue(request, path)
             if (!isRequestObject(current)) throw new Error('Expected a message')
-            const preserved = Object.fromEntries(Object.entries(current).filter(([key]) => key === 'role' || key === 'content'))
+            const preserved = Object.fromEntries(Object.entries(current).filter(([key]) => key === 'role' || key === contentKey))
             return setRequestValue(request, path, { ...value, ...preserved })
           }} />
       </details>
@@ -95,9 +100,17 @@ function MessageEditor({ draft, setDraft, path, index, onRemove }: EditorState &
   </div>
 }
 
-export function ModelRequestEditor({ round }: { round: TraceRound }) {
+export function ModelRequestEditor({ round, assembled, onRun, running = false, draftVersion = '', experiment = false }: {
+  round: TraceRound; assembled?: Record<string, unknown>; onRun?: (request: Record<string, unknown>) => void; running?: boolean; draftVersion?: string; experiment?: boolean
+}) {
   const text = useDebugText()
-  const [draft, setDraft] = useDebugDraft<ModelRequestDraft>(`model:${round.id}`, () => createModelRequestDraft(round.recordedRequest))
+  const [draft, setDraft] = useDebugDraft<ModelRequestDraft>(`model:${round.id}:${assembled ? `assembled:${draftVersion}` : 'recorded'}`, () => createModelRequestDraft(assembled ?? round.recordedRequest))
+  const assemblyChanged = useMemo(() => Boolean(assembled && JSON.stringify(assembled) !== JSON.stringify(draft.original)), [assembled, draft.original])
+  useEffect(() => {
+    if (!assembled || !assemblyChanged) return
+    // Preserve edits, including invalid JSON buffers, when the assembly changes.
+    setDraft(current => current.edited ? current : createModelRequestDraft(assembled))
+  }, [assembled, assemblyChanged, setDraft])
   const snapshot = inspectModelRequest(draft.request)
   const ready = inspectModelRequest(draft.original).hasPrompt || draft.manual || draft.edited
   const modelFields = snapshot.models.length ? snapshot.models : [{ path: [...snapshot.primary.path, 'model'], value: undefined }]
@@ -106,13 +119,19 @@ export function ModelRequestEditor({ round }: { round: TraceRound }) {
   const changeMessages = (path: RequestPath, messages: unknown[]) => setDraft((current) => ({
     ...current, edited: true, request: setRequestValue(current.request, path, messages), buffers: {}, errors: {},
   }))
+  const runHint = experiment ? 'modelCall.experimentDraftHint' : 'modelCall.runNotice'
+  const runControl = <div className="debug-model-run"><button type="button" disabled={!onRun || running || !ready || hasErrors || (assemblyChanged && !draft.edited)} onClick={() => onRun?.(draft.request)}>{text(experiment ? 'modelCall.runExperiment' : 'callLlmOnce')}</button>
+    <span>{text(onRun ? runHint : 'executionApiPending')}</span>
+  </div>
   return <section className="debug-model-editor" aria-label={text('modelRequestEditor')}>
+    {experiment ? runControl : null}
     <div className="debug-model-heading"><strong>{ready ? text('debugDraft') : text('originalRequest')}</strong>
-      {ready ? <span>{draft.edited ? text('edited') : text('fromRecordedFields')}</span> : null}
+      {ready ? <span>{draft.edited ? text('edited') : text(assembled ? 'modelCall.assembledRequest' : 'fromRecordedFields')}</span> : null}
     </div>
-    {ready ? <button className="debug-model-reset" type="button" disabled={!draft.edited}
-      onClick={() => setDraft((current) => createModelRequestDraft(current.original))}>{text('restoreOriginalRequest')}</button> : null}
-    <p className="debug-model-note">{text('partialRequestNotice')}</p>
+    {assemblyChanged && draft.edited ? <p role="status" className="debug-model-note">{text('modelCall.assemblyChanged')}</p> : null}
+    {ready ? <button className="debug-model-reset" type="button" disabled={!draft.edited && !assemblyChanged}
+      onClick={() => setDraft((current) => createModelRequestDraft(assembled ?? current.original))}>{text(assembled ? 'modelCall.restoreAssembly' : 'restoreOriginalRequest')}</button> : null}
+    {!assembled ? <p className="debug-model-note">{text('partialRequestNotice')}</p> : null}
     {!ready ? <div className="debug-model-empty">
       <p>{text('noPromptNotice')}</p>
       <button type="button" onClick={() => setDraft(startManualModelRequest)}><Plus size={14} />{text('createDebugRequest')}</button>
@@ -158,12 +177,10 @@ export function ModelRequestEditor({ round }: { round: TraceRound }) {
           : <pre>{asJson(draft.request)}</pre>}
       </details>
     </>}
-    <details className="debug-model-raw"><summary>{text('originalRequestRecordedFields')}</summary>
+    <details className="debug-model-raw"><summary>{text(assembled ? 'modelCall.assemblyBaseline' : 'originalRequestRecordedFields')}</summary>
       <pre>{Object.keys(draft.original).length ? asJson(draft.original) : text('notRecorded')}</pre>
     </details>
-    <div className="debug-model-run"><button type="button" disabled>{text('callLlmOnce')}</button>
-      <span>{text('executionApiPending')}</span>
-    </div>
-    <p className="debug-model-note">{text('draftOnlyNotice')}</p>
+    {!experiment ? runControl : null}
+    {!onRun ? <p className="debug-model-note">{text('draftOnlyNotice')}</p> : null}
   </section>
 }

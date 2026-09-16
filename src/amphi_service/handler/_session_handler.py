@@ -175,8 +175,8 @@ class SessionDetailHandler(BaseHandler):
     async def delete(self, session_id: str) -> Response:
         user = await self.require_user()
         record = await self.require_session(session_id, user)
-        tree = await SessionRepository().list_tree(user.id, record.id)
-        removed = await self.invocations.remove_session_tree(session_id)
+        async with self.state.debug_runs.deleting_session_tree(user.id, record.id) as tree:
+            removed = await self.invocations.remove_session_tree(session_id)
         if not removed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

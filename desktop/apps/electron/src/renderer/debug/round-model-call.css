@@ -1,0 +1,134 @@
+.debug-round-call { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.debug-call-heading { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-default); }
+.debug-call-heading > strong { flex: 1; font-size: var(--text-sm); }
+.debug-call-heading > span { color: var(--text-tertiary); font-size: var(--text-xs); }
+.debug-call-heading button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--border-default); border-radius: 7px; background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; font-size: var(--text-xs); }
+.debug-call-heading button:hover { color: var(--text-accent-purple); border-color: var(--text-accent-purple); }
+.debug-call-heading button:disabled { opacity: .5; cursor: default; }
+.debug-call-heading select { max-width: 58%; min-width: 0; padding: 5px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-surface); color: var(--text-primary); font-size: var(--text-xs); }
+.debug-call-body { padding: 14px 16px; min-width: 0; }
+.debug-call-body > .debug-model-note:first-child { margin-top: 0; }
+.debug-call-request-meta, .debug-call-result-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; font-size: var(--text-xs); color: var(--text-secondary); }
+.debug-call-request-meta code { color: var(--text-accent-purple); }
+.debug-call-source { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: var(--text-xs); color: var(--text-secondary); }
+.debug-call-source code { overflow-wrap: anywhere; }
+.debug-call-message { min-width: 0; }
+.debug-message-path { display: flex; gap: 10px; justify-content: space-between; padding: 10px 12px; color: var(--text-tertiary); font-size: var(--text-xs); }
+.debug-message-block { border-top: 1px solid var(--border-default); }
+.debug-message-block-heading { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 10px 12px 0; color: var(--text-secondary); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.debug-message-block-heading > code, .debug-message-block-heading > strong { min-width: 0; }
+.debug-message-block-heading > strong { font-weight: 500; }
+.debug-message-call-id { flex-basis: 100%; color: var(--text-tertiary); }
+.debug-message-block > pre, .debug-message-content { padding: 12px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.65; }
+.debug-call-message > .debug-json { margin: 0; border: 0; border-top: 1px solid var(--border-default); border-radius: 0; }
+.debug-call-body .debug-json { margin-top: 12px; }
+.debug-call-result > .debug-metrics { margin-bottom: 14px; }
+.debug-call-result .debug-thinking { margin: 12px 0; }
+.debug-call-result .debug-response { margin-top: 12px; }
+
+.debug-request-tabs { display: flex; border-bottom: 1px solid var(--border-default); margin: 4px 0 12px; }
+.debug-request-tabs > button { display: flex; align-items: center; justify-content: center; flex: 1; min-width: 0; gap: 5px; padding: 9px 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font-size: var(--text-xs); cursor: pointer; }
+.debug-request-tabs > button[aria-selected=true] { color: var(--text-accent-purple); border-bottom-color: var(--text-accent-purple); }
+.debug-request-tabs > button > span { padding: 0 4px; border-radius: 4px; background: var(--bg-hover); color: var(--text-tertiary); font-size: var(--text-2xs); }
+.debug-request-browser { container-type: inline-size; }
+.debug-request-search { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.debug-request-search > label { display: flex; align-items: center; flex: 1; min-width: 0; gap: 6px; border: 1px solid var(--border-default); border-radius: 6px; padding: 6px 8px; color: var(--text-tertiary); }
+.debug-request-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font-size: var(--text-xs); }
+.debug-request-search > label:focus-within { border-color: var(--text-accent-purple); }
+.debug-request-search > select { max-width: 34%; padding: 5px 4px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-surface); color: var(--text-secondary); font-size: var(--text-xs); }
+.debug-request-count { color: var(--text-tertiary); font-size: var(--text-2xs); white-space: nowrap; }
+.debug-request-browser-layout { display: flex; flex-direction: column; border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden; }
+.debug-request-directory { min-width: 0; background: var(--bg-surface); }
+.debug-request-directory ol { list-style: none; margin: 0; padding: 0; max-height: 144px; overflow: auto; overscroll-behavior: contain; }
+.debug-request-directory li > button { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 7px; width: 100%; height: 48px; padding: 6px 10px; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
+.debug-request-directory li > button:hover { background: var(--bg-hover); }
+.debug-request-directory li > button[aria-current=true] { background: color-mix(in srgb, var(--text-accent-purple) 9%, var(--bg-surface)); box-shadow: inset 2px 0 var(--text-accent-purple); }
+.debug-request-directory li > button:focus-visible { outline: 2px solid var(--text-accent-purple); outline-offset: -2px; }
+.debug-request-directory li > button > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); font-weight: 500; }
+.debug-request-directory li > button[aria-current=true] > strong { color: var(--text-accent-purple); }
+.debug-request-item-number { grid-row: span 2; align-self: center; color: var(--text-tertiary); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+.debug-request-item-preview { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-2xs); color: var(--text-tertiary); }
+.debug-request-pagination { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 8px; border-top: 1px solid var(--border-default); font-size: var(--text-2xs); color: var(--text-tertiary); }
+.debug-request-pagination button { display: inline-flex; padding: 3px; border: 1px solid var(--border-default); border-radius: 4px; background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; }
+.debug-request-pagination button:disabled { opacity: .35; cursor: default; }
+.debug-request-item-detail { display: flex; flex-direction: column; min-width: 0; border-top: 1px solid var(--border-default); }
+.debug-request-item-navigation { display: flex; align-items: center; gap: 6px; padding: 7px 10px; background: var(--bg-hover); font-size: var(--text-xs); color: var(--text-secondary); }
+.debug-request-item-navigation > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.debug-request-item-navigation > span { font-size: var(--text-2xs); color: var(--text-tertiary); }
+.debug-request-item-content { height: 256px; overflow: auto; overscroll-behavior: contain; min-width: 0; }
+.debug-request-item-content .debug-json pre { max-height: none; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
+.debug-request-item-content .debug-call-message > .debug-json { margin-top: 0; }
+.debug-request-empty { display: flex; align-items: center; justify-content: center; height: 160px; color: var(--text-tertiary); font-size: var(--text-xs); }
+.debug-request-tool-schema { padding: 0 12px 12px; overflow-wrap: anywhere; font-size: var(--text-xs); }
+.debug-request-tool-schema > p { white-space: pre-wrap; line-height: 1.6; }
+.debug-request-parameters { max-height: 440px; overflow: auto; }
+.debug-request-raw > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--text-xs); }
+.debug-request-raw button { padding: 4px 6px; border: 1px solid var(--border-default); border-radius: 5px; color: var(--text-secondary); background: var(--bg-surface); cursor: pointer; font-size: var(--text-xs); }
+.debug-request-raw > pre { max-height: 460px; margin: 10px 0 0; padding: 12px; overflow: auto; border: 1px solid var(--border-default); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.6; }
+.debug-call-heading button[aria-pressed=true] { color: var(--text-accent-purple); border-color: var(--text-accent-purple); }
+
+@container (min-width: 460px) {
+  .debug-request-browser-layout { flex-direction: row; height: 370px; }
+  .debug-request-directory { display: flex; flex-direction: column; width: 36%; flex-shrink: 0; }
+  .debug-request-directory ol { flex: 1; max-height: none; }
+  .debug-request-item-detail { flex: 1; border-top: 0; border-left: 1px solid var(--border-default); }
+  .debug-request-item-content { flex: 1; height: auto; min-height: 0; }
+}
+
+.debug-parameter-model { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid color-mix(in srgb, var(--text-accent-purple) 20%, var(--border-default)); border-radius: 10px; background: linear-gradient(115deg, color-mix(in srgb, var(--text-accent-purple) 7%, var(--bg-surface)), var(--bg-surface)); }
+.debug-parameter-model-icon { display: inline-flex; padding: 10px; border-radius: 10px; background: color-mix(in srgb, var(--text-accent-purple) 10%, var(--bg-surface)); color: var(--text-accent-purple); }
+.debug-parameter-model > div { min-width: 0; display: grid; gap: 5px; }
+.debug-parameter-model > div > span { font-size: var(--text-xs); color: var(--text-tertiary); }
+.debug-parameter-model strong { font-family: var(--font-mono); font-weight: 500; font-size: var(--text-base); color: var(--text-primary); overflow-wrap: anywhere; }
+.debug-parameter-connection { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 10px 0 20px; }
+.debug-parameter-connection > div { display: grid; gap: 9px; padding: 13px; border: 1px solid var(--border-default); border-radius: 8px; }
+.debug-parameter-connection span { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--text-tertiary); }
+.debug-parameter-connection code { font-size: var(--text-xs); color: var(--text-secondary); overflow-wrap: anywhere; }
+.debug-parameter-options > header { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: var(--text-xs); color: var(--text-secondary); }
+.debug-parameter-options > header > strong { font-weight: 500; }
+.debug-parameter-options > header > span { margin-left: auto; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.debug-parameter-empty { display: flex; gap: 12px; padding: 18px; border: 1px dashed var(--border-default); border-radius: 8px; color: var(--text-tertiary); }
+.debug-parameter-empty > svg { flex-shrink: 0; margin-top: 2px; }
+.debug-parameter-empty strong { font-size: var(--text-xs); font-weight: 500; color: var(--text-secondary); }
+.debug-parameter-empty p { margin: 7px 0 0; font-size: var(--text-xs); line-height: 1.7; }
+.debug-parameter-values { margin: 0; border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden; }
+.debug-parameter-values > div { display: flex; gap: 12px; justify-content: space-between; padding: 12px; font-size: var(--text-xs); }
+.debug-parameter-values > div + div { border-top: 1px solid var(--border-default); }
+.debug-parameter-values dt { display: grid; gap: 4px; min-width: 0; color: var(--text-secondary); }
+.debug-parameter-values dt > code { color: var(--text-tertiary); font-size: var(--text-2xs); overflow-wrap: anywhere; }
+.debug-parameter-values dd { margin: 0; min-width: 0; color: var(--text-accent-purple); overflow-wrap: anywhere; }
+.debug-parameter-values .is-structured { display: grid; }
+.debug-parameter-values pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); color: var(--text-primary); line-height: 1.6; }
+
+.debug-experiment-entry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 14px; border: 1px dashed var(--border-default); border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: var(--text-xs); text-align: left; cursor: pointer; }
+.debug-experiment-entry > span:last-child { margin-left: auto; color: var(--text-tertiary); font-size: var(--text-2xs); }
+.debug-experiment-entry:hover { background: var(--bg-hover); border-color: var(--text-accent-purple); color: var(--text-accent-purple); }
+.debug-experiment-dialog { display: flex; flex-direction: column; width: min(1080px, 92vw); height: min(820px, 84vh); min-height: 0; border: 1px solid var(--border-default); border-radius: 14px; background: var(--bg-surface); color: var(--text-primary); box-shadow: var(--shadow-modal); overflow: hidden; }
+.debug-experiment-heading { display: flex; align-items: center; gap: 12px; padding: 18px 22px 12px; flex-shrink: 0; }
+.debug-experiment-icon { display: inline-flex; padding: 10px; border-radius: 10px; background: color-mix(in srgb, var(--text-accent-purple) 10%, var(--bg-surface)); color: var(--text-accent-purple); }
+.debug-experiment-heading > div { min-width: 0; flex: 1; }
+.debug-experiment-heading h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.debug-experiment-heading p { display: flex; flex-wrap: wrap; gap: 8px; margin: 5px 0 0; font-size: var(--text-xs); color: var(--text-secondary); }
+.debug-experiment-heading button { padding: 6px; border-radius: 6px; color: var(--text-secondary); cursor: pointer; }
+.debug-experiment-heading button:hover { background: var(--bg-hover); }
+.debug-experiment-intro { margin: 0; padding: 0 22px 16px; font-size: var(--text-xs); color: var(--text-tertiary); line-height: 1.6; }
+.debug-experiment-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); flex: 1; min-height: 0; border-top: 1px solid var(--border-default); }
+.debug-experiment-editor { min-width: 0; overflow: auto; padding: 0 20px 20px; overscroll-behavior: contain; }
+.debug-experiment-editor .debug-model-run { position: sticky; top: 0; z-index: 1; margin: 0 -20px; padding: 14px 20px; border: 0; border-bottom: 1px solid var(--border-default); background: var(--bg-surface); }
+.debug-experiment-editor .debug-model-run > button { background: var(--text-accent-purple); color: var(--text-inverse, #fff); cursor: pointer; }
+.debug-experiment-editor .debug-model-run > span { flex: 1; min-width: 120px; }
+.debug-experiment-output { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-left: 1px solid var(--border-default); background: color-mix(in srgb, var(--bg-hover) 35%, var(--bg-surface)); }
+.debug-experiment-output > .debug-call-heading { flex-shrink: 0; flex-wrap: wrap; min-height: 61px; }
+.debug-experiment-result-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; overscroll-behavior: contain; }
+.debug-experiment-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 180px; gap: 14px; padding: 28px; color: var(--text-tertiary); text-align: center; }
+.debug-experiment-empty > svg { color: var(--text-accent-purple); opacity: .65; }
+.debug-experiment-empty strong { color: var(--text-secondary); font-size: var(--text-sm); font-weight: 500; }
+.debug-experiment-empty p { margin: 0; max-width: 280px; font-size: var(--text-xs); line-height: 1.8; }
+.debug-experiment-footnote { margin: 0; padding: 12px 16px; border-top: 1px solid var(--border-default); color: var(--text-tertiary); font-size: var(--text-2xs); line-height: 1.7; }
+.debug-experiment-dialog :is(button, input, textarea, select, summary):focus-visible, .debug-experiment-entry:focus-visible { outline: 2px solid var(--text-accent-purple); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .debug-experiment-columns { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .debug-experiment-output { border-left: 0; border-top: 1px solid var(--border-default); }
+  .debug-experiment-heading { padding: 12px 16px; }
+  .debug-experiment-intro { padding: 0 16px 12px; }
+}

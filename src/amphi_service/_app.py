@@ -16,6 +16,7 @@ from starlette.responses import Response
 
 from .. import __version__
 from .auth import TokenAuth, get_current_user, require_bearer_token, seed_local_user
+from .handler._debug_handler import DebugLlmRunsHandler, DebugLlmRunHandler, DebugLlmCancelHandler, DebugLlmEventsHandler
 from .handler import (
     AgentRunHandler,
     AgentStatusHandler,
@@ -334,7 +335,10 @@ class ServiceApp:
                     await self.state.scheduler.stop()
                 finally:
                     try:
-                        await self.state.invocations.shutdown()
+                        try:
+                            await self.state.debug_runs.shutdown()
+                        finally:
+                            await self.state.invocations.shutdown()
                     finally:
                         try:
                             await self.state.browser_host.shutdown()
@@ -474,6 +478,10 @@ class ServiceApp:
         SessionDetailHandler.bind(r, "/sessions/{session_id}", state)
         SessionMessagesHandler.bind(r, "/sessions/{session_id}/messages", state)
         SessionDebugPromptsHandler.bind(r, "/api/debug/sessions/{session_id}/prompts", state)
+        DebugLlmRunsHandler.bind(r, "/api/debug/sessions/{session_id}/llm-runs", state)
+        DebugLlmRunHandler.bind(r, "/api/debug/sessions/{session_id}/runs/{run_id}", state)
+        DebugLlmCancelHandler.bind(r, "/api/debug/sessions/{session_id}/runs/{run_id}/cancel", state)
+        DebugLlmEventsHandler.bind(r, "/api/debug/sessions/{session_id}/runs/{run_id}/events", state)
         SessionFileHandler.bind(r, "/sessions/{session_id}/files", state)
         ResetHandler.bind(r, "/sessions/{session_id}/reset", state)
         TokensHandler.bind(r, "/sessions/{session_id}/tokens", state)
