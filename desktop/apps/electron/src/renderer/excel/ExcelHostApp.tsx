@@ -51,7 +51,6 @@ function loadRecentFormulas(): string[] {
 interface Copy {
   close: string
   documentTabs: string
-  closeUnsaved: string
   dismissError: string
   dismissNotice: string
   lossyOverwrite: string
@@ -254,13 +253,6 @@ export function ExcelHostApp() {
   useEffect(() => {
     const hasUnsaved = tabs.some((tab) => tab.dirty)
     if (recoveryLoaded) void api.setDirty(hasUnsaved).catch((cause) => setError(errorMessage(cause)))
-    if (!hasUnsaved) return
-    const beforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault()
-      event.returnValue = ''
-    }
-    window.addEventListener('beforeunload', beforeUnload)
-    return () => window.removeEventListener('beforeunload', beforeUnload)
   }, [api, recoveryLoaded, tabs])
 
   useEffect(() => {
@@ -474,11 +466,10 @@ export function ExcelHostApp() {
       if (workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
       const state = workspace.getState()
       const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)!
-      if (tab.dirty && !window.confirm(copy.closeUnsaved)) return
       setFormulaDialog(null)
       setInsertDialog(null)
       if (state.tabs.length === 1) {
-        await api.closeSession()
+        await api.requestClose()
         return
       }
       const index = state.tabs.findIndex((candidate) => candidate.tabId === tab.tabId)

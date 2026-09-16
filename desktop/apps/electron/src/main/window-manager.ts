@@ -2,7 +2,6 @@ import {
   BrowserWindow,
   WebContentsView,
   app,
-  dialog,
   nativeTheme,
   screen,
   session,
@@ -18,7 +17,6 @@ import { WindowCloseSource, type WindowCloseRequest } from '../shared/types'
 import { getGuiSettings, onGuiSettingsChanged, stepZoomLevel, updateWindowState } from './gui-settings'
 import { parseExternalUrl, redactExternalUrlForLog } from './handlers/external-url'
 import { windowLog } from './logger'
-import { mt } from './i18n'
 import { titleBarOverlayFor } from './titlebar-overlay'
 import { pickStartupBounds } from './window-bounds'
 import { pickZoomDelta } from './zoom-keys'
@@ -240,22 +238,6 @@ export class WindowManager {
         if (win && !win.isDestroyed()) {
           win.webContents.send(IPC.events.excelHostChanged, snapshot)
         }
-      },
-      async (count) => {
-        const window = this.mainWindow
-        const options = {
-          type: 'warning' as const,
-          buttons: [mt('main.excelQuit.cancel'), mt('main.excelQuit.discard')],
-          defaultId: 0,
-          cancelId: 0,
-          title: mt('main.excelQuit.title'),
-          message: mt('main.excelQuit.message', { count }),
-          detail: mt('main.excelQuit.detail'),
-        }
-        const result = window && !window.isDestroyed()
-          ? await dialog.showMessageBox(window, options)
-          : await dialog.showMessageBox(options)
-        return result.response === 1
       },
       (url) => this.openExternal(url, 'excel'),
     )
@@ -704,7 +686,7 @@ export class WindowManager {
     const win = this.mainWindow
     const generation = this.closeGeneration
     const closing = (async () => {
-      if (!await this.flushWordDocuments()) return
+      await this.flushWordDocuments()
       if (generation !== this.closeGeneration || win !== this.mainWindow) return
       if (win && !win.isDestroyed()) win.destroy()
     })()
@@ -715,23 +697,15 @@ export class WindowManager {
     return closing
   }
 
-  /** A native child must finish its checkpoint before the host window can destroy it. */
+  /** Best-effort checkpoint: closing never prompts or waits for user intervention. */
   flushWordDocuments(): Promise<boolean> {
     if (this.wordFlush) return this.wordFlush
     const flush = (async () => {
       try {
         if (await this.wordHost.flushAll()) return true
-        const win = this.mainWindow
-        const options = {
-          type: 'error' as const,
-          title: mt('main.wordSaveFailed.title'),
-          message: mt('main.wordSaveFailed.message'),
-          buttons: [mt('common.confirm')],
-        }
-        if (win && !win.isDestroyed()) await dialog.showMessageBox(win, options)
-        else await dialog.showMessageBox(options)
+        windowLog.warn('[window] Word checkpoint failed; continuing shutdown')
       } catch (error) {
-        windowLog.warn('[window] Word checkpoint failed; keeping the window open', error)
+        windowLog.warn('[window] Word checkpoint failed; continuing shutdown', error)
       }
       return false
     })()

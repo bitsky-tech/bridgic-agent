@@ -26,10 +26,12 @@ export function registerWordHostHandlers(word: WordHost, emitToHost: (channel: s
     return word.getConfig()
   })
   loggedHandle(IPC.wordHost.reportState, (event, state: unknown) => word.reportState(event.sender.id, state))
-  loggedHandle(IPC.wordHost.requestHide, (event) => {
-    const state = word.requestHide(event.sender.id)
-    emitToHost(IPC.events.wordHostExpandedChanged, state)
-    emitToHost(IPC.events.wordHostHideRequested, state.sessionId)
+  loggedHandle(IPC.wordHost.requestClose, async (event) => {
+    const webContentsId = event.sender.id
+    const sessionId = await word.requestClose(webContentsId)
+    emitToHost(IPC.events.wordHostCloseRequested, sessionId)
+    // Acknowledge the invoke before destroying its sender.
+    setImmediate(() => word.closeCurrentSession(webContentsId))
   })
   loggedHandle(IPC.wordHost.setExpanded, (event, expanded: boolean) => {
     emitToHost(IPC.events.wordHostExpandedChanged, word.setExpanded(event.sender.id, expanded))

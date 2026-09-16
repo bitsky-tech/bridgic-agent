@@ -53,7 +53,6 @@ export class ExcelHost {
     private readonly devServerUrl: string | undefined,
     private readonly rendererHtml: string,
     private readonly onStateChanged: (snapshot: ExcelHostSnapshot) => void = () => undefined,
-    private readonly confirmDiscardDirty: (count: number) => Promise<boolean> = async () => false,
     private readonly openExternal: (url: string) => void = () => undefined,
   ) {
     this.container = new OfficeSessionContainer({
@@ -136,11 +135,16 @@ export class ExcelHost {
     this.container.closeSession(this.normalizeSessionId(sessionId))
   }
 
-  /** Close only the Session target owned by the requesting child renderer. */
+  sessionForContents(webContentsId: number): string {
+    const record = this.container.forWebContents(webContentsId)
+    if (!record) throw new Error('Excel Session does not own this renderer')
+    return record.sessionId
+  }
+
+  /** Resolve ownership again so delayed teardown cannot destroy a replacement target. */
   closeCurrentSession(webContentsId: number): void {
     const record = this.container.forWebContents(webContentsId)
-    if (!record) return
-    this.closeSession(record.sessionId)
+    if (record) this.closeSession(record.sessionId)
   }
 
   setDirty(webContentsId: number, dirty: boolean): void {
@@ -165,11 +169,6 @@ export class ExcelHost {
       throw new TypeError('Excel recovery state must be serialized JSON')
     }
     record.recoveryState = state
-  }
-
-  async confirmClose(): Promise<boolean> {
-    const count = [...this.container.values()].filter((record) => record.dirty).length
-    return count === 0 || this.confirmDiscardDirty(count)
   }
 
   activateSession(sessionId: string | null): void {

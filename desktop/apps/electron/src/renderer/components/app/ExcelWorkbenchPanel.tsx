@@ -36,6 +36,7 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   const { t, i18n } = useTranslation()
   const sessionId = useAtomValue(viewedSessionIdAtom)
   const hostSession = useAtomValue(activeExcelHostSessionAtom)
+  const hasHostSession = hostSession !== null
   const pendingWorkbookOpenRequests = useAtomValue(pendingExcelWorkbookOpenRequestsAtom)
   const expanded = useAtomValue(excelExpandedAtom)
   const surfaceBlocked = useAtomValue(browserSurfaceBlockedAtom)
@@ -86,7 +87,7 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   ])
 
   useEffect(() => {
-    if (!active || !sessionId || !config || !hostSession) return
+    if (!active || !sessionId || !config || !hasHostSession) return
     let current = true
     void window.api.excelHost.ensureSession(sessionId, config).then(
       () => {
@@ -103,7 +104,7 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
     return () => {
       current = false
     }
-  }, [active, config, hostSession, sessionId])
+  }, [active, config, hasHostSession, sessionId])
 
   const nativeVisible = active
     && hostSession?.ready === true
@@ -142,6 +143,9 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
           onClose={() => {
             setExpanded(false)
             setRightCollapsed(true)
+            void window.api.excelHost.closeSession(sessionId).catch((error) => {
+              rlog.warn('[excel-host] panel close failed', error)
+            })
           }}
           onToggleExpanded={() => setExpanded((value) => !value)}
           testIdPrefix="excel"

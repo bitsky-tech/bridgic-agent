@@ -9,7 +9,7 @@ import type { ExcelHost } from '../excel-host'
 import { loggedHandle } from './logged-handle'
 
 /** Register the renderer control plane for Session-scoped native Excel targets. */
-export function registerExcelHostHandlers(excelHost: ExcelHost, browser: EmbeddedBrowserManager): void {
+export function registerExcelHostHandlers(excelHost: ExcelHost, browser: EmbeddedBrowserManager, emitToHost: (channel: string, value: unknown) => void): void {
   loggedHandle(IPC.excelHost.snapshot, () => excelHost.snapshot())
 
   loggedHandle(
@@ -28,9 +28,10 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
     excelHost.closeSession(sessionId)
   })
 
-  loggedHandle(IPC.excelHost.closeCurrentSession, (event) => {
+  loggedHandle(IPC.excelHost.requestClose, (event) => {
     const webContentsId = event.sender.id
-    // Let the invoke response settle before destroying the renderer that made it.
+    emitToHost(IPC.events.excelHostCloseRequested, excelHost.sessionForContents(webContentsId))
+    // Acknowledge the invoke before destroying its sender.
     setImmediate(() => excelHost.closeCurrentSession(webContentsId))
   })
 

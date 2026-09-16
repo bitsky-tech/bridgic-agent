@@ -167,8 +167,8 @@ export interface ExcelHostPreloadAPI {
   openRequestedWorkbook(requestId: string): Promise<ExcelOpenResult>
   save(request: ExcelSaveRequest): Promise<ExcelSaveResult>
   saveAs(request: ExcelSaveAsRequest): Promise<ExcelSaveResult>
-  /** Close the Session target that owns this preload after its final workbook tab closes. */
-  closeSession(): Promise<void>
+  /** Close the owning Session's panel and release its editor target. */
+  requestClose(): Promise<void>
   setDirty(dirty: boolean): Promise<void>
   /** JSON crosses contextBridge as one value, avoiding per-cell proxy copies. */
   getRecoveryState(): Promise<string | null>
@@ -416,7 +416,7 @@ export interface WordHostPreloadAPI {
   getConfig(): Promise<GuiSettings>
   readDocument(path: string): Promise<WordDocumentReadResult>
   reportState(state: WordHostRendererState): Promise<void>
-  requestHide(): Promise<void>
+  requestClose(): Promise<void>
   setExpanded(expanded: boolean): Promise<void>
   onExpandedChanged(callback: (event: WordHostExpandedEvent) => void): () => void
   onConfigChanged(callback: (settings: GuiSettings) => void): () => void
@@ -660,8 +660,9 @@ export interface ElectronAPI {
     onPowerPointCloseRequested(callback: (sessionId: string) => void): () => void
     onPowerPointExpandedChanged(callback: (expanded: boolean) => void): () => void
     onExcelHostChanged(callback: (snapshot: ExcelHostSnapshot) => void): () => void
+    onExcelHostCloseRequested(callback: (sessionId: string) => void): () => void
     onWordHostChanged(callback: (snapshot: WordHostSnapshot) => void): () => void
-    onWordHostHideRequested(callback: (sessionId: string) => void): () => void
+    onWordHostCloseRequested(callback: (sessionId: string) => void): () => void
     onWordHostExpandedChanged(callback: (event: WordHostExpandedEvent) => void): () => void
     /** A watched session-file directory changed on disk — re-read that level. */
     onFsChanged(callback: (event: FsChangedEvent) => void): () => void

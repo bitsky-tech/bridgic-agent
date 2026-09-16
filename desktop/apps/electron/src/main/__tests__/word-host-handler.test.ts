@@ -10,15 +10,16 @@ const { IPC } = await import('../../shared/ipc-channels')
 const { registerWordHostHandlers } = await import('../handlers/word-host')
 
 describe('Word host IPC boundary', () => {
-  it('uses the sending child identity for runtime reports, completion and hide requests', async () => {
+  it('uses the sending child identity for runtime reports, completion and close requests', async () => {
     const calls: unknown[][] = []
     const events: unknown[][] = []
     const word = {
-      requestHide: (sender: number) => {
+      requestClose: async (sender: number) => {
         if (sender !== 17) throw new Error('Word Session does not own this renderer')
-        calls.push(['hide', sender])
-        return { sessionId: 'session-a', expanded: false }
+        calls.push(['close', sender])
+        return 'session-a'
       },
+      closeCurrentSession: (sender: number) => { calls.push(['destroy', sender]) },
       reportState: (...args: unknown[]) => { calls.push(['report', ...args]) },
       completeOpenFile: (...args: unknown[]) => { calls.push(['open', ...args]) },
       completeFlush: (...args: unknown[]) => { calls.push(['flush', ...args]) },
@@ -34,18 +35,19 @@ describe('Word host IPC boundary', () => {
     await testIpcHandlers.get(IPC.wordHost.reportState)?.(event, state)
     await testIpcHandlers.get(IPC.wordHost.completeOpenFile)?.(event, 'open-ticket', 'import failed')
     await testIpcHandlers.get(IPC.wordHost.completeFlush)?.(event, 'flush-ticket', true)
-    await testIpcHandlers.get(IPC.wordHost.requestHide)?.(event)
+    await testIpcHandlers.get(IPC.wordHost.requestClose)?.(event)
     await testIpcHandlers.get(IPC.wordHost.setExpanded)?.(event, true)
     expect(calls).toEqual([
       ['report', 17, state], ['open', 17, 'open-ticket', 'import failed'],
-      ['flush', 17, 'flush-ticket', true], ['hide', 17], ['expanded', 17, true],
+      ['flush', 17, 'flush-ticket', true], ['close', 17], ['expanded', 17, true],
     ])
     expect(events).toEqual([
-      [IPC.events.wordHostExpandedChanged, { sessionId: 'session-a', expanded: false }],
-      [IPC.events.wordHostHideRequested, 'session-a'],
+      [IPC.events.wordHostCloseRequested, 'session-a'],
       [IPC.events.wordHostExpandedChanged, { sessionId: 'session-a', expanded: true }],
     ])
-    await expect(testIpcHandlers.get(IPC.wordHost.requestHide)?.({ sender: { id: 99 } } as IpcMainInvokeEvent)).rejects.toThrow('does not own')
+    await expect(testIpcHandlers.get(IPC.wordHost.requestClose)?.({ sender: { id: 99 } } as IpcMainInvokeEvent)).rejects.toThrow('does not own')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(calls.at(-1)).toEqual(['destroy', 17])
   })
 
   it('converts renderer bounds through host zoom and only focuses on explicit hides', async () => {

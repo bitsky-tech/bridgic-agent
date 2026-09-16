@@ -150,11 +150,25 @@ export class WordHost {
     return event
   }
 
-  /** Closing the panel exits expansion but preserves this Session's editor and documents. */
-  requestHide(webContentsId: number): WordHostExpandedEvent {
-    const event = this.setExpanded(webContentsId, false)
-    if (this.sessions.activeSessionId === event.sessionId) this.sessions.setVisible(false)
-    return event
+  /** Attempt a durable checkpoint before closing, without a confirmation or veto. */
+  async requestClose(webContentsId: number): Promise<string> {
+    const record = this.recordForContents(webContentsId)
+    try {
+      const saved = await this.withTimeout(this.flushRecord(record), WORD_FLUSH_TIMEOUT_MS, 'Word workspace flush timed out')
+      if (!saved) windowLog.warn('[word-host] checkpoint failed; closing the editor')
+    } catch (error) {
+      windowLog.warn('[word-host] checkpoint failed; closing the editor', error)
+    }
+    if (!this.sessions.owns(record) || record.view.webContents.isDestroyed()) {
+      throw new Error('Word Session closed during its checkpoint')
+    }
+    return record.sessionId
+  }
+
+  /** A deferred close must never apply to a replacement renderer for the same Session. */
+  closeCurrentSession(webContentsId: number): void {
+    const record = this.sessions.forWebContents(webContentsId)
+    if (record) this.closeSession(record.sessionId)
   }
 
   /** Route an opaque one-use request to the exact Session, waiting for domain restoration. */

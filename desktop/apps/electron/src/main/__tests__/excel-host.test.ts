@@ -108,7 +108,7 @@ function fakeHost() {
   }
 }
 
-function setup(confirmDiscardDirty?: (count: number) => Promise<boolean>, openExternal?: (url: string) => void) {
+function setup(openExternal?: (url: string) => void) {
   const views: FakeView[] = []
   const host = fakeHost()
   const manager = new ExcelHost(
@@ -122,7 +122,6 @@ function setup(confirmDiscardDirty?: (count: number) => Promise<boolean>, openEx
     'http://localhost:5173',
     '/dist/renderer/excel.html',
     () => undefined,
-    confirmDiscardDirty,
     openExternal,
   )
   manager.attachHost(host.window)
@@ -220,19 +219,26 @@ describe('ExcelHost Session target ownership', () => {
     expect(manager.snapshot().sessions.map((session) => session.sessionId)).toEqual(['session-b'])
   })
 
-  it('lets the child renderer close only the Session target that owns it', async () => {
-    const { host, manager } = setup()
-    const first = await manager.ensureSession('session-a', {
-      sessionId: 'session-a', locale: 'en-US', theme: 'light',
-    })
-    await manager.ensureSession('session-b', {
-      sessionId: 'session-b', locale: 'en-US', theme: 'light',
-    })
-
+  it('releases only the requesting renderer and cannot close a replacement target', async () => {
+    const { host, manager, views } = setup()
+    const config = { sessionId: 'session-a', locale: 'en-US' as const, theme: 'light' as const }
+    const first = await manager.ensureSession('session-a', config)
+    await manager.ensureSession('session-b', { ...config, sessionId: 'session-b' })
+    manager.setDirty(first.webContentsId, true)
+    manager.setRecoveryState(first.webContentsId, '{"version":1}')
+    manager.activateSession('session-b')
+    manager.setVisible(true)
+    expect(manager.sessionForContents(first.webContentsId)).toBe('session-a')
     manager.closeCurrentSession(first.webContentsId)
-
+    expect(views[0]!.webContents.isDestroyed()).toBe(true)
+    expect(views[1]!.visibilityHistory.at(-1)).toBe(true)
     expect(host.children.size).toBe(1)
     expect(manager.snapshot().sessions.map((session) => session.sessionId)).toEqual(['session-b'])
+    expect(() => manager.getRecoveryState(first.webContentsId)).toThrow('does not own')
+    const replacement = await manager.ensureSession('session-a', config)
+    manager.closeCurrentSession(first.webContentsId)
+    expect(manager.sessionForContents(replacement.webContentsId)).toBe('session-a')
+    expect(views[2]!.webContents.isDestroyed()).toBe(false)
   })
 
   it('reloads a crashed renderer in place and retains its recovery snapshot', async () => {
@@ -257,24 +263,21 @@ describe('ExcelHost Session target ownership', () => {
     expect(manager.getRecoveryState(first.webContentsId)).toBe(checkpoint)
   })
 
-  it('requires explicit confirmation before discarding dirty Session workbooks', async () => {
-    const confirmations: number[] = []
-    const { manager } = setup(async (count) => {
-      confirmations.push(count)
-      return false
-    })
-    const session = await manager.ensureSession('session-a', {
-      sessionId: 'session-a', locale: 'en-US', theme: 'light',
-    })
-    manager.setDirty(session.webContentsId, true)
-
-    expect(await manager.confirmClose()).toBe(false)
-    expect(confirmations).toEqual([1])
+  it('closes every dirty Session directly during shutdown', async () => {
+    const { manager, views, host } = setup()
+    for (const sessionId of ['session-a', 'session-b']) {
+      const session = await manager.ensureSession(sessionId, { sessionId, locale: 'en-US', theme: 'light' })
+      manager.setDirty(session.webContentsId, true)
+    }
+    manager.shutdown()
+    expect(manager.snapshot().sessions).toEqual([])
+    expect(host.children.size).toBe(0)
+    expect(views.every((view) => view.webContents.isDestroyed())).toBe(true)
   })
 
   it('hands workbook hyperlinks to the trusted external URL boundary', async () => {
     const opened: string[] = []
-    const { manager, views } = setup(undefined, (url) => opened.push(url))
+    const { manager, views } = setup((url) => opened.push(url))
     await manager.ensureSession('session-a', {
       sessionId: 'session-a', locale: 'en-US', theme: 'light',
     })
