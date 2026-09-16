@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { installWordImportWorker } from '../../test-fixtures/wordImportWorker'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resolve } from 'node:path'
 import { DEFAULT_SETTINGS, type GuiSettings } from '@app/shared/types'
@@ -10,7 +11,10 @@ const { act, StrictMode } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { WordHostApp, createWordHostRequestQueue } = await import('../WordHostApp')
 
+let restoreWorker: () => void
+beforeEach(() => { restoreWorker = installWordImportWorker() })
 afterEach(() => {
+  restoreWorker()
   window.localStorage.clear()
   delete window.__bridgicWord
   document.body.replaceChildren()

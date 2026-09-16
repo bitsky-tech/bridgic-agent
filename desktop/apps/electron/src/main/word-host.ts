@@ -16,6 +16,8 @@ import { windowLog } from './logger'
 import { parseExternalUrl, redactExternalUrlForLog } from './handlers/external-url'
 
 export const WORD_OPEN_TIMEOUT_MS = 30_000
+// Import includes decompression, native layout, and a durable workspace checkpoint.
+export const WORD_IMPORT_TIMEOUT_MS = 120_000
 export const WORD_FLUSH_TIMEOUT_MS = 10_000
 
 interface PendingOpen {
@@ -171,7 +173,7 @@ export class WordHost {
       const timer = setTimeout(() => {
         record.pendingOpen.delete(ticket)
         reject(new Error('Word document opening timed out'))
-      }, WORD_OPEN_TIMEOUT_MS)
+      }, WORD_IMPORT_TIMEOUT_MS)
       record.pendingOpen.set(ticket, { request: { ...request, id: ticket }, sent: false, resolve, reject, timer })
       this.dispatchPending(record)
     })

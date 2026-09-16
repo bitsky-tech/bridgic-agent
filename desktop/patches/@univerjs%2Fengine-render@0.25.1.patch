@@ -1,0 +1,98 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index cb8606f8fd6e17873cf7fe4df228353f4c067306..5b0dc1cd961f021664dcaeeb25853a42e247cdad 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -387,6 +387,9 @@ function isEmojiGrapheme(grapheme) {
+ 	return false;
+ }
+ function startWithEmoji(text) {
++	// ASCII cannot start an emoji except for a complete keycap sequence.
++	// Avoid allocating an Intl.Segmenter iterator for every ordinary letter.
++	if (text.charCodeAt(0) < 128 && !/^[0-9#*]\uFE0F?\u20E3/.test(text)) return false;
+ 	const first = getFirstGrapheme(text);
+ 	return first ? isEmojiGrapheme(first) : false;
+ }
+@@ -14528,7 +14531,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+ 	const { st, ed } = textRun;
+ 	let { ts: textStyle = {} } = textRun;
+ 	const cache = fontCreateConfigCache.getValue(st, ed);
+-	if (cache && !hasAddonStyle && originTextRun) return cache;
++	if (cache && !hasAddonStyle) return cache;
+ 	const { snapToGrid = _univerjs_core.BooleanNumber.TRUE, namedStyleType } = paragraphStyle;
+ 	const bulletTextStyle = bullet ? getBulletParagraphTextStyle(bullet, viewModel) : null;
+ 	const namedStyle = namedStyleType ? _univerjs_core.NAMED_STYLE_MAP[namedStyleType] : null;
+@@ -14551,7 +14554,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+ 		snapToGrid,
+ 		pageWidth: pageSize.width || Number.POSITIVE_INFINITY - marginLeft - marginRight
+ 	};
+-	if (!hasAddonStyle && originTextRun) fontCreateConfigCache.setValue(st, ed, result);
++	if (!hasAddonStyle) fontCreateConfigCache.setValue(st, ed, result);
+ 	return result;
+ }
+ function getNullSkeleton() {
+@@ -16094,14 +16097,13 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
+ 	let bk;
+ 	let lastGlyphIndex = 0;
+ 	const { hyphen, languageDetector } = ctx;
+-	const paragraphBody = prepareParagraphBody(viewModel.getBody(), endIndex);
+ 	let glyphInfos = [];
+-	if (useOpenType) glyphInfos = textShape(paragraphBody);
++	if (useOpenType) glyphInfos = textShape(prepareParagraphBody(viewModel.getBody(), endIndex));
+ 	tabLineBreakExtension(breaker);
+ 	customBlockLineBreakExtension(breaker);
+ 	breaker = new LineBreakerLinkEnhancer(breaker);
+-	const lang = languageDetector.detect(content);
+ 	const needHyphen = hyphenConfig(paragraphStyle, sectionBreakConfig);
++	const lang = needHyphen ? languageDetector.detect(content) : "unknown";
+ 	const doNotHyphenateCaps = sectionBreakConfig.doNotHyphenateCaps === _univerjs_core.BooleanNumber.TRUE;
+ 	if (lang !== "unknown" && needHyphen) if (hyphen.hasPattern(lang)) breaker = new LineBreakerHyphenEnhancer(breaker, hyphen, lang, doNotHyphenateCaps);
+ 	else hyphen.loadPattern(lang);
+diff --git a/lib/es/index.js b/lib/es/index.js
+index e019b7aa38363406a32f74a29c6fd6a6262530e6..d204c5a857c4e597229e4b259638d80c728f3759 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -362,6 +362,9 @@ function isEmojiGrapheme(grapheme) {
+ 	return false;
+ }
+ function startWithEmoji(text) {
++	// ASCII cannot start an emoji except for a complete keycap sequence.
++	// Avoid allocating an Intl.Segmenter iterator for every ordinary letter.
++	if (text.charCodeAt(0) < 128 && !/^[0-9#*]\uFE0F?\u20E3/.test(text)) return false;
+ 	const first = getFirstGrapheme(text);
+ 	return first ? isEmojiGrapheme(first) : false;
+ }
+@@ -14503,7 +14506,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+ 	const { st, ed } = textRun;
+ 	let { ts: textStyle = {} } = textRun;
+ 	const cache = fontCreateConfigCache.getValue(st, ed);
+-	if (cache && !hasAddonStyle && originTextRun) return cache;
++	if (cache && !hasAddonStyle) return cache;
+ 	const { snapToGrid = BooleanNumber.TRUE, namedStyleType } = paragraphStyle;
+ 	const bulletTextStyle = bullet ? getBulletParagraphTextStyle(bullet, viewModel) : null;
+ 	const namedStyle = namedStyleType ? NAMED_STYLE_MAP[namedStyleType] : null;
+@@ -14526,7 +14529,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+ 		snapToGrid,
+ 		pageWidth: pageSize.width || Number.POSITIVE_INFINITY - marginLeft - marginRight
+ 	};
+-	if (!hasAddonStyle && originTextRun) fontCreateConfigCache.setValue(st, ed, result);
++	if (!hasAddonStyle) fontCreateConfigCache.setValue(st, ed, result);
+ 	return result;
+ }
+ function getNullSkeleton() {
+@@ -16069,14 +16072,13 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
+ 	let bk;
+ 	let lastGlyphIndex = 0;
+ 	const { hyphen, languageDetector } = ctx;
+-	const paragraphBody = prepareParagraphBody(viewModel.getBody(), endIndex);
+ 	let glyphInfos = [];
+-	if (useOpenType) glyphInfos = textShape(paragraphBody);
++	if (useOpenType) glyphInfos = textShape(prepareParagraphBody(viewModel.getBody(), endIndex));
+ 	tabLineBreakExtension(breaker);
+ 	customBlockLineBreakExtension(breaker);
+ 	breaker = new LineBreakerLinkEnhancer(breaker);
+-	const lang = languageDetector.detect(content);
+ 	const needHyphen = hyphenConfig(paragraphStyle, sectionBreakConfig);
++	const lang = needHyphen ? languageDetector.detect(content) : "unknown";
+ 	const doNotHyphenateCaps = sectionBreakConfig.doNotHyphenateCaps === BooleanNumber.TRUE;
+ 	if (lang !== "unknown" && needHyphen) if (hyphen.hasPattern(lang)) breaker = new LineBreakerHyphenEnhancer(breaker, hyphen, lang, doNotHyphenateCaps);
+ 	else hyphen.loadPattern(lang);

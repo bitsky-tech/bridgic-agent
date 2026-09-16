@@ -18,6 +18,7 @@ import { installApiStub } from './lib/apiStub'
 import { i18n } from './lib/i18n'
 import { rlog } from './lib/logger'
 import { createPresentationPptx } from './lib/presentationPptx'
+import { importPresentationInBackground } from './lib/presentationImport'
 import { createPresentationPersistence } from './lib/presentationPersistence'
 import { useApplyTheme } from './hooks/useTheme'
 import { useSettingsBridge } from './hooks/useSettingsBridge'
@@ -67,7 +68,7 @@ window.__bridgicPowerPoint = {
   sessionId,
   dispatch: (request) => workspaceRuntime.dispatchProtocol(
     request,
-    () => ({ currentTarget: persistence.targetFor(store.get(workspaceAtom)), fileName: activeFileName }),
+    () => ({ currentTarget: persistence.targetFor(store.get(workspaceAtom)), fileName: activeFileName, importPptx: importPresentationInBackground }),
     async (dispatched) => {
       if (dispatched.target) {
         activeFileName = dispatched.target.split(/[\\/]/).at(-1) || activeFileName

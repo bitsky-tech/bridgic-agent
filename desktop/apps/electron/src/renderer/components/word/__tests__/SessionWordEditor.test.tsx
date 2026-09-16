@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { installWordImportWorker } from '../../../test-fixtures/wordImportWorker'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resolve } from 'node:path'
 
@@ -21,7 +22,10 @@ async function waitForElement<T extends Element>(host: HTMLElement, selector: st
   throw new Error(`Timed out waiting for ${selector}`)
 }
 
+let restoreWorker: () => void
+beforeEach(() => { restoreWorker = installWordImportWorker() })
 afterEach(() => {
+  restoreWorker()
   window.localStorage.clear()
   delete window.__bridgicWord
 })
