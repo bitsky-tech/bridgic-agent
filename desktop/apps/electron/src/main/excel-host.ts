@@ -37,7 +37,7 @@ const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPrefere
 interface ExcelHostRecord extends OfficeSessionRecord {
   config: ExcelHostConfig
   dirty: boolean
-  recoveryState: unknown | null
+  recoveryState: string | null
   workbookOpenRequests: Map<string, string>
 }
 
@@ -152,7 +152,7 @@ export class ExcelHost {
     this.publishState()
   }
 
-  getRecoveryState(webContentsId: number): unknown | null {
+  getRecoveryState(webContentsId: number): string | null {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
     return record.recoveryState
@@ -161,8 +161,8 @@ export class ExcelHost {
   setRecoveryState(webContentsId: number, state: unknown): void {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
-    if (state === null || typeof state !== 'object' || Array.isArray(state)) {
-      throw new TypeError('Excel recovery state must be an object')
+    if (typeof state !== 'string') {
+      throw new TypeError('Excel recovery state must be serialized JSON')
     }
     record.recoveryState = state
   }

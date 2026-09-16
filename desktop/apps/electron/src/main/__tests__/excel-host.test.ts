@@ -130,6 +130,21 @@ function setup(confirmDiscardDirty?: (count: number) => Promise<boolean>, openEx
 }
 
 describe('ExcelHost Session target ownership', () => {
+  it('keeps serialized recovery scoped to the owning Session renderer', async () => {
+    const { manager } = setup()
+    const first = await manager.ensureSession('session-a', { sessionId: 'session-a', locale: 'en-US', theme: 'light' })
+    const second = await manager.ensureSession('session-b', { sessionId: 'session-b', locale: 'en-US', theme: 'light' })
+    const recovery = JSON.stringify({ version: 1, tabs: [{ snapshot: { sheets: {} } }] })
+    manager.setRecoveryState(first.webContentsId, recovery)
+    expect(manager.getRecoveryState(first.webContentsId)).toBe(recovery)
+    expect(manager.getRecoveryState(second.webContentsId)).toBeNull()
+    expect(() => manager.setRecoveryState(first.webContentsId, { tabs: [] })).toThrow('serialized JSON')
+    expect(() => manager.getRecoveryState(-1)).toThrow('does not own')
+    expect(() => manager.setRecoveryState(-1, recovery)).toThrow('does not own')
+    manager.closeSession('session-a')
+    expect(() => manager.getRecoveryState(first.webContentsId)).toThrow('does not own')
+  })
+
   it('reuses exactly one WebContentsView/CDP target for every workbook tab in a Session', async () => {
     const { manager, views } = setup()
     const config = { sessionId: 'session-a', locale: 'zh-CN', theme: 'dark' } as const
@@ -225,7 +240,8 @@ describe('ExcelHost Session target ownership', () => {
     const first = await manager.ensureSession('session-a', {
       sessionId: 'session-a', locale: 'en-US', theme: 'light',
     })
-    manager.setRecoveryState(first.webContentsId, { version: 1, tabs: [{ tabId: 'tab-a' }] })
+    const checkpoint = JSON.stringify({ version: 1, tabs: [{ tabId: 'tab-a' }] })
+    manager.setRecoveryState(first.webContentsId, checkpoint)
     manager.setDirty(first.webContentsId, true)
 
     views[0]?.webContents.emit('render-process-gone', {}, { reason: 'crashed' })
@@ -238,10 +254,7 @@ describe('ExcelHost Session target ownership', () => {
     expect(recovered.crashed).toBe(false)
     expect(recovered.dirty).toBe(true)
     expect(recovered.targetId).toBe('excel-target-1-recovered-2')
-    expect(manager.getRecoveryState(first.webContentsId)).toEqual({
-      version: 1,
-      tabs: [{ tabId: 'tab-a' }],
-    })
+    expect(manager.getRecoveryState(first.webContentsId)).toBe(checkpoint)
   })
 
   it('requires explicit confirmation before discarding dirty Session workbooks', async () => {

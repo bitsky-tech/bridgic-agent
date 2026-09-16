@@ -21,6 +21,9 @@ const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
 const { pendingExcelWorkbookOpenRequestsAtom } = await import('@/atoms/excel')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
+const { activeModalAtom } = await import('@/atoms/amphi')
+const { rightPanelCollapsedAtom, setRightPanelCollapsedAtom } = await import('@/atoms/layout')
+const { SessionWorkbenchSurface, sessionWorkbenchSurfaceAtom } = await import('@/atoms/workbench')
 const { FileLink } = await import('../FileLink')
 
 const TARGET = { path: '/Users/me/out/最终报告 v3.pdf', name: '最终报告 v3.pdf' }
@@ -81,6 +84,23 @@ describe('FileLink', () => {
       sessionId: 'session-agent-output',
       path: target.path,
     }])
+  })
+
+  it('opens a chat presentation link in the current Session right panel', async () => {
+    const openFile = mock(async () => ({ documentId: 'deck', fileName: 'Deck.PPTX', reused: false, slideCount: 1, title: 'Deck' }))
+    window.api.powerpoint = { ...window.api.powerpoint, openFile }
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-presentation')
+    store.set(setRightPanelCollapsedAtom, true)
+    const target = { path: '/Users/me/out/Deck.PPTX', name: 'Deck.PPTX' }
+    const host = await renderLink(target, store)
+
+    await act(async () => { host.querySelector<HTMLAnchorElement>('a')?.click() })
+
+    expect(openFile).toHaveBeenCalledWith('session-presentation', target.path)
+    expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Presentation)
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    expect(store.get(activeModalAtom)).toBeNull()
   })
 
   it('keeps both actions mounted so hover never shifts the surrounding text', async () => {

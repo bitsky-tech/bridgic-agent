@@ -9,6 +9,7 @@ import {
   type Worksheet,
 } from 'exceljs'
 import JSZip from 'jszip'
+import { SaxesParser, type SaxesTagNS } from 'saxes'
 import {
   BooleanNumber,
   BorderStyleTypes,
@@ -56,9 +57,16 @@ interface BridgicWorkbookMetadata {
 }
 
 interface NativeSheetView {
+  name: string
   path: string
   showZeros: boolean
+  merges: IRange[]
+  unsupportedFeatures: string[]
 }
+
+export type ExcelImportProgress =
+  | { phase: 'reading' }
+  | { phase: 'converting'; completed: number; total: number }
 
 /** Excel stores zero visibility on each worksheet view. Univer has no native field for it. */
 export function excelSheetShowsZeros(custom: unknown): boolean {
@@ -68,18 +76,12 @@ export function excelSheetShowsZeros(custom: unknown): boolean {
     || (custom as Record<string, unknown>)[EXCEL_SHOW_ZEROS_CUSTOM_KEY] !== false
 }
 
-function xmlAttribute(attributes: string, name: string): string | undefined {
-  const escaped = name.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&')
-  const value = new RegExp(`(?:^|\\s)${escaped}="([^"]*)"`).exec(attributes)?.[1]
-  if (value === undefined) return undefined
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
+function readXmlTags(xml: string, onTag: (tag: SaxesTagNS) => void): void {
+  // Stream tags without allocating a DOM for the worksheet's full cell graph.
+  // XML parsing handles quotes, entities, namespaces, and comments consistently.
+  const parser = new SaxesParser({ xmlns: true })
+  parser.on('opentag', onTag)
+  parser.write(xml).close()
 }
 
 function archivePath(target: string): string {
@@ -93,47 +95,83 @@ function archivePath(target: string): string {
   return normalized.join('/')
 }
 
-async function readNativeSheetViews(zip: JSZip): Promise<Map<string, NativeSheetView>> {
+async function readNativeSheetViews(zip: JSZip): Promise<Map<number, NativeSheetView>> {
   const workbookXml = await zip.file('xl/workbook.xml')?.async('text')
   const relationshipsXml = await zip.file('xl/_rels/workbook.xml.rels')?.async('text')
-  if (!workbookXml || !relationshipsXml) return new Map()
+  if (!workbookXml || !relationshipsXml) throw new Error('The workbook sheet metadata is missing.')
 
   const targets = new Map<string, string>()
-  for (const match of relationshipsXml.matchAll(/<Relationship\b([^>]*)\/?\s*>/g)) {
-    const id = xmlAttribute(match[1]!, 'Id')
-    const target = xmlAttribute(match[1]!, 'Target')
+  readXmlTags(relationshipsXml, (tag) => {
+    if (tag.local !== 'Relationship') return
+    const id = tag.attributes.Id?.value
+    const target = tag.attributes.Target?.value
     if (id && target) targets.set(id, archivePath(target))
-  }
+  })
 
-  const views = new Map<string, NativeSheetView>()
-  for (const match of workbookXml.matchAll(/<(?:\w+:)?sheet\b([^>]*)\/?\s*>/g)) {
-    const name = xmlAttribute(match[1]!, 'name')
-    const relationshipId = xmlAttribute(match[1]!, 'r:id')
+  const sheets = new Map<number, { name: string; path: string }>()
+  readXmlTags(workbookXml, (tag) => {
+    if (tag.local !== 'sheet') return
+    const name = tag.attributes.name?.value
+    const sheetId = Number(tag.attributes.sheetId?.value)
+    const relationshipId = Object.values(tag.attributes).find((attribute) => attribute.local === 'id')?.value
     const path = relationshipId ? targets.get(relationshipId) : undefined
-    if (!name || !path) continue
+    if (!name || !path) throw new Error('A workbook sheet relationship is missing.')
+    if (!Number.isSafeInteger(sheetId) || sheetId < 0 || sheets.has(sheetId)) {
+      throw new Error('A workbook sheet ID is missing or invalid.')
+    }
+    sheets.set(sheetId, { name, path })
+  })
+
+  const views = new Map<number, NativeSheetView>()
+  for (const [sheetId, { name, path }] of sheets) {
     const worksheetXml = await zip.file(path)?.async('text')
-    if (!worksheetXml) continue
-    const attributes = /<(?:\w+:)?sheetView\b([^>]*)\/?\s*>/.exec(worksheetXml)?.[1] ?? ''
-    views.set(name, {
-      path,
-      showZeros: xmlAttribute(attributes, 'showZeros') !== '0',
+    if (!worksheetXml) throw new Error(`The workbook sheet data is missing: ${name}`)
+    const view: NativeSheetView = { name, path, showZeros: true, merges: [], unsupportedFeatures: [] }
+    const features = new Set<string>()
+    let hasSheetView = false
+    readXmlTags(worksheetXml, (tag) => {
+      switch (tag.local) {
+        case 'sheetView':
+          if (!hasSheetView) {
+            hasSheetView = true
+            const showZeros = tag.attributes.showZeros?.value
+            view.showZeros = showZeros !== '0' && showZeros !== 'false'
+          }
+          break
+        case 'mergeCell': {
+          const ref = tag.attributes.ref?.value
+          if (!ref) throw new Error(`A merged cell range is missing: ${name}`)
+          view.merges.push(parseRange(ref))
+          break
+        }
+        case 'filterColumn':
+          features.add('active filter criteria')
+          break
+        case 'sheetProtection':
+          features.add('sheet protection')
+          break
+        case 'headerFooter':
+        case 'rowBreaks':
+        case 'colBreaks':
+        case 'printOptions':
+          features.add('print settings')
+          break
+      }
     })
+    view.unsupportedFeatures = [...features]
+    views.set(sheetId, view)
   }
   return views
 }
 
-async function writeHiddenZeroViews(bytes: Uint8Array, snapshot: IWorkbookData): Promise<Uint8Array> {
-  const hiddenZeroSheetNames = snapshot.sheetOrder.flatMap((sheetId) => {
-    const sheet = snapshot.sheets[sheetId]
-    return sheet && typeof sheet.name === 'string' && !excelSheetShowsZeros(sheet.custom) ? [sheet.name] : []
-  })
-  if (hiddenZeroSheetNames.length === 0) return bytes
+async function writeHiddenZeroViews(bytes: Uint8Array, sheetIds: number[]): Promise<Uint8Array> {
+  if (sheetIds.length === 0) return bytes
 
   const zip = await JSZip.loadAsync(bytes)
   const nativeViews = await readNativeSheetViews(zip)
-  for (const sheetName of hiddenZeroSheetNames) {
-    const nativeView = nativeViews.get(sheetName)
-    if (!nativeView) continue
+  for (const sheetId of sheetIds) {
+    const nativeView = nativeViews.get(sheetId)
+    if (!nativeView) throw new Error(`The workbook sheet metadata is missing: ${sheetId}`)
     const worksheetXml = await zip.file(nativeView.path)?.async('text')
     if (!worksheetXml) continue
     const updated = worksheetXml.replace(/<(?:\w+:)?sheetView\b[^>]*\/?\s*>/, (tag) => {
@@ -255,7 +293,7 @@ function excelStyle(cell: Cell): IStyleData | undefined {
   return Object.keys(style).length > 0 ? style : undefined
 }
 
-function cellValue(cell: Cell): ICellData | null {
+function cellValue(cell: Cell, style: ICellData['s']): ICellData | null {
   const raw = cell.value
   let value: string | number | boolean | null = null
   let formula: string | undefined
@@ -299,13 +337,17 @@ function cellValue(cell: Cell): ICellData | null {
     value = cell.text
   }
 
-  const style = excelStyle(cell)
   if (value === null && !formula && !document && !style) return null
   let type: CellValueType | undefined
   if (typeof value === 'number') type = CellValueType.NUMBER
   else if (typeof value === 'boolean') type = CellValueType.BOOLEAN
   else if (typeof value === 'string') type = CellValueType.STRING
-  return { v: value, t: type, f: formula, p: document, s: style }
+  const data: ICellData = { v: value }
+  if (type !== undefined) data.t = type
+  if (formula) data.f = formula
+  if (document) data.p = document
+  if (style) data.s = style
+  return data
 }
 
 function columnIndex(label: string): number {
@@ -499,9 +541,8 @@ function excelConditionalRule(rule: ConditionalFormattingRule): ResourceRule | n
   return null
 }
 
-async function unsupportedFeatures(bytes: Uint8Array, workbook: Workbook): Promise<string[]> {
+async function unsupportedFeatures(zip: JSZip, workbook: Workbook, nativeViews: Map<number, NativeSheetView>): Promise<string[]> {
   const features = new Set<string>()
-  const zip = await JSZip.loadAsync(bytes)
   const paths = Object.keys(zip.files)
   const archiveFeatures: Array<[RegExp, string]> = [
     [/^xl\/charts\//, 'charts'],
@@ -521,11 +562,8 @@ async function unsupportedFeatures(bytes: Uint8Array, workbook: Workbook): Promi
   if (workbookXml && /<definedName\b/.test(await workbookXml.async('text'))) {
     features.add('named ranges or print areas')
   }
-  for (const path of paths.filter((candidate) => /^xl\/worksheets\/sheet\d+\.xml$/.test(candidate))) {
-    const xml = await zip.file(path)?.async('text') ?? ''
-    if (/<filterColumn\b/.test(xml)) features.add('active filter criteria')
-    if (/<sheetProtection\b/.test(xml)) features.add('sheet protection')
-    if (/<(?:headerFooter|rowBreaks|colBreaks|printOptions)\b/.test(xml)) features.add('print settings')
+  for (const view of nativeViews.values()) {
+    for (const feature of view.unsupportedFeatures) features.add(feature)
   }
   for (const path of paths.filter((candidate) => /^xl\/drawings\/drawing\d+\.xml$/.test(candidate))) {
     const xml = await zip.file(path)?.async('text') ?? ''
@@ -571,8 +609,10 @@ async function unsupportedFeatures(bytes: Uint8Array, workbook: Workbook): Promi
 }
 
 /** Convert the broadly-supported ExcelJS subset into a Univer workbook snapshot. */
-export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise<IWorkbookData> {
-  const nativeViews = await readNativeSheetViews(await JSZip.loadAsync(bytes))
+export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgress?: (progress: ExcelImportProgress) => void): Promise<IWorkbookData> {
+  onProgress?.({ phase: 'reading' })
+  const archive = await JSZip.loadAsync(bytes)
+  const nativeViews = await readNativeSheetViews(archive)
   const workbook = new Workbook()
   const input = bytes.slice().buffer as ArrayBuffer
   await workbook.xlsx.load(input)
@@ -585,8 +625,36 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
 
   const usedSheetIds = new Set<string>()
   const usedDrawingIds = new Set<string>()
+  // ExcelJS shares source styles. Preserve that sharing in Univer's style table
+  // instead of allocating and hashing another style object for every cell.
+  const sourceStyles = new WeakMap<Partial<Style>, string | undefined>()
+  const styleIds = new Map<string, string>()
+  const styleFor = (cell: Cell): string | undefined => {
+    if (sourceStyles.has(cell.style)) return sourceStyles.get(cell.style)
+    const style = excelStyle(cell)
+    let id: string | undefined
+    if (style) {
+      const key = JSON.stringify(style)
+      id = styleIds.get(key)
+      if (!id) {
+        id = `style-${styleIds.size}`
+        styleIds.set(key, id)
+        snapshot.styles[id] = style
+      }
+    }
+    sourceStyles.set(cell.style, id)
+    return id
+  }
+  const total = workbook.worksheets.length
+  let completed = 0
+  onProgress?.({ phase: 'converting', completed, total })
   workbook.eachSheet((worksheet) => {
-    const storedSheetId = bridgicMetadata?.sheetIds[worksheet.name]
+    // ExcelJS decodes entity-like text in names a second time. Match by the
+    // source sheet ID and retain the original XML name for display and export.
+    const nativeView = nativeViews.get(worksheet.id)
+    if (!nativeView) throw new Error(`The workbook sheet metadata is missing: ${worksheet.id}`)
+    const sheetName = nativeView.name
+    const storedSheetId = bridgicMetadata?.sheetIds[sheetName]
     const sheetId = typeof storedSheetId === 'string' && storedSheetId && !usedSheetIds.has(storedSheetId)
       ? storedSheetId
       : crypto.randomUUID()
@@ -594,7 +662,7 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
     const cellData: NonNullable<IWorkbookData['sheets'][string]['cellData']> = {}
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       row.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
-        const data = cellValue(cell)
+        const data = cellValue(cell, styleFor(cell))
         if (!data) return
         const rowIndex = rowNumber - 1
         cellData[rowIndex] ??= {}
@@ -602,14 +670,16 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
       })
     })
     const rowData: NonNullable<IWorkbookData['sheets'][string]['rowData']> = {}
-    worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    for (let rowNumber = 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+      const row = worksheet.findRow(rowNumber)
+      if (!row) continue
       if (row.height || row.hidden) {
         rowData[rowNumber - 1] = {
           h: row.height ? Math.round(row.height * 4 / 3) : undefined,
           hd: row.hidden ? BooleanNumber.TRUE : undefined,
         }
       }
-    })
+    }
     const columnData: NonNullable<IWorkbookData['sheets'][string]['columnData']> = {}
     const maxColumn = Math.max(worksheet.columnCount, DEFAULT_COLUMNS)
     for (let columnNumber = 1; columnNumber <= worksheet.columnCount; columnNumber += 1) {
@@ -622,21 +692,21 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
       }
     }
     const views = worksheet.views ?? []
-    const nativeView = nativeViews.get(worksheet.name)
     const frozen = views.find((view) => view.state === 'frozen') as
       | { xSplit?: number; ySplit?: number }
       | undefined
     snapshot.sheetOrder.push(sheetId)
     snapshot.sheets[sheetId] = {
       id: sheetId,
-      name: worksheet.name,
+      name: sheetName,
       hidden: worksheet.state === 'visible' ? BooleanNumber.FALSE : BooleanNumber.TRUE,
       rowCount: Math.max(worksheet.rowCount, DEFAULT_ROWS),
       columnCount: maxColumn,
       cellData,
       rowData,
       columnData,
-      mergeData: (worksheet.model.merges ?? []).map((merge) => parseMerge(String(merge))),
+      // worksheet.model builds all row/cell models just to expose merges.
+      mergeData: nativeView.merges,
       freeze: {
         xSplit: frozen?.xSplit ?? 0,
         ySplit: frozen?.ySplit ?? 0,
@@ -647,7 +717,7 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
       showGridlines: views[0]?.showGridLines === false
         ? BooleanNumber.FALSE
         : BooleanNumber.TRUE,
-      custom: nativeView?.showZeros === false
+      custom: nativeView.showZeros === false
         ? { [EXCEL_SHOW_ZEROS_CUSTOM_KEY]: false }
         : undefined,
     }
@@ -658,18 +728,14 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
     }
 
     const validationRules: ResourceRule[] = []
-    worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-      row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-        const validation = cell.dataValidation
-        if (!validation?.type) return
-        validationRules.push(excelDataValidationRule(validation, {
-          startRow: rowNumber - 1,
-          endRow: rowNumber - 1,
-          startColumn: columnNumber - 1,
-          endColumn: columnNumber - 1,
-        }))
-      })
-    })
+    // The source validation map includes empty validated cells without creating
+    // every missing cell in a sparse worksheet.
+    const validations = (worksheet as Worksheet & {
+      dataValidations: { model: Record<string, DataValidation> }
+    }).dataValidations.model
+    for (const [address, validation] of Object.entries(validations)) {
+      if (validation.type) validationRules.push(excelDataValidationRule(validation, parseRange(address)))
+    }
     if (validationRules.length > 0) dataValidationResources[sheetId] = validationRules
 
     const conditionalRules: ResourceRule[] = []
@@ -702,7 +768,7 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
         tl: { col: number; row: number }
         br: { col: number; row: number }
       }
-      const storedDrawings = bridgicMetadata?.drawingIds[worksheet.name] ?? []
+      const storedDrawings = bridgicMetadata?.drawingIds[sheetName] ?? []
       const anchored = storedDrawings.find((candidate) => candidate
         && Math.floor(candidate.column) === Math.floor(range.tl.col)
         && Math.floor(candidate.row) === Math.floor(range.tl.row)
@@ -730,6 +796,8 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
       }
     }
     if (Object.keys(sheetDrawings).length > 0) drawingResources[sheetId] = sheetDrawings
+    completed += 1
+    onProgress?.({ phase: 'converting', completed, total })
   })
   if (snapshot.sheetOrder.length === 0) return createEmptyWorkbook(locale, snapshot.name)
   setResource(snapshot, FILTER_RESOURCE, filterResources)
@@ -742,7 +810,7 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType): Promise
       [EXCEL_LIVE_ANALYSIS_CUSTOM_KEY]: bridgicMetadata.liveAnalysis,
     }
   }
-  const incompatible = await unsupportedFeatures(bytes, workbook)
+  const incompatible = await unsupportedFeatures(archive, workbook, nativeViews)
   if (incompatible.length > 0) {
     snapshot.custom = { ...snapshot.custom, [COMPATIBILITY_CUSTOM_KEY]: incompatible }
   }
@@ -1005,6 +1073,7 @@ export async function exportXlsx(
   const conditionalFormatting = resourceMap(snapshot, CONDITIONAL_FORMATTING_RESOURCE)
   const drawings = resourceMap(snapshot, DRAWING_RESOURCE)
   const conversionFailures = new Set<string>()
+  const hiddenZeroSheetIds: number[] = []
   const storedLiveAnalysis = snapshot.custom?.[EXCEL_LIVE_ANALYSIS_CUSTOM_KEY]
   const bridgicMetadata: BridgicWorkbookMetadata = {
     version: 1,
@@ -1017,6 +1086,7 @@ export async function exportXlsx(
     const source = snapshot.sheets[sheetId]
     if (!source) continue
     const worksheet = workbook.addWorksheet(source.name || 'Sheet')
+    if (!excelSheetShowsZeros(source.custom)) hiddenZeroSheetIds.push(worksheet.id)
     bridgicMetadata.sheetIds[worksheet.name] = sheetId
     worksheet.state = source.hidden === BooleanNumber.TRUE ? 'hidden' : 'visible'
     const showGridLines = source.showGridlines !== BooleanNumber.FALSE
@@ -1142,7 +1212,7 @@ export async function exportXlsx(
   if (workbook.worksheets.length === 0) workbook.addWorksheet('Sheet1')
   if (bridgicMetadata.liveAnalysis !== undefined) writeBridgicMetadata(workbook, bridgicMetadata)
   const buffer = await workbook.xlsx.writeBuffer()
-  return writeHiddenZeroViews(new Uint8Array(buffer), snapshot)
+  return writeHiddenZeroViews(new Uint8Array(buffer), hiddenZeroSheetIds)
 }
 
 function readBridgicMetadata(workbook: Workbook): BridgicWorkbookMetadata | null {

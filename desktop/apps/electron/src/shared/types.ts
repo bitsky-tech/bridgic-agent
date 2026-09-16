@@ -170,8 +170,9 @@ export interface ExcelHostPreloadAPI {
   /** Close the Session target that owns this preload after its final workbook tab closes. */
   closeSession(): Promise<void>
   setDirty(dirty: boolean): Promise<void>
-  getRecoveryState(): Promise<unknown | null>
-  setRecoveryState(state: unknown): Promise<void>
+  /** JSON crosses contextBridge as one value, avoiding per-cell proxy copies. */
+  getRecoveryState(): Promise<string | null>
+  setRecoveryState(state: string): Promise<void>
   onConfigChanged(callback: (config: ExcelHostConfig) => void): () => void
   onWorkbookOpenRequested(callback: (ticket: ExcelWorkbookOpenTicket) => void): () => void
 }
