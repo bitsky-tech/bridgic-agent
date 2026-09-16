@@ -14,6 +14,7 @@ const { settingsAtom } = await import('@/atoms/settings')
 const { applyAgentEventAtom, messageFamily, prepareInteractionContinuationAtom, agentEventObserverAtom } = await import('@/atoms/agent')
 const { DebugSessionProvider } = await import('../DebugSessionProvider')
 const { DebugConversation } = await import('../DebugConversation')
+const { DebugToolsPanel } = await import('../DebugPanel')
 const { liveDebugTurnsFamily } = await import('../live-trace-state')
 
 const originalFetch = globalThis.fetch
@@ -40,7 +41,7 @@ const savedRow: DesktopDebugTurn = {
   otaRecords: [{ think_result: { step_content: 'First', tool_calls: [] } }],
 }
 
-async function mount() {
+async function mount(showTools = false) {
   const store = createStore()
   store.set(settingsAtom, { ...store.get(settingsAtom), locale: 'en' })
   store.set(activeSessionIdAtom, 's')
@@ -56,7 +57,8 @@ async function mount() {
   }) as typeof fetch
   function View() {
     const sessionId = useAtomValue(activeSessionIdAtom)
-    return sessionId ? <DebugConversation sessionId={sessionId} /> : null
+    return sessionId ? <><DebugConversation sessionId={sessionId} />
+      {showTools ? <DebugToolsPanel sessionId={sessionId} active onClose={() => {}} /> : null}</> : null
   }
   const host = document.createElement('div')
   document.body.append(host)
@@ -70,6 +72,45 @@ async function mount() {
 }
 
 describe('debug streaming execution cards', () => {
+  test.each([false, true])('uses settled tool outcomes in both cards and the tools panel (streaming: %s)', async (streaming) => {
+    const view = await mount(true)
+    await view.send([start('m'), text('First'), usage,
+      { type: 'tool_call', messageId: 'm', toolUseId: 'child', toolName: 'run_subagent', input: {} },
+      { type: 'tool_result', toolUseId: 'child', output: 'Dispatch accepted', isError: false, durationMs: 1 },
+    ])
+    if (streaming) {
+      await view.send([text('Continuing'), { type: 'thinking_delta', messageId: 'm', text: 'New reasoning' }, usage,
+        { type: 'tool_call', messageId: 'm', toolUseId: 'new-call', toolName: 'read_file', input: { path: 'new.txt' } },
+      ])
+    } else {
+      await view.send([{ type: 'message_stop', messageId: 'm', finalAnswer: 'First' }])
+    }
+    view.setRows([{ ...savedRow, otaRecords: [{
+      think_result: { step_content: 'First', tool_calls: [{ call_id: 'child', tool: 'run_subagent', tool_arguments: {} }] },
+      action_result: { results: [{ tool_id: 'child', tool_name: 'run_subagent', tool_result: 'Child failed', error: 'Child failed', success: false }] },
+    }] }])
+    await act(async () => view.store.set(messageFamily('s'), view.store.get(messageFamily('s')).map(message => ({
+      ...message, turnId: 't', id: message.id === 'm' && !streaming ? 'saved-m' : message.id,
+    }))))
+    expect(view.host.querySelector('.debug-record-card .debug-status')?.textContent).toBe('Failed')
+    expect(view.host.querySelector('.debug-conversation .debug-tool-row .debug-status')?.textContent).toBe('Failed')
+    if (streaming) {
+      const cards = view.host.querySelectorAll('.debug-round-card')
+      expect(cards).toHaveLength(2)
+      expect(cards[0]!.textContent).toContain('Child failed')
+      expect(cards[0]!.textContent).not.toContain('Dispatch accepted')
+      expect(cards[1]!.textContent).toContain('Continuing')
+      expect(cards[1]!.textContent).toContain('New reasoning')
+      expect(cards[1]!.querySelector('.debug-live-tool')?.textContent).toContain('Running')
+      await view.send([{ type: 'tool_result', toolUseId: 'new-call', output: 'New file contents', isError: false, durationMs: 5 }])
+      expect(cards[1]!.textContent).toContain('New file contents')
+      expect(cards[1]!.querySelector('.debug-status')?.textContent).toBe('Success')
+    } else {
+      expect(view.host.querySelector('[data-live-trace]')).toBeNull()
+      expect(view.host.querySelector<HTMLButtonElement>('.debug-round-card > summary > button')?.disabled).toBe(false)
+    }
+  })
+
   test('keeps saved cards inspectable while a later turn refreshes history', async () => {
     const view = await mount()
     await view.send([start('m'), text('First'), usage, { type: 'message_stop', messageId: 'm', finalAnswer: 'First' }])

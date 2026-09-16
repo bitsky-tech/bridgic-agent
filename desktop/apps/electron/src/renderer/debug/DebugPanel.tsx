@@ -3,8 +3,9 @@ import { ArrowLeft, ChevronDown, Clock3, Crosshair, ExternalLink, FileOutput, Me
 import type { SessionWorkbenchExtensionProps } from '@/components/app/DesktopAppExtensions'
 import { WorkbenchToolHeader, WorkbenchToolScrollArea, WorkbenchToolSurface, WorkbenchSearchField } from '@/components/app/WorkbenchToolPrimitives'
 import { useDebugSession, useDebugText, type DebugPanelKind } from './DebugSessionProvider'
-import { JsonRecord, RoundResponse, TraceStatusLabel, duration, roundLabel, turnLabel } from './TraceParts'
-import type { TraceRound, TraceToolCall } from './types'
+import { JsonRecord, RoundResponse, ToolStatusLabel, duration, roundLabel, turnLabel } from './TraceParts'
+import type { TraceRound } from './types'
+import { toolStatus, type ToolInspection } from './tool-records'
 import { RoundTurnList, TurnContext } from './RoundTurnList'
 import { groupRoundsByTurn, userInputText } from './trace-presentation'
 import { StageFilter, roundStageKey } from './StageFilter'
@@ -15,18 +16,19 @@ import { RoundOverview } from './RoundOverview'
 import './debug-inspector.css'
 import './round-detail.css'
 
-function ToolDetail({ call }: { call: TraceToolCall }) {
-  const { records, turns, inspect, locate } = useDebugSession()
+function ToolDetail({ call }: { call: ToolInspection }) {
+  const { records, inspect, locate } = useDebugSession()
   const text = useDebugText()
-  const round = records.rounds.find((item) => item.id === call.roundId)
-  const input = userInputText(turns.find((turn) => turn.id === call.turnId)?.userInput)
+  const round = call.round
+  const canInspectRound = records.rounds.some(item => item.id === round.id)
+  const input = userInputText(call.userInput)
   return <div className="debug-detail debug-tool-detail">
     <div className="debug-tool-identity">
       <h3><span className="debug-tool-identity-icon"><Wrench size={17} /></span><span>{call.name ?? text('unknownTool')}</span></h3>
-      <div className="debug-tool-run-meta"><TraceStatusLabel status={call.status} /><span><Clock3 size={12} />{text('duration')} {duration(call.durationMs)}</span></div>
+      <div className="debug-tool-run-meta"><ToolStatusLabel call={call} /><span><Clock3 size={12} />{text('duration')} {duration(call.durationMs)}</span></div>
     </div>
     <section className="debug-inspector-card debug-inspector-source">
-      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('callSource')}</h4><span className="debug-inspector-caption">Turn {turnLabel(call.turnOrdinal)}</span></div>
+      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('callSource')}</h4><span className="debug-inspector-caption">{call.turnOrdinal < 0 ? text('toolWorkbench.currentTurn') : `Turn ${turnLabel(call.turnOrdinal)}`}</span></div>
       <div className="debug-inspector-body">
         <p className="debug-inspector-message">{input ?? text('userInputNotRecorded')}</p>
         <dl className="debug-tool-origin">
@@ -35,10 +37,10 @@ function ToolDetail({ call }: { call: TraceToolCall }) {
           {round?.mode ? <div><dt>{text('mode')}</dt><dd>{round.mode}</dd></div> : null}
         </dl>
       </div>
-      {round ? <div className="debug-inspector-actions">
+      {canInspectRound ? <div className="debug-inspector-actions">
         <button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('locateInChat')}</button>
         <button type="button" onClick={() => inspect('rounds', round.id)}><Repeat2 size={13} />{text('inspectRound')}</button>
-      </div> : null}
+      </div> : <p className="debug-tool-editor-note">{text('live.detailsPending')}</p>}
     </section>
     <ToolCallEditor call={call} />
     <details className="debug-inspector-card debug-tool-result" open>
@@ -104,15 +106,15 @@ function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & 
   const listRef = useRef<HTMLDivElement>(null)
   const [appliedSelection, setAppliedSelection] = useState<number | null>(null)
   const tools = kind === 'tools'
-  const names = useMemo(() => [...new Set(debug.records.calls.map((call) => call.name).filter((name): name is string => Boolean(name)))].sort(), [debug.records.calls])
+  const names = useMemo(() => [...new Set(debug.toolRecords.map((call) => call.name).filter((name): name is string => Boolean(name)))].sort(), [debug.toolRecords])
   const needle = query.toLocaleLowerCase().trim()
-  const calls = debug.records.calls.filter((call) => (!toolName || call.name === toolName)
-    && (status === 'all' || call.status === status)
+  const calls = debug.toolRecords.filter((call) => (!toolName || call.name === toolName)
+    && (status === 'all' || toolStatus(call) === status)
     && `${call.name ?? ''} ${call.sourceCallId ?? ''} ${turnLabel(call.turnOrdinal)}`.toLocaleLowerCase().includes(needle))
   const inputByTurn = new Map(debug.turns.map((turn) => [turn.id, userInputText(turn.userInput) ?? '']))
   const rounds = debug.records.rounds.filter((round) => (!stage || roundStageKey(round) === stage)
     && `${roundLabel(round)} ${round.stage ?? ''} ${round.mode ?? ''} ${round.model ?? ''} ${turnLabel(round.turnOrdinal)} ${inputByTurn.get(round.turnId) ?? ''} ${round.body ?? ''} ${round.calls.map((call) => call.name ?? '').join(' ')}`.toLocaleLowerCase().includes(needle))
-  const selectedCall = tools ? debug.records.calls.find((call) => call.id === detailId) : undefined
+  const selectedCall = tools ? debug.toolRecords.find((call) => call.id === detailId || call.aliases.includes(detailId ?? '')) : undefined
   const selectedRound = !tools ? debug.records.rounds.find((round) => round.id === detailId) : undefined
 
   const selection = debug.selection
@@ -122,7 +124,7 @@ function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & 
   }
   if (!debug.loading) {
     if (detailId && !selectedCall && !selectedRound) setDetailId(null)
-    if (focusedId && !(tools ? debug.records.calls : debug.records.rounds).some((record) => record.id === focusedId)) setFocusedId(null)
+    if (focusedId && !(tools ? debug.toolRecords : debug.records.rounds).some((record) => record.id === focusedId)) setFocusedId(null)
     if (toolName && !names.includes(toolName)) setToolName('')
     if (stage && !debug.records.rounds.some((round) => roundStageKey(round) === stage)) setStage('')
   }
@@ -158,20 +160,20 @@ function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & 
         <WorkbenchSearchField query={query} onQueryChange={setQuery} clearLabel={text('clearSearch')} searchPlaceholder={tools ? text('searchToolNameOrCallId') : text('searchUserInputOutputOrTools')} />
         {!tools ? <StageFilter rounds={debug.records.rounds} value={stage} onChange={(value) => { setStage(value); setFocusedId(null) }} /> : null}
         <div className="debug-list-filters">
-          <span>{text('currentSession')} · {tools ? debug.records.calls.length : `${groupRoundsByTurn(debug.turns, rounds).length} Turn · ${rounds.length} ${text('rounds')}`}</span>
+          <span>{text('currentSession')} · {tools ? debug.toolRecords.length : `${groupRoundsByTurn(debug.turns, rounds).length} Turn · ${rounds.length} ${text('rounds')}`}</span>
           {tools ? <><select aria-label={text('filterByTool')} value={toolName} onChange={(event) => setToolName(event.target.value)}><option value="">{text('allTools')}</option>{names.map((name) => <option key={name}>{name}</option>)}</select>
-            <select aria-label={text('filterByStatus')} value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">{text('allStatuses')}</option><option value="error">{text('failed')}</option><option value="success">{text('success')}</option><option value="unknown">{text('noResult')}</option></select></> : null}
+            <select aria-label={text('filterByStatus')} value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">{text('allStatuses')}</option><option value="running">{text('live.running')}</option><option value="waiting">{text('live.waiting')}</option><option value="error">{text('failed')}</option><option value="success">{text('success')}</option><option value="unknown">{text('noResult')}</option></select></> : null}
         </div>
         {debug.hasMore ? <button type="button" className="debug-load-earlier" disabled={debug.loading} onClick={debug.loadMore}>{text('loadEarlierRecords')}</button> : null}
         <div ref={listRef} className="debug-record-list">
           {tools ? calls.map((call) => <button key={call.id} type="button" data-debug-record={call.id} className={`debug-record-card ${focusedId === call.id ? 'is-focused' : ''}`} onClick={() => setDetailId(call.id)}>
             <strong><Wrench size={15} /><code>{call.name ?? text('unknownTool')}</code><ExternalLink size={12} /></strong>
-            <div className="debug-detail-meta"><TraceStatusLabel status={call.status} /><span>{duration(call.durationMs)}</span></div>
-            <div className="debug-record-footer"><span>Turn {turnLabel(call.turnOrdinal)} · {roundLabel(debug.records.rounds.find((round) => round.id === call.roundId))}</span><code>{call.sourceCallId ?? '—'}</code></div>
+            <div className="debug-detail-meta"><ToolStatusLabel call={call} /><span>{duration(call.durationMs)}</span></div>
+            <div className="debug-record-footer"><span>{call.turnOrdinal < 0 ? text('toolWorkbench.currentTurn') : `Turn ${turnLabel(call.turnOrdinal)}`} · {roundLabel(call.round)}</span><code>{call.sourceCallId ?? '—'}</code></div>
           </button>) : <RoundTurnList turns={debug.turns} rounds={rounds} focusedId={focusedId} onSelect={setDetailId} />}
         </div>
         {(tools ? calls : rounds).length === 0 ? <p className="debug-empty">{emptyText}</p> : null}
-        <p className="debug-list-note">{text('savedRecordsNotice')}</p>
+        <p className="debug-list-note">{text(tools ? 'toolWorkbench.liveNotice' : 'savedRecordsNotice')}</p>
         {debug.records.issues.length ? <p className="debug-notice">{text('incompleteRecordsNotice')} · {debug.records.issues.length}</p> : null}
       </>}
     </WorkbenchToolScrollArea>

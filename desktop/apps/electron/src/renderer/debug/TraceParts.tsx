@@ -3,6 +3,15 @@ import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
 import { MessageThinking } from '@/components/amphi/MessageThinking'
 import { useDebugText } from './DebugSessionProvider'
 import type { TraceRound, TraceStatus, TraceToolCall } from './types'
+import { toolStatus, type ToolInspection } from './tool-records'
+
+export function ToolStatusLabel({ call }: { call: ToolInspection }) {
+  const text = useDebugText()
+  const status = toolStatus(call)
+  return status === 'running' || status === 'waiting'
+    ? <span className={`debug-status debug-status-${status}`}><Clock3 size={12} />{text(`live.${status}`)}</span>
+    : <TraceStatusLabel status={status} />
+}
 
 export function duration(value: number | null) {
   if (value == null) return '—'

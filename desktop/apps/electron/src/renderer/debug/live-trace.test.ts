@@ -13,6 +13,25 @@ const tool = (id: string): AgentEvent => ({ type: 'tool_call', messageId: 'm', t
 const result = (id: string, failed = false): AgentEvent => ({ type: 'tool_result', toolUseId: id, output: `Output ${id}`, isError: failed, durationMs: failed ? 42 : 0 })
 
 describe('live round projection', () => {
+  test('resumes with settled saved results even when an earlier live event reported success', () => {
+    let turn = beginLiveTurn('s', 'm', 'u')
+    for (const event of [text('First'), usage,
+      { ...tool('child'), toolName: 'run_subagent' } as AgentEvent, result('child'),
+      { type: 'message_stop', messageId: 'm' } as AgentEvent]) turn = updateLiveTurn(turn, event)
+    const saved = buildTraceRecords([{ id: 't', sessionId: 's', sessionOrdinal: 0, status: 'completed',
+      model: null, durationMs: null, otaContext: null, otaRecords: [{
+        think_result: { step_content: 'First', tool_calls: [{ call_id: 'child', tool: 'run_subagent', tool_arguments: {} }] },
+        action_result: { results: [{ tool_id: 'child', tool_name: 'run_subagent', tool_result: 'Child failed', error: 'Child failed', success: false }] },
+      }],
+    }]).rounds
+    expect(savedRoundsCoverLive(saved, turn)).toBe(true)
+    let resumed = beginLiveTurn('s', 'next', 'u', turn, saved, 't')
+    resumed = updateLiveTurn(resumed, { type: 'text_delta', messageId: 'next', text: 'Continuing' })
+    expect(resumed.rounds[0]!.record.calls[0]).toMatchObject({ status: 'error', result: 'Child failed', error: 'Child failed' })
+    expect(resumed.rounds.map(round => round.record.body)).toEqual(['First', 'Continuing'])
+    expect(turn.rounds[0]!.record.calls[0]!.status).toBe('success')
+  })
+
   test('retains newer responses and tool results when resuming with an older saved snapshot', () => {
     let turn = beginLiveTurn('s', 'm', 'u')
     for (const event of [text('First'), usage, tool('a')]) turn = updateLiveTurn(turn, event)

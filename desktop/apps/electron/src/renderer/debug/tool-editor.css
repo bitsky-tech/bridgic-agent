@@ -25,3 +25,36 @@
 .debug-tool-test-result > details { margin-top: 8px; color: var(--text-tertiary); font-size: 11px; }
 .debug-tool-test-result > details > pre { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .debug-tool-test-result > pre.debug-tool-editor-error { color: var(--status-error); }
+.debug-tool-tabs { display: flex; gap: 4px; padding: 3px; margin: 12px 0; border-radius: 7px; background: var(--bg-hover); }
+.debug-tool-tabs > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: 1; padding: 6px; border-radius: 5px; color: var(--text-secondary); font-size: 11px; }
+.debug-tool-tabs > button[aria-selected=true] { background: var(--bg-surface); color: var(--text-accent-purple); box-shadow: var(--shadow-sm); }
+.debug-tool-tabs > button:disabled { opacity: .45; cursor: not-allowed; }
+.debug-tool-json-editor textarea { font-family: monospace; min-height: 190px; tab-size: 2; }
+.debug-tool-test-result { container-type: inline-size; margin-top: 14px; }
+.debug-tool-history-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
+.debug-tool-history-toolbar > label { flex: 1; min-width: 150px; }
+.debug-tool-history-toolbar label > span { display: block; margin-bottom: 5px; color: var(--text-tertiary); font-size: 11px; }
+.debug-tool-history-toolbar select, .debug-tool-baseline select { width: 100%; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 7px; background: var(--bg-input); color: var(--text-primary); font-size: 12px; }
+.debug-tool-history-toolbar > button { display: inline-flex; align-items: center; gap: 4px; padding: 7px 0; color: var(--text-accent-purple); font-size: 11px; }
+.debug-tool-test-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px; margin-top: 12px; font-size: 11px; color: var(--text-tertiary); }
+.debug-tool-test-meta .is-success { color: var(--text-success, #079c78); }
+.debug-tool-test-meta .is-error { color: var(--status-error); }
+.debug-tool-run-output, .debug-tool-submitted pre, .debug-tool-diff-side pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: var(--bg-hover); border-radius: 6px; font-size: 11px; line-height: 1.65; }
+.debug-tool-submitted { margin-top: 10px; color: var(--text-secondary); font-size: 11px; }
+.debug-tool-submitted summary { cursor: pointer; }
+.debug-tool-baseline { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 11px; }
+.debug-tool-baseline select { flex: 1; width: auto; }
+.debug-tool-difference { min-width: 0; margin-top: 14px; }
+.debug-tool-difference h5 { display: flex; justify-content: space-between; margin-bottom: 7px; font-size: 12px; color: var(--text-primary); }
+.debug-tool-difference h5 > span { font-weight: normal; color: var(--text-tertiary); font-size: 10px; }
+.debug-tool-diff-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.debug-tool-diff-side { min-width: 0; border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; }
+.debug-tool-diff-side > strong { display: block; padding: 7px 9px; color: var(--text-secondary); font-size: 10px; font-weight: normal; }
+.debug-tool-diff-side pre { margin: 0; border-radius: 0; }
+.debug-tool-diff-side mark { color: inherit; border-radius: 2px; }
+.debug-tool-diff-side.is-before mark { background: color-mix(in srgb, var(--status-error) 18%, transparent); }
+.debug-tool-diff-side.is-after mark { background: color-mix(in srgb, var(--text-success, #079c78) 20%, transparent); }
+@container (max-width: 480px) { .debug-tool-diff-pair { grid-template-columns: minmax(0, 1fr); } }
+.debug-status-running, .debug-status-waiting { color: var(--text-accent-purple); }
+.debug-tool-diff-side > strong { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.debug-tool-diff-side > strong > code { color: var(--text-tertiary); font-size: 9px; }

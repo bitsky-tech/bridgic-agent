@@ -15,9 +15,11 @@ import { liveDebugTurnsFamily } from './live-trace-state'
 import { savedRoundsCoverLive, type LivePhase, type LiveTurn } from './live-trace'
 
 function RoundCard({ round, phase }: { round: TraceRound; phase?: LivePhase }) {
-  const { inspect } = useDebugSession()
+  const { inspect, toolRecords } = useDebugSession()
   const text = useDebugText()
   const pendingPhase = phase === 'running' || phase === 'waiting' ? phase : 'noResult'
+  // Reuse settled tool outcomes while newer model output still requires live cards.
+  const calls = phase ? round.calls.map(call => toolRecords.find(record => record.aliases.includes(call.id)) ?? call) : round.calls
   return <details open className="debug-round-card" id={debugRoundElementId(round.id)} tabIndex={-1}>
     <summary>
       <ChevronDown size={13} /><code>{roundLabel(round)}</code><span>{text('modelResponse')}</span>
@@ -29,10 +31,11 @@ function RoundCard({ round, phase }: { round: TraceRound; phase?: LivePhase }) {
     <div className="debug-round-body">
       {phase && !round.body?.trim() && !round.thinking?.trim() && !round.calls.length
         ? <p className="debug-muted">{text(`live.${phase}`)}</p> : <RoundResponse round={round} />}
-      {round.calls.map((call) => phase ? <details key={call.id} className="debug-live-tool">
+      {calls.map((call) => phase ? <details key={call.id} className="debug-live-tool">
         <summary className="debug-tool-row"><Wrench size={13} /><code>{call.name ?? text('unknownTool')}</code>
           <span className="debug-tool-summary">{JSON.stringify(call.arguments)}</span>
           {call.hasResult ? <TraceStatusLabel status={call.status} /> : <span className="debug-live-phase">{text(`live.${pendingPhase}`)}</span>}
+          <button type="button" aria-label={text('inspectToolCall')} onClick={event => { event.preventDefault(); inspect('tools', call.id) }}><ExternalLink size={12} /></button>
           <ChevronDown size={12} />
         </summary>
         <pre>{JSON.stringify(call.arguments, null, 2)}</pre>

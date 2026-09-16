@@ -11,7 +11,8 @@ import { buildTraceRecords } from './trace-records'
 import { fetchTracePage } from './trace-client'
 import type { TraceRecords, TraceRound } from './types'
 import { DebugDraftProvider } from './DebugDrafts'
-import { observeDebugEventAtom, savedDebugRoundsFamily } from './live-trace-state'
+import { liveDebugTurnsFamily, observeDebugEventAtom, savedDebugRoundsFamily } from './live-trace-state'
+import { mergeToolRecords, toolIdentitiesFamily, type ToolInspection } from './tool-records'
 
 export type DebugPanelKind = 'tools' | 'rounds' | 'prompts'
 interface Selection { sessionId: string; kind: DebugPanelKind; id: string; nonce: number }
@@ -24,6 +25,7 @@ interface TraceState {
 }
 interface DebugContextValue extends TraceState {
   records: TraceRecords
+  toolRecords: ToolInspection[]
   selection: Selection | null
   reveal: PipelineRevealRequest | null
   refresh: () => void
@@ -51,6 +53,8 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
   }, [store])
   const sessionId = useAtomValue(activeSessionIdAtom)
   const messages = useAtomValue(currentMessagesAtom)
+  const liveTurns = useAtomValue(liveDebugTurnsFamily(sessionId ?? ''))
+  const toolIdentities = useAtomValue(toolIdentitiesFamily(sessionId ?? ''))
   const running = Boolean(useAtomValue(currentStreamingAtom))
   const open = useSetAtom(requestSessionWorkbenchSurfaceOpenAtom)
   const text = useDebugText()
@@ -127,19 +131,24 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
 
   const turns = state.sessionId === sessionId ? state.turns : EMPTY_TURNS
   const records = useMemo(() => buildTraceRecords(turns), [turns])
+  const tools = useMemo(() => mergeToolRecords(records, liveTurns, turns, messages, toolIdentities), [records, liveTurns, turns, messages, toolIdentities])
+  useLayoutEffect(() => {
+    if (sessionId && tools.identities !== toolIdentities) store.set(toolIdentitiesFamily(sessionId), tools.identities)
+  }, [store, sessionId, tools.identities, toolIdentities])
   useEffect(() => {
     if (sessionId && state.sessionId === sessionId && !loading) store.set(savedDebugRoundsFamily(sessionId), records.rounds)
   }, [store, sessionId, state.sessionId, loading, records.rounds])
   if (state.sessionId === sessionId && !loading) {
-    if (selection?.sessionId === sessionId && !(selection.kind === 'tools' ? records.calls : records.rounds).some((record) => record.id === selection.id)) setSelection(null)
+    if (selection?.sessionId === sessionId && !(selection.kind === 'tools' ? tools.calls : records.rounds).some((record) => record.id === selection.id)) setSelection(null)
     if (reveal?.sessionId === sessionId && !records.rounds.some((round) => round.turnId === reveal.turnId && debugRoundElementId(round.id) === reveal.targetId)) setReveal(null)
   }
   const inspect = useCallback((kind: DebugPanelKind, id: string) => {
+    if (kind === 'tools') id = tools.calls.find(call => call.id === id || call.aliases.includes(id))?.id ?? id
     if (!sessionId || store.get(activeSessionIdAtom) !== sessionId
-      || !(kind === 'tools' ? records.calls : records.rounds).some((record) => record.id === id)) return
+      || !(kind === 'tools' ? tools.calls : records.rounds).some((record) => record.id === id)) return
     setSelection({ sessionId, kind, id, nonce: ++interactionNonce.current })
     open({ sessionId, surface: `extension:debug-${kind}` })
-  }, [sessionId, open, records, store])
+  }, [sessionId, open, records, tools.calls, store])
   const locate = useCallback((round: TraceRound) => {
     if (!sessionId || round.sessionId !== sessionId || store.get(activeSessionIdAtom) !== sessionId
       || !records.rounds.some((record) => record.id === round.id)) return
@@ -151,7 +160,7 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
   }, [sessionId, text])
 
   return <Context.Provider value={{
-    sessionId, turns, records,
+    sessionId, turns, records, toolRecords: tools.calls,
     error: state.sessionId === sessionId && !loading ? state.error : null,
     loading,
     hasMore: state.sessionId === sessionId && state.hasMore,

@@ -27,9 +27,11 @@ export function savedRoundsCoverLive(saved: TraceRound[], live: LiveTurn): boole
     return !content || saved.map(round => round[field] ?? '').join('').includes(content)
   }
   const calls = saved.flatMap(round => round.calls)
+  // Post-processing can change a saved outcome after the live tool_result event.
+  // Result presence, rather than equal status, determines whether it is covered.
   return covers('body') && covers('thinking') && live.rounds.every(({ record }) => record.calls.every(call =>
     calls.some(candidate => candidate.sourceCallId === call.sourceCallId && candidate.name === call.name
-      && (!call.hasResult || (candidate.hasResult && candidate.status === call.status)))))
+      && (!call.hasResult || candidate.hasResult))))
 }
 
 export function beginLiveTurn(sessionId: string, messageId: string, userMessageId?: string, previous?: LiveTurn, saved: TraceRound[] = [], turnId?: string): LiveTurn {

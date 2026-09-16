@@ -14,6 +14,8 @@ const { createInstance } = await import('i18next')
 const { i18n } = await import('@/lib/i18n')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
+const { applyAgentEventAtom, messageFamily } = await import('@/atoms/agent')
+const { AgentRole } = await import('@shared/types')
 const { DebugSessionProvider, useDebugSession, useDebugText } = await import('../DebugSessionProvider')
 const { DebugToolsPanel, DebugRoundsPanel } = await import('../DebugPanel')
 
@@ -106,6 +108,41 @@ async function click(host: HTMLElement, text: string) {
   expect(button).toBeDefined()
   await act(async () => button!.click())
 }
+
+test('shows live calls in the tools panel and preserves an open detail when history arrives', async () => {
+  let rows: DesktopDebugTurn[] = []
+  databaseFetch(() => rows)
+  const view = await mount('tools')
+  await act(async () => {
+    view.store.set(messageFamily('a'), [{ id: 'u', role: AgentRole.User, text: 'Read this file', toolCalls: [], done: true, createdAt: 1 }])
+    for (const event of [
+      { type: 'message_start' as const, messageId: 'm', role: 'assistant' as const },
+      { type: 'tool_call' as const, messageId: 'm', toolUseId: 'live-call', toolName: 'read_file', input: { path: '/tmp/live.txt' } },
+    ]) view.store.set(applyAgentEventAtom, { sessionId: 'a', event })
+  })
+  expect(view.host.querySelectorAll('.debug-record-card')).toHaveLength(1)
+  expect(view.host.querySelector('.debug-record-card')?.textContent).toContain('Running')
+  await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-record-card')!.click())
+  expect(view.host.querySelector('.debug-tool-detail')?.textContent).toContain('Read this file')
+  await act(async () => view.store.set(applyAgentEventAtom, { sessionId: 'a', event: {
+    type: 'tool_result', toolUseId: 'live-call', output: 'Live contents', isError: false, durationMs: 9,
+  } }))
+  expect(view.host.querySelector('.debug-tool-result')?.textContent).toContain('Live contents')
+  expect(view.host.querySelector('.debug-tool-run-meta')?.textContent).toContain('9 ms')
+  const saved = turn('saved-turn', 0)
+  saved.userInput = { text: 'Read this file' }
+  saved.otaRecords = [{ think_result: { tool_calls: [{ call_id: 'live-call', tool: 'read_file', tool_arguments: { path: '/tmp/live.txt' } }] },
+    action_result: { results: [{ tool_id: 'live-call', tool_name: 'read_file', tool_result: 'Live contents', success: true }] } }]
+  rows = [saved]
+  await act(async () => {
+    view.store.set(messageFamily('a'), view.store.get(messageFamily('a')).map(message => ({ ...message, turnId: 'saved-turn' })))
+    view.current.refresh()
+  })
+  expect(view.current.toolRecords).toHaveLength(1)
+  expect(view.host.querySelector('.debug-tool-detail')).not.toBeNull()
+  expect(view.host.querySelector('.debug-tool-result')?.textContent).toContain('Live contents')
+  expect([...view.host.querySelectorAll('button')].some(button => button.textContent?.includes('Inspect round'))).toBe(true)
+})
 
 test('uses the resolved settings locale and app catalog under an unrelated translation provider', async () => {
   const foreignI18n = createInstance()

@@ -12,6 +12,8 @@ export interface ToolArgumentDraft {
   shape: 'object' | 'named-list' | 'value'
   original: unknown
   fields: ToolArgumentField[]
+  mode?: 'form' | 'json'
+  jsonInput?: string
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -75,6 +77,14 @@ export function updateToolArgumentDraft(draft: ToolArgumentDraft, fieldId: strin
 }
 
 export function validateToolArgumentDraft(draft: ToolArgumentDraft): { valid: boolean; value: unknown; errors: Record<string, ToolArgumentError> } {
+  if (draft.mode === 'json') {
+    let value: unknown
+    try { value = JSON.parse(draft.jsonInput ?? '') } catch {
+      return { valid: false, value: undefined, errors: { $json: 'invalid_json' } }
+    }
+    return object(value) ? { valid: true, value, errors: {} }
+      : { valid: false, value: undefined, errors: { $json: 'expected_object' } }
+  }
   const errors: Record<string, ToolArgumentError> = {}
   const values: unknown[] = []
   for (const field of draft.fields) {
@@ -104,4 +114,17 @@ export function validateToolArgumentDraft(draft: ToolArgumentDraft): { valid: bo
   if (draft.shape === 'object') value = Object.fromEntries(draft.fields.map((field, index) => [field.label, values[index]]))
   if (draft.shape === 'named-list') value = (draft.original as Record<string, unknown>[]).map((entry, index) => ({ ...entry, value: values[index] }))
   return { valid: true, value, errors }
+}
+
+export function toolArgumentMode(draft: ToolArgumentDraft, mode: 'form' | 'json'): ToolArgumentDraft {
+  if ((draft.mode ?? 'form') === mode) return draft
+  const validation = validateToolArgumentDraft(draft)
+  if (mode === 'json') return { ...draft, mode,
+    jsonInput: formatToolArguments(validation.valid ? toolExecutionArguments(validation.value) ?? validation.value : draft.original) ?? '{}' }
+  if (!validation.valid) return draft
+  return { ...createToolArgumentDraft(validation.value), original: draft.original, mode }
+}
+
+export function replaceToolArgumentValues(draft: ToolArgumentDraft, value: Record<string, unknown>): ToolArgumentDraft {
+  return { ...createToolArgumentDraft(value), original: draft.original, mode: draft.mode, jsonInput: formatToolArguments(value) }
 }

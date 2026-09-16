@@ -13,6 +13,8 @@ const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { backendSnapshotAtom } = await import('@/atoms/backend')
 const { DebugDraftProvider } = await import('../DebugDrafts')
 const { ToolCallEditor } = await import('../ToolCallEditor')
+const { executeDebugToolAtom, toolExecutionsFamily, TOOL_HISTORY_LIMIT } = await import('../useToolExecution')
+const { toolIdentitiesFamily } = await import('../tool-records')
 
 const roots: ReturnType<typeof createRoot>[] = []
 const originalFetch = globalThis.fetch
@@ -46,7 +48,7 @@ async function mount(initial: TraceToolCall) {
     </DebugDraftProvider></Provider>)
   })
   await render(initial)
-  return { host, render }
+  return { host, render, store }
 }
 
 function control(host: HTMLElement, label: string) {
@@ -68,6 +70,138 @@ function record(host: HTMLElement, summary: string) {
 }
 
 describe('ToolCallEditor', () => {
+  test('keeps an in-flight test attached to its call when live and saved identities are reconciled', async () => {
+    let finish: (response: Response) => void = () => {}
+    let requests = 0
+    globalThis.fetch = (() => { requests += 1; return new Promise<Response>(resolve => { finish = resolve }) }) as unknown as typeof fetch
+    const view = await mount(call({ file_path: 'before.txt' }, 'saved-call'))
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    await act(async () => view.store.set(toolIdentitiesFamily('session-a'), new Map([['saved-call', 'live-call']])))
+    await view.render(call({ file_path: 'before.txt' }, 'live-call'))
+    expect(view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.disabled).toBe(true)
+    await view.store.set(executeDebugToolAtom, { sessionId: 'session-a', callId: 'live-call', input: { toolName: 'read_file', arguments: {} } })
+    expect(requests).toBe(1)
+    await act(async () => finish(Response.json({ sessionId: 'session-a', durationMs: 2, result: {
+      tool_id: 'a', tool_name: 'read_file', tool_arguments: {}, tool_result: 'Reconciled result', success: true, error: null,
+    } })))
+    expect(view.host.querySelector('.debug-tool-test-result')?.textContent).toContain('Reconciled result')
+    expect(view.store.get(toolExecutionsFamily('session-a'))).toHaveLength(1)
+  })
+
+  test('bounds history per call while preserving other calls and monotonic test numbers', async () => {
+    globalThis.fetch = (async () => Response.json({ sessionId: 'session-a', durationMs: 1, result: {
+      tool_id: 'a', tool_name: 'read_file', tool_arguments: {}, tool_result: 'Done', success: true, error: null,
+    } })) as unknown as typeof fetch
+    const view = await mount(call({}))
+    const execute = (callId: string, value: number) => view.store.set(executeDebugToolAtom, {
+      sessionId: 'session-a', callId, input: { toolName: 'read_file', arguments: { value } },
+    })
+    await act(async () => {
+      await execute('other-call', 0)
+      for (let value = 0; value < TOOL_HISTORY_LIMIT + 2; value++) await execute('history-call', value)
+    })
+    const runs = view.store.get(toolExecutionsFamily('session-a'))
+    const history = runs.filter(run => run.callId === 'history-call')
+    expect(history).toHaveLength(TOOL_HISTORY_LIMIT)
+    expect(history[0]!.ordinal).toBe(3)
+    expect(history.at(-1)!.ordinal).toBe(TOOL_HISTORY_LIMIT + 2)
+    expect(runs.find(run => run.callId === 'other-call')?.input.arguments).toEqual({ value: 0 })
+  })
+
+  test('keeps running tests and their results when switching Sessions and remounting the inspector', async () => {
+    const pending: ((response: Response) => void)[] = []
+    globalThis.fetch = (() => new Promise<Response>(resolve => { pending.push(resolve) })) as unknown as typeof fetch
+    const source = call({ file_path: 'original.txt' })
+    const view = await mount(source)
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    await view.render(source, false, 'session-b')
+    await view.render(source, true, 'session-b')
+    expect(view.host.querySelector('.debug-tool-test-result')).toBeNull()
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    await view.render(source, false, 'session-a')
+    await view.render(source, true, 'session-a')
+    expect(view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.disabled).toBe(true)
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    expect(pending).toHaveLength(2)
+    await act(async () => pending[0]!(Response.json({ sessionId: 'session-a', durationMs: 2, result: {
+      tool_id: 'a', tool_name: 'read_file', tool_arguments: {}, tool_result: 'Session A completed', success: true, error: null,
+    } })))
+    expect(view.host.querySelector('.debug-tool-test-result')?.textContent).toContain('Session A completed')
+    await act(async () => pending[1]!(Response.json({ sessionId: 'session-b', durationMs: 3, result: {
+      tool_id: 'b', tool_name: 'read_file', tool_arguments: {}, tool_result: 'Session B completed', success: true, error: null,
+    } })))
+    expect(view.host.textContent).not.toContain('Session B completed')
+    await view.render(source, true, 'session-b')
+    expect(view.host.querySelector('.debug-tool-test-result')?.textContent).toContain('Session B completed')
+  })
+
+  test('edits the complete JSON object, synchronizes form types, and blocks invalid JSON without losing edits', async () => {
+    const requests: unknown[] = []
+    globalThis.fetch = (async (_url: unknown, options?: RequestInit) => {
+      const input = JSON.parse(String(options?.body))
+      requests.push(input.arguments)
+      return Response.json({ sessionId: 'session-a', durationMs: 1, result: {
+        tool_id: 'json', tool_name: 'read_file', tool_arguments: input.arguments, tool_result: '', success: true, error: null,
+      } })
+    }) as unknown as typeof fetch
+    const view = await mount(call({ file_path: 'before.txt', limit: null, remove: true }))
+    const tab = (label: string) => [...view.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(button => button.textContent === label)!
+    await act(async () => tab('JSON').click())
+    const json = view.host.querySelector<HTMLTextAreaElement>('.debug-tool-json-editor textarea')!
+    const setJson = async (value: string) => act(async () => { json.value = value; Simulate.change(json) })
+    await setJson('{')
+    expect(tab('Form').disabled).toBe(true)
+    expect(view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.disabled).toBe(true)
+    await setJson('[]')
+    expect(view.host.querySelector('[role="alert"]')?.textContent).toContain('JSON object')
+    await setJson('{"file_path":"after.txt","limit":2,"added":[false,null]}')
+    await act(async () => tab('Form').click())
+    expect(control(view.host, 'limit').value).toBe('2')
+    expect(view.host.querySelectorAll('.debug-tool-editor-field')).toHaveLength(3)
+    await edit(view.host, 'limit', '4')
+    await act(async () => tab('JSON').click())
+    expect(JSON.parse(view.host.querySelector<HTMLTextAreaElement>('.debug-tool-json-editor textarea')!.value)).toEqual({ file_path: 'after.txt', limit: 4, added: [false, null] })
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    expect(requests).toEqual([{ file_path: 'after.txt', limit: 4, added: [false, null] }])
+    expect(JSON.parse(record(view.host, 'Original arguments · Read only'))).toEqual({ file_path: 'before.txt', limit: null, remove: true })
+  })
+
+  test('keeps separate test snapshots, compares with a previous test, and reuses its arguments', async () => {
+    let count = 0
+    globalThis.fetch = (async (_url: unknown, options?: RequestInit) => {
+      const input = JSON.parse(String(options?.body))
+      count += 1
+      return Response.json({ sessionId: 'session-a', durationMs: count * 10, result: {
+        tool_id: String(count), tool_name: 'read_file', tool_arguments: input.arguments,
+        tool_result: `Result ${count}`, success: true, error: null,
+      } })
+    }) as unknown as typeof fetch
+    const source = call({ file_path: 'one.txt' })
+    const view = await mount(source)
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    await edit(view.host, 'file_path', 'two.txt')
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-tool-execute')!.click())
+    const history = () => view.host.querySelector<HTMLElement>('.debug-tool-test-result')!
+    const selection = history().querySelector<HTMLSelectElement>('select[aria-label="Selected test"]')!
+    expect(selection.options).toHaveLength(3)
+    await act(async () => [...history().querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(button => button.textContent === 'Compare')!.click())
+    const baseline = history().querySelector<HTMLSelectElement>('select[aria-label="Compare with"]')!
+    await act(async () => { baseline.value = baseline.options[1]!.value; Simulate.change(baseline) })
+    expect(history().querySelectorAll('.debug-tool-difference')).toHaveLength(2)
+    expect(history().textContent).toContain('one.txt')
+    expect(history().textContent).toContain('two.txt')
+    expect(history().textContent).toContain('Result 1')
+    expect(history().textContent).toContain('Result 2')
+    expect(history().querySelectorAll('mark').length).toBeGreaterThan(0)
+    await act(async () => { selection.value = selection.options[2]!.value; Simulate.change(selection) })
+    await act(async () => [...history().querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Reuse arguments')!.click())
+    expect(control(view.host, 'file_path').value).toBe('one.txt')
+    expect(count).toBe(2)
+    await view.render(source, false)
+    await view.render(source)
+    expect(view.host.querySelector<HTMLSelectElement>('select[aria-label="Selected test"]')!.options).toHaveLength(3)
+  })
+
   test('sends edited parameters once through the authenticated API and keeps the historical result', async () => {
     const requests: { url: string; init?: RequestInit }[] = []
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
