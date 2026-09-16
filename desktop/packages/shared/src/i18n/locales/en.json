@@ -393,6 +393,15 @@
     "invalidJsonFields": "Enter valid JSON. Object fields require an object and must not replace fields in another editor.",
     "invalidNumber": "Enter a valid number.",
     "jsonPlaceholder": "Not recorded; enter JSON",
+    "live": {
+      "complete": "Completed",
+      "detailsPending": "Details are available after this execution is saved.",
+      "error": "Failed",
+      "noResult": "No result received",
+      "running": "Running…",
+      "stopped": "Stopped",
+      "waiting": "Waiting for input"
+    },
     "loadEarlierExecutionRecords": "Load earlier execution records",
     "loadEarlierRecords": "Load earlier records",
     "loadingExecutionRecords": "Loading execution records…",

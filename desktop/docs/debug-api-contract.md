@@ -24,6 +24,36 @@ durations by call id; explicit durations on individual results remain supported.
 `act_duration_ms` describes the whole action group and is never substituted for
 an individual tool's time. Older records without per-call timings show no duration.
 
+### Live execution cards
+
+The debug renderer also projects the existing Session events into in-memory
+execution cards. No new backend event or OTA field is required. Each
+`context_usage` event closes a model response; subsequent text/reasoning or
+another usage event opens the next card. Tool calls after that boundary still
+belong to the completed response, and results match by tool-call id. Model
+transport retries roll back only the current card's discarded text/reasoning.
+
+The projection is installed only by the debug renderer and captures events
+synchronously before React batches its renders. It is Session-scoped, retains
+parked content across interaction continuations, and keeps settled cards visible
+until persisted Turn records become available. Conversation view retains the
+ordinary streaming presentation. Live tool rows expand to show received results;
+the saved-record inspector becomes available after persistence.
+
+Saved records replace a projection only when they cover its responses and
+received tool results. An older snapshot cannot erase newer continuation cards,
+and refreshing another Turn does not switch complete cards back to live mode.
+If a resumed transcript contains content absent from the projection, an expanded
+product conversation record preserves that content until complete history arrives.
+
+These cards are a presentation of received events, not authoritative OTA
+snapshots. Internal tools omitted from the ordinary stream and full request data
+are filled in from persisted records. Missing timing remains unknown and
+estimated token usage is not shown as provider-reported usage. A late subscriber
+can only display the events still available to it until durable history arrives.
+The proposed `liveTrace` capability below describes a future authoritative trace
+protocol, not this frontend projection.
+
 ### On-demand Cognitive Prompt API
 
 `POST /api/debug/sessions/{sessionId}/prompts` assembles one selected round:

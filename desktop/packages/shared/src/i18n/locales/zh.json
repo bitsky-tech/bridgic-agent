@@ -393,6 +393,15 @@
     "invalidJsonFields": "请填写有效 JSON；对象字段请使用对象，且勿覆盖其他编辑区的字段。",
     "invalidNumber": "请输入有效数字。",
     "jsonPlaceholder": "未记录；可填写 JSON",
+    "live": {
+      "complete": "已完成",
+      "detailsPending": "本次执行记录保存后可查看详情。",
+      "error": "执行失败",
+      "noResult": "尚未收到结果",
+      "running": "执行中…",
+      "stopped": "已停止",
+      "waiting": "等待输入"
+    },
     "loadEarlierExecutionRecords": "加载更早的执行记录",
     "loadEarlierRecords": "加载更早的记录",
     "loadingExecutionRecords": "正在读取执行记录…",

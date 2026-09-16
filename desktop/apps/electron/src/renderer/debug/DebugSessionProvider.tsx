@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { activeSessionIdAtom } from '@/atoms/sessions'
-import { currentMessagesAtom, currentStreamingAtom } from '@/atoms/agent'
+import { agentEventObserverAtom, currentMessagesAtom, currentStreamingAtom } from '@/atoms/agent'
 import { localeAtom } from '@/atoms/locale'
 import { i18n } from '@/lib/i18n'
 import { requestSessionWorkbenchSurfaceOpenAtom } from '@/atoms/workbench'
@@ -11,6 +11,7 @@ import { buildTraceRecords } from './trace-records'
 import { fetchTracePage } from './trace-client'
 import type { TraceRecords, TraceRound } from './types'
 import { DebugDraftProvider } from './DebugDrafts'
+import { observeDebugEventAtom, savedDebugRoundsFamily } from './live-trace-state'
 
 export type DebugPanelKind = 'tools' | 'rounds' | 'prompts'
 interface Selection { sessionId: string; kind: DebugPanelKind; id: string; nonce: number }
@@ -44,6 +45,10 @@ export const debugRoundElementId = (id: string) => `desktop-debug-round-${encode
 
 export function DebugSessionProvider({ children }: { children: ReactNode }) {
   const store = useStore()
+  useLayoutEffect(() => {
+    store.set(agentEventObserverAtom, observeDebugEventAtom)
+    return () => { if (store.get(agentEventObserverAtom) === observeDebugEventAtom) store.set(agentEventObserverAtom, null) }
+  }, [store])
   const sessionId = useAtomValue(activeSessionIdAtom)
   const messages = useAtomValue(currentMessagesAtom)
   const running = Boolean(useAtomValue(currentStreamingAtom))
@@ -122,6 +127,9 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
 
   const turns = state.sessionId === sessionId ? state.turns : EMPTY_TURNS
   const records = useMemo(() => buildTraceRecords(turns), [turns])
+  useEffect(() => {
+    if (sessionId && state.sessionId === sessionId && !loading) store.set(savedDebugRoundsFamily(sessionId), records.rounds)
+  }, [store, sessionId, state.sessionId, loading, records.rounds])
   if (state.sessionId === sessionId && !loading) {
     if (selection?.sessionId === sessionId && !(selection.kind === 'tools' ? records.calls : records.rounds).some((record) => record.id === selection.id)) setSelection(null)
     if (reveal?.sessionId === sessionId && !records.rounds.some((round) => round.turnId === reveal.turnId && debugRoundElementId(round.id) === reveal.targetId)) setReveal(null)

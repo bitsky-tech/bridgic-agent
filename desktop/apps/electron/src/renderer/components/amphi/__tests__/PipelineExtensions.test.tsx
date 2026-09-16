@@ -96,7 +96,7 @@ function installBackend(store: ReturnType<typeof createStore>) {
 }
 
 describe('Pipeline extensions', () => {
-  it('overrides persisted Assistant bodies while retaining Markdown fallback, actions, errors and live rendering', async () => {
+  it('overrides persisted and streaming Assistant bodies while retaining Markdown fallback, actions and errors', async () => {
     const messages = rows(4)
     messages[0]!.text = '**literal user**'
     messages[1] = { ...messages[1]!, text: '**Markdown fallback**', error: 'saved error', stopped: true }
@@ -107,6 +107,7 @@ describe('Pipeline extensions', () => {
     const rendered = new Set<string>()
     await view.render({ renderAssistantBody: (message, defaultBody) => {
       rendered.add(message.messageId!)
+      if (message.streaming) return <div data-testid="custom-live-reply">Live card: {message.content}</div>
       return message.turnId === 'turn-0' ? defaultBody : <div data-testid="custom-reply">Debug reply</div>
     } })
     expect(view.host.querySelector('strong')?.textContent).toBe('Markdown fallback')
@@ -115,8 +116,8 @@ describe('Pipeline extensions', () => {
     expect(view.host.textContent).toContain('本次生成已停止')
     expect(view.host.querySelector('[data-testid="custom-reply"]')).not.toBeNull()
     expect(view.host.querySelectorAll('button[aria-label="反馈"]')).toHaveLength(2)
-    expect(rendered).toEqual(new Set(['turn-message-1', 'turn-message-3']))
-    expect(view.host.textContent).toContain('live response')
+    expect(rendered).toEqual(new Set(['turn-message-1', 'turn-message-3', 'live-message']))
+    expect(view.host.querySelector('[data-testid="custom-live-reply"]')?.textContent).toBe('Live card: live response')
     await view.unmount()
   })
 
