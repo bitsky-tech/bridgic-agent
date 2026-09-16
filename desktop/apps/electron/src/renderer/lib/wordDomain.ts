@@ -1,6 +1,6 @@
 import type { IDocumentData } from '@univerjs/core'
 
-import { createOfficeWorkspaceRuntime, OfficeOperationError, type OfficeWorkspaceReader } from './office/officeWorkspaceRuntime'
+import { createOfficeWorkspaceRuntime, OfficeOperationError, type OfficeWorkspaceReader, type OfficeOperationResult } from './office/officeWorkspaceRuntime'
 
 import {
   appendTextBlockToSnapshot,
@@ -191,6 +191,7 @@ export interface WordEditorOperationContext {
 export interface WordDomainStore {
   readonly api: BridgicWordRendererApi
   commitEditorSnapshot(documentId: string, snapshot: IDocumentData): boolean
+  closeDocumentTab(documentId: string): Promise<OfficeOperationResult<{ closeSurface: boolean }>>
   dispatch(command: unknown): Promise<WordRendererResult>
   getSnapshot(): WordWorkspaceState
   registerEditorCommandHandler(documentId: string, handler: (command: WordEditorCommand, context: WordEditorOperationContext) => Promise<boolean>, flush?: () => Promise<void>): () => void
@@ -421,6 +422,19 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
     api,
     dispatch,
     getSnapshot: () => state,
+    closeDocumentTab: (documentId) => runtime.execute({ sessionId: state.sessionId, capability: 'document.close', documentId }, async (context) => {
+      const binding = editorBinding
+      if (binding?.flush && binding.documentId === state.activeDocumentId) {
+        await binding.flush()
+        context.assertCurrent()
+      }
+      // Decide inside the same queue as document creation, imports and other closes.
+      // Retain the final snapshot until the native host checkpoints and destroys it.
+      if (state.documents.length === 1) return { closeSurface: true }
+      const result = applyDomainCommand({ type: 'document.close', documentId })
+      if (!result.ok) throw new OfficeOperationError('operation_failed', result.error.message)
+      return { closeSurface: false }
+    }),
     whenIdle: runtime.whenIdle,
     dispose: () => { disposed = true; editorBinding = null; listeners.clear(); runtime.dispose() },
     commitEditorSnapshot: (documentId, snapshot) => {

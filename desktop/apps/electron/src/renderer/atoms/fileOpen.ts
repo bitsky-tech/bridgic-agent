@@ -72,6 +72,9 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
     return
   }
   const sessionId = get(viewedSessionIdAtom)
+  if (sessionId && isPowerPointFileTarget(file)) {
+    return set(requestPowerPointFileOpenAtom, file)
+  }
   if (sessionId && isEmbeddedExcelWorkbook(file.name)) {
     set(queueExcelWorkbookOpenAtom, { sessionId, path: file.path })
     return
@@ -87,12 +90,8 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
   set(openModalAtom, { type: ModalKind.FileOpenConfirm, path: file.path, name: file.name })
 })
 
-/** Route supported Session files into an in-app owner before falling back to the OS. */
-export const requestSessionFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
-  if (!isPowerPointFileTarget(file)) {
-    set(requestFileOpenAtom, file)
-    return
-  }
+/** Import into the originating Session even if the user navigates away while loading. */
+const requestPowerPointFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
   const sessionId = get(viewedSessionIdAtom)
   if (!sessionId) return
   try {
@@ -108,6 +107,9 @@ export const requestSessionFileOpenAtom = atom(null, async (get, set, file: File
     set(showToastAtom, i18n.t('session.presentation.importFailed'))
   }
 })
+
+/** File rows and chat links use the same Session-owned Office routing. */
+export const requestSessionFileOpenAtom = requestFileOpenAtom
 
 /**
  * Confirm action from the modal: open the file, and when `remember` is set,

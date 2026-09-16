@@ -37,7 +37,7 @@ const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPrefere
 interface ExcelHostRecord extends OfficeSessionRecord {
   config: ExcelHostConfig
   dirty: boolean
-  recoveryState: unknown | null
+  recoveryState: string | null
   workbookOpenRequests: Map<string, string>
 }
 
@@ -53,7 +53,6 @@ export class ExcelHost {
     private readonly devServerUrl: string | undefined,
     private readonly rendererHtml: string,
     private readonly onStateChanged: (snapshot: ExcelHostSnapshot) => void = () => undefined,
-    private readonly confirmDiscardDirty: (count: number) => Promise<boolean> = async () => false,
     private readonly openExternal: (url: string) => void = () => undefined,
   ) {
     this.container = new OfficeSessionContainer({
@@ -136,11 +135,16 @@ export class ExcelHost {
     this.container.closeSession(this.normalizeSessionId(sessionId))
   }
 
-  /** Close only the Session target owned by the requesting child renderer. */
+  sessionForContents(webContentsId: number): string {
+    const record = this.container.forWebContents(webContentsId)
+    if (!record) throw new Error('Excel Session does not own this renderer')
+    return record.sessionId
+  }
+
+  /** Resolve ownership again so delayed teardown cannot destroy a replacement target. */
   closeCurrentSession(webContentsId: number): void {
     const record = this.container.forWebContents(webContentsId)
-    if (!record) return
-    this.closeSession(record.sessionId)
+    if (record) this.closeSession(record.sessionId)
   }
 
   setDirty(webContentsId: number, dirty: boolean): void {
@@ -152,7 +156,7 @@ export class ExcelHost {
     this.publishState()
   }
 
-  getRecoveryState(webContentsId: number): unknown | null {
+  getRecoveryState(webContentsId: number): string | null {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
     return record.recoveryState
@@ -161,15 +165,10 @@ export class ExcelHost {
   setRecoveryState(webContentsId: number, state: unknown): void {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
-    if (state === null || typeof state !== 'object' || Array.isArray(state)) {
-      throw new TypeError('Excel recovery state must be an object')
+    if (typeof state !== 'string') {
+      throw new TypeError('Excel recovery state must be serialized JSON')
     }
     record.recoveryState = state
-  }
-
-  async confirmClose(): Promise<boolean> {
-    const count = [...this.container.values()].filter((record) => record.dirty).length
-    return count === 0 || this.confirmDiscardDirty(count)
   }
 
   activateSession(sessionId: string | null): void {

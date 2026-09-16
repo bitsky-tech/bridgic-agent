@@ -130,6 +130,35 @@ it('owns exactly one CDP target per Session and presents only the active one', a
   expect(manager.snapshot().sessions.map((item) => item.sessionId)).toEqual(['session-a'])
 })
 
+it('rejects unknown close senders and preserves a replacement target during deferred close', async () => {
+  const views: FakeView[] = []
+  const manager = new EmbeddedPowerPointManager(
+    () => {
+      const view = new FakeView(views.length + 1)
+      views.push(view)
+      return view as unknown as WebContentsView
+    },
+    async () => {},
+  )
+  manager.attachHost({
+    isDestroyed: () => false,
+    contentView: { addChildView: () => {}, removeChildView: () => {} },
+  } as unknown as BrowserWindow)
+  const first = await manager.ensureSession('session-a')
+  const other = await manager.ensureSession('session-b')
+  expect(manager.sessionForContents(first.webContentsId)).toBe('session-a')
+  expect(() => manager.sessionForContents(99)).toThrow('does not own')
+  manager.closeSession('session-a')
+  const replacement = await manager.ensureSession('session-a')
+  manager.closeCurrentSession(first.webContentsId)
+  expect(manager.snapshot().sessions.map((item) => item.webContentsId)).toEqual([
+    other.webContentsId, replacement.webContentsId,
+  ])
+  manager.closeCurrentSession(replacement.webContentsId)
+  expect(manager.snapshot().sessions.map((item) => item.sessionId)).toEqual(['session-b'])
+  manager.closeAll()
+})
+
 it('shares one pending PPT initialization and rejects it if the Session closes before load completes', async () => {
   const views: FakeView[] = []
   const children = new Set<WebContentsView>()

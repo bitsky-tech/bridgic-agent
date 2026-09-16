@@ -264,18 +264,6 @@ function SessionResourcePanelForSession({ viewedSessionId, extensions }: {
   const [settledModeHandoffKey, setSettledModeHandoffKey] = useState<string | null>(null)
   const hostWindowForeground = useHostWindowForeground()
 
-  useEffect(() => window.api.events.onPowerPointCloseRequested?.((sessionId) => {
-    if (store.get(viewedSessionIdAtom) !== sessionId) return
-    setPresentationExpanded(false)
-    setRightCollapsed(true)
-  }) ?? (() => undefined), [setPresentationExpanded, setRightCollapsed, store])
-
-  useEffect(() => window.api.events.onWordHostHideRequested?.((sessionId) => {
-    if (store.get(viewedSessionIdAtom) !== sessionId) return
-    if (store.get(sessionWorkbenchSurfaceAtom) !== SessionWorkbenchSurface.Word) return
-    setRightCollapsed(true)
-  }) ?? (() => undefined), [setRightCollapsed, store])
-
   useEffect(() => window.api.events.onPowerPointExpandedChanged?.((expanded) => {
     setPresentationExpanded(expanded)
   }) ?? (() => undefined), [setPresentationExpanded])

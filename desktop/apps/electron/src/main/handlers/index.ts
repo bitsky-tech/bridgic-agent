@@ -50,12 +50,15 @@ export function registerAllHandlers(windowManager: WindowManager, quitApp: () =>
     const window = windowManager.getMainWindow()
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   })
-  registerExcelHostHandlers(windowManager.getExcelHost(), windowManager.getEmbeddedBrowser())
+  registerExcelHostHandlers(windowManager.getExcelHost(), windowManager.getEmbeddedBrowser(), (channel, value) => {
+    const window = windowManager.getMainWindow()
+    if (window && !window.isDestroyed()) window.webContents.send(channel, value)
+  })
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after
   // the backend handlers because it drives pythonClient during the handover.
-  registerUpdateHandlers(windowManager.getExcelHost(), () => windowManager.getWordHost().flushAll())
+  registerUpdateHandlers(() => windowManager.flushWordDocuments())
   registerSystemHandlers()
   registerIssueReportHandlers()
   // Native toasts for daemon `schedule.notify` frames (relayed by the renderer).

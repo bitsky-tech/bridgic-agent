@@ -6,6 +6,7 @@ import {
   PRESENTATION_PAGE_SIZES,
   createPresentationId,
   type PresentationDocument,
+  type PresentationFileSource,
   type PresentationElement,
   type PresentationPageSize,
   type PresentationImageElement,
@@ -932,7 +933,7 @@ function mimeTypeForPath(path: string): string {
   return 'image/png'
 }
 
-async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number): Promise<PresentationSlide> {
+async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>): Promise<PresentationSlide> {
   const slideFile = archive.file(slidePath)
   if (!slideFile) throw new Error(`Missing ${slidePath}`)
   const document = parseXml(await slideFile.async('text'))
@@ -995,12 +996,19 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const target = relationshipId ? relationshipMap.get(relationshipId) : null
     const image = target ? archive.file(target) : null
     if (!target || !image) return null
-    const mimeType = mimeTypeForPath(target)
-    return {
-      dataUrl: bytesToDataUrl(await image.async('uint8array'), mimeType),
-      fileName: target.slice(target.lastIndexOf('/') + 1),
-      mimeType,
+    let source = imageSources.get(target)
+    if (!source) {
+      const mimeType = mimeTypeForPath(target)
+      source = image.async('uint8array').then((bytes) => ({
+        dataUrl: bytesToDataUrl(bytes, mimeType),
+        fileName: target.slice(target.lastIndexOf('/') + 1),
+        mimeType,
+      }))
+      // Master/layout images are often reused by every slide. Share both the
+      // in-flight decode and its source object, including across worker transfer.
+      imageSources.set(target, source)
     }
+    return source
   }
 
   const imageCropFrom = (fill: Element | null) => {
@@ -1394,9 +1402,11 @@ export async function importPresentationPptx(
   const selectedSlides = selectedSlideNumbers.length > 0
     ? selectedSlideNumbers.map(number => ({ path: slidePaths[number - 1]!, sourceIndex: number - 1 }))
     : slidePaths.map((path, sourceIndex) => ({ path, sourceIndex }))
-  const slides = await Promise.all(selectedSlides.map(({ path, sourceIndex }) => (
-    importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex)
-  )))
+  const imageSources = new Map<string, Promise<PresentationFileSource>>()
+  const slides: PresentationSlide[] = []
+  for (const { path, sourceIndex } of selectedSlides) {
+    slides.push(await importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex, imageSources))
+  }
   return {
     id: createPresentationId('presentation'),
     master: {

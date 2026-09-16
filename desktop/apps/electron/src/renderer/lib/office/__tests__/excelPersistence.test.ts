@@ -27,13 +27,13 @@ function deferred<T>() {
 
 function recoveryApi(stored: unknown = null) {
   return {
-    getRecoveryState: mock(async (): Promise<unknown | null> => stored),
-    setRecoveryState: mock(async (_state: unknown): Promise<void> => undefined),
+    getRecoveryState: mock(async (): Promise<string | null> => stored === null ? null : JSON.stringify(stored)),
+    setRecoveryState: mock(async (_state: string): Promise<void> => undefined),
   }
 }
 
 describe('Excel recovery persistence', () => {
-  it('declares Session-memory recovery and writes the unchanged recovery schema without clearing source dirty', async () => {
+  it('serializes Session-memory checkpoints before the preload bridge without clearing source dirty', async () => {
     const api = recoveryApi()
     const recovery = createExcelRecoveryPersistence<Snapshot>({ sessionId: 'session-a', api })
     expect(recovery.getSnapshot().policy).toEqual({
@@ -45,10 +45,20 @@ describe('Excel recovery persistence', () => {
     expect(recovery.schedule(snapshot)).toBe(true)
     expect(api.setRecoveryState).not.toHaveBeenCalled()
     await recovery.flush()
-    expect(api.setRecoveryState).toHaveBeenCalledWith(snapshot)
+    expect(api.setRecoveryState).toHaveBeenCalledWith(JSON.stringify(snapshot))
     expect(snapshot.tabs[0]!.dirty).toBe(true)
     expect(snapshot.tabs[0]!.documentId).toBeNull()
     expect(recovery.getSnapshot().status).toBe('saved')
+    recovery.dispose()
+  })
+
+  it('rejects malformed recovery JSON without overwriting the stored checkpoint', async () => {
+    const api = recoveryApi()
+    api.getRecoveryState.mockResolvedValueOnce('{incomplete')
+    const recovery = createExcelRecoveryPersistence<Snapshot>({ sessionId: 'session-a', api })
+    expect(await recovery.restore()).toMatchObject({ status: 'failed' })
+    expect(recovery.schedule(state(0))).toBe(false)
+    expect(api.setRecoveryState).not.toHaveBeenCalled()
     recovery.dispose()
   })
 
@@ -66,7 +76,7 @@ describe('Excel recovery persistence', () => {
     recovery.schedule(state(10))
     await recovery.flush()
     expect(api.setRecoveryState).toHaveBeenCalledTimes(1)
-    expect(api.setRecoveryState).toHaveBeenCalledWith(state(10))
+    expect(api.setRecoveryState).toHaveBeenCalledWith(JSON.stringify(state(10)))
     recovery.dispose()
   })
 
@@ -80,7 +90,7 @@ describe('Excel recovery persistence', () => {
   })
 
   it('deduplicates concurrent restores and rejects their result after disposal', async () => {
-    const read = deferred<unknown>()
+    const read = deferred<string>()
     const api = recoveryApi()
     api.getRecoveryState.mockImplementation(() => read.promise)
     const recovery = createExcelRecoveryPersistence<Snapshot>({ sessionId: 'session-a', api })
@@ -89,7 +99,7 @@ describe('Excel recovery persistence', () => {
     expect(first).toBe(second)
     expect(api.getRecoveryState).toHaveBeenCalledTimes(1)
     recovery.dispose()
-    read.resolve(state(7))
+    read.resolve(JSON.stringify(state(7)))
     expect(await first).toMatchObject({ status: 'failed', error: { code: 'persistence_disposed' } })
     expect(recovery.schedule(state(8))).toBe(false)
     expect(api.setRecoveryState).not.toHaveBeenCalled()
@@ -111,7 +121,7 @@ describe('Excel recovery persistence', () => {
     expect(api.setRecoveryState).toHaveBeenCalledTimes(1)
     gate.resolve()
     await Promise.all([firstFlush, secondFlush])
-    expect(api.setRecoveryState.mock.calls.map(([snapshot]) => snapshot)).toEqual([state(1), state(3)])
+    expect(api.setRecoveryState.mock.calls.map(([snapshot]) => JSON.parse(snapshot))).toEqual([state(1), state(3)])
     expect(recovery.getSnapshot().pendingCount).toBe(0)
     recovery.dispose()
   })
@@ -125,7 +135,7 @@ describe('Excel recovery persistence', () => {
     await expect(recovery.flush()).rejects.toThrow('write unavailable')
     expect(recovery.getSnapshot()).toMatchObject({ status: 'error', pendingCount: 1, error: { message: 'write unavailable' } })
     await recovery.flush()
-    expect(api.setRecoveryState.mock.calls.map(([snapshot]) => snapshot)).toEqual([state(4), state(4)])
+    expect(api.setRecoveryState.mock.calls.map(([snapshot]) => JSON.parse(snapshot))).toEqual([state(4), state(4)])
     expect(recovery.getSnapshot()).toMatchObject({ status: 'saved', pendingCount: 0, error: null })
     recovery.dispose()
   })
@@ -140,7 +150,7 @@ describe('Excel recovery persistence', () => {
     recovery.dispose()
     expect(recovery.schedule(state(6))).toBe(false)
     await written.promise
-    expect(api.setRecoveryState).toHaveBeenCalledWith(state(5))
+    expect(api.setRecoveryState).toHaveBeenCalledWith(JSON.stringify(state(5)))
   })
 })
 

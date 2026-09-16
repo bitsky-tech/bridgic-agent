@@ -43,6 +43,16 @@ desktop/                     (sub-project of the Bridgic Agent repository)
 > The root README is the overview; executable contracts live in source and
 > tests.
 
+## Embedded editors
+
+When adding a native sidebar editor, start with the
+[embedded editor integration guide](docs/embedded-editor-guide.md). It defines
+the shared shell, Session ownership, tab/panel closure, persistence boundaries and
+acceptance checks. Reuse its linked components and lifecycle helpers so new
+editors follow the same behavior and style. The
+[Office architecture record](office-architecture.md) describes the existing
+PowerPoint, Word and Excel implementation layers.
+
 ## Prerequisites
 
 - **Bun** ≥ 1.3 — `curl -fsSL https://bun.sh/install | bash`

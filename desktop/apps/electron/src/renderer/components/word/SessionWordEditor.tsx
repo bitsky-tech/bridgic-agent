@@ -39,11 +39,11 @@ function prepareWordFile(request: WordFileOpenRequest, readDocument: (path: stri
   if (pending) return pending
   const task = Promise.all([
     readDocument(request.path),
-    import('@/lib/wordDocxImport'),
+    import('@/lib/wordImport'),
   ]).then(async ([document, importer]) => ({
     fileName: document.fileName,
     mtimeMs: document.mtimeMs,
-    ...await importer.importDocxToHtml(document.bytes),
+    ...await importer.importDocxInBackground(document.bytes),
   }))
   pendingFileImports.set(key, task)
   const clear = () => {

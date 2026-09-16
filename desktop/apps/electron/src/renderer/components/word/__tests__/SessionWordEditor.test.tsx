@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { installWordImportWorker } from '../../../test-fixtures/wordImportWorker'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resolve } from 'node:path'
 
@@ -21,7 +22,10 @@ async function waitForElement<T extends Element>(host: HTMLElement, selector: st
   throw new Error(`Timed out waiting for ${selector}`)
 }
 
+let restoreWorker: () => void
+beforeEach(() => { restoreWorker = installWordImportWorker() })
 afterEach(() => {
+  restoreWorker()
   window.localStorage.clear()
   delete window.__bridgicWord
 })
@@ -31,6 +35,38 @@ afterAll(async () => {
 })
 
 describe('SessionWordEditor', () => {
+  it('hands the final tab to the host for checkpoint and teardown and removes only non-final tabs', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const onClose = mock(() => {})
+    try {
+      await act(async () => {
+        root.render(<SessionWordEditor defaultTitle="Untitled" expanded={false} sessionId="session-close" onClose={onClose} />)
+      })
+      await act(async () => {
+        await window.__bridgicWord!.dispatch({ type: 'document.create', title: 'Retained' })
+      })
+      await waitForElement(host, '[data-testid="word-close-document"]')
+      const before = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-close-document"]')!.click())
+      expect(onClose).toHaveBeenCalledTimes(1)
+      const after = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
+      expect(after).toEqual(before)
+      expect(host.querySelector('[data-testid="word-launch-empty-state"]')).toBeNull()
+      await act(async () => {
+        await window.__bridgicWord!.dispatch({ type: 'document.create', title: 'Second' })
+      })
+      await act(async () => host.querySelectorAll<HTMLButtonElement>('[data-testid="word-close-document"]')[1]!.click())
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(host.querySelectorAll('[data-testid="word-document-tab"]')).toHaveLength(1)
+      expect(host.textContent).toContain('Retained.docx')
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
   it('retries external snapshot replacement and excludes view-only commands from persistence', async () => {
     const executeCommand = mock(async (_id: string, _params?: object) => false)
     executeCommand.mockResolvedValueOnce(false).mockResolvedValueOnce(true)

@@ -201,10 +201,12 @@ const api: ElectronAPI = {
       subscribe<string>(IPC.events.powerPointCloseRequested, callback),
     onPowerPointExpandedChanged: (callback) =>
       subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
+    onExcelHostCloseRequested: (callback) =>
+      subscribe(IPC.events.excelHostCloseRequested, callback),
     onExcelHostChanged: (callback) =>
       subscribe<ExcelHostSnapshot>(IPC.events.excelHostChanged, callback),
     onWordHostChanged: (callback) => subscribe(IPC.events.wordHostChanged, callback),
-    onWordHostHideRequested: (callback) => subscribe(IPC.events.wordHostHideRequested, callback),
+    onWordHostCloseRequested: (callback) => subscribe(IPC.events.wordHostCloseRequested, callback),
     onWordHostExpandedChanged: (callback) => subscribe(IPC.events.wordHostExpandedChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },

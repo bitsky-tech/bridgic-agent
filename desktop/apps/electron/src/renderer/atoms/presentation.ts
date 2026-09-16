@@ -717,8 +717,7 @@ export const presentationExpandedAtom = atom(
     const sessionId = get(presentationSessionIdAtom)
     return sessionId ? get(expandedPresentationSessionsAtom).has(sessionId) : false
   },
-  (get, set, update: SessionStateUpdate<boolean>) => {
-    const sessionId = get(presentationSessionIdAtom)
+  (get, set, update: SessionStateUpdate<boolean>, sessionId: string | null = get(presentationSessionIdAtom)) => {
     if (!sessionId) return
     const current = get(expandedPresentationSessionsAtom)
     const isExpanded = current.has(sessionId)

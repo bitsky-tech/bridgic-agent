@@ -3,7 +3,7 @@ import type { BrowserWindow, Rectangle, WebContentsView, WebContentsViewConstruc
 import { DEFAULT_SETTINGS } from '@app/shared/types'
 import { IPC } from '../../shared/ipc-channels'
 import type { WordHostOpenRequest } from '../../shared/types'
-import { WORD_FLUSH_TIMEOUT_MS, WordHost } from '../word-host'
+import { WORD_FLUSH_TIMEOUT_MS, WORD_IMPORT_TIMEOUT_MS, WORD_OPEN_TIMEOUT_MS, WordHost } from '../word-host'
 import { windowLog } from '../logger'
 
 type Listener = (...args: unknown[]) => void
@@ -82,6 +82,39 @@ function flushTickets(view: FakeView): string[] {
 }
 
 describe('Session-owned Word host', () => {
+  it('allows large imports more time than renderer startup and still expires stalled requests', async () => {
+    const timers: Array<{ callback: () => void; delay: number; cleared: boolean }> = []
+    const setTimer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
+      const timer = { callback, delay, cleared: false }
+      timers.push(timer)
+      return timer as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+    const clearTimer = spyOn(globalThis, 'clearTimeout').mockImplementation(((timer: unknown) => {
+      const found = timers.find((item) => item === timer)
+      if (found) found.cleared = true
+    }) as typeof clearTimeout)
+    try {
+      const { host, views } = fixture()
+      const opening = host.openFile('a', request)
+      await settle()
+      host.reportState(1, { documentCount: 0, persistenceStatus: 'saved' })
+      expect(timers.find((timer) => timer.delay === WORD_OPEN_TIMEOUT_MS)?.cleared).toBe(true)
+      expect(WORD_IMPORT_TIMEOUT_MS).toBeGreaterThan(WORD_OPEN_TIMEOUT_MS)
+      expect(timers.filter((timer) => !timer.cleared).map((timer) => timer.delay)).toEqual([WORD_IMPORT_TIMEOUT_MS])
+      host.completeOpenFile(1, openTickets(views[0]!)[0]!.id)
+      await opening
+      expect(timers.every((timer) => timer.cleared)).toBe(true)
+
+      const stalled = host.openFile('a', request).catch((error: Error) => error)
+      await settle()
+      const ticket = openTickets(views[0]!).at(-1)!
+      timers.find((timer) => !timer.cleared)!.callback()
+      expect((await stalled as Error).message).toBe('Word document opening timed out')
+      expect(() => host.completeOpenFile(1, ticket.id)).toThrow('invalid or expired')
+      expect(views[0]!.webContents.destroyed).toBe(false)
+    } finally { setTimer.mockRestore(); clearTimer.mockRestore() }
+  })
+
   it('deduplicates target creation, preserves the default storage partition and keeps hidden Sessions alive', async () => {
     let loaded!: () => void
     const state = fixture(() => new Promise<void>((resolve) => { loaded = resolve }))
@@ -479,21 +512,69 @@ describe('Session-owned Word host', () => {
     } finally { warn.mockRestore() }
   })
 
-  it('resets expansion on hide without closing documents or hiding another Session', async () => {
-    const { host, views } = fixture()
+  it('checkpoints the closing Session before releasing its editor without touching another Session', async () => {
+    const { host, views, children } = fixture()
     await host.ensureSession('a')
     await host.ensureSession('b')
     host.reportState(1, { documentCount: 2, persistenceStatus: 'saved' })
     host.setExpanded(1, true)
     host.activateSession('b')
     host.setVisible(true)
-    expect(host.requestHide(1)).toEqual({ sessionId: 'a', expanded: false })
-    expect(views[1]?.visible).toBe(true)
-    expect(host.snapshot().sessions[0]?.expanded).toBe(false)
-    expect(host.snapshot().sessions[0]?.documentCount).toBe(2)
-    host.requestHide(2)
-    expect(views[1]?.visible).toBe(false)
-    expect(views.every((view) => !view.webContents.destroyed)).toBe(true)
-    expect(() => host.requestHide(99)).toThrow('does not own')
+    const closing = host.requestClose(1)
+    await settle()
+    expect(views[0]!.webContents.destroyed).toBe(false)
+    expect(flushTickets(views[1]!)).toHaveLength(0)
+    host.completeFlush(1, flushTickets(views[0]!)[0]!, true)
+    expect(await closing).toBe('a')
+    host.closeCurrentSession(1)
+    expect(views[0]!.webContents.destroyed).toBe(true)
+    expect(children).toHaveLength(1)
+    expect(host.snapshot().sessions.map((session) => session.sessionId)).toEqual(['b'])
+    expect(views[1]!.visible).toBe(true)
+    await host.ensureSession('a')
+    host.closeCurrentSession(1)
+    expect(views[2]!.webContents.destroyed).toBe(false)
+    await expect(host.requestClose(99)).rejects.toThrow('does not own')
+  })
+
+  it('continues closing after a failed checkpoint and rejects an obsolete close after replacement', async () => {
+    const { host, views } = fixture()
+    await host.ensureSession('a')
+    host.reportState(1, { documentCount: 1, persistenceStatus: 'error' })
+    const closing = host.requestClose(1)
+    await settle()
+    host.completeFlush(1, flushTickets(views[0]!)[0]!, false)
+    expect(await closing).toBe('a')
+    host.closeCurrentSession(1)
+    expect(views[0]!.webContents.destroyed).toBe(true)
+    await host.ensureSession('a')
+    host.reportState(2, { documentCount: 1, persistenceStatus: 'saved' })
+    const obsolete = host.requestClose(2).catch((error: Error) => error)
+    await settle()
+    host.closeSession('a')
+    await host.ensureSession('a')
+    expect((await obsolete as Error).message).toBe('Word Session closed during its checkpoint')
+    expect(views[2]!.webContents.destroyed).toBe(false)
+  })
+
+  it('continues closing when its checkpoint times out', async () => {
+    const { host, views } = fixture()
+    await host.ensureSession('a')
+    host.reportState(1, { documentCount: 1, persistenceStatus: 'saved' })
+    const callbacks: Array<() => void> = []
+    const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => {
+      callbacks.push(callback)
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as typeof setTimeout)
+    try {
+      const closing = host.requestClose(1)
+      await settle()
+      expect(flushTickets(views[0]!)).toHaveLength(1)
+      for (const callback of callbacks) callback()
+      expect(await closing).toBe('a')
+      host.closeCurrentSession(1)
+      expect(host.snapshot().sessions).toEqual([])
+      expect(views[0]!.webContents.destroyed).toBe(true)
+    } finally { timer.mockRestore() }
   })
 })

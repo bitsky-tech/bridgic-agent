@@ -74,8 +74,7 @@ export const excelExpandedAtom = atom(
     const sessionId = get(viewedSessionIdAtom)
     return sessionId ? get(expandedSessionsAtom).has(sessionId) : false
   },
-  (get, set, update: ExcelStateUpdate<boolean>) => {
-    const sessionId = get(viewedSessionIdAtom)
+  (get, set, update: ExcelStateUpdate<boolean>, sessionId: string | null = get(viewedSessionIdAtom)) => {
     if (!sessionId) return
     const current = get(expandedSessionsAtom)
     const nextValue = typeof update === 'function' ? update(current.has(sessionId)) : update

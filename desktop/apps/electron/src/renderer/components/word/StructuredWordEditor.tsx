@@ -16,6 +16,7 @@ import { Icons } from '@/components/amphi/Icons'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { OfficeAppHeader, OfficeDocumentTabs, OfficePanelControls } from '@/components/app/OfficeWorkbenchChrome'
 import { cn } from '@/lib/cn'
+import { rlog } from '@/lib/logger'
 import type {
   WordDomainStore,
   WordFormattingCommand,
@@ -204,7 +205,17 @@ export function StructuredWordEditor({
         icon={<span className="flex shrink-0 text-blue-600 dark:text-blue-400">{Icons.wordDocument(16)}</span>}
         label={t('word.documentTabs')}
         newLabel={t('word.newDocument')}
-        onClose={(documentId) => { flushActiveSnapshot(); void store.dispatch({ type: 'document.close', documentId }) }}
+        onClose={(documentId) => {
+          flushActiveSnapshot()
+          if (!onClose) {
+            void store.dispatch({ type: 'document.close', documentId })
+            return
+          }
+          void store.closeDocumentTab(documentId).then((result) => {
+            if (!result.ok) rlog.warn('[word] document close failed', result.error)
+            else if (result.value.closeSurface) onClose()
+          })
+        }}
         onCreate={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.create' }) }}
         onSelect={(documentId) => { flushActiveSnapshot(); void store.dispatch({ type: 'document.activate', documentId }) }}
         tabs={workspace.documents.map((item) => {

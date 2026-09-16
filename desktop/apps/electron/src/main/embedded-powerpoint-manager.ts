@@ -38,6 +38,7 @@ export class EmbeddedPowerPointManager {
   ) {
     this.container = new OfficeSessionContainer({
       label: 'PowerPoint',
+      closeOptions: { waitForBeforeUnload: false },
       onStateChanged: () => this.onStateChanged(this.snapshot()),
       onError: (error, surface) => {
         windowLog.warn(`[embedded-powerpoint] creation failed session=${surface.sessionId}`, error)
@@ -116,6 +117,18 @@ export class EmbeddedPowerPointManager {
 
   closeSession(sessionId: string): void {
     this.container.closeSession(this.normalizeSessionId(sessionId))
+  }
+
+  sessionForContents(webContentsId: number): string {
+    const surface = this.container.forWebContents(webContentsId)
+    if (!surface) throw new Error('PowerPoint Session does not own this renderer')
+    return surface.sessionId
+  }
+
+  /** A delayed close belongs to its sender, even if this Session has since reopened. */
+  closeCurrentSession(webContentsId: number): void {
+    const surface = this.container.forWebContents(webContentsId)
+    if (surface) this.closeSession(surface.sessionId)
   }
 
   setBounds(bounds: EmbeddedPowerPointBounds): void {

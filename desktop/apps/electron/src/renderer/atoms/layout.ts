@@ -140,10 +140,10 @@ export const toggleSidebarCollapsedAtom = atom(null, (get, set) => {
   set(sidebarOverlayOpenAtom, false)
 })
 
-/** Set the right content's collapsed state without relying on a stale toggle read. */
-export const setRightPanelCollapsedAtom = atom(null, (get, set, collapsed: boolean) => {
-  const sessionId = get(activeSessionIdAtom)
+/** Remember an explicit Session for delayed events; only foreground changes update the fallback. */
+export const setRightPanelCollapsedAtom = atom(null, (get, set, collapsed: boolean, sessionId: string | null = get(activeSessionIdAtom)) => {
   if (sessionId) set(rightPanelCollapsedFamily(sessionId), collapsed)
+  if (sessionId !== get(activeSessionIdAtom)) return
   // Keep the persisted fallback aligned even when this Session already had the
   // requested override. The singleton draft id is reused: without this write,
   // entering it again as collapsed after an open Session would leave the fallback

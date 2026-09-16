@@ -19,6 +19,39 @@ function deferred() {
 }
 
 describe('Word common workspace runtime', () => {
+  it('decides the final tab inside the close queue after an unfinished editor flush', async () => {
+    const store = createStore()
+    const firstId = store.getSnapshot().activeDocumentId
+    await store.dispatch({ type: 'document.create', title: 'Second' })
+    const secondId = store.getSnapshot().activeDocumentId
+    const checkpoint = deferred()
+    const detach = store.registerEditorCommandHandler(secondId, async () => true, () => checkpoint.promise)
+    const firstClose = store.closeDocumentTab(firstId)
+    const finalClose = store.closeDocumentTab(secondId)
+    expect(store.getSnapshot().documents).toHaveLength(2)
+    checkpoint.resolve()
+    expect(await firstClose).toEqual({ ok: true, value: { closeSurface: false } })
+    expect(await finalClose).toEqual({ ok: true, value: { closeSurface: true } })
+    expect(store.getSnapshot().documents.map((document) => document.id)).toEqual([secondId])
+    detach()
+    store.dispose()
+  })
+
+  it('includes a queued new document when deciding whether a close should release the surface', async () => {
+    const store = createStore()
+    const firstId = store.getSnapshot().activeDocumentId
+    const checkpoint = deferred()
+    const detach = store.registerEditorCommandHandler(firstId, async () => true, () => checkpoint.promise)
+    const creating = store.dispatch({ type: 'document.create', title: 'Queued document' })
+    const closing = store.closeDocumentTab(firstId)
+    checkpoint.resolve()
+    expect((await creating).ok).toBe(true)
+    expect(await closing).toEqual({ ok: true, value: { closeSurface: false } })
+    expect(store.getSnapshot().documents.map((document) => document.title)).toEqual(['Queued document'])
+    detach()
+    store.dispose()
+  })
+
   it('publishes immutable metadata from the authoritative domain without duplicating document content', async () => {
     const store = createStore()
     const reader = store.api.workspace

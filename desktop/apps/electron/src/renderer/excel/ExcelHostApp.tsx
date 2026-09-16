@@ -11,8 +11,10 @@ import { completeExcelWorkbookSave, createExcelWorkspace, type ExcelWorkspaceTab
 import { createExcelRecoveryPersistence, writeExcelWorkbookSource } from '../lib/office/excelPersistence'
 import { OfficeOperationError, type OfficeOperationContext } from '../lib/office/officeWorkspaceRuntime'
 import {
-  clearUnsupportedWorkbookFeatures, createEmptyWorkbook, exportXlsx, importXlsx, unsupportedWorkbookFeatures,
+  clearUnsupportedWorkbookFeatures, createEmptyWorkbook, exportXlsx, unsupportedWorkbookFeatures,
+  type ExcelImportProgress,
 } from '../lib/excelWorkbook'
+import { importExcelWorkbook } from '../lib/excelWorkbookImport'
 import { ExcelRibbon, type ExcelRibbonAction, type ExcelRibbonTab, type ExcelViewState } from './ExcelRibbon'
 import { excelDataOperationMessage } from './excelDataOperations'
 import { ExcelHyperlinkDialog, ExcelPivotTableDialog } from './ExcelInsertDialogs'
@@ -49,7 +51,6 @@ function loadRecentFormulas(): string[] {
 interface Copy {
   close: string
   documentTabs: string
-  closeUnsaved: string
   dismissError: string
   dismissNotice: string
   lossyOverwrite: string
@@ -144,6 +145,8 @@ export function ExcelHostApp() {
   const [formulaDialog, setFormulaDialog] = useState<FormulaDialogState | null>(null)
   const [recentFunctions, setRecentFunctions] = useState(loadRecentFormulas)
   const [busy, setBusy] = useState<BusyAction>(null)
+  const [importProgress, setImportProgress] = useState<ExcelImportProgress | null>(null)
+  const importControllerRef = useRef<AbortController | null>(null)
   const [pendingWorkbookOpenTickets, setPendingWorkbookOpenTickets] = useState<ExcelWorkbookOpenTicket[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<OperationNotice>(null)
@@ -195,6 +198,7 @@ export function ExcelHostApp() {
         if (currentLifetime.current === lifetime) {
           runtime.dispose()
           recovery.dispose()
+          importControllerRef.current?.abort()
         }
       })
     }
@@ -249,13 +253,6 @@ export function ExcelHostApp() {
   useEffect(() => {
     const hasUnsaved = tabs.some((tab) => tab.dirty)
     if (recoveryLoaded) void api.setDirty(hasUnsaved).catch((cause) => setError(errorMessage(cause)))
-    if (!hasUnsaved) return
-    const beforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault()
-      event.returnValue = ''
-    }
-    window.addEventListener('beforeunload', beforeUnload)
-    return () => window.removeEventListener('beforeunload', beforeUnload)
   }, [api, recoveryLoaded, tabs])
 
   useEffect(() => {
@@ -292,7 +289,22 @@ export function ExcelHostApp() {
     replaceInitialBlank: boolean,
     assertCurrent: () => void,
   ) => {
-    const snapshot = await importXlsx(document.bytes, univerLocale(config))
+    const controller = new AbortController()
+    importControllerRef.current = controller
+    setImportProgress({ phase: 'reading' })
+    let snapshot: IWorkbookData
+    try {
+      snapshot = await importExcelWorkbook(document.bytes, univerLocale(config), {
+        signal: controller.signal,
+        onProgress: setImportProgress,
+      })
+    } catch (error) {
+      if (controller.signal.aborted) return
+      throw error
+    } finally {
+      importControllerRef.current = null
+      setImportProgress(null)
+    }
     assertCurrent()
     await flushActiveEditor(assertCurrent)
     const tab = openedWorkbookTab(document, snapshot)
@@ -454,11 +466,10 @@ export function ExcelHostApp() {
       if (workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
       const state = workspace.getState()
       const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)!
-      if (tab.dirty && !window.confirm(copy.closeUnsaved)) return
       setFormulaDialog(null)
       setInsertDialog(null)
       if (state.tabs.length === 1) {
-        await api.closeSession()
+        await api.requestClose()
         return
       }
       const index = state.tabs.findIndex((candidate) => candidate.tabId === tab.tabId)
@@ -608,6 +619,19 @@ export function ExcelHostApp() {
           selectionValue={selection.value}
           viewState={{ ...viewState, darkMode: editorTheme === 'dark' }}
         />
+      ) : null}
+
+      {importProgress ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle bg-bg-app px-3 py-2 text-xs" role="status" aria-live="polite">
+          <span className="min-w-0 flex-1">
+            {importProgress.phase === 'reading'
+              ? t('excel.host.importReading')
+              : t('excel.host.importConverting', { completed: importProgress.completed, total: importProgress.total })}
+          </span>
+          <button className="shrink-0 underline underline-offset-2" onClick={() => importControllerRef.current?.abort()} type="button">
+            {t('excel.host.importCancel')}
+          </button>
+        </div>
       ) : null}
 
       {error ? (

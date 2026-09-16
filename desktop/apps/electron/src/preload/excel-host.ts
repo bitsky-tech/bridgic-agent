@@ -27,7 +27,7 @@ const api: ExcelHostPreloadAPI = {
   ),
   save: (request) => ipcRenderer.invoke(IPC.excel.save, request),
   saveAs: (request) => ipcRenderer.invoke(IPC.excel.saveAs, request),
-  closeSession: () => ipcRenderer.invoke(IPC.excelHost.closeCurrentSession),
+  requestClose: () => ipcRenderer.invoke(IPC.excelHost.requestClose),
   setDirty: (dirty) => ipcRenderer.invoke(IPC.excelHost.setDirty, dirty),
   getRecoveryState: () => ipcRenderer.invoke(IPC.excelHost.getRecoveryState),
   setRecoveryState: (state) => ipcRenderer.invoke(IPC.excelHost.setRecoveryState, state),

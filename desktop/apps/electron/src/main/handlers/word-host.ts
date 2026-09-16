@@ -2,6 +2,7 @@ import { IPC } from '../../shared/ipc-channels'
 import type { EmbeddedBrowserBounds, WordHostOpenRequest } from '../../shared/types'
 import type { WordHost } from '../word-host'
 import { loggedHandle } from './logged-handle'
+import { registerOfficeCloseHandler } from './office-close'
 import { redactLocalPathLogArgs } from './path-log'
 
 /** Main-window lifecycle commands and owner-checked child-runtime acknowledgements. */
@@ -26,10 +27,12 @@ export function registerWordHostHandlers(word: WordHost, emitToHost: (channel: s
     return word.getConfig()
   })
   loggedHandle(IPC.wordHost.reportState, (event, state: unknown) => word.reportState(event.sender.id, state))
-  loggedHandle(IPC.wordHost.requestHide, (event) => {
-    const state = word.requestHide(event.sender.id)
-    emitToHost(IPC.events.wordHostExpandedChanged, state)
-    emitToHost(IPC.events.wordHostHideRequested, state.sessionId)
+  registerOfficeCloseHandler({
+    requestChannel: IPC.wordHost.requestClose,
+    closedEvent: IPC.events.wordHostCloseRequested,
+    host: word,
+    emitToHost,
+    prepareClose: (webContentsId) => word.requestClose(webContentsId),
   })
   loggedHandle(IPC.wordHost.setExpanded, (event, expanded: boolean) => {
     emitToHost(IPC.events.wordHostExpandedChanged, word.setExpanded(event.sender.id, expanded))

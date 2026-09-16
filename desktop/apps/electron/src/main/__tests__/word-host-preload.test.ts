@@ -47,7 +47,7 @@ it('buffers early Word runtime events and exposes only its narrow Session API', 
   expect(result.name).toBe('wordHostApi')
   expect(result.keys.sort()).toEqual([
     'completeFlush', 'completeOpenFile', 'getConfig', 'onConfigChanged', 'onExpandedChanged',
-    'onFlushRequested', 'onOpenFileRequested', 'readDocument', 'reportState', 'requestHide', 'setExpanded',
+    'onFlushRequested', 'onOpenFileRequested', 'readDocument', 'reportState', 'requestClose', 'setExpanded',
   ].sort())
   expect(result.received.map(([kind]) => kind)).toEqual(['open', 'flush', 'config', 'expanded', 'replayed'])
   expect(result.received[2]).toEqual(['config', { locale: 'zh' }])

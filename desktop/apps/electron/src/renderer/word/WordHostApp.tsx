@@ -64,6 +64,7 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
   const [openFileRequest, setOpenFileRequest] = useState<WordHostOpenRequest | null>(null)
   const activeImportRef = useRef<{ id: string; complete: (error?: string) => void } | null>(null)
   const flushRef = useRef<WordWorkspaceFlush | null>(null)
+  const closingRef = useRef<Promise<void> | null>(null)
   const readyResolversRef = useRef<Array<() => void>>([])
   const mountedRef = useRef(false)
   const requestsRef = useRef<ReturnType<typeof createWordHostRequestQueue> | null>(null)
@@ -151,7 +152,9 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
       <SessionWordEditor
         defaultTitle={t('word.untitled')}
         expanded={expanded}
-        onClose={() => { void api.requestHide().catch(reportError) }}
+        onClose={() => {
+          closingRef.current ??= api.requestClose().catch(reportError).finally(() => { closingRef.current = null })
+        }}
         onFlushHandlerChange={onFlushHandlerChange}
         onOpenFileRequestHandled={onOpenFileRequestHandled}
         onStateChange={onStateChange}

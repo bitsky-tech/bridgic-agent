@@ -58,7 +58,9 @@ export function createExcelRecoveryPersistence<TSnapshot>(options: {
       automatic: true,
     },
     delayMs: 250,
-    write: (value) => options.api.setRecoveryState(value),
+    // Serialize BEFORE contextBridge. Passing the nested cell graph directly
+    // makes Electron recursively proxy/freeze millions of objects on the UI thread.
+    write: (value) => options.api.setRecoveryState(JSON.stringify(value)),
     onStatusChange: options.onStatusChange,
   })
 
@@ -72,7 +74,7 @@ export function createExcelRecoveryPersistence<TSnapshot>(options: {
         if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel recovery controller is unavailable.')
         const stored = await options.api.getRecoveryState()
         if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel recovery controller is unavailable.')
-        return recoveryState<TSnapshot>(stored)
+        return recoveryState<TSnapshot>(stored === null ? null : JSON.parse(stored))
       }).then((result) => {
         if (disposed) {
           return {

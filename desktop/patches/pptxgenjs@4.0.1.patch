@@ -1,0 +1,94 @@
+diff --git a/dist/pptxgen.cjs.js b/dist/pptxgen.cjs.js
+index 143dfa3e7fb54054153bad16b6c991697c0d31e7..24cbc33697034bcbcdc978c98c4732d4a4d30155 100644
+--- a/dist/pptxgen.cjs.js
++++ b/dist/pptxgen.cjs.js
+@@ -6954,6 +6954,9 @@ class PptxGenJS {
+             slide._relsChart.forEach(rel => chartPromises.push(createExcelWorksheet(rel, zip)));
+             slide._relsMedia.forEach(rel => {
+                 if (rel.type !== 'online' && rel.type !== 'hyperlink') {
++                    const mediaPath = rel.Target.replace('..', 'ppt');
++                    // Shared images need only one decode and one ZIP entry.
++                    if (rel.type.startsWith('image/') && zip.file(mediaPath)) return;
+                     // A: Loop vars
+                     let data = rel.data && typeof rel.data === 'string' ? rel.data : '';
+                     // B: Users will undoubtedly pass various string formats, so correct prefixes as needed
+@@ -6964,7 +6967,7 @@ class PptxGenJS {
+                     else if (!data.includes(';'))
+                         data = 'image/png;' + data;
+                     // C: Add media
+-                    zip.file(rel.Target.replace('..', 'ppt'), data.split(',').pop(), { base64: true });
++                    zip.file(mediaPath, data.split(',').pop(), { base64: true });
+                 }
+             });
+         };
+@@ -7020,6 +7023,23 @@ class PptxGenJS {
+                     if (slide._slideLayout)
+                         addPlaceholdersToSlideLayouts(slide);
+                 });
++                // Reuse identical image parts across slides before writing XML or ZIP data.
++                // SVG previews have finished rendering, so different preview sizes remain distinct.
++                const imageTargets = new Map();
++                [...this.slideLayouts, ...this.slides, this.masterSlide].forEach(slide => {
++                    slide._relsMedia.forEach(rel => {
++                        if (!rel.type.startsWith('image/') || typeof rel.data !== 'string' || !rel.data) return;
++                        const format = rel.type + ':' + rel.extn;
++                        let targets = imageTargets.get(format);
++                        if (!targets) {
++                            targets = new Map();
++                            imageTargets.set(format, targets);
++                        }
++                        const target = targets.get(rel.data);
++                        if (target) rel.Target = target;
++                        else targets.set(rel.data, rel.Target);
++                    });
++                });
+                 // B: Add all required folders and files
+                 zip.folder('_rels');
+                 zip.folder('docProps');
+diff --git a/dist/pptxgen.es.js b/dist/pptxgen.es.js
+index 449038cbf3d367c7e5a51bf692793a25bd06a86e..5088680279b4d56d4028ce646ed300c45a689390 100644
+--- a/dist/pptxgen.es.js
++++ b/dist/pptxgen.es.js
+@@ -6952,6 +6952,9 @@ class PptxGenJS {
+             slide._relsChart.forEach(rel => chartPromises.push(createExcelWorksheet(rel, zip)));
+             slide._relsMedia.forEach(rel => {
+                 if (rel.type !== 'online' && rel.type !== 'hyperlink') {
++                    const mediaPath = rel.Target.replace('..', 'ppt');
++                    // Shared images need only one decode and one ZIP entry.
++                    if (rel.type.startsWith('image/') && zip.file(mediaPath)) return;
+                     // A: Loop vars
+                     let data = rel.data && typeof rel.data === 'string' ? rel.data : '';
+                     // B: Users will undoubtedly pass various string formats, so correct prefixes as needed
+@@ -6962,7 +6965,7 @@ class PptxGenJS {
+                     else if (!data.includes(';'))
+                         data = 'image/png;' + data;
+                     // C: Add media
+-                    zip.file(rel.Target.replace('..', 'ppt'), data.split(',').pop(), { base64: true });
++                    zip.file(mediaPath, data.split(',').pop(), { base64: true });
+                 }
+             });
+         };
+@@ -7018,6 +7021,23 @@ class PptxGenJS {
+                     if (slide._slideLayout)
+                         addPlaceholdersToSlideLayouts(slide);
+                 });
++                // Reuse identical image parts across slides before writing XML or ZIP data.
++                // SVG previews have finished rendering, so different preview sizes remain distinct.
++                const imageTargets = new Map();
++                [...this.slideLayouts, ...this.slides, this.masterSlide].forEach(slide => {
++                    slide._relsMedia.forEach(rel => {
++                        if (!rel.type.startsWith('image/') || typeof rel.data !== 'string' || !rel.data) return;
++                        const format = rel.type + ':' + rel.extn;
++                        let targets = imageTargets.get(format);
++                        if (!targets) {
++                            targets = new Map();
++                            imageTargets.set(format, targets);
++                        }
++                        const target = targets.get(rel.data);
++                        if (target) rel.Target = target;
++                        else targets.set(rel.data, rel.Target);
++                    });
++                });
+                 // B: Add all required folders and files
+                 zip.folder('_rels');
+                 zip.folder('docProps');
