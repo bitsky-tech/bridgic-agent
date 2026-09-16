@@ -93,7 +93,7 @@ async def test_one_human_call_runs_alone_in_every_stage(orchestration: _Harness,
     ("main", "request_run_workflow"),
     ("clarify", "request_human_task_confirm"),
     ("verify", "request_human_workflow_confirm"),
-    ("ppt_plan", "ppt_rag"),
+    ("ppt_plan", "request_presentation_template_confirm"),
     ("ppt_compose", "report_presentation_step"),
     ("execute", "report_workflow_step"),
 ])
@@ -215,7 +215,7 @@ async def test_human_control_does_not_ask_for_an_excluded_network_call(orchestra
 
 async def test_conflicting_controls_are_denied_without_template_approval(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     """Conflicting controls are rejected without invoking permission evaluation or approval."""
-    calls = [_human_call(), _call("templates", "ppt_rag")]
+    calls = [_human_call(), _call("templates", "request_presentation_template_confirm", search_id="search-one")]
     ota_context = await _stage_round(orchestration, "ppt_plan", calls)
     ota_context.ota_record[-1].permission = RoundPermission(execution_mode="request")
     agent, context = orchestration.agent, orchestration.context
@@ -341,7 +341,7 @@ async def test_invalid_template_ask_is_denied_by_the_stage_before_approval(orche
     calls = [_call("templates", "ppt_rag")]
     ota_context = await _stage_round(orchestration, "ppt_plan", calls)
     # Retain the offered ToolSurface while invalidating the cursor before final admission.
-    ota_context.transition_think(PresentationStageState(stage="ppt_plan", step_index=2, outline_confirmed=False))
+    ota_context.transition_think(PresentationStageState(stage="ppt_plan", step_index=1))
     ota_context.ota_record[-1].permission = RoundPermission(execution_mode="request")
     agent, context = orchestration.agent, orchestration.context
     worker = agent._current_think_worker(ota_context, context)

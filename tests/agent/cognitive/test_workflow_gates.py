@@ -205,7 +205,7 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
         workspace=workspace,
     )
 
-    def ota(stage: str, step_index: int, generation: str = GENERATION) -> AmphiOTAContext:
+    def ota(stage: str, step_index: int, generation: str | None = GENERATION) -> AmphiOTAContext:
         return AmphiOTAContext(
             user_input="Create the report",
             state={
@@ -255,4 +255,7 @@ async def test_run_gate(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyP
     # Check 3: A cognitive cursor that disagrees with `.run/.state.json` rejects Workflow control.
     assert "does not match" in (
         await legality_reason(execute, report, ota("execute", 1, "stale-generation"), context) or ""
+    )
+    assert "does not match" in (
+        await legality_reason(execute, report, ota("execute", 1, None), context) or ""
     )

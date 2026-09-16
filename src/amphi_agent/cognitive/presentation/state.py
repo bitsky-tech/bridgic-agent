@@ -147,18 +147,6 @@ class PresentationStageState(BaseModel):
     mode: Literal["presentation"] = "presentation"
     stage: Literal["ppt_brief", "ppt_plan", "ppt_compose", "ppt_review"] = "ppt_brief"
     step_index: int = Field(default=0, ge=0)
-    goal: Optional[str] = Field(default=None, min_length=1)
-    reports: List[PresentationStepRecord] = Field(default_factory=list)
-    sources: List[PresentationSource] = Field(default_factory=list, max_length=80)
-    outline: List[PresentationChapterOutline] = Field(default_factory=list, max_length=20)
-    outline_confirmed: bool = False
-    outline_confirmation_id: Optional[str] = Field(default=None, min_length=1)
-    template_candidates: List[PresentationTemplateCandidate] = Field(default_factory=list, max_length=8)
-    template_selection_id: Optional[str] = Field(default=None, min_length=1)
-    template_selection_status: Literal["idle", "pending", "selected", "skipped"] = "idle"
-    template_selection_error: Optional[str] = Field(default=None, max_length=1_000)
-    selected_template: Optional[PresentationTemplateCandidate] = None
-    template_excluded_ids: List[str] = Field(default_factory=list, max_length=200)
 
     @model_validator(mode="before")
     @classmethod
@@ -178,11 +166,18 @@ class PresentationStageState(BaseModel):
         if not any(step_id(report) == "shape_chapters" for report in reports):
             return value
         migrated = dict(value)
-        migrated["reports"] = [report for report in reports if step_id(report) != "shape_chapters"]
         migrated["step_index"] = max(1, int(value.get("step_index") or 0) - 1)
         return migrated
 
-    def apply_plan_step_data(self, step_id: str, data: Any) -> "PresentationStageState":
+
+class PresentationPlanData(BaseModel):
+    """Validated artifact content, never stored in the Turn's cognitive state."""
+
+    goal: Optional[str] = None
+    sources: List[PresentationSource] = Field(default_factory=list, max_length=80)
+    outline: List[PresentationChapterOutline] = Field(default_factory=list, max_length=20)
+
+    def apply_plan_step_data(self, step_id: str, data: Any) -> "PresentationPlanData":
         """Validate one Plan result and assign runtime-owned stable identities."""
         def required_text(item: Dict[str, Any], name: str, label: str) -> str:
             value = str(item.get(name) or "").strip()
@@ -287,16 +282,7 @@ class PresentationStageState(BaseModel):
             ))
         if step_id == "map_slides" and not any(chapter.slides for chapter in chapters):
             raise ValueError("Plan step `map_slides` requires at least one slide.")
-        return self.model_copy(update={
-            "outline": chapters,
-            "outline_confirmed": False,
-            "template_candidates": [],
-            "template_selection_id": None,
-            "template_selection_status": "idle",
-            "template_selection_error": None,
-            "selected_template": None,
-            "template_excluded_ids": [],
-        })
+        return self.model_copy(update={"outline": chapters})
 
 
 class AwaitingPresentationOutlineConfirm(BaseModel):
@@ -315,6 +301,7 @@ class AwaitingPresentationTemplateSelection(BaseModel):
 
 __all__ = [
     "PresentationStageState",
+    "PresentationPlanData",
     "PresentationChapterOutline",
     "PresentationSlideOutline",
     "PresentationSource",

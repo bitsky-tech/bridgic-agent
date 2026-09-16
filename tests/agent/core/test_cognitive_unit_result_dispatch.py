@@ -5,12 +5,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 from bridgic.amphibious import OTARecord, RETURN, ThinkUnit, think_unit
+from bridgic.core.model.types import Message, Role
 
-from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, Session
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.build.state import BuildStageState
 from src.amphi_agent.cognitive.normal.main import MainThink
 from src.amphi_agent.cognitive.normal.state import NormalStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
+from src.amphi_store import SessionRecord
 from src.amphi_agent.cognitive.state import AwaitingFeedback, AwaitingSubAgent, InStage, SubAgentCall, ThinkUnitOutcome
 from src.amphi_agent.cognitive.workflow.base import WorkflowRunThink
 from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
@@ -94,7 +97,7 @@ async def test_state_change_dispatches_target_before_accepting_an_answer(orchest
 
     agent = CustomAgent()
     monkeypatch.setattr("src.amphi_agent._agent.MAX_THINK_UNITS_PER_TURN", 1)
-    monkeypatch.setattr(agent, "_publish_stage", lambda _ota, status: events.append(("publish", status)))
+    monkeypatch.setattr(agent, "_publish_stage", lambda _ota, status, _context: events.append(("publish", status)))
     source_status = BuildStageState(stage="clarify")
     ota_context = AmphiOTAContext(ota_record=[OTARecord()], stream=SimpleNamespace(publish=lambda *_args, **_kwargs: None))
     ota_context.transition_think(source_status)
@@ -222,3 +225,76 @@ async def test_workflow_budget_expands_only_on_entry(orchestration: _Harness, mo
         initialize.assert_awaited_once_with(ota_context, orchestration.context)
     finally:
         await flow.aclose()
+
+
+@pytest.mark.parametrize(("state", "child", "worker_name"), [
+    (NormalStageState(), False, "MainThink"),
+    (NormalStageState(), True, "SubAgentThink"),
+    (PresentationStageState(stage="ppt_plan", goal="Science deck", step_index=2, outline_confirmed=True), False, "PresentationPlanThink"),
+    (BuildStageState(stage="clarify"), False, "ClarifyThink"),
+])
+async def test_get_prompt_uses_supplied_contexts_without_execution(monkeypatch, state, child, worker_name) -> None:
+    """The original assembler owns message and tool selection, including stage progress."""
+    async def reject_execution(*args, **kwargs):
+        pytest.fail("Prompt inspection must only call assemble_messages.")
+
+    monkeypatch.setattr(BaseThink, "compact_messages", reject_execution)
+    monkeypatch.setattr(BaseThink, "append_runtime_state", reject_execution)
+    monkeypatch.setattr(AmphiAgent, "arun", reject_execution)
+    context = AmphiContext(session=Session(SessionRecord(
+        id="prompt-read-only", user_id="local", workspace_root="/sessions/prompt-read-only",
+        parent_session_id="parent" if child else None,
+    ), []))
+    ota_context = AmphiOTAContext(
+        user_input="Explain the task.", prompt_time="2026-09-15 12:00 (UTC+08:00)",
+        ota_record=[OTARecord()],
+    )
+    ota_context.transition_think(state.model_copy(deep=True))
+    original = ota_context.model_dump(mode="json", exclude={"tools"})
+
+    result = await AmphiAgent().get_prompt(context, ota_context)
+
+    assert result["worker"] == worker_name
+    assert result["messages"][0]["role"] == Role.SYSTEM.value
+    assert any("Explain the task." in Message.model_validate(message).content for message in result["messages"])
+    assert result["tools"] and ota_context.tools
+    assert ota_context.model_dump(mode="json", exclude={"tools"}) == original
+    assert ota_context.think_status == state
+    if isinstance(state, PresentationStageState):
+        system = Message.model_validate(result["messages"][0]).content
+        assert "Current step id: design_visual_direction" in system
+        assert "Goal: Science deck" not in system
+        assert "ppt_rag" in {tool["name"] for tool in result["tools"]}
+
+
+async def test_get_prompt_passes_context_identity_to_worker_override() -> None:
+    """No copied context, stage rewriting, or additional assembly runs at this boundary."""
+    observed = []
+
+    class CustomThink(MainThink):
+        extra_body = {"temperature": 0.25}
+
+        async def assemble_messages(self, ota_context, context):
+            observed.append((ota_context, context))
+            return [Message.from_text("Custom stage policy", role=Role.SYSTEM)]
+
+        async def append_runtime_state(self, messages, ota_context, context):
+            pytest.fail("get_prompt must return the original assembler's messages.")
+
+    class CustomAgent(AmphiAgent):
+        ppt_plan = think_unit(CustomThink())
+
+    context = AmphiContext(session=Session(SessionRecord(
+        id="custom-prompt", user_id="local", workspace_root="/sessions/custom-prompt",
+    ), []))
+    ota_context = AmphiOTAContext(user_input="Plan", ota_record=[OTARecord()])
+    ota_context.transition_think(PresentationStageState(stage="ppt_plan", goal="Retain the goal", step_index=2))
+
+    result = await CustomAgent().get_prompt(context, ota_context)
+
+    assert result["worker"] == "CustomThink"
+    assert result["extraBody"] == {"temperature": 0.25}
+    assert [Message.model_validate(message).content for message in result["messages"]] == ["Custom stage policy"]
+    assert observed[0][0] is ota_context
+    assert observed[0][1] is context
+    assert ota_context.think_status.step_index == 2

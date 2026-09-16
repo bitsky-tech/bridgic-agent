@@ -38,8 +38,10 @@ describe('Desktop debug startup gate', () => {
     const built = await desktopViteConfig({ command: 'build', mode: 'production', isPreview: false })
     expect(built.define?.__DESKTOP_DEBUG__).toBe('false')
     expect(built.server?.proxy).toBeUndefined()
+    expect(built.server?.fs).toBeUndefined()
     const served = await desktopViteConfig({ command: 'serve', mode: 'development', isPreview: false })
     expect(served.define?.__DESKTOP_DEBUG__).toBe('true')
+    expect(served.server?.fs).toBeUndefined()
     expect(served.server?.proxy?.['/__debug-api']).toMatchObject({
       target: environment.DESKTOP_DEBUG_API_URL,
       headers: { authorization: `Bearer ${environment.DESKTOP_DEBUG_STARTUP_TOKEN}` },

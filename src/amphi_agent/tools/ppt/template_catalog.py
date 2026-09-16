@@ -741,7 +741,7 @@ def infer_page_roles(values: Iterable[str]) -> Counter[str]:
 
 
 def build_ppt_search_profile(state: Any, preferences: Optional[str] = None) -> Dict[str, Any]:
-    """Project presentation state into the provider-neutral retrieval request."""
+    """Project confirmed presentation artifact content into the retrieval request."""
     def requested_aspect_ratio(value: Optional[str]) -> Optional[str]:
         if not value:
             return None

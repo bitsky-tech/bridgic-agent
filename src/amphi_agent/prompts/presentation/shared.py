@@ -4,9 +4,9 @@
 # System Rules
 ################################################################################################################
 PRESENTATION_CONTEXT_GUIDANCE = """\
-- `<presentation_progress>`: the authoritative presentation goal and current stage; in Plan, Compose, and Review it also contains the current step, completed count, and durable reports. Never infer progress from chat prose, files, or visible slides.
-- `<presentation_plan_data>`: the runtime-owned selected sources and editable chapter/slide outline with stable ids, outline-confirmation state, template-selection status, and any selected template. Treat a user-confirmed outline here as authoritative over an older copy in `.presentation/plan.md` and synchronize the document before handing off.
-- `<presentation_artifacts>`: the current non-empty Brief, Plan, and Review contracts read from the Session filesystem before this model call, when available. Each `<artifact>` identifies its owning stage and relative path.
+- `<presentation_progress>`: the current stage and, where applicable, its step instruction and completed count. It contains no presentation content or user decisions.
+- `<presentation_artifacts>`: recorded sources, confirmed outline, and template-decision artifacts under `.ppt/`. Their paths come from preceding tool results. Confirmed artifacts include the user's edits; use them when writing the production plan.
+- The user's request, human decisions, and step reports remain in the conversation and their corresponding tool results. Read `.ppt/brief.md`, `.ppt/plan.md`, and `.ppt/review.md` with file tools as needed.
 """.strip()
 
 ################################################################################################################
@@ -23,9 +23,9 @@ PRESENTATION_TOOL_GUIDANCE = """\
 # Agent Mode Guidance
 ################################################################################################################
 PRESENTATION_OVERVIEW = """\
-- The finished user deliverable is the Session-owned live PowerPoint presentation. The files under `.presentation/` are internal production contracts that make decisions and review evidence durable; they are not substitutes for the deck and are not themselves the requested presentation.
+- The finished user deliverable is the Session-owned live PowerPoint presentation. The files under `.ppt/` are internal production contracts that make decisions and review evidence durable; they are not substitutes for the deck and are not themselves the requested presentation.
 - The pipeline has four ownership boundaries: Brief defines the assignment and communication contract; Plan establishes the evidence, narrative, editable page blueprint, and content-derived visual direction; Compose builds and polishes the live deck; Review inspects and repairs the finished deck before delivery.
-- Maintain three Session-local production contracts in the user's language. `ppt_brief` owns `.presentation/brief.md`; `ppt_plan` owns `.presentation/plan.md`; `ppt_review` owns `.presentation/review.md`. Use file tools to create or update them, and include the relevant path as report evidence in stages that report production steps. `<presentation_artifacts>` injects their current contents downstream.
+- Maintain three Session-local production contracts in the user's language. `ppt_brief` owns `.ppt/brief.md`; `ppt_plan` owns `.ppt/plan.md`; `ppt_review` owns `.ppt/review.md`. Use file tools to create or update them, and include the relevant path as report evidence in stages that report production steps. Read these documents with file tools when needed. Confirmed structured artifacts are assembled from the paths recorded by their producing tools.
 """.strip()
 
 PRESENTATION_STAGE_GUIDANCE = """\

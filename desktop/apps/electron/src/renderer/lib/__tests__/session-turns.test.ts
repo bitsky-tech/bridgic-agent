@@ -399,39 +399,48 @@ describe('Session Turn display projection', () => {
     expect(message.blocks![0]).toMatchObject({ type: 'confirmation', question: "Use 'project'?", response: 'Yes' })
     expect(message.blocks![1]).toMatchObject({ type: 'workflow_confirm', defaultName: 'Directory', status: 'confirmed' })
   })
-  for (const status of ['confirmed', 'revision_requested'] as const) {
-    it(`retains the outline tool and ${status} confirmation together after reload`, () => {
+  for (const toolName of ['request_presentation_outline_confirm', 'report_presentation_step']) for (const status of ['confirmed', 'revision_requested'] as const) {
+    it(`retains ${toolName} and ${status} confirmation together after reload`, () => {
       const payload = { outline_confirmation_id: ' outline-1 ', status, feedback: 'Move the evidence section first.' }
       const input = turn({ status: 'completed', agent_state: { think: { mode: 'presentation', stage: 'ppt_compose' } }, ota_records: [{
         think_scope: { mode: 'presentation', stage: 'ppt_plan' }, act_duration_ms: 75,
-        action_result: { results: [{ tool_name: 'report_presentation_step', tool_id: 'outline-call', tool_arguments: { step_id: 'map_slides' }, tool_result: payload }] },
+        action_result: { results: [{ tool_name: toolName, tool_id: 'outline-call', tool_arguments: { step_id: 'map_slides' }, tool_result: payload }] },
       }] })
       const original = structuredClone(input)
       const message = assistant(sessionTurnsToMessages([input]))
       expect(message.blocks!.map((block) => block.type)).toEqual(['tool', 'presentation_outline_confirm'])
-      expect(message.blocks![0]).toMatchObject({ name: 'report_presentation_step', result: { isError: false, durationMs: 75 } })
+      expect(message.blocks![0]).toMatchObject({ name: toolName, result: { isError: false, durationMs: 75 } })
       expect(JSON.parse(String(message.toolCalls[0]!.result!.output))).toEqual(payload)
       expect(message.blocks![1]).toEqual({ type: 'presentation_outline_confirm', requestId: 'outline-1', status, feedback: payload.feedback })
       expect(input).toEqual(original)
     })
   }
-  for (const status of ['selected', 'skipped', 'refresh_requested', 'revision_requested'] as const) {
-    it(`retains a ${status} template decision beside the original search tool`, () => {
+  for (const status of ['selected', 'skipped', 'refresh_requested', 'revision_requested'] as const) for (const toolName of ['request_presentation_template_confirm', 'ppt_rag']) {
+    it(`retains a ${status} template decision beside ${toolName}`, () => {
       const payload = { template_selection_id: 'template-1', status, selected_template_id: status === 'selected' ? 'template-blue' : null, feedback: 'Use a quieter color palette.' }
       const message = assistant(sessionTurnsToMessages([turn({ status: 'completed', agent_state: {}, ota_records: [{
-        action_result: { results: [{ tool_name: 'ppt_rag', tool_id: 'search-call', tool_result: payload }] },
+        action_result: { results: [{ tool_name: toolName, tool_id: 'search-call', tool_result: payload }] },
       }] })]))
       expect(message.blocks!.map((block) => block.type)).toEqual(['tool', 'presentation_template_selection'])
       expect(message.toolCalls).toHaveLength(1)
-      expect(message.toolCalls[0]!.name).toBe('ppt_rag')
+      expect(message.toolCalls[0]!.name).toBe(toolName)
       expect(message.blocks![1]).toEqual({
         type: 'presentation_template_selection', requestId: 'template-1', status,
         selectedTemplateId: payload.selected_template_id, feedback: payload.feedback,
       })
     })
   }
+  it('shows retrieval results without creating a template confirmation', () => {
+    const input = turn({ agent_state: {}, ota_records: [{ action_result: { results: [{
+      tool_name: 'ppt_rag', tool_id: 'search-only', tool_result: { search_id: 'search-1', candidates: [{ template_id: 'blue' }] },
+    }] } }] })
+    const message = assistant(sessionTurnsToMessages([input], { showPendingInteraction: true }))
+    expect(message.blocks!.map((block) => block.type)).toEqual(['tool'])
+  })
   for (const [toolName, requestKey, pendingStatus, blockType] of [
+    ['request_presentation_outline_confirm', 'outline_confirmation_id', 'awaiting_outline_confirmation', 'presentation_outline_confirm'],
     ['report_presentation_step', 'outline_confirmation_id', 'awaiting_outline_confirmation', 'presentation_outline_confirm'],
+    ['request_presentation_template_confirm', 'template_selection_id', 'awaiting_template_selection', 'presentation_template_selection'],
     ['ppt_rag', 'template_selection_id', 'awaiting_template_selection', 'presentation_template_selection'],
   ] as const) for (const explicitStatus of [false, true]) {
     it(`shows ${toolName}'s pending card only on the active tail (explicit status=${explicitStatus})`, () => {

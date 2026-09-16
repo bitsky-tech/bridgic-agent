@@ -52,6 +52,7 @@ from .handler import (
     SessionListHandler,
     SessionFileHandler,
     SessionMessagesHandler,
+    SessionDebugPromptsHandler,
     SessionMountListHandler,
     SessionMountUploadHandler,
     SessionMountsHandler,
@@ -472,6 +473,7 @@ class ServiceApp:
         SessionDuplicateHandler.bind(r, "/sessions/{session_id}/duplicate", state)
         SessionDetailHandler.bind(r, "/sessions/{session_id}", state)
         SessionMessagesHandler.bind(r, "/sessions/{session_id}/messages", state)
+        SessionDebugPromptsHandler.bind(r, "/api/debug/sessions/{session_id}/prompts", state)
         SessionFileHandler.bind(r, "/sessions/{session_id}/files", state)
         ResetHandler.bind(r, "/sessions/{session_id}/reset", state)
         TokensHandler.bind(r, "/sessions/{session_id}/tokens", state)

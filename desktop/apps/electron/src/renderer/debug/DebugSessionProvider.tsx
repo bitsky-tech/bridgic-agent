@@ -12,7 +12,7 @@ import { fetchTracePage } from './trace-client'
 import type { TraceRecords, TraceRound } from './types'
 import { DebugDraftProvider } from './DebugDrafts'
 
-export type DebugPanelKind = 'tools' | 'rounds'
+export type DebugPanelKind = 'tools' | 'rounds' | 'prompts'
 interface Selection { sessionId: string; kind: DebugPanelKind; id: string; nonce: number }
 interface TraceState {
   sessionId: string | null
@@ -63,7 +63,6 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(() => setRevision((value) => value + 1), [])
   const requestKey = JSON.stringify([sessionId, pages, durableTail, running, revision])
   const loading = Boolean(sessionId) && (state.sessionId !== sessionId || state.requestKey !== requestKey)
-
   // Reset local interaction state before the new Session's children commit.
   if (selectionSession !== sessionId) {
     setSelectionSession(sessionId)
@@ -131,7 +130,7 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
     if (!sessionId || store.get(activeSessionIdAtom) !== sessionId
       || !(kind === 'tools' ? records.calls : records.rounds).some((record) => record.id === id)) return
     setSelection({ sessionId, kind, id, nonce: ++interactionNonce.current })
-    open({ sessionId, surface: kind === 'tools' ? 'extension:debug-tools' : 'extension:debug-rounds' })
+    open({ sessionId, surface: `extension:debug-${kind}` })
   }, [sessionId, open, records, store])
   const locate = useCallback((round: TraceRound) => {
     if (!sessionId || round.sessionId !== sessionId || store.get(activeSessionIdAtom) !== sessionId

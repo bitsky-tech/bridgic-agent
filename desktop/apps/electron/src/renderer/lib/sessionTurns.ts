@@ -389,7 +389,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
       })
       toolIndex += 1
       // Presentation tools retain their execution card before the associated human interaction.
-      if (name === 'report_presentation_step' && string(payload.outline_confirmation_id).trim()) {
+      if (['request_presentation_outline_confirm', 'report_presentation_step'].includes(name) && string(payload.outline_confirmation_id).trim()) {
         const status = string(payload.status || 'awaiting_outline_confirmation')
         addInteraction({
           type: 'presentation_outline_confirm', requestId: string(payload.outline_confirmation_id).trim(),
@@ -397,7 +397,7 @@ function turnBlocks(turn: SessionTurnRecord, context: TurnProjectionContext, pre
           feedback: payload.feedback == null ? null : string(payload.feedback),
         })
       }
-      if (name === 'ppt_rag' && string(payload.template_selection_id).trim()) {
+      if ((name === 'request_presentation_template_confirm' || name === 'ppt_rag') && string(payload.template_selection_id).trim()) {
         const status = string(payload.status || 'awaiting_template_selection')
         addInteraction({
           type: 'presentation_template_selection', requestId: string(payload.template_selection_id).trim(),

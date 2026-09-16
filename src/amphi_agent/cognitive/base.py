@@ -521,18 +521,24 @@ class BaseThink(CognitiveWorker):
                 )
 
         # Persist the source cognitive scope before this round can switch state.
-        status = ota_context.think_status
-        ota_context._current_record().think_scope = {
-            "mode": status.mode,
-            "stage": status.stage,
-            "session_history": "stage_scoped_v2",
-        }
+        ota_context._current_record().think_scope = ota_context.think_status.model_dump(mode="json", exclude_none=True)
         messages = await self.assemble_messages(ota_context, context)
         messages = await self.append_runtime_state(messages, ota_context, context)
         tools = [spec.to_tool() for spec in ota_context.tools]
         messages = await self.compact_messages(messages, tools, ota_context, context)
         request_estimate = self._estimate_request_tokens(messages, tools)
         breakdown_estimate = await estimate_context_breakdown(messages, tools)
+        # Freeze the effective assembly state after compaction, before model/tool
+        # execution can change it. Do not copy history, messages, or tool schemas.
+        state = ota_context.state.model_dump(mode="json", exclude_none=True)
+        ota_context._current_record().think_scope = {
+            **state.pop("think"),
+            **state,
+            "browser_tool_loaded": ota_context.browser_tool_loaded,
+            "workspace_tools_loaded": ota_context.workspace_tools_loaded,
+            "skills_tool_loaded": ota_context.skills_tool_loaded,
+            "prompt_time": ota_context.prompt_time,
+        }
         stream = ota_context.stream
         def publish(event: str, **payload: Any) -> None:
             # Keep the in-flight model output on the open OTA round. A user may

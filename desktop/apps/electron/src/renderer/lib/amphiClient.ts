@@ -55,6 +55,7 @@ import type {
 } from '@shared/types'
 import { askUserQuestionSchema } from './askUserQuestionSchema'
 import { i18n } from './i18n'
+import type { DesktopDebugPromptResponse, PromptAssemblyInput } from '@shared/debug-prompt-types'
 
 // ───── Request / response shapes mirrored from backend schemas ─────────────
 
@@ -1038,6 +1039,12 @@ export class AmphiClient {
 
   async getVersion(): Promise<VersionResponse> {
     return this.fetchJson('/version')
+  }
+
+  async assembleDebugPrompt(sessionId: string, input: PromptAssemblyInput, signal?: AbortSignal): Promise<DesktopDebugPromptResponse> {
+    return this.fetchJson(`/api/debug/sessions/${encodeURIComponent(sessionId)}/prompts`, {
+      method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+    })
   }
 
   // ───── Gateway endpoints (M1+, /api/gateway/*) ────────────────────────────

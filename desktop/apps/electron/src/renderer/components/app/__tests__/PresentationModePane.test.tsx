@@ -144,10 +144,9 @@ describe('PresentationModePane', () => {
       mode: 'presentation',
       stage: 'ppt_plan',
       presentationGoal: 'Explain Su Shi\'s life',
-      presentationStepIndex: 2,
+      presentationStepIndex: 1,
       presentationReports: [
         { stage: 'ppt_plan', stepId: 'collect_evidence', summary: 'Collected sources.', evidence: [] },
-        { stage: 'ppt_plan', stepId: 'map_slides', summary: 'Mapped the slides.', evidence: [] },
       ],
       presentationSources: [
         {
@@ -194,6 +193,9 @@ describe('PresentationModePane', () => {
     expect(host.querySelectorAll('[data-testid="presentation-outline-chapter"]')).toHaveLength(0)
     expect(host.querySelector('[data-testid="presentation-open-sources"]')?.textContent).toContain('2 项')
     expect(host.querySelector('[data-testid="presentation-open-outline"]')?.textContent).toContain('1 章 · 1 页')
+    expect(host.querySelector('[data-step="map_slides"]')?.getAttribute('data-state')).toBe('current')
+    expect(host.querySelector('[data-step="design_visual_direction"]')?.getAttribute('data-state')).toBe('pending')
+    expect(host.querySelector('[data-testid="presentation-report-map_slides"]')).toBeNull()
 
     await act(async () => {
       ;(host.querySelector('[data-testid="presentation-open-sources"]') as HTMLButtonElement).click()

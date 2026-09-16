@@ -34,6 +34,17 @@ class RenameSessionRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class GetSessionPromptRequest(BaseModel):
+    """Select a recorded round for on-demand Cognitive prompt assembly."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: str = Field(alias="turnId", min_length=1)
+    round_index: int = Field(alias="roundIndex", ge=0, strict=True)
+    mode: str = Field(min_length=1)
+    stage: str = Field(min_length=1)
+
+
 class CreateMountRequest(BaseModel):
     """Body of ``POST /sessions/{session_id}/mounts`` — pin a local path.
 
@@ -282,6 +293,7 @@ class WorkflowProgram(BaseModel):
 __all__ = [
     "CreateSessionRequest",
     "RenameSessionRequest",
+    "GetSessionPromptRequest",
     "CreateMountRequest",
     "SetModelRequest",
     "CredentialsRequest",

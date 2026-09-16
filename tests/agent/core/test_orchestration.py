@@ -19,7 +19,8 @@ from src.amphi_agent import (
 )
 from src.amphi_agent.cognitive.normal.state import AwaitingBuildConflict, AwaitingWorkflowRunChoice, NormalStageState
 from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, GenerateThink, WorkflowRunThink
-from src.amphi_agent.cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection, PresentationStageState
+from src.amphi_agent.cognitive.presentation.shared import presentation_view, read_artifact
+from src.amphi_agent.cognitive.presentation.state import PresentationPlanData, AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection, PresentationStageState, PresentationStepRecord
 from src.amphi_agent.cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
 from src.amphi_agent.cognitive.state import RoundPermission
 from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
@@ -29,7 +30,7 @@ from src.amphi_agent.tools.build import (
     RequestHumanTaskConfirm,
     RequestHumanWorkflowConfirm,
 )
-from src.amphi_agent.tools.ppt import PresentationStepReport
+from src.amphi_agent.tools.ppt import PresentationStepReport, RequestPresentationOutlineConfirm
 from src.amphi_agent.tools._workflow import EditWorkflow
 from src.amphi_agent.tools.workflow import RequestRunWorkflow, WorkflowStepReport
 from src.amphi_service.protocol import (
@@ -218,7 +219,7 @@ async def _start_run(harness: _Harness, workflow_id: str, request: str | UserInp
 
 async def test_presentation_outline_confirmation(orchestration: _Harness) -> None:
     """An edited Plan outline resumes the parked Turn before visual design."""
-    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+    data = PresentationPlanData().apply_plan_step_data(
         "collect_evidence",
         {"sources": [{
             "kind": "conversation",
@@ -226,24 +227,22 @@ async def test_presentation_outline_confirmation(orchestration: _Harness) -> Non
             "excerpt": "Explain the subject to students.",
         }]},
     )
-    plan = _ota(
-        "Create the presentation",
-        _step("report_presentation_step", PresentationStepReport(
-            "Mapped the deck.",
-            ["source-001"],
-            {"chapters": [{
-                "title": "Original chapter",
-                "slides": [{
-                    "title": "Original slide",
-                    "content_outline": ["Introduce the original framing."],
-                    "source_ids": ["source-001"],
-                }],
-            }]},
-        )),
-        state,
-    )
-    await _apply(orchestration, plan)
+    plan = AmphiOTAContext(user_input="Create the presentation", state={"think": PresentationStageState(stage="ppt_plan", step_index=1)}, ota_record=[OTARecord(action_result=ActionResult(results=[_step("report_presentation_step", {"step_id": "collect_evidence", "data": {"sources": [item.model_dump() for item in data.sources]}})]))])
+    request = await _execute_call(orchestration, plan, _call(
+        "request-outline", "request_presentation_outline_confirm",
+        data=json.dumps({"chapters": [{
+            "title": "Original chapter",
+            "slides": [{
+                "title": "Original slide",
+                "content_outline": ["Introduce the original framing."],
+                "source_ids": ["source-001"],
+            }],
+        }]}),
+    ))
+    assert request.success is True
     assert isinstance(plan.interaction_status, AwaitingPresentationOutlineConfirm)
+    assert plan.think_status.step_index == 1
+    assert all(report["step_id"] != "map_slides" for report in presentation_view(plan.ota_record)["presentation_reports"])
     request_id = plan.interaction_status.request_id
 
     orchestration.context.session = Session(
@@ -269,21 +268,44 @@ async def test_presentation_outline_confirmation(orchestration: _Harness) -> Non
 
     resumed = confirmed.think_status
     assert isinstance(resumed, PresentationStageState)
-    assert resumed.step_index == 2
-    assert resumed.outline_confirmed is True
-    assert resumed.outline_confirmation_id is None
-    assert resumed.outline[0].title == "Edited chapter"
-    assert resumed.outline[0].slides[0].title == "Edited slide"
-    assert resumed.outline[0].slides[0].content_outline == [
+    assert resumed.step_index == 1
+    view = presentation_view(confirmed.ota_record)
+    assert all(report["step_id"] != "map_slides" for report in view["presentation_reports"])
+    assert view["presentation_outline_confirmed"] is True
+    assert view["presentation_outline_confirmation_id"] is None
+    assert view["presentation_outline"][0]["title"] == "Edited chapter"
+    assert view["presentation_outline"][0]["slides"][0]["title"] == "Edited slide"
+    assert view["presentation_outline"][0]["slides"][0]["content_outline"] == [
         "Open with the audience's central question."
     ]
     assert confirmed.interaction_status is None
-    assert _payload(confirmed, "report_presentation_step")["status"] == "confirmed"
+    assert _payload(confirmed, "request_presentation_outline_confirm")["status"] == "confirmed"
+
+
+    receipt = _payload(confirmed, "request_presentation_outline_confirm")
+    assert receipt["chapters"] == view["presentation_outline"]
+    assert "report_presentation_step" in confirmed.ota_record[-1].observation_result
+    visible = {tool.tool_name for tool in orchestration.agent._select_current_tools(confirmed, orchestration.context)}
+    assert "ppt_rag" not in visible
+
+    report = await _execute_call(orchestration, confirmed, _call(
+        "report-confirmed-outline", "report_presentation_step", summary="User confirmed the edited outline.",
+    ))
+    assert report.success is True
+    assert report.tool_result["step_id"] == "map_slides"
+    assert confirmed.think_status.step_index == 2
+    assert presentation_view(confirmed.ota_record)["presentation_outline_confirmed"] is True
+    assert read_artifact(orchestration.context, receipt["artifact"])["chapters"] == view["presentation_outline"]
+    assert report.tool_result["data"]["artifact"] == receipt["artifact"]
+    assert confirmed.interaction_status is None
+    visible = {tool.tool_name for tool in orchestration.agent._select_current_tools(confirmed, orchestration.context)}
+    assert "ppt_rag" in visible
+    assert "request_presentation_outline_confirm" not in visible
 
 
 async def test_presentation_outline_direct_feedback_returns_to_slide_mapping(orchestration: _Harness) -> None:
     """A chat reply to the outline review reopens the combined narrative and page-map step."""
-    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+    data = PresentationPlanData().apply_plan_step_data(
         "collect_evidence",
         {"sources": [{
             "kind": "conversation",
@@ -293,9 +315,7 @@ async def test_presentation_outline_direct_feedback_returns_to_slide_mapping(orc
     )
     plan = _ota(
         "Create the presentation",
-        _step("report_presentation_step", PresentationStepReport(
-            "Mapped the deck.",
-            ["source-001"],
+        _step("request_presentation_outline_confirm", RequestPresentationOutlineConfirm(
             {"chapters": [{
                 "title": "Original chapter",
                 "slides": [{
@@ -305,8 +325,9 @@ async def test_presentation_outline_direct_feedback_returns_to_slide_mapping(orc
                 }],
             }]},
         )),
-        state,
+        PresentationStageState(stage="ppt_plan", step_index=1),
     )
+    plan.ota_record.insert(0, OTARecord(action_result=ActionResult(results=[_step("report_presentation_step", {"step_id": "collect_evidence", "data": {"sources": [item.model_dump() for item in data.sources]}})])))
     await _apply(orchestration, plan)
     assert isinstance(plan.interaction_status, AwaitingPresentationOutlineConfirm)
 
@@ -320,15 +341,37 @@ async def test_presentation_outline_direct_feedback_returns_to_slide_mapping(orc
     resumed = revised.think_status
     assert isinstance(resumed, PresentationStageState)
     assert resumed.step_index == 1
-    assert resumed.outline_confirmed is False
-    assert resumed.outline_confirmation_id is None
-    assert all(report.step_id != "map_slides" for report in resumed.reports)
+    assert presentation_view(revised.ota_record)["presentation_outline_confirmed"] is False
+    assert presentation_view(revised.ota_record)["presentation_outline_confirmation_id"] is None
+    assert all(report["step_id"] != "map_slides" for report in presentation_view(revised.ota_record)["presentation_reports"])
     assert revised.interaction_status is None
-    assert _payload(revised, "report_presentation_step")["status"] == "revision_requested"
+    assert _payload(revised, "request_presentation_outline_confirm")["status"] == "revision_requested"
+
+
+async def test_legacy_outline_confirmation_resumes_without_reporting_twice(orchestration: _Harness) -> None:
+    """Existing pending report-based reviews keep their already-advanced cursor."""
+    chapters = [{"title": "Opening", "slides": [{"title": "Overview", "content_outline": ["Purpose"]}]}]
+    state = PresentationStageState(stage="ppt_plan", step_index=2)
+    pending = _ota("Create a deck", _step("report_presentation_step", {
+        "step_id": "map_slides", "next_step_index": 2,
+        "outline_confirmation_id": "legacy-outline", "status": "awaiting_outline_confirmation",
+    }), state)
+    pending.transition_interaction(AwaitingPresentationOutlineConfirm(request_id="legacy-outline"))
+    orchestration.context.session = Session(orchestration.record, [_pending(pending, "legacy-outline-turn")])
+    resumed = AmphiOTAContext(user_input=WsPresentationOutlineConfirmMessage(
+        session_id=SESSION_ID, request_id="legacy-outline", chapters=chapters,
+    ))
+    await orchestration.agent.init_state(resumed, orchestration.context)
+    assert resumed.think_status.step_index == 2
+    assert presentation_view(resumed.ota_record)["presentation_outline_confirmed"] is True
+    assert len(presentation_view(resumed.ota_record)["presentation_reports"]) == 1
+    assert resumed.interaction_status is None
+    assert _payload(resumed, "report_presentation_step")["status"] == "confirmed"
+    assert "already reported" in resumed.ota_record[-1].observation_result
 
 
 async def test_presentation_template_selection(orchestration: _Harness) -> None:
-    """A retrieved shortlist parks Plan and the selected template resumes the same Turn."""
+    """Only explicit confirmation parks Plan; selection resumes the same Turn and step."""
     candidate = {
         "template_id": "template-editorial-1",
         "version": "sha256:test",
@@ -356,20 +399,29 @@ async def test_presentation_template_selection(orchestration: _Harness) -> None:
     )
     plan = _ota(
         "Create the presentation",
-        _step("ppt_rag", json.dumps({"candidates": [candidate]})),
+        _step("ppt_rag", json.dumps({"search_id": "search-first", "candidates": [candidate]})),
         state,
     )
 
     await _apply(orchestration, plan)
+    retrieval = plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"]
+    assert plan.think_status == state
+    assert plan.interaction_status is None
+    confirmation = await _execute_call(orchestration, plan, _call(
+        "confirm-first", "request_presentation_template_confirm", search_id="search-first",
+    ))
+    assert confirmation.success is True
+    assert plan.think_status.step_index == 2
+    assert plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"] == retrieval
 
     assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
     request_id = plan.interaction_status.request_id
-    assert plan.think_status.template_selection_status == "pending"
-    assert plan.think_status.template_candidates[0].template_id == "template-editorial-1"
-    receipt = _payload(plan, "ppt_rag")
+    assert presentation_view(plan.ota_record)["presentation_template_selection_status"] == "pending"
+    assert presentation_view(plan.ota_record)["presentation_template_candidates"][0]["template_id"] == "template-editorial-1"
+    receipt = _payload(plan, "request_presentation_template_confirm")
     assert receipt["status"] == "awaiting_template_selection"
     assert receipt["candidate_ids"] == ["template-editorial-1"]
-    assert "candidates" not in receipt
+    assert receipt["candidates"][0]["template_id"] == "template-editorial-1"
 
     orchestration.context.session = Session(
         orchestration.record,
@@ -385,19 +437,41 @@ async def test_presentation_template_selection(orchestration: _Harness) -> None:
 
     resumed = selected.think_status
     assert isinstance(resumed, PresentationStageState)
-    assert resumed.template_selection_status == "selected"
-    assert resumed.template_selection_id is None
-    assert resumed.selected_template is not None
-    assert resumed.selected_template.template_id == "template-editorial-1"
-    assert len(resumed.selected_template.preview_paths) == 6
+    assert presentation_view(selected.ota_record)["presentation_template_selection_status"] == "selected"
+    assert presentation_view(selected.ota_record)["presentation_template_selection_id"] is None
+    assert presentation_view(selected.ota_record)["presentation_selected_template"] is not None
+    assert presentation_view(selected.ota_record)["presentation_selected_template"]["template_id"] == "template-editorial-1"
+    assert len(presentation_view(selected.ota_record)["presentation_selected_template"]["preview_paths"]) == 6
     assert selected.interaction_status is None
-    assert _payload(selected, "ppt_rag")["status"] == "selected"
-    assert _payload(selected, "ppt_rag")["selected_template_id"] == "template-editorial-1"
-    assert set(_payload(selected, "ppt_rag")) == {
-        "search_id", "template_selection_id", "status", "selected_template_id", "feedback",
-    }
-    assert _payload(selected, "ppt_rag")["template_selection_id"] == request_id
+    assert _payload(selected, "request_presentation_template_confirm")["status"] == "selected"
+    assert _payload(selected, "request_presentation_template_confirm")["selected_template_id"] == "template-editorial-1"
+    artifact = read_artifact(orchestration.context, _payload(selected, "request_presentation_template_confirm")["artifact"])
+    assert artifact["selected_template"]["template_id"] == "template-editorial-1"
+    assert "/templates/previews/" not in json.dumps(artifact)
+    assert resumed.model_dump() == {"mode": "presentation", "stage": "ppt_plan", "step_index": 2}
+    assert _payload(selected, "request_presentation_template_confirm")["template_selection_id"] == request_id
     assert "/templates/previews/" not in str(selected.ota_record[-1].observation_result)
+
+    previous_receipt = _payload(selected, "request_presentation_template_confirm")
+    replacement = {**candidate, "template_id": "template-editorial-2"}
+    selected.ota_record.append(OTARecord(action_result=ActionResult(results=[
+        _step("ppt_rag", json.dumps({"search_id": "search-second", "candidates": [replacement]})),
+    ])))
+    await _apply(orchestration, selected)
+    assert presentation_view(selected.ota_record)["presentation_template_selection_status"] == "selected"
+    assert selected.interaction_status is None
+    confirmation = await _execute_call(orchestration, selected, _call(
+        "confirm-second", "request_presentation_template_confirm", search_id="search-second",
+    ))
+    assert confirmation.success is True
+    assert selected.think_status.step_index == 2
+    assert presentation_view(selected.ota_record)["presentation_template_selection_status"] == "pending"
+    assert presentation_view(selected.ota_record)["presentation_selected_template"] is None
+    assert presentation_view(selected.ota_record)["presentation_template_candidates"][0]["template_id"] == "template-editorial-2"
+    assert selected.interaction_status.request_id != request_id
+    assert _payload(selected, "request_presentation_template_confirm")["status"] == "awaiting_template_selection"
+    assert previous_receipt["status"] == "selected"
+    assert previous_receipt["selected_template_id"] == "template-editorial-1"
 
 
 async def test_presentation_template_refresh_excludes_the_current_batch(orchestration: _Harness) -> None:
@@ -414,10 +488,19 @@ async def test_presentation_template_refresh_excludes_the_current_batch(orchestr
     )
     plan = _ota(
         "Create the presentation",
-        _step("ppt_rag", json.dumps({"candidates": [candidate]})),
+        _step("ppt_rag", json.dumps({"search_id": "search-first", "candidates": [candidate]})),
         state,
     )
     await _apply(orchestration, plan)
+    retrieval = plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"]
+    assert plan.think_status == state
+    assert plan.interaction_status is None
+    confirmation = await _execute_call(orchestration, plan, _call(
+        "confirm-first", "request_presentation_template_confirm", search_id="search-first",
+    ))
+    assert confirmation.success is True
+    assert plan.think_status.step_index == 2
+    assert plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"] == retrieval
     assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
     request_id = plan.interaction_status.request_id
     orchestration.context.session = Session(
@@ -434,11 +517,12 @@ async def test_presentation_template_refresh_excludes_the_current_batch(orchestr
 
     resumed = refreshed.think_status
     assert isinstance(resumed, PresentationStageState)
-    assert resumed.template_selection_status == "idle"
-    assert resumed.template_selection_id is None
-    assert resumed.template_candidates == []
-    assert resumed.template_excluded_ids == ["template-first-batch"]
-    assert _payload(refreshed, "ppt_rag")["status"] == "refresh_requested"
+    assert presentation_view(refreshed.ota_record)["presentation_template_selection_status"] == "idle"
+    assert presentation_view(refreshed.ota_record)["presentation_template_selection_id"] is None
+    assert presentation_view(refreshed.ota_record)["presentation_template_candidates"] == []
+    assert _payload(refreshed, "request_presentation_template_confirm")["candidates"][0]["template_id"] == "template-first-batch"
+    assert _payload(refreshed, "request_presentation_template_confirm")["excluded_template_ids"] == ["template-first-batch"]
+    assert _payload(refreshed, "request_presentation_template_confirm")["status"] == "refresh_requested"
 
 
 async def test_presentation_template_failure_can_be_skipped(orchestration: _Harness) -> None:
@@ -451,6 +535,7 @@ async def test_presentation_template_failure_can_be_skipped(orchestration: _Harn
     plan = _ota(
         "Create the presentation",
         _step("ppt_rag", json.dumps({
+            "search_id": "search-first",
             "status": "retrieval_failed",
             "retrieval_error": "The local template index is unavailable.",
             "candidates": [],
@@ -459,10 +544,19 @@ async def test_presentation_template_failure_can_be_skipped(orchestration: _Harn
     )
 
     await _apply(orchestration, plan)
+    retrieval = plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"]
+    assert plan.think_status == state
+    assert plan.interaction_status is None
+    confirmation = await _execute_call(orchestration, plan, _call(
+        "confirm-first", "request_presentation_template_confirm", search_id="search-first",
+    ))
+    assert confirmation.success is True
+    assert plan.think_status.step_index == 2
+    assert plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"] == retrieval
 
     assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
-    assert plan.think_status.template_candidates == []
-    assert plan.think_status.template_selection_error == "The local template index is unavailable."
+    assert presentation_view(plan.ota_record)["presentation_template_candidates"] == []
+    assert presentation_view(plan.ota_record)["presentation_template_selection_error"] == "The local template index is unavailable."
     request_id = plan.interaction_status.request_id
     orchestration.context.session = Session(
         orchestration.record,
@@ -478,8 +572,8 @@ async def test_presentation_template_failure_can_be_skipped(orchestration: _Harn
 
     resumed = skipped.think_status
     assert isinstance(resumed, PresentationStageState)
-    assert resumed.template_selection_status == "skipped"
-    assert resumed.template_selection_error is None
+    assert presentation_view(skipped.ota_record)["presentation_template_selection_status"] == "skipped"
+    assert presentation_view(skipped.ota_record)["presentation_template_selection_error"] is None
     assert skipped.interaction_status is None
 
 
@@ -489,18 +583,31 @@ async def test_presentation_template_retry_after_exhaustion_resets_exclusions(or
         stage="ppt_plan",
         step_index=2,
         outline_confirmed=True,
-        template_excluded_ids=["template-previous"],
     )
     plan = _ota(
         "Create the presentation",
         _step("ppt_rag", json.dumps({
+            "search_id": "search-first",
             "status": "retrieval_failed",
             "retrieval_error": "No new candidates remain.",
             "candidates": [],
         })),
         state,
     )
+    plan.ota_record[0].action_result.results.append(_step("request_presentation_template_confirm", {
+        "template_selection_id": "previous-empty-batch", "status": "refresh_requested", "excluded_template_ids": ["template-previous"],
+    }))
     await _apply(orchestration, plan)
+    retrieval = plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"]
+    assert plan.think_status == state
+    assert plan.interaction_status is None
+    confirmation = await _execute_call(orchestration, plan, _call(
+        "confirm-first", "request_presentation_template_confirm", search_id="search-first",
+    ))
+    assert confirmation.success is True
+    assert confirmation.tool_result["excluded_template_ids"] == ["template-previous"]
+    assert plan.think_status.step_index == 2
+    assert plan.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"] == retrieval
     assert isinstance(plan.interaction_status, AwaitingPresentationTemplateSelection)
     request_id = plan.interaction_status.request_id
     orchestration.context.session = Session(
@@ -517,13 +624,13 @@ async def test_presentation_template_retry_after_exhaustion_resets_exclusions(or
 
     resumed = retried.think_status
     assert isinstance(resumed, PresentationStageState)
-    assert resumed.template_selection_status == "idle"
-    assert resumed.template_selection_error is None
-    assert resumed.template_excluded_ids == []
+    assert presentation_view(retried.ota_record)["presentation_template_selection_status"] == "idle"
+    assert presentation_view(retried.ota_record)["presentation_template_selection_error"] is None
+    assert _payload(retried, "request_presentation_template_confirm")["excluded_template_ids"] == []
 
 
-async def test_ppt_rag_preserves_full_candidates_until_after_action(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Plan retains the complete shortlist and compacts it only during result handling."""
+async def test_ppt_rag_preserves_results_until_explicit_confirmation(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retrieval stays unchanged and a separate confirmation receipt owns the interaction."""
     candidate = {
         "template_id": "template-large",
         "version": "sha256:test",
@@ -544,26 +651,34 @@ async def test_ppt_rag_preserves_full_candidates_until_after_action(orchestratio
     async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
         return result
 
-    monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
-    executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
+    with monkeypatch.context() as patch:
+        patch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
+        executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
     assert executed is result
     assert result.results[0].tool_result == payload
     assert result.results[0].success is True
     assert ota_context.think_status == state
-    assert ota_context.think_status.template_candidates == []
+    assert presentation_view(ota_context.ota_record)["presentation_template_candidates"] == []
     assert ota_context.interaction_status is None
     assert not orchestration.workspace.tool_result_dir.exists()
 
     ota_context.action_result = executed
     await _apply(orchestration, ota_context)
 
-    receipt = result.results[0].tool_result
+    assert result.results[0].tool_result == payload
+    assert ota_context.think_status == state
+    assert ota_context.interaction_status is None
+    confirmation = await _execute_call(orchestration, ota_context, _call(
+        "confirm-large", "request_presentation_template_confirm", search_id="search-large",
+    ))
+    assert confirmation.success is True
+    receipt = confirmation.tool_result
     assert isinstance(receipt, dict)
     assert receipt["status"] == "awaiting_template_selection"
     assert receipt["candidate_ids"] == ["template-large"]
-    assert len(json.dumps(receipt)) < 16 * 1024
-    retained = ota_context.think_status.template_candidates[0]
-    assert retained.model_dump(include=set(candidate)) == candidate
+    retained = receipt["candidates"][0]
+    assert {key: retained[key] for key in candidate} == candidate
+    assert ota_context.think_status.model_dump() == {"mode": "presentation", "stage": "ppt_plan", "step_index": 2}
     assert isinstance(ota_context.interaction_status, AwaitingPresentationTemplateSelection)
     assert not orchestration.workspace.tool_result_dir.exists()
 
@@ -572,57 +687,96 @@ async def test_ppt_rag_preserves_full_candidates_until_after_action(orchestratio
     await _apply(orchestration, ota_context)
 
     assert ota_context.state.model_dump(mode="json") == pending_state
-    assert result.results[0].tool_result == original_receipt
+    assert confirmation.tool_result == original_receipt
+    assert result.results[0].tool_result == payload
     assert result.results[0].success is True
     assert not orchestration.workspace.tool_result_dir.exists()
 
 
-async def test_invalid_ppt_rag_payload_is_rejected_after_action_without_spill(orchestration: _Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Plan rejects malformed data after execution and clears the failed payload."""
+@pytest.mark.parametrize("payload, success, error", [
+    ("{invalid", True, "search_id"),
+    ({"search_id": "search-invalid", "candidates": []}, True, "no selectable candidates"),
+    ({"search_id": "search-invalid", "candidates": [{"broken": True}]}, True, "no selectable candidates"),
+    ({"search_id": "other-search", "candidates": [{"template_id": "one", "title": "One", "version": "v1"}]}, True, "search_id"),
+    ({"search_id": "search-invalid", "candidates": []}, False, "search_id"),
+])
+async def test_template_confirmation_rejects_invalid_search_without_changing_state(orchestration: _Harness, payload: Any, success: bool, error: str) -> None:
+    """A confirmation cannot select an unknown, failed, or malformed retrieval batch."""
+    state = PresentationStageState(stage="ppt_plan", step_index=2, outline_confirmed=True)
+    result = _step("ppt_rag", payload)
+    result.success = success
+    ota = _ota("Create a deck", result, state)
+    confirmation = await _execute_call(orchestration, ota, _call(
+        "invalid-confirmation", "request_presentation_template_confirm", search_id="search-invalid",
+    ))
+    assert confirmation.success is False
+    assert error in confirmation.error
+    assert ota.think_status == state
+    assert ota.interaction_status is None
+    assert ota.ota_record[0].model_dump()["action_result"]["results"][0]["tool_result"] == payload
+
+
+@pytest.mark.parametrize("action", ["select", "skip"])
+async def test_template_confirmation_uses_the_referenced_batch_and_needs_an_explicit_report(orchestration: _Harness, action: str) -> None:
+    """Two retrievals remain readable; confirmation uses its exact reference and cannot report."""
+    state = PresentationStageState(stage="ppt_plan", step_index=2, outline_confirmed=True)
+    ota = AmphiOTAContext(user_input="Create a deck")
+    ota.transition_think(state)
+    for search_id in ("first", "second"):
+        ota.ota_record.append(OTARecord(action_result=ActionResult(results=[_step("ppt_rag", json.dumps({
+            "search_id": search_id,
+            "candidates": [{"template_id": search_id, "title": search_id, "version": "v1"}],
+        }))])))
+    retrievals = [record.model_dump(mode="json") for record in ota.ota_record]
+    confirmation = await _execute_call(orchestration, ota, _call(
+        "confirm-first-batch", "request_presentation_template_confirm", search_id="first",
+    ))
+    assert confirmation.success is True
+    assert [item["template_id"] for item in presentation_view(ota.ota_record)["presentation_template_candidates"]] == ["first"]
+    assert ota.think_status.step_index == 2
+    orchestration.context.session = Session(orchestration.record, [_pending(ota, "confirm-specific-batch")])
+    resumed = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID, request_id=ota.interaction_status.request_id,
+        action=action, template_id="first" if action == "select" else None,
+    ))
+    await orchestration.agent.init_state(resumed, orchestration.context)
+    assert resumed.think_status.step_index == 2
+    assert presentation_view(resumed.ota_record)["presentation_reports"] == []
+    assert [record.model_dump(mode="json") for record in resumed.ota_record[:2]] == retrievals
+    artifact = orchestration.workspace.work_dir / ".ppt/plan.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("# Visual plan\n\nUse the confirmed visual direction.\n", encoding="utf-8")
+    report = await _execute_call(orchestration, resumed, _call(
+        "report-visual-design", "report_presentation_step", summary="Finalized the visual direction.",
+    ))
+    assert report.success is True
+    assert report.tool_result["step_id"] == "design_visual_direction"
+    assert resumed.think_status.step_index == 3
+    assert resumed.think_status.stage == "ppt_plan"
+
+
+async def test_legacy_ppt_rag_selection_can_still_resume(orchestration: _Harness) -> None:
+    """Already-saved retrieval interactions remain resumable after separating the tools."""
     state = PresentationStageState(
-        stage="ppt_plan",
-        step_index=2,
-        outline_confirmed=True,
+        stage="ppt_plan", step_index=2, outline_confirmed=True,
+        template_selection_status="pending", template_selection_id="legacy-template",
+        template_candidates=[{"template_id": "legacy", "title": "Legacy", "version": "v1"}],
     )
-    payload = "{" + "x" * 20_000
-    result = ActionResult(results=[_step("ppt_rag", payload)])
-    ota_context = AmphiOTAContext(ota_record=[OTARecord()])
-    ota_context.transition_think(state)
-
-    async def execute_tool_calls(ota_context: AmphiOTAContext, context: AmphiContext) -> ActionResult:
-        return result
-
-    monkeypatch.setattr(orchestration.agent, "_execute_tool_calls", execute_tool_calls)
-    executed = await orchestration.agent.action_tool_call(ota_context, orchestration.context)
-    assert executed is result
-    assert not orchestration.workspace.tool_result_dir.exists()
-
-    step = result.results[0]
-    assert step.success is True
-    assert step.tool_result == payload
-    assert step.error is None
-    assert ota_context.think_status == state
-    assert ota_context.interaction_status is None
-
-    ota_context.action_result = executed
-    await _apply(orchestration, ota_context)
-
-    assert step.success is False
-    assert step.tool_result is None
-    assert step.error is not None and "invalid JSON" in step.error
-    assert ota_context.think_status == state
-    assert ota_context.interaction_status is None
-    assert not orchestration.workspace.tool_result_dir.exists()
-
-    original_error = step.error
-    await _apply(orchestration, ota_context)
-
-    assert step.success is False
-    assert step.tool_result is None
-    assert step.error == original_error
-    assert ota_context.think_status == state
-    assert ota_context.interaction_status is None
-    assert not orchestration.workspace.tool_result_dir.exists()
+    pending = _ota("Create a deck", _step("ppt_rag", {
+        "search_id": "legacy-search", "template_selection_id": "legacy-template",
+        "status": "awaiting_template_selection",
+        "candidates": [{"template_id": "legacy", "title": "Legacy", "version": "v1"}],
+    }), state)
+    pending.transition_interaction(AwaitingPresentationTemplateSelection(request_id="legacy-template"))
+    orchestration.context.session = Session(orchestration.record, [_pending(pending, "legacy-template-turn")])
+    resumed = AmphiOTAContext(user_input=WsPresentationTemplateSelectionMessage(
+        session_id=SESSION_ID, request_id="legacy-template", action="select", template_id="legacy",
+    ))
+    await orchestration.agent.init_state(resumed, orchestration.context)
+    assert resumed.think_status.step_index == 2
+    assert presentation_view(resumed.ota_record)["presentation_selected_template"]["template_id"] == "legacy"
+    assert resumed.interaction_status is None
+    assert _payload(resumed, "ppt_rag")["status"] == "selected"
 
 
 @pytest.mark.parametrize("legacy_pending", [False, True], ids=["main-card", "legacy-build-card"])

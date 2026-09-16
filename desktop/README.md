@@ -97,30 +97,51 @@ endpoint. Click "New Session", optionally pick a workspace, then chat.
 ## Debug conversation
 
 Run `bun run debug` from `desktop/` to open the same app with an execution view
-and two additional Session panels: **Tool calls** and **Agent rounds**. The
-normal `bun run dev` command always opens the product UI. Both modes use the
-same settings, sessions, daemon, browser and Office hosts; stop one development
-instance before switching modes.
+and three additional Session panels: **Tool calls**, **Agent rounds**, and
+**Prompt analysis**. The normal `bun run dev` command always opens the product
+UI. Both modes use the same settings, sessions, daemon, browser and Office hosts;
+stop one development instance before switching modes.
 
 The execution view groups recorded model responses by cognitive stage and keeps
 Desktop Markdown, Thinking, message actions and interaction cards. Tool rows and
 round details open the corresponding right-side inspector. Inspectors support
 chronological Turn/round/tool order, stage and tool-name/status filtering,
 recorded usage, and navigation back to older conversation messages. Tool arguments
-are editable forms; model requests expose recorded messages and request options.
-Edits stay in local drafts across inspector navigation and automatic refresh;
-switching sessions clears those drafts and never changes recorded history. The
-conversation view remains available in the debug header for comparison.
+and recorded round requests have local draft editors. The Prompt analysis panel
+assembles messages, tool definitions, and semantic request options on demand as
+read-only data. Edits in the other inspectors stay in local drafts across
+navigation and automatic refresh. The conversation view remains available in
+the debug header for comparison.
 
-Debug starts a loopback read-only SQLite service inside the existing Bun
-launcher. It reads `~/.bridgic/AmphiAgent/state.db` (or
-`BRIDGIC_AGENT_STATE_DB`) and refreshes while a Turn runs. No mock records or
-reconstructed model requests are presented as captured data: missing Prompt,
-duration and usage fields remain unavailable. Missing historical Prompts can be
-replaced by a manually authored debug draft, clearly marked as new input. Tool
-execution and single LLM calls are not connected yet; their buttons remain
-disabled. See the proposed [debug API contract](docs/debug-api-contract.md) for
-the fuller history and replay capabilities required from the backend.
+Prompt analysis lists the existing Session Turn rounds chronologically. Opening
+a round calls `POST /api/debug/sessions/{sessionId}/prompts` with its `turnId`,
+zero-based `roundIndex`, `mode`, and `stage`. The API delegates to
+`invocation.get_prompt`, which loads the Session resources through the same
+context loader as normal execution. It restores the selected round's
+`think_scope`: mode/stage, any step and Workflow identity, the remaining Agent
+state (including compaction summaries and coverage), tool-loading flags, and the
+assembly timestamp. All fields live in this single round snapshot; mode/stage
+and step are not repeated under a nested `state.think`. It is captured after accepted
+compaction and before the model request; later tools and state transitions cannot
+overwrite it. The trace is bounded before the selected response. Legacy rounds
+with a separate `prompt_context` remain readable. Rounds without a snapshot
+retain the Turn-state fallback and any recorded
+`think_scope.step_index`; their missing intermediate state cannot be recovered.
+New rounds omit the unused `think_scope.session_history` marker.
+`AmphiAgent.get_prompt(context, ota_context)` then calls the worker's existing
+`assemble_messages` directly. Comparing rounds requests only the
+selected round and baseline. Results stay in the current panel's memory.
+
+This operation uses current Cognitive code, configuration, and Session resources
+as supplied to `assemble_messages`, before runtime-tail injection or new context
+compaction. New rounds preserve their internal assembly state while mutable
+external resources, such as `.build` files, use the current environment. This is
+not a recorded provider HTTP body. The query does not run an LLM or execute tools.
+Snapshots use the existing Round JSON storage, with no new database columns or
+migrations. They store state rather than duplicate conversation history or tool schemas.
+
+See the [debug API contract](docs/debug-api-contract.md) for the assembly boundary
+and the separate history and replay capabilities.
 
 The renderer's debug entry is enabled only by the explicit debug launcher.
 Production builds fix the flag to false and exclude debug modules and styles,

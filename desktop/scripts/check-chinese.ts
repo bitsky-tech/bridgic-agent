@@ -23,7 +23,7 @@
  * The i18n catalog is exempt by definition — it is the Chinese copy.
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -38,7 +38,6 @@ const LIST_ONLY = process.argv.includes('--list')
 const EXEMPT_FILES = new Set([
   'src/amphi_service/i18n.py',
   'desktop/scripts/check-chinese.ts',
-  'lab/src/i18n/zh-CN.ts',
 ])
 
 /**
@@ -51,13 +50,13 @@ const ALLOWED: Record<string, string> = {
   'desktop/apps/electron/src/renderer/atoms/models-presets.ts': 'legacy GLM display name stored by earlier app versions',
   'desktop/apps/electron/src/renderer/excel/excelDataOperations.ts': 'total-row detection matches existing Chinese sheet labels independently of the UI locale',
   'desktop/apps/electron/src/renderer/lib/presentationText.ts': 'authored font-family matching and East Asian document numbering glyphs must remain locale-independent',
-  'lab/src/experiments/presentation-highlights.ts': 'legacy captured audience and reading-mode question headers identify response fields when question ids are absent',
   'src/amphi_agent/tools/ppt/template_catalog.py': 'template classification matches source text, vendor names, and the source preview directory name',
 }
 
 function trackedSources(): string[] {
   const out = spawnSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' }).stdout
   return out.split('\n').filter((f) => {
+    if (!existsSync(join(REPO_ROOT, f))) return false
     if (!f.endsWith('.ts') && !f.endsWith('.tsx') && !f.endsWith('.py')) return false
     if (f.endsWith('.test.ts') || f.endsWith('.test.tsx')) return false
     const parts = f.split('/')

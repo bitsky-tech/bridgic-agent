@@ -197,6 +197,7 @@ async def test_workspace_business_context_belongs_to_its_mode(tmp_path: Path, wo
         mount_roots=lambda: [str(tmp_path), "/mounted/project"],
         build=SimpleNamespace(root=tmp_path / ".build", is_available=True),
         run_workflow=SimpleNamespace(root=tmp_path / ".run", is_available=True),
+        run_workflow_root=tmp_path / ".run",
         build_checkpoint=lambda: SimpleNamespace(stage="generate", workflow_id="workflow-build"),
         run_workflow_checkpoint=lambda: SimpleNamespace(
             workflow_name="Retained report", workflow_id="workflow-retained", stage="execute", step_index=2,

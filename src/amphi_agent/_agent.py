@@ -98,6 +98,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             "edit_workflow",
             "request_build",
             "request_presentation",
+            "request_presentation_outline_confirm",
+            "request_presentation_template_confirm",
             "request_run_workflow",
             "request_human_choice",
             "request_human_task_confirm",
@@ -174,7 +176,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         await self.init_state(ota_context, context)
         current_status = ota_context.think_status
         current_stage = self._current_think_unit_name(ota_context, context)
-        self._publish_stage(ota_context, current_status)
+        self._publish_stage(ota_context, current_status, context)
         if isinstance(current_status, WorkflowStageState):
             WorkflowRunThink._publish_workflow_progress(ota_context, context, current_status, "running")
 
@@ -214,7 +216,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             current_status = ota_context.think_status
             if current_status != previous_status:
                 current_stage = self._current_think_unit_name(ota_context, context)
-                self._publish_stage(ota_context, current_status)
+                self._publish_stage(ota_context, current_status, context)
             worker = self._current_think_worker(ota_context, context)
             outcome = await worker.handle_think_unit_result(
                 ota_context, context, previous_status, answer, self,
@@ -835,7 +837,7 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
     # Helpers
     ############################################################################
     @staticmethod
-    def _publish_stage(ota_context: AmphiOTAContext, status: Any) -> None:
+    def _publish_stage(ota_context: AmphiOTAContext, status: Any, context: Optional[AmphiContext] = None) -> None:
         """Publish an internal think state using the client-facing stage shape."""
         stage = None if isinstance(status, NormalStageState) else status.stage
         workflow_id = status.workflow_id if isinstance(status, BuildStageState) else None
@@ -843,32 +845,10 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         if workflow_id is not None:
             payload["workflow_id"] = workflow_id
         if isinstance(status, PresentationStageState):
-            payload.update({
-                "presentation_goal": status.goal,
-                "presentation_step_index": status.step_index,
-                "presentation_reports": [
-                    report.model_dump(mode="json") for report in status.reports
-                ],
-                "presentation_sources": [
-                    source.model_dump(mode="json") for source in status.sources
-                ],
-                "presentation_outline": [
-                    chapter.model_dump(mode="json") for chapter in status.outline
-                ],
-                "presentation_outline_confirmed": status.outline_confirmed,
-                "presentation_outline_confirmation_id": status.outline_confirmation_id,
-                "presentation_template_candidates": [
-                    candidate.model_dump(mode="json") for candidate in status.template_candidates
-                ],
-                "presentation_template_selection_id": status.template_selection_id,
-                "presentation_template_selection_status": status.template_selection_status,
-                "presentation_template_selection_error": status.template_selection_error,
-                "presentation_selected_template": (
-                    status.selected_template.model_dump(mode="json")
-                    if status.selected_template is not None
-                    else None
-                ),
-            })
+            from .cognitive.presentation.shared import presentation_records, presentation_view
+
+            payload.update(presentation_view(presentation_records(ota_context, context)))
+            payload["presentation_step_index"] = status.step_index
         ota_context.stream.publish("stage", **payload)
 
     @staticmethod
@@ -993,8 +973,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             if not failed and step.tool_name == "read_file":
                 continue
             if not failed and step.tool_name == "ppt_rag":
-                # Plan consumes the complete shortlist in handle_action_result and
-                # replaces it with a compact template-selection receipt.
+                # Keep the retrieved batch available to the model and to the
+                # separate template-confirmation tool by search_id.
                 continue
             value = (
                 getattr(step, "error", None)
@@ -1082,3 +1062,17 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
             )
             for call in calls
         ]
+
+    ############################################################################
+    # Agent Debugging Support
+    ############################################################################
+    async def get_prompt(self, context: AmphiContext, ota_context: AmphiOTAContext) -> Dict[str, Any]:
+        """Return the worker's assembly from the supplied contexts."""
+        worker = self._current_think_worker(ota_context, context)
+        messages = await worker.assemble_messages(ota_context, context)
+        return {
+            "messages": [message.model_dump(mode="json") for message in messages],
+            "tools": [spec.to_tool().model_dump(mode="json") for spec in ota_context.tools],
+            "extraBody": worker.extra_body,
+            "worker": type(worker).__name__,
+        }
