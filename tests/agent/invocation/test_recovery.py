@@ -360,12 +360,14 @@ async def test_get_prompt_reads_only_the_selected_history_prefix(agent_store: No
         record = SessionTurnRecord(
             id=f"prompt-turn-{ordinal}", user_id="local", session_id=session.id,
             session_ordinal=ordinal, user_input=UserInput(text=f"question-{ordinal}"),
+            model="historical-turn-model",
             status=TurnStatus.COMPLETED,
             ota_records=[
                 {
                     "think_scope": {"mode": "normal", "stage": "main"},
                     "think_result": {"step_content": f"answer-{ordinal}-{index}"},
                     "observation_result": f"observation-{ordinal}-{index}",
+                    "model_id": "historical-round-model",
                 }
                 for index in range(3)
             ],
@@ -409,7 +411,10 @@ async def test_get_prompt_reads_only_the_selected_history_prefix(agent_store: No
         assert item["availability"] == "assembled"
         assert item["roundIndex"] == 1
         assert item["turnOrdinal"] == 1
-        assert item["request"]["modelId"] == "invocation-model"
+        assert item["request"]["modelId"] == "historical-round-model"
+        assert item["modelSource"] == "round"
+        assert item["boundary"] == "cognitive_before_runtime_tail"
+        assert item["revision"]
         assert item["request"]["messages"][0]["content"] == "assembled"
         monkeypatch.setattr(AmphiAgent, "get_prompt", real_assembly)
         actual = await invocation.get_prompt(session.id, records[1].id, 1, mode="normal", stage="main")

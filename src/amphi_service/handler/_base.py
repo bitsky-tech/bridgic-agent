@@ -1,6 +1,6 @@
 import asyncio
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from fastapi import (
@@ -27,6 +27,7 @@ from ..runtime import (
 )
 from ...amphi_agent import AgentInvocation, BrowserHost, PowerPointHost
 from ..cache import ClientRegistry, LlmCache
+from ..runtime._debug_runs import DebugModelRuns
 from ...amphi_store import (
     SessionRecord,
     SessionRepository,
@@ -74,6 +75,7 @@ class ServiceState:
     gateway: GatewayMeta
     scheduler: SchedulerService
     agent_env: AgentEnvironmentSupervisor
+    debug_runs: DebugModelRuns = field(default_factory=DebugModelRuns)
 
 
 ################################################################################################################

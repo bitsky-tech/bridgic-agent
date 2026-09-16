@@ -44,6 +44,8 @@ export interface TraceRound {
   status: TraceStatus
   /** Explicit round wall time only; Turn totals are not assigned to rounds. */
   durationMs: number | null
+  /** Model streaming and retries only; excludes prompt assembly and tool execution. */
+  modelDurationMs: number | null
   /** Recorded wall time of the whole action group; not an individual tool time. */
   actDurationMs: number | null
   usage: Record<TraceUsageField, number | null>

@@ -58,8 +58,8 @@ const usageFields: Record<TraceUsageField, string[][]> = {
   inputTokens: [['prompt_tokens'], ['input_tokens'], ['prompt_token_count']],
   outputTokens: [['completion_tokens'], ['output_tokens'], ['candidates_token_count']],
   totalTokens: [['total_tokens'], ['total_token_count']],
-  cachedInputTokens: [['prompt_tokens_details', 'cached_tokens'], ['input_tokens_details', 'cached_tokens'], ['cache_read_input_tokens'], ['cached_content_token_count']],
-  cacheCreationInputTokens: [['cache_creation_input_tokens']],
+  cachedInputTokens: [['prompt_tokens_details', 'cached_tokens'], ['input_tokens_details', 'cached_tokens'], ['cache_read_input_tokens'], ['cached_input_tokens'], ['cached_content_token_count']],
+  cacheCreationInputTokens: [['cache_creation_input_tokens'], ['input_tokens_details', 'cache_write_tokens']],
 }
 
 function providerUsage(raw: JsonObject | undefined): Pick<TraceRound, 'usage' | 'usageSources' | 'usageIssues'> {
@@ -78,6 +78,16 @@ function providerUsage(raw: JsonObject | undefined): Pick<TraceRound, 'usage' | 
         if (value === undefined) continue
         if (container.source === 'estimated') { problem = 'estimated'; continue }
         if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+          // Native Anthropic input excludes cache reads and writes. Other
+          // supported providers include them in their reported input already.
+          if (key === 'inputTokens' && path[0] === 'input_tokens') {
+            const cache = ['cache_read_input_tokens', 'cache_creation_input_tokens'].map(name => container[name] ?? 0)
+            if (cache.some(count => typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0)) {
+              problem = 'invalid'
+              continue
+            }
+            value += (cache[0] as number) + (cache[1] as number)
+          }
           candidates.push({ value, path: `${name}.${path.join('.')}` })
         } else problem = 'invalid'
       }
@@ -209,6 +219,7 @@ export function buildTraceRecords(turns: readonly TraceTurnInput[]): TraceRecord
         body, thinking: thinking(raw), model: roundModel !== undefined ? roundModel : turn.model,
         modelSource,
         status, durationMs: duration(field(raw, 'round_duration_ms', 'roundDurationMs')),
+        modelDurationMs: duration(field(raw, 'model_duration_ms', 'modelDurationMs')),
         actDurationMs: duration(field(raw, 'act_duration_ms', 'actDurationMs')), ...providerUsage(raw),
         calls: toolCalls, recordedRequest, raw: value,
       }

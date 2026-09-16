@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlmodel import Field, SQLModel, func, select
 
 from ._base import Repository
@@ -426,6 +426,7 @@ class SessionRepository(Repository[SessionRecord]):
 
     async def delete(self, session_id: str, user_id: str) -> bool:
         """Delete a session by id; ownership-gated. ``True`` iff a row was deleted."""
+        from ._debug_run import DebugModelRun
         from ._workflow import WorkflowRepository
         from ._workflow_run import WorkflowRunRepository
 
@@ -434,6 +435,7 @@ class SessionRepository(Repository[SessionRecord]):
         async with self._session() as s:
             deleted = await self._delete_owned(s, SessionRecord, session_id, user_id)
             if deleted:
+                await s.execute(delete(DebugModelRun).where(DebugModelRun.user_id == user_id, DebugModelRun.session_id == session_id))
                 await s.commit()
             return deleted
 

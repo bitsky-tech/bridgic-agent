@@ -97,8 +97,8 @@ endpoint. Click "New Session", optionally pick a workspace, then chat.
 ## Debug conversation
 
 Run `bun run debug` from `desktop/` to open the same app with an execution view
-and three additional Session panels: **Tool calls**, **Agent rounds**, and
-**Prompt analysis**. The normal `bun run dev` command always opens the product
+and three additional Session panels: **Agent overview**, **Tool calls**, and
+**Agent rounds**. The normal `bun run dev` command always opens the product
 UI. Both modes use the same settings, sessions, daemon, browser and Office hosts;
 stop one development instance before switching modes.
 
@@ -107,15 +107,11 @@ Desktop Markdown, Thinking, message actions and interaction cards. Tool rows and
 round details open the corresponding right-side inspector. Inspectors support
 chronological Turn/round/tool order, stage and tool-name/status filtering,
 recorded usage, and navigation back to older conversation messages. Tool arguments
-and recorded round requests have local draft editors. The Prompt analysis panel
-assembles messages, tool definitions, and semantic request options on demand as
-read-only data. Tool arguments can be submitted with **Execute tool** to run once
-against the Session's current workspace, mounts, browser, and Office hosts.
-The test result and submitted arguments appear in the inspector; resource changes
-take effect immediately. Drafts and test results survive inspector navigation and
-automatic refresh within the selected Session. Model request edits remain drafts.
-The conversation view remains available in
-the debug header for comparison.
+and recorded round requests have local draft editors. Tool arguments can be
+submitted with **Execute tool** to run once against the Session's current
+workspace, mounts, browser, and Office hosts. Test results and submitted
+arguments stay in the inspector across navigation and automatic refresh within
+the selected Session; resource changes take effect immediately.
 
 Tool execution calls the authenticated
 `POST /api/debug/sessions/{sessionId}/tools/execute` endpoint with `toolName`
@@ -126,32 +122,54 @@ JSON values retain their types. This does not restore historical files or pages,
 run a new Turn, or overwrite the recorded call. Existing tool prerequisites still
 apply; missing resources or state produce the tool's usual error.
 
-Prompt analysis lists the existing Session Turn rounds chronologically. Opening
-a round calls `POST /api/debug/sessions/{sessionId}/prompts` with its `turnId`,
-zero-based `roundIndex`, `mode`, and `stage`. The API delegates to
-`invocation.get_prompt`, which loads the Session resources through the same
-context loader as normal execution. It restores the selected round's
-`think_scope`: mode/stage, any step and Workflow identity, the remaining Agent
-state (including compaction summaries and coverage), tool-loading flags, and the
-assembly timestamp. All fields live in this single round snapshot; mode/stage
-and step are not repeated under a nested `state.think`. It is captured after accepted
-compaction and before the model request; later tools and state transitions cannot
-overwrite it. The trace is bounded before the selected response. Legacy rounds
-with a separate `prompt_context` remain readable. Rounds without a snapshot
-retain the Turn-state fallback and any recorded
-`think_scope.step_index`; their missing intermediate state cannot be recovered.
-New rounds omit the unused `think_scope.session_history` marker.
-`AmphiAgent.get_prompt(context, ota_context)` then calls the worker's existing
-`assemble_messages` directly. Comparing rounds requests only the
-selected round and baseline. Results stay in the current panel's memory.
+The Agent overview panel summarizes token usage, model rounds, mode/stage visits,
+and tool outcomes. It defaults to the entire Session, automatically loads all
+trace pages for complete totals, and allows selecting the latest or historical Turns.
+New rounds store measured input/output and cache usage, plus model-call duration
+(including streaming and retries, excluding prompt assembly and tools). The
+execution cards and round inspector read these same per-round measurements.
+Recording requires the updated Python daemon; reloading only the renderer does
+not enable it. Historical per-round measurements cannot be reconstructed from
+Turn totals. Existing Turn token
+counters remain available for older records; their latest-call cache snapshot
+is never substituted for cumulative cache usage. Missing usage appears as `—`,
+and partial sums are marked `≥`. Cache tokens are included in input totals.
+Mode/stage entries count transitions within each Turn, while the model-call
+count follows recorded rounds. Tool outcomes distinguish success, failure, and
+unknown results; unpaired results do not inflate declared invocation counts.
 
-This operation uses current Cognitive code, configuration, and Session resources
-as supplied to `assemble_messages`, before runtime-tail injection or new context
-compaction. New rounds preserve their internal assembly state while mutable
-external resources, such as `.build` files, use the current environment. This is
-not a recorded provider HTTP body. The query does not run an LLM or execute tools.
-Snapshots use the existing Round JSON storage, with no new database columns or
-migrations. They store state rather than duplicate conversation history or tool schemas.
+Opening a round shows its model request and recorded output inside an initially
+expanded **Model call** section. Its disclosure sits outside both cards, matching
+the **User input** section. The Cognitive request is assembled automatically. Messages (including native content
+blocks and metadata), tool schemas and options can be inspected and copied, or
+edited in a separate experiment. Assembly restores the saved round scope and
+prefers its recorded model;
+it uses current resources and excludes runtime-tail injection. It is not a
+historical HTTP capture. Collapsed **Tool execution** and **Raw record** sections below
+the output retain the recorded results and source data.
+
+The request inspector separates **Messages**, **Tool definitions**, and **Call
+parameters**. Messages and tools use searchable, paginated directories with one
+selected detail; only 20 directory rows and one full item render at a time.
+Message role filters preserve original positions, and inspector navigation keeps
+the selection and filters. Wider sidebars place the directory beside its detail;
+narrow sidebars stack them within bounded scroll areas. Complete request JSON is
+an alternate view opened from the request header, separate from these fields.
+
+**Debug experiment** opens a dedicated dialog with the request editor and results
+side by side. **Run experiment** submits the draft using the active provider; merely
+opening or closing the dialog never starts or cancels a run. The inspector always
+shows historical output, while the dialog keeps a separate result selection;
+experiments support cancellation and retain submitted requests, outputs and usage
+in `debug_model_runs`, outside conversation Turns and overview totals. Returned
+tool calls are displayed, never executed. A disconnected viewer can reconnect;
+unfinished runs are marked interrupted after a daemon restart. Independent tool
+execution remains available in the Tool calls inspector. These routes require the
+updated Python daemon.
+
+Edits stay in local drafts across inspector navigation and automatic refresh;
+switching Sessions clears local drafts. The conversation view remains available
+in the debug header for comparison.
 
 See the [debug API contract](docs/debug-api-contract.md) for the assembly boundary
 and the separate history and replay capabilities.

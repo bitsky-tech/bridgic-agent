@@ -18,6 +18,7 @@ const { applyAgentEventAtom, messageFamily } = await import('@/atoms/agent')
 const { AgentRole } = await import('@shared/types')
 const { DebugSessionProvider, useDebugSession, useDebugText } = await import('../DebugSessionProvider')
 const { DebugToolsPanel, DebugRoundsPanel } = await import('../DebugPanel')
+const { DebugOverviewPanel } = await import('../DebugOverviewPanel')
 
 const originalFetch = globalThis.fetch
 const mounted: ReturnType<typeof createRoot>[] = []
@@ -74,7 +75,7 @@ function databaseFetch(read: () => DesktopDebugTurn[], size = 2) {
   return requests
 }
 
-async function mount(panel?: 'tools' | 'rounds', sessionId = 'a') {
+async function mount(panel?: 'tools' | 'rounds' | 'overview', sessionId = 'a') {
   const store = createStore()
   store.set(activeSessionIdAtom, sessionId)
   store.set(settingsAtom, { ...store.get(settingsAtom), locale: 'en' })
@@ -85,6 +86,7 @@ async function mount(panel?: 'tools' | 'rounds', sessionId = 'a') {
     if (!id) return null
     if (panel === 'tools') return <DebugToolsPanel sessionId={id} active={active} onClose={() => undefined} />
     if (panel === 'rounds') return <DebugRoundsPanel sessionId={id} active={active} onClose={() => undefined} />
+    if (panel === 'overview') return <DebugOverviewPanel sessionId={id} active={active} onClose={() => undefined} />
     return null
   }
   const host = document.createElement('div')
@@ -142,6 +144,82 @@ test('shows live calls in the tools panel and preserves an open detail when hist
   expect(view.host.querySelector('.debug-tool-detail')).not.toBeNull()
   expect(view.host.querySelector('.debug-tool-result')?.textContent).toContain('Live contents')
   expect([...view.host.querySelectorAll('button')].some(button => button.textContent?.includes('Inspect round'))).toBe(true)
+})
+
+describe('execution overview scope and refresh', () => {
+  function fixture(id: string, ordinal: number, tokens: number, sessionId = 'a') {
+    return { ...turn(id, ordinal, sessionId), contextUsage: { source: 'provider', input_tokens: tokens, output_tokens: 10 } }
+  }
+
+  test('defaults to the entire Session, switches history, and resets scope on a Session change', async () => {
+    databaseFetch(() => [fixture('a-old', 0, 100), fixture('a-new', 1, 200), fixture('b-only', 0, 300, 'b')])
+    const view = await mount('overview')
+    const metric = () => view.host.querySelector('[data-metric="totalTokens"]')?.textContent
+    expect(view.host.querySelector('select')!.value).toBe('session')
+    expect(metric()).toBe('320')
+    expect(view.host.textContent).toContain('Agent overview')
+    expect(view.host.textContent).not.toContain('Prompt analysis')
+    await choose(view.host.querySelector('select')!, 'a-old')
+    expect(metric()).toBe('110')
+    await view.switchSession('b')
+    expect(view.host.querySelector('select')!.value).toBe('session')
+    expect(metric()).toBe('310')
+    expect(view.host.textContent).not.toContain('a-old')
+  })
+
+  test('automatically loads every page for the default Session scope and never requests prompts', async () => {
+    const requests = databaseFetch(() => [fixture('one', 0, 100), fixture('two', 1, 200), fixture('three', 2, 300)], 1)
+    const view = await mount('overview')
+    expect(view.host.querySelector('select')!.value).toBe('session')
+    expect(view.current.turns).toHaveLength(3)
+    expect(view.current.hasMore).toBe(false)
+    expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('630')
+    expect(view.host.querySelector('[data-metric="tools"]')?.textContent).toBe('9')
+    expect(view.host.querySelector('[data-metric="toolSuccess"]')?.textContent).toBe('3')
+    expect(view.host.querySelector('[data-metric="toolFailed"]')?.textContent).toBe('3')
+    expect(view.host.querySelector('[data-metric="toolUnknown"]')?.textContent).toBe('3')
+    expect(requests.every(url => url.pathname.endsWith('/turns'))).toBe(true)
+  })
+
+  test('follows new Turns in Session and latest scopes but preserves an explicitly selected historical Turn', async () => {
+    const turns = [fixture('old', 0, 100)]
+    databaseFetch(() => turns)
+    const view = await mount('overview')
+    turns.push(fixture('new', 1, 200))
+    await act(async () => view.current.refresh())
+    expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('320')
+    await choose(view.host.querySelector('select')!, 'latest')
+    expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('210')
+    await choose(view.host.querySelector('select')!, 'old')
+    turns.push(fixture('newer', 2, 300))
+    await act(async () => view.current.refresh())
+    expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('110')
+    expect(view.host.querySelector('select')!.value).toBe('old')
+  })
+
+  test('distinguishes initial loading, read failure, missing usage, and empty history', async () => {
+    const pending = deferredFetch()
+    const view = await mount('overview')
+    expect(view.host.textContent).toContain('Loading execution records')
+    expect(view.host.querySelector('[data-metric="totalTokens"]')).toBeNull()
+    await act(async () => pending[0]!.resolve(page('a', [turn('unknown-usage', 0)])))
+    expect(view.host.querySelector('[data-metric="totalTokens"]')?.textContent).toBe('—')
+    expect(view.host.querySelector('[data-metric="cachedInputTokens"]')?.textContent).toBe('—')
+    globalThis.fetch = (async () => new Response('Unavailable', { status: 503 })) as unknown as typeof fetch
+    await act(async () => view.current.refresh())
+    expect(view.host.querySelector('[role="alert"]')?.textContent).toContain('HTTP 503')
+    databaseFetch(() => [])
+    await act(async () => view.current.refresh())
+    expect(view.host.textContent).toContain('No execution records yet')
+    expect(view.host.querySelector('[data-metric="totalTokens"]')).toBeNull()
+  })
+
+  test('opens the round inspector from a mode/stage distribution row', async () => {
+    databaseFetch(() => [fixture('one', 0, 100)])
+    const view = await mount('overview')
+    await act(async () => view.host.querySelector<HTMLButtonElement>('.debug-overview-stage')!.click())
+    expect(view.current.selection).toMatchObject({ kind: 'rounds', id: 'one:round:1' })
+  })
 })
 
 test('uses the resolved settings locale and app catalog under an unrelated translation provider', async () => {
@@ -294,14 +372,25 @@ describe('DebugPanel filters and inspection', () => {
 
   test('shows missing prompts honestly and keeps recorded raw values available in round details', async () => {
     const stored = turn('alpha', 0)
+    Object.assign((stored.otaRecords as Record<string, unknown>[])[0]!, {
+      model_duration_ms: 1250,
+      usage: { source: 'provider', prompt_tokens: 1200, completion_tokens: 80, prompt_tokens_details: { cached_tokens: 900 } },
+    })
     databaseFetch(() => [stored])
     const view = await mount('rounds')
     await act(async () => view.host.querySelector<HTMLButtonElement>('[data-debug-record]')!.click())
-    await click(view.host, 'Model request')
-    expect(view.host.textContent).toContain('No readable prompt was saved')
-    await click(view.host, 'Raw record')
-    expect(view.host.querySelector('[role="tabpanel"] pre')!.textContent).toContain('"think_scope"')
-    expect(view.host.querySelector('[role="tabpanel"] pre')!.textContent).toContain('"tool_arguments": null')
+    const metrics = view.host.querySelector('.debug-round-overview-metrics')!
+    expect(metrics.textContent).toContain('Model time1.3 s')
+    expect(metrics.textContent).toContain((1200).toLocaleString())
+    expect(metrics.textContent).toContain('90075.0%')
+    expect(view.host.querySelector('[aria-label="Round details"]')).toBeNull()
+    expect(view.host.querySelector('.debug-round-call')).not.toBeNull()
+    expect(view.host.textContent).toContain('Connect to the backend')
+    const raw = [...view.host.querySelectorAll<HTMLDetailsElement>('.debug-round-support')].find(item => item.querySelector('summary')?.textContent === 'Raw record')!
+    await act(async () => raw.querySelector('summary')!.click())
+    expect(raw.open).toBe(true)
+    expect(raw.querySelector('pre')!.textContent).toContain('"think_scope"')
+    expect(raw.querySelector('pre')!.textContent).toContain('"tool_arguments": null')
     await click(view.host, 'Locate in chat')
     expect(view.current.reveal).toMatchObject({ sessionId: 'a', turnId: 'alpha' })
     await view.switchSession('b')
@@ -313,6 +402,9 @@ describe('DebugPanel filters and inspection', () => {
     databaseFetch(() => [turn('preview-turn', 0)])
     const view = await mount('rounds')
     await act(async () => view.host.querySelector<HTMLButtonElement>('[data-debug-record]')!.click())
+    const tools = view.host.querySelector<HTMLDetailsElement>('.debug-round-support')!
+    await act(async () => tools.querySelector('summary')!.click())
+    expect(tools.open).toBe(true)
     const cards = [...view.host.querySelectorAll<HTMLElement>('[data-debug-tool-preview]')]
     expect(cards).toHaveLength(3)
     expect(cards[0]!.querySelector('dt')?.textContent).toBe('path')
@@ -381,14 +473,14 @@ describe('DebugRoundsPanel Turn grouping', () => {
     await act(async () => secondTurnCard.click())
     expect(view.host.querySelector('.debug-detail h3 code')?.textContent).toBe('R01')
     expect(view.host.querySelector('.debug-turn-context p')?.textContent).toBe('Reconcile the budget totals')
-    expect(view.host.querySelector('.debug-detail [role="tabpanel"]')?.textContent).toContain('Drafted the budget report')
+    expect(view.host.querySelector('.debug-detail .debug-round-call')?.textContent).toContain('Drafted the budget report')
     expect(view.host.querySelector('.debug-detail')?.textContent).not.toContain('Plan the launch agenda')
     await click(view.host, 'Locate in chat')
     expect(view.current.reveal).toMatchObject({ turnId: 'budget-turn', targetId: 'desktop-debug-round-budget-turn%3Around%3A1' })
     await click(view.host, 'Back to list')
     await act(async () => view.host.querySelector<HTMLButtonElement>('[data-debug-record="plan-turn:round:1"]')!.click())
     expect(view.host.querySelector('.debug-turn-context p')?.textContent).toBe('Plan the launch agenda')
-    expect(view.host.querySelector('.debug-detail [role="tabpanel"]')?.textContent).toContain('Outlined the launch agenda')
+    expect(view.host.querySelector('.debug-detail .debug-round-call')?.textContent).toContain('Outlined the launch agenda')
   })
 
   test('external inspect expands the exact collapsed Turn group and focuses its saved round identity', async () => {

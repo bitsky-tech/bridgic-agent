@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ChevronDown, Clock3, Crosshair, ExternalLink, FileOutput, MessageSquare, Pencil, Repeat2, ScanText, Wrench, X } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Clock3, Crosshair, ExternalLink, FileOutput, MessageSquare, Repeat2, Wrench, X } from 'lucide-react'
 import type { SessionWorkbenchExtensionProps } from '@/components/app/DesktopAppExtensions'
 import { WorkbenchToolHeader, WorkbenchToolScrollArea, WorkbenchToolSurface, WorkbenchSearchField } from '@/components/app/WorkbenchToolPrimitives'
 import { useDebugSession, useDebugText, type DebugPanelKind } from './DebugSessionProvider'
-import { JsonRecord, RoundResponse, ToolStatusLabel, duration, roundLabel, turnLabel } from './TraceParts'
+import { JsonRecord, ToolStatusLabel, duration, roundLabel, turnLabel } from './TraceParts'
 import type { TraceRound } from './types'
 import { toolStatus, type ToolInspection } from './tool-records'
 import { RoundTurnList, TurnContext } from './RoundTurnList'
 import { groupRoundsByTurn, userInputText } from './trace-presentation'
 import { StageFilter, roundStageKey } from './StageFilter'
 import { ToolCallEditor } from './ToolCallEditor'
-import { ModelRequestEditor } from './ModelRequestEditor'
+import { RoundModelCall } from './RoundModelCall'
 import { RoundToolCalls } from './RoundToolCalls'
 import { RoundOverview } from './RoundOverview'
 import './debug-inspector.css'
@@ -58,43 +58,36 @@ function ToolDetail({ call }: { call: ToolInspection }) {
 function RoundDetail({ round }: { round: TraceRound }) {
   const text = useDebugText()
   const { turns, inspect, locate } = useDebugSession()
-  const [tab, setTab] = useState<'output' | 'request' | 'raw'>('output')
-  const tabs = { output: text('outputCalls'), request: text('modelRequest'), raw: text('rawRecord') }
-  let tabContent
-  if (tab === 'output') tabContent = <div role="tabpanel" className="debug-round-tab-content">
-    <section className="debug-inspector-card debug-round-output">
-      <div className="debug-inspector-heading"><MessageSquare size={15} aria-hidden="true" /><h4>{text('modelOutput')}</h4></div>
-      <div className="debug-inspector-body">
-        <RoundResponse round={round} />
-        {!round.body?.trim() && !round.thinking?.trim() && round.calls.length > 0 ? <p className="debug-muted">{text('noModelText')}</p> : null}
-      </div>
-    </section>
-    <RoundToolCalls calls={round.calls} onInspect={(call) => inspect('tools', call.id)} />
-    {round.actDurationMs != null ? <p className="debug-round-action-time"><Clock3 size={12} />{text('actionGroupDuration')} <span>{duration(round.actDurationMs)}</span></p> : null}
-  </div>
-  else if (tab === 'request') tabContent = <div role="tabpanel" className="debug-round-tab-content debug-round-request">
-    <ModelRequestEditor round={round} />
-  </div>
-  else tabContent = <div role="tabpanel" className="debug-round-tab-content debug-round-raw">
-    <JsonRecord title={text('roundRecord')} value={round.raw} />
-    <JsonRecord title={text('usageSources')} value={round.usageSources} open={false} />
-    <JsonRecord title={text('usageValidation')} value={round.usageIssues} open={false} />
-  </div>
   return <div className="debug-detail debug-round-detail">
     <RoundOverview round={round} />
-    <TurnContext turn={turns.find((turn) => turn.id === round.turnId)} ordinal={round.turnOrdinal}>
-      <div className="debug-inspector-actions"><button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('locateInChat')}</button>
-        <button type="button" onClick={() => inspect('prompts', round.id)}><ScanText size={13} />{text('promptAnalysis.analyzeRequest')}</button>
-        <button type="button" className="debug-round-edit-action" onClick={() => setTab('request')}><Pencil size={13} />{text('editRequestDebug')}</button></div>
-    </TurnContext>
-    <div role="tablist" aria-label={text('roundDetails')} className="debug-round-tabs">
-      {(['output', 'request', 'raw'] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{tabs[value]}</button>)}
-    </div>
-    {tabContent}
+    <details className="debug-round-input"><summary>{text('userInput')} · Turn {turnLabel(round.turnOrdinal)}</summary>
+      <TurnContext turn={turns.find((turn) => turn.id === round.turnId)} ordinal={round.turnOrdinal}>
+      <div className="debug-inspector-actions"><button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('locateInChat')}</button></div>
+      </TurnContext>
+    </details>
+    <details className="debug-round-model-call" open>
+      <summary>{text('modelCall.title')}</summary>
+      <RoundModelCall round={round} />
+    </details>
+    {round.calls.length ? <details className="debug-round-support">
+      <summary>{text('toolExecution')} <span>{round.calls.length}</span></summary>
+      <div className="debug-round-support-body">
+        <RoundToolCalls calls={round.calls} onInspect={call => inspect('tools', call.id)} />
+        {round.actDurationMs != null ? <p className="debug-round-action-time"><Clock3 size={12} />{text('actionGroupDuration')} <span>{duration(round.actDurationMs)}</span></p> : null}
+      </div>
+    </details> : null}
+    <details className="debug-round-support">
+      <summary>{text('rawRecord')}</summary>
+      <div className="debug-round-support-body debug-round-raw">
+        <JsonRecord title={text('roundRecord')} value={round.raw} />
+        <JsonRecord title={text('usageSources')} value={round.usageSources} open={false} />
+        <JsonRecord title={text('usageValidation')} value={round.usageIssues} open={false} />
+      </div>
+    </details>
   </div>
 }
 
-function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & { kind: Exclude<DebugPanelKind, 'prompts'> }) {
+function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & { kind: DebugPanelKind }) {
   const debug = useDebugSession()
   const text = useDebugText()
   const [query, setQuery] = useState('')

@@ -11,7 +11,7 @@ export function RoundOverview({ round }: { round: TraceRound }) {
     && cachedInputTokens != null && Number.isFinite(cachedInputTokens) && cachedInputTokens >= 0 && cachedInputTokens <= inputTokens
     ? `${(cachedInputTokens / inputTokens * 100).toFixed(1)}%` : null
   const metrics = [
-    { label: text('time'), value: duration(round.durationMs) },
+    { label: text(round.modelDurationMs != null ? 'modelDuration' : 'time'), value: duration(round.modelDurationMs ?? round.durationMs), title: round.modelDurationMs != null ? text('modelDurationHint') : undefined },
     { label: text('inputTokens'), value: inputTokens?.toLocaleString() ?? '—' },
     { label: text('outputTokens'), value: outputTokens?.toLocaleString() ?? '—' },
     { label: text('cacheRead'), value: cachedInputTokens?.toLocaleString() ?? '—', hint: cacheRate },
@@ -30,7 +30,7 @@ export function RoundOverview({ round }: { round: TraceRound }) {
       </div>
     </div>
     <dl className="debug-round-overview-metrics">
-      {metrics.map(metric => <div key={metric.label}>
+      {metrics.map(metric => <div key={metric.label} title={metric.title}>
         <dt>{metric.label}</dt>
         <dd><span>{metric.value}</span>{metric.hint != null ? <small>{metric.hint}</small> : null}</dd>
       </div>)}

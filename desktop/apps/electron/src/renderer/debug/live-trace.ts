@@ -53,7 +53,7 @@ function newRound(turn: LiveTurn): LiveRound {
     sourceRoundId: null, mode: turn.position?.mode ?? null,
     stage: turn.position?.stage ?? (turn.position?.mode === 'normal' ? 'main' : null),
     body: '', thinking: '', model: null, modelSource: null, status: 'unknown',
-    durationMs: null, actDurationMs: null, calls: [], recordedRequest: {}, raw: undefined,
+    durationMs: null, modelDurationMs: null, actDurationMs: null, calls: [], recordedRequest: {}, raw: undefined,
     usage: { inputTokens: null, outputTokens: null, totalTokens: null, cachedInputTokens: null, cacheCreationInputTokens: null },
     usageSources: { inputTokens: [], outputTokens: [], totalTokens: [], cachedInputTokens: [], cacheCreationInputTokens: [] },
     usageIssues: { inputTokens: 'missing', outputTokens: 'missing', totalTokens: 'missing', cachedInputTokens: 'missing', cacheCreationInputTokens: 'missing' },
