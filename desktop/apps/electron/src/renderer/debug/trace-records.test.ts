@@ -122,12 +122,14 @@ describe('buildTraceRecords: persisted OTA data', () => {
 
   test('reads only explicit round/tool durations without distributing Turn or action totals', () => {
     const records = buildTraceRecords([turn([
-      { ...round([call('a', {})], [{ ...result('a', {}, ''), duration_ms: 0 }]), turn_duration_ms: 500, act_duration_ms: 25, round_duration_ms: 0 },
+      { ...round([call('a', {})], [{ ...result('a', {}, ''), duration_ms: 0 }]), turn_duration_ms: 500, act_duration_ms: 25, round_duration_ms: 0, model_duration_ms: 125 },
       { ...round([call('b', {})], [result('b', {}, '')]), turn_duration_ms: 900, act_duration_ms: 30 },
-      { round_duration_ms: -1, act_duration_ms: Infinity },
+      { round_duration_ms: -1, act_duration_ms: Infinity, model_duration_ms: -1 },
+      { modelDurationMs: 0 },
     ], { durationMs: 900 })])
-    expect(records.rounds.map(value => value.durationMs)).toEqual([0, null, null])
-    expect(records.rounds.map(value => value.actDurationMs)).toEqual([25, 30, null])
+    expect(records.rounds.map(value => value.durationMs)).toEqual([0, null, null, null])
+    expect(records.rounds.map(value => value.actDurationMs)).toEqual([25, 30, null, null])
+    expect(records.rounds.map(value => value.modelDurationMs)).toEqual([125, null, null, 0])
     expect(records.calls.map(value => value.durationMs)).toEqual([0, null])
   })
 
@@ -151,6 +153,19 @@ describe('buildTraceRecords: persisted OTA data', () => {
     expect(records.rounds[1]!.usage.inputTokens).toBeNull()
     expect(records.rounds[1]!.usageIssues.inputTokens).toBe('estimated')
     expect(records.rounds[2]!.usage.totalTokens).toBeNull()
+  })
+
+  test('reads Responses cache writes without adding them to input tokens again', () => {
+    const records = buildTraceRecords([turn([
+      { usage: { input_tokens: 15061, output_tokens: 49, input_tokens_details: { cached_tokens: 14848, cache_write_tokens: 213 } } },
+      { usage: { input_tokens: 15061, output_tokens: 74, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } },
+    ])])
+    expect(records.rounds.map(record => record.usage)).toEqual([
+      { inputTokens: 15061, outputTokens: 49, totalTokens: null, cachedInputTokens: 14848, cacheCreationInputTokens: 213 },
+      { inputTokens: 15061, outputTokens: 74, totalTokens: null, cachedInputTokens: 0, cacheCreationInputTokens: 0 },
+    ])
+    expect(records.rounds[0]!.usageSources.cacheCreationInputTokens).toEqual(['usage.input_tokens_details.cache_write_tokens'])
+    expect(records.rounds[1]!.usageIssues.cacheCreationInputTokens).toBeNull()
   })
 
   test('round model metadata takes precedence and a Turn fallback is labeled as such', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ChevronDown, Clock3, Crosshair, ExternalLink, FileOutput, MessageSquare, Pencil, Repeat2, ScanText, Wrench, X } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Clock3, Crosshair, ExternalLink, FileOutput, MessageSquare, Pencil, Repeat2, Wrench, X } from 'lucide-react'
 import type { SessionWorkbenchExtensionProps } from '@/components/app/DesktopAppExtensions'
 import { WorkbenchToolHeader, WorkbenchToolScrollArea, WorkbenchToolSurface, WorkbenchSearchField } from '@/components/app/WorkbenchToolPrimitives'
 import { useDebugSession, useDebugText, type DebugPanelKind } from './DebugSessionProvider'
@@ -82,7 +82,6 @@ function RoundDetail({ round }: { round: TraceRound }) {
     <RoundOverview round={round} />
     <TurnContext turn={turns.find((turn) => turn.id === round.turnId)} ordinal={round.turnOrdinal}>
       <div className="debug-inspector-actions"><button type="button" onClick={() => locate(round)}><Crosshair size={13} />{text('locateInChat')}</button>
-        <button type="button" onClick={() => inspect('prompts', round.id)}><ScanText size={13} />{text('promptAnalysis.analyzeRequest')}</button>
         <button type="button" className="debug-round-edit-action" onClick={() => setTab('request')}><Pencil size={13} />{text('editRequestDebug')}</button></div>
     </TurnContext>
     <div role="tablist" aria-label={text('roundDetails')} className="debug-round-tabs">
@@ -92,7 +91,7 @@ function RoundDetail({ round }: { round: TraceRound }) {
   </div>
 }
 
-function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & { kind: Exclude<DebugPanelKind, 'prompts'> }) {
+function DebugPanel({ kind, active, onClose }: SessionWorkbenchExtensionProps & { kind: DebugPanelKind }) {
   const debug = useDebugSession()
   const text = useDebugText()
   const [query, setQuery] = useState('')

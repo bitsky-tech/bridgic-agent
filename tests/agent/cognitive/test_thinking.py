@@ -9,6 +9,7 @@ from bridgic.core.model.types import Message, Role
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink
 from src.amphi_agent._invocation import AgentInvocation
+from src.amphi_agent.cognitive import base as base_module
 from src.amphi_agent.cognitive.build.state import BuildStageState
 from src.amphi_agent.cognitive.normal.state import NormalStageState
 from src.amphi_agent.cognitive.presentation.state import PresentationStageState
@@ -19,7 +20,7 @@ from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive._harness import make_session
 
 
-async def test_live_round(test_sandbox: IsolatedPaths) -> None:
+async def test_live_round(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
     """Final live cognitive round:
 
     {
@@ -38,6 +39,8 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     3. Usage reaches the Turn totals, worker meter, and context event stream once.
     4. The open OTA record identifies its cognitive scope without a legacy policy marker.
     """
+    clock = iter((10.0, 11.25))
+    monkeypatch.setattr(base_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     ota_context = AmphiOTAContext(
         user_input="Continue generating the workflow",
         state={"think": {"mode": "build", "stage": "generate"}},
@@ -127,6 +130,13 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         ota_context.context_usage.cached_input_tokens,
     ) == (11, 3, 5)
     assert worker.spent_tokens == 14
+    assert record.model_call_started is True
+    assert record.model_id == "test-model"
+    assert record.model_duration_ms == 1250
+    assert record.model_dump(mode="json")["usage"] == {
+        "source": "provider", "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14,
+        "prompt_tokens_details": {"cached_tokens": 5}, "cache_creation_input_tokens": 2,
+    }
     context_events = [payload for event, payload in stream.events if event == "context_usage"]
     assert len(context_events) == 1
     context_event = context_events[0]
@@ -301,6 +311,72 @@ async def test_round_context_freezes_post_compaction_state_before_model_call(tes
 def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tuple[int, int, int]) -> None:
     """Provider-specific cache details converge on one latest-call count."""
     assert MainThink._usage_values(usage) == expected
+
+
+@pytest.mark.parametrize(("usage", "expected"), [
+    (None, None),
+    ({"prompt_tokens": 0, "completion_tokens": 0}, {"source": "provider", "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+    ({"input_tokens": 50, "output_tokens": 10, "cached_input_tokens": 20}, {
+        "source": "provider", "prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60,
+        "prompt_tokens_details": {"cached_tokens": 20},
+    }),
+    ({"input_tokens": 12}, {"source": "provider", "prompt_tokens": 12}),
+    ({"output_tokens": 5}, {"source": "provider", "completion_tokens": 5}),
+    ({"input_tokens": 15061, "output_tokens": 74, "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}, {
+        "source": "provider", "prompt_tokens": 15061, "completion_tokens": 74, "total_tokens": 15135,
+        "prompt_tokens_details": {"cached_tokens": 0}, "cache_creation_input_tokens": 0,
+    }),
+    (SimpleNamespace(input_tokens=15061, output_tokens=49, input_tokens_details=SimpleNamespace(cached_tokens=14848, cache_write_tokens=213)), {
+        "source": "provider", "prompt_tokens": 15061, "completion_tokens": 49, "total_tokens": 15110,
+        "prompt_tokens_details": {"cached_tokens": 14848}, "cache_creation_input_tokens": 213,
+    }),
+])
+async def test_round_usage_persists_measured_fields_only(test_sandbox: IsolatedPaths, usage: Any, expected: Any) -> None:
+    """Persist round-local usage without replacing missing fields with estimates."""
+    class UsageLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            return StreamResult(tool_calls=[], content="Answer", usage=usage)
+
+    ota = AmphiOTAContext(user_input="Hello", ota_record=[OTARecord()])
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "round-usage"),
+        llm_provider=LlmProvider(model_id="usage-model", model_limits={"input": 100_000}),
+    )
+    worker = MainThink(UsageLlm())
+    await worker.thinking(ota, context)
+    saved = ota.ota_record[0].model_dump(mode="json")
+    assert saved["model_call_started"] is True
+    assert saved["model_id"] == "usage-model"
+    assert saved["usage"] == expected
+
+
+@pytest.mark.parametrize("error", [RuntimeError("Provider failed"), asyncio.CancelledError()])
+async def test_interrupted_round_keeps_model_time_without_inventing_usage(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
+    """A failed or cancelled stream preserves elapsed time and its partial response."""
+    clock = iter((20.0, 22.5))
+    monkeypatch.setattr(base_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+
+    class InterruptedLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            publish("token", text="Partial response")
+            raise error
+
+    ota = AmphiOTAContext(user_input="Hello", ota_record=[OTARecord()])
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "interrupted-round"),
+        llm_provider=LlmProvider(model_id="interrupted-model"),
+    )
+    with pytest.raises(type(error)):
+        await MainThink(InterruptedLlm()).thinking(ota, context)
+    checkpoint = AgentInvocation._ota_context_values(ota)
+    saved = checkpoint["ota_records"][0]
+    assert saved["model_duration_ms"] == 2500
+    assert saved["model_call_started"] is True
+    assert saved["model_id"] == "interrupted-model"
+    assert saved["think_result"]["step_content"] == "Partial response"
+    assert saved["usage"] is None
+    assert checkpoint["context_usage"]["input_tokens"] == 0
+    assert checkpoint["context_usage"]["output_tokens"] == 0
 
 
 async def test_context_breakdown_classifies_the_final_request(test_sandbox: IsolatedPaths) -> None:

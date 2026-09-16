@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -462,6 +463,27 @@ class BaseThink(CognitiveWorker):
             provider_input_tokens, provider_output_tokens, cached_input_tokens = self._usage_values(
                 result.usage
             )
+            # Keep each round's measured usage; the context snapshot's cache is
+            # only the latest call, while its input/output counters are cumulative.
+            record = ota_context._current_record()
+            if result.usage is not None:
+                get_usage = result.usage.get if isinstance(result.usage, dict) else (lambda key: getattr(result.usage, key, None))
+                measured: Dict[str, Any] = {"source": "provider"}
+                if get_usage("prompt_tokens") is not None or get_usage("input_tokens") is not None:
+                    measured["prompt_tokens"] = provider_input_tokens
+                if get_usage("completion_tokens") is not None or get_usage("output_tokens") is not None:
+                    measured["completion_tokens"] = provider_output_tokens
+                if "prompt_tokens" in measured and "completion_tokens" in measured:
+                    measured["total_tokens"] = provider_input_tokens + provider_output_tokens
+                if cached_input_tokens is not None:
+                    measured["prompt_tokens_details"] = {"cached_tokens": cached_input_tokens}
+                cache_creation = get_usage("cache_creation_input_tokens")
+                if cache_creation is None:
+                    details = get_usage("input_tokens_details")
+                    cache_creation = details.get("cache_write_tokens") if isinstance(details, dict) else getattr(details, "cache_write_tokens", None)
+                if isinstance(cache_creation, int) and not isinstance(cache_creation, bool) and cache_creation >= 0:
+                    measured["cache_creation_input_tokens"] = cache_creation
+                record.usage = measured
             previous = ota_context.context_usage
             total_input_tokens = previous.input_tokens + provider_input_tokens
             total_output_tokens = previous.output_tokens + provider_output_tokens
@@ -566,9 +588,18 @@ class BaseThink(CognitiveWorker):
             if stream is not None:
                 stream.publish(event, **payload)
 
-        result = await self._llm.stream_turn(
-            messages, tools or None, publish=publish, extra_body=self.extra_body,
-        )
+        record = ota_context._current_record()
+        record.model_call_started = True
+        record.model_id = context.llm_provider.model_id
+        record.usage = None
+        started = time.monotonic()
+        try:
+            result = await self._llm.stream_turn(
+                messages, tools or None, publish=publish, extra_body=self.extra_body,
+            )
+        finally:
+            # Include provider retries and streaming, but not prompt assembly or tools.
+            record.model_duration_ms = max(0, int((time.monotonic() - started) * 1000))
         write_thinking_debug(
             messages=messages,
             tools=tools,

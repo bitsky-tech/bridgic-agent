@@ -12,7 +12,7 @@ import { fetchTracePage } from './trace-client'
 import type { TraceRecords, TraceRound } from './types'
 import { DebugDraftProvider } from './DebugDrafts'
 
-export type DebugPanelKind = 'tools' | 'rounds' | 'prompts'
+export type DebugPanelKind = 'tools' | 'rounds'
 interface Selection { sessionId: string; kind: DebugPanelKind; id: string; nonce: number }
 interface TraceState {
   sessionId: string | null
@@ -27,6 +27,7 @@ interface DebugContextValue extends TraceState {
   reveal: PipelineRevealRequest | null
   refresh: () => void
   loadMore: () => void
+  loadAll: () => void
   inspect: (kind: DebugPanelKind, id: string) => void
   locate: (round: TraceRound) => void
   revealFailed: () => void
@@ -151,6 +152,9 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
     reveal: reveal?.sessionId === sessionId ? reveal : null,
     notice: notice?.sessionId === sessionId ? notice.text : null,
     refresh, inspect, locate, revealFailed,
+    loadAll: () => {
+      if (sessionId && store.get(activeSessionIdAtom) === sessionId) setDepth({ sessionId, value: Infinity })
+    },
     loadMore: () => {
       if (sessionId && store.get(activeSessionIdAtom) === sessionId && !loading && state.hasMore) setDepth({ sessionId, value: pages + 1 })
     },

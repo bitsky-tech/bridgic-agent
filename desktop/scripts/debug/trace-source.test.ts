@@ -12,6 +12,9 @@ let dbPath: string
 let writer: Database
 const rawRecords = [{
   round_id: 'recorded-round', turn_duration_ms: 987,
+  model_id: 'captured-model', model_call_started: true, model_duration_ms: 125,
+  usage: { source: 'provider', prompt_tokens: 100, completion_tokens: 10, total_tokens: 110,
+    prompt_tokens_details: { cached_tokens: 50 }, cache_creation_input_tokens: 10 },
   llm_request: { messages: [{ role: 'system', content: 'captured test instruction' }], model: 'captured-model', temperature: 0.2 },
   future_field: { preserved: true },
 }]
