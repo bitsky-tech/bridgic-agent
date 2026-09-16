@@ -7,6 +7,7 @@ import type {
 import type { EmbeddedBrowserManager } from '../embedded-browser-manager'
 import type { ExcelHost } from '../excel-host'
 import { loggedHandle } from './logged-handle'
+import { registerOfficeCloseHandler } from './office-close'
 
 /** Register the renderer control plane for Session-scoped native Excel targets. */
 export function registerExcelHostHandlers(excelHost: ExcelHost, browser: EmbeddedBrowserManager, emitToHost: (channel: string, value: unknown) => void): void {
@@ -28,11 +29,11 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
     excelHost.closeSession(sessionId)
   })
 
-  loggedHandle(IPC.excelHost.requestClose, (event) => {
-    const webContentsId = event.sender.id
-    emitToHost(IPC.events.excelHostCloseRequested, excelHost.sessionForContents(webContentsId))
-    // Acknowledge the invoke before destroying its sender.
-    setImmediate(() => excelHost.closeCurrentSession(webContentsId))
+  registerOfficeCloseHandler({
+    requestChannel: IPC.excelHost.requestClose,
+    closedEvent: IPC.events.excelHostCloseRequested,
+    host: excelHost,
+    emitToHost,
   })
 
   loggedHandle(IPC.excelHost.setDirty, (event, dirty: boolean) => {

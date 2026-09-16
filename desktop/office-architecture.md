@@ -1,5 +1,11 @@
 # Office frontend architecture
 
+For the current interaction, visual and lifecycle rules, and the steps for adding
+another embedded editor, start with the
+[embedded editor integration guide](docs/embedded-editor-guide.md). The phases
+below record the architecture migration; later lifecycle decisions are reflected
+in the current descriptions.
+
 ## Scope and direction
 
 PowerPoint, Word, and Excel should share their frontend platform infrastructure and
@@ -111,12 +117,23 @@ and complete through sender-checked, one-use tickets. Configuration events do no
 recreate the document store. The default storage partition and same-origin Word
 page preserve the existing IndexedDB/localStorage workspace keys.
 
-Hiding exits the expanded view and preserves the target. Closing a document acts
-inside its workspace. Deleting a Session releases only its target. Closing the
-window, quitting, and installing an update wait for Word's native snapshot to
-reach durable workspace storage; failure or timeout leaves the application open.
+Hiding exits the expanded view and preserves the target. Non-final document close
+acts inside its workspace; final-tab close uses the same surface-close path as
+the editor header. Deleting a Session releases only that Session's targets.
+Word makes a bounded best-effort durable workspace checkpoint before panel/window
+closure, quitting or update installation; failure or timeout does not veto exit.
+Office dirty-close confirmations and unload vetoes are not part of this contract.
 This checkpoint does not overwrite the source DOCX. A renderer crash receives
 one automatic recovery attempt, then exposes an explicit retry if it fails again.
+
+The three native editors share the
+[close IPC handshake](apps/electron/src/main/handlers/office-close.ts): sender
+ownership, optional preparation, post-preparation validation, Session-scoped
+notification and deferred destruction by the original renderer identity.
+The [app-lifetime close bridge](apps/electron/src/renderer/hooks/useOfficeCloseBridge.ts)
+updates the owner's layout even after Session/page navigation. It preserves other
+Sessions and newer tool selections. An obsolete close cannot destroy a replacement
+target for the same Session.
 
 ## Phase 3: workspace and commands
 
@@ -215,13 +232,16 @@ primary is restored, and the alternative is retained in private checkpoint metad
 through future writes; it is not automatically opened as another document. The
 original fallback is cleared only after its data or retained alternative is durable
 in IndexedDB. A failed primary read never triggers a migration over unread data.
-Its existing window/quit/update flush still waits for
-domain operations, the native editor snapshot, and durable recovery storage.
+Its window/quit/update checkpoint attempts to drain domain operations and save
+the native editor snapshot to durable recovery storage within a bounded wait.
+Failure is logged without keeping the application open.
 
 Excel recovery success does not clear source-file dirty state. Its source-write
 adapter returns distinct written, canceled, conflict and failed outcomes. No save
 button or routine saved-status banner is added. Recovery errors provide retry;
-ordinary source-save and dirty-close behavior is preserved.
+ordinary source-save checks remain intact. Closing a workbook or panel does not
+prompt for unsaved changes, and releasing the Session discards its in-memory
+recovery state.
 
 PowerPoint keeps protocol v5's request/response shapes and error codes. Its UI and
 protocol writes use the same source channel. Returning to a bound file selects its

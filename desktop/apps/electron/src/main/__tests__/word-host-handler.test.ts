@@ -14,6 +14,10 @@ describe('Word host IPC boundary', () => {
     const calls: unknown[][] = []
     const events: unknown[][] = []
     const word = {
+      sessionForContents: (sender: number) => {
+        if (sender !== 17) throw new Error('Word Session does not own this renderer')
+        return 'session-a'
+      },
       requestClose: async (sender: number) => {
         if (sender !== 17) throw new Error('Word Session does not own this renderer')
         calls.push(['close', sender])
