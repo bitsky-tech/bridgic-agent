@@ -97,8 +97,8 @@ endpoint. Click "New Session", optionally pick a workspace, then chat.
 ## Debug conversation
 
 Run `bun run debug` from `desktop/` to open the same app with an execution view
-and three additional Session panels: **Tool calls**, **Agent rounds**, and
-**Execution overview**. The normal `bun run dev` command always opens the product
+and three additional Session panels: **Agent overview**, **Tool calls**, and
+**Agent rounds**. The normal `bun run dev` command always opens the product
 UI. Both modes use the same settings, sessions, daemon, browser and Office hosts;
 stop one development instance before switching modes.
 
@@ -109,7 +109,7 @@ chronological Turn/round/tool order, stage and tool-name/status filtering,
 recorded usage, and navigation back to older conversation messages. Tool arguments
 and recorded round requests have local draft editors.
 
-The Execution overview panel summarizes token usage, model rounds, mode/stage visits,
+The Agent overview panel summarizes token usage, model rounds, mode/stage visits,
 and tool outcomes. It defaults to the latest Turn, allows selecting historical
 Turns, and loads all trace pages before presenting complete Session totals.
 New rounds store measured input/output and cache usage, plus model-call duration

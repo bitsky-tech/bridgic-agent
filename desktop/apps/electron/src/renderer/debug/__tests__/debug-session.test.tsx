@@ -119,7 +119,7 @@ describe('execution overview scope and refresh', () => {
     const view = await mount('overview')
     const metric = () => view.host.querySelector('[data-metric="totalTokens"]')?.textContent
     expect(metric()).toBe('210')
-    expect(view.host.textContent).toContain('Execution overview')
+    expect(view.host.textContent).toContain('Agent overview')
     expect(view.host.textContent).not.toContain('Prompt analysis')
     await choose(view.host.querySelector('select')!, 'a-old')
     expect(metric()).toBe('110')
