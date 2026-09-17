@@ -288,13 +288,18 @@ function SessionWordEditorInstance({
         if (openFileRequest.sessionId !== sessionId) throw new Error('The Word document request belongs to another Session.')
         await flushWorkspace()
         if (!active) return
+        const beforeImport = store.getSnapshot()
+        const revisions = store.api.workspace.getSnapshot().documents
         const prepared = await prepareWordFile(openFileRequest, readDocument)
         if (!active) return
         const existing = store.getSnapshot().documents.find((item) => item.sourcePath === prepared.path)
-        const result = await (existing?.sourceMtimeMs === prepared.mtimeMs
+        const previous = beforeImport.documents.find((item) => item.id === existing?.id && item.sourcePath === prepared.path)
+        let result = await (existing && (!previous || existing.sourceMtimeMs === prepared.mtimeMs)
           ? store.dispatch({ type: 'document.activate', documentId: existing.id })
           : store.dispatch({
             type: 'document.open',
+            documentId: existing?.id,
+            expectedDocumentRevision: revisions.find((item) => item.id === existing?.id)?.revision,
             html: prepared.html,
             document: prepared.document,
             sourceProtected: prepared.sourceProtected,
@@ -302,6 +307,11 @@ function SessionWordEditorInstance({
             sourcePath: prepared.path,
             title: prepared.fileName,
           }))
+        // Parsing and queued native flushes must never replace a newer live document.
+        if (!result.ok && result.error.code === 'revision_conflict' && existing
+          && store.getSnapshot().documents.some((item) => item.id === existing.id && item.sourcePath === prepared.path)) {
+          result = await store.dispatch({ type: 'document.activate', documentId: existing.id })
+        }
         if (!result.ok) throw new Error(result.error.message)
         if (prepared.warnings.length > 0) {
           rlog.warn('[word] document imported with conversion warnings', {
@@ -342,7 +352,7 @@ function SessionWordEditorInstance({
         onClose()
       }).catch((error) => rlog.warn('[word] close failed', error))
     } : undefined}
-    onSaveRequested={() => { void flushWorkspace().catch((error) => rlog.warn('[word] workspace flush failed', error)) }}
+    onSaveRequested={flushWorkspace}
     onEditorFlushHandlerChange={setEditorFlush}
     onToggleExpanded={onToggleExpanded}
     persistenceStatus={persistenceStatus}
@@ -356,7 +366,7 @@ function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onS
   expanded: boolean
   onClose?: () => void
   onEditorFlushHandlerChange: (flush: WordWorkspaceFlush | null) => void
-  onSaveRequested: () => void
+  onSaveRequested: () => Promise<void>
   onToggleExpanded: () => void
   openingFileName: string | null
   persistenceStatus: WordPersistenceStatus

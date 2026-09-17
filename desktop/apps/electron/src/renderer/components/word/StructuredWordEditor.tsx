@@ -41,7 +41,7 @@ import { WordRibbon, type WordRibbonTab } from './WordRibbon'
 export interface StructuredWordEditorProps {
   expanded: boolean
   onClose?: () => void
-  onSaveRequested?: () => void
+  onSaveRequested?: () => void | Promise<void>
   onFlushHandlerChange?: (flush: (() => Promise<void>) | null) => void
   onToggleExpanded: () => void
   persistenceStatus?: WordPersistenceStatus
@@ -55,6 +55,7 @@ type WordZoomMode = 'fit' | 'manual'
 export function StructuredWordEditor({
   expanded,
   onClose,
+  onSaveRequested,
   onFlushHandlerChange,
   onToggleExpanded,
   persistenceStatus = 'saved',
@@ -181,8 +182,12 @@ export function StructuredWordEditor({
   const save = (saveAs: boolean) => {
     setSaving(true)
     setSaveError(null)
-    void store.dispatch({ type: saveAs ? 'document.saveAs' : 'document.save', documentId: activeDocument.id }).then((result) => {
-      if (!result.ok && result.error.code !== 'save_incomplete') setSaveError(result.error.message)
+    void store.dispatch({ type: saveAs ? 'document.saveAs' : 'document.save', documentId: activeDocument.id }).then(async (result) => {
+      if (!result.ok && result.error.code !== 'save_incomplete') {
+        setSaveError(result.error.message)
+        return
+      }
+      await onSaveRequested?.()
     }).catch((error) => setSaveError(String(error))).finally(() => setSaving(false))
   }
   useEffect(() => {

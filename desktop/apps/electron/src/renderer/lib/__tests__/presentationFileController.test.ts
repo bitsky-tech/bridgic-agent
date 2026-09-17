@@ -6,7 +6,7 @@ import { createPresentationFileController } from '../presentationFileController'
 import { isPresentationDirty } from '../presentationWorkspaceRuntime'
 import type { OfficeFilesAPI } from '../../../shared/office-files'
 
-function setup(automatic = false) {
+function setup(automatic = false, onSaveStatus?: (status: 'saving' | 'saved' | 'error', error?: string) => void) {
   const document = { ...createBlankPresentationDocument('Report'), source: { path: '/Report.pptx', mtimeMs: 42 }, savedVersion: 1 }
   let workspace: PresentationWorkspace = { activeDocumentId: document.id, documents: [document] }
   let recovery: string | null = null
@@ -17,7 +17,7 @@ function setup(automatic = false) {
     getRecovery: async () => recovery,
     setRecovery: async (_kind, _session, value) => { recovery = value },
   }
-  const controller = createPresentationFileController({ automatic, sessionId: 'session-a', files, read: () => workspace, write: (value) => { workspace = value }, encode: async () => new Uint8Array([1]), flushEditor: async () => undefined, locale: () => 'en' })
+  const controller = createPresentationFileController({ automatic, onSaveStatus, sessionId: 'session-a', files, read: () => workspace, write: (value) => { workspace = value; controller.schedule() }, encode: async () => new Uint8Array([1]), flushEditor: async () => undefined, locale: () => 'en' })
   return { controller, files, read: () => workspace, edit: () => { workspace = { ...workspace, documents: [{ ...workspace.documents[0]!, version: workspace.documents[0]!.version + 1 }] } } }
 }
 
@@ -80,6 +80,46 @@ describe('PowerPoint explicit saving', () => {
     expect(files.save).not.toHaveBeenCalled()
     controller.recovery.dispose()
   })
+})
+
+it('retries a failed PPT recovery write after the source is saved and clears the failure only on success', async () => {
+  const status = mock(() => undefined)
+  const { controller, files, read, edit } = setup(true, status)
+  let fail = true
+  let checkpoint: string | null = null
+  files.setRecovery = mock(async (_kind, _session, value) => {
+    if (fail) throw new Error('Recovery unavailable')
+    checkpoint = value
+  })
+  try {
+    await controller.restore()
+    edit()
+    controller.schedule()
+    await expect(controller.autoSave.flush()).rejects.toThrow('Recovery unavailable')
+    expect(isPresentationDirty(read().documents[0]!)).toBe(false)
+    expect(files.save).toHaveBeenCalledTimes(1)
+    await expect(controller.save(read().activeDocumentId)).rejects.toThrow('Recovery unavailable')
+    expect(status).toHaveBeenLastCalledWith('error', 'Recovery unavailable')
+    fail = false
+    expect(await controller.save(read().activeDocumentId)).toBe(true)
+    expect(JSON.parse(checkpoint!)).toEqual(read())
+    expect(files.save).toHaveBeenCalledTimes(1)
+    expect(status).toHaveBeenLastCalledWith('saved')
+    expect(controller.recovery.getSnapshot().status).toBe('saved')
+  } finally { controller.autoSave.dispose(); controller.recovery.dispose() }
+})
+
+it('keeps PPT edits made during a clean-file recovery retry pending', async () => {
+  const status = mock(() => undefined)
+  const { controller, files, read, edit } = setup(true, status)
+  try {
+    await controller.restore()
+    files.setRecovery = async () => { edit() }
+    expect(await controller.save(read().activeDocumentId)).toBe(false)
+    expect(isPresentationDirty(read().documents[0]!)).toBe(true)
+    expect(files.save).not.toHaveBeenCalled()
+    expect(status).toHaveBeenLastCalledWith('saving')
+  } finally { controller.autoSave.dispose(); controller.recovery.dispose() }
 })
 
 

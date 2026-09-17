@@ -153,3 +153,37 @@ it('automatically saves Word creation and edits, and preserves content when clos
   expect(isWordDocumentDirty(store.getSnapshot().documents[0]!)).toBe(false)
   store.dispose()
 })
+
+it('rejects a parsed Word replacement when native input changes during the final flush', async () => {
+  const store = createWordDomainStore(createEmptyWordWorkspace('reopen-native'), { defaultTitle: 'Report', autoSave: true, saveDocument: async () => saved })
+  await store.dispatch({ type: 'document.open', title: 'Report.docx', html: '<p>Original</p>', sourcePath: '/report.docx', sourceMtimeMs: 1 })
+  const document = store.getSnapshot().documents[0]!
+  const revision = store.api.workspace.getSnapshot().documents[0]!.revision
+  let typed = false
+  const detach = store.registerEditorCommandHandler(document.id, async () => true, async () => {
+    if (typed) return
+    typed = true
+    store.commitEditorSnapshot(document.id, { ...document.snapshot, body: { dataStream: 'Pending native input\r\n' } })
+  })
+  try {
+    expect(await store.dispatch({ type: 'document.open', title: 'Report.docx', html: '<p>Stale parsed text</p>', sourcePath: '/report.docx', sourceMtimeMs: 2, documentId: document.id, expectedDocumentRevision: revision })).toMatchObject({ ok: false, error: { code: 'revision_conflict' } })
+    expect(store.getSnapshot().documents[0]!.snapshot.body!.dataStream).toContain('Pending native input')
+    expect(isWordDocumentDirty(store.getSnapshot().documents[0]!)).toBe(true)
+    expect((await store.dispatch({ type: 'document.save' })).ok).toBe(true)
+    expect(isWordDocumentDirty(store.getSnapshot().documents[0]!)).toBe(false)
+  } finally { detach(); store.dispose() }
+})
+
+it('refreshes an unchanged Word file with a guarded import without coupling it to other tabs', async () => {
+  const store = createWordDomainStore(createEmptyWordWorkspace('reopen-clean'), { defaultTitle: 'Report' })
+  try {
+    await store.dispatch({ type: 'document.open', title: 'Report.docx', html: '<p>Original</p>', sourcePath: '/report.docx', sourceMtimeMs: 1 })
+    const document = store.getSnapshot().documents[0]!
+    const revision = store.api.workspace.getSnapshot().documents[0]!.revision
+    await store.dispatch({ type: 'document.create', title: 'Unrelated' })
+    await store.dispatch({ type: 'document.append', text: 'Another document edit' })
+    expect((await store.dispatch({ type: 'document.open', title: 'Report.docx', html: '<p>Refreshed file</p>', sourcePath: '/report.docx', sourceMtimeMs: 2, documentId: document.id, expectedDocumentRevision: revision })).ok).toBe(true)
+    expect(store.getSnapshot().documents).toHaveLength(2)
+    expect(store.getSnapshot().documents[0]!.snapshot.body!.dataStream).toContain('Refreshed file')
+  } finally { store.dispose() }
+})

@@ -29,7 +29,11 @@ export function createPresentationFileController(options: {
     if (!background) await options.flushEditor()
     const document = read().documents.find((item) => item.id === documentId)
     if (!document) throw new Error('The presentation is no longer open')
-    if (!saveAs && !isPresentationDirty(document)) return true
+    if (!saveAs && !isPresentationDirty(document)) {
+      // A successful source write can still leave a failed recovery checkpoint.
+      await recovery.persist(read())
+      return !isPresentationDirty(read().documents.find((item) => item.id === documentId)!)
+    }
     if (document.sourceProtected && !saveAs && !options.automatic) throw new Error(i18n.t('office.protectedSave'))
     const result = await files.save({ kind: 'presentation', managed: options.automatic, documentId, source: document.source, preserveSource: document.sourceProtected, saveAs, destination, suggestedName: `${document.title.replace(/\.pptx$/i, '') || 'Untitled'}.pptx`, bytes: await options.encode(document) })
     if (!result.ok) {
@@ -80,7 +84,17 @@ export function createPresentationFileController(options: {
       await options.flushEditor()
       await recovery.persist(read())
     },
-    save,
+    async save(documentId: string, saveAs = false, destination?: string) {
+      options.onSaveStatus?.('saving')
+      try {
+        const saved = await save(documentId, saveAs, destination)
+        options.onSaveStatus?.(saved ? 'saved' : 'saving')
+        return saved
+      } catch (error) {
+        options.onSaveStatus?.('error', error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    },
     async beforeClose(documentId: string): Promise<boolean> {
       await options.flushEditor()
       const document = read().documents.find((item) => item.id === documentId)

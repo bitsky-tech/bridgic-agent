@@ -165,7 +165,7 @@ export type WordRendererCommand =
   | WordEditorCommand
   | { type: 'workspace.get' }
   | { type: 'document.create'; title?: string; html?: string; snapshot?: unknown }
-  | { type: 'document.open'; title: string; html: string; sourcePath: string; sourceMtimeMs: number; document?: import('./wordDocxImport').WordFileDocument; sourceProtected?: boolean }
+  | { type: 'document.open'; title: string; html: string; sourcePath: string; sourceMtimeMs: number; document?: import('./wordDocxImport').WordFileDocument; sourceProtected?: boolean; documentId?: string; expectedDocumentRevision?: number }
   | { type: 'document.save'; documentId?: string }
   | { type: 'document.saveAs'; documentId?: string; destination?: string }
   | { type: 'document.activate'; documentId: string }
@@ -395,7 +395,8 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
     const isEditorCommand = input.type.startsWith('editor.')
     const editorCommand = isEditorCommand ? validateWordEditorCommand(command) : null
     if (isEditorCommand && !editorCommand) return failure('invalid_editor_command', 'Unsupported or malformed Word editor command.')
-    const targetsDocument = isEditorCommand || (input.type.startsWith('document.') && input.type !== 'document.create' && input.type !== 'document.open')
+    const targetsDocument = isEditorCommand || (input.type.startsWith('document.') && input.type !== 'document.create'
+      && (input.type !== 'document.open' || typeof input.documentId === 'string'))
     // Resolve omitted targets at submission, before another queued command can switch tabs.
     if ((input.type === 'document.activate' || input.type === 'document.close') && input.documentId === undefined) {
       return failure('invalid_document_id', 'This Word command requires an explicit document id.')
@@ -498,6 +499,7 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
       if (options.autoSave && ['document.activate', 'document.create', 'document.open'].includes(String(command.type)) && state.activeDocumentId) {
         if (!await saveDocument(state.activeDocumentId, false)) return failure('save_incomplete', 'Newer edits remain unsaved; retry before switching documents.')
       }
+      if (command.type === 'document.open') context.assertCurrent()
       const applied = applyDomainCommand(command)
       if (applied.ok && options.autoSave && command.type !== 'workspace.get' && command.type !== 'document.close') {
         const target = documentId ?? state.activeDocumentId
@@ -612,6 +614,7 @@ export function reduceWordCommand(state: WordWorkspaceState, command: unknown, d
     const sourceMtimeMs = command.sourceMtimeMs
     const title = normalizedTitle(command.title, defaultTitle)
     const existing = state.documents.find((item) => item.sourcePath === sourcePath)
+    if (command.documentId !== undefined && existing?.id !== command.documentId) return failure('source_conflict', 'The requested Word document no longer owns this source file.')
     const imported = isRecord(command.document) ? command.document : null
     const page = normalizePageSettings(imported?.page)
     const headerFooter = normalizeHeaderFooter(imported?.headerFooter)
