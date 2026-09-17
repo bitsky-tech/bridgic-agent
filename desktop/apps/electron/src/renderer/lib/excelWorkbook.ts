@@ -9,6 +9,7 @@ import {
   type Worksheet,
 } from 'exceljs'
 import JSZip from 'jszip'
+import { prepareOfficeImage } from './office/officeImage'
 import { SaxesParser, type SaxesTagNS } from 'saxes'
 import {
   BooleanNumber,
@@ -1025,16 +1026,6 @@ function conditionalRuleFromResource(rule: ResourceRule, priority: number): Cond
   return null
 }
 
-function imageSource(value: string): { base64: string; extension: 'jpeg' | 'png' | 'gif' } | null {
-  const match = /^data:image\/(png|jpe?g|gif);base64,(.+)$/i.exec(value)
-  if (!match) return null
-  const extension = match[1]!.toLocaleLowerCase()
-  return {
-    base64: match[2]!,
-    extension: extension === 'jpg' ? 'jpeg' : extension as 'jpeg' | 'png' | 'gif',
-  }
-}
-
 function hyperlinkFromCell(data: ICellData): { hyperlink: string; text: string } | null {
   const body = data.p?.body
   const range = body?.customRanges?.find((candidate) => candidate.rangeType === CustomRangeType.HYPERLINK)
@@ -1182,12 +1173,10 @@ export async function exportXlsx(
           conversionFailures.add('non-image drawing')
           continue
         }
-        const image = imageSource(String(drawing.source ?? ''))
         const transform = (drawing.axisAlignSheetTransform ?? drawing.sheetTransform) as ResourceRule | undefined
-        if (!image || !transform?.from || !transform?.to) {
-          conversionFailures.add('image with an unsupported source or anchor')
-          continue
-        }
+        // Imported unsupported objects may be simplified, but live images must never disappear.
+        if (!transform?.from || !transform?.to) throw new UnsupportedWorkbookFeatureError(['image with an unsupported anchor'])
+        const image = await prepareOfficeImage(String(drawing.source ?? ''), 'excel')
         const imageId = workbook.addImage(image)
         const from = transform.from as ResourceRule
         if (typeof drawing.drawingId === 'string' && drawing.drawingId.length > 0) {

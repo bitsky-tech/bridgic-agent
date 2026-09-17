@@ -13,6 +13,7 @@ class FakeContents {
   zoom = 0
   url = 'http://localhost:5273/word.html?sessionId=a'
   sent: Array<[string, unknown]> = []
+  executedScripts: string[] = []
   listeners = new Map<string, Listener[]>()
   windowOpen: ((details: { url: string }) => { action: string }) | null = null
   debugger = {
@@ -30,6 +31,7 @@ class FakeContents {
   isLoading(): boolean { return false }
   getURL(): string { return this.url }
   send(channel: string, value: unknown): void { this.sent.push([channel, value]) }
+  async executeJavaScript(script: string): Promise<void> { this.executedScripts.push(script) }
   on(event: string, listener: Listener): void { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]) }
   once(event: string, listener: Listener): void { this.on(event, listener) }
   emit(event: string, ...args: unknown[]): void { for (const listener of this.listeners.get(event) ?? []) listener(...args) }
@@ -82,6 +84,38 @@ function flushTickets(view: FakeView): string[] {
 }
 
 describe('Session-owned Word host', () => {
+  it('waits for recovery before creating a document through the exact Session domain', async () => {
+    const { host, views } = fixture()
+    const creating = host.createDocument('a')
+    await settle()
+    expect(views[0]!.webContents.executedScripts).toEqual([])
+    expect(flushTickets(views[0]!)).toEqual([])
+    host.reportState(1, { documentCount: 2, persistenceStatus: 'saved' })
+    host.completeFlush(1, flushTickets(views[0]!)[0]!, true)
+    await creating
+    expect(views[0]!.webContents.executedScripts).toHaveLength(1)
+    expect(views[0]!.webContents.executedScripts[0]).toContain('domain.sessionId !== "a"')
+    expect(views[0]!.webContents.executedScripts[0]).toContain("domain.dispatch({ type: 'document.create' })")
+    expect(views).toHaveLength(1)
+  })
+
+  it('does not create over failed recovery or into a replacement Session', async () => {
+    const { host, views } = fixture()
+    const failed = host.createDocument('a')
+    await settle()
+    host.reportState(1, { documentCount: 0, persistenceStatus: 'error' })
+    host.completeFlush(1, flushTickets(views[0]!)[0]!, false)
+    await expect(failed).rejects.toThrow('not ready')
+    expect(views[0]!.webContents.executedScripts).toEqual([])
+    const pending = host.createDocument('a')
+    await settle()
+    host.completeFlush(1, flushTickets(views[0]!).at(-1)!, true)
+    host.closeSession('a')
+    await host.ensureSession('a')
+    await expect(pending).rejects.toThrow('closed before document creation')
+    expect(views[1]!.webContents.executedScripts).toEqual([])
+  })
+
   it('allows large imports more time than renderer startup and still expires stalled requests', async () => {
     const timers: Array<{ callback: () => void; delay: number; cleared: boolean }> = []
     const setTimer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {

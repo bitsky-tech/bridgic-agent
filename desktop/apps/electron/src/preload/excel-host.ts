@@ -1,3 +1,4 @@
+import { officeFiles } from './office-files'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import type {
@@ -45,3 +46,5 @@ const api: ExcelHostPreloadAPI = {
 }
 
 contextBridge.exposeInMainWorld('excelHostApi', api)
+
+contextBridge.exposeInMainWorld('officeFiles', officeFiles)

@@ -5,7 +5,7 @@ export interface OfficePersistencePolicy {
   readonly appKind: OfficeAppKind
   readonly sessionId: string
   readonly kind: 'recovery' | 'source' | 'export'
-  readonly storage: 'browser-storage' | 'session-memory' | 'source-file' | 'download'
+  readonly storage: 'browser-storage' | 'session-memory' | 'source-file' | 'download' | 'recovery-file'
   readonly automatic: boolean
 }
 

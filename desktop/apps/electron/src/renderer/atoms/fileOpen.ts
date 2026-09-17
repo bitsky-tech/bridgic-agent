@@ -26,6 +26,7 @@ import { viewedSessionIdAtom } from './navigation'
 import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workbench'
 import { requestWordFileOpenAtom } from './word'
 import { queueExcelWorkbookOpenAtom } from './excel'
+import { pendingPowerPointFileOpensAtom } from './powerpoint'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -94,6 +95,10 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
 const requestPowerPointFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
   const sessionId = get(viewedSessionIdAtom)
   if (!sessionId) return
+  const pending = get(pendingPowerPointFileOpensAtom)
+  if (pending.some((request) => request.sessionId === sessionId && request.path === file.path)) return
+  const request = { sessionId, path: file.path }
+  set(pendingPowerPointFileOpensAtom, [...pending, request])
   try {
     await window.api.powerpoint.openFile(sessionId, file.path)
     const stillViewed = get(viewedSessionIdAtom) === sessionId
@@ -105,6 +110,8 @@ const requestPowerPointFileOpenAtom = atom(null, async (get, set, file: FileOpen
   } catch (error) {
     rlog.warn('[fileOpen] in-app PowerPoint import failed', error)
     set(showToastAtom, i18n.t('session.presentation.importFailed'))
+  } finally {
+    set(pendingPowerPointFileOpensAtom, get(pendingPowerPointFileOpensAtom).filter((item) => item !== request))
   }
 })
 

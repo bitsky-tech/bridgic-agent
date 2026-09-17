@@ -232,3 +232,37 @@ async def test_mount_pagination(service_client: httpx.AsyncClient, test_sandbox:
     page_response = await service_client.get("/mounts", params={"limit": 1, "offset": 1})
     assert page_response.status_code == 200
     assert page_response.json() == full[1:2]
+
+
+async def test_office_imports_share_workspace_identity(service_client: httpx.AsyncClient, test_sandbox: IsolatedPaths) -> None:
+    """Office mounts and uploads use managed files without replacing original bytes."""
+    created = await create_session(service_client)
+    endpoint = f"/sessions/{created['id']}/mounts"
+    workspace = Path(created["workspace_root"])
+    for extension in ("docx", "xlsx", "pptx"):
+        external = test_sandbox.root / f"report.{extension}"
+        external.write_bytes(b"original")
+        first = await service_client.post(endpoint, json={"path": str(external)})
+        assert first.status_code == 201
+        mounted = first.json()
+        managed = Path(mounted["path"])
+        assert managed == workspace / ".work" / external.name
+        managed.write_bytes(b"edited")
+        repeated = await service_client.post(endpoint, json={"path": str(external)})
+        assert repeated.json()["id"] == mounted["id"]
+        assert repeated.json()["path"] == str(managed)
+        registered = await service_client.post(endpoint, json={"path": str(managed)})
+        assert registered.json()["id"] == mounted["id"]
+        assert managed.read_bytes() == b"edited"
+        assert external.read_bytes() == b"original"
+        originals = list((workspace / ".internal" / "office" / "originals").glob(f"*/{external.name}"))
+        assert len(originals) == 1
+        assert originals[0].read_bytes() == b"original"
+        uploaded = await service_client.post(endpoint + "/upload", files={"file": (external.name, b"uploaded", "application/octet-stream")})
+        assert uploaded.status_code == 201
+        uploaded_path = Path(uploaded.json()["path"])
+        assert uploaded_path == workspace / ".work" / f"report (2).{extension}"
+        assert uploaded_path.read_bytes() == b"uploaded"
+        assert managed.read_bytes() == b"edited"
+    mounts = (await service_client.get(endpoint)).json()
+    assert len(mounts) == 7

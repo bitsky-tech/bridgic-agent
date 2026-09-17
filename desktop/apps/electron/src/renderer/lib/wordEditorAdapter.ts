@@ -85,7 +85,7 @@ export async function replaceUniverSnapshotWithRetry(executor: UniverCommandExec
     try {
       if (await executor.executeCommand(ReplaceSnapshotCommand.id, {
         unitId: documentId,
-        snapshot,
+        snapshot: structuredClone(snapshot),
         // Univer skips metadata-only snapshot changes when textRanges is truthy, including an empty array.
         textRanges: undefined,
         options: { noHistory: true },
@@ -117,7 +117,8 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
       if (committed) lastDomainSignature = snapshotSignature(committed.snapshot)
     },
   })
-  const engine = (options.mountNative ?? mountWordUniverEngine)(options)
+  // Univer mutates drawing maps in place; native edits must pass through commit().
+  const engine = (options.mountNative ?? mountWordUniverEngine)({ ...options, snapshot: structuredClone(snapshot) })
   const { document: nativeDocument, univerAPI } = engine
   const lease = binding.capture()
   lastSnapshotSignature = snapshotSignature(nativeDocument.getSnapshot())

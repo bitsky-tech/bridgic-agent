@@ -84,6 +84,24 @@ export class WordHost {
     return this.infoFor(record)
   }
 
+  /** Start Word only for an explicit creation request and preserve recovered documents. */
+  async createDocument(sessionId: string): Promise<void> {
+    const id = this.normalizeSessionId(sessionId)
+    await this.withTimeout(this.ensureSession(id), WORD_OPEN_TIMEOUT_MS, 'Word renderer startup timed out')
+    const record = this.sessions.get(id)
+    // The checkpoint also waits for domain restoration before dispatching creation.
+    if (!record || !await this.flushRecord(record)) throw new Error('The Word workspace is not ready.')
+    if (!this.sessions.owns(record) || record.view.webContents.isDestroyed() || record.crashed) {
+      throw new Error('The Word Session was closed before document creation.')
+    }
+    await record.view.webContents.executeJavaScript(`(async () => {
+      const domain = window.__bridgicWord;
+      if (!domain || domain.sessionId !== ${JSON.stringify(id)}) throw new Error('The Word Session is unavailable.');
+      const result = await domain.dispatch({ type: 'document.create' });
+      if (!result.ok) throw new Error(result.error.message);
+    })()`)
+  }
+
   closeSession(sessionId: string): void {
     const id = this.normalizeSessionId(sessionId)
     const record = this.sessions.get(id)

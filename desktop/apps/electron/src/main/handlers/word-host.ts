@@ -9,6 +9,7 @@ import { redactLocalPathLogArgs } from './path-log'
 export function registerWordHostHandlers(word: WordHost, emitToHost: (channel: string, value?: unknown) => void): void {
   loggedHandle(IPC.wordHost.snapshot, () => word.snapshot())
   loggedHandle(IPC.wordHost.ensureSession, (_event, sessionId: string) => word.ensureSession(sessionId))
+  loggedHandle(IPC.wordHost.createDocument, (_event, sessionId: string) => word.createDocument(sessionId))
   loggedHandle(IPC.wordHost.closeSession, (_event, sessionId: string) => word.closeSession(sessionId))
   loggedHandle(IPC.wordHost.activateSession, (_event, sessionId: string | null) => word.activateSession(sessionId))
   loggedHandle(IPC.wordHost.setBounds, (event, bounds: EmbeddedBrowserBounds) => {

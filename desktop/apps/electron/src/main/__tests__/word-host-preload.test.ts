@@ -8,7 +8,7 @@ it('buffers early Word runtime events and exposes only its narrow Session API', 
     const invocations = [];
     let exposed;
     mock.module('electron', () => ({
-      contextBridge: { exposeInMainWorld(name, api) { exposed = { name, api }; } },
+      contextBridge: { exposeInMainWorld(name, api) { if (name === 'wordHostApi') exposed = { name, api }; } },
       ipcRenderer: {
         on(channel, listener) { listeners.set(channel, listener); },
         invoke(...args) { invocations.push(args); return Promise.resolve(); },

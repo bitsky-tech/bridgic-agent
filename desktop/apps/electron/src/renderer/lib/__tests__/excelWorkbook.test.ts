@@ -14,6 +14,23 @@ import {
 } from '../excelWorkbook'
 
 describe('Excel workbook conversion', () => {
+  it('keeps formulas, formatting and frozen panes through repeated save and reopen cycles', async () => {
+    let workbook = createEmptyWorkbook(LocaleType.EN_US, 'Repeated edits')
+    const sheet = workbook.sheets[workbook.sheetOrder[0]!]!
+    sheet.cellData = { 0: { 0: { v: 10, s: { bl: BooleanNumber.TRUE, bg: { rgb: '#D1FAE5' } } }, 1: { f: '=A1*2', v: 20 } } }
+    sheet.freeze = { xSplit: 1, ySplit: 1, startColumn: 1, startRow: 1 }
+    for (let cycle = 0; cycle < 2; cycle++) {
+      workbook = await importXlsx(await exportXlsx(workbook), LocaleType.EN_US)
+      const reopened = workbook.sheets[workbook.sheetOrder[0]!]!
+      expect(reopened.cellData![0]![1]!.f).toBe('=A1*2')
+      const style = reopened.cellData![0]![0]!.s!
+      expect(typeof style === 'string' ? workbook.styles[style] : style).toMatchObject({ bl: BooleanNumber.TRUE, bg: { rgb: '#D1FAE5' } })
+      expect(reopened.freeze).toMatchObject({ xSplit: 1, ySplit: 1 })
+      expect(unsupportedWorkbookFeatures(workbook)).toEqual([])
+      reopened.cellData![1] = { 0: { v: `Edit ${cycle}` } }
+    }
+  })
+
   it('round-trips values, formulas, formats, dimensions, merges, and sheets through .xlsx', async () => {
     const source = createEmptyWorkbook(LocaleType.EN_US, 'Quarterly plan')
     const firstId = source.sheetOrder[0]!

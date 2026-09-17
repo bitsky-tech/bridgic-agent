@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import type { ExcelHostConfig } from '@shared/types'
 import {
   activeExcelHostSessionAtom,
+  claimExcelWorkbookOpenRequestAtom,
   consumeExcelWorkbookOpenRequestAtom,
   excelExpandedAtom,
   pendingExcelWorkbookOpenRequestsAtom,
@@ -14,22 +15,19 @@ import {
   setNativeSurfaceRectAtom,
 } from '@/atoms/browser'
 import { viewedSessionIdAtom } from '@/atoms/navigation'
-import { setRightPanelCollapsedAtom } from '@/atoms/layout'
 import { themeAtom } from '@/atoms/theme'
 import { showToastAtom } from '@/atoms/toast'
 import { Icons } from '@/components/amphi/Icons'
 import { rlog } from '@/lib/logger'
 import { OfficeAppHeader, OfficePanelControls } from './OfficeWorkbenchChrome'
+import { useOfficeSessionRestore } from '@/hooks/useOfficeSessionRestore'
+import { OfficeSessionLoading } from './OfficeSessionLoading'
 
 const excelSurfacePolicy: NativeOfficeSurfacePolicy = {
   publishBoundsBeforeApply: true,
   deactivateOnDetach: true,
   onError: (error) => rlog.warn('[excel-host] native surface sync failed', error),
 }
-
-type ExcelLaunchState =
-  | { status: 'idle' | 'creating' | 'ready' }
-  | { status: 'error'; message: string }
 
 /** Renderer chrome around one Session-owned native Excel WebContentsView. */
 export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
@@ -42,41 +40,39 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   const surfaceBlocked = useAtomValue(browserSurfaceBlockedAtom)
   const resolvedTheme = useAtomValue(themeAtom).resolved
   const setExpanded = useSetAtom(excelExpandedAtom)
-  const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
   const consumeWorkbookOpenRequest = useSetAtom(consumeExcelWorkbookOpenRequestAtom)
+  const claimWorkbookOpenRequest = useSetAtom(claimExcelWorkbookOpenRequestAtom)
   const showToast = useSetAtom(showToastAtom)
   const publishSurfaceRect = useSetAtom(setNativeSurfaceRectAtom)
   const viewportRef = useRef<HTMLDivElement>(null)
-  const openingWorkbookRequestRef = useRef<number | null>(null)
   const [hostError, setHostError] = useState<{ sessionId: string; message: string } | null>(null)
   const config = useMemo<ExcelHostConfig | null>(() => sessionId ? ({
     sessionId,
     locale: i18n.resolvedLanguage?.toLocaleLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
     theme: resolvedTheme === 'dark' ? 'dark' : 'light',
   }) : null, [i18n.resolvedLanguage, resolvedTheme, sessionId])
+  const restoration = useOfficeSessionRestore('excel', sessionId, active, hasHostSession, () => window.api.excelHost.ensureSession(sessionId!, config!, false))
 
   const pendingWorkbookOpenRequest = pendingWorkbookOpenRequests.find(
     (request) => request.sessionId === sessionId,
   ) ?? null
   useEffect(() => {
     if (!active || !sessionId || !config || !pendingWorkbookOpenRequest) return
-    if (openingWorkbookRequestRef.current === pendingWorkbookOpenRequest.requestId) return
-    openingWorkbookRequestRef.current = pendingWorkbookOpenRequest.requestId
+    const request = claimWorkbookOpenRequest(pendingWorkbookOpenRequest.requestId)
+    if (!request) return
     const replaceInitialBlank = hostSession === null
     void window.api.excelHost.openWorkbook(sessionId, config, {
-      path: pendingWorkbookOpenRequest.path,
+      path: request.path,
       replaceInitialBlank,
     }).catch((cause) => {
       rlog.warn('[excel-host] opening routed workbook failed', cause)
       showToast(t('error.cannotOpenFile'))
     }).finally(() => {
-      consumeWorkbookOpenRequest(pendingWorkbookOpenRequest.requestId)
-      if (openingWorkbookRequestRef.current === pendingWorkbookOpenRequest.requestId) {
-        openingWorkbookRequestRef.current = null
-      }
+      consumeWorkbookOpenRequest(request.requestId)
     })
   }, [
     active,
+    claimWorkbookOpenRequest,
     config,
     consumeWorkbookOpenRequest,
     hostSession,
@@ -119,7 +115,7 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   })
 
   if (!sessionId || !config) return null
-  if (!hostSession) return <ExcelLaunchEmptyState config={config} sessionId={sessionId} />
+  if (!hostSession) return <OfficeSessionLoading failed={restoration.failed} onRetry={restoration.retry} />
 
   const error = hostError?.sessionId === sessionId ? hostError.message : null
   let status = t('excel.hostStarting')
@@ -141,8 +137,6 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
           expanded={expanded}
           expandLabel={expanded ? t('excel.exitExpanded') : t('excel.expand')}
           onClose={() => {
-            setExpanded(false)
-            setRightCollapsed(true)
             void window.api.excelHost.closeSession(sessionId).catch((error) => {
               rlog.warn('[excel-host] panel close failed', error)
             })
@@ -162,69 +156,6 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
             {error ? <p className="mt-1 max-w-80 break-words text-[11px] text-status-error">{error}</p> : null}
           </div>
         ) : null}
-      </div>
-    </section>
-  )
-}
-
-function ExcelLaunchEmptyState({ config, sessionId }: {
-  config: ExcelHostConfig
-  sessionId: string
-}) {
-  const { t } = useTranslation()
-  const creatingRef = useRef(false)
-  const [state, setState] = useState<ExcelLaunchState>({ status: 'idle' })
-  const opening = state.status === 'creating'
-  const ready = state.status === 'ready'
-
-  const createWorkbook = () => {
-    if (creatingRef.current) return
-    creatingRef.current = true
-    setState({ status: 'creating' })
-    void window.api.excelHost.ensureSession(sessionId, config).then(
-      () => setState({ status: 'ready' }),
-      (cause) => {
-        rlog.warn('[excel-host] open Session failed', cause)
-        setState({
-          status: 'error',
-          message: cause instanceof Error ? cause.message : String(cause),
-        })
-      },
-    ).finally(() => {
-      creatingRef.current = false
-    })
-  }
-
-  return (
-    <section
-      className="flex h-full min-h-0 flex-col bg-bg-surface"
-      data-testid="excel-launch-empty-state"
-    >
-      <OfficeAppHeader icon={Icons.spreadsheet(16)} iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" title="Excel" />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
-        <div className="max-w-sm">
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-app text-emerald-600">
-            {Icons.spreadsheet(20)}
-          </div>
-          <div className="mt-4 text-sm font-medium text-text-primary">{t('excel.emptyTitle')}</div>
-          <div className="mt-1.5 text-xs leading-5 text-text-tertiary">
-            {t('excel.emptyDescription')}
-          </div>
-          <button
-            className="mt-4 inline-flex h-8 min-w-24 items-center justify-center rounded-md bg-emerald-600 px-3 text-xs font-medium text-white hover:opacity-90 disabled:cursor-default disabled:opacity-60"
-            data-testid="excel-create-workbook"
-            disabled={opening || ready}
-            onClick={createWorkbook}
-            type="button"
-          >
-            {opening ? t('excel.hostStarting') : t('excel.newWorkbook')}
-          </button>
-          {state.status === 'error' ? (
-            <div className="mt-2 text-xs text-status-error" role="alert">
-              {t('excel.hostFailed')}: {state.message}
-            </div>
-          ) : null}
-        </div>
       </div>
     </section>
   )

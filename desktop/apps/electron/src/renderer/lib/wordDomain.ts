@@ -1,4 +1,7 @@
+import type { OfficeCloseDecision, OfficeFileSaveResult } from '../../shared/office-files'
 import type { IDocumentData } from '@univerjs/core'
+import { prepareOfficeImage } from './office/officeImage'
+import { prepareWordHtmlImages, prepareWordSnapshotImages } from './wordImages'
 
 import { createOfficeWorkspaceRuntime, OfficeOperationError, type OfficeWorkspaceReader, type OfficeOperationResult } from './office/officeWorkspaceRuntime'
 
@@ -72,8 +75,11 @@ export const DEFAULT_WORD_HEADER_FOOTER: WordHeaderFooterSettings = {
 export interface WordDocumentState {
   id: string
   title: string
+  contentVersion?: number
+  savedContentVersion?: number
   sourcePath?: string
   sourceMtimeMs?: number
+  sourceProtected?: boolean
   snapshot: IDocumentData
   page: WordPageSettings
   headerFooter: WordHeaderFooterSettings
@@ -159,7 +165,9 @@ export type WordRendererCommand =
   | WordEditorCommand
   | { type: 'workspace.get' }
   | { type: 'document.create'; title?: string; html?: string; snapshot?: unknown }
-  | { type: 'document.open'; title: string; html: string; sourcePath: string; sourceMtimeMs: number }
+  | { type: 'document.open'; title: string; html: string; sourcePath: string; sourceMtimeMs: number; document?: import('./wordDocxImport').WordFileDocument; sourceProtected?: boolean }
+  | { type: 'document.save'; documentId?: string }
+  | { type: 'document.saveAs'; documentId?: string; destination?: string }
   | { type: 'document.activate'; documentId: string }
   | { type: 'document.update'; documentId?: string; title?: string; html?: string; snapshot?: unknown }
   | { type: 'document.page.update'; documentId?: string; page: Partial<WordPageSettings> }
@@ -191,6 +199,7 @@ export interface WordEditorOperationContext {
 export interface WordDomainStore {
   readonly api: BridgicWordRendererApi
   commitEditorSnapshot(documentId: string, snapshot: IDocumentData): boolean
+  closeAllDocuments(): Promise<WordRendererResult>
   closeDocumentTab(documentId: string): Promise<OfficeOperationResult<{ closeSurface: boolean }>>
   dispatch(command: unknown): Promise<WordRendererResult>
   getSnapshot(): WordWorkspaceState
@@ -201,8 +210,11 @@ export interface WordDomainStore {
 }
 
 interface WordDomainOptions {
+  autoSave?: boolean
   defaultTitle: string
   onChange?: (state: WordWorkspaceState) => void
+  saveDocument?: (document: WordDocumentState, saveAs: boolean, destination?: string) => Promise<OfficeFileSaveResult>
+  confirmClose?: (title: string) => Promise<OfficeCloseDecision>
 }
 
 const ALLOWED_TAGS = new Set([
@@ -257,6 +269,9 @@ export function restoreWordWorkspace(value: unknown, sessionId: string, defaultT
       title,
       ...(typeof item.sourcePath === 'string' && item.sourcePath.trim() ? { sourcePath: item.sourcePath } : {}),
       ...(typeof item.sourceMtimeMs === 'number' && Number.isFinite(item.sourceMtimeMs) ? { sourceMtimeMs: item.sourceMtimeMs } : {}),
+      contentVersion: typeof item.contentVersion === 'number' ? item.contentVersion : 0,
+      savedContentVersion: typeof item.savedContentVersion === 'number' ? item.savedContentVersion : undefined,
+      sourceProtected: Boolean(item.sourcePath) && item.sourceProtected !== false,
       snapshot,
       page,
       headerFooter,
@@ -274,7 +289,7 @@ export function restoreWordWorkspace(value: unknown, sessionId: string, defaultT
 }
 
 export const WORD_WORKSPACE_CAPABILITIES = Object.freeze([
-  'workspace.get',
+  'workspace.get', 'document.save', 'document.saveAs',
   'document.create', 'document.open', 'document.activate', 'document.update', 'document.close',
   'document.page.update', 'document.headerFooter.update', 'document.append',
   'document.footnote.add', 'document.footnote.update', 'document.footnote.remove',
@@ -302,8 +317,7 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
         id: document.id,
         title: document.title,
         revision: documentRevisions.get(document.id) ?? 0,
-        // Durability belongs to the existing workspace persister, not individual tabs.
-        dirty: null,
+        dirty: isWordDocumentDirty(document),
       })),
     }),
   })
@@ -331,6 +345,38 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
     return { ok: true, state }
   }
 
+  const saveDocument = async (documentId: string, saveAs: boolean, destination?: string): Promise<boolean> => {
+    const document = state.documents.find((item) => item.id === documentId)
+    if (!document || !options.saveDocument) throw new OfficeOperationError('save_unavailable', 'Word file saving is unavailable')
+    if (!saveAs && !isWordDocumentDirty(document)) return true
+    const saved = await options.saveDocument(document, saveAs, destination)
+    if (!saved.ok) {
+      if (saved.reason === 'conflict') throw new OfficeOperationError('source_conflict', 'The file changed outside the editor. Your edits have been retained; retry after resolving the file change.')
+      if (saved.reason === 'source-protected') throw new OfficeOperationError('source_protected', 'Choose a different file name to preserve the original document.')
+      return false
+    }
+    // Native typing can continue during encoding. Acknowledge only the exported version.
+    if (editorBinding?.flush) await editorBinding.flush()
+    publish({ ...state, documents: state.documents.map((current) => {
+      if (current.id === documentId) return { ...current, title: saved.fileName, sourcePath: saved.source.path, sourceMtimeMs: saved.source.mtimeMs ?? undefined, sourceProtected: false, savedContentVersion: document.contentVersion ?? 0 }
+      if (current.sourcePath !== saved.source.path) return current
+      return { ...current, sourcePath: undefined, sourceMtimeMs: undefined, savedContentVersion: undefined }
+    }) })
+    return !isWordDocumentDirty(state.documents.find((item) => item.id === documentId)!)
+  }
+  const prepareClose = async (documentId: string): Promise<boolean> => {
+    if (editorBinding?.flush) await editorBinding.flush()
+    const document = state.documents.find((item) => item.id === documentId)
+    if (!document || !isWordDocumentDirty(document)) return true
+    if (options.autoSave) return saveDocument(documentId, false)
+    if (!options.confirmClose) return true
+    const decision = await options.confirmClose(document.title)
+    if (decision === 'cancel') return false
+    if (decision === 'save') return saveDocument(documentId, Boolean(document.sourceProtected))
+    if (editorBinding?.flush) await editorBinding.flush()
+    return state.documents.find((item) => item.id === documentId)?.contentVersion === document.contentVersion
+  }
+
   const dispatch = async (input: unknown): Promise<WordRendererResult> => {
     if (!isRecord(input) || typeof input.type !== 'string') return failure('invalid_command', 'Word commands must be objects with a string type.')
     if (!WORD_WORKSPACE_CAPABILITIES.includes(input.type as typeof WORD_WORKSPACE_CAPABILITIES[number])) {
@@ -338,6 +384,7 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
     }
     if (input.sessionId !== undefined && typeof input.sessionId !== 'string') return failure('invalid_session_id', 'Session id must be a string.')
     if (input.documentId !== undefined && (typeof input.documentId !== 'string' || !input.documentId)) return failure('invalid_document_id', 'Document id must be a non-empty string.')
+    if (input.destination !== undefined && (input.type !== 'document.saveAs' || typeof input.destination !== 'string' || !input.destination)) return failure('invalid_destination', 'Only Save as accepts a destination path.')
     for (const key of ['expectedRevision', 'expectedDocumentRevision'] as const) {
       if (input[key] !== undefined && (typeof input[key] !== 'number' || !Number.isSafeInteger(input[key]) || input[key] < 0)) {
         return failure('invalid_revision', 'Expected revisions must be non-negative integers.')
@@ -366,6 +413,38 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
       expectedDocumentRevision: input.expectedDocumentRevision as number | undefined,
     }
     const result = await runtime.execute(operation, async (context) => {
+      // Resolve image IO before changing the model. A failed download leaves the document editable.
+      if (editorCommand?.type === 'editor.insert' && editorCommand.kind === 'image') {
+        editorCommand.src = (await prepareOfficeImage(editorCommand.src, 'word')).dataUrl
+        context.assertCurrent()
+      }
+      if (editorCommand?.type === 'editor.insert' && editorCommand.kind === 'html') {
+        editorCommand.html = await prepareWordHtmlImages(editorCommand.html)
+        context.assertCurrent()
+      }
+      if (!editorCommand && typeof command.html === 'string' && /<img\b/i.test(command.html)) {
+        command.html = await prepareWordHtmlImages(sanitizeWordHtml(command.html))
+        context.assertCurrent()
+      }
+      if (isRecord(command.snapshot) && command.snapshot.drawings) {
+        command.snapshot = await prepareWordSnapshotImages(command.snapshot as unknown as IDocumentData)
+        context.assertCurrent()
+      }
+      if (isRecord(command.document) && isRecord(command.document.snapshot) && command.document.snapshot.drawings) {
+        command.document.snapshot = await prepareWordSnapshotImages(command.document.snapshot as unknown as IDocumentData)
+        context.assertCurrent()
+      }
+      let imageSettings: Record<string, unknown> | null = null
+      if (command.type === 'document.headerFooter.update' && isRecord(command.settings)) imageSettings = command.settings
+      else if (isRecord(command.document) && isRecord(command.document.headerFooter)) imageSettings = command.document.headerFooter
+      if (imageSettings) {
+        for (const key of ['headerHtml', 'footerHtml']) {
+          if (typeof imageSettings[key] === 'string' && /<img\b/i.test(imageSettings[key])) {
+            imageSettings[key] = await prepareWordHtmlImages(sanitizeWordHtml(imageSettings[key]))
+            context.assertCurrent()
+          }
+        }
+      }
       if (editorCommand) {
         if (!binding || binding.documentId !== documentId || editorBinding !== binding || state.activeDocumentId !== documentId) {
           return failure('editor_unavailable', 'The requested Word document editor is not ready.')
@@ -399,6 +478,10 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
           if (error instanceof OfficeOperationError) throw error
           return failure('editor_command_failed', 'The Word editor could not apply the requested command.')
         }
+        if (options.autoSave) {
+          await binding.flush?.()
+          await saveDocument(documentId!, false)
+        }
         return { ok: true, state } as const
       }
       if (command.type !== 'workspace.get') {
@@ -408,7 +491,20 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
           context.assertCurrent()
         }
       }
-      return applyDomainCommand(command)
+      if (command.type === 'document.save' || command.type === 'document.saveAs') {
+        return await saveDocument(documentId!, command.type === 'document.saveAs', command.destination as string | undefined) ? { ok: true as const, state } : failure('save_incomplete', 'The save was canceled or newer edits remain unsaved.')
+      }
+      if (command.type === 'document.close' && !await prepareClose(documentId!)) return failure('close_canceled', 'Document close was canceled.')
+      if (options.autoSave && ['document.activate', 'document.create', 'document.open'].includes(String(command.type)) && state.activeDocumentId) {
+        if (!await saveDocument(state.activeDocumentId, false)) return failure('save_incomplete', 'Newer edits remain unsaved; retry before switching documents.')
+      }
+      const applied = applyDomainCommand(command)
+      if (applied.ok && options.autoSave && command.type !== 'workspace.get' && command.type !== 'document.close') {
+        const target = documentId ?? state.activeDocumentId
+        if (target) await saveDocument(target, false)
+        return { ok: true as const, state }
+      }
+      return applied
     })
     return result.ok ? result.value : result
   }
@@ -422,6 +518,21 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
     api,
     dispatch,
     getSnapshot: () => state,
+    closeAllDocuments: async () => {
+      const result = await runtime.execute({ sessionId: state.sessionId, capability: 'document.close' }, async () => {
+        if (editorBinding?.flush) await editorBinding.flush()
+        const approved = new Map<string, number | undefined>()
+        for (const document of state.documents) {
+          if (!await prepareClose(document.id)) return failure('close_canceled', 'Document close was canceled.')
+          approved.set(document.id, state.documents.find((item) => item.id === document.id)?.contentVersion)
+        }
+        if (editorBinding?.flush) await editorBinding.flush()
+        if (state.documents.some((document) => isWordDocumentDirty(document) && approved.get(document.id) !== document.contentVersion)) return failure('close_canceled', 'New edits were made while closing. The documents remain open.')
+        publish({ ...state, documents: [], activeDocumentId: '' })
+        return { ok: true, state } as const
+      })
+      return result.ok ? result.value : result
+    },
     closeDocumentTab: (documentId) => runtime.execute({ sessionId: state.sessionId, capability: 'document.close', documentId }, async (context) => {
       const binding = editorBinding
       if (binding?.flush && binding.documentId === state.activeDocumentId) {
@@ -430,10 +541,12 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
       }
       // Decide inside the same queue as document creation, imports and other closes.
       // Retain the final snapshot until the native host checkpoints and destroys it.
-      if (state.documents.length === 1) return { closeSurface: true }
+      if (!await prepareClose(documentId)) return { closeSurface: false }
+      const closeSurface = state.documents.length === 1
+      if (closeSurface && !options.confirmClose) return { closeSurface: true }
       const result = applyDomainCommand({ type: 'document.close', documentId })
       if (!result.ok) throw new OfficeOperationError('operation_failed', result.error.message)
-      return { closeSurface: false }
+      return { closeSurface }
     }),
     whenIdle: runtime.whenIdle,
     dispose: () => { disposed = true; editorBinding = null; listeners.clear(); runtime.dispose() },
@@ -452,6 +565,7 @@ export function createWordDomainStore(initialState: WordWorkspaceState, options:
           footnotes: references.footnotes,
           citations: references.citations,
           updatedAt: Date.now(),
+          contentVersion: (item.contentVersion ?? 0) + 1,
         } : item),
       })
       return true
@@ -498,13 +612,24 @@ export function reduceWordCommand(state: WordWorkspaceState, command: unknown, d
     const sourceMtimeMs = command.sourceMtimeMs
     const title = normalizedTitle(command.title, defaultTitle)
     const existing = state.documents.find((item) => item.sourcePath === sourcePath)
+    const imported = isRecord(command.document) ? command.document : null
+    const page = normalizePageSettings(imported?.page)
+    const headerFooter = normalizeHeaderFooter(imported?.headerFooter)
+    const importedSnapshot = (id: string) => imported
+      ? normalizeUniverDocumentSnapshot(imported.snapshot, id, title, page, headerFooter)
+      : createUniverDocumentSnapshot(id, title, page, headerFooter, sanitizeWordHtml(command.html as string))
     if (existing) {
-      const snapshot = createUniverDocumentSnapshot(existing.id, title, existing.page, existing.headerFooter, sanitizeWordHtml(command.html))
+      if (existing.sourceMtimeMs !== sourceMtimeMs && isWordDocumentDirty(existing)) return failure('source_conflict', 'The file changed outside the editor. Save your edits before reopening it.')
+      const snapshot = importedSnapshot(existing.id)
       const references = extractWordReferences(snapshot)
       const documents = state.documents.map((item) => item.id === existing.id ? {
         ...item,
         title,
         sourceMtimeMs,
+        sourceProtected: command.sourceProtected !== false,
+        page, headerFooter,
+        contentVersion: (item.contentVersion ?? 0) + 1,
+        savedContentVersion: (item.contentVersion ?? 0) + 1,
         snapshot,
         ...references,
         updatedAt: Date.now(),
@@ -515,6 +640,11 @@ export function reduceWordCommand(state: WordWorkspaceState, command: unknown, d
       sourceMtimeMs,
       sourcePath,
     })
+    document.page = page
+    document.headerFooter = headerFooter
+    document.snapshot = importedSnapshot(document.id)
+    document.sourceProtected = command.sourceProtected !== false
+    Object.assign(document, extractWordReferences(document.snapshot))
     return success(state, [...state.documents, document], document.id)
   }
 
@@ -709,6 +839,8 @@ function createDocument(title: string, html = '<p><br></p>', source?: { sourceMt
     id,
     title,
     ...source,
+    contentVersion: 0,
+    savedContentVersion: source ? 0 : undefined,
     snapshot,
     page,
     headerFooter,
@@ -724,7 +856,7 @@ function createDocumentId(): string {
 }
 
 function replaceDocument(state: WordWorkspaceState, documentId: string, patch: Partial<WordDocumentState>): WordRendererResult {
-  const documents = state.documents.map((item) => item.id === documentId ? { ...item, ...patch, updatedAt: Date.now() } : item)
+  const documents = state.documents.map((item) => item.id === documentId ? { ...item, ...patch, updatedAt: Date.now(), contentVersion: (item.contentVersion ?? 0) + 1 } : item)
   return success(state, documents, state.activeDocumentId)
 }
 
@@ -894,7 +1026,7 @@ function safeImageSource(value: string | null): string | null {
   if (!value) return null
   const source = value.trim()
   if (/^https:\/\//i.test(source)) return source
-  return /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=\s]+$/i.test(source) ? source : null
+  return /^data:image\/(?:png|jpe?g|gif|bmp|x-ms-bmp|webp);base64,[a-z0-9+/=\s]+$/i.test(source) ? source : null
 }
 
 function normalizedReferenceId(value: string): string {
@@ -1009,3 +1141,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export {}
+
+export function isWordDocumentDirty(document: WordDocumentState): boolean {
+  return !document.sourcePath || document.savedContentVersion === undefined || document.savedContentVersion !== (document.contentVersion ?? 0)
+}

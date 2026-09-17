@@ -34,7 +34,7 @@ describe('Office import workers', () => {
 
   it('decodes PPT base64 in the worker and copies binary inputs without detaching callers', async () => {
     const encoded = importPresentationInBackground('AQID', 'deck.pptx')
-    expect(workers[0]!.postMessage.mock.calls[0]).toEqual([{ input: 'AQID', fileName: 'deck.pptx', options: {} }, []])
+    expect(workers[0]!.postMessage.mock.calls[0]).toEqual([{ input: 'AQID', fileName: 'deck.pptx', options: { restoreEditorModel: true } }, []])
     workers[0]!.reply({ ok: true, value: { slides: [] } })
     await encoded
     const input = new Uint8Array([1, 2, 3])

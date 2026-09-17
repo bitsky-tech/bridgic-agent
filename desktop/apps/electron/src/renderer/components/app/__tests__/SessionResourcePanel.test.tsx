@@ -282,6 +282,7 @@ describe('SessionResourcePanel', () => {
     const originalWordApi = window.api.wordHost
     window.api.wordHost = {
       ensureSession: async (id) => { ensures.push(id); return wordSnapshot(id, 1).sessions[0]! },
+      createDocument: async () => undefined,
       snapshot: async () => store.get(wordHostSnapshotAtom),
       closeSession: async () => undefined,
       openFile: async () => undefined,
@@ -295,7 +296,7 @@ describe('SessionResourcePanel', () => {
     store.set(wordHostSnapshotAtom, wordSnapshot('word-close-a', 1))
     const { host, root } = await mountPanel(store)
     try {
-      expect(ensures).toEqual(['word-close-a'])
+      expect(ensures).toEqual([])
       // The close checkpoint finishes after the user has switched to another Session.
       await act(async () => store.set(activeSessionIdAtom, 'word-close-b'))
       expect(store.get(rightPanelCollapsedAtom)).toBe(false)
@@ -306,10 +307,11 @@ describe('SessionResourcePanel', () => {
       expect(store.get(rightPanelCollapsedAtom)).toBe(false)
       await act(async () => store.set(activeSessionIdAtom, 'word-close-a'))
       expect(store.get(rightPanelCollapsedAtom)).toBe(true)
-      expect(ensures).toEqual(['word-close-a'])
-      // A later explicit click still opens a fresh editor normally.
+      expect(ensures).toEqual([])
+      // Reopening the rail restores the Session without creating a document.
       await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-word"]')!.click())
-      expect(ensures).toEqual(['word-close-a', 'word-close-a'])
+      expect(ensures).toEqual(['word-close-a'])
+      expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
     } finally {
       await act(async () => root.unmount())
       window.api.wordHost = originalWordApi
@@ -594,8 +596,8 @@ describe('SessionResourcePanel', () => {
     expect(host.querySelector('[data-testid="workflow-library-panel"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="workflow-results-tool"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="schedule-workbench-tool"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
-    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
 
     const workflows = host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-workflows"]')!
     await act(async () => workflows.click())
@@ -610,7 +612,7 @@ describe('SessionResourcePanel', () => {
     expect(store.get(sessionWorkbenchSurfaceAtom)).toBe(SessionWorkbenchSurface.Word)
     expect(host.querySelector('[data-testid="session-workbench-word-content"]')?.getAttribute('aria-hidden')).toBe('false')
     expect(window.__bridgicWord).toBeUndefined()
-    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
 
     await act(async () => word.click())
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
@@ -692,7 +694,7 @@ describe('SessionResourcePanel', () => {
 
     await act(async () => presentation.click())
 
-    expect(host.querySelector('[data-testid="powerpoint-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
     expect(presentation.querySelector(
       '[data-testid="session-workbench-presentation-status-indicator"]',
     )).toBeNull()
@@ -786,7 +788,7 @@ describe('SessionResourcePanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('shows an Excel launch surface without creating a target until New Excel is clicked', async () => {
+  it('restores Excel on rail activation before showing recovered workbooks', async () => {
     const store = createStore()
     const sessionId = 'session-excel-launch'
     store.set(activeSessionIdAtom, sessionId)
@@ -796,16 +798,11 @@ describe('SessionResourcePanel', () => {
     const excelButton = host.querySelector<HTMLButtonElement>(
       '[data-testid="session-workbench-excel"]',
     )!
-    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
-    expect(excelEnsureCalls).toEqual([])
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
+    expect(excelEnsureCalls).toEqual([sessionId])
     expect(excelButton.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
       .toBeNull()
 
-    await act(async () => {
-      host.querySelector<HTMLButtonElement>('[data-testid="excel-create-workbook"]')?.click()
-      await Promise.resolve()
-    })
-    expect(excelEnsureCalls).toEqual([sessionId])
 
     await act(async () => {
       store.set(excelHostSnapshotAtom, {
@@ -881,7 +878,7 @@ describe('SessionResourcePanel', () => {
     await act(async () => store.set(setExcelHostSnapshotAtom, { sessions: [] }))
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-excel"]')!.click())
     expect(store.get(rightPanelCollapsedAtom)).toBe(false)
-    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
     await act(async () => store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Files))
     await act(async () => onExcelCloseRequested?.(sessionId))
     expect(store.get(rightPanelCollapsedAtom)).toBe(false)
@@ -901,6 +898,8 @@ describe('SessionResourcePanel', () => {
     expect(excelEnsureCalls).toHaveLength(ensureCount)
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="excel-close-panel"]')!.click())
     expect(excelCloseCalls).toEqual([sessionId])
+    expect(store.get(rightPanelCollapsedAtom)).toBe(false)
+    await act(async () => onExcelCloseRequested?.(sessionId))
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     await act(async () => store.set(setExcelHostSnapshotAtom, { sessions: [] }))
     expect(excelEnsureCalls).toHaveLength(ensureCount)
@@ -934,7 +933,7 @@ describe('SessionResourcePanel', () => {
       host.querySelector<HTMLButtonElement>('[data-testid="session-workbench-excel"]')?.click()
     })
     expect(store.get(rightPanelCollapsedAtom)).toBe(false)
-    expect(host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="session-workbench-excel-status-indicator"]'))
       .toBeNull()
 

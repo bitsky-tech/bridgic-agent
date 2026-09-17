@@ -64,6 +64,8 @@ async function runIsolated(body: string): Promise<Record<string, unknown>> {
       Object.assign(manager, {
         mainWindow: win, pendingCloseTimeout: null, closeGeneration: 0,
         closingWindow: null, wordFlush: null,
+        excelHost: { flushAll: async () => true },
+        embeddedPowerPoint: { flushAll: async () => true },
         wordHost: { flushAll: () => { flushes += 1; return flush(); } },
       });
       return { manager, win, snapshot: () => ({ destroys, flushes, destroyed }) };

@@ -1,3 +1,4 @@
+import { officeFiles } from './office-files'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { GuiSettings } from '@app/shared/types'
 import { IPC } from '../shared/ipc-channels'
@@ -48,3 +49,5 @@ const api: WordHostPreloadAPI = {
 }
 
 contextBridge.exposeInMainWorld('wordHostApi', api)
+
+contextBridge.exposeInMainWorld('officeFiles', officeFiles)

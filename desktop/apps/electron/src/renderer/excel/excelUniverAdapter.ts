@@ -1,7 +1,6 @@
 import {
   BorderStyleTypes,
   BorderType,
-  CommandType,
   Dimension,
   ImageSourceType,
   InterceptorEffectEnum,
@@ -90,6 +89,7 @@ import {
   type ExcelLiveAnalysisBinding, type ExcelLivePivotBinding, type ExcelLiveStructureChange,
 } from './excelLiveAnalysis'
 import { adjustDecimalPlaces } from './excelNumberFormat'
+import { isExcelContentMutation } from './excelContentChanges'
 import { EXCEL_OPEN_SOURCE_FEATURES, EXCEL_SHEETS_UI_CONFIG, type ExcelOpenSourceFeature } from './excelUiConfig'
 
 export interface SheetEditorHandle {
@@ -213,7 +213,7 @@ export function mountExcelUniverAdapter(options: {
     univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
       const structureChange = liveStructureChange(event.id, event.params)
       if (structureChange) liveAnalysis?.structureChanged(structureChange)
-      if (event.type === CommandType.MUTATION && formulaPreviewDepth === 0) binding.scheduleChange()
+      if (isExcelContentMutation(event) && formulaPreviewDepth === 0) binding.scheduleChange()
     }),
   ]
   const observer = new ResizeObserver(() => {

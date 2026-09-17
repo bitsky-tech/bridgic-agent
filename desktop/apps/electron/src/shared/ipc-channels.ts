@@ -136,6 +136,7 @@ export const IPC = {
   wordHost: {
     snapshot: 'word-host:snapshot',
     ensureSession: 'word-host:ensureSession',
+    createDocument: 'word-host:createDocument',
     openFile: 'word-host:openFile',
     closeSession: 'word-host:closeSession',
     activateSession: 'word-host:activateSession',

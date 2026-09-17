@@ -27,6 +27,11 @@ export const electronModuleMock = {
   },
   BrowserWindow: {
     getAllWindows: (): never[] => [],
+    getFocusedWindow: () => null,
+  },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] as string[] }),
+    showSaveDialog: async () => ({ canceled: true, filePath: undefined as string | undefined }),
   },
   ipcMain: {
     handle: (channel: string, handler: TestIpcHandler): void => {

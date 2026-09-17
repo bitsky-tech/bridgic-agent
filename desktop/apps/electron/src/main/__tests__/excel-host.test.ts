@@ -38,6 +38,7 @@ class FakeWebContents extends EventEmitter {
   private destroyed = false
   private loading = false
   private loadCount = 0
+  loadedUrl = ''
   windowOpenHandler: ((details: { url: string }) => { action: string }) | null = null
 
   constructor(readonly id: number, private readonly targetId: string) {
@@ -47,7 +48,8 @@ class FakeWebContents extends EventEmitter {
       : `${this.targetId}-recovered-${this.loadCount}`)
   }
 
-  async loadURL(_url: string): Promise<void> {
+  async loadURL(url: string): Promise<void> {
+    this.loadedUrl = url
     this.loading = true
     this.loadCount += 1
     this.loading = false
@@ -167,6 +169,7 @@ describe('ExcelHost Session target ownership', () => {
     })
 
     expect(views).toHaveLength(1)
+    expect(new URL(views[0]!.webContents.loadedUrl).searchParams.get('initialWorkbook')).toBe('empty')
     const delivery = views[0]?.webContents.sent.find(
       (message) => message.channel === IPC.events.excelWorkbookOpenRequested,
     )

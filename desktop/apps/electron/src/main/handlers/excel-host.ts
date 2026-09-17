@@ -15,7 +15,10 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
 
   loggedHandle(
     IPC.excelHost.ensureSession,
-    (_event, sessionId: string, config: ExcelHostConfig) => excelHost.ensureSession(sessionId, config),
+    (_event, sessionId: string, config: ExcelHostConfig, createInitialWorkbook = true) => {
+      if (typeof createInitialWorkbook !== 'boolean') throw new TypeError('Invalid workbook creation flag')
+      return excelHost.ensureSession(sessionId, config, createInitialWorkbook)
+    },
   )
 
   loggedHandle(
@@ -26,7 +29,7 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
   )
 
   loggedHandle(IPC.excelHost.closeSession, (_event, sessionId: string) => {
-    excelHost.closeSession(sessionId)
+    return excelHost.requestCloseSession(sessionId)
   })
 
   registerOfficeCloseHandler({

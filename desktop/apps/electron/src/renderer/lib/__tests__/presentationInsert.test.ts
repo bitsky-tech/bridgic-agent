@@ -79,6 +79,11 @@ describe('presentation insert helpers', () => {
 
   it('rejects unsupported, cross-kind, mismatched, or malformed file sources', () => {
     expect(normalizePresentationFileSource('image', {
+      dataUrl: 'data:image/bmp;base64,aW1hZ2U=',
+      fileName: 'image.bmp',
+      mimeType: 'image/bmp',
+    })).toBeNull()
+    expect(normalizePresentationFileSource('image', {
       dataUrl: 'data:image/webp;base64,aW1hZ2U=',
       fileName: 'image.webp',
       mimeType: 'image/webp',

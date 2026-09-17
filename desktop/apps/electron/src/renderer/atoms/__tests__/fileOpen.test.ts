@@ -1,5 +1,6 @@
 import { activeModalAtom, ModalKind } from '../amphi'
 import { pendingExcelWorkbookOpenRequestsAtom } from '../excel'
+import { pendingPowerPointFileOpensAtom, powerPointFileOpeningAtom } from '../powerpoint'
 import { isEmbeddedExcelWorkbook, requestFileOpenAtom } from '../fileOpen'
 import { describe, expect, it, mock } from 'bun:test'
 import { createStore } from 'jotai'
@@ -36,6 +37,25 @@ const {
 } = await import('../workbench')
 
 describe('Session file PowerPoint opening', () => {
+  it('coalesces file clicks until import completes and tracks loading in its original Session', async () => {
+    openFile.mockClear()
+    let finish!: (result: Awaited<ReturnType<typeof openFile>>) => void
+    openFile.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const store = createStore()
+    store.set(activeSessionIdAtom, 'session-a')
+    const file = { name: 'Deck.pptx', path: '/tmp/Deck.pptx' }
+    const first = store.set(requestSessionFileOpenAtom, file)
+    await store.set(requestSessionFileOpenAtom, file)
+    expect(openFile).toHaveBeenCalledTimes(1)
+    expect(store.get(powerPointFileOpeningAtom)).toBe(true)
+    store.set(activeSessionIdAtom, 'session-b')
+    expect(store.get(powerPointFileOpeningAtom)).toBe(false)
+    finish({ documentId: 'deck', fileName: file.name, reused: false, slideCount: 1, title: 'Deck' })
+    await first
+    expect(store.get(pendingPowerPointFileOpensAtom)).toEqual([])
+    expect(store.get(powerPointNeedsAttentionFamily('session-a'))).toBe(true)
+  })
+
   it('recognizes only real PPTX suffixes', () => {
     expect(isPowerPointFileTarget({ name: 'Deck.PPTX' })).toBe(true)
     expect(isPowerPointFileTarget({ name: 'Deck.pptx.tmp' })).toBe(false)

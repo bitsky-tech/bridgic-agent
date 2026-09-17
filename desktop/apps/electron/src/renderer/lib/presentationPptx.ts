@@ -2,6 +2,7 @@ import { presentationChartBlankDisplay, presentationChartHoleSize } from '@/lib/
 import { correctPresentationChartData, correctPresentationGraphicFlips } from '@/lib/presentationChartPptx'
 import PptxGenJS from 'pptxgenjs'
 import JSZip from 'jszip'
+import { writeOfficeRoundTrip } from './office/officeRoundTrip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { correctPresentationTextXml } from '@/lib/presentationTextPptx'
 import {
@@ -1159,5 +1160,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
   if (!(output instanceof Uint8Array)) {
     throw new Error('PPTX exporter returned an unexpected output type')
   }
-  return addNativePresentationFeatures(output)
+  const archive = await JSZip.loadAsync(await addNativePresentationFeatures(output))
+  const { master, pageSize: storedPageSize, slides, selectedSlideId, title } = document
+  return writeOfficeRoundTrip(archive, 'presentation', { master, pageSize: storedPageSize, slides, selectedSlideId, title })
 }

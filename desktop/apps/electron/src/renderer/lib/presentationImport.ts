@@ -15,7 +15,7 @@ export function importPresentationInBackground(input: Uint8Array | ArrayBuffer |
   else owned = new Uint8Array(input.slice(0))
   return runOfficeImportWorker<PresentationDocument>(
     () => new Worker(new URL('./presentationImport.worker.ts', import.meta.url), { type: 'module' }),
-    { input: owned, fileName, options } satisfies PresentationImportRequest,
+    { input: owned, fileName, options: { restoreEditorModel: true, ...options } } satisfies PresentationImportRequest,
     typeof owned === 'string' ? [] : [owned.buffer],
   )
 }

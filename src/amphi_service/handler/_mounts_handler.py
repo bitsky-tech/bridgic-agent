@@ -1,4 +1,6 @@
 import os
+import asyncio
+from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +15,7 @@ from ...amphi_store import (
     SessionTurnRepository,
 )
 from ._base import BaseHandler
+from ..runtime._office_files import OFFICE_EXTENSIONS, import_office_file
 
 _MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
 
@@ -80,7 +83,7 @@ class SessionMountsHandler(BaseHandler):
 
     async def post(self, session_id: str, body: CreateMountRequest) -> Response:
         user = await self.require_user()
-        await self.require_session(session_id, user)
+        record = await self.require_session(session_id, user)
         path = body.path
         if not os.path.isabs(path):
             raise HTTPException(
@@ -93,8 +96,16 @@ class SessionMountsHandler(BaseHandler):
                 detail=backend_i18n.text("mount.path_not_found", path=path),
             )
         kind = "folder" if os.path.isdir(path) else "file"
+        repository = SessionMountRepository()
+        if kind == "file" and Path(path).suffix.lower() in OFFICE_EXTENSIONS:
+            original = str(Path(path).resolve())
+            path = str(await asyncio.to_thread(import_office_file, record.workspace_root, Path(path)))
+            for existing in await repository.list_for_session(session_id, user.id):
+                if str(Path(existing.abs_path).resolve()) in {original, path}:
+                    row = await repository.rebind(existing, path) if existing.abs_path != path else existing
+                    return self.response(mount_summary(row))
         name = os.path.basename(os.path.normpath(path)) or path
-        row = await SessionMountRepository().create(
+        row = await repository.create(
             session_id, user.id, name=name, abs_path=path, kind=kind,
         )
         return self.response(mount_summary(row), status_code=status.HTTP_201_CREATED)

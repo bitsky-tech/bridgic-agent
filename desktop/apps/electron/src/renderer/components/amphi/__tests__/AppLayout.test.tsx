@@ -27,7 +27,7 @@ const {
 const {
   RIGHT_PANEL_MIN,
   RIGHT_PANEL_RAIL_WIDTH,
-  browserDockWidthAtom,
+  canvasDockWidthAtom,
   rememberRightPanelStateAtom,
   rightPanelCollapseRequestAtom,
   rightPanelCollapsedAtom,
@@ -513,7 +513,7 @@ describe('AppLayout focused right pane', () => {
     host.remove()
   })
 
-  it('restores each Session Browser width after dragging the divider', async () => {
+  it('restores each Session canvas width after dragging the divider', async () => {
     const originalInnerWidth = window.innerWidth
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
     const store = createStore()
@@ -555,15 +555,15 @@ describe('AppLayout focused right pane', () => {
         handle.dispatchEvent(pointerEvent('pointermove', 640))
         handle.dispatchEvent(pointerEvent('pointerup', 640))
       })
-      expect(store.get(browserDockWidthAtom)).toBe(600)
+      expect(store.get(canvasDockWidthAtom)).toBe(600)
       expect(dock().style.width).toBe(`${resizedTotal}px`)
 
       await act(async () => store.set(activeSessionIdAtom, 'layout-browser-width-b'))
-      expect(store.get(browserDockWidthAtom)).toBe(640)
+      expect(store.get(canvasDockWidthAtom)).toBe(640)
       expect(dock().style.width).toBe(`${initialTotal}px`)
 
       await act(async () => store.set(activeSessionIdAtom, 'layout-browser-width-a'))
-      expect(store.get(browserDockWidthAtom)).toBe(600)
+      expect(store.get(canvasDockWidthAtom)).toBe(600)
       expect(dock().style.width).toBe(`${resizedTotal}px`)
     } finally {
       await act(async () => root.unmount())

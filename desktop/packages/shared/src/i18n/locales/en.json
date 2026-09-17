@@ -775,7 +775,9 @@
       "saveAs": "Save as",
       "saveConflict": "The file changed on disk. Use Save as to keep both versions.",
       "saveFailed": "Could not save this workbook",
+      "savedDraftsPreserved": "Unsaved edits were kept in {{names}}. Save them as a different file.",
       "unsaved": "Unsaved changes",
+      "unsavedCopyName": "{{name}} (unsaved edits).xlsx",
       "workbook": "Workbook"
     },
     "hostCrashed": "Excel target stopped unexpectedly",
@@ -1660,6 +1662,22 @@
       "warning": "This action cannot be undone. The Skill’s local files will also be removed."
     }
   },
+  "office": {
+    "changedDuringClose": "New edits were made while closing. Your documents remain open.",
+    "createFailed": "The document could not be created. Please retry.",
+    "importedCopyNotice": "Some imported formatting may not be preserved. The original imported file has been retained.",
+    "protectedSave": "This imported file cannot be overwritten without possible formatting loss. Use Save as and choose a different name.",
+    "recoveryFailed": "Drafts could not be restored. Retry to continue.",
+    "restoring": "Restoring drafts…",
+    "retry": "Retry",
+    "save": "Save",
+    "saveAs": "Save as",
+    "saveFailed": "Save failed",
+    "saveShortcut": "Save (⌘/Ctrl+S)",
+    "saved": "Saved",
+    "saving": "Saving…",
+    "unsaved": "Unsaved"
+  },
   "permission": {
     "action": {
       "allow": "Allow",
@@ -2396,6 +2414,7 @@
       "importFailed": "Could not import this PowerPoint file.",
       "importPptx": "Import PPTX",
       "imported": "Imported {{name}}",
+      "importing": "Opening PowerPoint…",
       "increaseFontSize": "Increase font size",
       "increaseIndent": "Increase indent",
       "insert": "Insert",

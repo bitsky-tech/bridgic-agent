@@ -542,6 +542,9 @@ export const DEFAULT_PRESENTATION_MASTER: PresentationMaster = {
 }
 
 export interface PresentationDocument {
+  sourceProtected?: boolean
+  source?: import('../../shared/office-files').OfficeFileSource
+  savedVersion?: number
   id: string
   master: PresentationMaster
   title: string

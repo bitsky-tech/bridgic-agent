@@ -1,3 +1,5 @@
+import { OfficeSaveActions } from '@/components/app/OfficeSaveActions'
+import { isWordDocumentDirty } from '@/lib/wordDomain'
 import type { IDocumentData } from '@univerjs/core'
 
 import {
@@ -16,7 +18,6 @@ import { Icons } from '@/components/amphi/Icons'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { OfficeAppHeader, OfficeDocumentTabs, OfficePanelControls } from '@/components/app/OfficeWorkbenchChrome'
 import { cn } from '@/lib/cn'
-import { rlog } from '@/lib/logger'
 import type {
   WordDomainStore,
   WordFormattingCommand,
@@ -54,7 +55,6 @@ type WordZoomMode = 'fit' | 'manual'
 export function StructuredWordEditor({
   expanded,
   onClose,
-  onSaveRequested = () => undefined,
   onFlushHandlerChange,
   onToggleExpanded,
   persistenceStatus = 'saved',
@@ -73,6 +73,7 @@ export function StructuredWordEditor({
   const [zoom, setZoom] = useState(expanded ? 100 : 75)
   const [zoomMode, setZoomMode] = useState<WordZoomMode>('fit')
   const [runtime, setRuntime] = useState<WordEditorRuntime | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
 
   useLayoutEffect(() => {
     if (zoomMode !== 'fit') return
@@ -156,9 +157,11 @@ export function StructuredWordEditor({
     event.target.value = ''
     if (!file || !file.type.startsWith('image/') || file.size > 8 * 1024 * 1024) return
     const documentId = activeDocument.id
+    setImageError(null)
     void readFileAsDataUrl(file)
       .then((src) => store.dispatch({ type: 'editor.insert', documentId, kind: 'image', src, alt: file.name, title: file.name }))
-      .catch(() => undefined)
+      .then((result) => { if (!result.ok) setImageError(result.error.message) })
+      .catch((error) => setImageError(error instanceof Error ? error.message : String(error)))
   }
 
   const updateHeaderFooter = (settings: Partial<WordHeaderFooterSettings>) => {
@@ -172,6 +175,25 @@ export function StructuredWordEditor({
     const value = window.prompt(label, current)
     if (value !== null) updateHeaderFooter({ [field]: escapeHtml(value.trim()) })
   }
+
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const save = (saveAs: boolean) => {
+    setSaving(true)
+    setSaveError(null)
+    void store.dispatch({ type: saveAs ? 'document.saveAs' : 'document.save', documentId: activeDocument.id }).then((result) => {
+      if (!result.ok && result.error.code !== 'save_incomplete') setSaveError(result.error.message)
+    }).catch((error) => setSaveError(String(error))).finally(() => setSaving(false))
+  }
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      save(false)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  })
 
   const wordCount = getUniverWordCount(activeDocument.snapshot)
   const pageCount = getUniverPageCount(activeDocument.snapshot)
@@ -189,18 +211,18 @@ export function StructuredWordEditor({
           closeLabel={t('word.closePanel')}
           expanded={expanded}
           expandLabel={expanded ? t('word.exitExpanded') : t('word.expand')}
-          onClose={onClose ? () => { flushActiveSnapshot(); onSaveRequested(); onClose() } : undefined}
+          onClose={onClose}
           onToggleExpanded={showExpandControl ? onToggleExpanded : undefined}
           testIdPrefix="word"
           toggleTestId="word-expand-toggle"
         />
       </OfficeAppHeader>
       <OfficeDocumentTabs
-        actions={persistenceStatus === 'error' ? (
+        actions={<><OfficeSaveActions dirty={isWordDocumentDirty(activeDocument)} error={saveError || (persistenceStatus === 'error' ? t('office.saveFailed') : null)} disabled={saving} onSave={save} />{persistenceStatus === 'error' ? (
           <span className="max-w-28 truncate text-[10px] text-status-error" role="alert">
             {t('word.persistence.error')}
           </span>
-        ) : undefined}
+        ) : null}</>}
         activeId={activeDocument.id}
         icon={<span className="flex shrink-0 text-blue-600 dark:text-blue-400">{Icons.wordDocument(16)}</span>}
         label={t('word.documentTabs')}
@@ -212,20 +234,23 @@ export function StructuredWordEditor({
             return
           }
           void store.closeDocumentTab(documentId).then((result) => {
-            if (!result.ok) rlog.warn('[word] document close failed', result.error)
+            if (!result.ok) setSaveError(result.error.message)
             else if (result.value.closeSurface) onClose()
           })
         }}
         onCreate={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.create' }) }}
         onSelect={(documentId) => { flushActiveSnapshot(); void store.dispatch({ type: 'document.activate', documentId }) }}
         tabs={workspace.documents.map((item) => {
-          const title = item.title.trim() || t('word.untitled')
+          const title = item.sourcePath?.split(/[\\/]/).at(-1) || item.title.trim() || t('word.untitled')
           const fileName = title.toLocaleLowerCase().endsWith('.docx') ? title : `${title}.docx`
-          return { id: item.id, label: fileName, closeLabel: t('word.closeDocument', { title: fileName }) }
+          return { id: item.id, label: fileName, closeLabel: t('word.closeDocument', { title: fileName }), dirtyLabel: isWordDocumentDirty(item) ? t('office.unsaved') : undefined }
         })}
         testIdPrefix="word"
       />
 
+      {saveError ? <div role="alert" className="px-3 py-2 text-sm text-status-error">{saveError}</div> : null}
+      {imageError ? <div role="alert" className="px-3 py-2 text-sm text-status-error">{imageError}</div> : null}
+      {activeDocument.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
       <WordRibbon
         activeTab={activeRibbonTab}
         onActiveTabChange={setActiveRibbonTab}
@@ -257,7 +282,7 @@ export function StructuredWordEditor({
         zoom={zoom}
       />
 
-      <input accept="image/*" className="sr-only" onChange={handleImageChange} ref={imageInputRef} type="file" />
+      <input accept="image/png,image/jpeg,image/gif,image/bmp,image/webp" className="sr-only" onChange={handleImageChange} ref={imageInputRef} type="file" />
       {rulerVisible ? <WordRuler page={activeDocument.page} zoom={zoom} /> : null}
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[#eef0f4] dark:bg-[#20201e]" data-testid="word-canvas" ref={canvasRef}>
         <UniverDocumentSurface

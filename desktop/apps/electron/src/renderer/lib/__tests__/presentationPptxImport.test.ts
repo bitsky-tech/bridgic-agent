@@ -5,6 +5,34 @@ import { createPresentationTestDocument as createInitialPresentationDocument } f
 import { createPresentationPptx } from '../presentationPptx'
 
 describe('importPresentationPptx', () => {
+  it('preserves the editable master and footer through repeated save and reopen cycles', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationDocument()
+    source.master.footer = { text: 'Confidential', showDate: true, showSlideNumber: true }
+    source.master.bodyFontFamily = 'Arial'
+    source.master.titleFontFamily = 'Georgia'
+    let document = source
+    for (let cycle = 0; cycle < 2; cycle++) {
+      document = await importPresentationPptx(await createPresentationPptx(document), 'Report.pptx', { restoreEditorModel: true })
+      expect(document.master).toEqual(source.master)
+      expect(document.slides).toEqual(source.slides)
+      expect(document.sourceProtected).toBe(false)
+      document.slides[0]!.notes = `Edited note ${cycle}`
+      source.slides[0]!.notes = `Edited note ${cycle}`
+    }
+  })
+
+  it('invalidates its embedded model after an external edit and protects that source', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationDocument()
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const slide = archive.file('ppt/slides/slide1.xml')!
+    archive.file(slide.name, (await slide.async('string')).replace(/<a:t>[^<]*<\/a:t>/, '<a:t>Externally corrected</a:t>'))
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'Report.pptx', { restoreEditorModel: true })
+    expect(JSON.stringify(imported.slides)).toContain('Externally corrected')
+    expect(imported.sourceProtected).toBe(true)
+  })
+
   it('shares a master image across slides and preserves sharing through worker transfer', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = createInitialPresentationDocument()

@@ -119,6 +119,40 @@ describe('Excel workspace adapter', () => {
     expect(workspace.getState().activeTabId).toBe('b')
   })
 
+  it('keeps one source owner after Save as replaces an already open clean workbook', () => {
+    const workspace = setup()
+    workspace.updateTab('a', (current) => ({ ...current, documentId: 'source-a' }))
+    workspace.updateTab('b', (current) => ({ ...current, documentId: 'source-b' }))
+    workspace.activate('b')
+    const snapshots: string[][] = []
+    workspace.subscribe(() => snapshots.push(workspace.getState().tabs.map((tab) => tab.tabId)))
+    const drafts = workspace.completeSave('b', {
+      changeVersion: 0, documentId: 'source-a', fileName: 'a.xlsx', mtimeMs: 2, snapshot: { id: 'native-b', value: 10 },
+    }, (name) => `Draft ${name}`)
+    expect(drafts).toEqual([])
+    expect(snapshots).toEqual([['b']])
+    expect(workspace.getState().activeTabId).toBe('b')
+    expect(workspace.getState().tabs).toEqual([expect.objectContaining({ tabId: 'b', documentId: 'source-a', fileName: 'a.xlsx', dirty: false })])
+  })
+
+  it('retains conflicting unsaved edits as an unbound draft and preserves edits made during saving', () => {
+    const workspace = setup()
+    const original = { id: 'native-a', value: 99 }
+    const latest = { id: 'native-b', value: 42 }
+    workspace.updateTab('a', (current) => ({ ...current, documentId: 'source-a', snapshot: original, dirty: true, changeVersion: 3, mtimeMs: 1 }))
+    workspace.updateTab('b', (current) => ({ ...current, documentId: 'source-b', snapshot: latest, dirty: true, changeVersion: 2 }))
+    workspace.activate('b')
+    const drafts = workspace.completeSave('b', {
+      changeVersion: 1, documentId: 'source-a', fileName: 'a.xlsx', mtimeMs: 2, snapshot: { id: 'native-b', value: 21 },
+    }, (name) => `Draft ${name}`)
+    expect(drafts).toEqual(['Draft a.xlsx'])
+    expect(workspace.getState().tabs[0]).toMatchObject({ tabId: 'a', documentId: null, mtimeMs: null, fileName: 'Draft a.xlsx', dirty: true, changeVersion: 3 })
+    expect(workspace.getState().tabs[0]!.snapshot).toBe(original)
+    expect(workspace.getState().tabs[1]).toMatchObject({ tabId: 'b', documentId: 'source-a', mtimeMs: 2, dirty: true, changeVersion: 2 })
+    expect(workspace.getState().tabs[1]!.snapshot).toBe(latest)
+    expect(workspace.getState().activeTabId).toBe('b')
+  })
+
   it('rejects a late import after the Session runtime is disposed', async () => {
     const workspace = setup()
     const gate = deferred()

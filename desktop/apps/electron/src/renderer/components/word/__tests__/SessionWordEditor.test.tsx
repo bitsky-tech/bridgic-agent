@@ -35,7 +35,7 @@ afterAll(async () => {
 })
 
 describe('SessionWordEditor', () => {
-  it('hands the final tab to the host for checkpoint and teardown and removes only non-final tabs', async () => {
+  it('checkpoints a closed final tab as empty and removes only the selected non-final tab', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -48,13 +48,13 @@ describe('SessionWordEditor', () => {
         await window.__bridgicWord!.dispatch({ type: 'document.create', title: 'Retained' })
       })
       await waitForElement(host, '[data-testid="word-close-document"]')
-      const before = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
       await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-close-document"]')!.click())
       expect(onClose).toHaveBeenCalledTimes(1)
       const after = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
-      expect(after).toEqual(before)
-      expect(host.querySelector('[data-testid="word-launch-empty-state"]')).toBeNull()
+      expect(after).toMatchObject({ ok: true, state: { documents: [], activeDocumentId: '' } })
+      expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
       await act(async () => {
+        await window.__bridgicWord!.dispatch({ type: 'document.create', title: 'Retained' })
         await window.__bridgicWord!.dispatch({ type: 'document.create', title: 'Second' })
       })
       await act(async () => host.querySelectorAll<HTMLButtonElement>('[data-testid="word-close-document"]')[1]!.click())

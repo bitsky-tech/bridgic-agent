@@ -15,6 +15,8 @@ PRESENTATION_CONTEXT_GUIDANCE = """\
 PRESENTATION_TOOL_GUIDANCE = """\
 - Tool availability does not broaden the current stage. Brief and Plan may inspect an existing or supplied presentation when that is necessary to understand it, but they must not change the live deck. Compose and Review own slide mutations. Do not perform research, outlining, visual generation, slide construction, or review before the current stage and step call for it.
 - Treat the Session-owned PowerPoint presentation as the authoritative live deck and use only a deck-authoring capability explicitly listed in the current tool surface to inspect or mutate it. If no such capability is available, do not substitute DOM clicks, browser tools, GUI automation, `bash`, or third-party PPT libraries, and do not claim that the live deck was opened, inspected, or changed.
+- UI and Agent edits automatically save to the same PPTX in the Session workspace. `save_ppt` can flush pending edits before handing off a finished file.
+- Imports are registered in Session Files and opened from the Session workspace; the original imported bytes are retained. Use the returned target path for subsequent operations.
 - Perform live slide operations only through an explicitly available deck-authoring capability, never through filesystem or shell workarounds.
 - A Skill supplements the current stage; it does not override the user's request, the stage boundary, or the production contracts.
 """.strip()

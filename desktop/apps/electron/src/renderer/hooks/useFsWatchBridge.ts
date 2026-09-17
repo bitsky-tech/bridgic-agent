@@ -47,6 +47,15 @@ export function useFsWatchBridge(): void {
   const sessionId = useAtomValue(activeSessionIdAtom)
   const mounts = useAtomValue(mountsFamily(sessionId ?? ''))
 
+  useEffect(() => window.officeFiles?.onChanged?.((id) => {
+    void loadMounts(id)
+    if (id !== sessionId) return
+    for (const level of levels) {
+      if (level.relPath === '') void loadRoot({ sessionId: id, mountId: level.mountId, path: level.mountPath })
+      else void loadLevel({ mountId: level.mountId, mountPath: level.mountPath, relPath: level.relPath })
+    }
+  }), [loadMounts, loadRoot, loadLevel, levels, sessionId])
+
   // File mounts never expand → MountRow contributes no watched level for them,
   // so their visible size / invalidated state would go stale. Watch the file itself.
   const fileMountPaths = useMemo(

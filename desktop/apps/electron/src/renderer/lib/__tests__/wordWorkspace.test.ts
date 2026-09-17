@@ -59,12 +59,12 @@ describe('Word common workspace runtime', () => {
     const revisions: number[] = []
     const unsubscribe = reader.subscribe((snapshot) => revisions.push(snapshot.revision))
     expect(initial).toMatchObject({ appKind: 'word', sessionId: 'word-session', revision: 0 })
-    expect(initial.documents[0]).toEqual({ id: initial.activeDocumentId!, title: 'Untitled', revision: 0, dirty: null })
+    expect(initial.documents[0]).toEqual({ id: initial.activeDocumentId!, title: 'Untitled', revision: 0, dirty: true })
     expect(Object.isFrozen(initial)).toBe(true)
     expect(Object.isFrozen(initial.documents)).toBe(true)
     expect(Object.isFrozen(initial.documents[0])).toBe(true)
     expect(reader.supports('document.update')).toBe(true)
-    expect(reader.supports('document.saveAs')).toBe(false)
+    expect(reader.supports('document.saveAs')).toBe(true)
 
     await store.dispatch({ type: 'document.activate', documentId: initial.activeDocumentId })
     expect(reader.getSnapshot()).toBe(initial)

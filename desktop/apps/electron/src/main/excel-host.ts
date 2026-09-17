@@ -39,6 +39,7 @@ interface ExcelHostRecord extends OfficeSessionRecord {
   dirty: boolean
   recoveryState: string | null
   workbookOpenRequests: Map<string, string>
+  createInitialWorkbook: boolean
 }
 
 type ViewFactory = (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -83,13 +84,13 @@ export class ExcelHost {
   }
 
   /** Create the Session target once; subsequent calls only refresh presentation config. */
-  async ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo> {
+  async ensureSession(sessionId: string, config: ExcelHostConfig, createInitialWorkbook = true): Promise<ExcelHostSessionInfo> {
     const id = this.normalizeSessionId(sessionId)
     const nextConfig = this.normalizeConfig(id, config)
     const record = this.container.ensure(
       id,
-      () => this.createRecord(id, nextConfig),
-      (current) => current.view.webContents.loadURL(this.rendererUrl(current.config)),
+      () => this.createRecord(id, nextConfig, createInitialWorkbook),
+      (current) => current.view.webContents.loadURL(this.rendererUrl(current)),
     )
     this.updateConfig(record, nextConfig)
     if (this.container.activeSessionId === null) this.container.activateSession(id)
@@ -105,7 +106,7 @@ export class ExcelHost {
   ): Promise<void> {
     const id = this.normalizeSessionId(sessionId)
     const normalizedRequest = this.normalizeWorkbookOpenRequest(request)
-    await this.ensureSession(id, config)
+    await this.ensureSession(id, config, false)
     const record = this.container.get(id)
     if (!record || record.view.webContents.isDestroyed()) {
       throw new Error(`Excel Session does not exist: ${id}`)
@@ -145,6 +146,18 @@ export class ExcelHost {
   closeCurrentSession(webContentsId: number): void {
     const record = this.container.forWebContents(webContentsId)
     if (record) this.closeSession(record.sessionId)
+  }
+
+  async requestCloseSession(sessionId: string): Promise<void> {
+    const record = this.container.get(sessionId)
+    if (!record) return
+    if (record.crashed || record.view.webContents.isDestroyed()) { this.closeSession(sessionId); return }
+    await record.view.webContents.executeJavaScript('window.__bridgicExcel.close()')
+  }
+
+  async flushAll(): Promise<boolean> {
+    const results = await Promise.allSettled([...this.container.values()].map((record) => record.view.webContents.executeJavaScript('window.__bridgicExcel?.flush()')))
+    return results.every((result) => result.status === 'fulfilled')
   }
 
   setDirty(webContentsId: number, dirty: boolean): void {
@@ -194,7 +207,7 @@ export class ExcelHost {
     this.closeAll()
   }
 
-  private createRecord(sessionId: string, config: ExcelHostConfig): ExcelHostRecord {
+  private createRecord(sessionId: string, config: ExcelHostConfig, createInitialWorkbook: boolean): ExcelHostRecord {
     const view = this.createView({
       webPreferences: { ...WEB_PREFERENCES, preload: this.preloadPath },
     })
@@ -207,6 +220,7 @@ export class ExcelHost {
       dirty: false,
       recoveryState: null,
       workbookOpenRequests: new Map(),
+      createInitialWorkbook,
       ready: Promise.resolve(),
     }
     this.configureView(record)
@@ -235,7 +249,7 @@ export class ExcelHost {
       if (!this.container.owns(record) || contents.isDestroyed()) return
       this.container.invalidate(record)
       void this.container.reload(record, (current) => (
-        current.view.webContents.loadURL(this.rendererUrl(current.config))
+        current.view.webContents.loadURL(this.rendererUrl(current))
       ))
     })
   }
@@ -249,13 +263,14 @@ export class ExcelHost {
     }
   }
 
-  private rendererUrl(config: ExcelHostConfig): string {
+  private rendererUrl({ config, createInitialWorkbook }: ExcelHostRecord): string {
     const url = this.devServerUrl
       ? new URL('excel.html', this.devServerUrl.endsWith('/') ? this.devServerUrl : `${this.devServerUrl}/`)
       : new URL(pathToFileURL(this.rendererHtml).toString())
     url.searchParams.set('sessionId', config.sessionId)
     url.searchParams.set('locale', config.locale)
     url.searchParams.set('theme', config.theme)
+    if (!createInitialWorkbook) url.searchParams.set('initialWorkbook', 'empty')
     return url.toString()
   }
 

@@ -24,6 +24,7 @@ import { importPresentationPptx } from '@/lib/presentationPptxImport'
 export const POWERPOINT_PROTOCOL_VERSION = 5 as const
 
 export type PowerPointMethod =
+  | 'save_ppt'
   | 'view_ppt'
   | 'inspect_ppt_assets'
   | 'get_ppt_page'
@@ -81,7 +82,7 @@ export async function executePowerPointRequest(
     const document = encoded
       ? await (context.importPptx
         ? context.importPptx(encoded, fileName)
-        : importPresentationPptx(decodeBase64(encoded), fileName))
+        : importPresentationPptx(decodeBase64(encoded), fileName, { restoreEditorModel: true }))
       : createBlankPresentationDocument(fileName.replace(/\.pptx$/i, ''))
     const workspace = { activeDocumentId: document.id, documents: [document] }
     return { result: { ...deckOverview(document, fileName), reused: false }, workspace, target, persist: !encoded }

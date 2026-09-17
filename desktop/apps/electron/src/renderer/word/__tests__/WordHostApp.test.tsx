@@ -87,6 +87,7 @@ describe('WordHostApp', () => {
     const bytes = new Uint8Array(await Bun.file(fixture).arrayBuffer())
     const reads: string[] = []
     const acknowledgements: string[] = []
+    let deliver!: (request: WordHostOpenRequest) => void
     const api: WordHostPreloadAPI = {
       getConfig: async () => DEFAULT_SETTINGS,
       readDocument: async (path) => {
@@ -99,6 +100,7 @@ describe('WordHostApp', () => {
       onConfigChanged: () => () => undefined,
       onExpandedChanged: () => () => undefined,
       onOpenFileRequested: (callback) => {
+        deliver = callback
         callback(request('first'))
         callback(request('first'))
         callback(request('second'))
@@ -123,6 +125,20 @@ describe('WordHostApp', () => {
       expect(workspace.state.documents.map((document) => document.title)).toEqual(['first.docx', 'second.docx'])
       const { loadPersistedWordWorkspace } = await import('@/lib/wordPersistence')
       expect(await loadPersistedWordWorkspace('word-session')).toEqual(workspace.state)
+      const firstId = workspace.state.documents[0]!.id
+      await act(async () => {
+        await window.__bridgicWord!.dispatch({ type: 'document.update', documentId: firstId, title: 'User edits' })
+        deliver({ ...request('first'), id: 'repeat-click' })
+      })
+      for (let attempt = 0; attempt < 100 && acknowledgements.length < 4; attempt++) {
+        await act(async () => new Promise((accept) => setTimeout(accept, 10)))
+      }
+      expect(acknowledgements.at(-1)).toBe('open:repeat-click:ok')
+      const reopened = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
+      if (!reopened.ok) throw new Error('Expected workspace')
+      expect(reopened.state.documents).toHaveLength(2)
+      expect(reopened.state.activeDocumentId).toBe(firstId)
+      expect(reopened.state.documents[0]!.title).toBe('User edits')
     } finally {
       await act(async () => root.unmount())
     }

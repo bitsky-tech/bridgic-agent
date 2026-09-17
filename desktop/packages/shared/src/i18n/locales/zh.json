@@ -775,7 +775,9 @@
       "saveAs": "另存为",
       "saveConflict": "磁盘中的文件已被修改。请使用“另存为”保留两个版本。",
       "saveFailed": "无法保存此工作簿",
+      "savedDraftsPreserved": "未保存的修改已保留在 {{names}} 中，请另存为其他文件。",
       "unsaved": "有未保存的更改",
+      "unsavedCopyName": "{{name}}（未保存修改）.xlsx",
       "workbook": "工作簿"
     },
     "hostCrashed": "Excel target 意外停止",
@@ -1660,6 +1662,22 @@
       "warning": "此操作不可撤销，该 Skill 的本地文件将一并移除。"
     }
   },
+  "office": {
+    "changedDuringClose": "关闭期间产生了新修改，文档已保留，请再次保存或关闭。",
+    "createFailed": "文档创建失败，请重试。",
+    "importedCopyNotice": "此文件的部分格式可能无法完整保留，导入的原始文件已保留。",
+    "protectedSave": "此导入文件可能丢失部分格式，不能直接覆盖原文件。请另存为不同名称。",
+    "recoveryFailed": "草稿恢复失败，请重试后继续。",
+    "restoring": "正在恢复草稿…",
+    "retry": "重试",
+    "save": "保存",
+    "saveAs": "另存为",
+    "saveFailed": "保存失败",
+    "saveShortcut": "保存（⌘/Ctrl+S）",
+    "saved": "已保存",
+    "saving": "正在保存…",
+    "unsaved": "未保存"
+  },
   "permission": {
     "action": {
       "allow": "允许",
@@ -2396,6 +2414,7 @@
       "importFailed": "无法导入这个 PowerPoint 文件。",
       "importPptx": "导入 PPTX",
       "imported": "已导入 {{name}}",
+      "importing": "正在打开 PowerPoint…",
       "increaseFontSize": "增大字号",
       "increaseIndent": "增加缩进",
       "insert": "插入",

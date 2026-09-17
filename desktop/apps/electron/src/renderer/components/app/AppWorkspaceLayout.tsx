@@ -11,7 +11,7 @@ import { sessionFocusPaneOpenAtom } from '@/atoms/session-focus-pane-view'
 import { presentationExpandedAtom } from '@/atoms/presentation'
 import { wordExpandedAtom } from '@/atoms/word'
 import { excelExpandedAtom } from '@/atoms/excel'
-import { AppLayout } from '@/components/amphi'
+import { AppLayout, type AppLayoutProps } from '@/components/amphi'
 
 export interface AppWorkspaceLayoutProps {
   left: ReactNode
@@ -36,10 +36,11 @@ export function AppWorkspaceLayout({ left, center, right }: AppWorkspaceLayoutPr
   const browserLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Browser
   const presentationLayout = !focusPaneOpen
     && workbenchSurface === SessionWorkbenchSurface.Presentation
-  let rightKind: 'panel' | 'browser' | 'presentation' | 'excel' = 'panel'
+  let rightKind: AppLayoutProps['rightKind'] = 'panel'
   if (browserLayout) rightKind = 'browser'
   else if (presentationLayout) rightKind = 'presentation'
   const wordLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Word
+  if (wordLayout) rightKind = 'word'
   const excelLayout = !focusPaneOpen && workbenchSurface === SessionWorkbenchSurface.Excel
   if (excelLayout) rightKind = 'excel'
 

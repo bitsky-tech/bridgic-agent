@@ -111,6 +111,11 @@ export class EmbeddedPowerPointManager {
     }
   }
 
+  async flushAll(): Promise<boolean> {
+    const results = await Promise.allSettled([...this.container.values()].map((surface) => surface.view.webContents.executeJavaScript('window.__bridgicPowerPoint?.flush?.()')))
+    return results.every((result) => result.status === 'fulfilled')
+  }
+
   activateSession(sessionId: string | null): void {
     this.container.activateSession(sessionId === null ? null : this.normalizeSessionId(sessionId))
   }

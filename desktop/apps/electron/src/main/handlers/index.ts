@@ -1,3 +1,4 @@
+import { registerOfficeFileHandlers } from './office-files'
 import type { WindowManager } from '../window-manager'
 import { registerAppHandlers } from './app'
 import { registerBackendHandlers } from './backend'
@@ -22,6 +23,12 @@ import { registerWordHandlers } from './word'
 import { registerWordHostHandlers } from './word-host'
 
 export function registerAllHandlers(windowManager: WindowManager, quitApp: () => Promise<void>): void {
+  registerOfficeFileHandlers((kind, contentsId) => {
+    if (kind === 'word') return windowManager.getWordHost().sessionForContents(contentsId)
+    if (kind === 'excel') return windowManager.getExcelHost().sessionForContents(contentsId)
+    if (kind === 'presentation') return windowManager.getEmbeddedPowerPoint().sessionForContents(contentsId)
+    throw new Error('Unknown Office editor')
+  })
   registerAppHandlers(quitApp)
   registerShellHandlers()
   registerDialogHandlers()

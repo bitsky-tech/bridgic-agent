@@ -702,7 +702,11 @@ export class WindowManager {
     if (this.wordFlush) return this.wordFlush
     const flush = (async () => {
       try {
-        if (await this.wordHost.flushAll()) return true
+        const results = await Promise.race([
+          Promise.allSettled([this.wordHost.flushAll(), this.excelHost.flushAll(), this.embeddedPowerPoint.flushAll()]),
+          new Promise<never>((_resolve, reject) => { const timer = setTimeout(() => reject(new Error('Office checkpoint timed out')), 10_000); timer.unref() }),
+        ])
+        if (results.every((result) => result.status === 'fulfilled' && result.value)) return true
         windowLog.warn('[window] Word checkpoint failed; continuing shutdown')
       } catch (error) {
         windowLog.warn('[window] Word checkpoint failed; continuing shutdown', error)

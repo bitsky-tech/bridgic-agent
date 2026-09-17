@@ -1,5 +1,6 @@
 import secrets
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from sqlmodel import Field, SQLModel, select
@@ -105,6 +106,19 @@ class SessionMountRepository(Repository[SessionMountRecord]):
             await s.delete(row)
             await s.commit()
             return True
+
+    async def rebind(self, row: SessionMountRecord, path: str) -> SessionMountRecord:
+        """Keep existing mention ids when an Office import moves into its workspace."""
+        async with self._session() as session:
+            current = await self._get_owned(session, SessionMountRecord, row.id, row.user_id)
+            if current is None or current.session_id != row.session_id:
+                raise ValueError("The Session mount no longer exists")
+            current.abs_path = path
+            current.name = Path(path).name
+            session.add(current)
+            await session.commit()
+            await session.refresh(current)
+            return current
 
     async def delete_for_session(self, session_id: str, user_id: str) -> int:
         """Drop ALL of one session's mount rows — cascade from session delete.

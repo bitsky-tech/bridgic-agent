@@ -103,6 +103,7 @@ export type IssueReportExportResult =
 /** A workbook selected through the native Excel file picker. The opaque id is
  * the renderer's only authority to overwrite the selected path later. */
 export interface ExcelDocumentHandle {
+  source?: import('./office-files').OfficeFileSource
   documentId: string
   fileName: string
   bytes: Uint8Array
@@ -132,7 +133,7 @@ export interface ExcelSaveRequest {
 }
 
 export type ExcelSaveResult =
-  | { ok: true; documentId: string; fileName: string; mtimeMs: number }
+  | { ok: true; documentId: string; fileName: string; mtimeMs: number; source?: import('./office-files').OfficeFileSource }
   | { ok: false; reason: 'canceled' | 'conflict' }
 
 export interface ExcelSaveAsRequest {
@@ -374,6 +375,7 @@ export interface EmbeddedPowerPointOpenFileResult {
 }
 
 export interface WordDocumentReadResult {
+  path?: string
   bytes: Uint8Array
   fileName: string
   mtimeMs: number
@@ -552,6 +554,7 @@ export interface ElectronAPI {
   wordHost: {
     snapshot(): Promise<WordHostSnapshot>
     ensureSession(sessionId: string): Promise<WordHostSessionInfo>
+    createDocument(sessionId: string): Promise<void>
     openFile(sessionId: string, request: WordHostOpenRequest): Promise<void>
     /** Release a deleted Session; hiding a panel must not call this. */
     closeSession(sessionId: string): Promise<void>
@@ -561,7 +564,7 @@ export interface ElectronAPI {
   }
   excelHost: {
     snapshot(): Promise<ExcelHostSnapshot>
-    ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo>
+    ensureSession(sessionId: string, config: ExcelHostConfig, createInitialWorkbook?: boolean): Promise<ExcelHostSessionInfo>
     openWorkbook(sessionId: string, config: ExcelHostConfig, request: ExcelWorkbookOpenRequest): Promise<void>
     closeSession(sessionId: string): Promise<void>
     activateSession(sessionId: string | null): Promise<void>
@@ -682,8 +685,11 @@ declare global {
     __bridgicPowerPoint?: {
       protocolVersion: 5
       sessionId: string
+      flush?(): Promise<void>
+      close?(): Promise<void>
       dispatch(request: {
         method:
+          | 'save_ppt'
           | 'view_ppt'
           | 'inspect_ppt_assets'
           | 'get_ppt_page'

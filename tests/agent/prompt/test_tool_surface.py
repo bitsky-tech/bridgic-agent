@@ -36,6 +36,7 @@ from src.amphi_store import SessionRecord, SkillRepository
 USER_ID = "local"
 SESSION_ID = "session-tools"
 POWERPOINT_TOOL_NAMES = {
+    "save_ppt",
     "view_ppt",
     "get_ppt_page",
     "update_ppt_design",

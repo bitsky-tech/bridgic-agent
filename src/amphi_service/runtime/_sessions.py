@@ -16,6 +16,7 @@ from ...amphi_store import (
     new_session_id,
 )
 from ._attachments import SessionAttachmentStore
+from ._office_files import OFFICE_EXTENSIONS, import_office_file
 
 SESSIONS_ROOT_ENV_VAR = "BRIDGIC_AGENT_SESSIONS_ROOT"
 WORK_DIR_NAME = ".work"
@@ -377,6 +378,11 @@ class SessionService:
             data,
         )
         try:
+            if Path(safe_name).suffix.lower() in OFFICE_EXTENSIONS and record.workspace_root:
+                uploaded = path
+                path = await asyncio.to_thread(import_office_file, record.workspace_root, uploaded, safe_name)
+                await asyncio.to_thread(self._attachments.delete, record.id, uploaded)
+                safe_name = path.name
             return await self._mounts.create(
                 record.id,
                 record.user_id,
