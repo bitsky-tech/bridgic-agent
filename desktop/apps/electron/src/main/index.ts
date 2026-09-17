@@ -217,8 +217,7 @@ const shutdownUsageTelemetry = (): Promise<void> => {
   return telemetryShutdownPromise
 }
 const shutdownBeforeQuit = async () => {
-  if (!await windowManager.getExcelHost().confirmClose()) return false
-  if (!await windowManager.flushWordDocuments()) return false
+  await windowManager.flushWordDocuments()
   await shutdownUsageTelemetry()
   await shutdownEmbeddedBrowser()
   return true

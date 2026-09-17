@@ -43,6 +43,16 @@ desktop/                     (sub-project of the Bridgic Agent repository)
 > The root README is the overview; executable contracts live in source and
 > tests.
 
+## Embedded editors
+
+When adding a native sidebar editor, start with the
+[embedded editor integration guide](docs/embedded-editor-guide.md). It defines
+the shared shell, Session ownership, tab/panel closure, persistence boundaries and
+acceptance checks. Reuse its linked components and lifecycle helpers so new
+editors follow the same behavior and style. The
+[Office architecture record](office-architecture.md) describes the existing
+PowerPoint, Word and Excel implementation layers.
+
 ## Prerequisites
 
 - **Bun** ≥ 1.3 — `curl -fsSL https://bun.sh/install | bash`
@@ -97,30 +107,82 @@ endpoint. Click "New Session", optionally pick a workspace, then chat.
 ## Debug conversation
 
 Run `bun run debug` from `desktop/` to open the same app with an execution view
-and two additional Session panels: **Tool calls** and **Agent rounds**. The
-normal `bun run dev` command always opens the product UI. Both modes use the
-same settings, sessions, daemon, browser and Office hosts; stop one development
-instance before switching modes.
+and three additional Session panels: **Agent overview**, **Tool calls**, and
+**Agent rounds**. The normal `bun run dev` command always opens the product
+UI. Both modes use the same settings, sessions, daemon, browser and Office hosts;
+stop one development instance before switching modes.
 
 The execution view groups recorded model responses by cognitive stage and keeps
 Desktop Markdown, Thinking, message actions and interaction cards. Tool rows and
 round details open the corresponding right-side inspector. Inspectors support
 chronological Turn/round/tool order, stage and tool-name/status filtering,
 recorded usage, and navigation back to older conversation messages. Tool arguments
-are editable forms; model requests expose recorded messages and request options.
-Edits stay in local drafts across inspector navigation and automatic refresh;
-switching sessions clears those drafts and never changes recorded history. The
-conversation view remains available in the debug header for comparison.
+and recorded round requests have local draft editors. Tool arguments can be
+submitted with **Execute tool** to run once against the Session's current
+workspace, mounts, browser, and Office hosts. Test results and submitted
+arguments stay in the inspector across navigation and automatic refresh within
+the selected Session; resource changes take effect immediately.
 
-Debug starts a loopback read-only SQLite service inside the existing Bun
-launcher. It reads `~/.bridgic/AmphiAgent/state.db` (or
-`BRIDGIC_AGENT_STATE_DB`) and refreshes while a Turn runs. No mock records or
-reconstructed model requests are presented as captured data: missing Prompt,
-duration and usage fields remain unavailable. Missing historical Prompts can be
-replaced by a manually authored debug draft, clearly marked as new input. Tool
-execution and single LLM calls are not connected yet; their buttons remain
-disabled. See the proposed [debug API contract](docs/debug-api-contract.md) for
-the fuller history and replay capabilities required from the backend.
+Tool execution calls the authenticated
+`POST /api/debug/sessions/{sessionId}/tools/execute` endpoint with `toolName`
+and an `arguments` object. Invocation reuses `_load_context`, then delegates to
+`AmphiAgent.execute_tool` and the same single-tool worker runner used by ordinary
+actions. Recorded string parameters receive the existing type coercion; native
+JSON values retain their types. This does not restore historical files or pages,
+run a new Turn, or overwrite the recorded call. Existing tool prerequisites still
+apply; missing resources or state produce the tool's usual error.
+
+The Agent overview panel summarizes token usage, model rounds, mode/stage visits,
+and tool outcomes. It defaults to the entire Session, automatically loads all
+trace pages for complete totals, and allows selecting the latest or historical Turns.
+New rounds store measured input/output and cache usage, plus model-call duration
+(including streaming and retries, excluding prompt assembly and tools). The
+execution cards and round inspector read these same per-round measurements.
+Recording requires the updated Python daemon; reloading only the renderer does
+not enable it. Historical per-round measurements cannot be reconstructed from
+Turn totals. Existing Turn token
+counters remain available for older records; their latest-call cache snapshot
+is never substituted for cumulative cache usage. Missing usage appears as `—`,
+and partial sums are marked `≥`. Cache tokens are included in input totals.
+Mode/stage entries count transitions within each Turn, while the model-call
+count follows recorded rounds. Tool outcomes distinguish success, failure, and
+unknown results; unpaired results do not inflate declared invocation counts.
+
+Opening a round shows its model request and recorded output inside an initially
+expanded **Model call** section. Its disclosure sits outside both cards, matching
+the **User input** section. The Cognitive request is assembled automatically. Messages (including native content
+blocks and metadata), tool schemas and options can be inspected and copied, or
+edited in a separate experiment. Assembly restores the saved round scope and
+prefers its recorded model;
+it uses current resources and excludes runtime-tail injection. It is not a
+historical HTTP capture. Collapsed **Tool execution** and **Raw record** sections below
+the output retain the recorded results and source data.
+
+The request inspector separates **Messages**, **Tool definitions**, and **Call
+parameters**. Messages and tools use searchable, paginated directories with one
+selected detail; only 20 directory rows and one full item render at a time.
+Message role filters preserve original positions, and inspector navigation keeps
+the selection and filters. Wider sidebars place the directory beside its detail;
+narrow sidebars stack them within bounded scroll areas. Complete request JSON is
+an alternate view opened from the request header, separate from these fields.
+
+**Debug experiment** opens a dedicated dialog with the request editor and results
+side by side. **Run experiment** submits the draft using the active provider; merely
+opening or closing the dialog never starts or cancels a run. The inspector always
+shows historical output, while the dialog keeps a separate result selection;
+experiments support cancellation and retain submitted requests, outputs and usage
+in `debug_model_runs`, outside conversation Turns and overview totals. Returned
+tool calls are displayed, never executed. A disconnected viewer can reconnect;
+unfinished runs are marked interrupted after a daemon restart. Independent tool
+execution remains available in the Tool calls inspector. These routes require the
+updated Python daemon.
+
+Edits stay in local drafts across inspector navigation and automatic refresh;
+switching Sessions clears local drafts. The conversation view remains available
+in the debug header for comparison.
+
+See the [debug API contract](docs/debug-api-contract.md) for the assembly boundary
+and the separate history and replay capabilities.
 
 The renderer's debug entry is enabled only by the explicit debug launcher.
 Production builds fix the flag to false and exclude debug modules and styles,

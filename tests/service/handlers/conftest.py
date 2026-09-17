@@ -37,6 +37,7 @@ async def service_app(test_sandbox: IsolatedPaths) -> AsyncIterator["ServiceApp"
                         await service.state.scheduler.stop()
                     finally:
                         try:
+                            await service.state.debug_runs.shutdown()
                             await service.state.invocations.shutdown()
                         finally:
                             await service.state.browser_host.shutdown()

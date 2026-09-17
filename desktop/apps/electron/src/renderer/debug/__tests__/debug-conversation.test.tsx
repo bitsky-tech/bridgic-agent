@@ -63,6 +63,27 @@ async function mount(messages: AgentMessage[], storedTurn: DesktopDebugTurn) {
 }
 
 describe('DebugConversation content preservation', () => {
+  it('shows each round\'s own model time and usage without allocating Turn totals to historical rounds', async () => {
+    const stored = turn([
+      { ...round('Measured response'), model_duration_ms: 1250, usage: {
+        source: 'provider', prompt_tokens: 1200, completion_tokens: 80,
+        total_tokens: 1280, prompt_tokens_details: { cached_tokens: 900 },
+      } },
+      round('Historical response'),
+    ])
+    stored.contextUsage = { input_tokens: 5000, output_tokens: 200, cached_input_tokens: 900 }
+    const view = await mount([message()], stored)
+    const metrics = view.host.querySelectorAll('.debug-metrics')
+    expect(metrics).toHaveLength(2)
+    expect(metrics[0]?.textContent).toContain('1.3 s')
+    expect(metrics[0]?.textContent).toContain((1200).toLocaleString())
+    expect(metrics[0]?.textContent).toContain('80')
+    expect(metrics[0]?.textContent).toContain('900 · 75.0%')
+    expect(metrics[0]?.querySelector('span[title]')).not.toBeNull()
+    expect(metrics[1]?.textContent?.match(/—/g)).toHaveLength(4)
+    await view.unmount()
+  })
+
   it('uses the shared Markdown file links for recorded model output and the final answer', async () => {
     const body = '**Prepared draft** [Draft](file:///tmp/debug-draft.txt)'
     const finalAnswer = 'Delivered [Final artifact](file:///tmp/debug-final.txt)'

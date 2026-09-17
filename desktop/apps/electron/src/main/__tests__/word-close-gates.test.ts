@@ -64,6 +64,8 @@ async function runIsolated(body: string): Promise<Record<string, unknown>> {
       Object.assign(manager, {
         mainWindow: win, pendingCloseTimeout: null, closeGeneration: 0,
         closingWindow: null, wordFlush: null,
+        excelHost: { flushAll: async () => true },
+        embeddedPowerPoint: { flushAll: async () => true },
         wordHost: { flushAll: () => { flushes += 1; return flush(); } },
       });
       return { manager, win, snapshot: () => ({ destroys, flushes, destroyed }) };
@@ -79,7 +81,7 @@ async function runIsolated(body: string): Promise<Record<string, unknown>> {
   return JSON.parse(stdout) as Record<string, unknown>
 }
 
-describe('Word persistence gates for native shutdown', () => {
+describe('Office checkpoints during native shutdown', () => {
   it('does not destroy the main window until its Word checkpoint acknowledges success', async () => {
     const result = await runIsolated(`
       const checkpoint = deferred();
@@ -95,7 +97,7 @@ describe('Word persistence gates for native shutdown', () => {
     expect(result.after).toEqual({ destroys: 1, flushes: 1, destroyed: true })
   })
 
-  it('keeps the window available on a refused or rejected checkpoint', async () => {
+  it('closes without a dialog even when a checkpoint fails or rejects', async () => {
     const result = await runIsolated(`
       const refused = fixture(async () => false);
       await refused.manager.confirmClose();
@@ -103,9 +105,9 @@ describe('Word persistence gates for native shutdown', () => {
       await rejected.manager.confirmClose();
       console.log(JSON.stringify({ refused: refused.snapshot(), rejected: rejected.snapshot(), dialogCount: dialogs.length }));
     `)
-    expect(result.refused).toEqual({ destroys: 0, flushes: 1, destroyed: false })
-    expect(result.rejected).toEqual({ destroys: 0, flushes: 1, destroyed: false })
-    expect(result.dialogCount).toBe(1)
+    expect(result.refused).toEqual({ destroys: 1, flushes: 1, destroyed: true })
+    expect(result.rejected).toEqual({ destroys: 1, flushes: 1, destroyed: true })
+    expect(result.dialogCount).toBe(0)
   })
 
   it('coalesces duplicate close confirmations and checkpoint requests', async () => {
@@ -164,10 +166,10 @@ describe('Word persistence gates for native shutdown', () => {
     expect(result.replacement).toEqual({ destroys: 0, flushes: 0, destroyed: false })
   })
 
-  it('does not hide windows, stop the daemon or install an update before a failed Word checkpoint', async () => {
+  it('continues update shutdown without a dialog after a failed Word checkpoint', async () => {
     const result = await runIsolated(`
       const checkpoint = deferred();
-      registerUpdateHandlers({ confirmClose: async () => { calls.push('excel-confirm'); return true; } }, () => {
+      registerUpdateHandlers(() => {
         calls.push('flush-word');
         return checkpoint.promise;
       });
@@ -178,15 +180,15 @@ describe('Word persistence gates for native shutdown', () => {
       const outcome = await installing;
       console.log(JSON.stringify({ before, after: calls, outcome }));
     `)
-    expect(result.before).toEqual(['excel-confirm', 'flush-word'])
-    expect(result.after).toEqual(['excel-confirm', 'flush-word'])
-    expect(result.outcome).toEqual({ ok: false, reason: 'unsaved-documents' })
+    expect(result.before).toEqual(['flush-word'])
+    expect(result.after).toEqual(['flush-word', 'list-windows', 'hide', 'stop-daemon', 'mark-quit', 'install'])
+    expect(result.outcome).toEqual({ ok: true })
   })
 
   it('begins the update handover only after the Word checkpoint succeeds', async () => {
     const result = await runIsolated(`
       const checkpoint = deferred();
-      registerUpdateHandlers({ confirmClose: async () => true }, () => {
+      registerUpdateHandlers(() => {
         calls.push('flush-word');
         return checkpoint.promise;
       });

@@ -12,7 +12,7 @@ from ...amphi_agent import WorkflowPackage
 from ...amphi_agent._workflow_run import RunWorkflow
 from ...amphi_agent._workspace import Workspace
 from ..i18n import backend_i18n
-from ..protocol import CreateSessionRequest, RenameSessionRequest
+from ..protocol import CreateSessionRequest, ExecuteSessionToolRequest, GetSessionPromptRequest, RenameSessionRequest
 from ...amphi_store import (
     SessionRecord,
     SessionRepository,
@@ -175,8 +175,8 @@ class SessionDetailHandler(BaseHandler):
     async def delete(self, session_id: str) -> Response:
         user = await self.require_user()
         record = await self.require_session(session_id, user)
-        tree = await SessionRepository().list_tree(user.id, record.id)
-        removed = await self.invocations.remove_session_tree(session_id)
+        async with self.state.debug_runs.deleting_session_tree(user.id, record.id) as tree:
+            removed = await self.invocations.remove_session_tree(session_id)
         if not removed:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -342,6 +342,54 @@ class SessionMessagesHandler(BaseHandler):
             "step_index": checkpoint.step_index,
             "execution_steps": execution_steps,
         }
+
+
+class SessionDebugToolsHandler(BaseHandler):
+    """Execute a single tool using the authenticated Session's current resources."""
+
+    tags = ["debug"]
+
+    async def post(self, session_id: str, body: ExecuteSessionToolRequest) -> Response:
+        from ...amphi_agent import InvocationNotFoundError, InvocationStateError
+
+        user = await self.require_user()
+        record = await self.require_session(session_id, user)
+        try:
+            result = await self.invocations.execute_tool(record.id, body.tool_name, body.arguments)
+        except InvocationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvocationStateError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response = self.response(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+class SessionDebugPromptsHandler(BaseHandler):
+    """Assemble a selected round through its actual Cognitive worker."""
+
+    tags = ["debug"]
+
+    async def post(self, session_id: str, body: GetSessionPromptRequest) -> Response:
+        from ...amphi_agent import InvocationNotFoundError, InvocationStateError
+
+        user = await self.require_user()
+        record = await self.require_session(session_id, user)
+        try:
+            prompt = await self.invocations.get_prompt(
+                record.id, body.turn_id, body.round_index, mode=body.mode, stage=body.stage,
+            )
+        except InvocationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvocationStateError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response = self.response(prompt)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 class SessionFileHandler(BaseHandler):
@@ -959,7 +1007,7 @@ def _turn_messages(
             t_idx += 1
             current_calls.append(call)
             blocks.append({"type": "tool", **call})
-            if step.get("tool_name") == "report_presentation_step":
+            if step.get("tool_name") in {"request_presentation_outline_confirm", "report_presentation_step"}:
                 result = step.get("tool_result")
                 request_id = (
                     str(result.get("outline_confirmation_id") or "").strip()
@@ -981,7 +1029,7 @@ def _turn_messages(
                     }
                     if should_show_interaction_block(block):
                         blocks.append(block)
-            if step.get("tool_name") == "ppt_rag":
+            if step.get("tool_name") in {"request_presentation_template_confirm", "ppt_rag"}:
                 result = step.get("tool_result")
                 request_id = (
                     str(result.get("template_selection_id") or "").strip()
@@ -1126,20 +1174,10 @@ def _thinking_mode(turns: Sequence[SessionTurnRecord]) -> Optional[Dict[str, Any
     if think.get("mode") == "build" and think.get("workflow_id"):
         position["workflow_id"] = think["workflow_id"]
     if think.get("mode") == "presentation":
-        position.update({
-            "presentation_goal": think.get("goal"),
-            "presentation_step_index": think.get("step_index") or 0,
-            "presentation_reports": think.get("reports") or [],
-            "presentation_sources": think.get("sources") or [],
-            "presentation_outline": think.get("outline") or [],
-            "presentation_outline_confirmed": bool(think.get("outline_confirmed")),
-            "presentation_outline_confirmation_id": think.get("outline_confirmation_id"),
-            "presentation_template_candidates": think.get("template_candidates") or [],
-            "presentation_template_selection_id": think.get("template_selection_id"),
-            "presentation_template_selection_status": think.get("template_selection_status") or "idle",
-            "presentation_template_selection_error": think.get("template_selection_error"),
-            "presentation_selected_template": think.get("selected_template"),
-        })
+        from ...amphi_agent.cognitive.presentation.shared import presentation_view
+
+        position.update(presentation_view(record for turn in turns for record in turn.ota_records))
+        position["presentation_step_index"] = think.get("step_index") or 0
     return position
 
 
@@ -1378,4 +1416,5 @@ __all__ = [
     "SessionListHandler",
     "SessionDetailHandler",
     "SessionMessagesHandler",
+    "SessionDebugPromptsHandler",
 ]

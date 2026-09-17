@@ -19,6 +19,7 @@ from src.amphi_agent import (
     Session,
 )
 from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, VerifyThink
+from src.amphi_agent.cognitive.base import VOLATILE_TAIL_EXTRA
 from src.amphi_agent._invocation import AgentInvocation
 from src.amphi_agent.cognitive.build.state import BuildStageState
 from src.amphi_agent.cognitive.normal.state import NormalStageState
@@ -427,6 +428,52 @@ async def test_compacts_session_and_turn_together_while_protecting_recent_suffix
         ("context_compaction", {"active": True}),
         ("context_compaction", {"active": False}),
     ]
+
+
+async def test_round_snapshot_reassembles_the_actual_compacted_request(test_sandbox: IsolatedPaths) -> None:
+    """Real compaction commits summaries before capture; rebuilding preserves the model context."""
+    content = "Historical facts and tool findings. " * 200
+    turns = [_turn("session-compaction-policy", index, content) for index in range(6)]
+    ota = AmphiOTAContext(
+        user_input="Continue", prompt_time="2026-09-15 09:00 (UTC+08:00)",
+        ota_record=[OTARecord(think_result={"step_content": f"Round {index}: {content}"}) for index in range(6)],
+    )
+    ota.open_record()
+    context = _context(str(test_sandbox.sessions / "snapshot-compaction"), turns, 200_000)
+    model_requests = []
+
+    class ThinkingLlm(SummaryLlm):
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            if tools is None:
+                return await super().stream_turn(messages, tools, publish=publish, extra_body=extra_body)
+            model_requests.append((deepcopy(messages), [tool.model_dump(mode="json") for tool in tools]))
+            return StreamResult(tool_calls=[], content="Final response")
+
+    class CompactingThink(MainThink):
+        async def compact_messages(self, messages, tools, ota_context, context, target=None):
+            return await super().compact_messages(messages, tools, ota_context, context, target=1)
+
+    llm = ThinkingLlm("Saved Session summary", "Saved Turn summary")
+    await CompactingThink(llm).thinking(ota, context)
+    assert len(llm.calls) == 2 and len(model_requests) == 1
+    saved = AgentInvocation._ota_context_values(ota)["ota_records"]
+    snapshot = saved[-1]["think_scope"]
+    assert "prompt_context" not in saved[-1]
+    assert snapshot["context_compaction"]["session"]["normal"]["main"]["session_summary"] == "Saved Session summary"
+    assert snapshot["context_compaction"]["turn"]["normal"]["main"]["turn_summary"] == "Saved Turn summary"
+    restored = AmphiOTAContext.model_validate({
+        **snapshot, "user_input": "Continue",
+        "state": {"think": {"mode": snapshot["mode"], "stage": snapshot["stage"]},
+                  "context_compaction": snapshot["context_compaction"]},
+        "ota_record": [*saved[:-1], {"think_scope": saved[-1]["think_scope"]}],
+    })
+    rebuilt = await AmphiAgent().get_prompt(context, restored)
+    original_messages, original_tools = model_requests[0]
+    assert rebuilt["messages"] == [
+        message.model_dump(mode="json") for message in original_messages
+        if not message.extras.get(VOLATILE_TAIL_EXTRA)
+    ]
+    assert rebuilt["tools"] == original_tools
 
 
 @pytest.fixture(params=[False, True], ids=["fresh", "previous_summary"])

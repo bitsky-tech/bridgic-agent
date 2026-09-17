@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
@@ -489,9 +489,24 @@ class SessionPowerPoint:
         if target_path.exists():
             params["content_base64"] = base64.b64encode(await asyncio.to_thread(target_path.read_bytes)).decode("ascii")
         result = await self._invoke({"method": "view_ppt", "params": params})
-        self._target = target_path
+        self._target = Path(result.get("target", str(target_path)))
         await self._apply_overview(result, reset_reads=True)
         return self.describe()
+
+    async def save_ppt(self, target: Optional[str] = None) -> dict[str, Any]:
+        """Explicitly write the current shared draft to its associated PPTX file."""
+        if self._target is None:
+            raise ValueError("Call view_ppt before saving the PowerPoint")
+        params = {"target": str(self._target)}
+        if target is not None:
+            params["save_as"] = str(Path(target).expanduser().resolve())
+        result = await self._invoke({"method": "save_ppt", "params": params})
+        if not isinstance(result, dict) or result.get("status") != "saved":
+            raise RuntimeError("PowerPoint draft was not saved")
+        if target is not None:
+            self._target = Path(params["save_as"])
+            self.identity = replace(self.identity, path=str(self._target), file_name=self._target.name)
+        return result
 
     async def read_page(self, page_id: str) -> PowerPointPageView:
         normalized = str(page_id or "").strip()

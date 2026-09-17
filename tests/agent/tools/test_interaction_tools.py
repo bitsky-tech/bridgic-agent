@@ -8,7 +8,7 @@ from src.amphi_agent.tools.build import (
     request_human_task_confirm,
     request_human_workflow_confirm,
 )
-from src.amphi_agent.tools.ppt import PresentationToolRejection, report_presentation_step, request_presentation
+from src.amphi_agent.tools.ppt import PresentationToolRejection, report_presentation_step, request_presentation, request_presentation_outline_confirm, request_presentation_template_confirm
 from src.amphi_agent.tools._request_human import RequestHumanRejection, request_human_choice
 from src.amphi_agent.tools.workflow import request_run_workflow
 from src.amphi_agent.tools._subagent import run_subagent, start_subagent
@@ -82,6 +82,16 @@ async def test_presentation_request() -> None:
     assert request.goal == "Create a product launch deck"
     with pytest.raises(RequestHumanRejection, match="goal.*non-empty"):
         await request_presentation("  ")
+
+
+async def test_presentation_outline_request() -> None:
+    """The independent review tool transports the full outline and rejects empty requests."""
+    chapters = [{"title": "Opening", "slides": [{"title": "Overview", "content_outline": ["Purpose"]}]}]
+    result = await request_presentation_outline_confirm(json.dumps({"chapters": chapters}))
+    assert result.data == {"chapters": chapters}
+    for invalid in ('{}', '{"chapters": []}', 'invalid', '[]'):
+        with pytest.raises(PresentationToolRejection):
+            await request_presentation_outline_confirm(invalid)
 
 
 async def test_presentation_step_report() -> None:
@@ -275,3 +285,11 @@ async def test_control_signals() -> None:
     # Check 4: Product help exposes the durable capabilities that the user can invoke.
     reference = await product_help()
     assert all(section in reference for section in ("# Reusable Workflows", "# Multi-Agent work", "# Scheduling"))
+
+
+async def test_template_confirmation_request() -> None:
+    """The interaction references a recorded batch rather than accepting fabricated candidates."""
+    request = await request_presentation_template_confirm("  search-one  ")
+    assert request.search_id == "search-one"
+    with pytest.raises(RequestHumanRejection, match="search_id.*non-empty"):
+        await request_presentation_template_confirm(" ")

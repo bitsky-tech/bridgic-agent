@@ -118,6 +118,11 @@ build/               PyInstaller entry points and target-native build scripts
 tests/               Python test suite
 ```
 
+Embedded desktop editors share a Session-owned native container, shell and
+workspace infrastructure. See the
+[embedded editor integration guide](desktop/docs/embedded-editor-guide.md) for
+the interaction and visual contract when adding another sidebar editor.
+
 ### Stage-aware Agent loops
 
 Bridgic Agent does not expose one permanent, all-powerful tool list. The model

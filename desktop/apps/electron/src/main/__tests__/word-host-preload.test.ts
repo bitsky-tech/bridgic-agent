@@ -8,7 +8,7 @@ it('buffers early Word runtime events and exposes only its narrow Session API', 
     const invocations = [];
     let exposed;
     mock.module('electron', () => ({
-      contextBridge: { exposeInMainWorld(name, api) { exposed = { name, api }; } },
+      contextBridge: { exposeInMainWorld(name, api) { if (name === 'wordHostApi') exposed = { name, api }; } },
       ipcRenderer: {
         on(channel, listener) { listeners.set(channel, listener); },
         invoke(...args) { invocations.push(args); return Promise.resolve(); },
@@ -47,7 +47,7 @@ it('buffers early Word runtime events and exposes only its narrow Session API', 
   expect(result.name).toBe('wordHostApi')
   expect(result.keys.sort()).toEqual([
     'completeFlush', 'completeOpenFile', 'getConfig', 'onConfigChanged', 'onExpandedChanged',
-    'onFlushRequested', 'onOpenFileRequested', 'readDocument', 'reportState', 'requestHide', 'setExpanded',
+    'onFlushRequested', 'onOpenFileRequested', 'readDocument', 'reportState', 'requestClose', 'setExpanded',
   ].sort())
   expect(result.received.map(([kind]) => kind)).toEqual(['open', 'flush', 'config', 'expanded', 'replayed'])
   expect(result.received[2]).toEqual(['config', { locale: 'zh' }])

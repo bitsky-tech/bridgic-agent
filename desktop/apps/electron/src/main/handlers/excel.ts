@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute } from 'node:path'
 import {
   BrowserWindow,
@@ -62,12 +62,16 @@ async function atomicWrite(path: string, bytes: Uint8Array, mode?: number): Prom
   }
 }
 
-/** Register capability-scoped .xlsx I/O. Paths never cross the preload bridge. */
+/** Register .xlsx imports and legacy renderer-owned write handles. Source metadata also supports durable draft recovery. */
 export function registerExcelHandlers(excelHost: ExcelHost): void {
   const documents = new Map<string, AuthorizedDocument>()
   const ownersWithCleanup = new WeakSet<WebContents>()
 
   const authorize = (event: IpcMainInvokeEvent, path: string): string => {
+    // A canonical file has one identity within its owning Session renderer.
+    for (const [id, document] of documents) {
+      if (document.ownerWebContentsId === event.sender.id && document.path === path) return id
+    }
     const documentId = randomUUID()
     documents.set(documentId, { ownerWebContentsId: event.sender.id, path })
     if (!ownersWithCleanup.has(event.sender)) {
@@ -88,6 +92,7 @@ export function registerExcelHandlers(excelHost: ExcelHost): void {
     bytes: Uint8Array,
   ): Promise<ExcelDocumentHandle> => ({
     documentId,
+    source: { path, mtimeMs: (await stat(path)).mtimeMs },
     fileName: basename(path),
     bytes,
     mtimeMs: (await stat(path)).mtimeMs,
@@ -97,7 +102,7 @@ export function registerExcelHandlers(excelHost: ExcelHost): void {
     event: IpcMainInvokeEvent,
     value: unknown,
   ): Promise<ExcelOpenResult> => {
-    const path = workbookPath(value)
+    const path = await realpath(workbookPath(value))
     const file = await stat(path)
     if (!file.isFile()) throw new Error('Workbook path is not a file')
     if (file.size > MAX_WORKBOOK_BYTES) throw new RangeError('Workbook exceeds the 150 MB limit')
@@ -143,6 +148,7 @@ export function registerExcelHandlers(excelHost: ExcelHost): void {
         documentId: saved.documentId,
         fileName: saved.fileName,
         mtimeMs: saved.mtimeMs,
+        source: saved.source,
       }
     },
     { transformLogArgs: ([request]) => ({
@@ -169,13 +175,14 @@ export function registerExcelHandlers(excelHost: ExcelHost): void {
         ? result.filePath
         : `${result.filePath}.xlsx`
       await atomicWrite(path, workbookBytes(request.bytes))
-      const documentId = authorize(event, path)
+      const documentId = authorize(event, await realpath(path))
       const saved = await documentResult(documentId, path, new Uint8Array())
       return {
         ok: true,
         documentId: saved.documentId,
         fileName: saved.fileName,
         mtimeMs: saved.mtimeMs,
+        source: saved.source,
       }
     },
     { transformLogArgs: ([request]) => ({

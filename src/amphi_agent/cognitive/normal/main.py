@@ -672,7 +672,7 @@ class MainThink(BaseThink):
                 if isinstance(result, RequestPresentation):
                     source_status = ota_context.think_status
                     PresentationThink.invalidate_artifacts(context, PRESENTATION_STAGE_ORDER)
-                    ota_context.transition_think(PresentationStageState(goal=result.goal))
+                    ota_context.transition_think(PresentationStageState())
                     step.tool_result = {
                         "mode": "presentation",
                         "stage": "ppt_brief",
@@ -688,14 +688,7 @@ class MainThink(BaseThink):
             elif step.tool_name == "request_run_workflow":
                 await handle_workflow_run_request(step, ota_context, context, agent)
 
-    async def handle_think_unit_result(
-        self,
-        ota_context: AmphiOTAContext,
-        context: AmphiContext,
-        previous_status: InStage,
-        result: Optional[str],
-        agent: "AmphiAgent",
-    ) -> ThinkUnitOutcome:
+    async def handle_think_unit_result(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_status: InStage, result: Optional[str], agent: "AmphiAgent") -> ThinkUnitOutcome:
         """Finish a Main answer or request another unit after a handoff or empty result."""
         outcome = await super().handle_think_unit_result(ota_context, context, previous_status, result, agent)
         if ota_context.think_status != previous_status:

@@ -6,6 +6,8 @@ import { browserSurfaceBlockedAtom, setNativeWordSurfaceRectAtom } from '@/atoms
 import { activeWordHostSessionAtom, completeWordFileOpenAtom, wordFileOpenRequestAtom } from '@/atoms/word'
 import { showToastAtom } from '@/atoms/toast'
 import { Icons } from '@/components/amphi/Icons'
+import { useOfficeSessionRestore } from '@/hooks/useOfficeSessionRestore'
+import { OfficeSessionLoading } from './OfficeSessionLoading'
 import { useNativeOfficeSurface, type NativeOfficeSurfacePolicy } from '@/hooks/useNativeOfficeSurface'
 import { rlog } from '@/lib/logger'
 import { OfficeAppHeader } from './OfficeWorkbenchChrome'
@@ -31,17 +33,7 @@ export function WordWorkbenchPanel({ active = false }: { active?: boolean }) {
   const [failure, setFailure] = useState<{ sessionId: string; error: string } | null>(null)
   const [retryingSession, setRetryingSession] = useState<string | null>(null)
   const api = window.api.wordHost
-
-  useEffect(() => {
-    if (!active || !sessionId || !api) return
-    let disposed = false
-    void api.ensureSession(sessionId).then(() => {
-      if (!disposed) setFailure((current) => current?.sessionId === sessionId ? null : current)
-    }).catch((error: unknown) => {
-      if (!disposed) setFailure({ sessionId, error: String(error) })
-    })
-    return () => { disposed = true }
-  }, [active, api, sessionId])
+  const restoration = useOfficeSessionRestore('word', sessionId, active, hostSession !== null, () => api.ensureSession(sessionId!))
 
   useEffect(() => {
     if (!request || !api) return
@@ -87,6 +79,10 @@ export function WordWorkbenchPanel({ active = false }: { active?: boolean }) {
     } finally {
       setRetryingSession((current) => current === sessionId ? null : current)
     }
+  }
+  // An existing renderer owns recovery errors and their retry action, even if creation failed.
+  if (!hostSession && !request && !failed && !retrying) {
+    return <OfficeSessionLoading failed={restoration.failed} onRetry={restoration.retry} />
   }
   return (
     <div className="h-full min-h-0 w-full bg-bg-app" data-testid="word-native-viewport" ref={viewportRef}>

@@ -4,9 +4,12 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Message, Response, Role
 
-from src.amphi_agent.cognitive.presentation.state import PresentationChapterOutline, PresentationSlideOutline, PresentationStageState
+from src.amphi_agent.cognitive.presentation.shared import write_artifact, presentation_view
+from src.amphi_agent.cognitive.presentation.state import PresentationPlanData, PresentationChapterOutline, PresentationSlideOutline, PresentationStageState
 from src.amphi_agent.tools.ppt.template_catalog import LocalPPTTemplateCatalog, build_ppt_search_profile, build_ppt_template_index
 from src.amphi_agent.tools.ppt.ppt_rag import ppt_rag
 from tests.agent.tools._harness import ToolHarness
@@ -45,20 +48,31 @@ def _write_deck(path: Path, slide_texts: list[str], thumbnail: bytes | None = No
             )
 
 
-def _state() -> PresentationStageState:
+def _plan() -> PresentationPlanData:
     slides = [
         PresentationSlideOutline(id="slide-001", title="人工智能研究报告", content_outline=["核心结论"]),
         PresentationSlideOutline(id="slide-002", title="研究议程", content_outline=["目录"]),
         PresentationSlideOutline(id="slide-003", title="2024—2026 研究里程碑", content_outline=["时间线"]),
         PresentationSlideOutline(id="slide-004", title="谢谢", content_outline=["交流"]),
     ]
-    return PresentationStageState(
-        stage="ppt_plan",
-        step_index=2,
+    return PresentationPlanData(
         goal="制作一份中国风学术研究汇报",
         outline=[PresentationChapterOutline(id="chapter-001", title="研究", slides=slides)],
-        outline_confirmed=True,
     )
+
+
+def _receipt(name: str, payload: dict) -> OTARecord:
+    return OTARecord(action_result=ActionResult(results=[ActionStepResult(tool_id=name, tool_name=name, tool_arguments={}, tool_result=payload)]))
+
+
+def _seed_plan(harness: ToolHarness) -> None:
+    plan = _plan()
+    artifact = write_artifact(harness.context, "outline", {"chapters": [item.model_dump() for item in plan.outline]})
+    harness.ota_context.transition_think(PresentationStageState(stage="ppt_plan", step_index=2))
+    harness.ota_context.ota_record = [
+        _receipt("request_presentation", {"goal": plan.goal}),
+        _receipt("request_presentation_outline_confirm", {"status": "confirmed", "artifact": artifact}),
+    ]
 
 
 def test_local_ppt_index_and_retrieval(tmp_path: Path) -> None:
@@ -106,7 +120,7 @@ def test_local_ppt_index_and_retrieval(tmp_path: Path) -> None:
     taxonomy = LocalPPTTemplateCatalog(index_path).taxonomy()
     assert any(item["id"] == "culture-storytelling" for item in taxonomy["categories"])
 
-    profile = build_ppt_search_profile(_state(), "水墨、留白")
+    profile = build_ppt_search_profile(_plan(), "水墨、留白")
     result = LocalPPTTemplateCatalog(index_path).list_candidates(["traditional-chinese"])
     assert result["provider"] == "local"
     assert result["candidates"][0]["template_id"] == chinese["id"]
@@ -163,7 +177,8 @@ def test_local_ppt_index_renders_representative_preview_pages(monkeypatch: Any, 
     assert all("-slide-" in Path(path).stem for path in previews)
 
 
-async def test_ppt_rag_lets_the_model_read_markdown_and_select(tool_harness: ToolHarness, monkeypatch: Any, tmp_path: Path) -> None:
+@pytest.mark.parametrize("selection_status", ["idle", "pending", "selected", "skipped"])
+async def test_ppt_rag_lets_the_model_read_markdown_and_select(tool_harness: ToolHarness, monkeypatch: Any, tmp_path: Path, selection_status: str) -> None:
     """The public tool classifies once, then lets the model compare every matching overview."""
     source = tmp_path / "templates"
     _write_deck(source / "【2】学术主题" / "1.pptx", ["研究", "目录", "2024 2025 里程碑", "谢谢"])
@@ -188,11 +203,17 @@ async def test_ppt_rag_lets_the_model_read_markdown_and_select(tool_harness: Too
             return Response(message=Message.from_text(json.dumps(payload, ensure_ascii=False), role=Role.AI))
 
     monkeypatch.setenv("BRIDGIC_PPT_RAG_INDEX", str(index_path))
-    tool_harness.ota_context.transition_think(_state())
+    _seed_plan(tool_harness)
+    tool_harness.ota_context.ota_record.append(_receipt("request_presentation_template_confirm", {"template_selection_id": "previous", "status": selection_status}))
+    previous_records = [record.model_dump(mode="json") for record in tool_harness.ota_context.ota_record]
     tool_harness.agent._llm = RecordingLlm()
 
     result = json.loads(await ppt_rag("水墨、留白", limit=2))
 
+    assert result["search_id"].startswith("ppt-search-")
+    assert tool_harness.ota_context.interaction_status is None
+    assert [record.model_dump(mode="json") for record in tool_harness.ota_context.ota_record] == previous_records
+    assert tool_harness.ota_context.think_status.model_dump() == {"mode": "presentation", "stage": "ppt_plan", "step_index": 2}
     assert len(calls) == 2
     assert all([message.role for message in call] == [Role.SYSTEM, Role.USER] for call in calls)
     assert "# Available template taxonomy" in calls[0][1].content
@@ -236,7 +257,7 @@ async def test_ppt_rag_retries_invalid_model_selection_without_using_rules(tool_
             return Response(message=Message.from_text(json.dumps({"template_ids": [template_id]}), role=Role.AI))
 
     monkeypatch.setenv("BRIDGIC_PPT_RAG_INDEX", str(index_path))
-    tool_harness.ota_context.transition_think(_state())
+    _seed_plan(tool_harness)
     tool_harness.agent._llm = InvalidLlm()
 
     result = json.loads(await ppt_rag("水墨、留白", limit=1))
@@ -261,13 +282,14 @@ async def test_ppt_rag_returns_recoverable_failure_after_retry(tool_harness: Too
             return Response(message=Message.from_text(content, role=Role.AI))
 
     monkeypatch.setenv("BRIDGIC_PPT_RAG_INDEX", str(index_path))
-    tool_harness.ota_context.transition_think(_state())
+    _seed_plan(tool_harness)
     tool_harness.agent._llm = InvalidLlm()
 
     result = json.loads(await ppt_rag("水墨、留白", limit=1))
 
     assert len(calls) == 3
     assert "# Output correction" in calls[-1][1].content
+    assert result["search_id"].startswith("ppt-search-")
     assert result["status"] == "retrieval_failed"
     assert result["failure_code"] == "selection_failed"
     assert result["candidates"] == []
@@ -285,7 +307,7 @@ async def test_ppt_rag_moves_past_excluded_candidate_batches(tool_harness: ToolH
     index_path = tmp_path / "index.json"
     build_ppt_template_index(source, index_path, "paging-test", "北京大学")
     monkeypatch.setenv("BRIDGIC_PPT_RAG_INDEX", str(index_path))
-    state = _state()
+    _seed_plan(tool_harness)
     calls: list[list[Message]] = []
 
     class PagingLlm:
@@ -302,15 +324,13 @@ async def test_ppt_rag_moves_past_excluded_candidate_batches(tool_harness: ToolH
     seen: set[str] = set()
 
     for _ in range(3):
-        tool_harness.ota_context.transition_think(state)
         result = json.loads(await ppt_rag(limit=8))
         batch = {candidate["template_id"] for candidate in result["candidates"]}
         assert len(batch) == 8
         assert batch.isdisjoint(seen)
         seen.update(batch)
-        state = state.model_copy(update={"template_excluded_ids": sorted(seen)})
+        tool_harness.ota_context.ota_record.append(_receipt("request_presentation_template_confirm", {"template_selection_id": "refresh", "status": "refresh_requested", "excluded_template_ids": sorted(seen)}))
 
-    tool_harness.ota_context.transition_think(state)
     final = json.loads(await ppt_rag(limit=8))
     final_batch = {candidate["template_id"] for candidate in final["candidates"]}
 
@@ -331,9 +351,8 @@ async def test_ppt_rag_widens_after_the_classified_batch_is_exhausted(tool_harne
     assert "technology" not in plain_template["search_profile"]["semantic_tags"]
     chinese_id = next(item["id"] for item in index["templates"] if item["relative_path"] == "中国风.pptx")
     monkeypatch.setenv("BRIDGIC_PPT_RAG_INDEX", str(index_path))
-    tool_harness.ota_context.transition_think(
-        _state().model_copy(update={"template_excluded_ids": [plain_id]}),
-    )
+    _seed_plan(tool_harness)
+    tool_harness.ota_context.ota_record.append(_receipt("request_presentation_template_confirm", {"template_selection_id": "refresh", "status": "refresh_requested", "excluded_template_ids": [plain_id]}))
 
     class WideningLlm:
         async def achat(self, messages: list[Message], **_: Any) -> Response:

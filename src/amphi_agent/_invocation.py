@@ -28,6 +28,7 @@ from ._workflows import WorkflowLibrary
 from ._workflow_run import WorkflowRunLibrary
 from .cognitive.state import (
     AgentResult,
+    AgentState,
     AwaitingFeedback,
     AwaitingPermission,
     AwaitingSubAgent,
@@ -38,7 +39,8 @@ from .cognitive.state import (
 from .cognitive.normal.state import AwaitingBuildConfirm, AwaitingBuildConflict, AwaitingWorkflowRunChoice
 from .cognitive.presentation.state import AwaitingPresentationOutlineConfirm, AwaitingPresentationTemplateSelection
 from .cognitive.build.state import AwaitingTaskConfirm, AwaitingWorkflowConfirm, BuildStageState
-from ._workspace import AppEnvironmentStatus, Workspace
+from .cognitive.workflow.base import WorkflowRunThink
+from ._workspace import AppEnvironmentStatus, BuildSpace, Workspace
 from ..amphi_service.protocol import (
     CancelledEvent,
     ErrorEvent,
@@ -724,73 +726,28 @@ class AgentInvocation:
             ), return_exceptions=True))
             prepared_children.clear()
 
-        async def load_mounts():
-            session_ids = [root.id]
-            if record.id != root.id:
-                session_ids.append(record.id)
-            groups = await asyncio.gather(*(
-                self._mounts.list_for_session(session_id, user.id)
-                for session_id in session_ids
-            ))
-            return list[SessionMountRecord]({
-                mount.id: mount
-                for group in groups
-                for mount in group
-            }.values())
-
         # Run the entire session logic
         try:
-            # If current session is child session, find the top parent
-            root = await self._sessions.root(record.id, user.id)
-            if root is None:
-                raise InvocationStateError(f"Session {record.id!r} has an invalid parent chain")
-
             # Init the agent LLM + Context
             llm = await self._llms.resolve(user, model)
-            workflows = WorkflowLibrary(user.id)
-            workflow_runs = WorkflowRunLibrary(user.id)
-            llm_provider = LlmProvider(user.id, model)
-            skills, workflows, workflow_runs, schedules, mounts, llm_provider = await asyncio.gather(
-                SkillLibrary(user.id).load(),
-                workflows.load(),
-                workflow_runs.load(
-                    user_input,
-                    *(turn.user_input for turn in previous_turns),
-                ),
-                ScheduleLibrary(user.id, mutable=root.kind is not SessionKind.SCHEDULED).load(),
-                load_mounts(),
-                llm_provider.load(),
+            context = await self._load_context(
+                record, user_input, previous_turns, model=model, execution_mode=execution_mode,
             )
+            workflows = context.workflows
+            workflow_runs = context.workflow_runs
+            workspace = context.workspace
             referenced_runs = workflow_runs.referenced_runs(user_input)
             referenced_workflow_ids = tuple(dict.fromkeys(
                 run.workflow_id for run in referenced_runs
             ))
             await asyncio.gather(
-                workflows.associate_session_input(root.id, user_input),
-                *(workflows.associate_session(root.id, workflow_id)
+                workflows.associate_session_input(workspace.session_id, user_input),
+                *(workflows.associate_session(workspace.session_id, workflow_id)
                   for workflow_id in referenced_workflow_ids),
-                *(workflow_runs.associate_session(root.id, run.run_id)
+                *(workflow_runs.associate_session(workspace.session_id, run.run_id)
                   for run in referenced_runs),
             )
-            workspace = Workspace(root.id, session_root=Path(root.workspace_root), mounts=mounts)
             await workspace.prepare_workspace()
-            context = AmphiContext(
-                session=Session(record, turns=previous_turns),
-                memory=Memory(user.id),
-                schedules=schedules,
-                skills=skills,
-                workflows=workflows,
-                workflow_runs=workflow_runs,
-                workspace=workspace,
-                browser=self._browser_host.for_session(
-                    record.id,
-                    tool_result_dir=workspace.tool_result_dir,
-                ),
-                powerpoint=self._powerpoint_host.for_session(record.id, workspace_root=workspace.work_dir),
-                invocations=self,
-                llm_provider=llm_provider,
-                execution_mode=execution_mode,
-            )
             agent = AmphiAgent(verbose=False)
 
             # Name a new root Session alongside its first Agent turn. Title generation
@@ -1344,7 +1301,6 @@ class AgentInvocation:
     ############################################################################
     # Agent Task Management
     ############################################################################
-
     async def _delete_workspace_workflow_runs(self, sessions: list[SessionRecord]) -> None:
         """Delete active Runs only when their root Session is in this scope."""
         if not sessions:
@@ -1819,4 +1775,157 @@ class AgentInvocation:
             disposition=disposition,
             input_tokens=ota_context.context_usage.input_tokens,
             output_tokens=ota_context.context_usage.output_tokens,
+        )
+
+    ############################################################################
+    # Agent Debugging Support
+    ############################################################################
+    async def execute_tool(self, session_id: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Run one tool against current resources without creating a conversation Turn."""
+        record = await self._sessions.load_by_id(session_id)
+        if record is None:
+            raise InvocationNotFoundError(f"Session {session_id!r} was not found")
+        user = await UserRepository().load(record.user_id)
+        if user is None:
+            raise InvocationNotFoundError("Session owner was not found")
+        context = await self._load_context(
+            record, "", [], model=user.current_model,
+            execution_mode=user.execution_mode, sync_builtins=False,
+        )
+        start = time.monotonic()
+        result = await AmphiAgent(verbose=False).execute_tool(context, tool_name, arguments)
+        return {
+            "sessionId": session_id,
+            "durationMs": int((time.monotonic() - start) * 1000),
+            "result": result.model_dump(
+                mode="json", fallback=lambda value: vars(value) if hasattr(value, "__dict__") else str(value),
+            ),
+        }
+
+    async def get_prompt(self, session_id: str, turn_id: str, round_index: int, *, mode: str, stage: str) -> dict[str, Any]:
+        """Pass the selected Turn's context to its Cognitive worker."""
+        from ..amphi_store._debug_run import debug_fingerprint
+        record = await self._sessions.load_by_id(session_id)
+        if record is None:
+            raise InvocationNotFoundError(f"Session {session_id!r} was not found")
+        turn = await self._turns.get(record.user_id, turn_id)
+        if turn is None or turn.session_id != session_id:
+            raise InvocationNotFoundError(f"Turn {turn_id!r} was not found in this Session")
+        rounds = turn.ota_records or []
+        if not 0 <= round_index < len(rounds):
+            raise ValueError("roundIndex does not identify a recorded round")
+        scope = rounds[round_index].get("think_scope") or {}
+        if scope and (scope.get("mode") != mode or scope.get("stage") != stage):
+            raise ValueError("mode and stage must match the selected round")
+        agent = AmphiAgent(verbose=False)
+        if stage not in agent.thinking_modes.get(mode, ()):
+            raise ValueError(f"Unknown cognitive stage `{mode}/{stage}`")
+        if record.parent_session_id and (mode, stage) != ("normal", "main"):
+            raise ValueError("Child Sessions can assemble only the normal SubAgent Think")
+        user = await UserRepository().load(record.user_id)
+        if user is None:
+            raise InvocationNotFoundError("Session owner was not found")
+        turns = await self._turns.list_conversation(user.id, record.id, before_ordinal=turn.session_ordinal)
+        user_input = AmphiAgent._renderable_user_input(turn.user_input)
+        round_model = rounds[round_index].get("model_id") or rounds[round_index].get("model")
+        context = await self._load_context(
+            record, user_input, turns, model=round_model or turn.model or user.current_model,
+            execution_mode=turn.execution_mode or user.execution_mode, sync_builtins=False,
+        )
+        dump = turn.ota_context_dump()
+        legacy_context = dump["ota_record"][round_index].get("prompt_context")
+        snapshot_fields = ("browser_tool_loaded", "workspace_tools_loaded", "skills_tool_loaded", "prompt_time")
+        has_snapshot = "prompt_time" in scope
+        if has_snapshot:
+            state_fields = AgentState.model_fields.keys() - {"think"}
+            dump["state"] = {
+                "think": {key: value for key, value in scope.items() if key not in state_fields and key not in snapshot_fields},
+                **{key: scope[key] for key in state_fields if key in scope},
+            }
+            # Restore explicit false/empty values too; the final Turn state may
+            # contain tools or summaries introduced after the selected round.
+            for field in snapshot_fields:
+                dump[field] = scope[field]
+        elif isinstance(legacy_context, dict):
+            # Read previously saved split snapshots without writing that shape again.
+            has_snapshot = True
+            for field in ("state", *snapshot_fields):
+                dump[field] = legacy_context[field]
+        dump["ota_record"] = [*dump["ota_record"][:round_index], {"think_scope": scope}]
+        if mode == "run_workflow" and not has_snapshot:
+            # Resolve the entry from the same history prefix before restoring its cursor.
+            prefix = AmphiOTAContext.model_validate({**dump, "user_input": user_input})
+            entry = WorkflowRunThink.recorded_entry(prefix, context)
+            saved_think = dump["state"].get("think") or {}
+            workflow_id = entry[0] if entry else saved_think.get("workflow_id")
+            if not workflow_id:
+                raise InvocationStateError("The selected round has no recorded Workflow entry")
+            dump["state"]["think"] = {
+                "workflow_id": workflow_id,
+                "step_index": saved_think.get("step_index", 0),
+            }
+        dump["state"].setdefault("think", {}).update(mode=mode, stage=stage)
+        if "step_index" in scope:
+            dump["state"]["think"]["step_index"] = scope["step_index"]
+        ota_context = AmphiOTAContext.model_validate({**dump, "user_input": user_input})
+        workspace = context.workspace
+        if mode == "build":
+            build = BuildSpace(workspace.work_dir)
+            if build.is_available:
+                workspace.build = build
+                context.workflows.open_package(build.root, workflow_id=build.workflow_id)
+        elif mode == "run_workflow":
+            source = context.workflows.source(ota_context.think_status.workflow_id)
+            context.workflows.open_package(source.root, workflow_id=source.workflow_id, name=source.name, validate=True)
+        request = await agent.get_prompt(context, ota_context)
+        return {
+            "sessionId": session_id,
+            "item": {
+                "id": f"{turn.id}:round:{round_index + 1}",
+                "turnId": turn.id, "turnOrdinal": turn.session_ordinal, "roundIndex": round_index,
+                "mode": mode, "stage": stage, "availability": "assembled",
+                "revision": debug_fingerprint(rounds[round_index]),
+                "modelSource": "round" if round_model else "turn" if turn.model else "current",
+                "boundary": "cognitive_before_runtime_tail",
+                "request": {
+                    "schemaVersion": 1, "kind": "cognitive",
+                    "providerId": context.llm_provider.provider_id or None,
+                    "modelId": context.llm_provider.model_id or None, "protocol": user.protocol,
+                    **request,
+                },
+            },
+        }
+
+    async def _load_context(self, record: SessionRecord, user_input: Any, turns: list[SessionTurnRecord], *, model: Optional[str], execution_mode: str, sync_builtins: bool = True) -> AmphiContext:
+        """Load the shared Session resources used by execution and Prompt inspection."""
+        root = await self._sessions.root(record.id, record.user_id)
+        if root is None:
+            raise InvocationStateError(f"Session {record.id!r} has an invalid parent chain")
+
+        async def load_mounts():
+            session_ids = [root.id] if record.id == root.id else [root.id, record.id]
+            groups = await asyncio.gather(*(
+                self._mounts.list_for_session(session_id, record.user_id) for session_id in session_ids
+            ))
+            return list[SessionMountRecord]({mount.id: mount for group in groups for mount in group}.values())
+
+        skills = SkillLibrary(record.user_id)
+        skills, workflows, workflow_runs, schedules, mounts, llm_provider = await asyncio.gather(
+            skills.load() if sync_builtins else skills.load(sync_builtins=False),
+            WorkflowLibrary(record.user_id).load(),
+            WorkflowRunLibrary(record.user_id).load(user_input, *(turn.user_input for turn in turns)),
+            ScheduleLibrary(record.user_id, mutable=root.kind is not SessionKind.SCHEDULED).load(),
+            load_mounts(),
+            LlmProvider(record.user_id, model).load(),
+        )
+        workspace = Workspace(root.id, session_root=Path(root.workspace_root), mounts=mounts)
+        if workspace.environment.app_environment_status().state == "ready":
+            workspace.environment.prepare()
+        return AmphiContext(
+            session=Session(record, turns=turns), memory=Memory(record.user_id),
+            schedules=schedules, skills=skills, workflows=workflows, workflow_runs=workflow_runs,
+            workspace=workspace,
+            browser=self._browser_host.for_session(record.id, tool_result_dir=workspace.tool_result_dir),
+            powerpoint=self._powerpoint_host.for_session(record.id, workspace_root=workspace.work_dir),
+            invocations=self, llm_provider=llm_provider, execution_mode=execution_mode,
         )

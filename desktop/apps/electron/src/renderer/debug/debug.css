@@ -89,3 +89,11 @@
 .debug-empty { padding: 24px 10px; color: var(--text-tertiary); text-align: center; line-height: 1.8; }
 .debug-list-note { margin: 14px 0 5px; font-size: 10px; text-align: center; }
 @media (max-width: 800px) { .debug-tool-summary { display: none; } .debug-tool-row .debug-status { margin-left: auto; } }
+.debug-live-phase { flex-shrink: 0; color: var(--text-tertiary); font-size: 11px; }
+.debug-round-card > summary > .debug-live-phase { margin-left: auto; }
+.debug-round-card > summary > .debug-live-phase + button { margin-left: 8px; }
+.debug-round-card > summary > button:disabled { opacity: .45; cursor: default; }
+.debug-live-tool { min-width: 0; }
+.debug-live-tool > summary { cursor: pointer; list-style: none; }
+.debug-live-tool > summary::-webkit-details-marker { display: none; }
+.debug-live-tool > pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; border-radius: 5px; background: var(--bg-hover); font-size: 11px; }

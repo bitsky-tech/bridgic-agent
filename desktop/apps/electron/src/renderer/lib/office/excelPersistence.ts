@@ -1,3 +1,4 @@
+import type { OfficeFilesAPI } from '../../../shared/office-files'
 import type { ExcelHostPreloadAPI, ExcelSaveResult } from '../../../shared/types'
 import type { ExcelWorkspaceTab } from './excelWorkspace'
 import {
@@ -40,9 +41,10 @@ function recoveryState<TSnapshot>(value: unknown): ExcelRecoveryState<TSnapshot>
   }
 }
 
-/** Recovery survives this renderer reloading, but not Session release or application restart. */
+/** Private recovery survives renderer reload, Session release and application restart. */
 export function createExcelRecoveryPersistence<TSnapshot>(options: {
   sessionId: string
+  files?: OfficeFilesAPI
   api: Pick<ExcelHostPreloadAPI, 'getRecoveryState' | 'setRecoveryState'>
   onStatusChange?: (state: OfficePersistenceSnapshot) => void
 }) {
@@ -54,11 +56,13 @@ export function createExcelRecoveryPersistence<TSnapshot>(options: {
       appKind: 'excel',
       sessionId: options.sessionId,
       kind: 'recovery',
-      storage: 'session-memory',
+      storage: options.files ? 'recovery-file' : 'session-memory',
       automatic: true,
     },
     delayMs: 250,
-    write: (value) => options.api.setRecoveryState(value),
+    // Serialize BEFORE contextBridge. Passing the nested cell graph directly
+    // makes Electron recursively proxy/freeze millions of objects on the UI thread.
+    write: (value) => options.files ? options.files.setRecovery('excel', options.sessionId, JSON.stringify(value)) : options.api.setRecoveryState(JSON.stringify(value)),
     onStatusChange: options.onStatusChange,
   })
 
@@ -70,9 +74,9 @@ export function createExcelRecoveryPersistence<TSnapshot>(options: {
       ready = false
       restoring = loadOfficeRecovery(async () => {
         if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel recovery controller is unavailable.')
-        const stored = await options.api.getRecoveryState()
+        const stored = options.files ? await options.files.getRecovery('excel', options.sessionId) : await options.api.getRecoveryState()
         if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel recovery controller is unavailable.')
-        return recoveryState<TSnapshot>(stored)
+        return recoveryState<TSnapshot>(stored === null ? null : JSON.parse(stored))
       }).then((result) => {
         if (disposed) {
           return {
@@ -104,10 +108,14 @@ export function createExcelRecoveryPersistence<TSnapshot>(options: {
 
 /** Explicit source writes keep cancellation and conflict distinct from recovery acknowledgements. */
 export function writeExcelWorkbookSource(options: {
+  files?: OfficeFilesAPI
   api: Pick<ExcelHostPreloadAPI, 'save' | 'saveAs'>
-  tab: Pick<ExcelWorkspaceTab<unknown>, 'documentId' | 'fileName' | 'mtimeMs'>
+  tab: Pick<ExcelWorkspaceTab<unknown>, 'documentId' | 'fileName' | 'mtimeMs' | 'source'> & { tabId?: string }
   saveAs: boolean
+  destination?: string
   conflictMessage: string
+  preserveSource?: boolean
+  protectedSourceMessage?: string
   prepare: () => Promise<Uint8Array | null>
   assertCurrent: () => void
 }) {
@@ -118,6 +126,12 @@ export function writeExcelWorkbookSource(options: {
       const bytes = await prepare()
       if (bytes === null) return { status: 'canceled' }
       assertCurrent()
+      if (options.files && (options.files.prepare || tab.source || !tab.documentId || saveAs)) {
+        const result = await options.files.save({ kind: 'excel', managed: Boolean(options.files.prepare), documentId: tab.tabId, source: tab.source, preserveSource: options.preserveSource, saveAs, destination: options.destination, bytes, suggestedName: tab.fileName })
+        if (!result.ok && result.reason === 'source-protected') throw new OfficePersistenceError('source_protected', options.protectedSourceMessage ?? 'Choose a different file name to preserve the original workbook.')
+        if (!result.ok) return result.reason === 'conflict' ? { status: 'conflict', message: conflictMessage } : { status: 'canceled' }
+        return { status: 'written', value: { ok: true, documentId: options.files.prepare ? result.source.path : tab.documentId ?? result.source.path, fileName: result.fileName, mtimeMs: result.source.mtimeMs!, source: result.source } }
+      }
       const result = saveAs || !tab.documentId || tab.mtimeMs === null
         ? await api.saveAs({ bytes, suggestedName: tab.fileName })
         : await api.save({ documentId: tab.documentId, bytes, expectedMtimeMs: tab.mtimeMs })

@@ -103,7 +103,8 @@ async def view_ppt(target: str) -> str:
 
     A name or relative path resolves in the Session workspace; a missing suffix
     becomes `.pptx`. An absolute path is used directly. If the file exists the
-    editor imports it; otherwise it creates an empty live PPT with that identity.
+    editor imports it into the Session workspace; otherwise it creates a new file.
+    Edits automatically save to that workspace file. Use the returned target path.
     This is the first tool for every PPT task because it immediately opens the
     PPT surface and shows Agent activity. The result includes deck metadata and
     ordered page summaries, but never returns every page's Markdown.
@@ -141,7 +142,7 @@ async def update_ppt_design(
 ) -> str:
     """Update document-wide PowerPoint design and normalize existing pages.
 
-    Call `view_ppt` first. A named theme establishes a coherent background,
+    Call `view_ppt` first. Edits automatically save to the Session workspace file. A named theme establishes a coherent background,
     accent palette, and title/body typography; explicit values override that
     preset. Page size rescales existing geometry. Footer and transition values
     apply across all pages. Images, media, page content, and page order remain
@@ -248,7 +249,19 @@ async def goto_ppt_page(page_id: str) -> str:
     return _format_json(await _get_powerpoint().goto_page(page_id))
 
 
+async def save_ppt() -> str:
+    """Flush pending edits to the active PowerPoint file in the Session workspace.
+
+    UI and Agent edits save automatically. This tool waits for pending writes
+    before handing off the file and does not create a separate copy.
+    """
+    powerpoint = _get_powerpoint()
+    result = await powerpoint.save_ppt()
+    return _format_json(result)
+
+
 _TOOLS = (
+    save_ppt,
     view_ppt,
     get_ppt_page,
     update_ppt_design,
@@ -266,6 +279,7 @@ POWERPOINT_TOOL_NAMES = frozenset(spec.tool_name for spec in powerpoint_tool_spe
 
 __all__ = [
     "POWERPOINT_TOOL_NAMES",
+    "save_ppt",
     "edit_ppt_page",
     "get_ppt_page",
     "goto_ppt_page",

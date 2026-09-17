@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from typing import Annotated, Any, Callable, Optional, TypeVar
+from uuid import uuid4
 
 from bridgic.amphibious.builtin_tools import current_agent
 from bridgic.core.agentic.tool_specs import FunctionToolSpec
 from bridgic.core.model.types import Message, Role
 from pydantic import Field
 
-from ...cognitive.presentation.state import PresentationStageState
+from ...cognitive.presentation.state import PresentationStageState, PresentationPlanData
+from ...cognitive.presentation.shared import confirmed_artifact, presentation_outputs, presentation_records
 from .template_catalog import build_ppt_search_profile, get_ppt_template_catalog
 
 
@@ -40,9 +41,8 @@ _Validated = TypeVar("_Validated")
 async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)] = None, limit: Annotated[int, Field(ge=1, le=8)] = 8) -> str:
     """Use an LLM to choose templates for the confirmed PowerPoint plan.
 
-    Call this once for each candidate batch during Plan's visual-direction step
-    after the editable outline has been confirmed. Call it again only after the
-    user requests another batch. The tool asks the model to classify the request, then
+    Call this during Plan's visual-direction step after the editable outline
+    has been confirmed. The tool asks the model to classify the request, then
     gives it a Markdown description of every template in those categories and
     lets the model select the candidates. No hand-authored relevance score is
     used. The result does not copy or modify any template.
@@ -53,9 +53,13 @@ async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)]
 
     Returns:
         A JSON result containing the model-selected templates and classified
-        catalogue scope. The Agent runtime consumes it before generic large
-        tool-output handling and parks for explicit user selection.
+        catalogue scope, with a unique search_id. This tool only retrieves; it
+        does not pause for user input or change the plan. Read the result, then
+        call request_presentation_template_confirm with its search_id to ask
+        the user to select, retry, or skip.
     """
+    search_id = f"ppt-search-{uuid4().hex}"
+
     def response_text(response: Any) -> str:
         if isinstance(response, str):
             return response
@@ -118,7 +122,7 @@ async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)]
         result = [text(value, 80) for value in values[:maximum_items] if text(value, 80)]
         return ", ".join(result) if result else "None"
 
-    def render_request(profile: dict[str, Any], state: PresentationStageState) -> str:
+    def render_request(profile: dict[str, Any], state: PresentationPlanData) -> str:
         lines = [
             "# Presentation request",
             "",
@@ -266,6 +270,7 @@ async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)]
 
     def retrieval_failure(code: str, message: str) -> str:
         payload = {
+            "search_id": search_id,
             "status": "retrieval_failed",
             "failure_code": code,
             "retrieval_error": text(message, 1_000) or "Template retrieval failed.",
@@ -283,15 +288,17 @@ async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)]
     if (
         state.stage != "ppt_plan"
         or state.step_index != 2
-        or not state.outline_confirmed
-        or state.template_selection_status != "idle"
     ):
-        raise RuntimeError("ppt_rag requires Plan's idle visual-direction step and a confirmed presentation outline.")
+        raise RuntimeError("ppt_rag requires Plan's visual-direction step and a confirmed presentation outline.")
 
     catalog = get_ppt_template_catalog()
     llm = getattr(agent, "_llm", None)
-    profile = build_ppt_search_profile(state, preferences)
-    request_markdown = render_request(profile, state)
+    context = getattr(agent, "_current_context", None) or getattr(agent, "ctx", None) or getattr(agent, "context", None)
+    outputs = presentation_outputs(presentation_records(ota_context, context))
+    outline = confirmed_artifact(outputs, "outline", context)
+    plan = PresentationPlanData(goal=outputs.get("goal"), outline=outline.get("chapters") or [])
+    profile = build_ppt_search_profile(plan, preferences)
+    request_markdown = render_request(profile, plan)
     try:
         taxonomy = catalog.taxonomy()
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -310,7 +317,7 @@ async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)]
         pool = catalog.list_candidates(routed_subcategories or None)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
         return retrieval_failure("catalog_unavailable", str(exc))
-    excluded_ids = set(state.template_excluded_ids)
+    excluded_ids = set((outputs.get("template") or {}).get("excluded_template_ids") or [])
 
     def available_candidates(candidate_pool: dict[str, Any]) -> list[dict[str, Any]]:
         return [
@@ -419,13 +426,8 @@ async def ppt_rag(preferences: Annotated[Optional[str], Field(max_length=1_000)]
         "aspect_ratio": profile.get("aspect_ratio"),
         "required_roles": profile.get("required_roles"),
     }
-    search_basis = json.dumps({
-        "index_id": pool.get("index_id"),
-        "profile": compact_profile,
-        "excluded_template_ids": sorted(excluded_ids),
-    }, ensure_ascii=False, sort_keys=True)
     result = {
-        "search_id": "ppt-search-" + hashlib.sha256(search_basis.encode("utf-8")).hexdigest()[:16],
+        "search_id": search_id,
         "provider": pool["provider"],
         "schema_version": pool["schema_version"],
         "indexer_version": pool.get("indexer_version"),

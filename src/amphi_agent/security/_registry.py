@@ -482,7 +482,7 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (r"browser_[a-z0-9_]+|load_browser_tools", Capability.NETWORK),
     (r"get_ppt_page|goto_ppt_page", Capability.MANAGE),
     (
-        r"view_ppt|update_ppt_design|edit_ppt_page|insert_ppt_element|remove_ppt_element"
+        r"save_ppt|view_ppt|update_ppt_design|edit_ppt_page|insert_ppt_element|remove_ppt_element"
         r"|insert_ppt_page|remove_ppt_page|move_ppt_page",
         Capability.MANAGE_WRITE,
     ),
@@ -490,6 +490,8 @@ TOOL_CAPABILITY: List[Tuple[str, Capability]] = [
     (
         r"switch|request_build|request_presentation|request_run_workflow|request_human_choice|request_human_task_confirm"
         r"|request_human_workflow_confirm|edit_workflow|report_presentation_step|report_workflow_step"
+        r"|request_presentation_outline_confirm"
+        r"|request_presentation_template_confirm"
         r"|run_subagent|start_subagent",
         Capability.CONTROL,
     ),

@@ -7,14 +7,18 @@ import type {
 import type { EmbeddedBrowserManager } from '../embedded-browser-manager'
 import type { ExcelHost } from '../excel-host'
 import { loggedHandle } from './logged-handle'
+import { registerOfficeCloseHandler } from './office-close'
 
 /** Register the renderer control plane for Session-scoped native Excel targets. */
-export function registerExcelHostHandlers(excelHost: ExcelHost, browser: EmbeddedBrowserManager): void {
+export function registerExcelHostHandlers(excelHost: ExcelHost, browser: EmbeddedBrowserManager, emitToHost: (channel: string, value: unknown) => void): void {
   loggedHandle(IPC.excelHost.snapshot, () => excelHost.snapshot())
 
   loggedHandle(
     IPC.excelHost.ensureSession,
-    (_event, sessionId: string, config: ExcelHostConfig) => excelHost.ensureSession(sessionId, config),
+    (_event, sessionId: string, config: ExcelHostConfig, createInitialWorkbook = true) => {
+      if (typeof createInitialWorkbook !== 'boolean') throw new TypeError('Invalid workbook creation flag')
+      return excelHost.ensureSession(sessionId, config, createInitialWorkbook)
+    },
   )
 
   loggedHandle(
@@ -25,13 +29,14 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
   )
 
   loggedHandle(IPC.excelHost.closeSession, (_event, sessionId: string) => {
-    excelHost.closeSession(sessionId)
+    return excelHost.requestCloseSession(sessionId)
   })
 
-  loggedHandle(IPC.excelHost.closeCurrentSession, (event) => {
-    const webContentsId = event.sender.id
-    // Let the invoke response settle before destroying the renderer that made it.
-    setImmediate(() => excelHost.closeCurrentSession(webContentsId))
+  registerOfficeCloseHandler({
+    requestChannel: IPC.excelHost.requestClose,
+    closedEvent: IPC.events.excelHostCloseRequested,
+    host: excelHost,
+    emitToHost,
   })
 
   loggedHandle(IPC.excelHost.setDirty, (event, dirty: boolean) => {
@@ -44,7 +49,7 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
 
   loggedHandle(IPC.excelHost.setRecoveryState, (event, state: unknown) => {
     excelHost.setRecoveryState(event.sender.id, state)
-  })
+  }, { transformLogArgs: ([state]) => ({ bytes: typeof state === 'string' ? state.length : 0 }) })
 
   loggedHandle(IPC.excelHost.activateSession, (_event, sessionId: string | null) => {
     excelHost.activateSession(sessionId)

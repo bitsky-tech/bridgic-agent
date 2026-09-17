@@ -63,6 +63,8 @@ from ._session_handler import (
     SessionListHandler,
     SessionFileHandler,
     SessionMessagesHandler,
+    SessionDebugToolsHandler,
+    SessionDebugPromptsHandler,
     session_detail,
     session_summary,
 )
@@ -127,6 +129,8 @@ __all__ = [
     "SessionDuplicateHandler",
     "SessionFileHandler",
     "SessionMessagesHandler",
+    "SessionDebugToolsHandler",
+    "SessionDebugPromptsHandler",
     "SessionMountListHandler",
     "SessionMountUploadHandler",
     "SessionMountsHandler",

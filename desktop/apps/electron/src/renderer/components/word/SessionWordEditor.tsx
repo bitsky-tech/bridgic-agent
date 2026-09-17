@@ -1,3 +1,5 @@
+import { officeFiles } from '@/lib/office/officeFileClient'
+import { i18n } from '@/lib/i18n'
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { WordFileOpenRequest } from '@/atoms/word'
@@ -6,6 +8,7 @@ import {
   createEmptyWordWorkspace,
   createWordDomainStore,
   restoreWordWorkspace,
+  isWordDocumentDirty,
 } from '@/lib/wordDomain'
 import {
   createWordWorkspacePersister,
@@ -14,18 +17,22 @@ import {
   type WordWorkspacePersister,
 } from '@/lib/wordPersistence'
 import { Icons } from '@/components/amphi/Icons'
-import { Tooltip } from '@/components/amphi/Tooltip'
+import { WordLaunchEmptyState } from './WordLaunchEmptyState'
 import { OfficeAppHeader } from '@/components/app/OfficeWorkbenchChrome'
 import { rlog } from '@/lib/logger'
 import { loadOfficeRecovery } from '@/lib/office/officePersistence'
+import { createOfficeAutoSave } from '@/lib/office/officeAutoSave'
 
 const WordEditor = lazy(() => import('./WordEditor').then((module) => ({ default: module.WordEditor })))
 
 interface PreparedWordFile {
+  path: string
   fileName: string
   html: string
   mtimeMs: number
   warnings: string[]
+  document?: import('@/lib/wordDocxImport').WordFileDocument
+  sourceProtected?: boolean
 }
 
 const pendingFileImports = new Map<string, Promise<PreparedWordFile>>()
@@ -38,12 +45,15 @@ function prepareWordFile(request: WordFileOpenRequest, readDocument: (path: stri
   const pending = pendingFileImports.get(key)
   if (pending) return pending
   const task = Promise.all([
-    readDocument(request.path),
-    import('@/lib/wordDocxImport'),
+    window.officeFiles?.prepare
+      ? window.officeFiles.prepare('word', request.path).then((source) => readDocument(source.path))
+      : readDocument(request.path),
+    import('@/lib/wordImport'),
   ]).then(async ([document, importer]) => ({
+    path: document.path ?? request.path,
     fileName: document.fileName,
     mtimeMs: document.mtimeMs,
-    ...await importer.importDocxToHtml(document.bytes),
+    ...await importer.importDocxInBackground(document.bytes),
   }))
   pendingFileImports.set(key, task)
   const clear = () => {
@@ -130,6 +140,7 @@ function SessionWordEditorInstance({
   const editorFlushRef = useRef<WordWorkspaceFlush | null>(null)
   const defaultTitleRef = useRef(defaultTitle)
   const recoveryErrorRef = useRef<string | null>(null)
+  const autoSaveRef = useRef<ReturnType<typeof createOfficeAutoSave> | null>(null)
 
   useLayoutEffect(() => { defaultTitleRef.current = defaultTitle }, [defaultTitle])
   const setEditorFlush = useCallback((flush: WordWorkspaceFlush | null) => { editorFlushRef.current = flush }, [])
@@ -137,7 +148,8 @@ function SessionWordEditorInstance({
     if (recoveryErrorRef.current) throw new Error(recoveryErrorRef.current)
     if (!persisterRef.current) throw new Error('The Word workspace is not ready.')
     await storeRef.current?.whenIdle()
-    await editorFlushRef.current?.()
+    if (storeRef.current?.getSnapshot().documents.length) await editorFlushRef.current?.()
+    await autoSaveRef.current?.flush()
     await persisterRef.current.flush()
   }, [])
 
@@ -145,6 +157,7 @@ function SessionWordEditorInstance({
     let cancelled = false
     let ownedStore: ReturnType<typeof createWordDomainStore> | null = null
     let ownedPersister: WordWorkspacePersister | null = null
+    let autoSave: ReturnType<typeof createOfficeAutoSave> | null = null
     void loadOfficeRecovery(async () => {
       const stored = await loadPersistedWordWorkspace(sessionId)
       return stored === null ? null : restoreWordWorkspace(stored, sessionId, defaultTitleRef.current)
@@ -160,25 +173,60 @@ function SessionWordEditorInstance({
       const initial = recovery.status === 'empty'
         ? createEmptyWordWorkspace(sessionId)
         : recovery.value
-      const persister = createWordWorkspacePersister(sessionId, (status) => {
+      let recoveryStatus: WordPersistenceStatus = 'saved'
+      let sourceStatus: WordPersistenceStatus = 'saved'
+      const publishStatus = () => {
+        let status: WordPersistenceStatus = 'saved'
+        if (recoveryStatus === 'saving' || sourceStatus === 'saving') status = 'saving'
+        if (recoveryStatus === 'error' || sourceStatus === 'error') status = 'error'
         persistenceStatusRef.current = status
         setPersistenceStatus(status)
+      }
+      const persister = createWordWorkspacePersister(sessionId, (status) => {
+        recoveryStatus = status
+        publishStatus()
       })
       ownedPersister = persister
       persisterRef.current = persister
       ownedStore = createWordDomainStore(initial, {
         get defaultTitle() { return defaultTitleRef.current },
-        onChange: persister.save,
+        autoSave: Boolean(window.officeFiles?.prepare),
+        onChange: (state) => {
+          persister.save(state)
+          autoSave?.schedule(state.documents.filter(isWordDocumentDirty).map((document) => `${document.id}:${document.contentVersion ?? 0}`).join('|'))
+        },
+        ...(window.officeFiles ? {
+          confirmClose: (title: string) => officeFiles().confirmClose(title, i18n.language),
+          saveDocument: async (document: import('@/lib/wordDomain').WordDocumentState, saveAs: boolean, destination?: string) => {
+            if (document.sourceProtected && !saveAs && !window.officeFiles?.prepare) throw new Error(i18n.t('office.protectedSave'))
+            const { exportWordDocx } = await import('@/lib/wordDocxExport')
+            const result = await officeFiles().save({ kind: 'word', managed: Boolean(window.officeFiles?.prepare), documentId: document.id, saveAs, destination, preserveSource: document.sourceProtected, suggestedName: document.title.toLowerCase().endsWith('.docx') ? document.title : `${document.title}.docx`, source: document.sourcePath ? { path: document.sourcePath, mtimeMs: document.sourceMtimeMs ?? null } : undefined, bytes: await exportWordDocx(document) })
+            if (!result.ok && result.reason === 'source-protected') throw new Error(i18n.t('office.protectedSave'))
+            return result
+          },
+        } : {}),
       })
       storeRef.current = ownedStore
+      if (window.officeFiles?.prepare) {
+        const domain = ownedStore
+        autoSave = createOfficeAutoSave(async () => {
+          for (const document of domain.getSnapshot().documents.filter(isWordDocumentDirty)) {
+            const result = await domain.dispatch({ type: 'document.save', documentId: document.id })
+            if (!result.ok && result.error.code !== 'save_incomplete') throw new Error(result.error.message)
+          }
+        }, (status) => { sourceStatus = status; publishStatus() })
+        autoSaveRef.current = autoSave
+        autoSave.schedule(initial.documents.filter(isWordDocumentDirty).map((document) => `${document.id}:${document.contentVersion ?? 0}`).join('|'))
+      }
       setStore(ownedStore)
-      persistenceStatusRef.current = 'saved'
-      setPersistenceStatus('saved')
+      publishStatus()
     })
     return () => {
       cancelled = true
       if (persisterRef.current === ownedPersister) persisterRef.current = null
       if (storeRef.current === ownedStore) storeRef.current = null
+      if (autoSaveRef.current === autoSave) autoSaveRef.current = null
+      autoSave?.dispose()
       // Child cleanup can still enqueue its final native snapshot before scheduling stops.
       queueMicrotask(() => { ownedPersister?.dispose(); ownedStore?.dispose() })
     }
@@ -240,18 +288,30 @@ function SessionWordEditorInstance({
         if (openFileRequest.sessionId !== sessionId) throw new Error('The Word document request belongs to another Session.')
         await flushWorkspace()
         if (!active) return
+        const beforeImport = store.getSnapshot()
+        const revisions = store.api.workspace.getSnapshot().documents
         const prepared = await prepareWordFile(openFileRequest, readDocument)
         if (!active) return
-        const existing = store.getSnapshot().documents.find((item) => item.sourcePath === openFileRequest.path)
-        const result = await (existing?.sourceMtimeMs === prepared.mtimeMs
+        const existing = store.getSnapshot().documents.find((item) => item.sourcePath === prepared.path)
+        const previous = beforeImport.documents.find((item) => item.id === existing?.id && item.sourcePath === prepared.path)
+        let result = await (existing && (!previous || existing.sourceMtimeMs === prepared.mtimeMs)
           ? store.dispatch({ type: 'document.activate', documentId: existing.id })
           : store.dispatch({
             type: 'document.open',
+            documentId: existing?.id,
+            expectedDocumentRevision: revisions.find((item) => item.id === existing?.id)?.revision,
             html: prepared.html,
+            document: prepared.document,
+            sourceProtected: prepared.sourceProtected,
             sourceMtimeMs: prepared.mtimeMs,
-            sourcePath: openFileRequest.path,
+            sourcePath: prepared.path,
             title: prepared.fileName,
           }))
+        // Parsing and queued native flushes must never replace a newer live document.
+        if (!result.ok && result.error.code === 'revision_conflict' && existing
+          && store.getSnapshot().documents.some((item) => item.id === existing.id && item.sourcePath === prepared.path)) {
+          result = await store.dispatch({ type: 'document.activate', documentId: existing.id })
+        }
         if (!result.ok) throw new Error(result.error.message)
         if (prepared.warnings.length > 0) {
           rlog.warn('[word] document imported with conversion warnings', {
@@ -285,8 +345,14 @@ function SessionWordEditorInstance({
 
   return <WordSessionSurface
     expanded={expanded}
-    onClose={onClose}
-    onSaveRequested={() => { void flushWorkspace().catch((error) => rlog.warn('[word] workspace flush failed', error)) }}
+    onClose={onClose ? () => {
+      void store.closeAllDocuments().then(async (result) => {
+        if (!result.ok) return
+        await flushWorkspace()
+        onClose()
+      }).catch((error) => rlog.warn('[word] close failed', error))
+    } : undefined}
+    onSaveRequested={flushWorkspace}
     onEditorFlushHandlerChange={setEditorFlush}
     onToggleExpanded={onToggleExpanded}
     persistenceStatus={persistenceStatus}
@@ -300,7 +366,7 @@ function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onS
   expanded: boolean
   onClose?: () => void
   onEditorFlushHandlerChange: (flush: WordWorkspaceFlush | null) => void
-  onSaveRequested: () => void
+  onSaveRequested: () => Promise<void>
   onToggleExpanded: () => void
   openingFileName: string | null
   persistenceStatus: WordPersistenceStatus
@@ -359,36 +425,6 @@ function WordFileOpeningState({ fileName }: { fileName: string }) {
           <div aria-live="polite" className="mt-3 max-w-72 truncate text-xs text-text-secondary" role="status">
             {t('word.openingFile', { name: fileName })}
           </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function WordLaunchEmptyState({ onCreate }: { onCreate: () => void }) {
-  const { t } = useTranslation()
-  return (
-    <section className="flex h-full min-h-0 flex-col bg-bg-surface" data-testid="word-launch-empty-state">
-      <OfficeAppHeader icon={Icons.wordDocument(16)} iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-400" title="Word" />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center">
-        <div className="max-w-sm">
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-app text-blue-600">
-            {Icons.wordDocument(20)}
-          </div>
-          <div className="mt-4 text-sm font-medium text-text-primary">{t('word.emptyTitle')}</div>
-          <div className="mt-1.5 text-xs leading-5 text-text-tertiary">{t('word.emptyDescription')}</div>
-          <Tooltip content={t('word.newDocument')} delayMs={0}>
-            <button
-              aria-label={t('word.newDocument')}
-              className="mt-4 inline-flex h-8 min-w-24 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-medium text-white hover:opacity-90"
-              data-testid="word-create-document"
-              onClick={onCreate}
-              type="button"
-            >
-              {Icons.plus(13)}
-              {t('word.newDocument')}
-            </button>
-          </Tooltip>
         </div>
       </div>
     </section>

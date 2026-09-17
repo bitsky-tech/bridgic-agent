@@ -36,6 +36,7 @@ from src.amphi_store import SessionRecord, SkillRepository
 USER_ID = "local"
 SESSION_ID = "session-tools"
 POWERPOINT_TOOL_NAMES = {
+    "save_ppt",
     "view_ppt",
     "get_ppt_page",
     "update_ppt_design",
@@ -283,7 +284,7 @@ def test_mode_tools() -> None:
         assert "run_subagent" in surface
         assert "start_subagent" not in surface
         assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
-        assert "ppt_rag" not in surface
+        assert {"ppt_rag", "request_presentation_template_confirm"}.isdisjoint(surface)
         assert {"request_build", "request_presentation", "request_run_workflow"}.isdisjoint(surface)
     assert "report_presentation_step" not in ppt_brief
     assert all("report_presentation_step" in surface for surface in (ppt_plan, ppt_compose, ppt_review))
@@ -301,8 +302,9 @@ def test_mode_tools() -> None:
         assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
 
 
-def test_ppt_rag_is_visible_only_for_confirmed_visual_direction() -> None:
-    """Template retrieval appears only when Plan has a confirmed page-role inventory."""
+@pytest.mark.parametrize("selection_status", ["idle", "pending", "selected", "skipped"])
+def test_ppt_rag_remains_visible_throughout_confirmed_visual_direction(selection_status: str) -> None:
+    """Template decisions do not change the visual-direction tool surface."""
     context = _context()
     before = AmphiOTAContext(user_input="Choose a template")
     before.transition_think(PresentationStageState(stage="ppt_plan", step_index=2, goal="Research deck"))
@@ -313,21 +315,21 @@ def test_ppt_rag_is_visible_only_for_confirmed_visual_direction() -> None:
         goal="Research deck",
         outline_confirmed=True,
     ))
-    pending = AmphiOTAContext(user_input="Choose a template")
-    pending.transition_think(PresentationStageState(
+    inspected = AmphiOTAContext(user_input="Choose a template")
+    inspected.transition_think(PresentationStageState(
         stage="ppt_plan",
         step_index=2,
         goal="Research deck",
         outline_confirmed=True,
-        template_selection_status="pending",
+        template_selection_status=selection_status,
     ))
 
     before_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(before, context)}
     after_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(after, context)}
-    pending_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(pending, context)}
-    assert "ppt_rag" not in before_tools
-    assert "ppt_rag" in after_tools
-    assert "ppt_rag" not in pending_tools
+    inspected_tools = {tool.tool_name for tool in PresentationPlanThink().select_tools(inspected, context)}
+    assert before_tools == after_tools
+    assert {"ppt_rag", "request_presentation_template_confirm"} <= after_tools
+    assert inspected_tools == after_tools
 
 
 async def test_powerpoint_bridge_is_dormant_and_bridgic_skill_is_absent(prompt_store: None) -> None:

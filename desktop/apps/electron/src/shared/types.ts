@@ -103,6 +103,7 @@ export type IssueReportExportResult =
 /** A workbook selected through the native Excel file picker. The opaque id is
  * the renderer's only authority to overwrite the selected path later. */
 export interface ExcelDocumentHandle {
+  source?: import('./office-files').OfficeFileSource
   documentId: string
   fileName: string
   bytes: Uint8Array
@@ -132,7 +133,7 @@ export interface ExcelSaveRequest {
 }
 
 export type ExcelSaveResult =
-  | { ok: true; documentId: string; fileName: string; mtimeMs: number }
+  | { ok: true; documentId: string; fileName: string; mtimeMs: number; source?: import('./office-files').OfficeFileSource }
   | { ok: false; reason: 'canceled' | 'conflict' }
 
 export interface ExcelSaveAsRequest {
@@ -167,11 +168,12 @@ export interface ExcelHostPreloadAPI {
   openRequestedWorkbook(requestId: string): Promise<ExcelOpenResult>
   save(request: ExcelSaveRequest): Promise<ExcelSaveResult>
   saveAs(request: ExcelSaveAsRequest): Promise<ExcelSaveResult>
-  /** Close the Session target that owns this preload after its final workbook tab closes. */
-  closeSession(): Promise<void>
+  /** Close the owning Session's panel and release its editor target. */
+  requestClose(): Promise<void>
   setDirty(dirty: boolean): Promise<void>
-  getRecoveryState(): Promise<unknown | null>
-  setRecoveryState(state: unknown): Promise<void>
+  /** JSON crosses contextBridge as one value, avoiding per-cell proxy copies. */
+  getRecoveryState(): Promise<string | null>
+  setRecoveryState(state: string): Promise<void>
   onConfigChanged(callback: (config: ExcelHostConfig) => void): () => void
   onWorkbookOpenRequested(callback: (ticket: ExcelWorkbookOpenTicket) => void): () => void
 }
@@ -373,6 +375,7 @@ export interface EmbeddedPowerPointOpenFileResult {
 }
 
 export interface WordDocumentReadResult {
+  path?: string
   bytes: Uint8Array
   fileName: string
   mtimeMs: number
@@ -415,7 +418,7 @@ export interface WordHostPreloadAPI {
   getConfig(): Promise<GuiSettings>
   readDocument(path: string): Promise<WordDocumentReadResult>
   reportState(state: WordHostRendererState): Promise<void>
-  requestHide(): Promise<void>
+  requestClose(): Promise<void>
   setExpanded(expanded: boolean): Promise<void>
   onExpandedChanged(callback: (event: WordHostExpandedEvent) => void): () => void
   onConfigChanged(callback: (settings: GuiSettings) => void): () => void
@@ -551,6 +554,7 @@ export interface ElectronAPI {
   wordHost: {
     snapshot(): Promise<WordHostSnapshot>
     ensureSession(sessionId: string): Promise<WordHostSessionInfo>
+    createDocument(sessionId: string): Promise<void>
     openFile(sessionId: string, request: WordHostOpenRequest): Promise<void>
     /** Release a deleted Session; hiding a panel must not call this. */
     closeSession(sessionId: string): Promise<void>
@@ -560,7 +564,7 @@ export interface ElectronAPI {
   }
   excelHost: {
     snapshot(): Promise<ExcelHostSnapshot>
-    ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo>
+    ensureSession(sessionId: string, config: ExcelHostConfig, createInitialWorkbook?: boolean): Promise<ExcelHostSessionInfo>
     openWorkbook(sessionId: string, config: ExcelHostConfig, request: ExcelWorkbookOpenRequest): Promise<void>
     closeSession(sessionId: string): Promise<void>
     activateSession(sessionId: string | null): Promise<void>
@@ -659,8 +663,9 @@ export interface ElectronAPI {
     onPowerPointCloseRequested(callback: (sessionId: string) => void): () => void
     onPowerPointExpandedChanged(callback: (expanded: boolean) => void): () => void
     onExcelHostChanged(callback: (snapshot: ExcelHostSnapshot) => void): () => void
+    onExcelHostCloseRequested(callback: (sessionId: string) => void): () => void
     onWordHostChanged(callback: (snapshot: WordHostSnapshot) => void): () => void
-    onWordHostHideRequested(callback: (sessionId: string) => void): () => void
+    onWordHostCloseRequested(callback: (sessionId: string) => void): () => void
     onWordHostExpandedChanged(callback: (event: WordHostExpandedEvent) => void): () => void
     /** A watched session-file directory changed on disk — re-read that level. */
     onFsChanged(callback: (event: FsChangedEvent) => void): () => void
@@ -680,8 +685,11 @@ declare global {
     __bridgicPowerPoint?: {
       protocolVersion: 5
       sessionId: string
+      flush?(): Promise<void>
+      close?(): Promise<void>
       dispatch(request: {
         method:
+          | 'save_ppt'
           | 'view_ppt'
           | 'inspect_ppt_assets'
           | 'get_ppt_page'

@@ -80,6 +80,10 @@ function fixture() {
   const api: ElectronAPI['wordHost'] = {
     snapshot: async () => store.get(wordHostSnapshotAtom),
     ensureSession: async (id) => { calls.push(`ensure:${id}`); return session(id) },
+    createDocument: async (id) => {
+      calls.push(`create:${id}`)
+      store.set(wordHostSnapshotAtom, { sessions: [session(id)] })
+    },
     closeSession: async (id) => { calls.push(`close:${id}`) },
     openFile: async (id, request) => { calls.push(`open:${id}`); imports.push(request) },
     activateSession: async (id) => { calls.push(`activate:${id}`) },
@@ -110,17 +114,30 @@ async function mount(state: ReturnType<typeof fixture>, active = true) {
 }
 
 describe('Word native workbench integration', () => {
-  it('ensures a Session only when its Word panel becomes active', async () => {
+  it('restores the Session on activation without creating an extra Word document', async () => {
     const state = fixture()
-    const { render } = await mount(state, false)
+    const restoring = deferred()
+    state.api.ensureSession = async (id) => {
+      state.calls.push(`ensure:${id}`)
+      await restoring.promise
+      const recovered = session(id, { documentCount: 2 })
+      state.store.set(wordHostSnapshotAtom, { sessions: [recovered] })
+      return recovered
+    }
+    const { host, render } = await mount(state, false)
     expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual([])
     await render(true)
     expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual(['ensure:a'])
-    expect(state.calls).not.toContain('visible:true')
-    await act(async () => state.store.set(wordHostSnapshotAtom, { sessions: [session('a')] }))
-    expect(state.calls).toContain('bounds:300:60:720:500')
-    expect(state.calls).toContain('activate:a')
-    expect(state.calls.at(-1)).toBe('visible:true')
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
+    expect(state.calls.filter((call) => call.startsWith('create:'))).toEqual([])
+    await act(async () => restoring.resolve())
+    expect(state.store.get(wordHostSnapshotAtom).sessions[0]!.documentCount).toBe(2)
+    expect(state.calls).toContain('visible:true')
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).toBeNull()
+    await render(false)
+    await render(true)
+    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual(['ensure:a'])
+    expect(state.calls.filter((call) => call.startsWith('create:'))).toEqual([])
   })
 
   it('hides and detaches the native view while preserving its documents and Session target', async () => {
@@ -148,7 +165,7 @@ describe('Word native workbench integration', () => {
     await act(async () => state.store.set(setBrowserSurfaceBlockerAtom, { source: 'test-modal', blocked: false }))
     expect(state.calls.at(-1)).toBe('visible:true')
     expect(state.calls.filter((call) => call.startsWith('close:'))).toEqual([])
-    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual(['ensure:a'])
+    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual([])
   })
 
   it('completes an imported file in its original Session without clearing the newly viewed Session request', async () => {
@@ -160,7 +177,9 @@ describe('Word native workbench integration', () => {
       return id === 'a' ? openingA.promise : openingB.promise
     }
     state.store.set(requestWordFileOpenAtom, { name: 'a.docx', path: '/tmp/a.docx' })
-    await mount(state)
+    const { host } = await mount(state)
+    expect(host.querySelector('[data-testid="word-launch-empty-state"]')).toBeNull()
+    expect(state.calls.some((call) => call.startsWith('create:'))).toBe(false)
     const requestA = state.imports[0]!
     await act(async () => {
       state.store.set(activeSessionIdAtom, 'b')
@@ -226,18 +245,43 @@ describe('Word native workbench integration', () => {
     expect(host.querySelector('[data-testid="word-host-retry"]')).toBeNull()
   })
 
-  it('does not carry a failed Session startup message into another Session while it loads', async () => {
+  it('allows restoration retry and does not carry a failed launch into another Session', async () => {
     const state = fixture()
-    const loadingB = deferred<WordHostSessionInfo>()
     state.api.ensureSession = async (id) => {
       if (id === 'a') throw new Error('Session A could not start')
-      return loadingB.promise
+      return session(id)
     }
     const { host } = await mount(state)
-    expect(host.querySelector('[data-testid="word-host-retry"]')).not.toBeNull()
+    expect(host.querySelector('[role="alert"]')).not.toBeNull()
     await act(async () => state.store.set(activeSessionIdAtom, 'b'))
-    expect(host.querySelector('[data-testid="word-host-retry"]')).toBeNull()
     expect(host.querySelector('[role="alert"]')).toBeNull()
-    await act(async () => loadingB.resolve(session('b')))
+    await act(async () => state.store.set(activeSessionIdAtom, 'a'))
+    state.api.ensureSession = async (id) => {
+      state.calls.push(`ensure:${id}`)
+      state.store.set(wordHostSnapshotAtom, { sessions: [session(id)] })
+      return session(id)
+    }
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="office-session-restoring"] button')!.click())
+    expect(host.querySelector('[data-testid="office-session-restoring"]')).toBeNull()
+    expect(state.calls).toContain('ensure:a')
+    expect(state.calls).not.toContain('create:a')
+    expect(state.calls).toContain('visible:true')
   })
+
+  it('exposes the native recovery retry when the recovered renderer reports a storage failure', async () => {
+    const state = fixture()
+    state.api.ensureSession = async (id) => {
+      const failed = session(id, { documentCount: 0, persistenceStatus: 'error' })
+      state.store.set(wordHostSnapshotAtom, { sessions: [failed] })
+      return failed
+    }
+    const { host, render } = await mount(state)
+    expect(host.querySelector('[data-testid="word-native-viewport"]')).not.toBeNull()
+    expect(state.calls.at(-1)).toBe('visible:true')
+    expect(state.calls.some((call) => call.startsWith('create:') || call.startsWith('close:'))).toBe(false)
+    await render(false)
+    await render(true)
+    expect(state.calls.at(-1)).toBe('visible:true')
+  })
+
 })

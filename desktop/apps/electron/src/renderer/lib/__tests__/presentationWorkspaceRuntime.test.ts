@@ -28,6 +28,38 @@ function setup() {
 }
 
 describe('presentation workspace runtime', () => {
+  it('imports concurrent opens of the same file once and preserves its edited document on another click', async () => {
+    let target: string | null = null
+    let imports = 0
+    let finish!: () => void
+    const gate = new Promise<void>((resolve) => { finish = resolve })
+    const initial = createBlankPresentationDocument('Initial')
+    let workspace: PresentationWorkspace = { activeDocumentId: initial.id, documents: [initial] }
+    const context = () => ({
+      currentTarget: target, fileName: 'Deck.pptx',
+      importPptx: async () => { imports++; await gate; return createBlankPresentationDocument('Imported deck') },
+    })
+    const apply = async (result: PowerPointDispatchResult) => {
+      if (result.target) target = result.target
+      if (result.workspace) workspace = result.workspace
+    }
+    const runtime = createPresentationWorkspaceRuntime({ sessionId: 'session-a', read: () => workspace, write: (next) => { workspace = next } })
+    const request = { method: 'view_ppt', params: { target: '/tmp/Deck.pptx', file_name: 'Deck.pptx', content_base64: 'AQ==' } } as const
+    const first = runtime.dispatchProtocol(request, context, apply)
+    const second = runtime.dispatchProtocol(request, context, apply)
+    finish()
+    expect(await first).toMatchObject({ ok: true, value: { reused: false } })
+    expect(await second).toMatchObject({ ok: true, value: { reused: true } })
+    expect(imports).toBe(1)
+    expect(workspace.documents).toHaveLength(1)
+    const document = workspace.documents[0]!
+    runtime.commitDocument(document, { ...document, title: 'User edits' })
+    expect(await runtime.dispatchProtocol(request, context, apply)).toMatchObject({ ok: true, value: { reused: true } })
+    expect(workspace.documents[0]!.id).toBe(document.id)
+    expect(workspace.documents[0]!.title).toBe('User edits')
+    expect(imports).toBe(1)
+  })
+
   it('reconciles native edits before an Agent page read without changing the v5 response', async () => {
     const { controller, first, read, context, apply } = setup()
     const binding = createOfficeEditorBinding<PresentationDocument>({ appKind: 'presentation', sessionId: 'session-a', documentId: first.id })
@@ -107,11 +139,11 @@ describe('presentation workspace runtime', () => {
     const { controller, first } = setup()
     expect(controller.runtime.getSnapshot()).toMatchObject({
       appKind: 'presentation', sessionId: 'session-a', activeDocumentId: first.id,
-      documents: [{ id: first.id, title: 'First', revision: 1, dirty: null }],
+      documents: [{ id: first.id, title: 'First', revision: 1, dirty: true }],
     })
     expect(controller.runtime.supports('document.create')).toBe(true)
     expect(controller.runtime.supports('powerpoint.edit_ppt_page')).toBe(true)
-    expect(controller.runtime.supports('document.save')).toBe(false)
+    expect(controller.runtime.supports('document.save')).toBe(true)
     expect(controller.runtime.supports('document.undo')).toBe(false)
   })
 

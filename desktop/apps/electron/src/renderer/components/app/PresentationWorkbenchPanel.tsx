@@ -1,3 +1,5 @@
+import { OfficeSaveActions } from './OfficeSaveActions'
+import { isPresentationDirty } from '@/lib/presentationWorkspaceRuntime'
 import { presentationChartValueTicks, presentationChartHoleSize, presentationChartValue, presentationChartLineSegments, presentationLineLabelY, presentationPieLabels } from '@/lib/presentationCharts'
 import {
   useCallback,
@@ -175,6 +177,8 @@ export interface PresentationWorkbenchPanelProps {
   workspaceRuntime?: PresentationWorkspaceRuntime
   onClose?: () => void
   onExpandedChange?: (expanded: boolean) => void
+  onSave?: (documentId: string, saveAs: boolean) => Promise<boolean>
+  saveError?: string | null
 }
 
 interface SlideshowTransitionRun {
@@ -1828,7 +1832,7 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
 }
 
 /** A focused PowerPoint-style editor embedded in the Session workbench. */
-export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, workspaceRuntime }: PresentationWorkbenchPanelProps) {
+export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, workspaceRuntime, onSave, saveError }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
   const sessionId = useAtomValue(presentationSessionIdAtom)
   const agentChange = useAtomValue(presentationAgentChangeAtom)
@@ -2797,6 +2801,23 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     }
   }
 
+  const [saving, setSaving] = useState(false)
+  const savePresentation = useCallback((saveAs: boolean) => {
+    if (!onSave) return
+    setSaving(true)
+    void onSave(document.id, saveAs).catch((error) => showToast(String(error))).finally(() => setSaving(false))
+  }, [document.id, onSave, showToast])
+  useEffect(() => {
+    if (!onSave) return
+    const key = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      savePresentation(false)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [onSave, savePresentation])
+
   const selectPresentationDocument = (documentId: string) => {
     void presentationRuntime.activateDocument(documentId).then((result) => {
       if (!result.ok) showToast(result.error.message)
@@ -3545,6 +3566,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       </OfficeAppHeader>
 
       <OfficeDocumentTabs
+        actions={onSave ? <OfficeSaveActions dirty={isPresentationDirty(document)} error={saveError} disabled={saving} onSave={savePresentation} /> : undefined}
         activeId={workspace.activeDocumentId}
         icon={<span className="shrink-0 text-[#D97706]"><PresentationMark /></span>}
         label={t('session.presentation.documentTabs')}
@@ -3554,10 +3576,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         onCreate={createPresentationDocument}
         onSelect={selectPresentationDocument}
         tabs={workspace.documents.map((item) => {
-          const fileName = documentFileName(item)
+          const fileName = item.source?.path.split(/[\\/]/).at(-1) || documentFileName(item)
           return {
             id: item.id,
             label: fileName,
+            dirtyLabel: isPresentationDirty(item) ? t('office.unsaved') : undefined,
             closeLabel: t('session.presentation.closeDocument', { name: fileName }),
           }
         })}
@@ -3565,6 +3588,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
       />
 
+      {document.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
       <PresentationRibbon
         activeTab={ribbonTab}
         animationTargetElements={selectedAnimationTargetElements}

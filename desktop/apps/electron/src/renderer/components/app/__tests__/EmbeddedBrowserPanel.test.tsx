@@ -32,8 +32,8 @@ const {
 const { SESSION_STATUS_BAR_HEIGHT_PX } = await import('../SessionStatusBar')
 const {
   AppLayout,
-  BROWSER_DOCK_MIN,
-  browserDockGeometry,
+  CANVAS_DOCK_MIN,
+  canvasDockGeometry,
 } = await import('../../amphi/AppLayout')
 const { RIGHT_PANEL_RAIL_WIDTH } = await import('@/atoms/layout')
 const {
@@ -1217,11 +1217,11 @@ describe('EmbeddedBrowserPanel', () => {
 
 describe('browser workbench layout', () => {
   it('keeps the fixed surface rail outside the persisted browser canvas width', () => {
-    expect(browserDockGeometry(1600, null)).toEqual({ width: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, min: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 1180 })
-    expect(browserDockGeometry(1000, null)).toEqual({ width: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, min: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 600 })
-    expect(browserDockGeometry(700, null)).toEqual({ width: 420, min: 420, max: 420 })
-    expect(browserDockGeometry(400, null)).toEqual({ width: 240, min: 240, max: 240 })
-    expect(browserDockGeometry(1600, 640)).toEqual({ width: 640 + RIGHT_PANEL_RAIL_WIDTH, min: BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 1180 })
+    expect(canvasDockGeometry(1600, null)).toEqual({ width: CANVAS_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, min: CANVAS_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 1180 })
+    expect(canvasDockGeometry(1000, null)).toEqual({ width: CANVAS_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, min: CANVAS_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 600 })
+    expect(canvasDockGeometry(700, null)).toEqual({ width: 420, min: 420, max: 420 })
+    expect(canvasDockGeometry(400, null)).toEqual({ width: 240, min: 240, max: 240 })
+    expect(canvasDockGeometry(1600, 640)).toEqual({ width: 640 + RIGHT_PANEL_RAIL_WIDTH, min: CANVAS_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max: 1180 })
   })
 
   it('normalizes addresses without treating ordinary search text as a host', () => {

@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { installWordImportWorker } from '../../test-fixtures/wordImportWorker'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resolve } from 'node:path'
 import { DEFAULT_SETTINGS, type GuiSettings } from '@app/shared/types'
@@ -10,7 +11,10 @@ const { act, StrictMode } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { WordHostApp, createWordHostRequestQueue } = await import('../WordHostApp')
 
+let restoreWorker: () => void
+beforeEach(() => { restoreWorker = installWordImportWorker() })
 afterEach(() => {
+  restoreWorker()
   window.localStorage.clear()
   delete window.__bridgicWord
   document.body.replaceChildren()
@@ -83,6 +87,7 @@ describe('WordHostApp', () => {
     const bytes = new Uint8Array(await Bun.file(fixture).arrayBuffer())
     const reads: string[] = []
     const acknowledgements: string[] = []
+    let deliver!: (request: WordHostOpenRequest) => void
     const api: WordHostPreloadAPI = {
       getConfig: async () => DEFAULT_SETTINGS,
       readDocument: async (path) => {
@@ -90,11 +95,12 @@ describe('WordHostApp', () => {
         return { bytes, fileName: path.split('/').at(-1)!, mtimeMs: 42 }
       },
       reportState: async () => undefined,
-      requestHide: async () => undefined,
+      requestClose: async () => undefined,
       setExpanded: async () => undefined,
       onConfigChanged: () => () => undefined,
       onExpandedChanged: () => () => undefined,
       onOpenFileRequested: (callback) => {
+        deliver = callback
         callback(request('first'))
         callback(request('first'))
         callback(request('second'))
@@ -119,6 +125,20 @@ describe('WordHostApp', () => {
       expect(workspace.state.documents.map((document) => document.title)).toEqual(['first.docx', 'second.docx'])
       const { loadPersistedWordWorkspace } = await import('@/lib/wordPersistence')
       expect(await loadPersistedWordWorkspace('word-session')).toEqual(workspace.state)
+      const firstId = workspace.state.documents[0]!.id
+      await act(async () => {
+        await window.__bridgicWord!.dispatch({ type: 'document.update', documentId: firstId, title: 'User edits' })
+        deliver({ ...request('first'), id: 'repeat-click' })
+      })
+      for (let attempt = 0; attempt < 100 && acknowledgements.length < 4; attempt++) {
+        await act(async () => new Promise((accept) => setTimeout(accept, 10)))
+      }
+      expect(acknowledgements.at(-1)).toBe('open:repeat-click:ok')
+      const reopened = await window.__bridgicWord!.dispatch({ type: 'workspace.get' })
+      if (!reopened.ok) throw new Error('Expected workspace')
+      expect(reopened.state.documents).toHaveLength(2)
+      expect(reopened.state.activeDocumentId).toBe(firstId)
+      expect(reopened.state.documents[0]!.title).toBe('User edits')
     } finally {
       await act(async () => root.unmount())
     }
@@ -136,7 +156,7 @@ describe('WordHostApp', () => {
       getConfig: async () => ({ ...DEFAULT_SETTINGS, locale: 'en' }),
       readDocument: async () => { throw new Error('No file requested') },
       reportState: async (state) => { reported.push(state) },
-      requestHide: async () => { hides += 1 },
+      requestClose: async () => { hides += 1 },
       setExpanded: async (expanded) => { expansions.push(expanded) },
       onConfigChanged: (callback) => { configChanged = callback; return () => undefined },
       onExpandedChanged: (callback) => { expandedChanged = callback; return () => undefined },
@@ -199,7 +219,7 @@ describe('WordHostApp', () => {
       getConfig: async () => DEFAULT_SETTINGS,
       readDocument: async () => { reads += 1; throw new Error('No import should run') },
       reportState: async (state) => { reported.push(state) },
-      requestHide: async () => undefined,
+      requestClose: async () => undefined,
       setExpanded: async () => undefined,
       onConfigChanged: () => () => undefined,
       onExpandedChanged: () => () => undefined,

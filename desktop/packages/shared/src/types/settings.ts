@@ -107,7 +107,8 @@ export interface GuiSettings {
     /** User-intent collapse of the right output panel (independent of
      *  whether there's content to show — see showRightPanelAtom). */
     rightPanelCollapsed: boolean
-    /** Browser workbench width after the user resizes it; absent uses its minimum. */
+    /** Shared Browser/Office canvas width; the legacy key preserves saved preferences.
+     *  Absent uses the responsive minimum. */
     browserPanelWidth?: number
     /** Drag width of the run-detail drawer (RunLogDrawer); once the user has
      *  dragged it, remembered across sessions. */

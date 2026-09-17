@@ -19,7 +19,7 @@
  * Downstream: currentMessagesAtom / currentStreamingAtom are rendered by Pipeline
  */
 import type { AgentEvent, ContextUsageSnapshot, ThinkPosition, WorkflowRunState } from '@shared/types'
-import { atom, type Getter, type Setter } from 'jotai'
+import { atom, type Getter, type Setter, type WritableAtom } from 'jotai'
 import { atomFamily } from 'jotai-family'
 import type {
   AgentEventPayload,
@@ -1418,7 +1418,7 @@ export const ensureDaemonSessionAtom = atom(
  * task_spawn / task_complete are accepted but leave the atom unchanged for now (phase one
  * doesn't render sub-tasks).
  */
-export const applyAgentEventAtom = atom(
+const reduceAgentEventAtom = atom(
   null,
   (get, set, payload: AgentEventPayload) => {
     const { sessionId, event } = payload
@@ -2208,6 +2208,31 @@ export const applyAgentEventAtom = atom(
     }
   },
 )
+
+/** Optional renderer extension; observes every event after the normal reducer. */
+export interface AgentEventObservation extends AgentEventPayload {
+  continuation?: { messageId: string; turnId?: string; userMessageId?: string }
+}
+export const agentEventObserverAtom = atom<WritableAtom<null, [AgentEventObservation], void> | null>(null)
+
+export const applyAgentEventAtom = atom(null, (get, set, payload: AgentEventPayload) => {
+  const observer = get(agentEventObserverAtom)
+  const { sessionId, event } = payload
+  const sourceId = observer && event.type === 'message_start'
+    ? get(continuationFamily(sessionId))?.sourceMessageId
+      ?? get(streamingFamily(sessionId))?.messageId
+      ?? get(messageFamily(sessionId)).at(-1)?.id
+    : undefined
+  const previousMessages = sourceId ? get(messageFamily(sessionId)) : []
+  const sourceIndex = previousMessages.findIndex(message => message.id === sourceId)
+  const source = previousMessages[sourceIndex]
+  const userMessageId = sourceIndex >= 0 ? previousMessages.slice(0, sourceIndex).findLast(message => message.role === AgentRole.User)?.id : undefined
+  set(reduceAgentEventAtom, payload)
+  if (observer) {
+    const resumed = event.type === 'message_start' && Boolean(get(streamingFamily(sessionId))?.blocks.length)
+    set(observer, { ...payload, ...(resumed && sourceId ? { continuation: { messageId: sourceId, turnId: source?.turnId, userMessageId } } : {}) })
+  }
+})
 
 /**
  * Abort the in-flight daemon chat turn for a session (composer Stop button).

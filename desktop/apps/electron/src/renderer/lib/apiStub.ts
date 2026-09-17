@@ -139,6 +139,7 @@ export function installApiStub(): void {
     wordHost: {
       snapshot: async () => ({ sessions: [] }),
       ensureSession: async () => { throw new Error('Word editor requires Electron') },
+      createDocument: async () => { throw new Error('Word editor requires Electron') },
       openFile: async () => { throw new Error('Word editor requires Electron') },
       closeSession: async () => {},
       activateSession: async () => {},
@@ -240,8 +241,9 @@ export function installApiStub(): void {
       onPowerPointCloseRequested: noopUnsub,
       onPowerPointExpandedChanged: noopUnsub,
       onExcelHostChanged: noopUnsub,
+      onExcelHostCloseRequested: noopUnsub,
       onWordHostChanged: noopUnsub,
-      onWordHostHideRequested: noopUnsub,
+      onWordHostCloseRequested: noopUnsub,
       onWordHostExpandedChanged: noopUnsub,
       onFsChanged: noopUnsub,
     },

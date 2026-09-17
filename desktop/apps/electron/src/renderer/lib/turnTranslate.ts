@@ -396,7 +396,7 @@ export function translateTurnEvent(
       // Some models stream only a final answer (no token deltas) — inject it
       // so the finalized message isn't empty.
       if (!next.sawContent && answer) {
-        events.push({ type: 'text_delta', messageId, text: answer })
+        events.push({ type: 'text_delta', messageId, text: answer, source: 'final' })
       }
       // Surface the backend's authoritative final answer on the finalize frame — the render
       // layer uses it to split "execution process vs final answer" precisely (empty string =

@@ -58,8 +58,8 @@ const usageFields: Record<TraceUsageField, string[][]> = {
   inputTokens: [['prompt_tokens'], ['input_tokens'], ['prompt_token_count']],
   outputTokens: [['completion_tokens'], ['output_tokens'], ['candidates_token_count']],
   totalTokens: [['total_tokens'], ['total_token_count']],
-  cachedInputTokens: [['prompt_tokens_details', 'cached_tokens'], ['input_tokens_details', 'cached_tokens'], ['cache_read_input_tokens'], ['cached_content_token_count']],
-  cacheCreationInputTokens: [['cache_creation_input_tokens']],
+  cachedInputTokens: [['prompt_tokens_details', 'cached_tokens'], ['input_tokens_details', 'cached_tokens'], ['cache_read_input_tokens'], ['cached_input_tokens'], ['cached_content_token_count']],
+  cacheCreationInputTokens: [['cache_creation_input_tokens'], ['input_tokens_details', 'cache_write_tokens']],
 }
 
 function providerUsage(raw: JsonObject | undefined): Pick<TraceRound, 'usage' | 'usageSources' | 'usageIssues'> {
@@ -78,6 +78,16 @@ function providerUsage(raw: JsonObject | undefined): Pick<TraceRound, 'usage' | 
         if (value === undefined) continue
         if (container.source === 'estimated') { problem = 'estimated'; continue }
         if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+          // Native Anthropic input excludes cache reads and writes. Other
+          // supported providers include them in their reported input already.
+          if (key === 'inputTokens' && path[0] === 'input_tokens') {
+            const cache = ['cache_read_input_tokens', 'cache_creation_input_tokens'].map(name => container[name] ?? 0)
+            if (cache.some(count => typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0)) {
+              problem = 'invalid'
+              continue
+            }
+            value += (cache[0] as number) + (cache[1] as number)
+          }
           candidates.push({ value, path: `${name}.${path.join('.')}` })
         } else problem = 'invalid'
       }
@@ -168,13 +178,17 @@ export function buildTraceRecords(turns: readonly TraceTurnInput[]): TraceRecord
       const addCall = (callValue: unknown, resultValue: unknown, hasResult: boolean, pairing: TraceToolCall['pairing'], key: string) => {
         const call = object(callValue)
         const result = object(resultValue)
+        const sourceCallId = identity(call ? field(call, 'call_id', 'callId') : field(result, 'tool_id', 'toolId'))
+        const resultDuration = field(result, 'duration_ms', 'durationMs')
+        const toolDuration = resultDuration === undefined && pairing === 'id' && sourceCallId
+          ? field(object(raw?.tool_durations_ms), sourceCallId) : resultDuration
         toolCalls.push({
           id: `${roundId}:${key}`, roundId, turnId: turn.id, turnOrdinal: turn.sessionOrdinal, ordinal: toolCalls.length + 1,
-          sourceCallId: identity(call ? field(call, 'call_id', 'callId') : field(result, 'tool_id', 'toolId')),
+          sourceCallId,
           name: text(call ? field(call, 'tool', 'name') : field(result, 'tool_name', 'toolName')) ?? null,
           arguments: field(call ?? result, 'tool_arguments', 'toolArguments', 'arguments'),
           result: field(result, 'tool_result', 'toolResult'), error: field(result, 'error'), hasResult, pairing,
-          status: hasResult ? resultStatus(resultValue) : 'unknown', durationMs: duration(field(result, 'duration_ms', 'durationMs')),
+          status: hasResult ? resultStatus(resultValue) : 'unknown', durationMs: duration(toolDuration),
           rawCall: callValue, rawResult: resultValue,
         })
       }
@@ -205,6 +219,7 @@ export function buildTraceRecords(turns: readonly TraceTurnInput[]): TraceRecord
         body, thinking: thinking(raw), model: roundModel !== undefined ? roundModel : turn.model,
         modelSource,
         status, durationMs: duration(field(raw, 'round_duration_ms', 'roundDurationMs')),
+        modelDurationMs: duration(field(raw, 'model_duration_ms', 'modelDurationMs')),
         actDurationMs: duration(field(raw, 'act_duration_ms', 'actDurationMs')), ...providerUsage(raw),
         calls: toolCalls, recordedRequest, raw: value,
       }

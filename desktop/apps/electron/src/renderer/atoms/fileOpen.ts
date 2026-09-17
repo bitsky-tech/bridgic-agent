@@ -26,6 +26,7 @@ import { viewedSessionIdAtom } from './navigation'
 import { SessionWorkbenchSurface, setSessionWorkbenchSurfaceAtom } from './workbench'
 import { requestWordFileOpenAtom } from './word'
 import { queueExcelWorkbookOpenAtom } from './excel'
+import { pendingPowerPointFileOpensAtom } from './powerpoint'
 
 /** Whether a remembered decision is keyed by extension or by exact filename. */
 export type FileOpenKeyKind = 'ext' | 'name'
@@ -72,6 +73,9 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
     return
   }
   const sessionId = get(viewedSessionIdAtom)
+  if (sessionId && isPowerPointFileTarget(file)) {
+    return set(requestPowerPointFileOpenAtom, file)
+  }
   if (sessionId && isEmbeddedExcelWorkbook(file.name)) {
     set(queueExcelWorkbookOpenAtom, { sessionId, path: file.path })
     return
@@ -87,14 +91,14 @@ export const requestFileOpenAtom = atom(null, (get, set, file: FileOpenTarget) =
   set(openModalAtom, { type: ModalKind.FileOpenConfirm, path: file.path, name: file.name })
 })
 
-/** Route supported Session files into an in-app owner before falling back to the OS. */
-export const requestSessionFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
-  if (!isPowerPointFileTarget(file)) {
-    set(requestFileOpenAtom, file)
-    return
-  }
+/** Import into the originating Session even if the user navigates away while loading. */
+const requestPowerPointFileOpenAtom = atom(null, async (get, set, file: FileOpenTarget) => {
   const sessionId = get(viewedSessionIdAtom)
   if (!sessionId) return
+  const pending = get(pendingPowerPointFileOpensAtom)
+  if (pending.some((request) => request.sessionId === sessionId && request.path === file.path)) return
+  const request = { sessionId, path: file.path }
+  set(pendingPowerPointFileOpensAtom, [...pending, request])
   try {
     await window.api.powerpoint.openFile(sessionId, file.path)
     const stillViewed = get(viewedSessionIdAtom) === sessionId
@@ -106,8 +110,13 @@ export const requestSessionFileOpenAtom = atom(null, async (get, set, file: File
   } catch (error) {
     rlog.warn('[fileOpen] in-app PowerPoint import failed', error)
     set(showToastAtom, i18n.t('session.presentation.importFailed'))
+  } finally {
+    set(pendingPowerPointFileOpensAtom, get(pendingPowerPointFileOpensAtom).filter((item) => item !== request))
   }
 })
+
+/** File rows and chat links use the same Session-owned Office routing. */
+export const requestSessionFileOpenAtom = requestFileOpenAtom
 
 /**
  * Confirm action from the modal: open the file, and when `remember` is set,

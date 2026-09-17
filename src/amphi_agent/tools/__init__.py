@@ -57,6 +57,8 @@ from .ppt import (
     report_presentation_step,
     report_presentation_step_tool,
     request_presentation_tool,
+    request_presentation_outline_confirm_tool,
+    request_presentation_template_confirm_tool,
 )
 from .ppt.ppt_rag import ppt_rag
 from ._filesystem import (
@@ -195,6 +197,8 @@ __all__ = [
     "request_human_choice_tool",
     "request_build_tool",
     "request_presentation_tool",
+    "request_presentation_outline_confirm_tool",
+    "request_presentation_template_confirm_tool",
     "request_run_workflow_tool",
     "request_human_task_confirm_tool",
     "request_human_workflow_confirm_tool",

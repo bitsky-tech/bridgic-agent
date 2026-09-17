@@ -1,5 +1,11 @@
 # Office frontend architecture
 
+For the current interaction, visual and lifecycle rules, and the steps for adding
+another embedded editor, start with the
+[embedded editor integration guide](docs/embedded-editor-guide.md). The phases
+below record the architecture migration; later lifecycle decisions are reflected
+in the current descriptions.
+
 ## Scope and direction
 
 PowerPoint, Word, and Excel should share their frontend platform infrastructure and
@@ -93,8 +99,11 @@ late load/target results after a Session closes or a renderer is replaced.
 PowerPoint retains its existing hidden-view behavior and Agent protocol; Excel
 retains its offscreen parking strategy and workbook recovery/dirty policies.
 
-Word opens an independent `word.html` renderer when its panel or a DOCX is first
-opened. Each Session keeps its own target, domain store, document tabs and undo
+Word shows a launch screen when its rail is selected without an existing target.
+An explicit New Document action, DOCX open, or host capability request starts its
+independent `word.html` renderer. New Document waits for recovery and dispatches
+`document.create` through that Session's domain without replacing recovered tabs.
+Each Session keeps its own target, domain store, document tabs and undo
 state while hidden or while another Session is viewed. The main-window
 [Word panel](apps/electron/src/renderer/components/app/WordWorkbenchPanel.tsx)
 only supplies the native viewport and projects host state. It does not mount a
@@ -111,12 +120,23 @@ and complete through sender-checked, one-use tickets. Configuration events do no
 recreate the document store. The default storage partition and same-origin Word
 page preserve the existing IndexedDB/localStorage workspace keys.
 
-Hiding exits the expanded view and preserves the target. Closing a document acts
-inside its workspace. Deleting a Session releases only its target. Closing the
-window, quitting, and installing an update wait for Word's native snapshot to
-reach durable workspace storage; failure or timeout leaves the application open.
+Hiding exits the expanded view and preserves the target. Non-final document close
+acts inside its workspace; final-tab close uses the same surface-close path as
+the editor header. Deleting a Session releases only that Session's targets.
+Word makes a bounded best-effort durable workspace checkpoint before panel/window
+closure, quitting or update installation; failure or timeout does not veto exit.
+Office dirty-close confirmations and unload vetoes are not part of this contract.
 This checkpoint does not overwrite the source DOCX. A renderer crash receives
 one automatic recovery attempt, then exposes an explicit retry if it fails again.
+
+The three native editors share the
+[close IPC handshake](apps/electron/src/main/handlers/office-close.ts): sender
+ownership, optional preparation, post-preparation validation, Session-scoped
+notification and deferred destruction by the original renderer identity.
+The [app-lifetime close bridge](apps/electron/src/renderer/hooks/useOfficeCloseBridge.ts)
+updates the owner's layout even after Session/page navigation. It preserves other
+Sessions and newer tool selections. An obsolete close cannot destroy a replacement
+target for the same Session.
 
 ## Phase 3: workspace and commands
 
@@ -215,13 +235,16 @@ primary is restored, and the alternative is retained in private checkpoint metad
 through future writes; it is not automatically opened as another document. The
 original fallback is cleared only after its data or retained alternative is durable
 in IndexedDB. A failed primary read never triggers a migration over unread data.
-Its existing window/quit/update flush still waits for
-domain operations, the native editor snapshot, and durable recovery storage.
+Its window/quit/update checkpoint attempts to drain domain operations and save
+the native editor snapshot to durable recovery storage within a bounded wait.
+Failure is logged without keeping the application open.
 
 Excel recovery success does not clear source-file dirty state. Its source-write
 adapter returns distinct written, canceled, conflict and failed outcomes. No save
 button or routine saved-status banner is added. Recovery errors provide retry;
-ordinary source-save and dirty-close behavior is preserved.
+ordinary source-save checks remain intact. Closing a workbook or panel does not
+prompt for unsaved changes, and releasing the Session discards its in-memory
+recovery state.
 
 PowerPoint keeps protocol v5's request/response shapes and error codes. Its UI and
 protocol writes use the same source channel. Returning to a bound file selects its
@@ -354,3 +377,63 @@ lint. Exercise existing rendering and editor suites appropriate to affected
 callers. Record actual checks performed; this matrix does not claim unexecuted
 manual/Electron scenarios passed. Remove superseded implementations only after
 parity checks, and do not modify backend files while completing these increments.
+
+
+## Session workspace files and automatic saving
+
+Office editors are shared views of Session workspace files. User edits are debounced
+into automatic source writes, while structured Agent mutations persist before returning.
+New documents receive a unique filename in `.work` and a Session Files entry. Local
+mounts, uploads and editor imports first register a managed workspace file, then open
+that file; repeating an import reuses its path and mount identity. Original import bytes
+are retained under `.internal/office/originals` before any format conversion.
+
+All three surfaces show Saving / Saved / Save failed with Retry. They do not offer a
+Save as workflow. Switching documents flushes the previous edits; closing tabs, releasing
+Sessions and application shutdown flush pending writes. A failed write keeps the editor
+and its unsaved content available for retry. Source versions are acknowledged only for
+the bytes actually written, so typing during a save schedules another write. Background
+writers serialize committed model content without ending native cell or text editing;
+foreground switching and closing still commit pending input first. Reopening an Excel
+file completes pending writes before inspecting or reading the source again.
+
+Each managed write records its destination and content fingerprint under
+`.internal/office/writes` before replacing the Office file. If file registration or its
+acknowledgement fails, a new process can verify its own completed write and recover the
+same destination. A mismatching file is still treated as a conflict.
+
+The main-process file service resolves `.work` through the authenticated Session mounts
+API, allocates collision-free names, atomically writes Office bytes, and notifies the file
+panel to refresh its entries. Private recovery remains separate from source writes and
+never marks a document saved. Word exports DOCX, Excel exports XLSX, and PowerPoint
+exports PPTX through their existing native model converters. `save_ppt` remains a flush
+tool for handing off the active workspace file; it no longer accepts a copy destination.
+
+This does not add live reload for direct external file writes or coordination between
+separate Sessions writing the same physical file.
+
+### Restore on activation and file round trips
+
+All three native editors start restoration when their Session rail is activated.
+Starting an editor does not create a document. A recovered inventory appears
+immediately; an empty inventory shows the explicit New action. Word's existing
+browser recovery and Excel/PPT's private recovery files remain Session-scoped.
+
+Word and PPT exports include the editable model in a separate OPC part alongside
+standard Office content. The model is accepted only when a SHA-256 fingerprint
+of all other package parts still matches. An external Office edit therefore
+invalidates stale editor data and goes through the native import converter.
+Word images are rebound to the newly opened document identity. Excel continues
+using its tested native workbook conversion and feature compatibility metadata.
+
+Word and Excel share image preparation: PNG/JPEG/GIF remain embedded, while BMP
+and WebP are decoded to PNG. Word resolves HTTPS images through its Session-owned
+host bridge before applying image commands, so failed downloads do not alter the
+document and later saves work offline. Export also prepares older recovery images.
+Excel never drops a live image on conversion failure, even when simplifying unsupported
+objects from an imported workbook. PPT rejects unsupported image types at insertion.
+
+Converted Word/PPT sources without a verified model and Excel sources with unsupported
+features can lose formatting during conversion. The workspace file becomes the editable
+version, while the original imported bytes are retained independently. An imported file
+is not rewritten simply by opening it; conversion is written when content changes.

@@ -15,13 +15,16 @@ from ..._skills import Skill
 from ..._tools import TOOL_LIBRARY
 from ..state import CallVerdict, InStage, ThinkUnitOutcome
 from ..normal.state import NormalStageState
-from .state import PresentationStageState, PresentationStepRecord
+from .state import PresentationStageState, PresentationPlanData
 from ...prompts.render import render_stage_persona
 from ...security import Permission
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 from ...tools.ppt import PresentationStepReport, parse_presentation_step_data
 from ..base import BaseThink
-from .shared import PRESENTATION_STAGE_ARTIFACTS, PRESENTATION_STAGE_ORDER, PRESENTATION_STAGE_STEPS
+from .shared import (
+    PRESENTATION_STAGE_ARTIFACTS, PRESENTATION_STAGE_ORDER, PRESENTATION_STAGE_STEPS,
+    confirmed_artifact, presentation_outputs, presentation_records, read_artifact, write_artifact,
+)
 
 
 if TYPE_CHECKING:
@@ -53,28 +56,7 @@ class PresentationThink(BaseThink):
                     target = str(sig.get("stage"))
                     current_index = PRESENTATION_STAGE_ORDER.index(current_status.stage)
                     target_index = PRESENTATION_STAGE_ORDER.index(target)
-                    reports = current_status.reports
-                    if target_index <= current_index:
-                        retained_stages = set(PRESENTATION_STAGE_ORDER[:target_index])
-                        reports = [report for report in reports if report.stage in retained_stages]
-                    reset_plan = target_index <= PRESENTATION_STAGE_ORDER.index("ppt_plan")
-                    next_status = current_status.model_copy(update={
-                        "stage": target,
-                        "step_index": 0,
-                        "reports": reports,
-                        **({
-                            "sources": [],
-                            "outline": [],
-                            "outline_confirmed": False,
-                            "outline_confirmation_id": None,
-                            "template_candidates": [],
-                            "template_selection_id": None,
-                            "template_selection_status": "idle",
-                            "template_selection_error": None,
-                            "selected_template": None,
-                            "template_excluded_ids": [],
-                        } if reset_plan else {}),
-                    })
+                    next_status = current_status.model_copy(update={"stage": target, "step_index": 0})
                     if target_index <= current_index:
                         self.invalidate_artifacts(context, PRESENTATION_STAGE_ORDER[target_index:])
                 sig["reason"] = self._handoff_reason(ota_context, context, sig.get("reason") or "")
@@ -91,25 +73,22 @@ class PresentationThink(BaseThink):
                     if current_status.step_index >= len(stage_steps):
                         raise RuntimeError("Cannot report a completed Presentation stage.")
                     current_step = stage_steps[current_status.step_index]
-                    report = PresentationStepRecord(
-                        stage=current_status.stage,
-                        step_id=current_step.step_id,
-                        summary=result.summary,
-                        evidence=result.evidence,
-                    )
-                    reports = [
-                        item
-                        for item in current_status.reports
-                        if (item.stage, item.step_id) != (report.stage, report.step_id)
-                    ]
-                    reports.append(report)
-                    next_status = current_status.apply_plan_step_data(
-                        current_step.step_id,
-                        result.data,
-                    ).model_copy(update={
-                        "step_index": current_status.step_index + 1,
-                        "reports": reports,
-                    })
+                    outputs = presentation_outputs(presentation_records(ota_context, context))
+                    artifact = None
+                    data = result.data
+                    if current_status.stage == "ppt_plan" and current_step.step_id == "map_slides":
+                        if "chapters" in result.data:
+                            raise RuntimeError("Report `map_slides` without resubmitting the confirmed outline.")
+                        confirmed_artifact(outputs, "outline", context)
+                        artifact = outputs["outline"]["artifact"]
+                        data = {"artifact": artifact}
+                    elif current_status.stage == "ppt_plan" and current_step.step_id == "collect_evidence":
+                        normalized = PresentationPlanData().apply_plan_step_data(current_step.step_id, data)
+                        data = {"sources": [source.model_dump(mode="json") for source in normalized.sources]}
+                        artifact = write_artifact(context, "sources", data)
+                    elif current_status.stage == "ppt_plan" and current_step.step_id == "design_visual_direction":
+                        confirmed_artifact(outputs, "template", context)
+                    next_status = current_status.model_copy(update={"step_index": current_status.step_index + 1})
                     payload = {
                         "mode": "presentation",
                         "stage": current_status.stage,
@@ -118,8 +97,9 @@ class PresentationThink(BaseThink):
                         "step_id": current_step.step_id,
                         "summary": result.summary,
                         "evidence": result.evidence,
-                        "data": result.data,
+                        "data": data,
                         "next_step_index": next_status.step_index,
+                        **({"artifact": artifact} if artifact else {}),
                     }
                     ota_context.transition_think(next_status)
                     step.tool_result = payload
@@ -144,7 +124,7 @@ class PresentationThink(BaseThink):
         steps = PRESENTATION_STAGE_STEPS.get(status.stage, ())
         if status.stage == "ppt_brief":
             note = (
-                "[presentation] Brief is still active. Complete `.presentation/brief.md`, then "
+                "[presentation] Brief is still active. Complete `.ppt/brief.md`, then "
                 "call switch(stage=\"ppt_plan\", reason=...). Do not call "
                 "report_presentation_step; Brief has no production-step cursor."
             )
@@ -194,12 +174,11 @@ class PresentationThink(BaseThink):
         return render_stage_persona([tool.tool_name for tool in tools], template=self.persona).strip()
 
     def progress_block(self, ota_context: AmphiOTAContext) -> str:
-        """Render the durable production cursor and completed reports."""
+        """Render only the production cursor and current step instruction."""
         state = self.state(ota_context)
         steps = PRESENTATION_STAGE_STEPS.get(state.stage, ())
         lines = [
             "<presentation_progress>",
-            f"Goal: {state.goal or '(infer from the current request and retained history)'}",
             f"Stage: {state.stage}",
         ]
         if not steps:
@@ -215,46 +194,32 @@ class PresentationThink(BaseThink):
         else:
             lines.append(f"Completed steps in this stage: {len(steps)} of {len(steps)}")
             lines.append("All steps in this stage are complete; perform the required `switch` handoff.")
-        if state.reports:
-            lines.append("Completed production reports:")
-            for report in state.reports:
-                lines.append(f"- {report.stage}/{report.step_id}: {report.summary}")
-                lines.extend(f"  - evidence: {item}" for item in report.evidence)
         lines.append("</presentation_progress>")
         return "\n".join(lines)
 
-    def artifacts_block(self, context: AmphiContext) -> str:
-        """Render completed presentation contracts directly into downstream context."""
+    def artifacts_block(self, ota_context: AmphiOTAContext, context: AmphiContext) -> str:
+        """Expose artifacts produced before this round, not the Turn's final business state."""
+        outputs = presentation_outputs(presentation_records(ota_context, context))
         parts: List[str] = []
-        for stage, relative in PRESENTATION_STAGE_ARTIFACTS.items():
-            path = self.artifact_path(context, stage)
-            if path is None or path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+        for kind in ("sources", "outline", "template"):
+            receipt = outputs.get(kind) or {}
+            if kind == "outline" and receipt.get("status") != "confirmed":
+                continue
+            if kind == "template" and receipt.get("status") not in {"selected", "skipped"}:
+                continue
+            relative = receipt.get("artifact")
+            if not relative:
                 continue
             try:
-                body = path.read_text(encoding="utf-8").strip()
-            except OSError:
+                body = read_artifact(context, relative)
+            except (OSError, ValueError):
+                parts.append(f'<artifact kind="{kind}" path="{relative}" status="unavailable" />')
                 continue
-            if body:
-                parts.append(f'<artifact stage="{stage}" path="{relative}">\n{body}\n</artifact>')
-        return "<presentation_artifacts>\n" + "\n\n".join(parts) + "\n</presentation_artifacts>" if parts else ""
-
-    def plan_data_block(self, ota_context: AmphiOTAContext) -> str:
-        """Render runtime-owned Plan data with stable ids for downstream work."""
-        state = self.state(ota_context)
-        if not state.sources and not state.outline:
-            return ""
-        payload = {
-            "sources": [source.model_dump(mode="json") for source in state.sources],
-            "chapters": [chapter.model_dump(mode="json") for chapter in state.outline],
-            "outline_confirmed": state.outline_confirmed,
-            "template_selection_status": state.template_selection_status,
-            "selected_template": (
-                state.selected_template.agent_context()
-                if state.selected_template is not None
-                else None
-            ),
-        }
-        return "<presentation_plan_data>\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n</presentation_plan_data>"
+            parts.append(f'<artifact kind="{kind}" path="{relative}">\n{json.dumps(body, ensure_ascii=False, indent=2)}\n</artifact>')
+        # Mutable production documents are read explicitly through file tools.
+        # Never inject a later edit or a downstream document into an earlier round.
+        parts.append("Production documents: .ppt/brief.md, .ppt/plan.md, .ppt/review.md. Use file tools to read the documents needed by the current step.")
+        return "<presentation_artifacts>\n" + "\n\n".join(parts) + "\n</presentation_artifacts>"
 
     async def context_blocks(self, ota_context: AmphiOTAContext, context: AmphiContext) -> List[str]:
         """Render only context that can materially affect the current deck."""
@@ -262,8 +227,7 @@ class PresentationThink(BaseThink):
             self.transcript_block(ota_context, context),
             await self.skills_block(ota_context, context),
             await self.memory_block(ota_context, context),
-            self.artifacts_block(context),
-            self.plan_data_block(ota_context),
+            self.artifacts_block(ota_context, context),
             self.progress_block(ota_context),
             await self.workspace_block(ota_context, context),
         ]
@@ -284,6 +248,8 @@ class PresentationThink(BaseThink):
                 "read_workflow_run",
                 "report_presentation_step",
                 "request_human_choice",
+                "request_presentation_outline_confirm",
+                "request_presentation_template_confirm",
                 "run_subagent",
                 "web_fetch",
                 "web_search",
@@ -294,15 +260,20 @@ class PresentationThink(BaseThink):
         ]
         tools = TOOL_LIBRARY.select(tool.tool_name for tool in tools)
         state = ota_context.think_status
-        expose_ppt_rag = (
+        expose_template_tools = (
             isinstance(state, PresentationStageState)
             and state.stage == "ppt_plan"
             and state.step_index == 2
-            and state.outline_confirmed
-            and state.template_selection_status == "idle"
         )
-        if not expose_ppt_rag:
-            tools = [tool for tool in tools if tool.tool_name != "ppt_rag"]
+        if not expose_template_tools:
+            tools = [tool for tool in tools if tool.tool_name not in {"ppt_rag", "request_presentation_template_confirm"}]
+        expose_outline_confirm = (
+            isinstance(state, PresentationStageState)
+            and state.stage == "ppt_plan"
+            and state.step_index == 1
+        )
+        if not expose_outline_confirm:
+            tools = [tool for tool in tools if tool.tool_name != "request_presentation_outline_confirm"]
         return [*tools, switch_tool]
 
     def select_skills(self, ota_context: AmphiOTAContext, context: AmphiContext) -> Dict[str, Skill]:
@@ -316,22 +287,34 @@ class PresentationThink(BaseThink):
     async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Keep one presentation control and validate its active production cursor."""
         resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)
-        resolved = self._exclusive_call_verdicts(calls, resolved, {"ppt_rag", "report_presentation_step"})
+        resolved = self._exclusive_call_verdicts(calls, resolved, {"request_presentation_template_confirm", "request_presentation_outline_confirm", "report_presentation_step"})
 
         def legality_reason(call: StepToolCall) -> Optional[str]:
             tool_name = getattr(call, "tool", None)
-            if tool_name not in {"ppt_rag", "report_presentation_step", "switch"}:
+            if tool_name not in {"ppt_rag", "request_presentation_template_confirm", "request_presentation_outline_confirm", "report_presentation_step", "switch"}:
                 return None
             if ota_context is None or not isinstance(ota_context.think_status, PresentationStageState):
                 return "presentation control rejected: no presentation pipeline is active."
             state = ota_context.think_status
             steps = PRESENTATION_STAGE_STEPS.get(state.stage, ())
-            if tool_name == "ppt_rag":
+            if tool_name == "request_presentation_outline_confirm":
+                if state.stage != "ppt_plan" or state.step_index != 1:
+                    return "presentation outline confirmation rejected: the `map_slides` step is not active."
+                arguments = {
+                    _view(argument, "name"): _view(argument, "value")
+                    for argument in getattr(call, "tool_arguments", None) or []
+                }
+                try:
+                    outputs = presentation_outputs(presentation_records(ota_context, context))
+                    sources = ((outputs.get("sources") or {}).get("data") or {}).get("sources") or []
+                    PresentationPlanData(sources=sources).apply_plan_step_data("map_slides", parse_presentation_step_data(arguments.get("data")))
+                except (TypeError, ValueError) as exc:
+                    return f"presentation outline confirmation rejected: {exc}"
+                return None
+            if tool_name in {"ppt_rag", "request_presentation_template_confirm"}:
                 if (
                     state.stage != "ppt_plan"
                     or state.step_index != 2
-                    or not state.outline_confirmed
-                    or state.template_selection_status != "idle"
                 ):
                     return "PPT template retrieval rejected: the confirmed visual-direction step is not active."
                 return None
@@ -348,13 +331,19 @@ class PresentationThink(BaseThink):
                     }
                     try:
                         data = parse_presentation_step_data(arguments.get("data"))
-                        state.apply_plan_step_data(current.step_id, data)
-                    except (TypeError, ValueError) as exc:
+                        if current.step_id == "map_slides":
+                            confirmed_artifact(presentation_outputs(presentation_records(ota_context, context)), "outline", context)
+                            if "chapters" in data:
+                                return "presentation step report rejected: omit `chapters`; the confirmed outline is already an artifact."
+                        else:
+                            PresentationPlanData().apply_plan_step_data(current.step_id, data)
+                    except (OSError, TypeError, ValueError, RuntimeError) as exc:
                         return f"presentation step report rejected: {exc}"
-                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and not state.outline_confirmed:
-                    return "presentation step report rejected: the editable outline must be confirmed first."
-                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction" and state.template_selection_status not in {"selected", "skipped"}:
-                    return "presentation step report rejected: call `ppt_rag` by itself and wait for the user's template decision first."
+                if state.stage == "ppt_plan" and current.step_id == "design_visual_direction":
+                    try:
+                        confirmed_artifact(presentation_outputs(presentation_records(ota_context, context)), "template", context)
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        return f"presentation step report rejected: {exc}"
                 if state.step_index == len(steps) - 1:
                     reason = self.artifact_validation_reason(context, state.stage)
                     if reason:

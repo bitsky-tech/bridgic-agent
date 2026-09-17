@@ -546,7 +546,9 @@ def test_presentation_structures() -> None:
     assert "do not call `run_subagent`" in plan
     assert "skip it instead of trying to bypass the failure in the browser" in plan
     assert "Do not search separately for every prospective slide" in plan
-    assert "pause after this report" in plan
+    assert "`request_presentation_outline_confirm` alone" in plan
+    assert "pauses in `map_slides`" in plan
+    assert "Do not report this step or begin visual design before confirmation" in plan
     assert "Do not choose a template or visual style before the outline is confirmed" in plan
     assert "If no deck-authoring capability is exposed" in personas["ppt_compose"]
     assert "If no such capability is exposed" in personas["ppt_review"]

@@ -13,7 +13,7 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { default: zh } = await import('@app/shared/i18n/locales/zh.json')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
-const { setEmbeddedPowerPointSnapshotAtom } = await import('@/atoms/powerpoint')
+const { setEmbeddedPowerPointSnapshotAtom, pendingPowerPointFileOpensAtom } = await import('@/atoms/powerpoint')
 const { EmbeddedPowerPointPanel } = await import('../EmbeddedPowerPointPanel')
 
 const originalResizeObserver = globalThis.ResizeObserver
@@ -109,45 +109,56 @@ async function mountPanel(store: ReturnType<typeof createStore>) {
 }
 
 describe('EmbeddedPowerPointPanel', () => {
-  it('does not create a PPT until the user clicks the empty-state action', async () => {
+  it('hides the native startup deck until the clicked file finishes importing', async () => {
+    const calls: string[] = []
+    window.api = { powerpoint: powerPointApi(calls) } as ElectronAPI
+    const store = createStore()
+    const sessionId = 'session-import'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(pendingPowerPointFileOpensAtom, [{ sessionId, path: '/tmp/deck.pptx' }])
+    const { host, root } = await mountPanel(store)
+    try {
+      expect(host.textContent).toContain('正在打开 PowerPoint')
+      expect(host.querySelector('[data-testid="powerpoint-create-session"]')).toBeNull()
+      await act(async () => store.set(setEmbeddedPowerPointSnapshotAtom, { sessions: [sessionInfo(sessionId)] }))
+      expect(calls).not.toContain('setVisible:true')
+      expect(host.textContent).toContain('正在打开 PowerPoint')
+      host.querySelector<HTMLElement>('[data-testid="embedded-powerpoint-viewport"]')!.getBoundingClientRect = () => (
+        { x: 10, y: 20, width: 900, height: 600, top: 20, right: 910, bottom: 620, left: 10, toJSON: () => ({}) }
+      )
+      await act(async () => store.set(pendingPowerPointFileOpensAtom, []))
+      await act(async () => { animationFrame?.(0) })
+      expect(calls).toContain('setVisible:true')
+      expect(host.textContent).not.toContain('正在打开 PowerPoint')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('restores the Session on rail activation before offering document creation', async () => {
     const calls: string[] = []
     const api = powerPointApi(calls)
-    let resolveCreate: ((session: EmbeddedPowerPointSessionInfo) => void) | null = null
-    api.ensureSession = (sessionId) => {
-      calls.push(`ensureSession:${sessionId}`)
-      return new Promise((resolve) => { resolveCreate = resolve })
-    }
-    ;(window as typeof window & { api: ElectronAPI }).api = { powerpoint: api } as ElectronAPI
+    let finish!: () => void
     const store = createStore()
-    store.set(activeSessionIdAtom, 'session-ppt-empty')
+    const sessionId = 'session-ppt-restore'
+    api.ensureSession = async (id) => {
+      calls.push(`ensureSession:${id}`)
+      await new Promise<void>((resolve) => { finish = resolve })
+      const restored = sessionInfo(id)
+      store.set(setEmbeddedPowerPointSnapshotAtom, { sessions: [restored] })
+      return restored
+    }
+    window.api = { powerpoint: api } as ElectronAPI
+    store.set(activeSessionIdAtom, sessionId)
     const { host, root } = await mountPanel(store)
-
-    expect(host.textContent).toContain('新建 PPT')
-    expect(host.querySelector('[data-testid="embedded-powerpoint-viewport"]')).toBeNull()
-    expect(calls.filter((call) => call.startsWith('ensureSession:'))).toEqual([])
-
-    const create = host.querySelector<HTMLButtonElement>(
-      '[data-testid="powerpoint-create-session"]',
-    )!
-    await act(async () => {
-      create.click()
-      create.click()
-      await Promise.resolve()
-    })
-
-    expect(calls.filter((call) => call.startsWith('ensureSession:')))
-      .toEqual(['ensureSession:session-ppt-empty'])
-    expect(create.disabled).toBe(true)
-    expect(host.querySelector('[data-testid="powerpoint-create-status"]')?.textContent)
-      .toContain('正在创建演示文稿')
-
-    await act(async () => {
-      resolveCreate?.(sessionInfo('session-ppt-empty'))
-      await Promise.resolve()
-    })
-    expect(create.textContent).toContain('PPT 已创建')
-
-    await act(async () => root.unmount())
+    try {
+      expect(calls.filter((call) => call.startsWith('ensureSession:'))).toEqual([`ensureSession:${sessionId}`])
+      expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
+      expect(host.querySelector('[data-testid="powerpoint-create-session"]')).toBeNull()
+      await act(async () => finish())
+      expect(host.querySelector('[data-testid="embedded-powerpoint-viewport"]')).not.toBeNull()
+      expect(host.querySelector('[data-testid="office-session-restoring"]')).toBeNull()
+    } finally { await act(async () => root.unmount()) }
   })
 
   it('attaches the native viewport only after the Session surface exists', async () => {

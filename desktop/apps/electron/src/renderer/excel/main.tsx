@@ -10,7 +10,7 @@ if (!window.excelHostApi) {
     openRequestedWorkbook: async () => ({ canceled: true as const }),
     save: async () => canceled,
     saveAs: async () => canceled,
-    closeSession: async () => undefined,
+    requestClose: async () => undefined,
     setDirty: async () => undefined,
     getRecoveryState: async () => null,
     setRecoveryState: async () => undefined,

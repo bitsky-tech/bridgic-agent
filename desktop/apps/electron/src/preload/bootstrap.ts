@@ -1,3 +1,4 @@
+import { officeFiles } from './office-files'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import type {
@@ -120,6 +121,7 @@ const api: ElectronAPI = {
   wordHost: {
     snapshot: () => ipcRenderer.invoke(IPC.wordHost.snapshot),
     ensureSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.ensureSession, sessionId),
+    createDocument: (sessionId) => ipcRenderer.invoke(IPC.wordHost.createDocument, sessionId),
     openFile: (sessionId, request) => ipcRenderer.invoke(IPC.wordHost.openFile, sessionId, request),
     closeSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.closeSession, sessionId),
     activateSession: (sessionId) => ipcRenderer.invoke(IPC.wordHost.activateSession, sessionId),
@@ -128,8 +130,8 @@ const api: ElectronAPI = {
   },
   excelHost: {
     snapshot: () => ipcRenderer.invoke(IPC.excelHost.snapshot),
-    ensureSession: (sessionId, config) =>
-      ipcRenderer.invoke(IPC.excelHost.ensureSession, sessionId, config),
+    ensureSession: (sessionId, config, createInitialWorkbook) =>
+      ipcRenderer.invoke(IPC.excelHost.ensureSession, sessionId, config, createInitialWorkbook),
     openWorkbook: (sessionId, config, request) =>
       ipcRenderer.invoke(IPC.excelHost.openWorkbook, sessionId, config, request),
     closeSession: (sessionId) => ipcRenderer.invoke(IPC.excelHost.closeSession, sessionId),
@@ -201,10 +203,12 @@ const api: ElectronAPI = {
       subscribe<string>(IPC.events.powerPointCloseRequested, callback),
     onPowerPointExpandedChanged: (callback) =>
       subscribe<boolean>(IPC.events.powerPointExpandedChanged, callback),
+    onExcelHostCloseRequested: (callback) =>
+      subscribe(IPC.events.excelHostCloseRequested, callback),
     onExcelHostChanged: (callback) =>
       subscribe<ExcelHostSnapshot>(IPC.events.excelHostChanged, callback),
     onWordHostChanged: (callback) => subscribe(IPC.events.wordHostChanged, callback),
-    onWordHostHideRequested: (callback) => subscribe(IPC.events.wordHostHideRequested, callback),
+    onWordHostCloseRequested: (callback) => subscribe(IPC.events.wordHostCloseRequested, callback),
     onWordHostExpandedChanged: (callback) => subscribe(IPC.events.wordHostExpandedChanged, callback),
     onFsChanged: (callback) => subscribe<FsChangedEvent>(IPC.events.fsChanged, callback),
   },
@@ -270,3 +274,5 @@ if (document.readyState === 'loading') {
 } else {
   setPlatformMarker()
 }
+
+contextBridge.exposeInMainWorld('officeFiles', officeFiles)

@@ -86,6 +86,8 @@ class _Client:
         params = request.get("params", {})
         if method == "view_ppt":
             return _overview(()) if params["target"].endswith("blank.pptx") else _overview()
+        if method == "save_ppt":
+            return {"status": "saved", "target": params.get("save_as", params["target"])}
         if method == "inspect_ppt_assets":
             return []
         if method == "get_ppt_page":
@@ -443,3 +445,30 @@ async def test_renderer_page_result_rejects_missing_assets() -> None:
 
     with pytest.raises(RuntimeError, match="omitted a resource"):
         await ppt.read_page("cover")
+
+
+@pytest.mark.asyncio
+async def test_save_requires_a_target_and_explicitly_writes_the_viewed_draft():
+    clients = []
+
+    def factory(_session_id):
+        client = _Client(_session_id)
+        clients.append(client)
+        return client
+
+    host, _controller = _host(factory)
+    ppt = host.for_session("save-session")
+    with pytest.raises(ValueError, match="view_ppt"):
+        await ppt.save_ppt()
+    await ppt.view_ppt("/workspace/draft.pptx")
+    assert not any(request["method"] == "save_ppt" for request in clients[0].requests)
+    result = await ppt.save_ppt()
+    assert result == {"status": "saved", "target": "/workspace/draft.pptx"}
+    assert clients[0].requests[-1] == {"method": "save_ppt", "params": {"target": "/workspace/draft.pptx"}}
+    copied = await ppt.save_ppt("/workspace/edited-copy.pptx")
+    assert copied["target"] == "/workspace/edited-copy.pptx"
+    assert clients[0].requests[-1] == {"method": "save_ppt", "params": {"target": "/workspace/draft.pptx", "save_as": "/workspace/edited-copy.pptx"}}
+    assert ppt.identity.path == "/workspace/edited-copy.pptx"
+    await ppt.save_ppt()
+    assert clients[0].requests[-1] == {"method": "save_ppt", "params": {"target": "/workspace/edited-copy.pptx"}}
+    await host.release_sessions(["save-session"])

@@ -1,3 +1,5 @@
+import asyncio
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
@@ -6,12 +8,19 @@ from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Message, Role
 
 from src.amphi_agent import AmphiContext, AmphiOTAContext, LlmProvider, MainThink
+from src.amphi_agent._invocation import AgentInvocation
+from src.amphi_agent.cognitive import base as base_module
+from src.amphi_agent.cognitive.build.state import BuildStageState
+from src.amphi_agent.cognitive.normal.state import NormalStageState
+from src.amphi_agent.cognitive.presentation.state import PresentationStageState
+from src.amphi_agent.cognitive.state import ContextCompactionState
+from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_service.protocol.llms._streaming import StreamResult
 from tests._support.sandbox import IsolatedPaths
 from tests.agent.cognitive._harness import make_session
 
 
-async def test_live_round(test_sandbox: IsolatedPaths) -> None:
+async def test_live_round(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch) -> None:
     """Final live cognitive round:
 
     {
@@ -20,8 +29,7 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
       "usage": {"input_tokens": 11, "output_tokens": 3, "cached_input_tokens": 5, "spent_tokens": 14},
       "think_scope": {
         "mode": "build",
-        "stage": "generate",
-        "session_history": "stage_scoped_v2"
+        "stage": "generate"
       }
     }
 
@@ -29,8 +37,10 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     1. A provider retry removes stale visible output before replacement deltas arrive.
     2. The completed call returns its final content and Tool Call while retaining provider captures.
     3. Usage reaches the Turn totals, worker meter, and context event stream once.
-    4. The open OTA record identifies its cognitive scope and Session-history policy.
+    4. The open OTA record identifies its cognitive scope without a legacy policy marker.
     """
+    clock = iter((10.0, 11.25))
+    monkeypatch.setattr(base_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     ota_context = AmphiOTAContext(
         user_input="Continue generating the workflow",
         state={"think": {"mode": "build", "stage": "generate"}},
@@ -120,6 +130,13 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
         ota_context.context_usage.cached_input_tokens,
     ) == (11, 3, 5)
     assert worker.spent_tokens == 14
+    assert record.model_call_started is True
+    assert record.model_id == "test-model"
+    assert record.model_duration_ms == 1250
+    assert record.model_dump(mode="json")["usage"] == {
+        "source": "provider", "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14,
+        "prompt_tokens_details": {"cached_tokens": 5}, "cache_creation_input_tokens": 2,
+    }
     context_events = [payload for event, payload in stream.events if event == "context_usage"]
     assert len(context_events) == 1
     context_event = context_events[0]
@@ -142,14 +159,131 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
     assert context_event["breakdown"]["current_input_tokens"] > 0
     assert ota_context.context_usage.used_tokens == 11
 
-    # Check 4: The open OTA record identifies its cognitive scope and Session-history policy.
+    # Check 4: The open OTA record identifies its cognitive scope without a legacy policy marker.
     expected_scope = {
         "mode": "build",
         "stage": "generate",
-        "session_history": "stage_scoped_v2",
+        "browser_tool_loaded": False,
+        "workspace_tools_loaded": False,
+        "skills_tool_loaded": False,
+        "prompt_time": ota_context.prompt_time,
     }
     assert llm.scope_at_call == expected_scope
     assert record.think_scope == expected_scope
+    assert "prompt_context" not in record.model_dump(mode="json")
+
+
+async def test_round_scope_keeps_step_before_assembly_and_later_transitions(test_sandbox: IsolatedPaths) -> None:
+    """Persist each round's optional cursor without changing trace order or earlier scopes."""
+    states = [
+        NormalStageState(),
+        PresentationStageState(stage="ppt_plan", step_index=0),
+        PresentationStageState(stage="ppt_plan", step_index=1),
+        BuildStageState(stage="clarify"),
+        WorkflowStageState(workflow_id="workflow", generation="generation", step_index=3),
+    ]
+    expected_scopes = [
+        {"mode": "normal", "stage": "main"},
+        {"mode": "presentation", "stage": "ppt_plan", "step_index": 0},
+        {"mode": "presentation", "stage": "ppt_plan", "step_index": 1},
+        {"mode": "build", "stage": "clarify"},
+        {"mode": "run_workflow", "stage": "execute", "workflow_id": "workflow", "generation": "generation", "step_index": 3},
+    ]
+    ota = AmphiOTAContext(user_input="Continue")
+
+    class InspectingThink(MainThink):
+        async def assemble_messages(self, ota_context, context):
+            assert ota_context.ota_record[-1].think_scope == expected_scopes[len(ota_context.ota_record) - 1]
+            return [Message.from_text("Round scope test", role=Role.SYSTEM)]
+
+    class TestLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            content = f"response-{len(ota.ota_record)}"
+            publish("token", text=content)
+            return StreamResult(tool_calls=[], content=content)
+
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "scope-steps"),
+        llm_provider=LlmProvider(model_id="test-model", model_limits={"input": 100_000}),
+    )
+    worker = InspectingThink(TestLlm())
+    for state in states:
+        ota.transition_think(state)
+        ota.open_record()
+        await worker.thinking(ota, context)
+
+    serialized = ota.model_dump(mode="json", include={"ota_record"})["ota_record"]
+    assert [record["think_scope"] for record in serialized] == [
+        {**scope, "browser_tool_loaded": False, "workspace_tools_loaded": False,
+         "skills_tool_loaded": False, "prompt_time": ota.prompt_time}
+        for scope in expected_scopes
+    ]
+    assert [record["think_result"]["step_content"] for record in serialized] == [
+        f"response-{index + 1}" for index in range(len(states))
+    ]
+    assert all("prompt_context" not in record for record in serialized)
+    assert all("state" not in record["think_scope"] and "think" not in record["think_scope"] for record in serialized)
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_round_context_freezes_post_compaction_state_before_model_call(test_sandbox: IsolatedPaths, cancelled: bool) -> None:
+    """Saved and cancelled rounds retain their own effective state, including false flags."""
+    ota = AmphiOTAContext(user_input="Continue", prompt_time="2026-09-15 12:00 (UTC+08:00)")
+    snapshots = []
+
+    class CompactingThink(MainThink):
+        async def compact_messages(self, messages, tools, ota_context, context, target=None):
+            if len(ota_context.ota_record) == 2:
+                ota_context.state.context_compaction = ContextCompactionState.model_validate({
+                    "turn": {"normal": {"main": {
+                        "turn_summary": "Round one summary", "turn_through_round": 1,
+                        "turn_covered_rounds": [1], "turn_covered_raw_rounds": [1],
+                    }}},
+                })
+                return await self.assemble_messages(ota_context, context)
+            return messages
+
+    class InspectingLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            snapshots.append(deepcopy(ota.ota_record[-1].think_scope))
+            if len(snapshots) == 2:
+                assert any("Round one summary" in message.content for message in messages)
+                assert snapshots[-1]["context_compaction"]["turn"]["normal"]["main"]["turn_covered_rounds"] == [1]
+                if cancelled:
+                    raise asyncio.CancelledError()
+            publish("token", text="Recorded answer")
+            return StreamResult(tool_calls=[], content="Recorded answer")
+
+    context = AmphiContext(session=make_session(test_sandbox.sessions / "round-context"))
+    worker = CompactingThink(InspectingLlm())
+    ota.open_record()
+    await worker.thinking(ota, context)
+    ota.browser_tool_loaded = ota.workspace_tools_loaded = ota.skills_tool_loaded = True
+    ota.open_record()
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await worker.thinking(ota, context)
+    else:
+        await worker.thinking(ota, context)
+
+    # Later mutations must not overwrite the summary, cursor, clock or loading flags.
+    summary = ota.state.context_compaction.turn["normal"]["main"]
+    summary.turn_summary = "Later summary"
+    summary.turn_covered_rounds.append(2)
+    ota.transition_think(PresentationStageState(stage="ppt_plan", step_index=2))
+    ota.prompt_time = "Later timestamp"
+    ota.browser_tool_loaded = ota.workspace_tools_loaded = ota.skills_tool_loaded = False
+    saved = AgentInvocation._ota_context_values(ota)["ota_records"]
+    restored = AmphiOTAContext(ota_record=saved)
+    assert [record.think_scope for record in restored.ota_record] == snapshots
+    assert all("prompt_context" not in record for record in saved)
+    assert "context_compaction" not in snapshots[0]
+    for name in ("browser_tool_loaded", "workspace_tools_loaded", "skills_tool_loaded"):
+        assert snapshots[0][name] is False
+        assert snapshots[1][name] is True
+    assert all(snapshot["prompt_time"] == "2026-09-15 12:00 (UTC+08:00)" for snapshot in snapshots)
+    assert all((snapshot["mode"], snapshot["stage"]) == ("normal", "main") for snapshot in snapshots)
+    assert snapshots[1]["context_compaction"]["turn"]["normal"]["main"]["turn_covered_rounds"] == [1]
 
 
 @pytest.mark.parametrize(("usage", "expected"), [
@@ -177,6 +311,72 @@ async def test_live_round(test_sandbox: IsolatedPaths) -> None:
 def test_usage_values_normalize_provider_cache_details(usage: Any, expected: tuple[int, int, int]) -> None:
     """Provider-specific cache details converge on one latest-call count."""
     assert MainThink._usage_values(usage) == expected
+
+
+@pytest.mark.parametrize(("usage", "expected"), [
+    (None, None),
+    ({"prompt_tokens": 0, "completion_tokens": 0}, {"source": "provider", "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+    ({"input_tokens": 50, "output_tokens": 10, "cached_input_tokens": 20}, {
+        "source": "provider", "prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60,
+        "prompt_tokens_details": {"cached_tokens": 20},
+    }),
+    ({"input_tokens": 12}, {"source": "provider", "prompt_tokens": 12}),
+    ({"output_tokens": 5}, {"source": "provider", "completion_tokens": 5}),
+    ({"input_tokens": 15061, "output_tokens": 74, "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}, {
+        "source": "provider", "prompt_tokens": 15061, "completion_tokens": 74, "total_tokens": 15135,
+        "prompt_tokens_details": {"cached_tokens": 0}, "cache_creation_input_tokens": 0,
+    }),
+    (SimpleNamespace(input_tokens=15061, output_tokens=49, input_tokens_details=SimpleNamespace(cached_tokens=14848, cache_write_tokens=213)), {
+        "source": "provider", "prompt_tokens": 15061, "completion_tokens": 49, "total_tokens": 15110,
+        "prompt_tokens_details": {"cached_tokens": 14848}, "cache_creation_input_tokens": 213,
+    }),
+])
+async def test_round_usage_persists_measured_fields_only(test_sandbox: IsolatedPaths, usage: Any, expected: Any) -> None:
+    """Persist round-local usage without replacing missing fields with estimates."""
+    class UsageLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            return StreamResult(tool_calls=[], content="Answer", usage=usage)
+
+    ota = AmphiOTAContext(user_input="Hello", ota_record=[OTARecord()])
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "round-usage"),
+        llm_provider=LlmProvider(model_id="usage-model", model_limits={"input": 100_000}),
+    )
+    worker = MainThink(UsageLlm())
+    await worker.thinking(ota, context)
+    saved = ota.ota_record[0].model_dump(mode="json")
+    assert saved["model_call_started"] is True
+    assert saved["model_id"] == "usage-model"
+    assert saved["usage"] == expected
+
+
+@pytest.mark.parametrize("error", [RuntimeError("Provider failed"), asyncio.CancelledError()])
+async def test_interrupted_round_keeps_model_time_without_inventing_usage(test_sandbox: IsolatedPaths, monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
+    """A failed or cancelled stream preserves elapsed time and its partial response."""
+    clock = iter((20.0, 22.5))
+    monkeypatch.setattr(base_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+
+    class InterruptedLlm:
+        async def stream_turn(self, messages, tools, *, publish, extra_body=None):
+            publish("token", text="Partial response")
+            raise error
+
+    ota = AmphiOTAContext(user_input="Hello", ota_record=[OTARecord()])
+    context = AmphiContext(
+        session=make_session(test_sandbox.sessions / "interrupted-round"),
+        llm_provider=LlmProvider(model_id="interrupted-model"),
+    )
+    with pytest.raises(type(error)):
+        await MainThink(InterruptedLlm()).thinking(ota, context)
+    checkpoint = AgentInvocation._ota_context_values(ota)
+    saved = checkpoint["ota_records"][0]
+    assert saved["model_duration_ms"] == 2500
+    assert saved["model_call_started"] is True
+    assert saved["model_id"] == "interrupted-model"
+    assert saved["think_result"]["step_content"] == "Partial response"
+    assert saved["usage"] is None
+    assert checkpoint["context_usage"]["input_tokens"] == 0
+    assert checkpoint["context_usage"]["output_tokens"] == 0
 
 
 async def test_context_breakdown_classifies_the_final_request(test_sandbox: IsolatedPaths) -> None:

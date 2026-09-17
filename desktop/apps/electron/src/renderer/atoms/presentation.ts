@@ -542,6 +542,9 @@ export const DEFAULT_PRESENTATION_MASTER: PresentationMaster = {
 }
 
 export interface PresentationDocument {
+  sourceProtected?: boolean
+  source?: import('../../shared/office-files').OfficeFileSource
+  savedVersion?: number
   id: string
   master: PresentationMaster
   title: string
@@ -717,8 +720,7 @@ export const presentationExpandedAtom = atom(
     const sessionId = get(presentationSessionIdAtom)
     return sessionId ? get(expandedPresentationSessionsAtom).has(sessionId) : false
   },
-  (get, set, update: SessionStateUpdate<boolean>) => {
-    const sessionId = get(presentationSessionIdAtom)
+  (get, set, update: SessionStateUpdate<boolean>, sessionId: string | null = get(presentationSessionIdAtom)) => {
     if (!sessionId) return
     const current = get(expandedPresentationSessionsAtom)
     const isExpanded = current.has(sessionId)

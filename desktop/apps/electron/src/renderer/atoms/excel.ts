@@ -11,6 +11,7 @@ export interface PendingExcelWorkbookOpenRequest {
   requestId: number
   sessionId: string
   path: string
+  claimed?: boolean
 }
 
 let nextWorkbookOpenRequestId = 1
@@ -22,13 +23,26 @@ export const pendingExcelWorkbookOpenRequestsAtom = atom<PendingExcelWorkbookOpe
 
 export const queueExcelWorkbookOpenAtom = atom(
   null,
-  (get, set, request: Omit<PendingExcelWorkbookOpenRequest, 'requestId'>) => {
+  (get, set, request: Pick<PendingExcelWorkbookOpenRequest, 'sessionId' | 'path'>) => {
+    const pending = get(pendingExcelWorkbookOpenRequestsAtom)
+    if (pending.some((item) => item.sessionId === request.sessionId && item.path === request.path)) return
     set(pendingExcelWorkbookOpenRequestsAtom, [
-      ...get(pendingExcelWorkbookOpenRequestsAtom),
+      ...pending,
       { ...request, requestId: nextWorkbookOpenRequestId++ },
     ])
   },
 )
+
+/** Claim in the shared store so effect replay or panel remount cannot deliver twice. */
+export const claimExcelWorkbookOpenRequestAtom = atom(null, (get, set, requestId: number) => {
+  const pending = get(pendingExcelWorkbookOpenRequestsAtom)
+  const request = pending.find((item) => item.requestId === requestId)
+  if (!request || request.claimed) return null
+  set(pendingExcelWorkbookOpenRequestsAtom, pending.map((item) => (
+    item === request ? { ...item, claimed: true } : item
+  )))
+  return request
+})
 
 export const consumeExcelWorkbookOpenRequestAtom = atom(null, (get, set, requestId: number) => {
   const current = get(pendingExcelWorkbookOpenRequestsAtom)
@@ -74,8 +88,7 @@ export const excelExpandedAtom = atom(
     const sessionId = get(viewedSessionIdAtom)
     return sessionId ? get(expandedSessionsAtom).has(sessionId) : false
   },
-  (get, set, update: ExcelStateUpdate<boolean>) => {
-    const sessionId = get(viewedSessionIdAtom)
+  (get, set, update: ExcelStateUpdate<boolean>, sessionId: string | null = get(viewedSessionIdAtom)) => {
     if (!sessionId) return
     const current = get(expandedSessionsAtom)
     const nextValue = typeof update === 'function' ? update(current.has(sessionId)) : update

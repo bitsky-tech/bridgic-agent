@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute } from 'node:path'
 
 import type { WordDocumentReadResult } from '../shared/types'
@@ -10,11 +10,12 @@ export async function readWordDocumentFile(path: unknown): Promise<WordDocumentR
   if (typeof path !== 'string' || !isAbsolute(path) || extname(path).toLocaleLowerCase() !== '.docx') {
     throw new TypeError('Word document path must be an absolute .docx path')
   }
-  const metadata = await stat(path)
+  const canonicalPath = await realpath(path)
+  const metadata = await stat(canonicalPath)
   if (!metadata.isFile()) throw new TypeError('Word document path must reference a file')
   if (metadata.size > MAX_WORD_DOCUMENT_BYTES) throw new RangeError('Word document exceeds the 50 MB limit')
 
-  const bytes = new Uint8Array(await readFile(path))
+  const bytes = new Uint8Array(await readFile(canonicalPath))
   if (bytes.byteLength > MAX_WORD_DOCUMENT_BYTES) throw new RangeError('Word document exceeds the 50 MB limit')
-  return { bytes, fileName: basename(path), mtimeMs: metadata.mtimeMs }
+  return { path: canonicalPath, bytes, fileName: basename(canonicalPath), mtimeMs: metadata.mtimeMs }
 }

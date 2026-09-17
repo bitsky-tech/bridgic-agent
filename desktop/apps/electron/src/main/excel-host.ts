@@ -37,8 +37,9 @@ const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPrefere
 interface ExcelHostRecord extends OfficeSessionRecord {
   config: ExcelHostConfig
   dirty: boolean
-  recoveryState: unknown | null
+  recoveryState: string | null
   workbookOpenRequests: Map<string, string>
+  createInitialWorkbook: boolean
 }
 
 type ViewFactory = (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -53,7 +54,6 @@ export class ExcelHost {
     private readonly devServerUrl: string | undefined,
     private readonly rendererHtml: string,
     private readonly onStateChanged: (snapshot: ExcelHostSnapshot) => void = () => undefined,
-    private readonly confirmDiscardDirty: (count: number) => Promise<boolean> = async () => false,
     private readonly openExternal: (url: string) => void = () => undefined,
   ) {
     this.container = new OfficeSessionContainer({
@@ -84,13 +84,13 @@ export class ExcelHost {
   }
 
   /** Create the Session target once; subsequent calls only refresh presentation config. */
-  async ensureSession(sessionId: string, config: ExcelHostConfig): Promise<ExcelHostSessionInfo> {
+  async ensureSession(sessionId: string, config: ExcelHostConfig, createInitialWorkbook = true): Promise<ExcelHostSessionInfo> {
     const id = this.normalizeSessionId(sessionId)
     const nextConfig = this.normalizeConfig(id, config)
     const record = this.container.ensure(
       id,
-      () => this.createRecord(id, nextConfig),
-      (current) => current.view.webContents.loadURL(this.rendererUrl(current.config)),
+      () => this.createRecord(id, nextConfig, createInitialWorkbook),
+      (current) => current.view.webContents.loadURL(this.rendererUrl(current)),
     )
     this.updateConfig(record, nextConfig)
     if (this.container.activeSessionId === null) this.container.activateSession(id)
@@ -106,7 +106,7 @@ export class ExcelHost {
   ): Promise<void> {
     const id = this.normalizeSessionId(sessionId)
     const normalizedRequest = this.normalizeWorkbookOpenRequest(request)
-    await this.ensureSession(id, config)
+    await this.ensureSession(id, config, false)
     const record = this.container.get(id)
     if (!record || record.view.webContents.isDestroyed()) {
       throw new Error(`Excel Session does not exist: ${id}`)
@@ -136,11 +136,28 @@ export class ExcelHost {
     this.container.closeSession(this.normalizeSessionId(sessionId))
   }
 
-  /** Close only the Session target owned by the requesting child renderer. */
+  sessionForContents(webContentsId: number): string {
+    const record = this.container.forWebContents(webContentsId)
+    if (!record) throw new Error('Excel Session does not own this renderer')
+    return record.sessionId
+  }
+
+  /** Resolve ownership again so delayed teardown cannot destroy a replacement target. */
   closeCurrentSession(webContentsId: number): void {
     const record = this.container.forWebContents(webContentsId)
+    if (record) this.closeSession(record.sessionId)
+  }
+
+  async requestCloseSession(sessionId: string): Promise<void> {
+    const record = this.container.get(sessionId)
     if (!record) return
-    this.closeSession(record.sessionId)
+    if (record.crashed || record.view.webContents.isDestroyed()) { this.closeSession(sessionId); return }
+    await record.view.webContents.executeJavaScript('window.__bridgicExcel.close()')
+  }
+
+  async flushAll(): Promise<boolean> {
+    const results = await Promise.allSettled([...this.container.values()].map((record) => record.view.webContents.executeJavaScript('window.__bridgicExcel?.flush()')))
+    return results.every((result) => result.status === 'fulfilled')
   }
 
   setDirty(webContentsId: number, dirty: boolean): void {
@@ -152,7 +169,7 @@ export class ExcelHost {
     this.publishState()
   }
 
-  getRecoveryState(webContentsId: number): unknown | null {
+  getRecoveryState(webContentsId: number): string | null {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
     return record.recoveryState
@@ -161,15 +178,10 @@ export class ExcelHost {
   setRecoveryState(webContentsId: number, state: unknown): void {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
-    if (state === null || typeof state !== 'object' || Array.isArray(state)) {
-      throw new TypeError('Excel recovery state must be an object')
+    if (typeof state !== 'string') {
+      throw new TypeError('Excel recovery state must be serialized JSON')
     }
     record.recoveryState = state
-  }
-
-  async confirmClose(): Promise<boolean> {
-    const count = [...this.container.values()].filter((record) => record.dirty).length
-    return count === 0 || this.confirmDiscardDirty(count)
   }
 
   activateSession(sessionId: string | null): void {
@@ -195,7 +207,7 @@ export class ExcelHost {
     this.closeAll()
   }
 
-  private createRecord(sessionId: string, config: ExcelHostConfig): ExcelHostRecord {
+  private createRecord(sessionId: string, config: ExcelHostConfig, createInitialWorkbook: boolean): ExcelHostRecord {
     const view = this.createView({
       webPreferences: { ...WEB_PREFERENCES, preload: this.preloadPath },
     })
@@ -208,6 +220,7 @@ export class ExcelHost {
       dirty: false,
       recoveryState: null,
       workbookOpenRequests: new Map(),
+      createInitialWorkbook,
       ready: Promise.resolve(),
     }
     this.configureView(record)
@@ -236,7 +249,7 @@ export class ExcelHost {
       if (!this.container.owns(record) || contents.isDestroyed()) return
       this.container.invalidate(record)
       void this.container.reload(record, (current) => (
-        current.view.webContents.loadURL(this.rendererUrl(current.config))
+        current.view.webContents.loadURL(this.rendererUrl(current))
       ))
     })
   }
@@ -250,13 +263,14 @@ export class ExcelHost {
     }
   }
 
-  private rendererUrl(config: ExcelHostConfig): string {
+  private rendererUrl({ config, createInitialWorkbook }: ExcelHostRecord): string {
     const url = this.devServerUrl
       ? new URL('excel.html', this.devServerUrl.endsWith('/') ? this.devServerUrl : `${this.devServerUrl}/`)
       : new URL(pathToFileURL(this.rendererHtml).toString())
     url.searchParams.set('sessionId', config.sessionId)
     url.searchParams.set('locale', config.locale)
     url.searchParams.set('theme', config.theme)
+    if (!createInitialWorkbook) url.searchParams.set('initialWorkbook', 'empty')
     return url.toString()
   }
 

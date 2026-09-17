@@ -1,6 +1,8 @@
+import type { OfficeFileSource } from '../../../shared/office-files'
 import { createOfficeWorkspaceRuntime, OfficeOperationError } from './officeWorkspaceRuntime'
 
 export interface ExcelWorkspaceTab<TSnapshot> {
+  source?: OfficeFileSource
   tabId: string
   documentId: string | null
   fileName: string
@@ -9,6 +11,15 @@ export interface ExcelWorkspaceTab<TSnapshot> {
   dirty: boolean
   changeVersion: number
   revision: number
+}
+
+export interface ExcelWorkbookSave<TSnapshot> {
+  source?: OfficeFileSource
+  changeVersion: number
+  documentId: string
+  fileName: string
+  mtimeMs: number
+  snapshot: TSnapshot
 }
 
 export const EXCEL_WORKSPACE_CAPABILITIES = [
@@ -75,6 +86,24 @@ export function createExcelWorkspace<TSnapshot>(options: {
     updateTab: (tabId: string, update: (tab: Tab) => Tab) => {
       replace(state.tabs.map((tab) => tab.tabId === tabId ? update(tab) : tab), state.activeTabId)
     },
+    completeSave(tabId: string, saved: ExcelWorkbookSave<TSnapshot>, draftName: (fileName: string) => string): string[] {
+      if (!state.tabs.some((tab) => tab.tabId === tabId)) {
+        throw new OfficeOperationError('document_not_ready', 'The saved workbook is no longer open.')
+      }
+      const retainedDrafts: string[] = []
+      const tabs = state.tabs.flatMap((tab) => {
+        if (tab.tabId === tabId) return [completeExcelWorkbookSave(tab, saved)]
+        if (tab.documentId !== saved.documentId && (!saved.source || tab.source?.path !== saved.source.path)) return [tab]
+        if (!tab.dirty) return []
+        // Save as may overwrite another open source. Preserve its edits without
+        // letting a later Save silently write them back over the newly saved file.
+        const fileName = draftName(tab.fileName)
+        retainedDrafts.push(fileName)
+        return [{ ...tab, documentId: null, source: undefined, mtimeMs: null, fileName }]
+      })
+      replace(tabs, tabs.some((tab) => tab.tabId === state.activeTabId) ? state.activeTabId : tabId)
+      return retainedDrafts
+    },
     executeEditor<TEditor extends { readonly documentId: string }, TResult>(options: {
       capability: string
       documentId: string | null
@@ -105,17 +134,12 @@ export function createExcelWorkspace<TSnapshot>(options: {
 }
 
 /** A source write acknowledges only the native change version that produced its bytes. */
-export function completeExcelWorkbookSave<TSnapshot>(current: ExcelWorkspaceTab<TSnapshot>, saved: {
-  changeVersion: number
-  documentId: string
-  fileName: string
-  mtimeMs: number
-  snapshot: TSnapshot
-}): ExcelWorkspaceTab<TSnapshot> {
+export function completeExcelWorkbookSave<TSnapshot>(current: ExcelWorkspaceTab<TSnapshot>, saved: ExcelWorkbookSave<TSnapshot>): ExcelWorkspaceTab<TSnapshot> {
   const changedWhileSaving = current.changeVersion !== saved.changeVersion
   return {
     ...current,
     documentId: saved.documentId,
+    source: saved.source ?? current.source,
     fileName: saved.fileName,
     snapshot: changedWhileSaving ? current.snapshot : saved.snapshot,
     mtimeMs: saved.mtimeMs,

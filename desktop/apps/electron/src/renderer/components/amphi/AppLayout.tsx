@@ -31,13 +31,11 @@ import {
   RIGHT_PANEL_RAIL_WIDTH,
   SIDEBAR_MAX,
   SIDEBAR_MIN,
-  browserDockWidthAtom,
-  excelDockWidthAtom,
+  canvasDockWidthAtom,
   rightPanelCollapsedAtom,
   rightPanelWidthAtom,
   requestRightPanelCollapseAtom,
-  setBrowserDockWidthAtom,
-  setExcelDockWidthAtom,
+  setCanvasDockWidthAtom,
   setRightPanelWidthAtom,
   setSidebarWidthAtom,
   sidebarCollapsedAtom,
@@ -56,8 +54,8 @@ export interface AppLayoutProps {
   center: ReactNode
   right?: ReactNode
   rightCollapsed?: boolean
-  /** Canvas tools use a wider independent dock instead of the output-panel width. */
-  rightKind?: 'panel' | 'browser' | 'presentation' | 'excel'
+  /** Browser and Office share one canvas width, independent of the output-panel width. */
+  rightKind?: 'panel' | 'browser' | 'presentation' | 'word' | 'excel'
   /** An expanded canvas tool owns the complete work area beside the sidebar. */
   rightExpanded?: boolean
   /** When false, render the custom TopBar chrome (the app default). */
@@ -78,15 +76,13 @@ export function AppLayout({
   const sidebarWidth = useAtomValue(sidebarWidthAtom)
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom)
   const rightPanelWidth = useAtomValue(rightPanelWidthAtom)
-  const browserDockWidth = useAtomValue(browserDockWidthAtom)
-  const excelDockWidth = useAtomValue(excelDockWidthAtom)
+  const canvasDockWidth = useAtomValue(canvasDockWidthAtom)
   const sessionId = useAtomValue(activeSessionIdAtom)
   const focusPaneOpen = useAtomValue(sessionFocusPaneOpenAtom)
   const rightUserCollapsed = useAtomValue(rightPanelCollapsedAtom)
   const persistSidebarWidth = useSetAtom(setSidebarWidthAtom)
   const persistRightWidth = useSetAtom(setRightPanelWidthAtom)
-  const setBrowserDockWidth = useSetAtom(setBrowserDockWidthAtom)
-  const setExcelDockWidth = useSetAtom(setExcelDockWidthAtom)
+  const setCanvasDockWidth = useSetAtom(setCanvasDockWidthAtom)
   const requestRightCollapse = useSetAtom(requestRightPanelCollapseAtom)
 
   // Transient drag widths — non-null only mid-drag. Overrides the persisted
@@ -94,7 +90,7 @@ export function AppLayout({
   const [dragSidebarW, setDragSidebarW] = useState<number | null>(null)
   const [dragRight, setDragRight] = useState<{
     sessionId: string | null
-    kind: 'panel' | 'browser' | 'presentation' | 'excel'
+    kind: AppLayoutProps['rightKind']
     width: number | null
   }>({ sessionId, kind: rightKind, width: null })
   if (dragRight.sessionId !== sessionId || dragRight.kind !== rightKind) {
@@ -123,11 +119,10 @@ export function AppLayout({
     ? dragRight.width
     : null
   const wideDock = rightKind !== 'panel'
-  const rememberedWideContentWidth = rightKind === 'excel' ? excelDockWidth : browserDockWidth
   const preferredWideContentWidth = dragRightW === null
-    ? rememberedWideContentWidth
+    ? canvasDockWidth
     : Math.max(0, dragRightW - RIGHT_PANEL_RAIL_WIDTH)
-  const wideGeometry = browserDockGeometry(availableWorkWidth, preferredWideContentWidth)
+  const wideGeometry = canvasDockGeometry(availableWorkWidth, preferredWideContentWidth)
   const effectiveRightW = wideDock
     ? wideGeometry.width
     : Math.min(dragRightW ?? rightPanelWidth + RIGHT_PANEL_RAIL_WIDTH, rightMax)
@@ -145,10 +140,8 @@ export function AppLayout({
   const rightStageW = expandRight ? null : effectiveRightW
 
   const persistDockWidth = (totalWidth: number) => {
-    if (rightKind === 'browser' || rightKind === 'presentation') {
-      setBrowserDockWidth(Math.max(0, totalWidth - RIGHT_PANEL_RAIL_WIDTH))
-    } else if (rightKind === 'excel') {
-      setExcelDockWidth(Math.max(0, totalWidth - RIGHT_PANEL_RAIL_WIDTH))
+    if (wideDock) {
+      setCanvasDockWidth(Math.max(0, totalWidth - RIGHT_PANEL_RAIL_WIDTH))
     } else {
       persistRightWidth(totalWidth - RIGHT_PANEL_RAIL_WIDTH)
     }
@@ -260,24 +253,24 @@ export function AppLayout({
   )
 }
 
-export const BROWSER_DOCK_MIN = 520
-export const BROWSER_DOCK_COMPACT_MIN = 240
-export const BROWSER_CENTER_MIN = 420
+export const CANVAS_DOCK_MIN = 520
+export const CANVAS_DOCK_COMPACT_MIN = 240
+export const CANVAS_CENTER_MIN = 420
 export const RIGHT_PANEL_COLLAPSE_OVERSHOOT = 24
 
-/** Resolve the responsive browser dock without squeezing a narrow window to zero. */
-export function browserDockGeometry(
+/** Resolve the shared Browser/Office dock without squeezing a narrow window to zero. */
+export function canvasDockGeometry(
   availableWidth: number,
   preferredContentWidth: number | null,
 ): { width: number; min: number; max: number } {
   const available = Math.max(0, Math.round(availableWidth))
   const compactCenter = Math.min(
-    BROWSER_CENTER_MIN,
+    CANVAS_CENTER_MIN,
     Math.max(160, Math.round(available * 0.4)),
   )
-  const max = Math.max(Math.min(BROWSER_DOCK_COMPACT_MIN, available), available - compactCenter)
-  const min = Math.min(BROWSER_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max)
-  const preferred = (preferredContentWidth ?? BROWSER_DOCK_MIN)
+  const max = Math.max(Math.min(CANVAS_DOCK_COMPACT_MIN, available), available - compactCenter)
+  const min = Math.min(CANVAS_DOCK_MIN + RIGHT_PANEL_RAIL_WIDTH, max)
+  const preferred = (preferredContentWidth ?? CANVAS_DOCK_MIN)
     + RIGHT_PANEL_RAIL_WIDTH
   return { width: Math.min(max, Math.max(min, preferred)), min, max }
 }

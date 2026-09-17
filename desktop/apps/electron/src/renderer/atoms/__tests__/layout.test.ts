@@ -15,7 +15,7 @@ w.api = {
 }
 
 const {
-  browserDockWidthAtom,
+  canvasDockWidthAtom,
   clearRightPanelCollapseRequestAtom,
   purgeRightPanelLayoutState,
   rememberRightPanelStateAtom,
@@ -24,7 +24,7 @@ const {
   rightPanelCollapseRequestAtom,
   rightPanelCollapsedAtom,
   rightPanelWidthAtom,
-  setBrowserDockWidthAtom,
+  setCanvasDockWidthAtom,
   setRightPanelCollapsedAtom,
   setRightPanelWidthAtom,
 } = await import('../layout')
@@ -57,34 +57,34 @@ describe('right-panel Session state', () => {
     store.set(activeSessionIdAtom, 'session-b')
     store.set(setRightPanelCollapsedAtom, true)
     store.set(setRightPanelWidthAtom, 460)
-    store.set(setBrowserDockWidthAtom, 700)
+    store.set(setCanvasDockWidthAtom, 700)
 
     store.set(activeSessionIdAtom, 'session-a')
     expect(store.get(rightPanelCollapsedAtom)).toBe(false)
     expect(store.get(rightPanelWidthAtom)).toBe(320)
-    expect(store.get(browserDockWidthAtom)).toBeNull()
+    expect(store.get(canvasDockWidthAtom)).toBeNull()
   })
 
-  it('restores both ordinary panel and Browser widths per Session', () => {
+  it('restores both ordinary panel and shared canvas widths per Session', () => {
     const store = createStore()
 
     store.set(activeSessionIdAtom, 'session-a')
     store.set(setRightPanelWidthAtom, 440)
-    store.set(setBrowserDockWidthAtom, 680)
+    store.set(setCanvasDockWidthAtom, 680)
 
     store.set(activeSessionIdAtom, 'session-b')
     store.set(setRightPanelWidthAtom, 600)
-    store.set(setBrowserDockWidthAtom, 760)
+    store.set(setCanvasDockWidthAtom, 760)
     expect(store.get(rightPanelWidthAtom)).toBe(600)
-    expect(store.get(browserDockWidthAtom)).toBe(760)
+    expect(store.get(canvasDockWidthAtom)).toBe(760)
 
     store.set(activeSessionIdAtom, 'session-a')
     expect(store.get(rightPanelWidthAtom)).toBe(440)
-    expect(store.get(browserDockWidthAtom)).toBe(680)
+    expect(store.get(canvasDockWidthAtom)).toBe(680)
 
     store.set(activeSessionIdAtom, 'session-b')
     expect(store.get(rightPanelWidthAtom)).toBe(600)
-    expect(store.get(browserDockWidthAtom)).toBe(760)
+    expect(store.get(canvasDockWidthAtom)).toBe(760)
   })
 
   it('does not deliver a pending collapse handoff to another Session', () => {
@@ -109,15 +109,15 @@ describe('right-panel Session state', () => {
 
     store.set(activeSessionIdAtom, 'session-deleted')
     store.set(setRightPanelWidthAtom, 440)
-    store.set(setBrowserDockWidthAtom, 680)
+    store.set(setCanvasDockWidthAtom, 680)
     store.set(activeSessionIdAtom, 'session-fallback')
     store.set(setRightPanelWidthAtom, 600)
-    store.set(setBrowserDockWidthAtom, 760)
+    store.set(setCanvasDockWidthAtom, 760)
 
     purgeRightPanelLayoutState('session-deleted')
     store.set(activeSessionIdAtom, 'session-deleted')
     expect(store.get(rightPanelWidthAtom)).toBe(600)
-    expect(store.get(browserDockWidthAtom)).toBe(760)
+    expect(store.get(canvasDockWidthAtom)).toBe(760)
   })
 
   it('moves draft visibility and handoff state to the materialized daemon id', () => {
@@ -126,7 +126,7 @@ describe('right-panel Session state', () => {
     store.set(activeSessionIdAtom, 'draft:new')
     store.set(setRightPanelCollapsedAtom, true)
     store.set(setRightPanelWidthAtom, 430)
-    store.set(setBrowserDockWidthAtom, 650)
+    store.set(setCanvasDockWidthAtom, 650)
     store.set(requestRightPanelCollapseAtom)
 
     // Another Session changes the persisted fallback while the create request is
@@ -134,7 +134,7 @@ describe('right-panel Session state', () => {
     store.set(activeSessionIdAtom, 'session-other')
     store.set(setRightPanelCollapsedAtom, false)
     store.set(setRightPanelWidthAtom, 360)
-    store.set(setBrowserDockWidthAtom, 520)
+    store.set(setCanvasDockWidthAtom, 520)
     store.set(remapRightPanelLayoutStateAtom, {
       sourceSessionId: 'draft:new',
       targetSessionId: 'session-materialized',
@@ -143,13 +143,13 @@ describe('right-panel Session state', () => {
     store.set(activeSessionIdAtom, 'session-materialized')
     expect(store.get(rightPanelCollapsedAtom)).toBe(true)
     expect(store.get(rightPanelWidthAtom)).toBe(430)
-    expect(store.get(browserDockWidthAtom)).toBe(650)
+    expect(store.get(canvasDockWidthAtom)).toBe(650)
     expect(store.get(rightPanelCollapseRequestAtom)).toBe(true)
 
     store.set(activeSessionIdAtom, 'draft:new')
     expect(store.get(rightPanelCollapsedAtom)).toBe(false)
     expect(store.get(rightPanelWidthAtom)).toBe(360)
-    expect(store.get(browserDockWidthAtom)).toBe(520)
+    expect(store.get(canvasDockWidthAtom)).toBe(520)
     expect(store.get(rightPanelCollapseRequestAtom)).toBe(false)
   })
 })

@@ -1,3 +1,4 @@
+import { officeFiles } from './office-files'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { GuiSettings } from '@app/shared/types'
 import { IPC } from '../shared/ipc-channels'
@@ -37,7 +38,7 @@ const api: WordHostPreloadAPI = {
   getConfig: () => ipcRenderer.invoke(IPC.wordHost.getConfig),
   readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
   reportState: (state) => ipcRenderer.invoke(IPC.wordHost.reportState, state),
-  requestHide: () => ipcRenderer.invoke(IPC.wordHost.requestHide),
+  requestClose: () => ipcRenderer.invoke(IPC.wordHost.requestClose),
   setExpanded: (expanded) => ipcRenderer.invoke(IPC.wordHost.setExpanded, expanded),
   onExpandedChanged: latestEvent<{ sessionId: string; expanded: boolean }>(IPC.events.wordHostExpandedChanged),
   onConfigChanged: latestEvent<GuiSettings>(IPC.events.wordHostConfigChanged),
@@ -48,3 +49,5 @@ const api: WordHostPreloadAPI = {
 }
 
 contextBridge.exposeInMainWorld('wordHostApi', api)
+
+contextBridge.exposeInMainWorld('officeFiles', officeFiles)

@@ -1,7 +1,6 @@
 import {
   BorderStyleTypes,
   BorderType,
-  CommandType,
   Dimension,
   ImageSourceType,
   InterceptorEffectEnum,
@@ -90,6 +89,7 @@ import {
   type ExcelLiveAnalysisBinding, type ExcelLivePivotBinding, type ExcelLiveStructureChange,
 } from './excelLiveAnalysis'
 import { adjustDecimalPlaces } from './excelNumberFormat'
+import { isExcelContentMutation } from './excelContentChanges'
 import { EXCEL_OPEN_SOURCE_FEATURES, EXCEL_SHEETS_UI_CONFIG, type ExcelOpenSourceFeature } from './excelUiConfig'
 
 export interface SheetEditorHandle {
@@ -132,8 +132,11 @@ export function mountExcelUniverAdapter(options: {
   onViewStateChange: (state: ExcelViewState) => void
 }): ExcelUniverAdapter {
   const { container, config, documentId, onActionFailure, onSelectionChange, onViewStateChange } = options
+  const editorContainer = document.createElement('div')
+  editorContainer.className = 'h-full w-full'
+  container.appendChild(editorContainer)
   const { univer, univerAPI } = createSheetsUniver([
-    UniverSheetsCorePreset({ container, ...EXCEL_SHEETS_UI_CONFIG }),
+    UniverSheetsCorePreset({ container: editorContainer, ...EXCEL_SHEETS_UI_CONFIG }),
     ...EXCEL_OPEN_SOURCE_FEATURES.map((feature) => openSourcePresetFactories[feature]()),
   ], {
     darkMode: config.theme === 'dark',
@@ -168,8 +171,11 @@ export function mountExcelUniverAdapter(options: {
       for (const subscription of subscriptions) subscription.dispose()
       liveAnalysis?.dispose()
       sheetView.dispose()
-      univer.dispose()
-      container.replaceChildren()
+      // Univer owns a separate React root. Unmount it after our host's commit,
+      // and remove only this instance's child, even if a replacement is mounted.
+      queueMicrotask(() => {
+        try { univer.dispose() } finally { editorContainer.remove() }
+      })
     },
   })
   const lease = binding.capture()
@@ -207,7 +213,7 @@ export function mountExcelUniverAdapter(options: {
     univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
       const structureChange = liveStructureChange(event.id, event.params)
       if (structureChange) liveAnalysis?.structureChanged(structureChange)
-      if (event.type === CommandType.MUTATION && formulaPreviewDepth === 0) binding.scheduleChange()
+      if (isExcelContentMutation(event) && formulaPreviewDepth === 0) binding.scheduleChange()
     }),
   ]
   const observer = new ResizeObserver(() => {

@@ -188,7 +188,7 @@ export interface ContextUsageSnapshot {
  */
 export type AgentEvent =
   | { type: 'message_start'; messageId: string; role: 'assistant' }
-  | { type: 'text_delta'; messageId: string; text: string }
+  | { type: 'text_delta'; messageId: string; text: string; source?: 'final' }
   | { type: 'thinking_delta'; messageId: string; text: string }
   | {
       type: 'model_retry'

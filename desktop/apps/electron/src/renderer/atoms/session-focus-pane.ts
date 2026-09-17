@@ -16,7 +16,7 @@ export type SessionFocusPaneSelection =
   | { kind: typeof SessionFocusPaneKind.TaskSpec }
   | { kind: typeof SessionFocusPaneKind.WorkflowRun; generation: string }
 
-const selectionFamily = atomFamily(
+export const sessionFocusPaneFamily = atomFamily(
   (_sessionId: string) => atom<SessionFocusPaneSelection | null>(null),
 )
 
@@ -27,7 +27,7 @@ const exitCollapseRequestFamily = atomFamily(
 /** Selected mode surface for the active Session, before content validity checks. */
 export const currentSessionFocusPaneAtom = atom((get) => {
   const sessionId = get(activeSessionIdAtom)
-  return sessionId ? get(selectionFamily(sessionId)) : null
+  return sessionId ? get(sessionFocusPaneFamily(sessionId)) : null
 })
 
 /** Whether the viewed Session should finish closing its Agent-owned right pane. */
@@ -42,7 +42,7 @@ export const setSessionFocusPaneAtom = atom(
   (get, set, selection: SessionFocusPaneSelection | null) => {
     const sessionId = get(activeSessionIdAtom)
     if (!sessionId) return
-    set(selectionFamily(sessionId), selection)
+    set(sessionFocusPaneFamily(sessionId), selection)
   },
 )
 
@@ -82,7 +82,7 @@ export const syncSessionFocusPaneModeAtom = atom(
       && payload.previousMode !== 'presentation'
       && payload.previousMode !== 'run_workflow'
     ) return
-    const selection = get(selectionFamily(payload.sessionId))
+    const selection = get(sessionFocusPaneFamily(payload.sessionId))
     let agentOwnsPane = false
     if (payload.previousMode === 'build') {
       agentOwnsPane = selection?.kind === SessionFocusPaneKind.TaskSpec
@@ -92,7 +92,7 @@ export const syncSessionFocusPaneModeAtom = atom(
       agentOwnsPane = selection?.kind === SessionFocusPaneKind.WorkflowRun
         && selection.generation === payload.runGeneration
     }
-    set(selectionFamily(payload.sessionId), null)
+    set(sessionFocusPaneFamily(payload.sessionId), null)
     set(exitCollapseRequestFamily(payload.sessionId), agentOwnsPane)
   },
 )
@@ -101,13 +101,13 @@ export const syncSessionFocusPaneModeAtom = atom(
 export const clearSessionFocusPaneKindAtom = atom(
   null,
   (get, set, payload: { sessionId: string; kind: SessionFocusPaneKind }) => {
-    const current = get(selectionFamily(payload.sessionId))
-    if (current?.kind === payload.kind) set(selectionFamily(payload.sessionId), null)
+    const current = get(sessionFocusPaneFamily(payload.sessionId))
+    if (current?.kind === payload.kind) set(sessionFocusPaneFamily(payload.sessionId), null)
   },
 )
 
 /** Drop transient focus selection for a deleted Session. */
 export function purgeSessionFocusPaneState(sessionId: string): void {
-  selectionFamily.remove(sessionId)
+  sessionFocusPaneFamily.remove(sessionId)
   exitCollapseRequestFamily.remove(sessionId)
 }

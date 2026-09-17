@@ -8,6 +8,7 @@ Process-local caches remain under :mod:`src.amphi_service.cache`.
 from __future__ import annotations
 
 from ._base import Repository
+from ._debug_run import DebugModelRun, DebugModelRunRepository
 from ._memory import Memory, MemoryRepository
 from ._provider import ProviderCredential, ProviderRepository
 from ._schedule import ScheduleRecord, ScheduleRepository
@@ -38,6 +39,8 @@ from ._workflow_run import (
 )
 
 __all__ = [
+    "DebugModelRun",
+    "DebugModelRunRepository",
     "Repository",
     "User",
     "UserRepository",

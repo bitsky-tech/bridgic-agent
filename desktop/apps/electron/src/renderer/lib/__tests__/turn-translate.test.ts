@@ -222,6 +222,7 @@ describe('translateTurnEvent', () => {
     const delta = events[1]
     if (delta?.type !== 'text_delta') throw new Error('expected text_delta')
     expect(delta.text).toBe('only-final')
+    expect(delta.source).toBe('final')
   })
 
   it('does NOT inject answer when content already streamed', () => {

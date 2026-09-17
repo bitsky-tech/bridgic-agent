@@ -17,7 +17,7 @@ function deferred() {
   return { promise, resolve }
 }
 
-function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSubscription?: boolean; onTableActiveChange?: () => void } = {}) {
+function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSubscription?: boolean; onTableActiveChange?: () => void; retainNativeInput?: boolean } = {}) {
   const store = createWordDomainStore(createWordWorkspace(crypto.randomUUID(), 'Untitled'), { defaultTitle: 'Untitled' })
   const document = store.getSnapshot().documents[0]!
   let nativeSnapshot = structuredClone(document.snapshot)
@@ -32,7 +32,7 @@ function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSu
   const executeCommand = mock(async (id: string, params?: { snapshot?: IDocumentData }) => {
     if (id === 'doc.command-replace-snapshot') {
       if (options.beforeReplace && !await options.beforeReplace()) return false
-      nativeSnapshot = structuredClone(params!.snapshot!)
+      nativeSnapshot = options.retainNativeInput ? params!.snapshot! : structuredClone(params!.snapshot!)
     }
     return true
   })
@@ -65,7 +65,10 @@ function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSu
     store,
     zoom: 100,
     onTableActiveChange: options.onTableActiveChange,
-    mountNative: () => native,
+    mountNative: (input) => {
+      if (options.retainNativeInput) nativeSnapshot = input.snapshot
+      return native
+    },
   })
   return {
     store,
@@ -85,6 +88,27 @@ function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSu
 }
 
 describe('Word editor engine binding', () => {
+  it('commits in-place native image changes without aliasing mounted or replaced domain snapshots', async () => {
+    const fixture = createFixture({ retainNativeInput: true })
+    const adapter = fixture.mount()
+    try {
+      for (const id of ['mounted-image', 'replaced-image']) {
+        if (id === 'replaced-image') {
+          await fixture.store.dispatch({ type: 'document.append', text: 'Agent edit' })
+          expect(await adapter.reconcile(fixture.store.getSnapshot().documents[0]!.snapshot)).toBe(true)
+        }
+        const before = fixture.store.getSnapshot().documents[0]!.snapshot
+        const native = fixture.native.document.getSnapshot()
+        native.drawings![id] = { drawingId: id, unitId: fixture.document.id, subUnitId: fixture.document.id } as NonNullable<IDocumentData['drawings']>[string]
+        fixture.emit('doc.command.insert-doc-image')
+        expect(before.drawings?.[id]).toBeUndefined()
+        await adapter.flush()
+        expect(fixture.store.getSnapshot().documents[0]!.snapshot.drawings?.[id]?.drawingId).toBe(id)
+        expect(before.drawings?.[id]).toBeUndefined()
+      }
+    } finally { adapter.dispose(); fixture.store.dispose() }
+  })
+
   it('flushes native typing into the existing Word authority without waiting for the debounce', async () => {
     const fixture = createFixture()
     const adapter = fixture.mount()

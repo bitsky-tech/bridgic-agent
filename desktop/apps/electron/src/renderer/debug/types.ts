@@ -22,7 +22,7 @@ export interface TraceToolCall {
   hasResult: boolean
   pairing: 'id' | 'arguments' | 'missing' | 'unmatched'
   status: TraceStatus
-  /** Only a duration on this individual result, never the round's action total. */
+  /** A recorded per-call duration, either on the result or keyed by call id on the round. */
   durationMs: number | null
   rawCall: unknown
   rawResult: unknown
@@ -44,6 +44,8 @@ export interface TraceRound {
   status: TraceStatus
   /** Explicit round wall time only; Turn totals are not assigned to rounds. */
   durationMs: number | null
+  /** Model streaming and retries only; excludes prompt assembly and tool execution. */
+  modelDurationMs: number | null
   /** Recorded wall time of the whole action group; not an individual tool time. */
   actDurationMs: number | null
   usage: Record<TraceUsageField, number | null>

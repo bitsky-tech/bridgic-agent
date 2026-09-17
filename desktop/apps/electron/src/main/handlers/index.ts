@@ -1,3 +1,4 @@
+import { registerOfficeFileHandlers } from './office-files'
 import type { WindowManager } from '../window-manager'
 import { registerAppHandlers } from './app'
 import { registerBackendHandlers } from './backend'
@@ -22,6 +23,12 @@ import { registerWordHandlers } from './word'
 import { registerWordHostHandlers } from './word-host'
 
 export function registerAllHandlers(windowManager: WindowManager, quitApp: () => Promise<void>): void {
+  registerOfficeFileHandlers((kind, contentsId) => {
+    if (kind === 'word') return windowManager.getWordHost().sessionForContents(contentsId)
+    if (kind === 'excel') return windowManager.getExcelHost().sessionForContents(contentsId)
+    if (kind === 'presentation') return windowManager.getEmbeddedPowerPoint().sessionForContents(contentsId)
+    throw new Error('Unknown Office editor')
+  })
   registerAppHandlers(quitApp)
   registerShellHandlers()
   registerDialogHandlers()
@@ -50,12 +57,15 @@ export function registerAllHandlers(windowManager: WindowManager, quitApp: () =>
     const window = windowManager.getMainWindow()
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   })
-  registerExcelHostHandlers(windowManager.getExcelHost(), windowManager.getEmbeddedBrowser())
+  registerExcelHostHandlers(windowManager.getExcelHost(), windowManager.getEmbeddedBrowser(), (channel, value) => {
+    const window = windowManager.getMainWindow()
+    if (window && !window.isDestroyed()) window.webContents.send(channel, value)
+  })
   // Bridgic Agent Python daemon control plane (discover / spawn / stop / clients).
   registerBackendHandlers()
   // Desktop auto-update: the user-confirmed "install now" path. Registered after
   // the backend handlers because it drives pythonClient during the handover.
-  registerUpdateHandlers(windowManager.getExcelHost(), () => windowManager.getWordHost().flushAll())
+  registerUpdateHandlers(() => windowManager.flushWordDocuments())
   registerSystemHandlers()
   registerIssueReportHandlers()
   // Native toasts for daemon `schedule.notify` frames (relayed by the renderer).

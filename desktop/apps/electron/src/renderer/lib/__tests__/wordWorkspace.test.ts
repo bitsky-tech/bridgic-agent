@@ -19,6 +19,39 @@ function deferred() {
 }
 
 describe('Word common workspace runtime', () => {
+  it('decides the final tab inside the close queue after an unfinished editor flush', async () => {
+    const store = createStore()
+    const firstId = store.getSnapshot().activeDocumentId
+    await store.dispatch({ type: 'document.create', title: 'Second' })
+    const secondId = store.getSnapshot().activeDocumentId
+    const checkpoint = deferred()
+    const detach = store.registerEditorCommandHandler(secondId, async () => true, () => checkpoint.promise)
+    const firstClose = store.closeDocumentTab(firstId)
+    const finalClose = store.closeDocumentTab(secondId)
+    expect(store.getSnapshot().documents).toHaveLength(2)
+    checkpoint.resolve()
+    expect(await firstClose).toEqual({ ok: true, value: { closeSurface: false } })
+    expect(await finalClose).toEqual({ ok: true, value: { closeSurface: true } })
+    expect(store.getSnapshot().documents.map((document) => document.id)).toEqual([secondId])
+    detach()
+    store.dispose()
+  })
+
+  it('includes a queued new document when deciding whether a close should release the surface', async () => {
+    const store = createStore()
+    const firstId = store.getSnapshot().activeDocumentId
+    const checkpoint = deferred()
+    const detach = store.registerEditorCommandHandler(firstId, async () => true, () => checkpoint.promise)
+    const creating = store.dispatch({ type: 'document.create', title: 'Queued document' })
+    const closing = store.closeDocumentTab(firstId)
+    checkpoint.resolve()
+    expect((await creating).ok).toBe(true)
+    expect(await closing).toEqual({ ok: true, value: { closeSurface: false } })
+    expect(store.getSnapshot().documents.map((document) => document.title)).toEqual(['Queued document'])
+    detach()
+    store.dispose()
+  })
+
   it('publishes immutable metadata from the authoritative domain without duplicating document content', async () => {
     const store = createStore()
     const reader = store.api.workspace
@@ -26,12 +59,12 @@ describe('Word common workspace runtime', () => {
     const revisions: number[] = []
     const unsubscribe = reader.subscribe((snapshot) => revisions.push(snapshot.revision))
     expect(initial).toMatchObject({ appKind: 'word', sessionId: 'word-session', revision: 0 })
-    expect(initial.documents[0]).toEqual({ id: initial.activeDocumentId!, title: 'Untitled', revision: 0, dirty: null })
+    expect(initial.documents[0]).toEqual({ id: initial.activeDocumentId!, title: 'Untitled', revision: 0, dirty: true })
     expect(Object.isFrozen(initial)).toBe(true)
     expect(Object.isFrozen(initial.documents)).toBe(true)
     expect(Object.isFrozen(initial.documents[0])).toBe(true)
     expect(reader.supports('document.update')).toBe(true)
-    expect(reader.supports('document.saveAs')).toBe(false)
+    expect(reader.supports('document.saveAs')).toBe(true)
 
     await store.dispatch({ type: 'document.activate', documentId: initial.activeDocumentId })
     expect(reader.getSnapshot()).toBe(initial)

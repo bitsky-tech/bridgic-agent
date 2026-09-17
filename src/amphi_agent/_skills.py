@@ -105,7 +105,7 @@ class SkillLibrary:
             await self._repo.ensure_builtin(self._user_id, **definition)
         await self._repo.remove_missing_builtins(self._user_id, set(names))
 
-    async def load(self) -> "SkillLibrary":
+    async def load(self, *, sync_builtins: bool = True) -> "SkillLibrary":
         """Load the user's Skill catalogue from the store (best-effort), returning
         ``self`` so an invocation can load the catalogue during context setup.
 
@@ -117,7 +117,8 @@ class SkillLibrary:
         ``SkillLibrary`` does not contain stage-specific selection policy.
         """
         try:
-            await self.sync_builtins()
+            if sync_builtins:
+                await self.sync_builtins()
             rows = await self._repo.list_for_user(self._user_id)
             self._skills = {
                 row.name: Skill(

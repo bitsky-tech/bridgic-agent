@@ -1,52 +1,293 @@
 # Desktop debug API contract
 
-**Proposal; not implemented.** This document specifies a future backend contract
-for the Desktop debug renderer. It does not add execution endpoints, change the
-Python backend, or promise that historical requests were captured.
+This document describes Turn observation, on-demand Cognitive Prompt assembly,
+single-tool execution, and model-only experiments, followed by proposed normalized
+trace and replay APIs.
 
-Today, `bun run debug` starts a read-only adapter inside the Bun development
-launcher. Its only route is
+## Implemented debug paths
+
+### Raw Turn traces
+
+`bun run debug` starts a read-only adapter inside the Bun development launcher.
+Its only data route is
 `GET /__debug-api/sessions/{sessionId}/turns?before={cursor}&limit=20`.
 It reads the existing Desktop database and returns `DesktopDebugTurnsPage` from
 `apps/electron/src/shared/debug-types.ts`: latest-first Turns with raw
 `otaRecords`, `otaContext`, `contextUsage`, and captured Turn metadata. Its
 `otaContextSource` distinguishes stored context from assembly of stored fields.
-It rejects non-GET requests. The current renderer adapts these records locally;
-neither tool execution nor LLM execution is available through this adapter.
+It rejects non-GET requests, requires the debug launcher's bearer token, and
+accepts only that launcher's renderer origin. This adapter is solely for raw
+Turn traces; it does not serve prompt data or execute tools or models.
 
-## Proposed routes and availability
+New tool executions record each call's elapsed milliseconds in the round's
+`tool_durations_ms` map, keyed by tool-call id. The inspector matches these
+durations by call id; explicit durations on individual results remain supported.
+`act_duration_ms` describes the whole action group and is never substituted for
+an individual tool's time. Older records without per-call timings show no duration.
 
-All proposed routes use the existing backend bearer authentication and current
-user resolution. Each Session, Turn, round, tool call, and debug run must belong
-to the requested Session and authenticated user. The debug renderer uses the
-same backend, data, workspace, and native Session hosts as ordinary Desktop.
+### Live execution cards
+
+The debug renderer also projects the existing Session events into in-memory
+execution cards. No new backend event or OTA field is required. Each
+`context_usage` event closes a model response; subsequent text/reasoning or
+another usage event opens the next card. Tool calls after that boundary still
+belong to the completed response, and results match by tool-call id. Model
+transport retries roll back only the current card's discarded text/reasoning.
+
+The projection is installed only by the debug renderer and captures events
+synchronously before React batches its renders. It is Session-scoped, retains
+parked content across interaction continuations, and keeps settled cards visible
+until persisted Turn records become available. Conversation view retains the
+ordinary streaming presentation. Live tool rows expand to show received results;
+the saved-record inspector becomes available after persistence.
+
+Saved records replace a projection only when they cover its responses and
+received tool results. An older snapshot cannot erase newer continuation cards,
+and refreshing another Turn does not switch complete cards back to live mode.
+If a resumed transcript contains content absent from the projection, an expanded
+product conversation record preserves that content until complete history arrives.
+
+These cards are a presentation of received events, not authoritative OTA
+snapshots. Internal tools omitted from the ordinary stream and full request data
+are filled in from persisted records. Missing timing remains unknown and
+estimated token usage is not shown as provider-reported usage. A late subscriber
+can only display the events still available to it until durable history arrives.
+The proposed `liveTrace` capability below describes a future authoritative trace
+protocol, not this frontend projection.
+
+### On-demand Cognitive Prompt API
+
+`POST /api/debug/sessions/{sessionId}/prompts` assembles one selected round:
+
+```ts
+type AssemblePromptInput = {
+  turnId: string
+  roundIndex: number // Zero-based index in the Turn's OTA records.
+  mode: string
+  stage: string
+}
+```
+
+The handler uses normal bearer authentication, resolves the current user, and
+checks Session/Turn ownership and the supplied round scope. It delegates to
+`self.invocation.get_prompt`, which calls the Agent method to identify the
+Cognitive worker and assemble the request for that round's context.
+
+The response uses `Cache-Control: no-store`:
+
+```ts
+type AssembledPromptResponse = {
+  sessionId: string
+  item: {
+    id: string
+    turnId: string
+    turnOrdinal: number
+    roundIndex: number
+    stage: string
+    mode: string
+    availability: 'assembled'
+    request: {
+      schemaVersion: 1
+      kind: 'cognitive'
+      worker: string // Resolved Cognitive worker class.
+      providerId: string | null
+      modelId: string | null
+      protocol: string | null
+      messages: unknown[]
+      tools: unknown[]
+      extraBody: unknown
+    }
+  }
+}
+```
+
+The round inspector requests assembly automatically when a round is opened and
+caches it in Session-scoped panel memory. Responses also include a source-record
+`revision`, `modelSource` (`round`, `turn`, or `current`), and the explicit
+`boundary: cognitive_before_runtime_tail`. The assembled model prefers the round
+record, then the Turn, then the current model. Provider credentials and protocol
+come from the currently active provider. It does not enable HTTP request capture.
+
+The output is assembled using current Cognitive code, configuration, and Session
+resources. Conversation history stops before the selected response. Each new
+`OTARecord` stores its complete round snapshot in `think_scope` immediately before
+the model request, after any accepted context compaction. Cognitive fields such
+as `mode`, `stage`, `step_index`, `workflow_id`, and `generation` stay at the top
+level. The other Agent state fields (including the full `context_compaction`
+summaries and coverage), all three tool-loading flags, and `prompt_time` live
+alongside them. There is no second `prompt_context` or duplicate `state.think`.
+The endpoint restores this round's values rather than the final Turn state.
+Snapshots contain no copied history, messages, or tool schemas, and remain
+independent of later state mutations. Existing trace navigation still reads
+`think_scope.mode`, `think_scope.stage`, and the optional `think_scope.step_index`.
+Previously saved split `prompt_context` snapshots remain readable. Older rounds
+without either snapshot retain the Turn-state fallback and any
+recorded `think_scope.step_index`; their overwritten intermediate states cannot
+be recovered retroactively.
+Presentation state retains only `mode`, `stage`, and `step_index`. Human decisions
+are recorded in the corresponding confirmation tool result. Confirmed outlines
+and template decisions produce artifacts under the Session's `.ppt/` directory;
+Prompt assembly resolves only artifact paths from preceding tool results. New
+confirmations produce new files instead of overwriting earlier confirmed output.
+The shared UI projection also reads these tool results, not business fields from
+Turn state. Mutable Brief/Plan/Review documents are read through file tools.
+Workflow inspection restores the recorded workflow identity and cursor from the
+round's state. Legacy records resolve their entry from preceding
+`request_run_workflow` results and their section from `think_scope.step_index`.
+The original input is resolved from preceding entry results. Inspection loads
+the recorded Workflow's saved definition,
+without opening the Session's active `.run` or comparing its current cursor.
+Completed Turns can assemble after returning to Main or after another Run starts.
+The inspection context does not need a Run generation; execution still requires
+the generation and cursor to match the durable Run before accepting controls.
+`AmphiAgent.get_prompt(context, ota_context)` calls the worker's original
+`assemble_messages` and returns those messages and tool definitions, before
+runtime-tail injection or new context compaction. Existing retained summaries may affect
+history projection, but this endpoint does not run new compaction because that
+could invoke a model.
+
+Internal assembly state is preserved for new rounds; mutable external resources
+such as `.build` files are read from the current environment. This is not a
+historical provider HTTP body. The endpoint does not call a model or execute
+tools. Round snapshots use the existing `ota_records` JSON column, with no new
+database columns, tables, or migrations. Storage grows with the serialized state,
+particularly the length of retained compaction summaries. Unsupported workers or
+insufficient round context return an error rather than a substituted Prompt.
+
+### Single-tool execution API
+
+`POST /api/debug/sessions/{sessionId}/tools/execute` runs one explicitly submitted
+tool call using the current Session resources:
+
+```ts
+type ToolExecutionInput = {
+  toolName: string
+  arguments: Record<string, unknown>
+}
+type ToolExecutionResponse = {
+  sessionId: string
+  durationMs: number
+  result: {
+    tool_id: string // A new id for this execution.
+    tool_name: string
+    tool_arguments: Record<string, unknown>
+    tool_result: unknown
+    success: boolean
+    error: string | null
+  }
+}
+```
+
+The normal backend bearer token and Session ownership check are required.
+The handler delegates to `self.invocations.execute_tool`; Invocation uses the
+shared `_load_context` resource loader and calls `AmphiAgent.execute_tool`.
+The Agent selects the current ToolSpec and reuses its ordinary single-tool
+worker runner. Recorded strings receive the existing argument coercion, while
+native JSON arrays, objects, booleans, numbers, and nulls retain their types.
+
+The explicit click executes the tool directly with the user's current execution
+mode. It does not enter model-driven admission, cognitive result processing, or
+the Turn loop. Control tools return their request data without opening a
+confirmation interaction or advancing a workflow. Tool-specific runtime checks
+still apply, including read-before-modify checks and required workflow state.
+
+Workspace files, mounts, browser pages, and Office targets are current resources;
+no historical restoration is attempted. Tool changes affect those resources.
+The endpoint does not create or overwrite conversation Turns or recorded calls.
+Unavailable resources retain their native errors. Completed calls, including
+tool failures, return HTTP 200 and `Cache-Control: no-store`; unavailable
+Sessions return 404, context-loading conflicts return 409, and malformed requests
+or unknown tool names return 422.
+
+The renderer submits only on a click, blocks repeat clicks while running, and
+keeps the result and submitted arguments in the current Session's panel memory.
+Inspector navigation does not cancel a running tool. Switching Sessions discards
+its local test state and ignores late results. There is no automatic retry,
+run-polling endpoint, cancellation contract, or 30-second transport timeout;
+individual tools retain their own runtime limits. A disconnected request cannot
+establish whether its tool already took effect.
+
+### Model-only experiments
+
+The authenticated implementation now includes these independent debug routes:
+
+| Method and path | Purpose |
+| --- | --- |
+| `POST /api/debug/sessions/{sessionId}/llm-runs` | Submit one model-only experiment. |
+| `GET /api/debug/sessions/{sessionId}/llm-runs?turnId=...&roundIndex=...` | List this round's experiments. |
+| `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Read the current or durable result. |
+| `GET /api/debug/sessions/{sessionId}/runs/{runId}/events` | Stream replacement result snapshots as newline-delimited JSON. |
+| `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Cancel an active model call and retain its partial output. |
+
+Submission contains `clientRequestId`, a `source` with the same round selection
+plus `revision`, and `request: {model, providerId, protocol, messages, tools,
+extraBody}`. Messages and tools use the native Bridgic schema; simple role/content
+text messages are also accepted. Semantic options cannot override the model,
+messages, tools or transport credentials. Session ownership, source scope and
+revision, active-provider identity, and the absence of a running Agent Turn are
+validated. One experiment may run per Session. Duplicate submissions with the
+same id and body return the same run; reusing an id for different content fails.
+
+Reassembling a request updates untouched experiment drafts to the new messages,
+tools, model and parameters, even when the source-record revision is unchanged.
+Edited drafts retain their contents and JSON buffers, show a changed-assembly
+notice, and can be reset to the latest assembly. The role selector offers the
+native message roles: `system`, `user`, `assistant`, and `tool`.
+
+The response is a run snapshot with `id`, `sessionId`, `source`, submitted
+`request`, `createdAt`, `status`, `content`, `reasoning`, `toolCalls`, raw provider
+`usage`, `durationMs`, `error` and observed `retries`. Stream snapshots omit the
+immutable request and replace previous output instead of appending it again.
+The viewer can reopen the stream or query the run after a disconnect. The model
+task lives independently of the HTTP viewer. Initial and final snapshots are
+stored in the separate `debug_model_runs` table; a restarted service marks a
+previously running row `interrupted` without repeating the model call.
+Creation, state reads and Session-tree deletion share a lifecycle lock. Creation
+rechecks Session ownership and existence after model resolution; deletion waits
+for active experiments to finish persisting before removing their records. Reads
+cannot classify a newly persisted experiment as interrupted before its live task
+has been registered.
+
+Experiments never dispatch returned tools, continue the Agent loop, mutate source
+Turns or enter normal conversation totals. The original provider attempt's HTTP
+body and unobserved retry usage remain unavailable. Asynchronous tool runs are still proposed.
+
+## Proposed normalized trace and tool replay routes
+
+All proposed routes must use the existing backend bearer authentication and
+current-user resolution. Each Session, Turn, round, tool call, and debug run must
+belong to the requested Session and authenticated user. The debug renderer uses
+the same backend, data, workspace, and native Session hosts as ordinary Desktop.
 
 | Method and path | Purpose |
 | --- | --- |
 | `GET /api/debug/capabilities` | Advertise implemented debug operations. |
 | `GET /api/debug/sessions/{sessionId}/trace` | Read normalized, paginated Turn → round → tool traces. |
-| `POST /api/debug/sessions/{sessionId}/tool-runs` | Start one explicitly requested tool execution from an edited draft. |
-| `POST /api/debug/sessions/{sessionId}/llm-runs` | Start one explicitly requested LLM call from an edited request draft. |
-| `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Read that debug run's status and result. |
-| `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Request cancellation, when supported. |
+| `POST /api/debug/sessions/{sessionId}/tool-runs` | Future asynchronous tool run; the implemented synchronous endpoint is `tools/execute`. |
+| `GET /api/debug/sessions/{sessionId}/runs/{runId}` | Extend the implemented model-run reader to tool runs. |
+| `POST /api/debug/sessions/{sessionId}/runs/{runId}/cancel` | Extend model-run cancellation to supported tool runs. |
 
 Capability values describe the deployed backend, not the presence of buttons:
 
 ```json
 {
   "schemaVersion": 1,
-  "traceRead": true,
+  "promptAssembly": true,
+  "traceRead": false,
   "liveTrace": false,
-  "toolRun": false,
-  "llmRun": false,
-  "cancelRun": false
+  "toolRun": true,
+  "llmRun": true,
+  "cancelRun": true
 }
 ```
 
-A missing capability endpoint means the proposed protocol is unavailable; the
-frontend can continue using the current read-only adapter. Unsupported execution
-controls remain disabled. Production remains the ordinary Desktop renderer; a
-frontend debug switch is not authorization to expose backend execution routes.
+The capability endpoint itself remains proposed. Its example values above
+describe the implemented tool execution and model experiment routes;
+`cancelRun` currently applies only to model experiments. Once implemented,
+its values must describe the deployed backend rather than the presence of
+buttons. Production
+remains the ordinary Desktop renderer; a frontend debug switch is not
+authorization to expose backend execution routes.
 
 ## Trace envelope and ordering
 
@@ -70,9 +311,10 @@ the label of an earlier round. Round IDs and provider call IDs are distinct from
 display ordinals. Legacy records can receive deterministic IDs derived from the
 Turn and source index; `idOrigin` must mark them as derived.
 
-The following compact example shows one completed round and one executed tool.
-Its request is deliberately partial: the captured messages are present, while
-the original outgoing wire body is unavailable.
+The following proposed trace example shows one completed round and one executed
+tool. Its `promptSource` identifies the separate on-demand assembly request; it
+does not embed a saved Prompt. The provider attempt's outgoing wire body is
+explicitly unavailable.
 
 ```json
 {
@@ -96,23 +338,13 @@ the original outgoing wire body is unavailable.
       "mode": "normal",
       "stage": "main",
       "source": { "turnId": "turn_12", "otaField": "ota_records", "roundIndex": 0, "pointer": "/ota_records/0" },
+      "promptSource": { "turnId": "turn_12", "roundIndex": 0, "mode": "normal", "stage": "main" },
       "modelAttempts": [{
         "id": "turn_12:round:1:attempt:1",
         "idOrigin": "derived",
         "ordinal": 1,
         "status": "succeeded",
-        "request": {
-          "availability": "partial",
-          "origin": "captured",
-          "missingFields": ["/wireRequest"],
-          "value": {
-            "model": { "providerId": "provider_example", "protocol": "openai", "modelId": "captured-model" },
-            "messages": [{ "role": "user", "content": "Read the project summary." }],
-            "tools": [{ "type": "function", "function": { "name": "read_file", "parameters": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] } } }],
-            "options": { "temperature": 0.2 },
-            "wireRequest": null
-          }
-        },
+        "wireRequest": { "availability": "unavailable", "origin": "unavailable", "value": null, "missingFields": ["/providerWireBody"] },
         "timing": { "startedAt": null, "endedAt": null, "durationMs": 1200 },
         "usage": { "source": "provider", "inputTokens": 120, "outputTokens": 20, "cacheReadInputTokens": 80, "cacheWriteInputTokens": null, "totalTokens": 140, "inputTokenSemantics": "includes_cache" },
         "response": { "text": "I will read the summary.", "reasoning": null, "toolCalls": [{ "id": "call_1", "name": "read_file", "arguments": { "path": "summary.md" } }] }
@@ -141,48 +373,47 @@ the original outgoing wire body is unavailable.
 }
 ```
 
-## Request snapshots and missing facts
+## Assembled requests and missing facts
 
-A request snapshot represents the request associated with **one model attempt**,
-after context assembly and provider option processing. It is not a concatenated
-display prompt. Preserve message order, roles, structured/multimodal content,
-tool-result links, tool schemas, and effective model options. Preserve provider
-extensions in `wireRequest` when captured. Never serialize authentication headers
-or provider credentials into a snapshot or debug response.
+A Cognitive request is assembled on demand through the implemented POST above.
+It preserves message order, roles, structured and multimodal blocks, tool-result
+links, tool schemas, semantic options, and current model metadata. It stops
+before new compaction, uses current runtime resources, and does not promise a
+historical intermediate state. Never serialize authentication headers or
+provider credentials into a debug response.
 
-The essential shared shapes are:
+A provider request snapshot is a separate future concern. It belongs to one
+provider attempt after protocol conversion and effective option processing. A
+provider adapter may make several attempts for one Cognitive request. The
+on-demand assembly API must not infer those attempts from the final response.
+
+The essential shared shapes for assembly and the separate proposed provider
+observations are:
 
 ```ts
+type AssembledCognitiveRequest = AssembledPromptResponse['item']['request']
 type Snapshot<T> = {
   availability: 'complete' | 'partial' | 'unavailable'
   origin: 'captured' | 'unavailable'
   value: T | null
   missingFields: string[] // JSON pointers into value; [] only when complete.
 }
-type RequestSnapshot = Snapshot<{
+type ProviderRequestSnapshot = Snapshot<{
   model: { providerId: string | null; protocol: string | null; modelId: string | null }
-  messages: Array<{
-    role: string
-    content: unknown
-    toolCallId?: string
-    toolCalls?: unknown[]
-  }> | null
-  tools: unknown[] | null
-  options: Record<string, unknown> | null
-  wireRequest: unknown
+  providerWireBody: unknown
 }>
 type Timing = { startedAt: string | null; endedAt: string | null; durationMs: number | null }
 type TraceIssue = { code: string; field: string; sourcePointers: string[] }
 type ExecutionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
 ```
 
-`complete` requires the actual outgoing request body and its effective metadata,
-not a reconstruction from today's templates, tools, credentials, or model
-selection. `partial` exposes exactly the captured subset and lists missing
-fields. `unavailable` has `value: null` and an explicit reason in the entity's
-`issues`. Assembled OTA context, visible chat text, and reconstructed prompts
-must never be relabeled as original model requests. The UI can display an
-unavailable request without blocking access to the rest of a trace.
+For a future provider snapshot, `complete` requires the actual outgoing request
+body and its effective metadata. `partial` exposes exactly the captured subset
+and lists missing fields. `unavailable` has `value: null` and an explicit reason
+in the entity's `issues`. An on-demand Cognitive
+assembly must retain its `assembled` origin; it must never be relabeled as a
+historical capture or provider request. The UI can display an assembly failure
+or unavailable provider observation without blocking the rest of a trace.
 
 Use ISO 8601 UTC timestamps with an explicit `Z`; do not guess the timezone of a
 legacy naive timestamp. Durations are finite, nonnegative milliseconds. Token
@@ -228,7 +459,7 @@ neither that those tools ran nor that they succeeded.
 ## Edited drafts and independent debug runs
 
 Editing happens in a local draft. It never modifies the original Turn, round,
-arguments, request snapshot, or result. Submitting a draft creates a new linked
+arguments, assembled request, or result. Submitting a draft creates a new linked
 debug run in the existing backend; it does not rewind Session files or create
 an isolated database. Original trace records remain immutable. Debug results
 are stored separately from normal conversation Turns and do not silently become
@@ -246,17 +477,16 @@ returns the same run; reuse with different input returns a conflict.
 }
 ```
 
-The `llm-runs` request uses the same envelope but references `modelAttemptId` and
-supplies the edited `RequestSnapshot.value` shape as `input.request`, with
-`input.basis: "captured" | "user_authored"`. A partial or unavailable original
-must not be silently completed from current settings. The UI must identify
-user-authored replacements and require any missing execution parameters.
-Replay references a finalized source snapshot at the specified revisions. The
-backend rejects changed or unavailable source revisions rather than silently
-executing against a newer trace, and retains the accepted source link and draft.
+The example above is the proposed tool replay envelope. Implemented model runs
+use the `source` and `request` schema in the model experiment section above,
+with a source-record fingerprint rather than normalized trace revisions.
+Assembled input uses the current Cognitive/runtime boundary; it is not a
+historical request. Both forms retain the accepted source link and edited input
+and reject changed or unavailable source revisions.
 
-Both POSTs return `202` with `{ "runId": "debug_run_1", "status": "queued" }`.
-The run resource contains its `kind` (`tool` or `llm`), source reference,
+The proposed tool POST returns `202` with `{ "runId": "debug_run_1", "status": "queued" }`;
+the implemented model POST returns its full run snapshot. A future normalized
+run resource contains its `kind` (`tool` or `llm`), source reference,
 submitted input, revision, execution status, timing, result, usage where
 applicable, and error. Accepted draft input is immutable; another edit creates
 another run. A cancellation request is not proof that execution was cancelled;
@@ -283,4 +513,5 @@ would be a separate capability, not an implicit interpretation of `llm-runs`.
 The frontend can adopt the normalized trace through one transport adapter when
 the backend advertises support, while retaining the current raw-record adapter
 for older deployments. Draft editors and unavailable-state UI can be implemented
-now; actual execution stays disabled until the backend capability exists.
+now; tool execution stays disabled until its backend capability exists. Model
+experiments are already enabled through the implemented routes above.

@@ -49,9 +49,11 @@ async def report_presentation_step(summary: str, evidence: Optional[List[str]] =
         Relevant source URLs, artifact paths, slide ranges, or inspection notes
         that make the result traceable from the presentation progress panel.
     data : str, optional
-        JSON-encoded current-step result. Plan uses ``sources`` for collected
-        evidence and ``chapters`` for the editable chapter or slide outline.
-        Stable source, chapter, and slide ids are assigned by the runtime.
+        JSON-encoded current-step result. Plan's evidence step requires
+        ``sources``; the runtime assigns source ids. For ``map_slides``, first
+        call ``request_presentation_outline_confirm`` and wait for confirmation.
+        Then report without resubmitting ``chapters``: the confirmed outline
+        is preserved, including the user's edits.
 
     Returns
     -------

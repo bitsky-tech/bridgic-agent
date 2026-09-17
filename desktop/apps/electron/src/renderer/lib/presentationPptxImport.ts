@@ -1,11 +1,13 @@
 import { presentationChartBlankDisplay, presentationChartHoleSize } from '@/lib/presentationCharts'
 import JSZip from 'jszip'
+import { readOfficeRoundTrip } from './office/officeRoundTrip'
 import { DOMParser as XmldomParser } from '@xmldom/xmldom'
 import {
   DEFAULT_PRESENTATION_MASTER,
   PRESENTATION_PAGE_SIZES,
   createPresentationId,
   type PresentationDocument,
+  type PresentationFileSource,
   type PresentationElement,
   type PresentationPageSize,
   type PresentationImageElement,
@@ -932,7 +934,7 @@ function mimeTypeForPath(path: string): string {
   return 'image/png'
 }
 
-async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number): Promise<PresentationSlide> {
+async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>): Promise<PresentationSlide> {
   const slideFile = archive.file(slidePath)
   if (!slideFile) throw new Error(`Missing ${slidePath}`)
   const document = parseXml(await slideFile.async('text'))
@@ -995,12 +997,19 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const target = relationshipId ? relationshipMap.get(relationshipId) : null
     const image = target ? archive.file(target) : null
     if (!target || !image) return null
-    const mimeType = mimeTypeForPath(target)
-    return {
-      dataUrl: bytesToDataUrl(await image.async('uint8array'), mimeType),
-      fileName: target.slice(target.lastIndexOf('/') + 1),
-      mimeType,
+    let source = imageSources.get(target)
+    if (!source) {
+      const mimeType = mimeTypeForPath(target)
+      source = image.async('uint8array').then((bytes) => ({
+        dataUrl: bytesToDataUrl(bytes, mimeType),
+        fileName: target.slice(target.lastIndexOf('/') + 1),
+        mimeType,
+      }))
+      // Master/layout images are often reused by every slide. Share both the
+      // in-flight decode and its source object, including across worker transfer.
+      imageSources.set(target, source)
     }
+    return source
   }
 
   const imageCropFrom = (fill: Element | null) => {
@@ -1350,6 +1359,8 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
 export interface PresentationPptxImportOptions {
   /** One-based source slide numbers. Omit to import the complete deck. */
   slideNumbers?: readonly number[]
+  /** Restore our exact editable model only when the Office parts are unchanged. */
+  restoreEditorModel?: boolean
 }
 
 /** Import common editable PowerPoint content from an OOXML .pptx archive. */
@@ -1359,6 +1370,19 @@ export async function importPresentationPptx(
   options: PresentationPptxImportOptions = {},
 ): Promise<PresentationDocument> {
   const archive = await JSZip.loadAsync(bytes)
+  const stored = (options.restoreEditorModel ? await readOfficeRoundTrip(archive, 'presentation') : null) as Partial<PresentationDocument> | null
+  if (stored?.master && stored.pageSize && Array.isArray(stored.slides) && stored.slides.length > 0
+    && stored.slides.every((slide) => slide && typeof slide.id === 'string' && Array.isArray(slide.elements))) {
+    const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= stored.slides!.length))] : null
+    const slides = requested ? (requested.length ? requested : [1]).map((number) => stored.slides![number - 1]!) : stored.slides
+    return {
+      id: createPresentationId('presentation'), version: 1,
+      sourceProtected: false,
+      title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
+      master: stored.master, pageSize: stored.pageSize, slides,
+      selectedSlideId: slides.find((slide) => slide.id === stored.selectedSlideId)?.id ?? slides[0]!.id,
+    }
+  }
   const themeColors = await themeColorsFromArchive(archive)
   const accentColors = ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].flatMap((name) => {
     const color = themeColors.get(name)
@@ -1394,11 +1418,14 @@ export async function importPresentationPptx(
   const selectedSlides = selectedSlideNumbers.length > 0
     ? selectedSlideNumbers.map(number => ({ path: slidePaths[number - 1]!, sourceIndex: number - 1 }))
     : slidePaths.map((path, sourceIndex) => ({ path, sourceIndex }))
-  const slides = await Promise.all(selectedSlides.map(({ path, sourceIndex }) => (
-    importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex)
-  )))
+  const imageSources = new Map<string, Promise<PresentationFileSource>>()
+  const slides: PresentationSlide[] = []
+  for (const { path, sourceIndex } of selectedSlides) {
+    slides.push(await importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex, imageSources))
+  }
   return {
     id: createPresentationId('presentation'),
+    sourceProtected: true,
     master: {
       ...DEFAULT_PRESENTATION_MASTER,
       accentColors: accentColors.length > 0 ? accentColors : [...DEFAULT_PRESENTATION_MASTER.accentColors],

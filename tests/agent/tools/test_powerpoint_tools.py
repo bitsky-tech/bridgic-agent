@@ -22,6 +22,7 @@ from src.amphi_agent.tools.powerpoint import (
     powerpoint_tool_specs,
     remove_ppt_element,
     remove_ppt_page,
+    save_ppt,
     update_ppt_design,
     view_ppt,
 )
@@ -100,10 +101,15 @@ class _RecordingPowerPoint:
         self.calls.append(("goto", page_id))
         return {"visible": page_id}
 
+    async def save_ppt(self) -> Any:
+        self.calls.append(("save", None))
+        return {"status": "saved", "target": "deck.pptx"}
+
 
 def test_powerpoint_tool_surface_has_page_and_document_tools_without_revision() -> None:
     schemas = {spec.tool_name: spec.tool_parameters for spec in powerpoint_tool_specs}
     assert set(schemas) == {
+        "save_ppt",
         "view_ppt",
         "get_ppt_page",
         "update_ppt_design",
@@ -116,6 +122,7 @@ def test_powerpoint_tool_surface_has_page_and_document_tools_without_revision() 
         "goto_ppt_page",
     }
     assert all("revision" not in schema.get("properties", {}) for schema in schemas.values())
+    assert schemas["save_ppt"].get("properties", {}) == {}
     assert set(schemas["edit_ppt_page"]["properties"]) == {"page_id", "ref", "replacement"}
     assert set(schemas["insert_ppt_element"]["properties"]) == {"page_id", "element"}
     assert set(schemas["remove_ppt_element"]["properties"]) == {"page_id", "ref"}
@@ -145,6 +152,7 @@ async def test_powerpoint_tools_use_the_page_level_session_contract(tool_harness
     assert json.loads(await remove_ppt_page("page-a")) == {"removed": "page-a"}
     assert json.loads(await move_ppt_page("page-a", "page-b", "after")) == {"moved": "page-a"}
     assert json.loads(await goto_ppt_page("page-a")) == {"visible": "page-a"}
+    assert json.loads(await save_ppt()) == {"status": "saved", "target": "deck.pptx"}
     assert powerpoint.calls == [
         ("view", str(workspace / "deck.pptx")),
         ("read", "page-a"),
@@ -160,6 +168,7 @@ async def test_powerpoint_tools_use_the_page_level_session_contract(tool_harness
         ("remove", "page-a"),
         ("move", ("page-a", "page-b", "after")),
         ("goto", "page-a"),
+        ("save", None),
     ]
 
 

@@ -119,7 +119,7 @@ export interface PipelineRevealRequest {
 }
 
 export interface PipelineProps {
-  /** Optional presentation of persisted Assistant bodies; message actions remain shared. */
+  /** Optional presentation of persisted and streaming Assistant bodies; message actions remain shared. */
   renderAssistantBody?: (message: Message, defaultBody: ReactNode) => ReactNode
   /** Reveal a durable Turn, paging older history and mounting hidden rows first. */
   revealRequest?: PipelineRevealRequest | null
@@ -592,6 +592,11 @@ export function Pipeline({ messages: legacyMessages, session, enableMessageActio
                 retry={streamingState.retry}
                 compacting={streamingState.compacting}
                 startedAt={streamingState.startedAt}
+                renderBody={renderAssistantBody ? (body) => renderAssistantBody({
+                  role: 'ai', messageId: streamingState.messageId, content: streamingState.content,
+                  thinking: streamingState.thinking, toolCalls: streamingState.toolCalls,
+                  blocks: streamingState.blocks, streaming: true, startedAt: streamingState.startedAt,
+                }, body) : undefined}
               />,
             ] : [])]}
           </>
@@ -880,7 +885,7 @@ export function MessageBubble({
               : 'w-full bg-transparent py-0.5',
           )}
         >
-          {renderBody && !isUser && !streaming ? renderBody(defaultBody) : defaultBody}
+          {renderBody && !isUser ? renderBody(defaultBody) : defaultBody}
           {(streaming || waitingForSubagent || waitingForHumanRequest) && !isUser && (
             <div className="mt-2 flex min-h-7 min-w-0 flex-wrap items-center gap-2 text-xs text-text-tertiary">
               <ActiveTurnIndicator retry={retry} activity={activity} startedAt={startedAt} />

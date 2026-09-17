@@ -16,6 +16,7 @@ import { viewedSessionIdAtom } from './navigation'
 import {
   currentSessionFocusPaneAtom,
   currentSessionModeExitCollapseRequestAtom,
+  sessionFocusPaneFamily,
 } from './session-focus-pane'
 
 type SessionStateUpdate<T> = T | ((current: T) => T)
@@ -93,6 +94,17 @@ export const setSessionWorkbenchSurfaceAtom = atom(
     if (next === SessionWorkbenchSurface.Files) surfaces.delete(sessionId)
     else surfaces.set(sessionId, next)
     set(workbenchSurfacesBySessionAtom, surfaces)
+  },
+)
+
+/** A delayed close belongs to its original Session, unless that dock now shows another surface. */
+export const closeSessionWorkbenchSurfaceAtom = atom(
+  null,
+  (get, set, { sessionId, surface }: SessionWorkbenchSurfaceOpenRequest) => {
+    if (!sessionId) return
+    const selected = get(workbenchSurfacesBySessionAtom).get(sessionId) ?? SessionWorkbenchSurface.Files
+    if (selected !== surface || get(sessionFocusPaneFamily(sessionId)) !== null) return
+    set(setRightPanelCollapsedAtom, true, sessionId)
   },
 )
 

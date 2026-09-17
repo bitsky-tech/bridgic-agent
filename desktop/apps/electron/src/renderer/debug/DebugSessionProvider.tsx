@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { activeSessionIdAtom } from '@/atoms/sessions'
-import { currentMessagesAtom, currentStreamingAtom } from '@/atoms/agent'
+import { agentEventObserverAtom, currentMessagesAtom, currentStreamingAtom } from '@/atoms/agent'
 import { localeAtom } from '@/atoms/locale'
 import { i18n } from '@/lib/i18n'
 import { requestSessionWorkbenchSurfaceOpenAtom } from '@/atoms/workbench'
@@ -11,6 +11,8 @@ import { buildTraceRecords } from './trace-records'
 import { fetchTracePage } from './trace-client'
 import type { TraceRecords, TraceRound } from './types'
 import { DebugDraftProvider } from './DebugDrafts'
+import { liveDebugTurnsFamily, observeDebugEventAtom, savedDebugRoundsFamily } from './live-trace-state'
+import { mergeToolRecords, toolIdentitiesFamily, type ToolInspection } from './tool-records'
 
 export type DebugPanelKind = 'tools' | 'rounds'
 interface Selection { sessionId: string; kind: DebugPanelKind; id: string; nonce: number }
@@ -23,10 +25,12 @@ interface TraceState {
 }
 interface DebugContextValue extends TraceState {
   records: TraceRecords
+  toolRecords: ToolInspection[]
   selection: Selection | null
   reveal: PipelineRevealRequest | null
   refresh: () => void
   loadMore: () => void
+  loadAll: () => void
   inspect: (kind: DebugPanelKind, id: string) => void
   locate: (round: TraceRound) => void
   revealFailed: () => void
@@ -44,8 +48,14 @@ export const debugRoundElementId = (id: string) => `desktop-debug-round-${encode
 
 export function DebugSessionProvider({ children }: { children: ReactNode }) {
   const store = useStore()
+  useLayoutEffect(() => {
+    store.set(agentEventObserverAtom, observeDebugEventAtom)
+    return () => { if (store.get(agentEventObserverAtom) === observeDebugEventAtom) store.set(agentEventObserverAtom, null) }
+  }, [store])
   const sessionId = useAtomValue(activeSessionIdAtom)
   const messages = useAtomValue(currentMessagesAtom)
+  const liveTurns = useAtomValue(liveDebugTurnsFamily(sessionId ?? ''))
+  const toolIdentities = useAtomValue(toolIdentitiesFamily(sessionId ?? ''))
   const running = Boolean(useAtomValue(currentStreamingAtom))
   const open = useSetAtom(requestSessionWorkbenchSurfaceOpenAtom)
   const text = useDebugText()
@@ -63,7 +73,6 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(() => setRevision((value) => value + 1), [])
   const requestKey = JSON.stringify([sessionId, pages, durableTail, running, revision])
   const loading = Boolean(sessionId) && (state.sessionId !== sessionId || state.requestKey !== requestKey)
-
   // Reset local interaction state before the new Session's children commit.
   if (selectionSession !== sessionId) {
     setSelectionSession(sessionId)
@@ -123,16 +132,24 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
 
   const turns = state.sessionId === sessionId ? state.turns : EMPTY_TURNS
   const records = useMemo(() => buildTraceRecords(turns), [turns])
+  const tools = useMemo(() => mergeToolRecords(records, liveTurns, turns, messages, toolIdentities), [records, liveTurns, turns, messages, toolIdentities])
+  useLayoutEffect(() => {
+    if (sessionId && tools.identities !== toolIdentities) store.set(toolIdentitiesFamily(sessionId), tools.identities)
+  }, [store, sessionId, tools.identities, toolIdentities])
+  useEffect(() => {
+    if (sessionId && state.sessionId === sessionId && !loading) store.set(savedDebugRoundsFamily(sessionId), records.rounds)
+  }, [store, sessionId, state.sessionId, loading, records.rounds])
   if (state.sessionId === sessionId && !loading) {
-    if (selection?.sessionId === sessionId && !(selection.kind === 'tools' ? records.calls : records.rounds).some((record) => record.id === selection.id)) setSelection(null)
+    if (selection?.sessionId === sessionId && !(selection.kind === 'tools' ? tools.calls : records.rounds).some((record) => record.id === selection.id)) setSelection(null)
     if (reveal?.sessionId === sessionId && !records.rounds.some((round) => round.turnId === reveal.turnId && debugRoundElementId(round.id) === reveal.targetId)) setReveal(null)
   }
   const inspect = useCallback((kind: DebugPanelKind, id: string) => {
+    if (kind === 'tools') id = tools.calls.find(call => call.id === id || call.aliases.includes(id))?.id ?? id
     if (!sessionId || store.get(activeSessionIdAtom) !== sessionId
-      || !(kind === 'tools' ? records.calls : records.rounds).some((record) => record.id === id)) return
+      || !(kind === 'tools' ? tools.calls : records.rounds).some((record) => record.id === id)) return
     setSelection({ sessionId, kind, id, nonce: ++interactionNonce.current })
-    open({ sessionId, surface: kind === 'tools' ? 'extension:debug-tools' : 'extension:debug-rounds' })
-  }, [sessionId, open, records, store])
+    open({ sessionId, surface: `extension:debug-${kind}` })
+  }, [sessionId, open, records, tools.calls, store])
   const locate = useCallback((round: TraceRound) => {
     if (!sessionId || round.sessionId !== sessionId || store.get(activeSessionIdAtom) !== sessionId
       || !records.rounds.some((record) => record.id === round.id)) return
@@ -144,7 +161,7 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
   }, [sessionId, text])
 
   return <Context.Provider value={{
-    sessionId, turns, records,
+    sessionId, turns, records, toolRecords: tools.calls,
     error: state.sessionId === sessionId && !loading ? state.error : null,
     loading,
     hasMore: state.sessionId === sessionId && state.hasMore,
@@ -152,6 +169,9 @@ export function DebugSessionProvider({ children }: { children: ReactNode }) {
     reveal: reveal?.sessionId === sessionId ? reveal : null,
     notice: notice?.sessionId === sessionId ? notice.text : null,
     refresh, inspect, locate, revealFailed,
+    loadAll: () => {
+      if (sessionId && store.get(activeSessionIdAtom) === sessionId) setDepth({ sessionId, value: Infinity })
+    },
     loadMore: () => {
       if (sessionId && store.get(activeSessionIdAtom) === sessionId && !loading && state.hasMore) setDepth({ sessionId, value: pages + 1 })
     },

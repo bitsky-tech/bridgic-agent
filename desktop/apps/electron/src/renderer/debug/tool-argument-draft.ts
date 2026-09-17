@@ -12,6 +12,8 @@ export interface ToolArgumentDraft {
   shape: 'object' | 'named-list' | 'value'
   original: unknown
   fields: ToolArgumentField[]
+  mode?: 'form' | 'json'
+  jsonInput?: string
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -34,6 +36,22 @@ export function formatToolArguments(value: unknown): string | undefined {
     if (typeof value === 'number' && !Number.isFinite(value)) return String(value)
     return JSON.stringify(value, null, 2)
   } catch { return undefined }
+}
+
+/** Normalize recorded name/value lists without silently dropping duplicate names. */
+export function toolExecutionArguments(value: unknown): Record<string, unknown> | null {
+  const properties = object(value)
+  if (properties) return properties
+  if (!Array.isArray(value)) return null
+  const entries: [string, unknown][] = []
+  const names = new Set<string>()
+  for (const item of value) {
+    const entry = object(item)
+    if (!entry || typeof entry.name !== 'string' || !entry.name || !Object.hasOwn(entry, 'value') || names.has(entry.name)) return null
+    names.add(entry.name)
+    entries.push([entry.name, entry.value])
+  }
+  return Object.fromEntries(entries)
 }
 
 /** The snapshot belongs to the draft, so later trace polls cannot overwrite edits. */
@@ -59,6 +77,14 @@ export function updateToolArgumentDraft(draft: ToolArgumentDraft, fieldId: strin
 }
 
 export function validateToolArgumentDraft(draft: ToolArgumentDraft): { valid: boolean; value: unknown; errors: Record<string, ToolArgumentError> } {
+  if (draft.mode === 'json') {
+    let value: unknown
+    try { value = JSON.parse(draft.jsonInput ?? '') } catch {
+      return { valid: false, value: undefined, errors: { $json: 'invalid_json' } }
+    }
+    return object(value) ? { valid: true, value, errors: {} }
+      : { valid: false, value: undefined, errors: { $json: 'expected_object' } }
+  }
   const errors: Record<string, ToolArgumentError> = {}
   const values: unknown[] = []
   for (const field of draft.fields) {
@@ -88,4 +114,17 @@ export function validateToolArgumentDraft(draft: ToolArgumentDraft): { valid: bo
   if (draft.shape === 'object') value = Object.fromEntries(draft.fields.map((field, index) => [field.label, values[index]]))
   if (draft.shape === 'named-list') value = (draft.original as Record<string, unknown>[]).map((entry, index) => ({ ...entry, value: values[index] }))
   return { valid: true, value, errors }
+}
+
+export function toolArgumentMode(draft: ToolArgumentDraft, mode: 'form' | 'json'): ToolArgumentDraft {
+  if ((draft.mode ?? 'form') === mode) return draft
+  const validation = validateToolArgumentDraft(draft)
+  if (mode === 'json') return { ...draft, mode,
+    jsonInput: formatToolArguments(validation.valid ? toolExecutionArguments(validation.value) ?? validation.value : draft.original) ?? '{}' }
+  if (!validation.valid) return draft
+  return { ...createToolArgumentDraft(validation.value), original: draft.original, mode }
+}
+
+export function replaceToolArgumentValues(draft: ToolArgumentDraft, value: Record<string, unknown>): ToolArgumentDraft {
+  return { ...createToolArgumentDraft(value), original: draft.original, mode: draft.mode, jsonInput: formatToolArguments(value) }
 }

@@ -10,6 +10,11 @@ import { SessionWorkbenchSurface, sessionWorkbenchSurfaceAtom } from './workbenc
 
 export const embeddedPowerPointSnapshotAtom = atom<EmbeddedPowerPointSnapshot>({ sessions: [] })
 
+export const pendingPowerPointFileOpensAtom = atom<Array<{ sessionId: string; path: string }>>([])
+export const powerPointFileOpeningAtom = atom((get) => (
+  get(pendingPowerPointFileOpensAtom).some((request) => request.sessionId === get(viewedSessionIdAtom))
+))
+
 /** The PowerPoint surface owned by the Agent Session currently shown in the app. */
 export const activeEmbeddedPowerPointSessionAtom = atom((get) => {
   const sessionId = get(viewedSessionIdAtom)

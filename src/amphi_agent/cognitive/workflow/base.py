@@ -287,17 +287,17 @@ class WorkflowRunThink(BaseThink):
     # Input
     ##############
     @staticmethod
-    def workflow_input(context: AmphiContext) -> str:
+    def workflow_input(context: AmphiContext, ota_context: AmphiOTAContext) -> str:
         """Render the original structured input with its persisted references resolved."""
         workspace = context.workspace
         if workspace is None:
             raise RuntimeError("Workflow Run workspace is unavailable.")
         state = workspace.run_workflow
-        if state is None:
-            raise RuntimeError("Workflow Run space has not been prepared.")
+        entry = WorkflowRunThink.recorded_entry(ota_context, context) if state is None else None
+        user_input = state.workflow_input if state is not None else (entry[1] if entry else UserInput.from_runtime(ota_context.user_input))
         mention_ids = [
             str(block.get("id") or "")
-            for block in state.workflow_input.blocks
+            for block in user_input.blocks
             if block.get("type") == "mention" and block.get("id")
         ]
         path_map = (
@@ -307,9 +307,9 @@ class WorkflowRunThink(BaseThink):
         )
         workflow_runs = context.workflow_runs
         if workflow_runs is not None:
-            for input_run in workflow_runs.referenced_runs(state.workflow_input):
+            for input_run in workflow_runs.referenced_runs(user_input):
                 path_map[input_run.run_id] = str(input_run.result_dir)
-        return render_input(state.workflow_input, path_map)
+        return render_input(user_input, path_map)
 
     ##############
     # Blocks
@@ -326,17 +326,13 @@ class WorkflowRunThink(BaseThink):
         """Add this Workflow Run's writable directories to its Session environment."""
         lines = ["<Workspace>", self.working_directory_block(context)]
         workspace = context.workspace
-        workflow_run = workspace.run_workflow if workspace is not None else None
-        if workflow_run is not None and workflow_run.is_available:
-            workflow_runs = context.workflow_runs
-            if workflow_runs is None:
-                raise RuntimeError("Workflow Run space is bound without its result library.")
-            active_run = workflow_runs.require_run_workflow(workflow_run.root)
+        if workspace is not None:
+            run_root = workspace.run_workflow_root
             lines.extend([
                 "- Workflow final result directory (active, writable): "
-                f"{json.dumps(str(active_run.result_dir), ensure_ascii=False)}",
+                f"{json.dumps(str(run_root / 'result'), ensure_ascii=False)}",
                 "- Workflow background work directory (active, writable): "
-                f"{json.dumps(str(active_run.background_work_dir), ensure_ascii=False)}",
+                f"{json.dumps(str(run_root / 'background' / 'work'), ensure_ascii=False)}",
             ])
         lines.append(self.environment_block(context))
         lines.append("</Workspace>")
@@ -347,7 +343,9 @@ class WorkflowRunThink(BaseThink):
     ) -> str:
         """Render the active Workflow position and current immutable section."""
         state = self.state(ota_context, expected_stage)
-        source = self.source(state, context)
+        source = context.workflows.require_package()
+        if source.workflow_id != state.workflow_id:
+            raise RuntimeError("Workflow package does not match the selected round.")
         steps = source.steps(state.stage)
         if state.step_index > len(steps):
             raise RuntimeError(
@@ -356,20 +354,22 @@ class WorkflowRunThink(BaseThink):
         current = steps[state.step_index] if state.step_index < len(steps) else None
         workflow_runs = context.workflow_runs
         workspace = context.workspace
-        run_space = workspace.run_workflow if workspace is not None else None
-        if workflow_runs is None or run_space is None:
+        if workflow_runs is None or workspace is None:
             raise RuntimeError("Workflow run context is unavailable.")
-        run = workflow_runs.require_run_workflow(run_space.root)
-        durable = run_space
+        run_root = workspace.run_workflow_root
+        entry = WorkflowRunThink.recorded_entry(ota_context, context)
+        user_input = entry[1] if entry else UserInput.from_runtime(ota_context.user_input)
+        if workspace.run_workflow is not None:
+            user_input = workspace.run_workflow.workflow_input
         execution_lines = [
             f"- [{'x' if index < state.step_index else ' '}] "
             f"{step.index}. {step.title}"
             for index, step in enumerate(source.execution_steps)
         ]
-        result_dir = str(run.result_dir)
-        work_dir = str(run.background_work_dir)
+        result_dir = str(run_root / "result")
+        work_dir = str(run_root / "background" / "work")
         input_lines = []
-        for input_run in workflow_runs.referenced_runs(durable.workflow_input):
+        for input_run in workflow_runs.referenced_runs(user_input):
             input_lines.append(
                 f"- {input_run.workflow_name} (run_id: {input_run.run_id}): "
                 f"final results: {input_run.result_dir}; "
@@ -393,10 +393,10 @@ class WorkflowRunThink(BaseThink):
             "<workflow_run>\n"
             f"Workflow id: `{source.workflow_id}`\n"
             f"Workflow name: `{source.name}`\n"
-            f"Original Workflow input: {self.workflow_input(context)}\n"
+            f"Original Workflow input: {self.workflow_input(context, ota_context)}\n"
             f"Read-only package root: {source.root}\n"
             f"Read-only source root: {source.source_root}\n"
-            f"Session-owned run root: {run_space.root}\n"
+            f"Session-owned run root: {run_root}\n"
             f"Writable final result directory: {result_dir}\n"
             f"Writable background work directory: {work_dir}\n"
             + ("Read-only input results:\n" + "\n".join(input_lines) + "\n" if input_lines else "")
@@ -461,6 +461,35 @@ class WorkflowRunThink(BaseThink):
     ############################################################################
     # Helpers
     ############################################################################
+    @staticmethod
+    def recorded_entry(ota_context: AmphiOTAContext, context: AmphiContext) -> Optional[tuple[str, UserInput]]:
+        """Resolve the last entered Workflow and its original input without live state."""
+        entry = None
+        history = [
+            *((turn.user_input, turn.ota_records or []) for turn in context.session.get_all()),
+            (UserInput.from_runtime(ota_context.user_input), ota_context.ota_record),
+        ]
+        for user_input, records in history:
+            for record in records:
+                for step in _view(_view(record, "action_result"), "results") or []:
+                    if _view(step, "tool_name") != "request_run_workflow" or _view(step, "success") is False or _view(step, "error"):
+                        continue
+                    result = _view(step, "tool_result")
+                    if isinstance(result, str):
+                        try:
+                            result = json.loads(result)
+                        except ValueError:
+                            continue
+                    workflow_id = _view(result, "workflow_id")
+                    status = _view(result, "status")
+                    if status == "resolved":
+                        status = _view(result, "resolved_action")
+                    if not workflow_id or status not in {"started", "restarted", "resumed"}:
+                        continue
+                    if status != "resumed" or entry is None or entry[0] != workflow_id:
+                        entry = (workflow_id, UserInput.from_runtime(user_input))
+        return entry
+
     async def _check_action_legality(self, ota_context: Optional[AmphiOTAContext], context: AmphiContext, calls: List[StepToolCall], verdicts: List[CallVerdict], agent: "AmphiAgent") -> List[CallVerdict]:
         """Validate controls against this stage's bound Run and pinned source."""
         resolved = await super()._check_action_legality(ota_context, context, calls, verdicts, agent)

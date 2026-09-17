@@ -3,6 +3,15 @@ import { MarkdownMessage } from '@/components/markdown/MarkdownMessage'
 import { MessageThinking } from '@/components/amphi/MessageThinking'
 import { useDebugText } from './DebugSessionProvider'
 import type { TraceRound, TraceStatus, TraceToolCall } from './types'
+import { toolStatus, type ToolInspection } from './tool-records'
+
+export function ToolStatusLabel({ call }: { call: ToolInspection }) {
+  const text = useDebugText()
+  const status = toolStatus(call)
+  return status === 'running' || status === 'waiting'
+    ? <span className={`debug-status debug-status-${status}`}><Clock3 size={12} />{text(`live.${status}`)}</span>
+    : <TraceStatusLabel status={status} />
+}
 
 export function duration(value: number | null) {
   if (value == null) return '—'
@@ -30,7 +39,7 @@ export function RoundMetrics({ round }: { round: TraceRound }) {
   const cacheRate = inputTokens != null && inputTokens > 0 && cachedInputTokens != null && cachedInputTokens <= inputTokens
     ? `${(cachedInputTokens / inputTokens * 100).toFixed(1)}%` : null
   return <div className="debug-metrics">
-    <span><Clock3 size={11} />{text('time')} {duration(round.durationMs)}</span>
+    <span title={round.modelDurationMs != null ? text('modelDurationHint') : undefined}><Clock3 size={11} />{text(round.modelDurationMs != null ? 'modelDuration' : 'time')} {duration(round.modelDurationMs ?? round.durationMs)}</span>
     <span>{text('input')} {inputTokens?.toLocaleString() ?? '—'}</span>
     <span>{text('output')} {outputTokens?.toLocaleString() ?? '—'}</span>
     <span>{text('cacheRead')} {cachedInputTokens?.toLocaleString() ?? '—'}{cacheRate ? ` · ${cacheRate}` : ''}</span>

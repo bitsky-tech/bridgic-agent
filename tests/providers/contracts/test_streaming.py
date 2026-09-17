@@ -375,13 +375,17 @@ async def test_codex_stream_turn_refreshes_401_and_reduces_sse() -> None:
             id_token=None,
         )
 
+    usage = {
+        "input_tokens": 15061, "output_tokens": 49, "total_tokens": 15110,
+        "input_tokens_details": {"cached_tokens": 14848, "cache_write_tokens": 0},
+    }
     response_events = [
         {"type": "response.reasoning_summary_text.delta", "delta": "plan"},
         {"type": "response.output_text.delta", "delta": "done"},
         {"type": "response.output_item.added", "item": {"type": "function_call", "id": "item-1", "call_id": "call-1", "name": "inspect", "arguments": ""}},
         {"type": "response.function_call_arguments.delta", "item_id": "item-1", "delta": '{"path":"."}'},
         {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "reason-1", "encrypted_content": "opaque"}},
-        {"type": "response.completed", "response": {"usage": {"input_tokens": 3, "output_tokens": 2}}},
+        {"type": "response.completed", "response": {"usage": usage}},
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -415,7 +419,7 @@ async def test_codex_stream_turn_refreshes_401_and_reduces_sse() -> None:
     assert credential_calls == [False, True]
     assert result.content == "done"
     assert result.tool_calls == [{"name": "inspect", "arguments": {"path": "."}, "call_id": "call-1"}]
-    assert result.usage == {"input_tokens": 3, "output_tokens": 2}
+    assert result.usage == usage
     assert result.capture == {"reasoning_items": [{"type": "reasoning", "id": "reason-1", "encrypted_content": "opaque"}]}
     assert events == [("reasoning", {"text": "plan"}), ("token", {"text": "done"})]
 

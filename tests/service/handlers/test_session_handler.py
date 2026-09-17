@@ -1,10 +1,13 @@
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 
+from src.amphi_agent import InvocationNotFoundError, InvocationStateError
 from src.amphi_service.auth import LOCAL_USER_ID
 from src.amphi_service.handler._session_handler import _thinking_mode, _turn_messages
-from src.amphi_store import SessionTurnRecord, SessionTurnRepository, TurnStatus, UserInput
+from src.amphi_store import SessionRecord, SessionRepository, SessionTurnRecord, SessionTurnRepository, TurnStatus, UserInput, UserRepository
 from tests._support.sandbox import IsolatedPaths
 
 
@@ -60,7 +63,8 @@ def test_think_scope_projects_build_stage_boundaries() -> None:
     ] == ["clarify", "explore", None]
 
 
-def test_presentation_outline_review_projects_a_durable_confirmation_card() -> None:
+@pytest.mark.parametrize("tool_name", ["request_presentation_outline_confirm", "report_presentation_step"])
+def test_presentation_outline_review_projects_a_durable_confirmation_card(tool_name: str) -> None:
     """A reload restores the same outline review that was published live."""
     turn = SessionTurnRecord(
         id="turn-presentation-outline",
@@ -72,7 +76,7 @@ def test_presentation_outline_review_projects_a_durable_confirmation_card() -> N
             "action_result": {
                 "results": [{
                     "tool_id": "map-slides",
-                    "tool_name": "report_presentation_step",
+                    "tool_name": tool_name,
                     "tool_arguments": {"summary": "Mapped the deck"},
                     "tool_result": {
                         "summary": "Mapped the deck",
@@ -111,7 +115,8 @@ def test_presentation_outline_review_projects_a_durable_confirmation_card() -> N
     }]
 
 
-def test_presentation_template_selection_restores_card_and_gallery_state() -> None:
+@pytest.mark.parametrize("tool_name", ["request_presentation_template_confirm", "ppt_rag"])
+def test_presentation_template_selection_restores_card_and_gallery_state(tool_name: str) -> None:
     """Reload restores both the compact interaction block and right-pane candidates."""
     candidate = {
         "template_id": "template-editorial-1",
@@ -137,8 +142,8 @@ def test_presentation_template_selection_restores_card_and_gallery_state() -> No
             "action_result": {
                 "results": [{
                     "tool_id": "retrieve-templates",
-                    "tool_name": "ppt_rag",
-                    "tool_arguments": {"limit": 8},
+                    "tool_name": tool_name,
+                    "tool_arguments": {"search_id": "search-1"},
                     "tool_result": {
                         "candidates": [candidate],
                         "template_selection_id": "template-selection-1",
@@ -151,11 +156,7 @@ def test_presentation_template_selection_restores_card_and_gallery_state() -> No
             "think": {
                 "mode": "presentation",
                 "stage": "ppt_plan",
-                "step_index": 3,
-                "outline_confirmed": True,
-                "template_candidates": [candidate],
-                "template_selection_id": "template-selection-1",
-                "template_selection_status": "pending",
+                "step_index": 2,
             },
             "interaction": {
                 "presentation_template_selection": True,
@@ -193,7 +194,8 @@ def test_presentation_template_selection_restores_card_and_gallery_state() -> No
     assert thinking_mode["presentation_template_candidates"] == [candidate]
 
 
-def test_completed_presentation_template_selection_restores_its_history_card() -> None:
+@pytest.mark.parametrize("tool_name", ["request_presentation_template_confirm", "ppt_rag"])
+def test_completed_presentation_template_selection_restores_its_history_card(tool_name: str) -> None:
     """A completed template decision retains the identity needed for REST reconstruction."""
     turn = SessionTurnRecord(
         id="turn-presentation-template-selected",
@@ -205,8 +207,8 @@ def test_completed_presentation_template_selection_restores_its_history_card() -
             "action_result": {
                 "results": [{
                     "tool_id": "retrieve-templates",
-                    "tool_name": "ppt_rag",
-                    "tool_arguments": {"limit": 8},
+                    "tool_name": tool_name,
+                    "tool_arguments": {"search_id": "search-1"},
                     "tool_result": {
                         "search_id": "search-1",
                         "template_selection_id": "template-selection-1",
@@ -491,6 +493,157 @@ async def test_message_pagination(service_client: httpx.AsyncClient) -> None:
     ]
     assert older["has_more"] is False
     assert older["next_before"] == 0
+
+
+async def test_debug_tool_executes_current_workspace_through_the_api(service_client) -> None:
+    created = await create_session(service_client)
+    workspace = Path(created["workspace_root"]) / ".work"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "debug.txt").write_text("Current workspace data")
+    path = f"/api/debug/sessions/{created['id']}/tools/execute"
+    response = await service_client.post(path, json={"toolName": "read_file", "arguments": {"file_path": "debug.txt"}})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()
+    assert data["sessionId"] == created["id"]
+    assert data["result"]["success"], data
+    assert "Current workspace data" in data["result"]["tool_result"]
+    assert data["durationMs"] >= 0
+    failed = await service_client.post(path, json={"toolName": "read_file", "arguments": {"file_path": "missing.txt"}})
+    assert failed.status_code == 200
+    assert failed.json()["result"]["success"] is False
+    unknown = await service_client.post(path, json={"toolName": "unknown_tool", "arguments": {}})
+    assert unknown.status_code == 422
+    assert await SessionTurnRepository().list_conversation("local", created["id"]) == []
+
+
+async def test_debug_tool_requires_authentication_and_session_ownership(service_client, service_app, monkeypatch) -> None:
+    created = await create_session(service_client)
+    execute = AsyncMock()
+    monkeypatch.setattr(service_app.state.invocations, "execute_tool", execute)
+    payload = {"toolName": "read_file", "arguments": {"file_path": "debug.txt"}}
+    path = f"/api/debug/sessions/{created['id']}/tools/execute"
+    assert (await service_client.post(path, json=payload, headers={"Authorization": "Bearer invalid"})).status_code == 401
+    transport = httpx.ASGITransport(app=service_app.app, raise_app_exceptions=True)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as public_client:
+        assert (await public_client.post(path, json=payload)).status_code == 401
+    await UserRepository().ensure_seeded("tool-other-user")
+    await SessionRepository().save(SessionRecord(
+        id="tool-foreign-session", user_id="tool-other-user", workspace_root=created["workspace_root"],
+    ))
+    for hidden in ("tool-foreign-session", "missing-session"):
+        assert (await service_client.post(f"/api/debug/sessions/{hidden}/tools/execute", json=payload)).status_code == 404
+    execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("payload", [
+    {"toolName": "", "arguments": {}},
+    {"toolName": "read_file"},
+    {"toolName": "read_file", "arguments": None},
+    {"toolName": "read_file", "arguments": []},
+    {"toolName": "read_file", "arguments": {}, "executionMode": "full"},
+])
+async def test_debug_tool_rejects_invalid_requests(service_client, service_app, monkeypatch, payload) -> None:
+    created = await create_session(service_client)
+    execute = AsyncMock()
+    monkeypatch.setattr(service_app.state.invocations, "execute_tool", execute)
+    response = await service_client.post(f"/api/debug/sessions/{created['id']}/tools/execute", json=payload)
+    assert response.status_code == 422
+    execute.assert_not_awaited()
+
+
+async def test_debug_prompt_delegates_round_selection(service_client, service_app, monkeypatch) -> None:
+    """Prompt analysis assembles one selected round without enabling capture."""
+    created = await create_session(service_client)
+    session_id = created["id"]
+    payload = {"turnId": "turn-selected", "roundIndex": 2, "mode": "presentation", "stage": "ppt_plan"}
+    assembled = {
+        "sessionId": session_id,
+        **payload,
+        "request": {"messages": [{"role": "system", "content": "Actual Cognitive instructions"}], "tools": []},
+    }
+    get_prompt = AsyncMock(return_value=assembled)
+    monkeypatch.setattr(service_app.state.invocations, "get_prompt", get_prompt)
+
+    response = await service_client.post(f"/api/debug/sessions/{session_id}/prompts", json=payload)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == assembled
+    get_prompt.assert_awaited_once_with(session_id, "turn-selected", 2, mode="presentation", stage="ppt_plan")
+
+    capture = await service_client.put(
+        f"/api/debug/sessions/{session_id}/prompt-capture",
+        json={"enabled": True},
+    )
+    assert capture.status_code == 404
+
+
+async def test_debug_prompt_requires_authentication_and_session_ownership(service_client, service_app, monkeypatch) -> None:
+    """Neither unauthorized requests nor foreign Sessions reach prompt assembly."""
+    created = await create_session(service_client)
+    session_id = created["id"]
+    payload = {"turnId": "turn-selected", "roundIndex": 0, "mode": "normal", "stage": "main"}
+    get_prompt = AsyncMock()
+    monkeypatch.setattr(service_app.state.invocations, "get_prompt", get_prompt)
+    path = f"/api/debug/sessions/{session_id}/prompts"
+    invalid_auth = await service_client.post(path, json=payload, headers={"Authorization": "Bearer invalid"})
+    assert invalid_auth.status_code == 401
+    transport = httpx.ASGITransport(app=service_app.app, raise_app_exceptions=True)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as public_client:
+        assert (await public_client.post(path, json=payload)).status_code == 401
+
+    await UserRepository().ensure_seeded("prompt-other-user")
+    await SessionRepository().save(SessionRecord(
+        id="prompt-foreign-session",
+        user_id="prompt-other-user",
+        workspace_root=created["workspace_root"],
+    ))
+    for hidden_id in ("prompt-foreign-session", "prompt-missing-session"):
+        response = await service_client.post(f"/api/debug/sessions/{hidden_id}/prompts", json=payload)
+        assert response.status_code == 404
+    get_prompt.assert_not_awaited()
+
+
+@pytest.mark.parametrize("invalid_fields", [
+    {"roundIndex": -1},
+    {"roundIndex": True},
+    {"roundIndex": "0"},
+    {"turnId": ""},
+    {"mode": ""},
+    {"stage": ""},
+    {"unexpected": True},
+])
+async def test_debug_prompt_validates_selection(service_client, service_app, monkeypatch, invalid_fields) -> None:
+    """Malformed round selectors are rejected before accessing the Agent."""
+    created = await create_session(service_client)
+    get_prompt = AsyncMock()
+    monkeypatch.setattr(service_app.state.invocations, "get_prompt", get_prompt)
+    response = await service_client.post(
+        f"/api/debug/sessions/{created['id']}/prompts",
+        json={"turnId": "turn-selected", "roundIndex": 0, "mode": "normal", "stage": "main", **invalid_fields},
+    )
+    assert response.status_code == 422
+    get_prompt.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("error", "status"), [
+    (InvocationNotFoundError("Selected round is missing"), 404),
+    (InvocationStateError("Selected stage is unavailable"), 409),
+    (FileNotFoundError("Workflow context is missing"), 409),
+    (ValueError("Unsupported Cognitive mode"), 422),
+])
+async def test_debug_prompt_maps_assembly_errors(
+    service_client, service_app, monkeypatch, error, status,
+) -> None:
+    """Assembly failures retain actionable HTTP statuses and error details."""
+    created = await create_session(service_client)
+    monkeypatch.setattr(service_app.state.invocations, "get_prompt", AsyncMock(side_effect=error))
+    response = await service_client.post(
+        f"/api/debug/sessions/{created['id']}/prompts",
+        json={"turnId": "turn-selected", "roundIndex": 0, "mode": "normal", "stage": "main"},
+    )
+    assert response.status_code == status
+    assert response.json() == {"detail": str(error)}
 
 
 async def test_workspace_file_boundary(service_client: httpx.AsyncClient, test_sandbox: IsolatedPaths) -> None:

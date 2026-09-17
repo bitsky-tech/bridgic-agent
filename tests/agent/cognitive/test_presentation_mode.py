@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -9,10 +10,12 @@ from src.amphi_agent.cognitive.presentation.state import (
     AwaitingPresentationOutlineConfirm,
     AwaitingPresentationTemplateSelection,
     PresentationChapterOutline,
+    PresentationPlanData,
     PresentationStageState,
     PresentationStepRecord,
     PresentationTemplateCandidate,
 )
+from src.amphi_agent.cognitive.presentation.shared import presentation_view, read_artifact, write_artifact
 from src.amphi_agent.cognitive.state import CallVerdict
 from src.amphi_agent.cognitive.normal.state import NormalStageState
 from src.amphi_agent._tools import TOOL_LIBRARY
@@ -24,7 +27,7 @@ from src.amphi_agent.cognitive import (
     PresentationPlanThink,
 )
 from src.amphi_agent.prompts.presentation import PRESENTATION_BRIEF_PERSONA, PRESENTATION_PLAN_PERSONA
-from src.amphi_agent.tools.ppt import PresentationStepReport, RequestPresentation
+from src.amphi_agent.tools.ppt import PresentationStepReport, RequestPresentation, RequestPresentationOutlineConfirm
 from src.amphi_agent._invocation import AgentInvocation
 from src.amphi_service.protocol import (
     PresentationOutlineConfirmRequestEvent,
@@ -33,7 +36,11 @@ from src.amphi_service.protocol import (
 )
 from src.amphi_service.runtime._session_events import SessionEventBroker
 from src.amphi_store import SessionTurnRecord, TurnStatus, UserInput
-from tests.agent.cognitive._harness import legality_reason
+from tests.agent.cognitive._harness import legality_reason, tool_call
+
+
+def _receipt(name: str, payload: dict) -> OTARecord:
+    return OTARecord(action_result=ActionResult(results=[ActionStepResult(tool_id=name, tool_name=name, tool_arguments={}, tool_result=payload)]))
 
 
 def test_presentation_pipeline_is_registered() -> None:
@@ -64,7 +71,7 @@ def test_presentation_brief_prompt_defines_a_durable_communication_contract() ->
     assert "no production-step cursor or step report" in PRESENTATION_BRIEF_PERSONA
     assert "supplied materials" in PRESENTATION_BRIEF_PERSONA
     assert "working defaults" in PRESENTATION_BRIEF_PERSONA
-    assert ".presentation/brief.md" in PRESENTATION_BRIEF_PERSONA
+    assert ".ppt/brief.md" in PRESENTATION_BRIEF_PERSONA
     assert "Do not begin research, narrative planning, or visual design" in PRESENTATION_BRIEF_PERSONA
     assert "A topic is not a core message" in PRESENTATION_BRIEF_PERSONA
     assert "A bare-topic request does not establish its audience" in PRESENTATION_BRIEF_PERSONA
@@ -82,10 +89,10 @@ def test_presentation_step_record_repairs_legacy_character_evidence() -> None:
         "stage": "ppt_brief",
         "step_id": "understand_request",
         "summary": "Captured the request.",
-        "evidence": list("['.presentation/brief.md']"),
+        "evidence": list("['.ppt/brief.md']"),
     })
 
-    assert record.evidence == [".presentation/brief.md"]
+    assert record.evidence == [".ppt/brief.md"]
 
 
 async def test_presentation_pipeline_switches_and_resumes() -> None:
@@ -144,7 +151,7 @@ async def test_presentation_continue_prompt_matches_the_current_cursor() -> None
     )
 
     brief_note = brief_outcome.continuation
-    assert ".presentation/brief.md" in brief_note
+    assert ".ppt/brief.md" in brief_note
     assert 'switch(stage="ppt_plan"' in brief_note
     assert "Do not call report_presentation_step" in brief_note
 
@@ -168,28 +175,21 @@ async def test_presentation_continue_prompt_matches_the_current_cursor() -> None
     assert "do not repeat a completed step" in ready_note
 
 
-def test_presentation_plan_context_excludes_renderer_preview_assets() -> None:
-    """The Agent sees the selected template contract without local preview paths."""
-    ota_context = AmphiOTAContext()
-    ota_context.transition_think(PresentationStageState(
-        stage="ppt_plan",
-        outline=[PresentationChapterOutline(id="chapter-1", title="Story")],
-        selected_template=PresentationTemplateCandidate(
-            template_id="template-1",
-            version="version-1",
-            title="Editorial",
-            preview_paths=[f"/private/previews/slide-{index}.jpg" for index in range(1, 7)],
-            structural_evidence={
-                "overview": "Editorial template",
-                "representative_slides": [{"slide_number": 1}],
-            },
-            materialize_ref={"provider": "local", "template_id": "template-1"},
-        ),
-        template_selection_status="selected",
-    ))
-
-    block = PresentationPlanThink().plan_data_block(ota_context)
-
+def test_presentation_plan_context_excludes_renderer_preview_assets(tmp_path: Path) -> None:
+    """The prompt reads the confirmed artifact and excludes renderer-only fields."""
+    context = AmphiContext(workspace=Workspace("plan-context", tmp_path / "plan-context"))
+    candidate = PresentationTemplateCandidate(
+        template_id="template-1", version="version-1", title="Editorial",
+        preview_paths=["/private/previews/slide-1.jpg"],
+        structural_evidence={"overview": "Editorial template", "representative_slides": [{"slide_number": 1}]},
+        materialize_ref={"provider": "local", "template_id": "template-1"},
+    )
+    artifact = write_artifact(context, "template", {"selected_template": candidate.agent_context()})
+    ota_context = AmphiOTAContext(ota_record=[_receipt("request_presentation_template_confirm", {
+        "template_selection_id": "choice-1", "status": "selected", "artifact": artifact,
+    })])
+    ota_context.transition_think(PresentationStageState(stage="ppt_plan"))
+    block = PresentationPlanThink().artifacts_block(ota_context, context)
     assert "Editorial template" in block
     assert '"template_id": "template-1"' in block
     assert "/private/previews/" not in block
@@ -245,10 +245,10 @@ async def test_presentation_contracts_are_invalidated_on_entry_and_backtrack(tmp
     assert not paths["ppt_review"].exists()
 
 
-async def test_presentation_step_contract_and_runtime_progress() -> None:
+async def test_presentation_step_contract_and_runtime_progress(tmp_path: Path) -> None:
     """A stage cannot hand off until each observable production step is reported."""
     worker = PresentationPlanThink()
-    context = AmphiContext()
+    context = AmphiContext(workspace=Workspace("progress", tmp_path / "progress"))
     ota_context = AmphiOTAContext()
     ota_context.transition_think(PresentationStageState(stage="ppt_plan", goal="Explain the strategy"))
     switch = StepToolCall(
@@ -300,14 +300,13 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
     state = ota_context.think_status
     assert isinstance(state, PresentationStageState)
     assert state.step_index == 1
-    assert state.reports == [PresentationStepRecord(
-        stage="ppt_plan",
-        step_id="collect_evidence",
-        summary="Collected the selected sources.",
-        evidence=["https://example.com/reference"],
-    )]
-    assert state.sources[0].id == "source-001"
-    assert state.sources[0].kind == "web"
+    view = presentation_view(ota_context.ota_record)
+    assert view["presentation_reports"][0]["step_id"] == "collect_evidence"
+    assert view["presentation_sources"][0]["id"] == "source-001"
+    assert view["presentation_sources"][0]["kind"] == "web"
+    receipt = ota_context.action_result.results[0].tool_result
+    assert read_artifact(context, receipt["artifact"])["sources"] == view["presentation_sources"]
+    assert state.model_dump() == {"mode": "presentation", "stage": "ppt_plan", "step_index": 1}
     assert "Current step id: map_slides" in worker.progress_block(ota_context)
 
     completed = AmphiOTAContext()
@@ -315,14 +314,15 @@ async def test_presentation_step_contract_and_runtime_progress() -> None:
         stage="ppt_plan",
         step_index=len(PRESENTATION_STAGE_STEPS["ppt_plan"]),
     ))
+    (context.workspace.work_dir / ".ppt/plan.md").write_text("# Plan\nConfirmed visual direction.\n")
     assert await legality_reason(worker, switch, completed, context) is None
 
 
-async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
+async def test_template_confirmation_must_be_the_plan_units_only_call() -> None:
     """The Plan ThinkUnit enforces the atomic template-selection handoff."""
     worker = PresentationPlanThink()
     context = AmphiContext()
-    ppt_call = StepToolCall(call_id="ppt-rag", tool="ppt_rag", tool_arguments=[])
+    ppt_call = StepToolCall(call_id="template-confirm", tool="request_presentation_template_confirm", tool_arguments=[])
     ota_context = AmphiOTAContext(ota_record=[OTARecord(think_result=ThinkResult(
         step_content="Choose templates and continue.",
         tool_calls=[ppt_call, StepToolCall(call_id="switch", tool="switch", tool_arguments=[ToolArgument(name="mode", value="normal")])],
@@ -348,21 +348,28 @@ async def test_ppt_rag_must_be_the_plan_units_only_call() -> None:
     assert await legality_reason(worker, ppt_call, ota_context, context) is None
 
 
+@pytest.mark.parametrize("selection_status", ["idle", "pending", "selected", "skipped"])
+@pytest.mark.parametrize("tool_name", ["ppt_rag", "request_presentation_template_confirm"])
+async def test_template_tool_admission_does_not_depend_on_previous_decisions(selection_status: str, tool_name: str) -> None:
+    """Keeping the tool visible also permits its invocation after a selection or skip."""
+    context = AmphiContext()
+    ota_context = AmphiOTAContext(state={"think": PresentationStageState(
+        stage="ppt_plan", step_index=2, outline_confirmed=True,
+        template_selection_status=selection_status,
+    )})
+    call = tool_call(tool_name)
+    assert await legality_reason(PresentationPlanThink(), call, ota_context, context) is None
+
+
 def test_presentation_progress_event_contains_the_durable_cursor() -> None:
     """Live stage events expose the same progress data restored from the transcript."""
     publisher = SessionEventBroker().open("presentation-progress")
     ota_context = AmphiOTAContext(stream=publisher)
-    state = PresentationStageState(
-        stage="ppt_compose",
-        step_index=1,
-        goal="Explain the strategy",
-        reports=[PresentationStepRecord(
-            stage="ppt_compose",
-            step_id="build_slide_shells",
-            summary="Created twelve slide shells.",
-            evidence=["slides 1-12"],
-        )],
-    )
+    state = PresentationStageState(stage="ppt_compose", step_index=1)
+    ota_context.ota_record = [
+        _receipt("request_presentation", {"goal": "Explain the strategy"}),
+        _receipt("report_presentation_step", {"stage": "ppt_compose", "step_id": "build_slide_shells", "summary": "Created twelve slide shells.", "evidence": ["slides 1-12"]}),
+    ]
 
     AmphiAgent._publish_stage(ota_context, state)
 
@@ -435,15 +442,16 @@ async def test_presentation_brief_artifact_is_required_for_the_stage_handoff(tmp
     )
 
     reason = await legality_reason(worker, switch, ota_context, context)
-    assert reason is not None and ".presentation/brief.md" in reason
+    assert reason is not None and ".ppt/brief.md" in reason
 
-    artifact = workspace.work_dir / ".presentation" / "brief.md"
+    artifact = workspace.work_dir / ".ppt" / "brief.md"
     assert worker.artifact_path(context, "ppt_brief") == artifact
     artifact.parent.mkdir(parents=True)
     artifact.write_text("# Brief\n\nAudience: board", encoding="utf-8")
 
     assert await legality_reason(worker, switch, ota_context, context) is None
-    assert "Audience: board" in worker.artifacts_block(context)
+    assert ".ppt/brief.md" in worker.artifacts_block(ota_context, context)
+    assert "Audience: board" not in worker.artifacts_block(ota_context, context)
 
 
 def test_presentation_step_catalog_matches_the_intended_production_order() -> None:
@@ -479,13 +487,13 @@ def test_legacy_plan_cursor_collapses_the_removed_chapter_step() -> None:
     })
 
     assert state.step_index == 2
-    assert [report.step_id for report in state.reports] == ["collect_evidence", "map_slides"]
+    assert state.model_dump() == {"mode": "presentation", "stage": "ppt_plan", "step_index": 2}
 
 
 def test_slide_map_requires_page_content_outlines() -> None:
     """A page title alone is not a sufficiently detailed production blueprint."""
     with pytest.raises(ValueError, match="non-empty `content_outline`"):
-        PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+        PresentationPlanData().apply_plan_step_data(
             "map_slides",
             {"chapters": [{
                 "title": "Opening",
@@ -494,10 +502,10 @@ def test_slide_map_requires_page_content_outlines() -> None:
         )
 
 
-async def test_slide_map_report_parks_for_editable_outline_confirmation() -> None:
+async def test_outline_tool_parks_in_slide_mapping_without_reporting_completion() -> None:
     """The runtime owns outline ids and stops before visual design for review."""
     agent = AmphiAgent()
-    state = PresentationStageState(stage="ppt_plan", step_index=1).apply_plan_step_data(
+    data = PresentationPlanData().apply_plan_step_data(
         "collect_evidence",
         {"sources": [{
             "kind": "conversation",
@@ -505,14 +513,13 @@ async def test_slide_map_report_parks_for_editable_outline_confirmation() -> Non
             "excerpt": "Focus on the life story.",
         }]},
     )
-    ota_context = AmphiOTAContext(ota_record=[OTARecord(action_result=ActionResult(results=[
+    publisher = SessionEventBroker().open("outline-review-step")
+    ota_context = AmphiOTAContext(stream=publisher, ota_record=[OTARecord(action_result=ActionResult(results=[
         ActionStepResult(
             tool_id="call-map-slides",
-            tool_name="report_presentation_step",
-            tool_arguments={"summary": "Mapped the deck."},
-            tool_result=PresentationStepReport(
-                "Mapped the deck.",
-                ["source-001"],
+            tool_name="request_presentation_outline_confirm",
+            tool_arguments={},
+            tool_result=RequestPresentationOutlineConfirm(
                 {"chapters": [{
                     "title": "Opening",
                     "summary": "Establish the context.",
@@ -529,23 +536,31 @@ async def test_slide_map_report_parks_for_editable_outline_confirmation() -> Non
             ),
         ),
     ]))])
-    ota_context.transition_think(state)
+    ota_context.ota_record.insert(0, _receipt("report_presentation_step", {"step_id": "collect_evidence", "data": {"sources": [item.model_dump() for item in data.sources]}}))
+    ota_context.transition_think(PresentationStageState(stage="ppt_plan", step_index=1))
 
     async for _ in agent.after_action(ota_context, AmphiContext()):
         raise AssertionError("after_action must not yield a visible value")
 
     next_state = ota_context.think_status
     assert isinstance(next_state, PresentationStageState)
-    assert next_state.step_index == 2
-    assert next_state.outline[0].id == "chapter-001"
-    assert next_state.outline[0].slides[0].id == "slide-001"
-    assert next_state.outline[0].slides[0].content_outline == [
+    assert next_state.step_index == 1
+    view = presentation_view(ota_context.ota_record)
+    assert all(report["step_id"] != "map_slides" for report in view["presentation_reports"])
+    assert "Current step id: map_slides" in PresentationPlanThink().progress_block(ota_context)
+    assert view["presentation_outline"][0]["id"] == "chapter-001"
+    assert view["presentation_outline"][0]["slides"][0]["id"] == "slide-001"
+    assert view["presentation_outline"][0]["slides"][0]["content_outline"] == [
         "Introduce the central question.",
         "Connect the question to the audience.",
     ]
-    assert next_state.outline_confirmation_id.startswith("presentation_outline_")
-    assert next_state.outline_confirmed is False
+    assert view["presentation_outline_confirmation_id"].startswith("presentation_outline_")
+    assert view["presentation_outline_confirmed"] is False
     assert isinstance(ota_context.interaction_status, AwaitingPresentationOutlineConfirm)
+    events = [event for event in publisher._buffer if isinstance(event, StageEvent)]
+    assert events[-1].payload()["presentation_step_index"] == 1
+    assert len(events[-1].payload()["presentation_reports"]) == 1
+    assert events[-1].payload()["presentation_outline"] == view["presentation_outline"]
 
     # Replaying the handled receipt must not advance again or replace its confirmation.
     expected_state = next_state.model_dump()
@@ -556,3 +571,60 @@ async def test_slide_map_report_parks_for_editable_outline_confirmation() -> Non
     assert ota_context.think_status.model_dump() == expected_state
     assert ota_context.interaction_status.model_dump() == expected_interaction
     assert ota_context.action_result.results[0].tool_result == expected_receipt
+
+
+@pytest.mark.parametrize("stage,step_index", [("ppt_brief", 0), ("ppt_plan", 0), ("ppt_plan", 1), ("ppt_plan", 2), ("ppt_compose", 1)])
+async def test_outline_confirmation_is_only_available_during_slide_mapping(stage: str, step_index: int) -> None:
+    """Outline review is a stage-local tool, separate from template selection."""
+    worker = PresentationPlanThink()
+    context = AmphiContext()
+    ota_context = AmphiOTAContext(state={"think": PresentationStageState(stage=stage, step_index=step_index)})
+    call = tool_call("request_presentation_outline_confirm", data=json.dumps({"chapters": [{
+        "title": "Opening", "slides": [{"title": "Overview", "content_outline": ["Purpose"]}],
+    }]}))
+    visible = {tool.tool_name for tool in worker.select_tools(ota_context, context)}
+    expected = stage == "ppt_plan" and step_index == 1
+    assert (call.tool in visible) is expected
+    assert (await legality_reason(worker, call, ota_context, context) is None) is expected
+
+
+async def test_outline_confirmation_is_exclusive_and_required_before_step_report(tmp_path: Path) -> None:
+    """Neither an unconfirmed outline nor a batched review can advance progress."""
+    worker = PresentationPlanThink()
+    context = AmphiContext(workspace=Workspace("report-outline", tmp_path / "report-outline"))
+    data = {"chapters": [{
+        "title": "Opening", "slides": [{"title": "Overview", "content_outline": ["Purpose"]}],
+    }]}
+    state = PresentationStageState(stage="ppt_plan", step_index=1)
+    ota_context = AmphiOTAContext(state={"think": state})
+    report = tool_call("report_presentation_step", summary="Mapped slides.")
+    assert "has not been confirmed" in await legality_reason(worker, report, ota_context, context)
+    invalid = tool_call("request_presentation_outline_confirm", data='{"chapters": []}')
+    assert "non-empty" in await legality_reason(worker, invalid, ota_context, context)
+
+    request = tool_call("request_presentation_outline_confirm", data=json.dumps(data))
+    calls = [request, report]
+    verdicts = [CallVerdict(id=str(index), tool=call.tool, verdict="allow") for index, call in enumerate(calls)]
+    resolved = await worker._check_action_legality(ota_context, context, calls, verdicts, AmphiAgent())
+    assert all(verdict.verdict == "deny" for verdict in resolved)
+    assert all("control-flow rejected" in verdict.reason for verdict in resolved)
+    assert ota_context.think_status.step_index == 1
+
+    artifact = write_artifact(context, "outline", data)
+    ota_context.ota_record.append(_receipt("request_presentation_outline_confirm", {"status": "confirmed", "artifact": artifact}))
+    assert await legality_reason(worker, report, ota_context, context) is None
+    overwrite = tool_call("report_presentation_step", summary="Replace outline.", data=json.dumps(data))
+    assert "omit `chapters`" in await legality_reason(worker, overwrite, ota_context, context)
+
+
+async def test_template_retrieval_can_share_a_batch_with_a_read() -> None:
+    """Retrieval has no human-interaction handoff and is not an exclusive control."""
+    worker = PresentationPlanThink()
+    context = AmphiContext()
+    calls = [tool_call("ppt_rag"), tool_call("read_file")]
+    ota = AmphiOTAContext(ota_record=[OTARecord(think_result=ThinkResult(tool_calls=calls))])
+    ota.transition_think(PresentationStageState(stage="ppt_plan", step_index=2, outline_confirmed=True))
+    ota.tools = worker.select_tools(ota, context)
+    verdicts = [CallVerdict(id=call.call_id, tool=call.tool, verdict="allow") for call in calls]
+    resolved = await worker._check_action_legality(ota, context, calls, verdicts, AmphiAgent())
+    assert all(verdict.verdict == "allow" for verdict in resolved)

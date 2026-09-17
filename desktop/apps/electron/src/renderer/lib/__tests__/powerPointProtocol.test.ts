@@ -9,6 +9,29 @@ function workspace(): PresentationWorkspace {
 }
 
 describe('PowerPoint renderer protocol', () => {
+  it('invalidates cached media revisions for payload changes and rejects stale edits', async () => {
+    const initial = workspace()
+    const slide = initial.documents[0]!.slides[0]!
+    const source = { dataUrl: 'data:image/png;base64,YQ==', fileName: 'image.png', mimeType: 'image/png' }
+    slide.elements = [{ id: 'image', type: 'image', source, altText: '', fit: 'contain', x: 0, y: 0, width: 20, height: 20, rotation: 0 }]
+    const revision = async () => {
+      const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
+      return (read.result as { page: { revision: string } }).page.revision
+    }
+    const first = await revision()
+    expect(await revision()).toBe(first)
+    source.dataUrl = 'data:image/png;base64,Yg=='
+    const second = await revision()
+    expect(second).not.toBe(first)
+    expect(await revision()).toBe(second)
+    await expect(executePowerPointRequest(initial, { method: 'remove_ppt_element', params: { page_id: slide.id, ref: 'image', expected_revision: first } })).rejects.toThrow('changed after it was read')
+    expect(slide.elements).toHaveLength(1)
+    source.dataUrl = 'data:image/png;base64,YQ=='
+    expect(await revision()).toBe(first)
+    slide.elements[0]!.x = 10
+    expect(await revision()).not.toBe(first)
+  })
+
   it('respects explicit Agent run sizes alongside base formatting and retains numbering through later edits', async () => {
     const initial = workspace()
     const slide = initial.documents[0]!.slides[0]!

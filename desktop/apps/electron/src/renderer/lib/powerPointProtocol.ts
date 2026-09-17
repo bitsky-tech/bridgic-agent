@@ -24,6 +24,7 @@ import { importPresentationPptx } from '@/lib/presentationPptxImport'
 export const POWERPOINT_PROTOCOL_VERSION = 5 as const
 
 export type PowerPointMethod =
+  | 'save_ppt'
   | 'view_ppt'
   | 'inspect_ppt_assets'
   | 'get_ppt_page'
@@ -44,6 +45,7 @@ export interface PowerPointRequest {
 export interface PowerPointRuntimeContext {
   currentTarget: string | null
   fileName: string
+  importPptx?: (encoded: string, fileName: string) => Promise<PresentationDocument>
 }
 
 export interface PowerPointDispatchResult {
@@ -78,7 +80,9 @@ export async function executePowerPointRequest(
     }
     const encoded = optionalString(params.content_base64, 'content_base64')
     const document = encoded
-      ? await importPresentationPptx(decodeBase64(encoded), fileName)
+      ? await (context.importPptx
+        ? context.importPptx(encoded, fileName)
+        : importPresentationPptx(decodeBase64(encoded), fileName, { restoreEditorModel: true }))
       : createBlankPresentationDocument(fileName.replace(/\.pptx$/i, ''))
     const workspace = { activeDocumentId: document.id, documents: [document] }
     return { result: { ...deckOverview(document, fileName), reused: false }, workspace, target, persist: !encoded }
@@ -397,8 +401,21 @@ function pageAssets(slide: PresentationSlide): Array<{
   return [...found.values()]
 }
 
+const mediaRevisions = new WeakMap<object, { dataUrl: string; revision: string }>()
+
 function pageRevision(slide: PresentationSlide): string {
-  return fingerprint(JSON.stringify(slide))
+  // Large master images are shared across slides. Hash each payload once rather
+  // than serializing its base64 text into every page's revision calculation.
+  return fingerprint(JSON.stringify(slide, function (key, value: unknown) {
+    if (key !== 'dataUrl' || typeof value !== 'string') return value
+    const source = this as object
+    let cached = mediaRevisions.get(source)
+    if (!cached || cached.dataUrl !== value) {
+      cached = { dataUrl: value, revision: `${value.length}:${fingerprint(value)}` }
+      mediaRevisions.set(source, cached)
+    }
+    return cached.revision
+  }))
 }
 
 function deckRevision(document: PresentationDocument): string {

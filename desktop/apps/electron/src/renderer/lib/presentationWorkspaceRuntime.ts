@@ -20,7 +20,7 @@ const POWERPOINT_METHODS = [
 ] as const
 
 export const PRESENTATION_WORKSPACE_CAPABILITIES = [
-  'document.create', 'document.activate', 'document.close', 'document.edit',
+  'document.create', 'document.activate', 'document.close', 'document.edit', 'document.save', 'document.saveAs',
   ...POWERPOINT_METHODS.map((method) => `powerpoint.${method}`),
 ] as const
 
@@ -32,6 +32,8 @@ interface PresentationWorkspaceRuntimeOptions {
   sessionId: string
   read: () => PresentationWorkspace
   write: (workspace: PresentationWorkspace) => void
+  beforeActivate?: () => Promise<void>
+  beforeClose?: (documentId: string) => Promise<boolean>
 }
 
 /** Coordinate commands around the existing presentation model, never a copy of it. */
@@ -49,7 +51,7 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
           id: document.id,
           title: document.title,
           revision: document.version,
-          dirty: null,
+          dirty: isPresentationDirty(document),
         })),
       }
     },
@@ -77,6 +79,8 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
       return runtime.execute({ sessionId, capability: 'document.create' }, async (context) => {
         if (editor) await editor.flush()
         context.assertCurrent()
+        await options.beforeActivate?.()
+        context.assertCurrent()
         const workspace = read()
         const document = createInitialPresentationDocument()
         publishWorkspace({ activeDocumentId: document.id, documents: [...workspace.documents, document] })
@@ -87,6 +91,8 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
       return runtime.execute({ sessionId, capability: 'document.activate', documentId }, async (context) => {
         if (editor) await editor.flush()
         context.assertCurrent()
+        await options.beforeActivate?.()
+        context.assertCurrent()
         const workspace = read()
         if (workspace.activeDocumentId !== documentId) publishWorkspace({ ...workspace, activeDocumentId: documentId })
       })
@@ -95,9 +101,15 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
       return runtime.execute({ sessionId, capability: 'document.close', documentId }, async (context) => {
         if (editor) await editor.flush()
         context.assertCurrent()
-        const workspace = read()
+        let workspace = read()
         // The final tab closes the native surface; its host owns that lifecycle.
-        if (workspace.documents.length <= 1) return { closeSurface: true }
+        if (options.beforeClose && !await options.beforeClose(documentId)) return { closeSurface: false }
+        context.assertCurrent()
+        workspace = read()
+        if (workspace.documents.length <= 1) {
+          if (options.beforeClose) publishWorkspace({ activeDocumentId: '', documents: [] })
+          return { closeSurface: true }
+        }
         const index = workspace.documents.findIndex((document) => document.id === documentId)
         const documents = workspace.documents.filter((document) => document.id !== documentId)
         const activeDocumentId = workspace.activeDocumentId === documentId
@@ -138,7 +150,7 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
         ...(error instanceof PowerPointProtocolError ? { code: error.code } : {}),
       })
       if (!request || typeof request !== 'object') return failure(new TypeError('PowerPoint request is required'))
-      if (!POWERPOINT_METHODS.includes(request.method)) {
+      if (!(POWERPOINT_METHODS as readonly string[]).includes(request.method)) {
         return failure(new Error(`Unsupported PowerPoint method: ${String(request.method)}`))
       }
       const capability = `powerpoint.${request.method}`
@@ -172,3 +184,7 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
 }
 
 export type PresentationWorkspaceRuntime = ReturnType<typeof createPresentationWorkspaceRuntime>
+
+export function isPresentationDirty(document: PresentationDocument): boolean {
+  return !document.source || document.source.mtimeMs === null || document.savedVersion !== document.version
+}

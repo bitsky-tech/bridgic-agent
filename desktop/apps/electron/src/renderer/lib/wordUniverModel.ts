@@ -110,6 +110,10 @@ export function normalizeUniverDocumentSnapshot(
   snapshot.body = normalizeBody(snapshot.body)
   snapshot.documentStyle = { ...snapshot.documentStyle }
   snapshot.drawings ??= {}
+  for (const drawing of Object.values(snapshot.drawings)) {
+    drawing.unitId = id
+    drawing.subUnitId = id
+  }
   snapshot.drawingsOrder ??= []
   snapshot.headers ??= {}
   snapshot.footers ??= {}

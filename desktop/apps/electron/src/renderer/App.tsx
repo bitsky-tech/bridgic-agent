@@ -39,6 +39,7 @@ import { useEmbeddedBrowserBridge } from './hooks/useEmbeddedBrowserBridge'
 import { useEmbeddedPowerPointBridge } from './hooks/useEmbeddedPowerPointBridge'
 import { useExcelHostBridge } from './hooks/useExcelHostBridge'
 import { useWordHostBridge } from './hooks/useWordHostBridge'
+import { useOfficeCloseBridge } from './hooks/useOfficeCloseBridge'
 import {
   ConfirmDialog,
   ExternalLinkDialog,
@@ -94,6 +95,7 @@ export default function App({ extensions }: { extensions?: DesktopAppExtensions 
   useEmbeddedPowerPointBridge()
   useExcelHostBridge()
   useWordHostBridge()
+  useOfficeCloseBridge()
 
   // GatewayBootGate gates the entire UI on Bridgic Agent daemon readiness.
   // Wrapping includes the modal stack: any modal opened mid-session would
