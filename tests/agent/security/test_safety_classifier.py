@@ -241,6 +241,55 @@ async def test_fail_closed(test_sandbox: "IsolatedPaths") -> None:
     assert [verdict.verdict for verdict in failed] == ["ask"]
 
 
+async def test_unwrapped_verdicts(test_sandbox: "IsolatedPaths", caplog: pytest.LogCaptureFixture) -> None:
+    """Final safety decisions:
+
+    {
+      "single_bare_object": "allow",
+      "comma_separated_objects": ["allow", "allow"],
+      "newline_separated_objects": ["allow", "allow"],
+      "bare_object_without_index_for_two_calls": ["ask", "ask"]
+    }
+
+    Checks:
+    1. A single verdict object without the enclosing array is still the model's decision.
+    2. Comma-separated verdict objects without the enclosing array are aligned by index.
+    3. Newline-separated verdict objects after leading blank lines are aligned by index.
+    4. An unwrapped object that cannot be aligned with every call still fails closed.
+    5. Recovering the dropped brackets is logged; a well-formed array logs nothing.
+    """
+    roots = [str(test_sandbox.root)]
+    first = {"index": 0, "verdict": "allow", "rule": "", "reason": "Read-only search."}
+    second = {"index": 1, "verdict": "allow", "rule": "", "reason": "Local preview page."}
+
+    async def review(response: str, count: int) -> list[str]:
+        classifier = LlmSafetyClassifier(_ScriptedLlm([response]))
+        items = [_item(f"operation-{index}") for index in range(count)]
+        verdicts = await classifier.judge(items, ["Run the task."], roots)
+        return [verdict.verdict for verdict in verdicts]
+
+    # Check 1: A single verdict object without the enclosing array is still the model's decision.
+    assert await review(json.dumps(first, indent=2), 1) == ["allow"]
+
+    # Check 2: Comma-separated verdict objects without the enclosing array are aligned by index.
+    assert await review(f"{json.dumps(second)},\n{json.dumps(first)}", 2) == ["allow", "allow"]
+
+    # Check 3: Newline-separated verdict objects after leading blank lines are aligned by index.
+    assert await review(f"\n\n{json.dumps(first)}\n{json.dumps(second)}", 2) == ["allow", "allow"]
+
+    # Check 4: An unwrapped object that cannot be aligned with every call still fails closed.
+    unaligned = {"verdict": "allow", "rule": "", "reason": "Routine work."}
+    assert await review(json.dumps(unaligned), 2) == ["ask", "ask"]
+
+    # Check 5: Recovering the dropped brackets is logged; a well-formed array logs nothing.
+    with caplog.at_level("INFO", logger="src.amphi_agent.security._classifier"):
+        await review(json.dumps(first), 1)
+        assert "recovered 1 verdict object(s)" in caplog.text
+        caplog.clear()
+        await review(json.dumps([first]), 1)
+        assert "recovered" not in caplog.text
+
+
 async def test_policy_reload(test_sandbox: "IsolatedPaths", monkeypatch: pytest.MonkeyPatch) -> None:
     """Final safety decisions:
 
