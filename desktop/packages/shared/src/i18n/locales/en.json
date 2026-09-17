@@ -1193,6 +1193,11 @@
       "zoomIn": "Zoom In",
       "zoomOut": "Zoom Out"
     },
+    "officeClose": {
+      "detail": "Discarding will remove this document’s unsaved changes.",
+      "discard": "Discard",
+      "message": "Save changes to “{{fileName}}”?"
+    },
     "quit": {
       "buttonCancel": "Cancel",
       "buttonKeep": "Keep Gateway and Quit",

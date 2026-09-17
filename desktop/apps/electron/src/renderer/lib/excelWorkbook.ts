@@ -682,8 +682,11 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgre
       }
     }
     const columnData: NonNullable<IWorkbookData['sheets'][string]['columnData']> = {}
-    const maxColumn = Math.max(worksheet.columnCount, DEFAULT_COLUMNS)
-    for (let columnNumber = 1; columnNumber <= worksheet.columnCount; columnNumber += 1) {
+    // ExcelJS computes columnCount by scanning rows and their sparse cells.
+    // Read it once so wide worksheets do not repeat that scan for every column.
+    const columnCount = worksheet.columnCount
+    const maxColumn = Math.max(columnCount, DEFAULT_COLUMNS)
+    for (let columnNumber = 1; columnNumber <= columnCount; columnNumber += 1) {
       const column = worksheet.getColumn(columnNumber)
       if (column.width || column.hidden) {
         columnData[columnNumber - 1] = {

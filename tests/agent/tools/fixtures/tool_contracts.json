@@ -209,9 +209,10 @@
     "start_subagent": "2c1ac2409402ff014532fd1c8d433a3c22bd7add1fb2ae468142cd95cd1a65f9"
   },
   "dormant_schemas": {
-    "view_ppt": "bb0e0625e7aa9a09d8cd9fc84e9849f1d4391eeb284469247071cea849b5b36d",
+    "save_ppt": "fb56767e3d00daa4ad738bdc1a9c6b1f63d83593b79334472aa84289f0249218",
+    "view_ppt": "a9f1ca6cb5952bcfada3672e675dc5bc3153d4c92b27109783c0e8c21cf5f29f",
     "get_ppt_page": "1b42ef26231d5424055052db17353e891790bf08b12f9988a0c3d0ec069fc2d8",
-    "update_ppt_design": "c1dc0d5dae0945cb1c0506663f2573459f1b2e18b4d34113c0507bc39d1fe7f0",
+    "update_ppt_design": "c3dd35a4d2034d788fe3f57e67b68790842574775a08bf98489b3fedaf26a514",
     "edit_ppt_page": "e7c8bcde6bafc946a230f36e34705514c3819ac21a36a0ddd34345df12af1038",
     "insert_ppt_element": "b0a8c7f15fe6ff529293b263836f2b08609b16465995d843cf6dbc1aa5a94e90",
     "remove_ppt_element": "42c18f11587c50f253949d3c3e80966b9b366d167bc47a22b37308daa436646d",

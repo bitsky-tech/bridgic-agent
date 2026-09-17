@@ -1193,6 +1193,11 @@
       "zoomIn": "放大",
       "zoomOut": "缩小"
     },
+    "officeClose": {
+      "detail": "不保存将放弃此文档的未保存修改。",
+      "discard": "不保存",
+      "message": "要保存对“{{fileName}}”的修改吗？"
+    },
     "quit": {
       "buttonCancel": "取消",
       "buttonKeep": "保留网关并退出",

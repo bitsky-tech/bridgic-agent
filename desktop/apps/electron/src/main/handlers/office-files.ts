@@ -7,6 +7,8 @@ import { loggedHandle } from './logged-handle'
 import { createOfficeWorkspaceFiles } from '../office-workspace-files'
 import { officeWorkspaceRequest } from '../office-workspace-backend'
 import { downloadOfficeImage } from '../../shared/office-images'
+import { resolveLocale } from '../../shared/locale'
+import { translate } from '../i18n'
 
 export function registerOfficeFileHandlers(owner: (kind: OfficeFileKind, contentsId: number) => string, request = officeWorkspaceRequest): void {
   const workspace = createOfficeWorkspaceFiles(request, (sessionId) => {
@@ -47,12 +49,12 @@ export function registerOfficeFileHandlers(owner: (kind: OfficeFileKind, content
     return saveOfficeFile(request, destination, approved)
   }, { transformLogArgs: ([request]) => ({ kind: (request as OfficeFileSaveRequest)?.kind, bytes: (request as OfficeFileSaveRequest)?.bytes?.byteLength }) })
   loggedHandle('office-files:confirm-close', async (_event, fileName: string, locale: string): Promise<OfficeCloseDecision> => {
-    const zh = locale.startsWith('zh')
+    const language = resolveLocale(locale, 'en')
     const options = {
       type: 'question' as const,
-      message: zh ? `要保存对“${fileName}”的修改吗？` : `Save changes to “${fileName}”?`,
-      detail: zh ? '不保存将放弃此文档的未保存修改。' : 'Discarding will remove this document’s unsaved changes.',
-      buttons: zh ? ['保存', '不保存', '取消'] : ['Save', 'Discard', 'Cancel'],
+      message: translate(language, 'main.officeClose.message', { fileName }),
+      detail: translate(language, 'main.officeClose.detail'),
+      buttons: [translate(language, 'office.save'), translate(language, 'main.officeClose.discard'), translate(language, 'common.cancel')],
       defaultId: 0, cancelId: 2, noLink: true,
     }
     const window = BrowserWindow.getFocusedWindow()

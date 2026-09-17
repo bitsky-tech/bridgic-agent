@@ -138,6 +138,7 @@ describe('Excel workbook conversion', () => {
     const imported = await importXlsx(new Uint8Array(await source.xlsx.writeBuffer()), LocaleType.EN_US)
     const restored = imported.sheets[imported.sheetOrder[0]!]!
     expect(restored.cellData?.[99]?.[16383]?.v).toBe(42)
+    expect(restored.columnCount).toBe(16384)
     expect(restored.rowData?.[49]).toEqual({ h: 40, hd: BooleanNumber.TRUE })
     expect(restored.mergeData).toEqual([{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 2 }])
     const validation = JSON.parse(imported.resources!.find((resource) => resource.name === 'SHEET_DATA_VALIDATION_PLUGIN')!.data)
