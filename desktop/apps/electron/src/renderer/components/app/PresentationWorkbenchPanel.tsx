@@ -3183,7 +3183,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         showDate: value.showDate,
         showSlideNumber: value.showSlideNumber,
       }
-      if (value.applyAll) {
+      if (value.useTheme) {
+        updateCurrentSlide({ footer: undefined })
+      } else if (value.applyAll) {
         commitDocument({
           ...current,
           theme: { ...current.theme, footer },
@@ -3301,7 +3303,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const current = documentRef.current
     const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
-    const nextSlide = { ...slide, ...patch }
+    const nextSlide: PresentationSlide = { ...slide, ...patch }
+    if ('background' in patch && patch.background === undefined) delete nextSlide.background
+    if ('footer' in patch && patch.footer === undefined) delete nextSlide.footer
     if (recordHistory) {
       replaceCurrentSlide(nextSlide)
       return
@@ -3533,6 +3537,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       showDate: footer.showDate,
       showSlideNumber: footerConfigured ? footer.showSlideNumber : true,
       applyAll: true,
+      useTheme: false,
     }
   }
   const currentSlideIndex = currentSlide

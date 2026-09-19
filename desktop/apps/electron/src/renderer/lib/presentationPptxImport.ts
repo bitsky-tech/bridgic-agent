@@ -26,7 +26,13 @@ import {
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { getPresentationShapeDefinition, isPresentationLineShape, isSupportedPresentationShapeType, PRESENTATION_CONNECTOR_NAMESPACE } from '@/lib/presentationShapes'
-import { clearPresentationHyperlinksToPages, createPresentationAsset, migratePresentationDocument, normalizePresentationProject } from '@/presentation/project'
+import {
+  clearPresentationHyperlinksToPages,
+  createPresentationAsset,
+  migratePresentationDocument,
+  normalizePresentationProject,
+  presentationAssetsForPages,
+} from '@/presentation/project'
 import { validatePresentationDocument } from '@/presentation/model/reducer'
 import {
   presentationCharacterSpacingFromPoints,
@@ -1382,21 +1388,26 @@ export async function importPresentationPptx(
   const archive = await JSZip.loadAsync(bytes)
   const stored = options.restoreEditorModel ? await readOfficeRoundTrip(archive, 'presentation') : null
   if (stored) {
-    const restored = migratePresentationDocument(stored, fileName.replace(/\.pptx$/i, ''))
-    const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= restored.slides.pages.length))] : null
-    const pages = requested ? (requested.length ? requested : [1]).map((number) => restored.slides.pages[number - 1]!) : restored.slides.pages
-    const retainedPageIds = new Set(pages.map((page) => page.id))
-    const removedPageIds = new Set(restored.slides.pages.flatMap((page) => retainedPageIds.has(page.id) ? [] : [page.id]))
-    const retainedPages = removedPageIds.size ? clearPresentationHyperlinksToPages(pages, removedPageIds) : pages
-    const selectedPageId = retainedPages.find((slide) => slide.id === restored.slides.selectedPageId)?.id ?? retainedPages[0]!.id
-    return validatePresentationDocument({
-      ...restored,
-      id: createPresentationId('presentation'),
-      revision: 1,
-      sourceProtected: false,
-      title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
-      slides: replacePresentationPages(restored.slides, retainedPages, selectedPageId),
-    })
+    try {
+      const restored = migratePresentationDocument(stored, fileName.replace(/\.pptx$/i, ''))
+      const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= restored.slides.pages.length))] : null
+      const pages = requested ? (requested.length ? requested : [1]).map((number) => restored.slides.pages[number - 1]!) : restored.slides.pages
+      const retainedPageIds = new Set(pages.map((page) => page.id))
+      const removedPageIds = new Set(restored.slides.pages.flatMap((page) => retainedPageIds.has(page.id) ? [] : [page.id]))
+      const retainedPages = removedPageIds.size ? clearPresentationHyperlinksToPages(pages, removedPageIds) : pages
+      const selectedPageId = retainedPages.find((slide) => slide.id === restored.slides.selectedPageId)?.id ?? retainedPages[0]!.id
+      return validatePresentationDocument({
+        ...restored,
+        id: createPresentationId('presentation'),
+        revision: 1,
+        sourceProtected: false,
+        title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
+        assets: requested ? presentationAssetsForPages(restored.assets, retainedPages) : restored.assets,
+        slides: replacePresentationPages(restored.slides, retainedPages, selectedPageId),
+      })
+    } catch (error) {
+      console.warn('[presentation] Ignoring an invalid embedded editor model and importing native PPTX content instead', error)
+    }
   }
   const [themeColors, themeFonts] = await Promise.all([
     themeColorsFromArchive(archive),

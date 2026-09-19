@@ -47,6 +47,7 @@ export interface PresentationInsertFooterValue {
   showDate: boolean
   showSlideNumber: boolean
   applyAll: boolean
+  useTheme?: boolean
 }
 
 export type PresentationInsertDialogValue =
@@ -356,6 +357,7 @@ function FooterDialog({ initialValue, onClose, onSubmit }: {
   const [showDate, setShowDate] = useState(initialValue?.showDate ?? false)
   const [showSlideNumber, setShowSlideNumber] = useState(initialValue?.showSlideNumber ?? true)
   const [applyAll, setApplyAll] = useState(initialValue?.applyAll ?? true)
+  const [useTheme, setUseTheme] = useState(initialValue?.useTheme ?? false)
 
   return (
     <DialogFrame
@@ -364,29 +366,36 @@ function FooterDialog({ initialValue, onClose, onSubmit }: {
       onClose={onClose}
       onSubmit={(event) => {
         event.preventDefault()
-        onSubmit({ kind: 'footer', text: text.trim(), showDate, showSlideNumber, applyAll })
+        onSubmit({ kind: 'footer', text: text.trim(), showDate, showSlideNumber, applyAll, ...(useTheme ? { useTheme: true } : {}) })
       }}
       width={520}
     >
       <div className="space-y-4">
         <label className={labelClassName}>
           {t('session.presentation.insertDialog.footerText')}
-          <input autoFocus data-testid="presentation-insert-footer-text" className={fieldClassName} value={text} onChange={(event) => setText(event.target.value)} />
+          <input autoFocus data-testid="presentation-insert-footer-text" className={fieldClassName} value={text} disabled={useTheme} onChange={(event) => setText(event.target.value)} />
         </label>
         <div className="space-y-2 rounded-lg border border-border-subtle bg-bg-app/45 p-3">
-          <CheckboxField checked={showDate} label={t('session.presentation.insertDialog.showDate')} onChange={setShowDate} testId="presentation-insert-footer-date" />
-          <CheckboxField checked={showSlideNumber} label={t('session.presentation.insertDialog.showSlideNumber')} onChange={setShowSlideNumber} testId="presentation-insert-footer-number" />
-          <CheckboxField checked={applyAll} label={t('session.presentation.insertDialog.applyAll')} onChange={setApplyAll} testId="presentation-insert-footer-all" />
+          <CheckboxField checked={showDate} disabled={useTheme} label={t('session.presentation.insertDialog.showDate')} onChange={setShowDate} testId="presentation-insert-footer-date" />
+          <CheckboxField checked={showSlideNumber} disabled={useTheme} label={t('session.presentation.insertDialog.showSlideNumber')} onChange={setShowSlideNumber} testId="presentation-insert-footer-number" />
+          <CheckboxField checked={applyAll} label={t('session.presentation.insertDialog.applyAll')} onChange={(checked) => {
+            setApplyAll(checked)
+            if (checked) setUseTheme(false)
+          }} testId="presentation-insert-footer-all" />
+          <CheckboxField checked={useTheme} label={t('session.presentation.insertDialog.useThemeFooter')} onChange={(checked) => {
+            setUseTheme(checked)
+            if (checked) setApplyAll(false)
+          }} testId="presentation-insert-footer-use-theme" />
         </div>
       </div>
     </DialogFrame>
   )
 }
 
-function CheckboxField({ checked, label, onChange, testId }: { checked: boolean; label: string; onChange: (checked: boolean) => void; testId: string }) {
+function CheckboxField({ checked, disabled = false, label, onChange, testId }: { checked: boolean; disabled?: boolean; label: string; onChange: (checked: boolean) => void; testId: string }) {
   return (
-    <label className="flex items-center gap-2.5 text-sm text-text-secondary">
-      <input data-testid={testId} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-4 accent-brand-purple" />
+    <label className={cn('flex items-center gap-2.5 text-sm text-text-secondary', disabled && 'opacity-50')}>
+      <input data-testid={testId} type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} className="size-4 accent-brand-purple" />
       {label}
     </label>
   )

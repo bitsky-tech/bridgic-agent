@@ -12,6 +12,7 @@ import {
   PRESENTATION_TRANSITION_EFFECTS,
   createBlankPresentationDocument,
   createBlankPresentationSlide,
+  presentationSlideBackground,
   replacePresentationPages,
   type PresentationAsset,
   type PresentationChartElement,
@@ -89,6 +90,7 @@ interface LayoutCursor {
 
 interface ElementCompilerContext {
   assets: PresentationMarkdownAssets
+  background: string
   cursor: LayoutCursor
   diagnostics: string[]
   elementOrdinal: number
@@ -249,6 +251,7 @@ export function compilePresentationElementMarkdown(
   const projectAssets: PresentationAsset[] = []
   const context: ElementCompilerContext = {
     assets: options.assets ?? {},
+    background: presentationSlideBackground(options.document.theme, options.slide),
     cursor: { full: 56, left: 76, right: 76, slot: 'full' },
     diagnostics,
     elementOrdinal: options.slide.elements.length,
@@ -400,7 +403,7 @@ function findTopLevelDelimiters(lines: string[]): number[] {
 
 function compileSlideSource(
   source: ParsedSlideSource,
-  context: Omit<ElementCompilerContext, 'cursor' | 'elementOrdinal' | 'slideId'> & { usedSlideIds: Set<string> },
+  context: Omit<ElementCompilerContext, 'background' | 'cursor' | 'elementOrdinal' | 'slideId'> & { usedSlideIds: Set<string> },
 ): PresentationSlide {
   const frontmatter = source.frontmatter
   const id = optionalString(frontmatter.id) ?? `slide-${source.index + 1}`
@@ -408,16 +411,25 @@ function compileSlideSource(
   if (context.usedSlideIds.has(id)) throw new Error(`Duplicate slide id: ${id}`)
   context.usedSlideIds.add(id)
   const template = createBlankPresentationSlide(optionalString(frontmatter.name) ?? `Slide ${source.index + 1}`)
+  const background = frontmatter.background === undefined
+    ? undefined
+    : requiredString(frontmatter.background, 'background')
   const parsedBody = extractNotes(source.body)
   const cursor: LayoutCursor = { full: 56, left: 76, right: 76, slot: 'full' }
-  const elementContext: ElementCompilerContext = { ...context, cursor, elementOrdinal: 0, slideId: id }
+  const elementContext: ElementCompilerContext = {
+    ...context,
+    background: background ?? context.theme.background,
+    cursor,
+    elementOrdinal: 0,
+    slideId: id,
+  }
   const elements = compileMarkdownBlocks(parsedBody.body, elementContext)
   if (elements.length > MAX_ELEMENTS_PER_SLIDE) {
     throw new Error(`Slide ${id} may contain at most ${MAX_ELEMENTS_PER_SLIDE} elements`)
   }
   return {
     ...template,
-    ...(frontmatter.background === undefined ? {} : { background: requiredString(frontmatter.background, 'background') }),
+    ...(background === undefined ? {} : { background }),
     ...(frontmatter.comments === undefined ? {} : { comments: parseComments(frontmatter.comments, id) }),
     elements,
     ...(frontmatter.footer === undefined ? {} : { footer: parseFooter(frontmatter.footer, 'footer') }),
@@ -546,6 +558,7 @@ function compileMarkdownBlocks(source: string, context: ElementCompilerContext):
       const table = token as Tokens.Table
       const box = allocateBox(context, Math.max(100, (table.rows.length + 1) * 42))
       const id = reserveElementId(context, undefined, 'table')
+      const textColors = presentationThemeTextColors(context.background)
       elements.push({
         ...box,
         id,
@@ -553,9 +566,9 @@ function compileMarkdownBlocks(source: string, context: ElementCompilerContext):
         rotation: 0,
         cells: [table.header.map((cell) => inlineText(cell.tokens)), ...table.rows.map((row) => row.map((cell) => inlineText(cell.tokens)))],
         headerRow: true,
-        headerFill: '#E8EAF0',
-        bodyFill: '#FFFFFF',
-        textColor: '#20202B',
+        headerFill: context.theme.accentColors[0] ?? '#5B67F1',
+        bodyFill: context.background,
+        textColor: textColors.primary,
         borderColor: '#B8BCC8',
         fontSize: 18,
       })
@@ -672,7 +685,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   }
   if (component.name === 'PptText') {
     const defaults = allocateBox(context, numberAttr(attrs.height, 80))
-    const textColors = presentationThemeTextColors(context.theme.background)
+    const textColors = presentationThemeTextColors(context.background)
     const element = withCommonAttrs<PresentationTextElement>({
       ...defaults,
       id: reserveElementId(context, componentRef(attrs), 'text'),
@@ -782,7 +795,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptTable') {
     const cells = parseMarkdownTable(component.body)
     const defaults = allocateBox(context, numberAttr(attrs.height, Math.max(100, cells.length * 42)))
-    const background = context.theme.background
+    const background = context.background
     const accent = context.theme.accentColors[0] ?? '#5B67F1'
     const textColors = presentationThemeTextColors(background)
     return withCommonAttrs({
@@ -840,7 +853,7 @@ function createTextElement(
 ): PresentationTextElement {
   const master = context.theme
   const title = options.fontWeight >= 600 || options.fontSize >= 30
-  const textColors = presentationThemeTextColors(master.background)
+  const textColors = presentationThemeTextColors(context.background)
   return {
     ...allocateBox(context, options.height),
     id: reserveElementId(context, options.explicitId, options.kind),

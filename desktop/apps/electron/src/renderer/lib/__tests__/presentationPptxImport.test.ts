@@ -39,6 +39,31 @@ describe('importPresentationPptx', () => {
     expect(imported.sourceProtected).toBe(true)
   })
 
+  it('falls back to native PPTX content when a matching embedded model is invalid', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationDocument()
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const modelFile = archive.file('bridgic/editor-model.json')!
+    const envelope = JSON.parse(await modelFile.async('string')) as Record<string, unknown>
+    archive.file(modelFile.name, JSON.stringify({ ...envelope, document: { schemaVersion: 1, version: 1 } }))
+    const warnings: unknown[][] = []
+    const originalWarn = console.warn
+    console.warn = (...args: unknown[]) => { warnings.push(args) }
+    try {
+      const imported = await importPresentationPptx(
+        await archive.generateAsync({ type: 'uint8array' }),
+        'Recovered.pptx',
+        { restoreEditorModel: true },
+      )
+      expect(imported.slides.pages.length).toBeGreaterThan(0)
+      expect(JSON.stringify(imported.slides.pages)).toContain('Primary message')
+      expect(imported.sourceProtected).toBe(true)
+      expect(warnings[0]?.[0]).toContain('Ignoring an invalid embedded editor model')
+    } finally {
+      console.warn = originalWarn
+    }
+  })
+
   it('shares a master image across slides and preserves sharing through worker transfer', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = createInitialPresentationDocument()

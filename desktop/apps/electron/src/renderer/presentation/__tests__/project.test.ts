@@ -9,6 +9,7 @@ import {
   duplicatePresentationSlide,
   migratePresentationDocument,
   normalizePresentationProject,
+  presentationAssetsForPages,
   presentationElementSource,
   presentationProjectOf,
 } from '../project'
@@ -99,7 +100,7 @@ describe('PresentationProject model', () => {
     expect(payloadReads).toBe(0)
   })
 
-  it('prunes assets after their last media element is removed', () => {
+  it('retains reusable project assets until a caller explicitly scopes them to pages', () => {
     const document = createBlankPresentationDocument('Asset cleanup')
     const page = document.slides.pages[0]!
     const image = { ...createPresentationImageElement(imageSource), sourceAssetId: 'used-asset' }
@@ -109,9 +110,12 @@ describe('PresentationProject model', () => {
     ]
     document.slides.pages = [{ ...page, elements: [image] }]
 
-    expect(normalizePresentationProject(document).assets.map((asset) => asset.id)).toEqual(['used-asset'])
+    const normalized = normalizePresentationProject(document)
+    expect(normalized.assets.map((asset) => asset.id)).toEqual(['used-asset', 'orphan-asset'])
+    expect(presentationAssetsForPages(normalized.assets, normalized.slides.pages).map((asset) => asset.id)).toEqual(['used-asset'])
     document.slides.pages = [{ ...page, elements: [] }]
-    expect(normalizePresentationProject(document).assets).toEqual([])
+    expect(normalizePresentationProject(document).assets.map((asset) => asset.id)).toEqual(['used-asset', 'orphan-asset'])
+    expect(presentationAssetsForPages(document.assets, document.slides.pages)).toEqual([])
   })
 
   it('repairs comments and slide links when their targets are removed', () => {

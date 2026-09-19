@@ -35,6 +35,36 @@ Supporting evidence
     expect(compiled.elements[2]).toMatchObject({ fill: '#CC5500', borderColor: '#CC5500' })
   })
 
+  it('uses a page background override when deriving editable text and table colors', () => {
+    const document = createBlankPresentationDocument('Mixed-background deck')
+    document.theme = { ...document.theme, background: '#FFFFFF', accentColors: ['#CC5500'] }
+    const slide = compilePresentationSlideMarkdown(`---
+id: dark-page
+background: '#17182B'
+---
+
+# Visible title
+
+| Metric | Value |
+| --- | ---: |
+| ARR | 42 |`, { document }).slide
+
+    expect(slide.elements[0]).toMatchObject({ type: 'text', color: '#FFFFFF' })
+    expect(slide.elements[1]).toMatchObject({
+      type: 'table',
+      headerFill: '#CC5500',
+      bodyFill: '#17182B',
+      textColor: '#FFFFFF',
+    })
+
+    const fragmentSlide = { ...document.slides.pages[0]!, background: '#17182B' }
+    const fragment = compilePresentationElementMarkdown('<PptText>Supporting evidence</PptText>', {
+      document,
+      slide: fragmentSlide,
+    }).element
+    expect(fragment).toMatchObject({ type: 'text', color: '#C7C8D8' })
+  })
+
   it('keeps inherited page styling out of canonical slide Markdown', () => {
     const document = createBlankPresentationDocument('Inherited page')
     document.theme = {

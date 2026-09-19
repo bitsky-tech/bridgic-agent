@@ -648,6 +648,18 @@ export function PresentationRibbon({
               <CompactRibbonMenu icon={Palette} label={t('session.presentation.moreColors')} testId="presentation-more-colors">
                 {(close) => (
                   <div className="grid w-[220px] grid-cols-6 gap-1.5 p-2">
+                    <button
+                      type="button"
+                      data-testid="presentation-use-theme-background"
+                      disabled={!currentSlide || currentSlide.background === undefined}
+                      className="col-span-6 h-8 rounded-md border border-border-subtle px-2 text-left text-xs text-text-secondary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => {
+                        onSlideChange({ background: undefined })
+                        close()
+                      }}
+                    >
+                      {t('session.presentation.useThemeBackground')}
+                    </button>
                     {presentationBackgroundColors.map((background) => (
                       <button
                         key={background}

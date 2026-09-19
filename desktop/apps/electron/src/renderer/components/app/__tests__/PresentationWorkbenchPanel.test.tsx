@@ -92,6 +92,45 @@ describe('PresentationWorkbenchPanel', () => {
       expect(themed.theme.background).toBe('#17182B')
       expect(themed.slides.pages[0]!.background).toBeUndefined()
       expect(themed.slides.pages[1]!.background).toBe('#F7F6F2')
+
+      const secondPreview = host.querySelectorAll<HTMLElement>('[data-testid="presentation-slide-preview"]')[1]!
+      await act(async () => secondPreview.closest<HTMLButtonElement>('button')!.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-more-colors"]')!.click())
+      const inheritBackground = document.querySelector<HTMLButtonElement>('[data-testid="presentation-use-theme-background"]')!
+      expect(inheritBackground.disabled).toBe(false)
+      await act(async () => inheritBackground.click())
+
+      const inherited = store.get(currentPresentationDocumentAtom)
+      expect(inherited.slides.pages[1]!.background).toBeUndefined()
+      expect(Object.hasOwn(inherited.slides.pages[1]!, 'background')).toBe(false)
+      expect(inherited.theme.background).toBe('#17182B')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('restores the current slide footer to theme inheritance', async () => {
+    const { host, root, store } = await mountPanel()
+    try {
+      const current = store.get(currentPresentationDocumentAtom)
+      const pages = current.slides.pages.map((slide, index) => index === 0
+        ? { ...slide, footer: { text: 'Page override', showDate: true, showSlideNumber: false } }
+        : slide)
+      await act(async () => store.set(currentPresentationDocumentAtom, {
+        ...current,
+        theme: { ...current.theme, footer: { text: 'Theme footer', showDate: false, showSlideNumber: true } },
+        slides: replacePresentationPages(current.slides, pages),
+      }))
+
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-insert"]')!.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-footer"]')!.click())
+      await act(async () => document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-use-theme"]')!.click())
+      await act(async () => document.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+
+      const restored = store.get(currentPresentationDocumentAtom)
+      expect(restored.slides.pages[0]!.footer).toBeUndefined()
+      expect(Object.hasOwn(restored.slides.pages[0]!, 'footer')).toBe(false)
+      expect(restored.theme.footer.text).toBe('Theme footer')
     } finally {
       await act(async () => root.unmount())
     }

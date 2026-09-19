@@ -62,6 +62,14 @@ export function presentationElementSource(project: Pick<PresentationProject, 'as
   return asset ? { ...asset.source, assetId: asset.id } : undefined
 }
 
+/** Build a bounded asset collection for an explicitly selected page subset. */
+export function presentationAssetsForPages(assets: readonly PresentationAsset[], pages: readonly PresentationSlide[]): PresentationAsset[] {
+  const referencedAssetIds = new Set(pages.flatMap((page) => page.elements.flatMap((element) => (
+    isPresentationAssetElement(element) && element.sourceAssetId ? [element.sourceAssetId] : []
+  ))))
+  return assets.filter((asset) => referencedAssetIds.has(asset.id))
+}
+
 /** Keep review comments valid when their target elements are removed. */
 export function detachPresentationCommentsFromElements(slide: PresentationSlide, removedElementIds: ReadonlySet<string>): PresentationSlide {
   if (!slide.comments?.some((comment) => comment.elementId && removedElementIds.has(comment.elementId))) return slide
@@ -171,18 +179,13 @@ export function normalizePresentationProject(document: PresentationDocument): Pr
     pagesChanged = true
     return { ...page, elements }
   })
-  const referencedAssetIds = new Set(pages.flatMap((page) => page.elements.flatMap((element) => (
-    isPresentationAssetElement(element) && element.sourceAssetId ? [element.sourceAssetId] : []
-  ))))
-  const retainedAssets = assets.filter((asset) => referencedAssetIds.has(asset.id))
-  const assetsPruned = retainedAssets.length !== assets.length
-  if (!pagesChanged && !assetsChanged && !assetsPruned && !orderChanged) return document
+  if (!pagesChanged && !assetsChanged && !orderChanged) return document
   const selectedPageId = pages.some((page) => page.id === document.slides.selectedPageId)
     ? document.slides.selectedPageId
     : pages[0]!.id
   return {
     ...document,
-    assets: retainedAssets,
+    assets,
     slides: {
       pages,
       slideOrder: orderIsComplete ? pages.map((page) => page.id) : document.slides.slideOrder,
