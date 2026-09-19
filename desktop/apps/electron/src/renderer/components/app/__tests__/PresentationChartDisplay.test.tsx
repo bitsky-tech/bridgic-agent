@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { DOMParser } from '@xmldom/xmldom'
 import JSZip from 'jszip'
-import type { PresentationChartElement, PresentationDocument } from '@/atoms/presentation'
+import { presentationSlideBackground, replacePresentationPages, type PresentationChartElement, type PresentationDocument } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 const { renderToStaticMarkup } = await import('react-dom/server')
@@ -18,20 +18,23 @@ const { createPresentationFabricObject } = await import('../PresentationWorkbenc
 const parse = (xml: string) => new DOMParser().parseFromString(xml, 'text/xml')
 const chartNs = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
 
-function documentFor(element: PresentationDocument['slides'][number]['elements'][number]) {
+function documentFor(element: PresentationDocument['slides']['pages'][number]['elements'][number]) {
   const model = createBlankPresentationDocument('Chart fidelity')
-  model.slides[0]!.elements = [element]
+  model.slides.pages[0]!.elements = [element]
   return model
 }
 
 function markup(model: PresentationDocument) {
   const host = document.createElement('div')
-  host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} selected={false} width={1280} />)
+  host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} theme={model.theme} selected={false} width={1280} />)
   return host
 }
 
 function agentEdit(model: PresentationDocument): PresentationDocument {
-  return { ...model, slides: [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides[0]!), { document: model }).slide] }
+  return {
+    ...model,
+    slides: replacePresentationPages(model.slides, [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]),
+  }
 }
 
 afterAll(() => GlobalRegistrator.unregister())
@@ -60,7 +63,7 @@ describe('chart and table display round trips', () => {
         expect(labels.every(label => Number.isFinite(Number(label)))).toBe(true)
         expect(Number(labels[0])).toBe(Math.min(0, ...values))
         expect(Number(labels.at(-1))).toBe(Math.max(0, ...values) || (values.every(value => value === 0) ? 1 : 0))
-        const group = await createPresentationFabricObject(fabric, model.slides[0]!.elements[0]!, () => undefined)
+        const group = await createPresentationFabricObject(fabric, model.slides.pages[0]!.elements[0]!, () => undefined)
         if (!(group instanceof fabric.Group)) throw new Error('Missing editable chart')
         try {
           const canvasTicks = group.getObjects().filter(object => object instanceof fabric.FabricText && object.fill === '#156589') as InstanceType<typeof fabric.FabricText>[]
@@ -121,7 +124,7 @@ describe('chart and table display round trips', () => {
           expect(cells.has('C6')).toBe(false)
         }
         model = await importPresentationPptx(bytes)
-        expect(model.slides[0]!.elements[0]).toMatchObject({ categories: element.categories, series: element.series, displayBlanksAs })
+        expect(model.slides.pages[0]!.elements[0]).toMatchObject({ categories: element.categories, series: element.series, displayBlanksAs })
       }
     }
   })
@@ -130,10 +133,10 @@ describe('chart and table display round trips', () => {
     const chart = { ...createPresentationChartElement('line'), categories: ['A', 'B'], series: [{ name: 'Sales', values: [null, 0] }] }
     const model = documentFor(chart)
     ;(chart.series as unknown[]).unshift({ name: 'Invalid series' })
-    ;(model.slides[0]!.elements as unknown[]).push({ ...chart, id: 'invalid-chart', series: undefined })
+    ;(model.slides.pages[0]!.elements as unknown[]).push({ ...chart, id: 'invalid-chart', series: undefined })
     const reopened = await importPresentationPptx(await createPresentationPptx(model))
-    expect(reopened.slides[0]!.elements).toHaveLength(1)
-    expect(reopened.slides[0]!.elements[0]).toMatchObject({ series: [{ name: 'Sales', values: [null, 0] }] })
+    expect(reopened.slides.pages[0]!.elements).toHaveLength(1)
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ series: [{ name: 'Sales', values: [null, 0] }] })
   })
 
   it.each(['gap', 'span', 'zero'] as const)('renders line-chart blanks as %s in both renderers', async displayBlanksAs => {
@@ -164,7 +167,7 @@ describe('chart and table display round trips', () => {
       let model = documentFor({ ...createPresentationChartElement(chartType), title: undefined, showLegend: false, showValue,
         categories: ['A', 'B', 'C', 'D'], series: [{ name: 'Sales', values: [null, 19, 0, 37] }], dataLabelColor: '#A020F0' })
       for (let round = 0; round < 2; round++) {
-        const element = model.slides[0]!.elements[0]!
+        const element = model.slides.pages[0]!.elements[0]!
         const previewValues = [...markup(model).querySelectorAll('text[fill="#A020F0"]')].map(node => node.textContent)
         const group = await createPresentationFabricObject(fabric, element, () => undefined)
         if (!(group instanceof fabric.Group)) throw new Error('Missing editable chart')
@@ -176,7 +179,7 @@ describe('chart and table display round trips', () => {
           expect(previewValues).not.toContain('null')
         } finally { group.dispose() }
         model = await importPresentationPptx(await createPresentationPptx(agentEdit(model)))
-        expect(model.slides[0]!.elements[0]).toMatchObject({ showValue })
+        expect(model.slides.pages[0]!.elements[0]).toMatchObject({ showValue })
       }
     }
   })
@@ -188,7 +191,7 @@ describe('chart and table display round trips', () => {
       const path = markup(model).querySelector('path')!.getAttribute('d')!
       const radii = [...path.matchAll(/A ([\d.]+)/g)].map(match => Number(match[1]))
       expect(radii[2]! / radii[0]!).toBeCloseTo(holeSize / 100)
-      const group = await createPresentationFabricObject(fabric, model.slides[0]!.elements[0]!, () => undefined)
+      const group = await createPresentationFabricObject(fabric, model.slides.pages[0]!.elements[0]!, () => undefined)
       if (!(group instanceof fabric.Group)) throw new Error('Missing ring group')
       const ring = group.getObjects().find(object => object instanceof fabric.Path)!
       expect(ring.path).toEqual(new fabric.Path(path).path)
@@ -200,7 +203,7 @@ describe('chart and table display round trips', () => {
       const chart = parse(await zip.file(chartPath)!.async('text'))
       expect(chart.getElementsByTagNameNS(chartNs, 'holeSize')[0]!.getAttribute('val')).toBe(String(holeSize))
       model = await importPresentationPptx(bytes)
-      expect(model.slides[0]!.elements[0]).toMatchObject({ holeSize })
+      expect(model.slides.pages[0]!.elements[0]).toMatchObject({ holeSize })
     }
   })
 
@@ -215,7 +218,7 @@ describe('chart and table display round trips', () => {
         const ids = Array.from(slide.getElementsByTagName('p:cNvPr')).map(node => node.getAttribute('id'))
         expect(new Set(ids).size).toBe(ids.length)
         model = await importPresentationPptx(bytes)
-        const reopened = model.slides[0]!.elements[0]!
+        const reopened = model.slides.pages[0]!.elements[0]!
         expect(reopened).toMatchObject({ type, rotation: 0, x: 173, y: 129, width: 640, height: 320 })
         expect(Boolean(reopened.flipHorizontal)).toBe(Boolean(element.flipHorizontal))
         expect(Boolean(reopened.flipVertical)).toBe(Boolean(element.flipVertical))
@@ -231,7 +234,7 @@ describe('chart and table display round trips', () => {
     for (const theme of ['light', 'midnight', 'paper', 'lavender'] as const) {
       let model = applyPresentationDesign(documentFor({ ...createPresentationChartElement(chartType),
         categories: ['A', 'B', 'C'], series: [{ name: 'Sales', values: [15, 30, 55] }] }), { theme })
-      const palette = model.master.accentColors.slice(0, 3)
+      const palette = model.theme.accentColors.slice(0, 3)
       for (let round = 0; round < 2; round++) {
         const fills = [...markup(model).querySelectorAll('path')].map(node => node.getAttribute('fill'))
         expect(fills).toEqual(palette)
@@ -245,11 +248,11 @@ describe('chart and table display round trips', () => {
     const element = { ...createPresentationChartElement('line'), categories: ['A', 'B', 'C'],
       series: [{ name: 'North', values: [1, 2, 3] }, { name: 'South', values: [3, 2, 1] }] }
     const model = applyPresentationDesign(documentFor(element), { theme: 'light' })
-    expect((model.slides[0]!.elements[0] as PresentationChartElement).colors).toEqual(model.master.accentColors.slice(0, 2))
-    expect(applyPresentationDesign(model, { bodyFontFamily: 'Arial' }).slides[0]!.elements[0]).toEqual(model.slides[0]!.elements[0])
+    expect((model.slides.pages[0]!.elements[0] as PresentationChartElement).colors).toEqual(model.theme.accentColors.slice(0, 2))
+    expect(applyPresentationDesign(model, { bodyFontFamily: 'Arial' }).slides.pages[0]!.elements[0]).toEqual(model.slides.pages[0]!.elements[0])
     const recolored = applyPresentationDesign(documentFor({ ...element, chartType: 'pie', series: element.series.slice(0, 1) }),
       { accentColors: ['#AA0000', '#00AA00', '#0000AA'] })
-    expect((recolored.slides[0]!.elements[0] as PresentationChartElement).colors).toHaveLength(3)
+    expect((recolored.slides.pages[0]!.elements[0] as PresentationChartElement).colors).toHaveLength(3)
   })
 
   it.each(['line', 'bar', 'column', 'pie', 'doughnut'] as const)('keeps %s labels readable on the actual chart and plot surfaces through export', async chartType => {
@@ -267,8 +270,10 @@ describe('chart and table display round trips', () => {
         let model = applyPresentationDesign(documentFor({ ...createPresentationChartElement(chartType), ...fills,
           title: 'Sales', showValue: true, categories: ['A', 'B'], series: [{ name: 'North', values: [19, 37] }] }), { theme })
         for (let round = 0; round < 2; round++) {
-          const element = model.slides[0]!.elements[0] as PresentationChartElement
-          const background = element.chartAreaFill === 'transparent' ? model.slides[0]!.background : element.chartAreaFill ?? '#FFFFFF'
+          const element = model.slides.pages[0]!.elements[0] as PresentationChartElement
+          const background = element.chartAreaFill === 'transparent'
+            ? presentationSlideBackground(model.theme, model.slides.pages[0]!)
+            : element.chartAreaFill ?? '#FFFFFF'
           const plot = !element.plotAreaFill || element.plotAreaFill === 'transparent' ? background : element.plotAreaFill
           const host = markup(model)
           const label = [...host.querySelectorAll('text')].find(node => node.textContent === '19')!
@@ -294,7 +299,7 @@ describe('chart and table display round trips', () => {
       let model = documentFor({ ...createPresentationTableElement(cells), x: 180, y: 140, width: 720, height: 240,
         fontSize: 24, flipHorizontal, flipVertical })
       for (let round = 0; round < 2; round++) {
-        const element = model.slides[0]!.elements[0]!
+        const element = model.slides.pages[0]!.elements[0]!
         const td = markup(model).querySelectorAll('td')[3]!
         expect(td.textContent).toBe(cells[1]![1]!)
         expect(td.querySelector<HTMLElement>('[style*="white-space"]')!.style.whiteSpace).toBe('pre-wrap')
@@ -335,7 +340,7 @@ describe('chart and table display round trips', () => {
       let model = documentFor({ ...createPresentationChartElement(chartType), showValue: true, dataLabelColor: '#A020F0',
         width: 800, height: 400, categories: values.map((_, i) => String(i)), series: [{ name: 'Sales', values }] })
       for (let round = 0; round < 2; round++) {
-        const element = model.slides[0]!.elements[0] as PresentationChartElement
+        const element = model.slides.pages[0]!.elements[0] as PresentationChartElement
         const group = await createPresentationFabricObject(fabric, element, () => undefined)
         if (!(group instanceof fabric.Group)) throw new Error('Missing pie group')
         const labels = group.getObjects().filter((object): object is InstanceType<typeof fabric.FabricText> => object instanceof fabric.FabricText && object.fill === '#A020F0')

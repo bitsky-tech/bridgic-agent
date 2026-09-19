@@ -4,6 +4,7 @@ import { createOfficePersistenceScheduler } from './office/officePersistence'
 import { isPresentationDirty } from './presentationWorkspaceRuntime'
 import { i18n } from './i18n'
 import { createOfficeAutoSave } from './office/officeAutoSave'
+import { migratePresentationDocument } from '@/presentation/project'
 
 /** Source files and recovery checkpoints have deliberately separate writers. */
 export function createPresentationFileController(options: {
@@ -44,8 +45,8 @@ export function createPresentationFileController(options: {
     if (!background) await options.flushEditor()
     const current = read()
     write({ ...current, documents: current.documents.map((item) => {
-      if (item.id === documentId) return { ...item, title: result.fileName.replace(/\.pptx$/i, ''), source: result.source, sourceProtected: false, savedVersion: document.version }
-      return item.source?.path === result.source.path ? { ...item, source: undefined, savedVersion: undefined } : item
+      if (item.id === documentId) return { ...item, title: result.fileName.replace(/\.pptx$/i, ''), source: result.source, sourceProtected: false, savedRevision: document.revision }
+      return item.source?.path === result.source.path ? { ...item, source: undefined, savedRevision: undefined } : item
     }) })
     await recovery.persist(read())
     return !isPresentationDirty(read().documents.find((item) => item.id === documentId)!)
@@ -64,20 +65,20 @@ export function createPresentationFileController(options: {
     async restore() {
       const serialized = await files.getRecovery('presentation', options.sessionId)
       if (serialized !== null) {
-        const workspace = JSON.parse(serialized) as PresentationWorkspace
-        if (!Array.isArray(workspace.documents) || typeof workspace.activeDocumentId !== 'string'
-          || workspace.documents.some((document) => !document.id || !Array.isArray(document.slides) || !document.master || !Number.isFinite(document.version))) throw new Error('The PowerPoint recovery checkpoint is invalid')
-        if (workspace.documents.length) write({ ...workspace, documents: workspace.documents.map((document) => ({
+        const workspace = JSON.parse(serialized) as { activeDocumentId?: unknown; documents?: unknown }
+        if (!Array.isArray(workspace.documents) || typeof workspace.activeDocumentId !== 'string') throw new Error('The PowerPoint recovery checkpoint is invalid')
+        const documents = workspace.documents.map((document) => migratePresentationDocument(document))
+        if (documents.length) write({ activeDocumentId: workspace.activeDocumentId, documents: documents.map((document) => ({
           ...document, sourceProtected: document.sourceProtected ?? Boolean(document.source && document.source.mtimeMs !== null),
         })) })
       }
       ready = true
-      if (options.automatic) autoSave.schedule(read().documents.filter(isPresentationDirty).map((document) => `${document.id}:${document.version}`).join('|'))
+      if (options.automatic) autoSave.schedule(read().documents.filter(isPresentationDirty).map((document) => `${document.id}:${document.revision}`).join('|'))
     },
     schedule() {
       if (!ready) return
       recovery.schedule(read())
-      if (options.automatic) autoSave.schedule(read().documents.filter(isPresentationDirty).map((document) => `${document.id}:${document.version}`).join('|'))
+      if (options.automatic) autoSave.schedule(read().documents.filter(isPresentationDirty).map((document) => `${document.id}:${document.revision}`).join('|'))
     },
     async flush() {
       if (!ready) throw new Error('PowerPoint recovery is not ready')
@@ -104,7 +105,7 @@ export function createPresentationFileController(options: {
       if (decision === 'cancel') return false
       if (decision === 'save') return save(documentId, Boolean(document.sourceProtected))
       await options.flushEditor()
-      return read().documents.find((item) => item.id === documentId)?.version === document.version
+      return read().documents.find((item) => item.id === documentId)?.revision === document.revision
     },
   }
 }

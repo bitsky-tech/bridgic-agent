@@ -11,8 +11,10 @@ const pixel: PresentationFileSource = {
   mimeType: 'image/png',
 }
 
-function picture(id: string, source = pixel): PresentationImageElement {
-  return { id, type: 'image', source, altText: id, fit: 'contain', x: 10, y: 20, width: 200, height: 100, rotation: 0 }
+function picture(document: ReturnType<typeof createBlankPresentationDocument>, id: string, source = pixel): PresentationImageElement {
+  const sourceAssetId = `${id}-asset`
+  document.assets.push({ id: sourceAssetId, kind: 'image', name: source.fileName, source })
+  return { id, type: 'image', sourceAssetId, altText: id, fit: 'contain', x: 10, y: 20, width: 200, height: 100, rotation: 0 }
 }
 
 async function imageRelationships(archive: JSZip, slideNumber: number) {
@@ -27,15 +29,15 @@ describe('PPTX shared image export', () => {
   it('deduplicates payloads across slides while keeping distinct images, frames, crops and links', async () => {
     const differentPixel = { ...pixel, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' }
     const document = createBlankPresentationDocument('Shared images')
-    const first = document.slides[0]!
+    const first = document.slides.pages[0]!
     const second = createBlankPresentationSlide('Second')
-    document.slides.push(second)
+    document.slides.pages.push(second)
     first.elements = [
-      picture('original'),
-      { ...picture('cropped'), crop: { left: 0.1, top: 0.2, right: 0.15, bottom: 0.05 }, x: 240, rotation: 20, flipHorizontal: true, hyperlink: { type: 'url', url: 'https://example.com' } },
-      picture('different-content', differentPixel),
+      picture(document, 'original'),
+      { ...picture(document, 'cropped'), crop: { left: 0.1, top: 0.2, right: 0.15, bottom: 0.05 }, x: 240, rotation: 20, flipHorizontal: true, hyperlink: { type: 'url', url: 'https://example.com' } },
+      picture(document, 'different-content', differentPixel),
     ]
-    second.elements = [picture('same-bytes-new-object', { ...pixel, fileName: 'renamed.png' })]
+    second.elements = [picture(document, 'same-bytes-new-object', { ...pixel, fileName: 'renamed.png' })]
     const before = structuredClone(document)
     const archive = await JSZip.loadAsync(await createPresentationPptx(document))
     expect(document).toEqual(before)
@@ -60,26 +62,26 @@ describe('PPTX shared image export', () => {
     const relationships = await archive.file('ppt/slides/_rels/slide1.xml.rels')!.async('text')
     expect(relationships).toContain('https://example.com')
     const reopened = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
-    const cropped = reopened.slides[0]!.elements[1]!
+    const cropped = reopened.slides.pages[0]!.elements[1]!
     expect(cropped.type).toBe('image')
     if (cropped.type !== 'image') throw new Error('Expected image')
     expect(cropped.crop?.left).toBeCloseTo(0.1, 3)
     expect(cropped.crop?.top).toBeCloseTo(0.2, 3)
     expect(cropped.rotation).toBeCloseTo(20, 3)
     expect(cropped.flipHorizontal).toBe(true)
-    expect(reopened.slides.map((slide) => slide.elements.length)).toEqual([3, 1])
+    expect(reopened.slides.pages.map((slide) => slide.elements.length)).toEqual([3, 1])
   })
 
   it('keeps repeated save and reopen cycles compact after editing an imported deck', async () => {
     const document = createBlankPresentationDocument('Shared backgrounds')
-    document.slides = Array.from({ length: 30 }, (_, index) => ({ ...createBlankPresentationSlide(`Page ${index + 1}`), elements: [picture(`image-${index}`)] }))
-    document.selectedSlideId = document.slides[0]!.id
+    document.slides.pages = Array.from({ length: 30 }, (_, index) => ({ ...createBlankPresentationSlide(`Page ${index + 1}`), elements: [picture(document, `image-${index}`)] }))
+    document.slides.selectedPageId = document.slides.pages[0]!.id
     let bytes = await createPresentationPptx(document)
     const initialSize = bytes.length
     for (let cycle = 0; cycle < 2; cycle++) {
       const imported = await importPresentationPptx(bytes, 'shared.pptx')
-      imported.slides[29]!.notes = `Edit ${cycle}`
-      imported.slides[29]!.elements[0]!.x = 120 + cycle
+      imported.slides.pages[29]!.notes = `Edit ${cycle}`
+      imported.slides.pages[29]!.elements[0]!.x = 120 + cycle
       bytes = await createPresentationPptx(imported)
       const archive = await JSZip.loadAsync(bytes)
       const media = Object.keys(archive.files).filter((name) => name.startsWith('ppt/media/') && !name.endsWith('/'))
@@ -87,9 +89,9 @@ describe('PPTX shared image export', () => {
       for (let number = 1; number <= 30; number++) expect((await imageRelationships(archive, number))[0]!.path).toBe(media[0]!)
       expect(bytes.length).toBeLessThan(initialSize + 4096)
       const reopened = await importPresentationPptx(bytes)
-      expect(reopened.slides).toHaveLength(30)
-      expect(reopened.slides[29]!.notes).toContain(`Edit ${cycle}`)
-      expect(reopened.slides[29]!.elements[0]!.x).toBeCloseTo(120 + cycle, 1)
+      expect(reopened.slides.pages).toHaveLength(30)
+      expect(reopened.slides.pages[29]!.notes).toContain(`Edit ${cycle}`)
+      expect(reopened.slides.pages[29]!.elements[0]!.x).toBeCloseTo(120 + cycle, 1)
     }
   })
 
@@ -98,8 +100,8 @@ describe('PPTX shared image export', () => {
     const red = svg('red')
     const blue = svg('blue')
     const document = createBlankPresentationDocument('SVG sharing')
-    document.slides[0]!.elements = [picture('red', red), picture('blue', blue)]
-    document.slides.push({ ...createBlankPresentationSlide('Scaled SVG'), elements: [{ ...picture('scaled-red', { ...red }), width: 400, height: 300 }] })
+    document.slides.pages[0]!.elements = [picture(document, 'red', red), picture(document, 'blue', blue)]
+    document.slides.pages.push({ ...createBlankPresentationSlide('Scaled SVG'), elements: [{ ...picture(document, 'scaled-red', { ...red }), width: 400, height: 300 }] })
     const archive = await JSZip.loadAsync(await createPresentationPptx(document))
     const svgFiles = Object.keys(archive.files).filter((name) => name.startsWith('ppt/media/') && name.endsWith('.svg'))
     expect(svgFiles).toHaveLength(2)

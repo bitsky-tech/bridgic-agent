@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { createBlankPresentationDocument } from '@/atoms/presentation'
+import { createBlankPresentationDocument, presentationSlideBackground } from '@/atoms/presentation'
 import {
   compilePresentationElementMarkdown,
   compilePresentationMarkdown,
@@ -11,8 +11,8 @@ import {
 describe('presentation Markdown compiler', () => {
   it('inherits document-wide typography and palette for later semantic pages', () => {
     const document = createBlankPresentationDocument('Designed deck')
-    document.master = {
-      ...document.master,
+    document.theme = {
+      ...document.theme,
       accentColors: ['#CC5500', '#118844'],
       background: '#17182B',
       bodyFontFamily: 'Arial',
@@ -29,9 +29,77 @@ Supporting evidence
 <PptShape id="accent" kind="rect" />`, { document }).slide
 
     expect(compiled.elements[0]).toMatchObject({ color: '#FFFFFF', fontFamily: 'Georgia' })
-    expect(compiled.background).toBe('#17182B')
+    expect(compiled.background).toBeUndefined()
+    expect(presentationSlideBackground(document.theme, compiled)).toBe('#17182B')
     expect(compiled.elements[1]).toMatchObject({ color: '#C7C8D8', fontFamily: 'Arial' })
     expect(compiled.elements[2]).toMatchObject({ fill: '#CC5500', borderColor: '#CC5500' })
+  })
+
+  it('uses a page background override when deriving editable text and table colors', () => {
+    const document = createBlankPresentationDocument('Mixed-background deck')
+    document.theme = { ...document.theme, background: '#FFFFFF', accentColors: ['#CC5500'] }
+    const slide = compilePresentationSlideMarkdown(`---
+id: dark-page
+background: '#17182B'
+---
+
+# Visible title
+
+| Metric | Value |
+| --- | ---: |
+| ARR | 42 |`, { document }).slide
+
+    expect(slide.elements[0]).toMatchObject({ type: 'text', color: '#FFFFFF' })
+    expect(slide.elements[1]).toMatchObject({
+      type: 'table',
+      headerFill: '#CC5500',
+      bodyFill: '#17182B',
+      textColor: '#FFFFFF',
+    })
+
+    const fragmentSlide = { ...document.slides.pages[0]!, background: '#17182B' }
+    const fragment = compilePresentationElementMarkdown('<PptText>Supporting evidence</PptText>', {
+      document,
+      slide: fragmentSlide,
+    }).element
+    expect(fragment).toMatchObject({ type: 'text', color: '#C7C8D8' })
+  })
+
+  it('keeps inherited page styling out of canonical slide Markdown', () => {
+    const document = createBlankPresentationDocument('Inherited page')
+    document.theme = {
+      ...document.theme,
+      background: '#17182B',
+      footer: { text: 'Global footer', showDate: false, showSlideNumber: true },
+    }
+    const slide = document.slides.pages[0]!
+    const markdown = decompilePresentationSlideMarkdown(slide, document)
+    const roundTripped = compilePresentationSlideMarkdown(markdown, { document }).slide
+
+    expect(markdown).not.toContain('background:')
+    expect(markdown).not.toContain('footer:')
+    expect(roundTripped.background).toBeUndefined()
+    expect(roundTripped.footer).toBeUndefined()
+    expect(presentationSlideBackground(document.theme, roundTripped)).toBe('#17182B')
+  })
+
+  it('uses a deck theme immediately while compiling its first inherited page', () => {
+    const compiled = compilePresentationMarkdown(`---
+title: Dark deck
+theme:
+  background: '#17182B'
+  titleFontFamily: Georgia
+  bodyFontFamily: Arial
+---
+
+# Visible title
+
+Visible body`).document
+    const slide = compiled.slides.pages[0]!
+
+    expect(slide.background).toBeUndefined()
+    expect(slide.elements[0]).toMatchObject({ color: '#FFFFFF', fontFamily: 'Georgia' })
+    expect(slide.elements[1]).toMatchObject({ color: '#C7C8D8', fontFamily: 'Arial' })
   })
 
   it('compiles Slidev framing, YAML, Markdown blocks, slots, tables, and notes', () => {
@@ -70,13 +138,13 @@ Pause on retention.
     const compiled = compilePresentationMarkdown(markdown).document
 
     expect(compiled.title).toBe('Product review')
-    expect(compiled.slides.map((slide) => slide.id)).toEqual(['cover', 'metrics'])
-    expect(compiled.slides[0]!.elements[0]).toMatchObject({ id: 'title', type: 'text', text: 'Product review' })
-    expect(compiled.slides[1]!.layout).toBe('twoContent')
-    expect(compiled.slides[1]!.elements.map((element) => element.type)).toEqual(['text', 'table'])
-    expect(compiled.slides[1]!.elements[0]!.x).toBeLessThan(compiled.pageSize.width / 2)
-    expect(compiled.slides[1]!.elements[1]!.x).toBeGreaterThan(compiled.pageSize.width / 2)
-    expect(compiled.slides[1]!.notes).toBe('Pause on retention.')
+    expect(compiled.slides.pages.map((slide) => slide.id)).toEqual(['cover', 'metrics'])
+    expect(compiled.slides.pages[0]!.elements[0]).toMatchObject({ id: 'title', type: 'text', text: 'Product review' })
+    expect(compiled.slides.pages[1]!.layout).toBe('twoContent')
+    expect(compiled.slides.pages[1]!.elements.map((element) => element.type)).toEqual(['text', 'table'])
+    expect(compiled.slides.pages[1]!.elements[0]!.x).toBeLessThan(compiled.pageSize.width / 2)
+    expect(compiled.slides.pages[1]!.elements[1]!.x).toBeGreaterThan(compiled.pageSize.width / 2)
+    expect(compiled.slides.pages[1]!.notes).toBe('Pause on retention.')
   })
 
   it('does not split slides on delimiters inside YAML literals, fences, comments, or native components', () => {
@@ -101,10 +169,10 @@ id: one
 </PptText>`
     const compiled = compilePresentationMarkdown(markdown).document
 
-    expect(compiled.slides).toHaveLength(1)
-    expect(compiled.slides[0]!.elements).toHaveLength(2)
-    expect(compiled.slides[0]!.elements[0]).toHaveProperty('text', '---\n<PptImage id="example" src="not-an-asset.png" />')
-    expect(compiled.slides[0]!.elements[1]).toMatchObject({ id: 'rule', text: '---' })
+    expect(compiled.slides.pages).toHaveLength(1)
+    expect(compiled.slides.pages[0]!.elements).toHaveLength(2)
+    expect(compiled.slides.pages[0]!.elements[0]).toHaveProperty('text', '---\n<PptImage id="example" src="not-an-asset.png" />')
+    expect(compiled.slides.pages[0]!.elements[1]).toMatchObject({ id: 'rule', text: '---' })
     expect(inspectPresentationMarkdownAssets(markdown)).toEqual([])
   })
 
@@ -119,8 +187,8 @@ id: fenced
 ---
 ~~~~`
     const fencedDocument = compilePresentationMarkdown(fenced).document
-    expect(fencedDocument.slides).toHaveLength(1)
-    expect(fencedDocument.slides[0]!.elements[0]).toHaveProperty('text', '---\n~~~\n---')
+    expect(fencedDocument.slides.pages).toHaveLength(1)
+    expect(fencedDocument.slides.pages[0]!.elements[0]).toHaveProperty('text', '---\n~~~\n---')
 
     const multilineComponent = `---
 id: first
@@ -137,8 +205,8 @@ id: second
 
 # Second`
     const componentDocument = compilePresentationMarkdown(multilineComponent).document
-    expect(componentDocument.slides.map((slide) => slide.id)).toEqual(['first', 'second'])
-    expect(componentDocument.slides[0]!.elements[0]).toMatchObject({ id: 'shape', type: 'rect' })
+    expect(componentDocument.slides.pages.map((slide) => slide.id)).toEqual(['first', 'second'])
+    expect(componentDocument.slides.pages[0]!.elements[0]).toMatchObject({ id: 'shape', type: 'rect' })
   })
 
   it('compiles adjacent native components emitted in one HTML token', () => {
@@ -150,16 +218,21 @@ id: adjacent
 <PptText id="label" x="40" y="50" width="260" height="80">Summary</PptText>`
 
     const document = compilePresentationMarkdown(markdown).document
-    expect(document.slides[0]!.elements).toHaveLength(2)
-    expect(document.slides[0]!.elements.map((element) => element.id)).toEqual(['panel', 'label'])
+    expect(document.slides.pages[0]!.elements).toHaveLength(2)
+    expect(document.slides.pages[0]!.elements.map((element) => element.id)).toEqual(['panel', 'label'])
   })
 
   it('round-trips every native element family through canonical Markdown without base64', () => {
     const existing = createBlankPresentationDocument('Imported deck')
-    const slide = existing.slides[0]!
+    existing.assets = [
+      { id: 'image-asset', kind: 'image', name: 'image.png', source: { dataUrl: 'data:image/png;base64,aW1hZ2U=', fileName: 'image.png', mimeType: 'image/png' } },
+      { id: 'audio-asset', kind: 'audio', name: 'audio.mp3', source: { dataUrl: 'data:audio/mpeg;base64,YXVkaW8=', fileName: 'audio.mp3', mimeType: 'audio/mpeg' } },
+      { id: 'video-asset', kind: 'video', name: 'video.mp4', source: { dataUrl: 'data:video/mp4;base64,dmlkZW8=', fileName: 'video.mp4', mimeType: 'video/mp4' } },
+    ]
+    const slide = existing.slides.pages[0]!
     slide.id = 'imported'
     slide.name = 'Imported'
-    existing.selectedSlideId = slide.id
+    existing.slides.selectedPageId = slide.id
     slide.notes = 'Speaker note'
     slide.elements = [
       {
@@ -196,7 +269,7 @@ id: adjacent
       {
         id: 'image',
         type: 'image',
-        source: { dataUrl: 'data:image/png;base64,aW1hZ2U=', fileName: 'image.png', mimeType: 'image/png' },
+        sourceAssetId: 'image-asset',
         altText: 'Hero',
         fit: 'cover',
         clipShape: 'ellipse',
@@ -210,7 +283,7 @@ id: adjacent
       {
         id: 'audio',
         type: 'audio',
-        source: { dataUrl: 'data:audio/mpeg;base64,YXVkaW8=', fileName: 'audio.mp3', mimeType: 'audio/mpeg' },
+        sourceAssetId: 'audio-asset',
         autoplay: false,
         loop: true,
         muted: false,
@@ -223,7 +296,7 @@ id: adjacent
       {
         id: 'video',
         type: 'video',
-        source: { dataUrl: 'data:video/mp4;base64,dmlkZW8=', fileName: 'video.mp4', mimeType: 'video/mp4' },
+        sourceAssetId: 'video-asset',
         autoplay: false,
         loop: false,
         muted: true,
@@ -265,7 +338,7 @@ id: adjacent
       },
     ]
 
-    const markdown = decompilePresentationSlideMarkdown(slide)
+    const markdown = decompilePresentationSlideMarkdown(slide, existing)
     expect(markdown).toContain('<PptText')
     expect(markdown).toContain('<PptChart')
     expect(markdown).toContain('ref="text"')
@@ -275,10 +348,10 @@ id: adjacent
     expect(markdown).not.toContain('base64')
 
     const roundTripped = compilePresentationMarkdown(markdown, { existingDocument: existing }).document
-    expect(roundTripped.slides[0]!.elements.map((element) => element.type)).toEqual(
-      existing.slides[0]!.elements.map((element) => element.type),
+    expect(roundTripped.slides.pages[0]!.elements.map((element) => element.type)).toEqual(
+      existing.slides.pages[0]!.elements.map((element) => element.type),
     )
-    expect(roundTripped.slides[0]!.elements[0]).toMatchObject({
+    expect(roundTripped.slides.pages[0]!.elements[0]).toMatchObject({
       id: 'text',
       text: '  Revenue & </PptText>  ',
       animation: 'fade',
@@ -286,12 +359,12 @@ id: adjacent
       flipHorizontal: true,
       textDirection: 'eastAsianVertical',
     })
-    expect(roundTripped.slides[0]!.elements[2]).toMatchObject({ id: 'image', flipVertical: true, clipShape: 'ellipse' })
-    expect(roundTripped.slides[0]!.elements[5]).toMatchObject({
+    expect(roundTripped.slides.pages[0]!.elements[2]).toMatchObject({ id: 'image', flipVertical: true, clipShape: 'ellipse' })
+    expect(roundTripped.slides.pages[0]!.elements[5]).toMatchObject({
       id: 'table',
       cells: [['Name', 'Value'], ['A|B', 'Line 1\nLine 2']],
     })
-    expect(roundTripped.slides[0]!.elements[6]).toMatchObject({
+    expect(roundTripped.slides.pages[0]!.elements[6]).toMatchObject({
       id: 'chart',
       categories: ['Q1', 'Q2'],
       series: [{ name: 'ARR', values: [12, 18] }],
@@ -300,7 +373,7 @@ id: adjacent
 
   it('compiles a single editable fragment while preserving or assigning its ref', () => {
     const document = createBlankPresentationDocument('Element edits')
-    const slide = document.slides[0]!
+    const slide = document.slides.pages[0]!
     slide.elements = [{
       id: 'title', type: 'text', text: 'Before', x: 20, y: 20, width: 300, height: 60,
       rotation: 0, fontSize: 30, fontFamily: 'Aptos', fontWeight: 700, color: '#111111', align: 'left',
@@ -353,7 +426,7 @@ id: media
         },
       },
     }).document
-    expect(document.slides[0]!.elements.map((element) => element.type)).toEqual(['image', 'audio'])
+    expect(document.slides.pages[0]!.elements.map((element) => element.type)).toEqual(['image', 'audio'])
     expect(inspectPresentationMarkdownAssets('<PptImage src="assets/detail.png" />')).toEqual([
       'assets/detail.png',
     ])
@@ -390,7 +463,7 @@ id: styled
 </style>
 
 # Native title`)
-    expect(compiled.document.slides[0]!.elements).toHaveLength(1)
+    expect(compiled.document.slides.pages[0]!.elements).toHaveLength(1)
     expect(compiled.diagnostics[0]).toContain('accepted but ignored')
   })
 })

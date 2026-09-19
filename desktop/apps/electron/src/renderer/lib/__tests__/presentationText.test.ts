@@ -11,6 +11,9 @@ import {
   presentationTextStyleAt,
   scalePresentationParagraphs,
   presentationNumberMarker,
+  presentationTextFrame,
+  usesPresentationUprightVerticalGlyph,
+  usesPresentationVerticalGlyphLayout,
 } from '../presentationText'
 import { formatPresentationText, stripPresentationTextFormatting, layoutPresentationVerticalText, type PresentationTextElement } from '../../atoms/presentation'
 
@@ -159,6 +162,45 @@ describe('presentation text rendering', () => {
     expect(shouldSplitPresentationTextByGrapheme('佛教从印度传播到中国')).toBe(true)
     expect(shouldSplitPresentationTextByGrapheme('Buddhism spread across Asia')).toBe(false)
     expect(shouldSplitPresentationTextByGrapheme('佛教从印度传播到中国', false)).toBe(false)
+  })
+
+  it('rotates pure Latin East Asian vertical text as one run while keeping CJK glyphs upright', () => {
+    const latin = { ...rich, text: 'Contents', width: 80, height: 240, textRuns: undefined,
+      textDirection: 'eastAsianVertical' as const }
+    const cjk = { ...latin, text: '目录' }
+    const mixed = { ...latin, text: '目录 Contents' }
+    const stacked = { ...latin, height: 400, textDirection: 'stacked' as const }
+
+    expect(usesPresentationVerticalGlyphLayout(latin)).toBe(false)
+    expect(usesPresentationVerticalGlyphLayout({ ...latin, text: 'Table of\nContents' })).toBe(false)
+    expect(presentationTextFrame(latin)).toEqual({ x: 80, y: 0, width: 240, height: 80, rotation: 90 })
+    expect(formatPresentationText(latin)).toBe('Contents')
+    expect(usesPresentationVerticalGlyphLayout(cjk)).toBe(true)
+    expect(formatPresentationText(cjk)).toBe('目\n录')
+    expect(usesPresentationVerticalGlyphLayout(mixed)).toBe(true)
+    expect(layoutPresentationVerticalText(mixed, text => text.length * 12).items[0]!.map(item => ({ text: item.text, rotation: item.rotation }))).toEqual([
+      { text: '目', rotation: 0 }, { text: '录', rotation: 0 }, { text: ' ', rotation: 0 }, { text: 'Contents', rotation: 90 },
+    ])
+    expect(formatPresentationText(mixed)).toBe('目录 Contents')
+    expect(usesPresentationUprightVerticalGlyph('《')).toBe(true)
+    expect(usesPresentationUprightVerticalGlyph('Ａ')).toBe(true)
+    expect(usesPresentationUprightVerticalGlyph('ㄅ')).toBe(true)
+    expect(usesPresentationUprightVerticalGlyph('😀')).toBe(true)
+    expect(usesPresentationVerticalGlyphLayout({ ...latin, text: '《Ａ》' })).toBe(true)
+    expect(layoutPresentationVerticalText({ ...latin, text: '👨‍👩‍👧‍👦' }).items[0]!.map(item => item.text)).toEqual(['👨‍👩‍👧‍👦'])
+    expect(usesPresentationVerticalGlyphLayout(stacked)).toBe(true)
+    expect(formatPresentationText(stacked)).toBe('C\no\nn\nt\ne\nn\nt\ns')
+    const numbered = {
+      ...latin,
+      height: 400,
+      listStyle: 'number' as const,
+      paragraphs: [{ start: 0, end: latin.text.length, style: { listStyle: 'number' as const, listNumberFormat: 'ea1ChsPlain', listStartAt: 12 } }],
+    }
+    expect(usesPresentationVerticalGlyphLayout(numbered)).toBe(true)
+    expect(presentationTextFrame(numbered)).toEqual({ x: 0, y: 0, width: 80, height: 400, rotation: 0 })
+    expect(layoutPresentationVerticalText(numbered).items[0]!.map(item => ({ text: item.text, rotation: item.rotation }))).toEqual([
+      { text: '十', rotation: 0 }, { text: '二', rotation: 0 }, { text: ' ', rotation: 0 }, { text: 'Contents', rotation: 90 },
+    ])
   })
 
   it('adds script-appropriate fallbacks without changing the stored font name', () => {

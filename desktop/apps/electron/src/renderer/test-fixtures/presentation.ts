@@ -2,6 +2,7 @@ import {
   createBlankPresentationDocument,
   createBlankPresentationSlide,
   createPresentationId,
+  replacePresentationPages,
   type PresentationDocument,
   type PresentationElement,
 } from '@/atoms/presentation'
@@ -9,7 +10,7 @@ import {
 /** Rich content used only by presentation tests; production starts with a blank document. */
 export function createPresentationTestDocument(): PresentationDocument {
   const document = createBlankPresentationDocument('Test presentation')
-  const firstSlide = document.slides[0]!
+  const firstSlide = document.slides.pages[0]!
   const secondSlide = createBlankPresentationSlide('Supporting slide')
   const groupId = createPresentationId('group')
   const groupedElements: PresentationElement[] = [
@@ -113,7 +114,6 @@ export function createPresentationTestDocument(): PresentationDocument {
 
   return {
     ...document,
-    selectedSlideId: firstSlide.id,
-    slides: [firstSlide, secondSlide],
+    slides: replacePresentationPages(document.slides, [firstSlide, secondSlide], firstSlide.id),
   }
 }

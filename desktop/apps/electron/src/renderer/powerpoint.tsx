@@ -84,10 +84,10 @@ function closePowerPoint(): Promise<void> {
       const approved = new Map<string, number>()
       for (const document of store.get(workspaceAtom).documents) {
         if (!await files.beforeClose(document.id)) return false
-        approved.set(document.id, store.get(workspaceAtom).documents.find((item) => item.id === document.id)?.version ?? document.version)
+        approved.set(document.id, store.get(workspaceAtom).documents.find((item) => item.id === document.id)?.revision ?? document.revision)
       }
       await workspaceRuntime.flushEditor()
-      if (store.get(workspaceAtom).documents.some((document) => isPresentationDirty(document) && approved.get(document.id) !== document.version)) throw new Error(i18n.t('office.changedDuringClose'))
+      if (store.get(workspaceAtom).documents.some((document) => isPresentationDirty(document) && approved.get(document.id) !== document.revision)) throw new Error(i18n.t('office.changedDuringClose'))
       store.set(workspaceAtom, { activeDocumentId: '', documents: [] })
       await files.recovery.persist(store.get(workspaceAtom))
       return true
@@ -137,9 +137,9 @@ window.__bridgicPowerPoint = {
           if (dispatched.target && openingSource) {
             const imported = workspace.documents.find((item) => item.id === workspace.activeDocumentId)!
             const existing = store.get(workspaceAtom).documents.find((item) => item.source?.path === openingSource?.path)
-            const document = { ...imported, id: existing?.id ?? imported.id, source: openingSource, savedVersion: openingSource.mtimeMs === null ? undefined : imported.version }
+            const document = { ...imported, id: existing?.id ?? imported.id, source: openingSource, savedRevision: openingSource.mtimeMs === null ? undefined : imported.revision }
             workspace = { activeDocumentId: document.id, documents: [
-              ...store.get(workspaceAtom).documents.filter((item) => item.id !== imported.id && item.id !== existing?.id && (item.id !== initialDocumentId || item.version !== 1)), document,
+              ...store.get(workspaceAtom).documents.filter((item) => item.id !== imported.id && item.id !== existing?.id && (item.id !== initialDocumentId || item.revision !== 1)), document,
             ] }
             initialDocumentId = null
           }

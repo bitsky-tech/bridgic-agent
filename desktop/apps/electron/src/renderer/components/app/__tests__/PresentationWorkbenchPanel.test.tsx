@@ -8,7 +8,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider } = await import('jotai')
-const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom, presentationExpandedAtom } = await import('@/atoms/presentation')
+const { currentPresentationDocumentAtom, currentPresentationWorkspaceAtom, presentationExpandedAtom, replacePresentationPages } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { i18n } = await import('@/lib/i18n')
@@ -78,6 +78,64 @@ async function mountPanel(withTestContent = true, onClose?: () => void, onExpand
 }
 
 describe('PresentationWorkbenchPanel', () => {
+  it('applies a theme as a global default without erasing page background overrides', async () => {
+    const { host, root, store } = await mountPanel()
+    try {
+      const initial = store.get(currentPresentationDocumentAtom)
+      expect(initial.slides.pages[0]!.background).toBeUndefined()
+      expect(initial.slides.pages[1]!.background).toBe('#F7F6F2')
+
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-design"]')!.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="深夜"]')!.click())
+
+      const themed = store.get(currentPresentationDocumentAtom)
+      expect(themed.theme.background).toBe('#17182B')
+      expect(themed.slides.pages[0]!.background).toBeUndefined()
+      expect(themed.slides.pages[1]!.background).toBe('#F7F6F2')
+
+      const secondPreview = host.querySelectorAll<HTMLElement>('[data-testid="presentation-slide-preview"]')[1]!
+      await act(async () => secondPreview.closest<HTMLButtonElement>('button')!.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-more-colors"]')!.click())
+      const inheritBackground = document.querySelector<HTMLButtonElement>('[data-testid="presentation-use-theme-background"]')!
+      expect(inheritBackground.disabled).toBe(false)
+      await act(async () => inheritBackground.click())
+
+      const inherited = store.get(currentPresentationDocumentAtom)
+      expect(inherited.slides.pages[1]!.background).toBeUndefined()
+      expect(Object.hasOwn(inherited.slides.pages[1]!, 'background')).toBe(false)
+      expect(inherited.theme.background).toBe('#17182B')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
+  it('restores the current slide footer to theme inheritance', async () => {
+    const { host, root, store } = await mountPanel()
+    try {
+      const current = store.get(currentPresentationDocumentAtom)
+      const pages = current.slides.pages.map((slide, index) => index === 0
+        ? { ...slide, footer: { text: 'Page override', showDate: true, showSlideNumber: false } }
+        : slide)
+      await act(async () => store.set(currentPresentationDocumentAtom, {
+        ...current,
+        theme: { ...current.theme, footer: { text: 'Theme footer', showDate: false, showSlideNumber: true } },
+        slides: replacePresentationPages(current.slides, pages),
+      }))
+
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-insert"]')!.click())
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-footer"]')!.click())
+      await act(async () => document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-use-theme"]')!.click())
+      await act(async () => document.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+
+      const restored = store.get(currentPresentationDocumentAtom)
+      expect(restored.slides.pages[0]!.footer).toBeUndefined()
+      expect(Object.hasOwn(restored.slides.pages[0]!, 'footer')).toBe(false)
+      expect(restored.theme.footer.text).toBe('Theme footer')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
   it('scales inline text styles and insets when the ribbon changes the slide ratio', async () => {
     const { host, root, store } = await mountPanel()
     try {
@@ -87,13 +145,13 @@ describe('PresentationWorkbenchPanel', () => {
         textRuns: [{ start: 3, end: 10, style: { fontSize: 20, color: '#0088CC' } }], lineSpacing: 48,
         textInsets: { left: 8, top: 4, right: 8, bottom: 4 },
       }
-      await act(async () => store.set(currentPresentationDocumentAtom, { ...current, slides: current.slides.map(slide => ({ ...slide, elements: [text] })) }))
+      await act(async () => store.set(currentPresentationDocumentAtom, { ...current, slides: replacePresentationPages(current.slides, current.slides.pages.map(slide => ({ ...slide, elements: [text] }))) }))
       await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-design"]')!.click())
       await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-slide-ratio"]')!.click())
       await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="presentation-slide-ratio-standard"]')!.click())
       const resized = store.get(currentPresentationDocumentAtom)
       expect(resized.pageSize.width).toBe(960)
-      const element = resized.slides[0]!.elements[0]!
+      const element = resized.slides.pages[0]!.elements[0]!
       expect(element).toMatchObject({ width: 300, fontSize: 30, lineSpacing: 36, textInsets: { left: 6, right: 6, top: 3, bottom: 3 } })
       if (element.type !== 'text') throw new Error('Expected text')
       expect(presentationTextStyleAt(element, 3)).toMatchObject({ fontSize: 15, color: '#0088CC' })
@@ -103,15 +161,15 @@ describe('PresentationWorkbenchPanel', () => {
   it('selects a slide without advancing the document revision', async () => {
     const { host, root, store } = await mountPanel()
     const initial = store.get(currentPresentationDocumentAtom)
-    const target = initial.slides[1]!
+    const target = initial.slides.pages[1]!
     const preview = host.querySelectorAll<HTMLElement>('[data-testid="presentation-slide-preview"]')[1]!
     const button = preview.closest<HTMLButtonElement>('button')!
 
     await act(async () => button.click())
 
     const selected = store.get(currentPresentationDocumentAtom)
-    expect(selected.selectedSlideId).toBe(target.id)
-    expect(selected.version).toBe(initial.version)
+    expect(selected.slides.selectedPageId).toBe(target.id)
+    expect(selected.revision).toBe(initial.revision)
 
     await act(async () => root.unmount())
   })
@@ -121,11 +179,11 @@ describe('PresentationWorkbenchPanel', () => {
     const presentation = store.get(currentPresentationDocumentAtom)
 
     expect(presentation.title).toBe('')
-    expect(presentation.slides).toHaveLength(1)
-    expect(presentation.slides[0]?.layout).toBe('title')
-    expect(presentation.slides[0]?.elements).toHaveLength(3)
-    expect(presentation.slides[0]?.elements.every((element) => element.type === 'text')).toBe(true)
-    expect(presentation.slides[0]?.elements.every((element) => !('placeholder' in element))).toBe(true)
+    expect(presentation.slides.pages).toHaveLength(1)
+    expect(presentation.slides.pages[0]?.layout).toBe('title')
+    expect(presentation.slides.pages[0]?.elements).toHaveLength(3)
+    expect(presentation.slides.pages[0]?.elements.every((element) => element.type === 'text')).toBe(true)
+    expect(presentation.slides.pages[0]?.elements.every((element) => !('placeholder' in element))).toBe(true)
     expect(host.querySelector('[data-testid="presentation-app-header"]')?.textContent).toContain('PowerPoint')
     expect(host.querySelector('[data-testid="presentation-app-header"]')?.textContent).toContain('Session target 已就绪 · PRESENTA')
     expect(host.querySelector('[data-testid="presentation-document-tab"]')?.textContent).toBe('未命名演示文稿.pptx')
@@ -230,7 +288,7 @@ describe('PresentationWorkbenchPanel', () => {
     })
 
     const presentation = store.get(currentPresentationDocumentAtom)
-    const slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    const slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const element = slide.elements.at(-1)
     expect(element?.type).toBe('text')
     if (element?.type === 'text') {
@@ -259,15 +317,15 @@ describe('PresentationWorkbenchPanel', () => {
     })
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-add-comment"]')!.click())
 
-    let slide = store.get(currentPresentationDocumentAtom).slides[0]!
+    let slide = store.get(currentPresentationDocumentAtom).slides.pages[0]!
     expect(slide.comments?.[0]?.text).toBe('Tighten this claim')
     const comment = host.querySelector<HTMLElement>('[data-presentation-comment-id]')!
     const actions = comment.querySelectorAll<HTMLButtonElement>('button')
     await act(async () => actions[0]!.click())
-    slide = store.get(currentPresentationDocumentAtom).slides[0]!
+    slide = store.get(currentPresentationDocumentAtom).slides.pages[0]!
     expect(slide.comments?.[0]?.resolved).toBe(true)
     await act(async () => actions[1]!.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.comments).toEqual([])
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.comments).toEqual([])
 
     await act(async () => root.unmount())
   })
@@ -305,7 +363,7 @@ describe('PresentationWorkbenchPanel', () => {
         ?.call(notes, 'Remember the customer story.')
       notes.dispatchEvent(new view.Event('input', { bubbles: true }))
     })
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.notes).toBe('Remember the customer story.')
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.notes).toBe('Remember the customer story.')
 
     const transitions = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-transitions"]')!
     await act(async () => transitions.click())
@@ -324,7 +382,7 @@ describe('PresentationWorkbenchPanel', () => {
     const fadeTransition = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-fade"]')!
     const animationCountBeforeSelection = transitionAnimationCalls.length
     await act(async () => fadeTransition.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition).toEqual({
       effect: 'fade',
       durationMs: 1_000,
     })
@@ -340,7 +398,7 @@ describe('PresentationWorkbenchPanel', () => {
       Simulate.change(duration)
     })
     expect(duration.value).toBe('')
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_000)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.durationMs).toBe(1_000)
     await act(async () => {
       Simulate.blur(duration)
       duration.blur()
@@ -354,9 +412,9 @@ describe('PresentationWorkbenchPanel', () => {
       Simulate.change(duration)
       store.set(currentPresentationDocumentAtom, (current) => ({
         ...current,
-        slides: current.slides.map((slide) => slide.id === current.selectedSlideId
+        slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => slide.id === current.slides.selectedPageId
           ? { ...slide, transition: { ...slide.transition, durationMs: 1_800 } }
-          : slide),
+          : slide)),
       }))
     })
     expect(duration.value).toBe('')
@@ -365,7 +423,7 @@ describe('PresentationWorkbenchPanel', () => {
       Simulate.blur(duration)
     })
     expect(duration.ownerDocument.activeElement).not.toBe(duration)
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_800)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.durationMs).toBe(1_800)
     expect(duration.value).toBe('1.8')
 
     await act(async () => {
@@ -374,7 +432,7 @@ describe('PresentationWorkbenchPanel', () => {
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '0.01')
       Simulate.change(duration)
     })
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(100)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.durationMs).toBe(100)
     await act(async () => {
       Simulate.blur(duration)
       duration.blur()
@@ -387,7 +445,7 @@ describe('PresentationWorkbenchPanel', () => {
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '30')
       Simulate.change(duration)
     })
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(20_000)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.durationMs).toBe(20_000)
     await act(async () => {
       Simulate.blur(duration)
       duration.blur()
@@ -400,7 +458,7 @@ describe('PresentationWorkbenchPanel', () => {
       Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value')?.set?.call(duration, '1.2')
       Simulate.change(duration)
     })
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.durationMs).toBe(1_200)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.durationMs).toBe(1_200)
     await act(async () => {
       Simulate.blur(duration)
       duration.blur()
@@ -411,11 +469,11 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => options.click())
     const throughBlack = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-through-black"]')!
     await act(async () => throughBlack.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.throughBlack).toBe(true)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.throughBlack).toBe(true)
 
     const applyToAll = host.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-apply-all"]')!
     await act(async () => applyToAll.click())
-    expect(store.get(currentPresentationDocumentAtom).slides.every((slide) => (
+    expect(store.get(currentPresentationDocumentAtom).slides.pages.every((slide) => (
       slide.transition?.effect === 'fade'
       && slide.transition.durationMs === 1_200
       && slide.transition.throughBlack === true
@@ -427,7 +485,7 @@ describe('PresentationWorkbenchPanel', () => {
     expect(document.querySelector('[data-testid="presentation-transition-gallery-reveal"]')).not.toBeNull()
     const cube = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-gallery-cube"]')!
     await act(async () => cube.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition).toEqual({
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition).toEqual({
       effect: 'cube',
       durationMs: 1_200,
       direction: 'left',
@@ -442,7 +500,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => options.click())
     const fromTop = document.querySelector<HTMLButtonElement>('[data-testid="presentation-transition-direction-up"]')!
     await act(async () => fromTop.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.transition?.direction).toBe('up')
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.transition?.direction).toBe('up')
 
     const home = host.querySelector<HTMLButtonElement>('[data-testid="presentation-tab-home"]')!
     await act(async () => home.click())
@@ -456,7 +514,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => fadeAnimation.click())
 
     const presentation = store.get(currentPresentationDocumentAtom)
-    const selectedSlide = presentation.slides.find((slide) => slide.id === presentation.selectedSlideId)!
+    const selectedSlide = presentation.slides.pages.find((slide) => slide.id === presentation.slides.selectedPageId)!
     expect(selectedSlide.elements.at(-1)?.animation).toBe('fade')
     expect(host.querySelector('[data-testid="presentation-animation-player"]')).not.toBeNull()
     expect(host.querySelector('[data-animation-part$="-fade"]')).not.toBeNull()
@@ -466,14 +524,14 @@ describe('PresentationWorkbenchPanel', () => {
     expect(checkerboard.disabled).toBe(false)
     expect(dissolve.disabled).toBe(false)
     await act(async () => checkerboard.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.at(-1)?.animation).toBe('checkerboard')
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.elements.at(-1)?.animation).toBe('checkerboard')
     expect(host.querySelectorAll('[data-animation-part*="-checker-"]')).toHaveLength(48)
 
     const textColor = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-textColor"]')!
     await act(async () => textColor.click())
     const purpleTextAnimation = document.querySelector<HTMLButtonElement>('button[aria-label="文字颜色 #8B7CFF"]')!
     await act(async () => purpleTextAnimation.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.at(-1)).toMatchObject({
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.elements.at(-1)).toMatchObject({
       animation: 'textColor',
       animationColor: '#8B7CFF',
     })
@@ -490,7 +548,7 @@ describe('PresentationWorkbenchPanel', () => {
     const trigger = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-trigger"]')!
     await act(async () => trigger.click())
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-option-elementClick"]')!.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.at(-1)).toMatchObject({
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.elements.at(-1)).toMatchObject({
       animationDelay: 1_300,
       animationStart: 'withPrevious',
       animationTrigger: 'elementClick',
@@ -498,7 +556,7 @@ describe('PresentationWorkbenchPanel', () => {
 
     const applyAnimationToAll = host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-apply-all"]')!
     await act(async () => applyAnimationToAll.click())
-    expect(store.get(currentPresentationDocumentAtom).slides[0]?.elements.every((element) => (
+    expect(store.get(currentPresentationDocumentAtom).slides.pages[0]?.elements.every((element) => (
       element.animation === 'textColor'
       && element.animationDelay === 1_300
       && element.animationStart === 'withPrevious'
@@ -529,7 +587,7 @@ describe('PresentationWorkbenchPanel', () => {
   it('applies and previews one animation for an entire grouped card', async () => {
     const { host, root, store } = await mountPanel()
     const initial = store.get(currentPresentationDocumentAtom)
-    const overview = initial.slides[1]!
+    const overview = initial.slides.pages[1]!
     const cardGroupId = overview.elements.find((element) => element.groupId)?.groupId
     if (!cardGroupId) throw new Error('Expected a grouped test card')
     const cardElements = overview.elements.filter((element) => element.groupId === cardGroupId)
@@ -537,10 +595,9 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => {
       store.set(currentPresentationDocumentAtom, {
         ...initial,
-        selectedSlideId: overview.id,
-        slides: initial.slides.map((slide) => slide.id === overview.id
+        slides: replacePresentationPages(initial.slides, initial.slides.pages.map((slide) => slide.id === overview.id
           ? { ...slide, elements: cardElements }
-          : slide),
+          : slide), overview.id),
       })
       await Promise.resolve()
     })
@@ -551,7 +608,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-animation-fade"]')!.click())
 
     const current = store.get(currentPresentationDocumentAtom)
-    const currentSlide = current.slides.find((slide) => slide.id === overview.id)!
+    const currentSlide = current.slides.pages.find((slide) => slide.id === overview.id)!
     expect(currentSlide.elements[0]?.animation).toBe('fade')
     expect(currentSlide.elements.slice(1).every((element) => element.animation === undefined)).toBe(true)
     expect(host.querySelectorAll('[data-animation-part]')).toHaveLength(1)
@@ -567,19 +624,19 @@ describe('PresentationWorkbenchPanel', () => {
   it('advances slide-click animations before moving to the next slide in slideshow mode', async () => {
     const { host, root, store } = await mountPanel()
     const current = store.get(currentPresentationDocumentAtom)
-    const firstSlide = current.slides[0]!
+    const firstSlide = current.slides.pages[0]!
     const animatedElement = firstSlide.elements.find((element) => element.type === 'text')!
     await act(async () => {
       store.set(currentPresentationDocumentAtom, {
         ...current,
-        slides: current.slides.map((slide) => slide.id === firstSlide.id
+        slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => slide.id === firstSlide.id
           ? {
               ...slide,
               elements: slide.elements.map((element) => element.id === animatedElement.id
                 ? { ...element, animation: 'fade' as const }
                 : element),
             }
-          : slide),
+          : slide)),
       })
       await Promise.resolve()
     })
@@ -629,19 +686,19 @@ describe('PresentationWorkbenchPanel', () => {
   it('runs an element-click animation from its target area in slideshow mode', async () => {
     const { host, root, store } = await mountPanel()
     const current = store.get(currentPresentationDocumentAtom)
-    const firstSlide = current.slides[0]!
+    const firstSlide = current.slides.pages[0]!
     const animatedElement = firstSlide.elements.find((element) => element.type === 'text')!
     await act(async () => {
       store.set(currentPresentationDocumentAtom, {
         ...current,
-        slides: current.slides.map((slide) => slide.id === firstSlide.id
+        slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => slide.id === firstSlide.id
           ? {
               ...slide,
               elements: slide.elements.map((element) => element.id === animatedElement.id
                 ? { ...element, animation: 'fade' as const, animationTrigger: 'elementClick' as const }
                 : element),
             }
-          : slide),
+          : slide)),
       })
       await Promise.resolve()
     })
@@ -682,7 +739,7 @@ describe('PresentationWorkbenchPanel', () => {
       await act(async () => new Promise((resolve) => setTimeout(resolve, 10)))
     }
     const sourceDocument = store.get(currentPresentationDocumentAtom)
-    const source = sourceDocument.slides.find((slide) => slide.id === sourceDocument.selectedSlideId)!.elements.at(-1)
+    const source = sourceDocument.slides.pages.find((slide) => slide.id === sourceDocument.slides.selectedPageId)!.elements.at(-1)
     expect(source).toMatchObject({ type: 'text', fontWeight: 700 })
     const formatPainter = host.querySelector<HTMLButtonElement>('[data-testid="presentation-format-painter"]')!
     expect(formatPainter.disabled).toBe(false)
@@ -692,14 +749,14 @@ describe('PresentationWorkbenchPanel', () => {
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const current = store.get(currentPresentationDocumentAtom)
-      const selectedSlide = current.slides.find((item) => item.id === current.selectedSlideId)!
+      const selectedSlide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)!
       const target = selectedSlide.elements.at(-1)
       if (target?.type === 'text' && target.fontWeight === 700) break
       await act(async () => new Promise((resolve) => setTimeout(resolve, 10)))
     }
 
     let presentation = store.get(currentPresentationDocumentAtom)
-    let slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    let slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const painted = slide.elements.at(-1)
     expect(painted?.type).toBe('text')
     if (painted?.type === 'text') expect(painted.fontWeight).toBe(700)
@@ -707,7 +764,7 @@ describe('PresentationWorkbenchPanel', () => {
     const clearFormat = host.querySelector<HTMLButtonElement>('[data-testid="presentation-clear-format"]')!
     await act(async () => clearFormat.click())
     presentation = store.get(currentPresentationDocumentAtom)
-    slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const cleared = slide.elements.at(-1)
     expect(cleared?.type).toBe('text')
     if (cleared?.type === 'text') {
@@ -748,7 +805,7 @@ describe('PresentationWorkbenchPanel', () => {
     await act(async () => newDocument.click())
     expect(store.get(currentPresentationWorkspaceAtom).documents).toHaveLength(2)
     expect(store.get(currentPresentationDocumentAtom).id).not.toBe(firstDocumentId)
-    expect(store.get(currentPresentationDocumentAtom).slides).toHaveLength(1)
+    expect(store.get(currentPresentationDocumentAtom).slides.pages).toHaveLength(1)
     expect(host.querySelectorAll('[data-testid="presentation-document-tab"]')).toHaveLength(2)
 
     const tabs = host.querySelectorAll<HTMLButtonElement>('[data-testid="presentation-document-tab"]')
@@ -786,7 +843,7 @@ describe('PresentationWorkbenchPanel', () => {
     expect(document.querySelector('[role="tooltip"]')?.textContent).toBe('心形')
     await act(async () => heart.click())
     const presentation = store.get(currentPresentationDocumentAtom)
-    const slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    const slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const inserted = slide.elements.at(-1)
     expect(inserted?.type).toBe('heart')
     if (inserted?.type === 'heart') {

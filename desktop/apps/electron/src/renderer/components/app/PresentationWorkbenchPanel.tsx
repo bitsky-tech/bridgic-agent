@@ -43,12 +43,17 @@ import {
   formatPresentationText,
   getPresentationPageSize,
   layoutPresentationVerticalText,
+  presentationSlideBackground,
+  presentationSlideFooter,
   presentationAgentChangeAtom,
   presentationExpandedAtom,
   presentationSessionIdAtom,
   presentationWorkspaceFamily,
+  replacePresentationPages,
+  selectPresentationPage,
   stripPresentationTextFormatting,
   type PresentationAnimationEffect,
+  type PresentationAsset,
   type PresentationChartElement,
   type PresentationComment,
   type PresentationDocument,
@@ -74,7 +79,15 @@ import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
-import { resizePresentationDocument } from '@/lib/presentationDesign'
+import { presentationThemeTextColors, resizePresentationDocument } from '@/lib/presentationDesign'
+import {
+  clearPresentationHyperlinksToPages,
+  createPresentationAsset,
+  detachPresentationCommentsFromElements,
+  duplicatePresentationSlide,
+  mergePresentationAssets,
+  presentationElementSource,
+} from '@/presentation/project'
 import {
   buildPresentationAnimationPlaybackSteps,
   getPresentationAnimationHiddenElementIds,
@@ -104,6 +117,7 @@ import {
   presentationParagraphTextStyle,
   patchPresentationText,
   shouldSplitPresentationTextByGrapheme,
+  usesPresentationVerticalGlyphLayout,
 } from '@/lib/presentationText'
 import {
   detachPresentationElementsOutsideGroups,
@@ -257,41 +271,13 @@ function cloneDocument(document: PresentationDocument): PresentationDocument {
   // structuredClone would duplicate every Base64 payload for every undo step.
   // Strip the immutable payloads while cloning the mutable model, then reattach
   // the original strings by index so snapshots cannot mutate one another.
-  const payloadFreeSources = new WeakMap<PresentationFileSource, PresentationFileSource>()
-  const sourceWithoutPayload = (source: PresentationFileSource) => {
-    const existing = payloadFreeSources.get(source)
-    if (existing) return existing
-    const cloned = { ...source, dataUrl: '' }
-    payloadFreeSources.set(source, cloned)
-    return cloned
-  }
-  const payloads = document.slides.map((slide) => slide.elements.map((element) => (
-    isPresentationImageElement(element) || isPresentationMediaElement(element)
-      ? element.source.dataUrl
-      : null
-  )))
+  const payloads = document.assets.map((asset) => asset.source.dataUrl)
   const payloadFreeDocument: PresentationDocument = {
     ...document,
-    slides: document.slides.map((slide) => ({
-      ...slide,
-      elements: slide.elements.map((element) => (
-        isPresentationImageElement(element) || isPresentationMediaElement(element)
-          ? { ...element, source: sourceWithoutPayload(element.source) }
-          : element
-      )),
-    })),
+    assets: document.assets.map((asset) => ({ ...asset, source: { ...asset.source, dataUrl: '' } })),
   }
   const cloned = structuredClone(payloadFreeDocument)
-  cloned.slides.forEach((slide, slideIndex) => {
-    slide.elements.forEach((element, elementIndex) => {
-      const dataUrl = payloads[slideIndex]?.[elementIndex]
-      if (dataUrl !== null && dataUrl !== undefined && (
-        isPresentationImageElement(element) || isPresentationMediaElement(element)
-      )) {
-        element.source.dataUrl = dataUrl
-      }
-    })
-  })
+  cloned.assets.forEach((asset, index) => { asset.source.dataUrl = payloads[index] ?? '' })
   return cloned
 }
 
@@ -304,15 +290,17 @@ export function createPresentationHistoryEntry(document: PresentationDocument, m
 export function canAppendPresentationFileElement(
   document: PresentationDocument,
   element: PresentationImageElement | PresentationMediaElement,
+  asset: PresentationAsset,
   maxBytes = PRESENTATION_HISTORY_MAX_BYTES,
 ): boolean {
-  const slide = document.slides.find((item) => item.id === document.selectedSlideId)
+  const slide = document.slides.pages.find((item) => item.id === document.slides.selectedPageId)
   if (!slide) return false
   const nextDocument = {
     ...document,
-    slides: document.slides.map((item) => item.id === slide.id
+    assets: mergePresentationAssets(document.assets, [asset]),
+    slides: replacePresentationPages(document.slides, document.slides.pages.map((item) => item.id === slide.id
       ? { ...item, elements: [...item.elements, element] }
-      : item),
+      : item)),
   }
   return estimatePresentationDocumentBytes(nextDocument) <= maxBytes
 }
@@ -669,6 +657,7 @@ export function createPresentationMediaFabricObject(fabric: FabricModule, elemen
 interface PresentationMediaRegistration {
   element: PresentationMediaElement
   object: FabricObject
+  source: PresentationFileSource
   view: PresentationMediaFabricView
 }
 
@@ -685,7 +674,7 @@ export interface PresentationMediaRuntime {
   pause: (elementId: string) => void
   pauseAll: () => void
   prepare: (elementId: string) => void
-  register: (element: PresentationMediaElement, object: FabricObject) => void
+  register: (element: PresentationMediaElement, object: FabricObject, source?: PresentationFileSource) => void
   releaseAll: () => void
   reset: () => void
   toggle: (elementId: string) => Promise<void>
@@ -726,7 +715,7 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
   }
 
   const createSession = (registration: PresentationMediaRegistration): PresentationMediaSession => {
-    const { element, view } = registration
+    const { element, source, view } = registration
     const media = document.createElement(element.type)
     let disposed = false
     let playing = false
@@ -929,7 +918,7 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
       media.addEventListener('error', onError)
       media.addEventListener('loadeddata', onLoadedData)
       media.addEventListener('seeked', onSeeked)
-      media.src = element.source.dataUrl
+      media.src = source.dataUrl
       try {
         media.load()
       } catch {
@@ -985,13 +974,14 @@ export function createPresentationMediaRuntime(fabric: FabricModule, canvas: Fab
     prepare(elementId) {
       if (registrations.get(elementId)?.element.type === 'video') ensureSession(elementId)
     },
-    register(element, object) {
+    register(element, object, source) {
       if (runtimeDisposed) return
       const view = presentationMediaFabricViews.get(object)
-      if (!view) return
+      const resolvedSource = source
+      if (!view || !resolvedSource) return
       sessions.get(element.id)?.dispose()
       sessions.delete(element.id)
-      registrations.set(element.id, { element, object, view })
+      registrations.set(element.id, { element, object, source: resolvedSource, view })
       registrationIds.set(object, element.id)
       setViewPlaying(view, false)
     },
@@ -1640,8 +1630,23 @@ export function createPresentationTextFabricObject(fabric: FabricModule, element
 /** Compose PowerPoint vertical text in Fabric's center-based group coordinate plane. */
 export function createPresentationVerticalTextFabricObject(fabric: FabricModule, element: PresentationTextElement): FabricGroup {
   const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
-  const layout = layoutPresentationVerticalText(element)
   const textOptions = createPresentationTextFabricOptions(fabric, element, formatPresentationText(element))
+  const layout = layoutPresentationVerticalText(element, (text, style) => {
+    const measurement = new fabric.Text(text, {
+      ...textOptions,
+      ...presentationFabricRunStyle(fabric, element, 0, style),
+      angle: 0,
+      charSpacing: style.characterSpacing ?? element.characterSpacing ?? 0,
+      flipX: false,
+      flipY: false,
+      left: 0,
+      padding: 0,
+      top: 0,
+    })
+    const width = measurement.width
+    measurement.dispose()
+    return width
+  })
   const frame = new fabric.Rect({
     left: 0,
     top: 0,
@@ -1652,19 +1657,20 @@ export function createPresentationVerticalTextFabricObject(fabric: FabricModule,
     fill: 'rgba(0,0,0,0)',
     strokeWidth: 0,
   })
-  const glyphs = layout.columns.flatMap((column, columnIndex) => {
+  const glyphs = layout.items.flatMap((column, columnIndex) => {
     const columnLeft = insets.left + layout.columnOffsets[columnIndex]!
     const columnHeight = layout.columnHeights[columnIndex]!
     const availableHeight = Math.max(0, element.height - insets.top - insets.bottom - columnHeight)
     let alignmentOffset = 0
     if (element.verticalAlign === 'bottom') alignmentOffset = availableHeight
     else if (element.verticalAlign === 'middle') alignmentOffset = availableHeight / 2
-    return Array.from(column).map((glyph, rowIndex) => new fabric.Text(glyph, {
+    return column.map(item => new fabric.Text(item.text, {
       ...textOptions,
-      ...presentationFabricRunStyle(fabric, element, layout.sourceOffsets[columnIndex]![rowIndex]!, layout.glyphStyles[columnIndex]![rowIndex]!),
-      left: columnLeft - (element.width / 2),
-      top: insets.top + alignmentOffset + layout.rowOffsets[columnIndex]![rowIndex]! - (element.height / 2),
-      angle: 0,
+      ...presentationFabricRunStyle(fabric, element, item.sourceOffset, item.style),
+      left: columnLeft + (item.rotation === 90 ? item.blockSize : 0) - (element.width / 2),
+      top: insets.top + alignmentOffset + item.rowOffset - (element.height / 2),
+      angle: item.rotation,
+      charSpacing: item.style.characterSpacing ?? element.characterSpacing ?? 0,
       lineHeight: 1,
       opacity: 1,
       padding: 0,
@@ -1710,19 +1716,22 @@ export async function createPresentationFabricObject(
   fabric: FabricModule,
   element: PresentationElement,
   onTextEdit: (object: FabricObject) => void,
+  source?: PresentationFileSource,
 ): Promise<FabricObject> {
   if (isPresentationTextElement(element)) {
-    if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') {
+    if (usesPresentationVerticalGlyphLayout(element)) {
       return createPresentationVerticalTextFabricObject(fabric, element)
     }
     return createPresentationTextFabricObject(fabric, element, onTextEdit)
   }
   if (isPresentationShapeElement(element)) return createShapeFabricObject(fabric, element)
   if (isPresentationImageElement(element)) {
+    const imageSource = source
+    if (!imageSource) throw new Error(`Missing PowerPoint image asset: ${element.sourceAssetId ?? element.id}`)
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), PRESENTATION_IMAGE_LOAD_TIMEOUT_MS)
     try {
-      const image = await fabric.FabricImage.fromURL(element.source.dataUrl, { signal: controller.signal })
+      const image = await fabric.FabricImage.fromURL(imageSource.dataUrl, { signal: controller.signal })
       const naturalWidth = Math.max(1, image.width ?? element.width)
       const naturalHeight = Math.max(1, image.height ?? element.height)
       const frame = new fabric.Rect({
@@ -1798,8 +1807,8 @@ export async function createPresentationFabricObject(
   throw new Error(`Unsupported presentation element: ${(element as { type?: string }).type ?? 'unknown'}`)
 }
 
-function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlide, slideNumber: number, pageSize: PresentationPageSize): FabricObject[] {
-  if (!slide.footer) return []
+function createFooterFabricObjects(fabric: FabricModule, theme: PresentationMaster, slide: PresentationSlide, slideNumber: number, pageSize: PresentationPageSize): FabricObject[] {
+  const footer = presentationSlideFooter(theme, slide)
   const objects: FabricObject[] = []
   const style = {
     fill: '#666571',
@@ -1811,8 +1820,8 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
     originY: 'top' as const,
   }
   const footerTop = pageSize.height - 34
-  if (slide.footer.text) objects.push(new fabric.Text(slide.footer.text, { ...style, left: 32, top: footerTop }))
-  if (slide.footer.showDate) {
+  if (footer.text) objects.push(new fabric.Text(footer.text, { ...style, left: 32, top: footerTop }))
+  if (footer.showDate) {
     objects.push(new fabric.Text(new Intl.DateTimeFormat().format(new Date()), {
       ...style,
       left: pageSize.width / 2,
@@ -1820,7 +1829,7 @@ function createFooterFabricObjects(fabric: FabricModule, slide: PresentationSlid
       originX: 'center',
     }))
   }
-  if (slide.footer.showSlideNumber) {
+  if (footer.showSlideNumber) {
     objects.push(new fabric.Text(String(slideNumber), {
       ...style,
       left: pageSize.width - 32,
@@ -1917,11 +1926,14 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     documentId: document.id,
     generation: 0,
     sessionId,
-    slideId: document.selectedSlideId,
+    slideId: document.slides.selectedPageId,
   })
 
-  const currentSlide = document.slides.find((slide) => slide.id === document.selectedSlideId)
-    ?? document.slides[0]
+  const currentSlide = document.slides.pages.find((slide) => slide.id === document.slides.selectedPageId)
+    ?? document.slides.pages[0]
+  const currentSlideBackground = currentSlide
+    ? presentationSlideBackground(document.theme, currentSlide)
+    : document.theme.background
   const selectedElement = currentSlide?.elements.find((element) => (
     element.id === selectedElementId
   )) ?? null
@@ -1962,13 +1974,13 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const current = documentRef.current
     commitDocument({
       ...current,
-      slides: current.slides.map((slide) => slide.id === nextSlide.id ? nextSlide : slide),
+      slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => slide.id === nextSlide.id ? nextSlide : slide)),
     })
   }, [commitDocument])
 
   const addPresentationComment = useCallback((text: string) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide || !text.trim()) return
     const comment: PresentationComment = {
       author: t('session.presentation.commentAuthorYou'),
@@ -1983,7 +1995,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const updatePresentationComment = useCallback((commentId: string, patch: Partial<PresentationComment>) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     replaceCurrentSlide({
       ...slide,
@@ -1993,61 +2005,55 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     })
   }, [replaceCurrentSlide])
 
-  const applyPresentationMaster = useCallback((master: PresentationMaster) => {
+  const applyPresentationMaster = useCallback((theme: PresentationMaster) => {
     const current = documentRef.current
     commitDocument({
       ...current,
-      master,
-      slides: current.slides.map((slide) => ({
+      theme,
+      slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => ({
         ...slide,
-        background: master.background,
-        footer: { ...master.footer },
         elements: slide.elements.map((element): PresentationElement => (
           isPresentationTextElement(element)
             ? patchPresentationText(element, {
                 fontFamily: element.fontWeight >= 600 || element.fontSize >= 30
-                  ? master.titleFontFamily
-                  : master.bodyFontFamily,
+                  ? theme.titleFontFamily
+                  : theme.bodyFontFamily,
               })
             : element
         )),
-      })),
+      }))),
     })
     setMasterDialogOpen(false)
   }, [commitDocument, setMasterDialogOpen])
 
   const applyPresentationTheme = useCallback((background: string, colors: readonly string[]) => {
     const current = documentRef.current
-    const normalized = background.replace('#', '')
-    const red = Number.parseInt(normalized.slice(0, 2), 16)
-    const green = Number.parseInt(normalized.slice(2, 4), 16)
-    const blue = Number.parseInt(normalized.slice(4, 6), 16)
-    const dark = Number.isFinite(red + green + blue) && ((red * 299) + (green * 587) + (blue * 114)) / 1_000 < 140
-    const primaryText = dark ? '#FFFFFF' : '#1D1D28'
-    const secondaryText = dark ? '#C7C8D8' : '#666571'
+    const theme = { ...current.theme, accentColors: [...colors], background }
     commitDocument({
       ...current,
-      master: { ...current.master, accentColors: [...colors], background },
-      slides: current.slides.map((slide) => ({
-        ...slide,
-        background,
-        elements: slide.elements.map((element, index): PresentationElement => {
-          if (isPresentationTextElement(element)) {
-            return patchPresentationText(element, { color: element.fontWeight >= 600 || element.fontSize >= 30 ? primaryText : secondaryText })
-          }
-          if (isPresentationShapeElement(element) && element.fill !== 'transparent') {
-            const accent = colors[index % colors.length] ?? element.fill
-            return { ...element, fill: accent, borderColor: accent }
-          }
-          return element
-        }),
+      theme,
+      slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => {
+        const textColors = presentationThemeTextColors(presentationSlideBackground(theme, slide))
+        return {
+          ...slide,
+          elements: slide.elements.map((element, index): PresentationElement => {
+            if (isPresentationTextElement(element)) {
+              return patchPresentationText(element, { color: element.fontWeight >= 600 || element.fontSize >= 30 ? textColors.primary : textColors.secondary })
+            }
+            if (isPresentationShapeElement(element) && element.fill !== 'transparent') {
+              const accent = colors[index % colors.length] ?? element.fill
+              return { ...element, fill: accent, borderColor: accent }
+            }
+            return element
+          }),
+        }
       })),
     })
   }, [commitDocument])
 
   const patchElement = useCallback((elementId: string, patch: Partial<PresentationElement>) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     const selected = slide.elements.find((element) => element.id === elementId)
     const animationPatch = isPresentationAnimationPatch(patch)
@@ -2074,7 +2080,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     if (!binding || !lease?.isCurrent()) return
     const current = documentRef.current
     if (current.id !== lease.identity.documentId) return
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     const patches = new Map<string, Partial<PresentationElement>>()
     for (const object of objects) {
@@ -2116,7 +2122,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         ? detachPresentationElementsOutsideGroups(slide.elements, nextElements, new Set(patches.keys()))
         : nextElements,
     }
-    binding.publishChange({ ...current, slides: current.slides.map((item) => item.id === slide.id ? nextSlide : item) }, lease)
+    binding.publishChange({ ...current, slides: replacePresentationPages(current.slides, current.slides.pages.map((item) => item.id === slide.id ? nextSlide : item)) }, lease)
   }, [])
 
   const syncFabricObjectRef = useRef<(object: FabricObject, lease?: OfficeEditorLease) => void>(() => undefined)
@@ -2128,12 +2134,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const previous = fileInsertionTargetRef.current
     const targetChanged = previous.sessionId !== sessionId
       || previous.documentId !== document.id
-      || previous.slideId !== document.selectedSlideId
+      || previous.slideId !== document.slides.selectedPageId
     fileInsertionTargetRef.current = {
       documentId: document.id,
       generation: targetChanged ? previous.generation + 1 : previous.generation,
       sessionId,
-      slideId: document.selectedSlideId,
+      slideId: document.slides.selectedPageId,
     }
   }, [document, sessionId])
 
@@ -2233,7 +2239,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const fabric = fabricModuleRef.current
     if (!canvas || !fabric) return
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     const element = slide?.elements.find((item) => item.id === elementId)
     if (!slide || !element) return
     // Programmatic selection restoration must also restore React state. Fabric's
@@ -2372,7 +2378,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         const elementId = selected ? objectIdsRef.current.get(selected) : undefined
         if (!elementId) return
         const current = documentRef.current
-        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
         const element = slide?.elements.find((item) => item.id === elementId)
         const selectionContext = pointerDownSelectionContextRef.current
         drillIntoElementOnClickRef.current = Boolean(
@@ -2416,7 +2422,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
           const selection = event.target
           const objects = [...selection.getObjects()]
           const lease = binding.capture()
-          const slideId = documentRef.current.selectedSlideId
+          const slideId = documentRef.current.slides.selectedPageId
           if (canvasSelectionFrameRef.current !== null) window.cancelAnimationFrame(canvasSelectionFrameRef.current)
           const commitSelection = bindPresentationNativeEdit(lease, slideId, () => documentRef.current, () => {
             if (canvasRef.current !== canvas) return
@@ -2447,7 +2453,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         const elementId = selected ? objectIdsRef.current.get(selected) : undefined
         if (!elementId) return
         const current = documentRef.current
-        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
         const element = slide?.elements.find((item) => item.id === elementId)
         if (!element) return
         setSelectedElementId(element.id)
@@ -2543,8 +2549,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       if (
         visibleAgentChange.kind === 'content'
         && isPresentationTextElement(element)
-        && element.textDirection !== 'eastAsianVertical'
-        && element.textDirection !== 'stacked'
+        && !usesPresentationVerticalGlyphLayout(element)
         && object instanceof fabric.IText
       ) {
         const fullText = formatPresentationText(element)
@@ -2597,20 +2602,24 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       () => canvas.clear(),
     )
     canvas.setDimensions({ width: pageSize.width, height: pageSize.height })
-    canvas.backgroundColor = currentSlide.background
+    canvas.backgroundColor = currentSlideBackground
     objectIdsRef.current = new WeakMap()
     const elementOrder = new Map(currentSlide.elements.map((element, index) => [element.id, index]))
-    const slideNumber = documentRef.current.slides.findIndex((slide) => slide.id === currentSlide.id) + 1
-    createFooterFabricObjects(fabric, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
+    const slideNumber = documentRef.current.slides.pages.findIndex((slide) => slide.id === currentSlide.id) + 1
+    createFooterFabricObjects(fabric, document.theme, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
     canvas.requestRenderAll()
 
     currentSlide.elements.forEach((element, index) => {
+      const source = isPresentationImageElement(element) || isPresentationMediaElement(element)
+        ? presentationElementSource(documentRef.current, element)
+        : undefined
       void createPresentationFabricObject(
         fabric,
         element,
         lease ? bindPresentationNativeEdit(lease, currentSlide.id, () => documentRef.current, (object) => {
           if (!cancelled) syncFabricObjectRef.current(object, lease)
         }) : () => undefined,
+        source,
       ).then((object) => {
         if (cancelled || !lease?.isCurrent() || canvasRef.current !== canvas) return
         let hoverCursor = 'move'
@@ -2635,7 +2644,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         })
         canvas.insertAt(insertionIndex < 0 ? canvas.getObjects().length : insertionIndex, object)
         animateAgentObject(object, element, index)
-        if (isPresentationMediaElement(element)) mediaRuntime.register(element, object)
+        if (isPresentationMediaElement(element) && source) mediaRuntime.register(element, object, source)
         if (activeElementId) {
           activateFabricElement(
             activeElementId,
@@ -2659,7 +2668,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       for (const frameId of revealFrameIds) window.cancelAnimationFrame(frameId)
       if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
-  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, pageSize])
+  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.theme, pageSize])
 
   const undo = useCallback(() => {
     const previous = pastRef.current.pop()
@@ -2685,7 +2694,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const elementId = selectedElementIdRef.current
     if (!elementId) return
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     const selected = slide.elements.find((element) => element.id === elementId)
     if (!selected) return
@@ -2698,7 +2707,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     selectedElementIdRef.current = null
     setSelectedElementId(null)
     replaceCurrentSlide({
-      ...slide,
+      ...detachPresentationCommentsFromElements(slide, removedIds),
       elements: removePresentationElements(slide.elements, removedIds),
     })
   }, [replaceCurrentSlide])
@@ -2718,7 +2727,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       if (!modifier && !event.repeat && (event.key === ' ' || event.key === 'Enter')) {
         const elementId = selectedElementIdRef.current
         const current = documentRef.current
-        const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+        const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
         const element = slide?.elements.find((item) => item.id === elementId)
         if (element && isPresentationMediaElement(element) && !transitionPreviewRun) {
           event.preventDefault()
@@ -2750,7 +2759,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const goToSlideshowIndex = useCallback((requestedIndex: number, completedTargetIds: ReadonlySet<string> = new Set()) => {
     if (slideshowTransition) return
-    const slides = documentRef.current.slides
+    const slides = documentRef.current.slides.pages
     const toIndex = Math.max(0, Math.min(slides.length - 1, requestedIndex))
     if (toIndex === slideshowIndex) return
     const transition = normalizePresentationTransition(slides[toIndex]?.transition)
@@ -2770,7 +2779,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const activateSlideshowHyperlink = useCallback((hyperlink: PresentationHyperlink, completedTargetIds?: ReadonlySet<string>) => {
     if (hyperlink.type === 'slide') {
-      const index = documentRef.current.slides.findIndex((slide) => slide.id === hyperlink.slideId)
+      const index = documentRef.current.slides.pages.findIndex((slide) => slide.id === hyperlink.slideId)
       if (index >= 0) goToSlideshowIndex(index, completedTargetIds)
       return
     }
@@ -2792,8 +2801,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     setAnimationPreviewRun(null)
     setTransitionPreviewRun(null)
     const current = documentRef.current
-    if (current.selectedSlideId === slideId) return
-    const selected = { ...current, selectedSlideId: slideId }
+    if (current.slides.selectedPageId === slideId) return
+    const selected = { ...current, slides: selectPresentationPage(current.slides, slideId) }
     try {
       documentRef.current = presentationRuntime.commitDocument(current, selected, false)
     } catch (error) {
@@ -2852,53 +2861,50 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const addSlide = () => {
     const current = documentRef.current
     const slide = createBlankPresentationSlide(
-      t('session.presentation.slideName', { index: current.slides.length + 1 }),
+      t('session.presentation.slideName', { index: current.slides.pages.length + 1 }),
     )
     setSelectedElementId(null)
     commitDocument({
       ...current,
-      selectedSlideId: slide.id,
-      slides: [...current.slides, slide],
+      slides: replacePresentationPages(current.slides, [...current.slides.pages, slide], slide.id),
     })
   }
 
   const duplicateSlide = () => {
     if (!currentSlide) return
     const current = documentRef.current
-    const duplicate: PresentationSlide = {
-      ...currentSlide,
-      id: createPresentationId('slide'),
-      name: t('session.presentation.slideCopy', { name: currentSlide.name }),
-      elements: currentSlide.elements.map((element) => ({
-        ...element,
-        id: createPresentationId(element.type),
-      })),
-    }
-    const index = current.slides.findIndex((slide) => slide.id === currentSlide.id)
-    const slides = [...current.slides]
+    const duplicate = duplicatePresentationSlide(
+      currentSlide,
+      t('session.presentation.slideCopy', { name: currentSlide.name }),
+    )
+    const index = current.slides.pages.findIndex((slide) => slide.id === currentSlide.id)
+    const slides = [...current.slides.pages]
     slides.splice(index + 1, 0, duplicate)
     setSelectedElementId(null)
-    commitDocument({ ...current, selectedSlideId: duplicate.id, slides })
+    commitDocument({ ...current, slides: replacePresentationPages(current.slides, slides, duplicate.id) })
   }
 
   const deleteSlide = () => {
     const current = documentRef.current
-    if (current.slides.length <= 1 || !currentSlide) return
-    const index = current.slides.findIndex((slide) => slide.id === currentSlide.id)
-    const slides = current.slides.filter((slide) => slide.id !== currentSlide.id)
+    if (current.slides.pages.length <= 1 || !currentSlide) return
+    const index = current.slides.pages.findIndex((slide) => slide.id === currentSlide.id)
+    const slides = clearPresentationHyperlinksToPages(
+      current.slides.pages.filter((slide) => slide.id !== currentSlide.id),
+      new Set([currentSlide.id]),
+    )
     const nextSelectedSlide = slides[Math.min(index, slides.length - 1)]
     if (!nextSelectedSlide) return
     setSelectedElementId(null)
     commitDocument({
       ...current,
-      slides,
-      selectedSlideId: nextSelectedSlide.id,
+      slides: replacePresentationPages(current.slides, slides, nextSelectedSlide.id),
     })
   }
 
   const addText = (kind: 'title' | 'body') => {
     if (!currentSlide) return
     const isTitle = kind === 'title'
+    const textColors = presentationThemeTextColors(currentSlideBackground)
     const element: PresentationTextElement = {
       id: createPresentationId('text'),
       type: 'text',
@@ -2909,7 +2915,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       rotation: 0,
       text: t(isTitle ? 'session.presentation.titlePlaceholder' : 'session.presentation.textPlaceholder'),
       fontSize: isTitle ? 42 : 24,
-      fontFamily: isTitle ? 'Aptos Display' : 'Aptos',
+      fontFamily: isTitle ? document.theme.titleFontFamily : document.theme.bodyFontFamily,
       fontWeight: isTitle ? 700 : 400,
       italic: false,
       underline: false,
@@ -2919,7 +2925,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       lineHeight: 1.08,
       indentLevel: 0,
       listStyle: 'none',
-      color: '#20202B',
+      color: isTitle ? textColors.primary : textColors.secondary,
       align: 'left',
     }
     setSelectedElementId(element.id)
@@ -2928,7 +2934,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const applySlideLayout = (layout: PresentationSlideLayout) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     if (layout === 'blank') {
       replaceCurrentSlide({ ...slide, layout })
@@ -2936,6 +2942,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     }
     const textElements = slide.elements.filter(isPresentationTextElement)
     const nonTextElements = slide.elements.filter((element) => !isPresentationTextElement(element))
+    const textColors = presentationThemeTextColors(presentationSlideBackground(current.theme, slide))
     const createLayoutText = (title: boolean): PresentationTextElement => ({
       id: createPresentationId('text'),
       type: 'text',
@@ -2946,9 +2953,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       rotation: 0,
       text: t(title ? 'session.presentation.titlePlaceholder' : 'session.presentation.textPlaceholder'),
       fontSize: title ? 42 : 24,
-      fontFamily: title ? current.master.titleFontFamily : current.master.bodyFontFamily,
+      fontFamily: title ? current.theme.titleFontFamily : current.theme.bodyFontFamily,
       fontWeight: title ? 700 : 400,
-      color: '#20202B',
+      color: title ? textColors.primary : textColors.secondary,
       align: 'left',
     })
     const title = textElements[0] ?? createLayoutText(true)
@@ -3001,12 +3008,18 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     replaceCurrentSlide({ ...currentSlide, elements: [...currentSlide.elements, element] })
   }
 
-  const appendElement = (element: PresentationElement) => {
+  const appendElement = (element: PresentationElement, asset?: PresentationAsset) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     setSelectedElementId(element.id)
-    replaceCurrentSlide({ ...slide, elements: [...slide.elements, element] })
+    commitDocument({
+      ...current,
+      assets: asset ? mergePresentationAssets(current.assets, [asset]) : current.assets,
+      slides: replacePresentationPages(current.slides, current.slides.pages.map((item) => item.id === slide.id
+        ? { ...slide, elements: [...slide.elements, element] }
+        : item)),
+    })
   }
 
   const insertFile = async (kind: 'image' | 'audio' | 'video', event: ChangeEvent<HTMLInputElement>) => {
@@ -3039,7 +3052,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         showToast(t('session.common.cancelled'))
         return
       }
-      let element: PresentationElement
+      let element: PresentationImageElement | PresentationMediaElement
       if (kind === 'image') {
         const image = createPresentationImageElement(source)
         const size = await presentationImageSize(file)
@@ -3071,12 +3084,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         showToast(t('session.common.cancelled'))
         return
       }
-      if ((isPresentationImageElement(element) || isPresentationMediaElement(element))
-        && !canAppendPresentationFileElement(documentRef.current, element)) {
+      const asset = createPresentationAsset(kind, source, element.sourceAssetId)
+      if (!canAppendPresentationFileElement(documentRef.current, element, asset)) {
         showToast(t('session.presentation.insertDialog.totalFileSizeTooLarge'))
         return
       }
-      appendElement(element)
+      appendElement(element, asset)
     } catch {
       showToast(t('session.presentation.insertDialog.fileReadError'))
     }
@@ -3093,7 +3106,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const state = insertDialog
     if (!state) return
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     const existing = state.elementId
       ? slide.elements.find((element) => element.id === state.elementId)
@@ -3126,7 +3139,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       let hyperlink: PresentationHyperlink | null = null
       if (value.targetType === 'url') {
         hyperlink = createPresentationUrlHyperlink(value.url, value.tooltip)
-      } else if (current.slides.some((item) => item.id === value.slideId)) {
+      } else if (current.slides.pages.some((item) => item.id === value.slideId)) {
         hyperlink = { type: 'slide', slideId: value.slideId, ...(value.tooltip ? { tooltip: value.tooltip } : {}) }
       }
       if (!hyperlink) {
@@ -3170,10 +3183,16 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         showDate: value.showDate,
         showSlideNumber: value.showSlideNumber,
       }
-      if (value.applyAll) {
+      if (value.useTheme) {
+        updateCurrentSlide({ footer: undefined })
+      } else if (value.applyAll) {
         commitDocument({
           ...current,
-          slides: current.slides.map((item) => ({ ...item, footer: { ...footer } })),
+          theme: { ...current.theme, footer },
+          slides: replacePresentationPages(current.slides, current.slides.pages.map((item) => {
+            const { footer: _pageFooter, ...page } = item
+            return page
+          })),
         })
       } else {
         replaceCurrentSlide({ ...slide, footer })
@@ -3213,7 +3232,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const alignSelectedElement = (alignment: PresentationElementAlignment) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     const selected = slide?.elements.find((element) => element.id === selectedElementIdRef.current)
     if (!slide || !selected) return
     const targets = getPresentationSelectionElements(slide.elements, selected, isolatedElementIdRef.current)
@@ -3237,7 +3256,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const toggleSelectedElementGroup = () => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     const selected = slide?.elements.find((element) => element.id === selectedElementIdRef.current)
     if (!slide || !selected) return
     if (selected.groupId) {
@@ -3282,16 +3301,18 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const updateCurrentSlide = (patch: Partial<PresentationSlide>, recordHistory = true) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
-    const nextSlide = { ...slide, ...patch }
+    const nextSlide: PresentationSlide = { ...slide, ...patch }
+    if ('background' in patch && patch.background === undefined) delete nextSlide.background
+    if ('footer' in patch && patch.footer === undefined) delete nextSlide.footer
     if (recordHistory) {
       replaceCurrentSlide(nextSlide)
       return
     }
     commitDocument({
       ...current,
-      slides: current.slides.map((item) => item.id === slide.id ? nextSlide : item),
+      slides: replacePresentationPages(current.slides, current.slides.pages.map((item) => item.id === slide.id ? nextSlide : item)),
     }, false)
   }
 
@@ -3302,21 +3323,21 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const applyCurrentTransitionToAll = () => {
     const current = documentRef.current
-    const selectedSlide = current.slides.find((slide) => slide.id === current.selectedSlideId)
+    const selectedSlide = current.slides.pages.find((slide) => slide.id === current.slides.selectedPageId)
     if (!selectedSlide) return
     const transition = normalizePresentationTransition(selectedSlide.transition)
     commitDocument({
       ...current,
-      slides: current.slides.map((slide) => ({
+      slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => ({
         ...slide,
         transition: { ...transition },
-      })),
+      }))),
     })
   }
 
   const applyCurrentAnimationToAll = () => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     const selected = slide?.elements.find((element) => element.id === selectedElementIdRef.current)
     if (!slide || !selected) return
     const source = getPresentationAnimationOwner(slide.elements, selected)
@@ -3352,7 +3373,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const previewTransition = (override?: PresentationTransition) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     const transition = normalizePresentationTransition(override ?? slide?.transition)
     if (!slide) return
     if (transition.effect === 'none') {
@@ -3367,7 +3388,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const previewSelectedAnimation = useCallback((animationOverride?: Partial<PresentationElement>) => {
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     if (!slide) return
     const selected = slide.elements.find((element) => element.id === selectedElementIdRef.current)
     const target = selected ? getPresentationAnimationOwner(slide.elements, selected) : null
@@ -3394,12 +3415,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       elementIds: targetElementId ? [targetElementId] : undefined,
       runKey: animationRunIdRef.current,
       slide: previewSlide,
-      slideNumber: current.slides.findIndex((item) => item.id === slide.id) + 1,
+      slideNumber: current.slides.pages.findIndex((item) => item.id === slide.id) + 1,
     })
   }, [])
 
   const startSlideshow = () => {
-    const index = documentRef.current.slides.findIndex((slide) => slide.id === documentRef.current.selectedSlideId)
+    const index = documentRef.current.slides.pages.findIndex((slide) => slide.id === documentRef.current.slides.selectedPageId)
     mediaRuntimeRef.current?.releaseAll()
     setAnimationPreviewRun(null)
     setTransitionPreviewRun(null)
@@ -3464,7 +3485,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     setRibbonTab(tab)
     if (tab !== 'animations' || selectedElementIdRef.current) return
     const current = documentRef.current
-    const slide = current.slides.find((item) => item.id === current.selectedSlideId)
+    const slide = current.slides.pages.find((item) => item.id === current.slides.selectedPageId)
     const firstElement = slide?.elements[0]
     if (firstElement) selectPresentationElement(firstElement.id)
   }
@@ -3503,32 +3524,35 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       kind: 'link',
       targetType: hyperlink?.type ?? 'url',
       url: hyperlink?.type === 'url' ? hyperlink.url : 'https://',
-      slideId: hyperlink?.type === 'slide' ? hyperlink.slideId : document.slides[0]?.id ?? '',
+      slideId: hyperlink?.type === 'slide' ? hyperlink.slideId : document.slides.pages[0]?.id ?? '',
       label,
       tooltip: hyperlink?.tooltip ?? '',
     }
   } else if (insertDialog?.kind === 'footer') {
+    const footer = currentSlide ? presentationSlideFooter(document.theme, currentSlide) : document.theme.footer
+    const footerConfigured = Boolean(currentSlide?.footer || footer.text || footer.showDate || footer.showSlideNumber)
     insertDialogInitialValue = {
       kind: 'footer',
-      text: currentSlide?.footer?.text ?? '',
-      showDate: currentSlide?.footer?.showDate ?? false,
-      showSlideNumber: currentSlide?.footer?.showSlideNumber ?? true,
+      text: footer.text,
+      showDate: footer.showDate,
+      showSlideNumber: footerConfigured ? footer.showSlideNumber : true,
       applyAll: true,
+      useTheme: false,
     }
   }
   const currentSlideIndex = currentSlide
-    ? document.slides.findIndex((slide) => slide.id === currentSlide.id)
+    ? document.slides.pages.findIndex((slide) => slide.id === currentSlide.id)
     : -1
   const transitionPreviewPreviousSlide = currentSlideIndex > 0
-    ? document.slides[currentSlideIndex - 1]
+    ? document.slides.pages[currentSlideIndex - 1]
     : undefined
   const slideshowTargetIndex = slideshowTransition?.toIndex ?? slideshowIndex
-  const slideshowSlide = document.slides[slideshowTargetIndex] ?? currentSlide
+  const slideshowSlide = document.slides.pages[slideshowTargetIndex] ?? currentSlide
   const slideshowTransitionCurrentSlide = slideshowTransition
-    ? document.slides[slideshowTransition.toIndex]
+    ? document.slides.pages[slideshowTransition.toIndex]
     : undefined
   const slideshowTransitionPreviousSlide = slideshowTransition
-    ? document.slides[slideshowTransition.fromIndex]
+    ? document.slides.pages[slideshowTransition.fromIndex]
     : undefined
   const slideshowTransitionView = slideshowTransition && slideshowTransitionCurrentSlide && slideshowTransitionPreviousSlide ? {
     ...slideshowTransition,
@@ -3597,6 +3621,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         canvasScale={canvasScale}
         compact={compact}
         currentSlide={currentSlide}
+        currentSlideBackground={currentSlideBackground}
         filmstripCollapsed={filmstripCollapsed}
         historyStatus={historyStatus}
         inspectorOpen={inspectorOpen && inspectorMode === 'properties'}
@@ -3606,6 +3631,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         ribbonCollapsed={ribbonCollapsed}
         selectedElement={ribbonTab === 'animations' ? selectedAnimationElement : selectedElement}
         selectedText={selectedText}
+        themeBackground={document.theme.background}
         viewOptions={viewOptions}
         onActiveTabChange={changeRibbonTab}
         onAddShape={addShape}
@@ -3663,7 +3689,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
             {!filmstripCollapsed ? (
               <div className={cn('flex h-full flex-col', compact ? 'w-[118px]' : 'w-[166px]')}>
                 <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-3">
-                  {document.slides.map((slide, index) => (
+                  {document.slides.pages.map((slide, index) => (
                     <button
                       type="button"
                       key={slide.id}
@@ -3675,7 +3701,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                       aria-label={t('session.presentation.slideAria', { index: index + 1, name: slide.name })}
                     >
                       <span className={cn('w-4 shrink-0 pt-0.5 text-right text-2xs text-text-tertiary', slide.id === currentSlide?.id && 'font-semibold text-brand-purple')}>{index + 1}</span>
-                      <PresentationSlidePreview pageSize={pageSize} slide={slide} slideNumber={index + 1} width={previewWidth} selected={slide.id === currentSlide?.id} />
+                      <PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={slide} slideNumber={index + 1} theme={document.theme} width={previewWidth} selected={slide.id === currentSlide?.id} />
                     </button>
                   ))}
                 </div>
@@ -3685,7 +3711,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                 >
                   <MiniButton label={t('session.presentation.newSlide')} onClick={addSlide}><PlusIcon /></MiniButton>
                   <MiniButton label={t('session.presentation.duplicateSlide')} onClick={duplicateSlide}><DuplicateIcon /></MiniButton>
-                  <MiniButton label={t('session.presentation.deleteSlide')} onClick={deleteSlide} disabled={document.slides.length <= 1}><TrashIcon /></MiniButton>
+                  <MiniButton label={t('session.presentation.deleteSlide')} onClick={deleteSlide} disabled={document.slides.pages.length <= 1}><TrashIcon /></MiniButton>
                 </div>
               </div>
             ) : null}
@@ -3746,6 +3772,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                 {animationPreviewRun && currentSlide && animationPreviewRun.slide.id === currentSlide.id ? (
                   <div className="absolute inset-0 z-20">
                     <PresentationAnimationPlayer
+                      assets={document.assets}
                       className="size-full"
                       elementIds={animationPreviewRun.elementIds}
                       onComplete={() => setAnimationPreviewRun((run) => run?.runKey === animationPreviewRun.runKey ? null : run)}
@@ -3753,6 +3780,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                       runKey={animationPreviewRun.runKey}
                       slide={animationPreviewRun.slide}
                       slideNumber={animationPreviewRun.slideNumber}
+                      theme={document.theme}
                       width={pageSize.width * canvasScale}
                     />
                   </div>
@@ -3761,9 +3789,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                   <div className="absolute inset-0 z-20">
                     <PresentationTransitionPlayer
                       previous={transitionPreviewPreviousSlide
-                        ? <PresentationSlidePreview pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} width={pageSize.width * canvasScale} selected={false} presentation />
+                        ? <PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />
                         : <span className="block size-full bg-black" />}
-                      current={<PresentationSlidePreview pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} width={pageSize.width * canvasScale} selected={false} presentation />}
+                      current={<PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />}
                       transition={transitionPreviewRun.transition}
                       runKey={transitionPreviewRun.runKey}
                       onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
@@ -3801,6 +3829,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
             {!compact && inspectorOpen && inspectorMode === 'properties' ? (
               <PresentationInspector
                 currentSlide={currentSlide}
+                currentSlideBackground={currentSlideBackground}
                 selectedElement={selectedElement}
                 onEditElement={(element) => {
                   if (isPresentationTableElement(element) || isPresentationChartElement(element)) {
@@ -3828,7 +3857,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
           ) : null}
 
           <footer className="flex h-8 shrink-0 items-center justify-between border-t border-border-subtle/65 bg-bg-surface px-2.5 text-[10px] text-text-tertiary">
-            <span>{t('session.presentation.pageCount', { current: Math.max(1, document.slides.findIndex((slide) => slide.id === currentSlide?.id) + 1), total: document.slides.length })}</span>
+            <span>{t('session.presentation.pageCount', { current: Math.max(1, document.slides.pages.findIndex((slide) => slide.id === currentSlide?.id) + 1), total: document.slides.pages.length })}</span>
             <div className="flex items-center gap-0.5">
               <StatusButton label={t('session.presentation.normalView')} active><Rows3 className="size-3.5" /></StatusButton>
               <StatusButton label={t('session.presentation.sorterView')} onClick={() => setFilmstripCollapsed(false)}><Grid2X2 className="size-3.5" /></StatusButton>
@@ -3872,13 +3901,13 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         open={insertDialog?.kind ?? null}
         initialValue={insertDialogInitialValue}
         linkLabelEditable={!insertDialogElement || isPresentationTextElement(insertDialogElement)}
-        slides={document.slides.map((slide) => ({ id: slide.id, name: slide.name }))}
+        slides={document.slides.pages.map((slide) => ({ id: slide.id, name: slide.name }))}
         onClose={() => setInsertDialog(null)}
         onSubmit={submitInsertDialog}
       />
       {masterDialogOpen ? (
         <PresentationMasterDialog
-          master={document.master}
+          master={document.theme}
           onApply={applyPresentationMaster}
           onClose={() => setMasterDialogOpen(false)}
         />
@@ -3886,12 +3915,14 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
       {slideshowOpen && slideshowSlide ? (
         <SlideshowOverlay
+          assets={document.assets}
           key={slideshowSlide.id}
           current={slideshowTargetIndex + 1}
           pageSize={pageSize}
           slide={slideshowSlide}
+          theme={document.theme}
           transitionRun={slideshowTransitionView}
-          total={document.slides.length}
+          total={document.slides.pages.length}
           onActivateHyperlink={activateSlideshowHyperlink}
           onClose={() => {
             setSlideshowOpen(false)
@@ -3993,7 +4024,8 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
   )
 }
 
-function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, total, transitionRun }: {
+function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, theme, total, transitionRun }: {
+  assets: readonly PresentationAsset[]
   current: number
   onActivateHyperlink: (hyperlink: PresentationHyperlink, completedTargetIds: ReadonlySet<string>) => void
   onClose: () => void
@@ -4002,6 +4034,7 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
   onTransitionComplete: () => void
   pageSize: PresentationPageSize
   slide: PresentationSlide
+  theme: PresentationMaster
   total: number
   transitionRun: SlideshowTransitionView | null
 }) {
@@ -4103,11 +4136,13 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
       <PresentationTransitionPlayer
         previous={(
           <PresentationSlidePreview
+            assets={assets}
             pageSize={pageSize}
             animationStates={getPresentationAnimationDisplayStates(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
             hiddenElementIds={getPresentationAnimationHiddenElementIds(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
             slide={transitionRun.previousSlide}
             slideNumber={transitionRun.fromIndex + 1}
+            theme={theme}
             width={slideshowWidth}
             selected={false}
             presentation
@@ -4115,7 +4150,7 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
             onActivateHyperlink={activateHyperlink}
           />
         )}
-        current={<PresentationSlidePreview pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
+        current={<PresentationSlidePreview assets={assets} pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} theme={theme} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
         transition={transitionRun.transition}
         runKey={transitionRun.runKey}
         direction={transitionRun.direction}
@@ -4127,6 +4162,7 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
     // Keep the base slide mounted between animation steps so unrelated media keeps playing.
     slideshowContent = (
       <PresentationAnimationPlayer
+        assets={assets}
         baseHiddenElementIds={hiddenElementIds}
         completedTargetIds={completedTargetIds}
         className="size-full"
@@ -4138,6 +4174,7 @@ function SlideshowOverlay({ current, onActivateHyperlink, onClose, onNext, onPre
         runKey={animationRunKey}
         slide={slide}
         slideNumber={current}
+        theme={theme}
         width={slideshowWidth}
       />
     )
@@ -4504,12 +4541,14 @@ function AnimationInspector({ currentSlide, onClose, onElementChange, onPreviewA
 
 function PresentationInspector({
   currentSlide,
+  currentSlideBackground,
   selectedElement,
   onEditElement,
   onElementChange,
   onSlideBackgroundChange,
 }: {
   currentSlide: PresentationSlide | undefined
+  currentSlideBackground: string
   selectedElement: PresentationElement | null
   onEditElement: (element: PresentationElement) => void
   onElementChange: (patch: Partial<PresentationElement>) => void
@@ -4665,7 +4704,7 @@ function PresentationInspector({
               <input
                 type="color"
                 className="h-7 w-10 cursor-pointer rounded border border-border-default bg-transparent p-0.5"
-                value={currentSlide.background}
+                value={currentSlideBackground}
                 onChange={onSlideBackgroundChange}
               />
             </label>

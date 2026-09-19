@@ -12,6 +12,8 @@ import {
   purgePresentationSessionAtom,
   formatPresentationText,
   layoutPresentationVerticalText,
+  presentationSlideBackground,
+  presentationSlideFooter,
   stripPresentationListMarkers,
   stripPresentationTextFormatting,
 } from '../presentation'
@@ -23,30 +25,51 @@ describe('presentation atoms', () => {
   })
 
   it('gives every generated slide an explicit no-transition default', () => {
-    expect(createBlankPresentationSlide('Blank').transition).toEqual({ effect: 'none', durationMs: 1_000 })
+    const blank = createBlankPresentationSlide('Blank')
+    expect(blank.transition).toEqual({ effect: 'none', durationMs: 1_000 })
+    expect(blank.background).toBeUndefined()
+    expect(blank.footer).toBeUndefined()
     const initialDocument = createInitialPresentationDocument()
-    expect(initialDocument.slides.every((slide) => (
+    expect(initialDocument.slides.pages.every((slide) => (
       slide.transition.effect === 'none' && slide.transition.durationMs === 1_000
     ))).toBe(true)
-    expect(initialDocument.slides.every((slide) => slide.footer === undefined)).toBe(true)
+    expect(initialDocument.slides.pages.every((slide) => slide.footer === undefined)).toBe(true)
   })
 
   it('starts with one unnamed slide containing ordinary editable text boxes instead of bundled sample content', () => {
     const document = createInitialPresentationDocument()
     expect(document.title).toBe('')
-    expect(document.slides).toHaveLength(1)
-    expect(document.selectedSlideId).toBe(document.slides[0]!.id)
-    expect(document.slides[0]).toMatchObject({
-      background: '#FFFFFF',
+    expect(document.slides.pages).toHaveLength(1)
+    expect(document.slides.selectedPageId).toBe(document.slides.pages[0]!.id)
+    expect(document.slides.pages[0]).toMatchObject({
       layout: 'title',
       name: 'Slide 1',
       notes: '',
     })
-    expect(document.slides[0]!.elements).toHaveLength(3)
-    expect(document.slides[0]!.elements.every((element) => element.type === 'text')).toBe(true)
-    expect(document.slides[0]!.elements.every((element) => element.type !== 'text' || element.text.length > 0)).toBe(true)
-    expect(document.slides[0]!.elements.every((element) => !('placeholder' in element))).toBe(true)
+    expect(presentationSlideBackground(document.theme, document.slides.pages[0]!)).toBe('#FFFFFF')
+    expect(document.slides.pages[0]!.elements).toHaveLength(3)
+    expect(document.slides.pages[0]!.elements.every((element) => element.type === 'text')).toBe(true)
+    expect(document.slides.pages[0]!.elements.every((element) => element.type !== 'text' || element.text.length > 0)).toBe(true)
+    expect(document.slides.pages[0]!.elements.every((element) => !('placeholder' in element))).toBe(true)
     expect(JSON.stringify(document)).not.toContain('Ideas that move forward')
+  })
+
+  it('resolves global theme defaults while preserving page overrides', () => {
+    const document = createBlankPresentationDocument('Theme defaults')
+    const slide = document.slides.pages[0]!
+    document.theme = {
+      ...document.theme,
+      background: '#17182B',
+      footer: { text: 'Global footer', showDate: true, showSlideNumber: true },
+    }
+
+    expect(presentationSlideBackground(document.theme, slide)).toBe('#17182B')
+    expect(presentationSlideFooter(document.theme, slide)).toEqual(document.theme.footer)
+    expect(presentationSlideBackground(document.theme, { ...slide, background: '#F7F3EA' })).toBe('#F7F3EA')
+    expect(presentationSlideFooter(document.theme, {
+      ...slide,
+      footer: { text: '', showDate: false, showSlideNumber: false },
+    })).toEqual({ text: '', showDate: false, showSlideNumber: false })
   })
 
   it('formats list markers for display without polluting editable text', () => {

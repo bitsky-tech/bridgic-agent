@@ -24,7 +24,7 @@ export function createPresentationPersistence(options: {
   const writers = new Map<string, OfficePersistenceScheduler<PresentationSourceWrite>>()
   const policy = Object.freeze({ appKind: 'presentation', sessionId: options.sessionId, kind: 'source', storage: 'source-file', automatic: true } as const)
   const idleSnapshot: OfficePersistenceSnapshot = Object.freeze({ policy, status: 'idle', pendingCount: 0, error: null })
-  const key = ({ document, target }: PresentationSourceWrite) => JSON.stringify([target, document.id, document.version])
+  const key = ({ document, target }: PresentationSourceWrite) => JSON.stringify([target, document.id, document.revision])
   const writerFor = (target: string) => {
     const existing = writers.get(target)
     if (existing) return existing

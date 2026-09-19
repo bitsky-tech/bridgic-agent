@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Root } from 'react-dom/client'
-import type { PresentationDocument, PresentationElement, PresentationTextElement } from '@/atoms/presentation'
+import type { PresentationDocument, PresentationElement, PresentationFileSource, PresentationMediaElement, PresentationTextElement } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -14,6 +14,7 @@ const { settingsAtom } = await import('@/atoms/settings')
 const { installApiStub } = await import('@/lib/apiStub')
 const { i18n } = await import('@/lib/i18n')
 const { createPresentationMediaElement } = await import('@/lib/presentationInsert')
+const { createPresentationAsset } = await import('@/presentation/project')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
 const { PresentationAnimationPlayer } = await import('../PresentationAnimationPlayer')
 
@@ -59,6 +60,10 @@ function bullet(id: string, overrides: Partial<PresentationTextElement> = {}): P
     fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', animation: 'appear', ...overrides }
 }
 
+function attachMedia(model: PresentationDocument, media: PresentationMediaElement, source: PresentationFileSource): void {
+  model.assets.push(createPresentationAsset(media.type, source, media.sourceAssetId))
+}
+
 async function mount(model: PresentationDocument) {
   const store = createStore()
   const settings = store.get(settingsAtom)
@@ -95,10 +100,10 @@ describe('slideshow playback interactions', () => {
       ...(effect === 'textColor' ? bullet('Emphasis', { color: '#CC2222', textRuns: [{ start: 0, end: 8, style: { color: '#FF8800', fontSize: 21 } }] }) : originalShape),
       animation: effect, animationDuration: 180, animationColor: '#2266CC',
     }
-    model.slides[0]!.elements = [element, bullet('Later')]
+    model.slides.pages[0]!.elements = [element, bullet('Later')]
     const next = createBlankPresentationSlide('Next')
     next.transition = { effect: 'fade', durationMs: 800 }
-    model.slides.push(next)
+    model.slides.pages.push(next)
     const original = JSON.stringify(model)
     const host = await mount(model)
     const assertAppearance = (container: Element, emphasized: boolean) => {
@@ -137,8 +142,8 @@ describe('slideshow playback interactions', () => {
     const model = createBlankPresentationDocument('Emphasis link')
     const target = createBlankPresentationSlide('Linked')
     target.transition = { effect: 'fade', durationMs: 800 }
-    model.slides.push(target)
-    model.slides[0]!.elements = [bullet('Continue', { animation: effect, animationDuration: 180, animationColor: '#2266CC',
+    model.slides.pages.push(target)
+    model.slides.pages[0]!.elements = [bullet('Continue', { animation: effect, animationDuration: 180, animationColor: '#2266CC',
       hyperlink: { type: 'slide', slideId: target.id, tooltip: 'Continue link' },
     })]
     const host = await mount(model)
@@ -163,10 +168,12 @@ describe('slideshow playback interactions', () => {
   })
 
   for (const type of ['audio', 'video'] as const) it.each([false, true])(`preserves ${type} with autoplay=%s through two unrelated animations and stops it on exit`, async autoplay => {
-    const media = { ...createPresentationMediaElement(type, { dataUrl: type === 'audio' ? 'data:audio/wav;base64,UklGRg==' : 'data:video/mp4;base64,AAAAHGZ0eXBpc29t', fileName: 'Narration', mimeType: type === 'audio' ? 'audio/wav' : 'video/mp4' }), autoplay }
+    const source = { dataUrl: type === 'audio' ? 'data:audio/wav;base64,UklGRg==' : 'data:video/mp4;base64,AAAAHGZ0eXBpc29t', fileName: 'Narration', mimeType: type === 'audio' ? 'audio/wav' : 'video/mp4' }
+    const media = { ...createPresentationMediaElement(type, source), autoplay }
     const model = createBlankPresentationDocument('Media lifecycle')
-    model.slides[0]!.elements = [bullet('First'), media, bullet('Second')]
-    model.slides.push(createBlankPresentationSlide('Next'))
+    attachMedia(model, media, source)
+    model.slides.pages[0]!.elements = [bullet('First'), media, bullet('Second')]
+    model.slides.pages.push(createBlankPresentationSlide('Next'))
     const host = await mount(model)
     const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
     const node = slideshow.querySelector<HTMLMediaElement>(type)!
@@ -191,9 +198,11 @@ describe('slideshow playback interactions', () => {
   })
 
   it('plays and pauses from SVG and path hit targets without advancing the slide', async () => {
-    const media = { ...createPresentationMediaElement('audio', { dataUrl: 'data:audio/wav;base64,UklGRg==', fileName: 'Narration', mimeType: 'audio/wav' }), autoplay: false }
+    const source = { dataUrl: 'data:audio/wav;base64,UklGRg==', fileName: 'Narration', mimeType: 'audio/wav' }
+    const media = { ...createPresentationMediaElement('audio', source), autoplay: false }
     const model = createBlankPresentationDocument('Audio controls')
-    model.slides[0]!.elements = [media, bullet('Pending')]
+    attachMedia(model, media, source)
+    model.slides.pages[0]!.elements = [media, bullet('Pending')]
     const host = await mount(model)
     const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
     const node = slideshow.querySelector('audio')!
@@ -213,7 +222,7 @@ describe('slideshow playback interactions', () => {
 
   it.each(['withPrevious', 'afterPrevious'] as const)('starts an initial %s animation once while retaining click steps', async animationStart => {
     const model = createBlankPresentationDocument('Automatic intro')
-    model.slides[0]!.elements = [bullet('Automatic', { animationStart, animationDelay: 80 }), bullet('Manual')]
+    model.slides.pages[0]!.elements = [bullet('Automatic', { animationStart, animationDelay: 80 }), bullet('Manual')]
     const host = await mount(model)
     const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
     expect(slideshow.querySelector('[data-testid="presentation-animation-player"]')).not.toBeNull()
@@ -235,7 +244,7 @@ describe('slideshow playback interactions', () => {
     const incoming = createBlankPresentationSlide('Incoming')
     incoming.transition = { effect: 'fade', durationMs: 800 }
     incoming.elements = [bullet('Automatic', { animationStart: 'afterPrevious' })]
-    model.slides.push(incoming)
+    model.slides.pages.push(incoming)
     const host = await mount(model)
     for (let visit = 0; visit < 2; visit++) {
       await click(host, 'session.presentation.nextSlide')
@@ -253,7 +262,7 @@ describe('slideshow playback interactions', () => {
 
   it('keeps explicit element-click triggers manual even with an automatic start setting', async () => {
     const model = createBlankPresentationDocument('Element trigger')
-    model.slides[0]!.elements = [bullet('Triggered', { animationStart: 'withPrevious', animationTrigger: 'elementClick' })]
+    model.slides.pages[0]!.elements = [bullet('Triggered', { animationStart: 'withPrevious', animationTrigger: 'elementClick' })]
     const host = await mount(model)
     expect(animations).toHaveLength(0)
     await click(host, 'session.presentation.triggerElementClick')
@@ -262,14 +271,17 @@ describe('slideshow playback interactions', () => {
 
   it('keeps ribbon animation previews silent', async () => {
     const model = createBlankPresentationDocument('Silent preview')
-    model.slides[0]!.elements = [
-      { ...createPresentationMediaElement('audio', { dataUrl: 'data:audio/wav;base64,UklGRg==', fileName: 'Narration', mimeType: 'audio/wav' }), autoplay: true }, bullet('Animated'),
+    const source = { dataUrl: 'data:audio/wav;base64,UklGRg==', fileName: 'Narration', mimeType: 'audio/wav' }
+    const media = { ...createPresentationMediaElement('audio', source), autoplay: true }
+    attachMedia(model, media, source)
+    model.slides.pages[0]!.elements = [
+      media, bullet('Animated'),
     ]
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     roots.push(root)
-    await act(async () => root.render(<PresentationAnimationPlayer runKey={1} slide={model.slides[0]!} width={1280} />))
+    await act(async () => root.render(<PresentationAnimationPlayer assets={model.assets} runKey={1} slide={model.slides.pages[0]!} width={1280} />))
     expect(host.querySelector('audio')).toBeNull()
     expect(plays).toHaveLength(0)
   })

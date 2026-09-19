@@ -201,4 +201,25 @@ describe('PresentationInsertDialogs', () => {
       applyAll: false,
     })
   })
+
+  it('submits an explicit request to restore theme footer inheritance', async () => {
+    const { submitted } = await mountDialog({
+      open: 'footer',
+      initialValue: { kind: 'footer', text: 'Page override', showDate: true, showSlideNumber: false, applyAll: false },
+    })
+    const useTheme = document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-use-theme"]')!
+    await act(async () => useTheme.click())
+    expect(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-text"]')!.disabled).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-date"]')!.disabled).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-all"]')!.checked).toBe(false)
+    await act(async () => document.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    expect(submitted[0]).toEqual({
+      kind: 'footer',
+      text: 'Page override',
+      showDate: true,
+      showSlideNumber: false,
+      applyAll: false,
+      useTheme: true,
+    })
+  })
 })

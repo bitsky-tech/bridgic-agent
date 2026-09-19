@@ -2,10 +2,12 @@ import diff from 'fast-diff'
 import type { PresentationTextElement, PresentationTextRun, PresentationTextStyle, PresentationTextParagraph, PresentationParagraphStyle } from '@/atoms/presentation'
 
 const CJK_TEXT_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+const EAST_ASIAN_VERTICAL_UPRIGHT_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\p{Extended_Pictographic}\u2022\u25A0-\u27BF\u3000-\u303F\uFE10-\uFE1F\uFE30-\uFE6F\uFF01-\uFF60\uFFE0-\uFFE6]/u
 const CJK_FONT_PATTERN = /(思源|黑体|黑體|宋体|宋體|仿宋|楷|行书|行書|毛笔|毛筆|篆|隶|隸|书法|書法|草书|草書|等线|等線|source han|noto (sans|serif) cjk|pingfang|hiragino|yahei|simhei|simsun|mincho|gothic|ming|songti|calligraphy|brush)/i
 const CJK_SERIF_FONT_PATTERN = /(宋|明朝|明體|仿宋|楷|serif|mincho|ming|song|kai)/i
 const CJK_CALLIGRAPHIC_FONT_PATTERN = /(行书|行書|毛笔|毛筆|篆|隶|隸|书法|書法|草书|草書|calligraphy|brush)/i
 const CSS_PIXELS_PER_POINT = 96 / 72
+const PRESENTATION_GRAPHEME_SEGMENTER = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
 
 /** Shared natural line metrics used by Fabric and DOM previews. */
 export const PRESENTATION_TEXT_LINE_METRICS = { height: 1.13, descent: 0.222 } as const
@@ -22,6 +24,27 @@ export function shouldSplitPresentationTextByGrapheme(text: string, wordWrap = t
 
 export function presentationTextUsesCjk(text: string): boolean {
   return CJK_TEXT_PATTERN.test(text)
+}
+
+export function presentationTextGraphemes(text: string): string[] {
+  return PRESENTATION_GRAPHEME_SEGMENTER
+    ? Array.from(PRESENTATION_GRAPHEME_SEGMENTER.segment(text), part => part.segment)
+    : Array.from(text)
+}
+
+/** Identify glyphs that remain upright in mixed-orientation East Asian vertical text. */
+export function usesPresentationUprightVerticalGlyph(glyph: string): boolean {
+  return EAST_ASIAN_VERTICAL_UPRIGHT_PATTERN.test(glyph)
+}
+
+/** East Asian vertical needs glyph layout when authored text or generated list markers contain upright glyphs. */
+export function usesPresentationVerticalGlyphLayout(element: PresentationTextElement): boolean {
+  if (element.textDirection === 'stacked') return true
+  if (element.textDirection !== 'eastAsianVertical') return false
+  if (presentationTextGraphemes(element.text).some(usesPresentationUprightVerticalGlyph)) return true
+  return presentationTextParagraphs(element).some((paragraph) => (
+    presentationTextGraphemes(paragraph.marker).some(usesPresentationUprightVerticalGlyph)
+  ))
 }
 
 /** Convert a PowerPoint point size into the presentation model's CSS-pixel unit. */
@@ -282,7 +305,9 @@ export function presentationTextFrame(element: PresentationTextElement) {
   const inset = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
   const width = Math.max(1, element.width - inset.left - inset.right)
   const height = Math.max(1, element.height - inset.top - inset.bottom)
-  if (element.textDirection === 'vertical') return { x: inset.left + width, y: inset.top, width: height, height: width, rotation: 90 }
+  if (element.textDirection === 'vertical' || (element.textDirection === 'eastAsianVertical' && !usesPresentationVerticalGlyphLayout(element))) {
+    return { x: inset.left + width, y: inset.top, width: height, height: width, rotation: 90 }
+  }
   if (element.textDirection === 'vertical270') return { x: inset.left, y: inset.top + height, width: height, height: width, rotation: -90 }
   return { x: inset.left, y: inset.top, width, height, rotation: 0 }
 }

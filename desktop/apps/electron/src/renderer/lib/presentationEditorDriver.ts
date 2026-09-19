@@ -12,7 +12,7 @@ export function bindPresentationNativeEdit<TArgs extends unknown[]>(lease: Offic
   return (...args) => {
     if (!lease.isCurrent()) return
     const document = readDocument()
-    if (document.id !== lease.identity.documentId || document.selectedSlideId !== slideId) return
+    if (document.id !== lease.identity.documentId || document.slides.selectedPageId !== slideId) return
     apply(...args)
   }
 }

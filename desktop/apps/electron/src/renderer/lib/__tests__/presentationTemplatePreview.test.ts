@@ -53,13 +53,13 @@ describe('presentation template renderer previews', () => {
 
   it('imports only the selected pages into an isolated read-only preview model', async () => {
     const source = createPresentationTestDocument()
-    const first = source.slides[0]!
+    const first = source.slides.pages[0]!
     const second = structuredClone(first)
     second.id = 'template-source-2'
     const third = structuredClone(first)
     third.id = 'template-source-3'
-    source.slides = [first, second, third]
-    source.selectedSlideId = first.id
+    source.slides.pages = [first, second, third]
+    source.slides.selectedPageId = first.id
     const bytes = await createPresentationPptx(source)
     const template = candidate({
       slideCount: 3,
@@ -78,6 +78,6 @@ describe('presentation template renderer previews', () => {
     expect(requests).toBe(1)
     expect(preview?.pages.map(page => page.slideNumber)).toEqual([1, 3, 2])
     expect(preview?.pages.map(page => page.slide.name)).toEqual(['Slide 1', 'Slide 3', 'Slide 2'])
-    expect(source.slides).toHaveLength(3)
+    expect(source.slides.pages).toHaveLength(3)
   })
 })

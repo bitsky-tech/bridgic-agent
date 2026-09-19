@@ -5,8 +5,11 @@ import JSZip from 'jszip'
 import { writeOfficeRoundTrip } from './office/officeRoundTrip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { correctPresentationTextXml } from '@/lib/presentationTextPptx'
+import { presentationElementSource } from '@/presentation/project'
 import {
   getPresentationPageSize,
+  presentationSlideBackground,
+  presentationSlideFooter,
   type PresentationChartType,
   type PresentationDocument,
   type PresentationElement,
@@ -263,7 +266,7 @@ function toPptxHyperlink(
     : undefined
 
   if (hyperlink.type === 'slide' && typeof hyperlink.slideId === 'string') {
-    const slideIndex = document.slides.findIndex((slide) => slide.id === hyperlink.slideId)
+    const slideIndex = document.slides.pages.findIndex((slide) => slide.id === hyperlink.slideId)
     return slideIndex >= 0 ? { slide: slideIndex + 1, tooltip } : undefined
   }
   if (hyperlink.type !== 'url' || typeof hyperlink.url !== 'string') return undefined
@@ -342,13 +345,13 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
   const pageSize = getPresentationPageSize(document)
   const slideWidthInches = SLIDE_HEIGHT_INCHES * (pageSize.width / pageSize.height)
   async function addNativePresentationFeatures(bytes: Uint8Array): Promise<Uint8Array> {
-    const transitions = document.slides.map((slide) => normalizePresentationTransition(slide.transition))
-    const slidesWithAudio = document.slides.map((slide) => (
+    const transitions = document.slides.pages.map((slide) => normalizePresentationTransition(slide.transition))
+    const slidesWithAudio = document.slides.pages.map((slide) => (
       Array.isArray(slide.elements) && (slide.elements as unknown[]).some((element) => (
         isRecord(element) && element.type === 'audio'
       ))
     ))
-    const slidesWithAnimations = document.slides.map((slide) => (
+    const slidesWithAnimations = document.slides.pages.map((slide) => (
       Array.isArray(slide.elements) && (slide.elements as PresentationElement[]).some(hasPresentationAnimation)
     ))
     const p14Namespace = 'http://schemas.microsoft.com/office/powerpoint/2010/main'
@@ -770,7 +773,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     const themeFile = themePath ? archive.file(themePath) : null
     if (themeFile) {
       let themeXml = await themeFile.async('text')
-      document.master.accentColors.slice(0, 6).forEach((color, index) => {
+      document.theme.accentColors.slice(0, 6).forEach((color, index) => {
         const name = `accent${index + 1}`
         const value = presentationColor(color, '')
         if (!value) return
@@ -788,17 +791,17 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       const slidePath = `ppt/slides/slide${index + 1}.xml`
       const slideFile = archive.file(slidePath)
       if (!slideFile) throw new Error(`PPTX exporter did not create ${slidePath}`)
-      let xml = correctPresentationTextXml(await slideFile.async('text'), document.slides[index]?.elements ?? [])
-      xml = correctTableHeaderXml(xml, document.slides[index]?.elements ?? [])
-      xml = correctConnectorGeometryXml(xml, document.slides[index]?.elements ?? [])
-      await correctPresentationChartData(archive, xml, index + 1, document.slides[index]?.elements ?? [])
-      xml = correctPresentationGraphicFlips(xml, document.slides[index]?.elements ?? [])
+      let xml = correctPresentationTextXml(await slideFile.async('text'), document.slides.pages[index]?.elements ?? [])
+      xml = correctTableHeaderXml(xml, document.slides.pages[index]?.elements ?? [])
+      xml = correctConnectorGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
+      await correctPresentationChartData(archive, xml, index + 1, document.slides.pages[index]?.elements ?? [])
+      xml = correctPresentationGraphicFlips(xml, document.slides.pages[index]?.elements ?? [])
       if (slidesWithAudio[index]) xml = await correctAudioFileTags(archive, xml, index + 1)
       if (transition.effect !== 'none') {
         xml = insertTransitionXml(ensureTransitionNamespaces(xml), transitionXml(transition))
       }
       if (slidesWithAnimations[index]) {
-        const timingMarkup = nativeAnimationTimingXml(xml, document.slides[index]?.elements ?? [])
+        const timingMarkup = nativeAnimationTimingXml(xml, document.slides.pages[index]?.elements ?? [])
         if (timingMarkup) xml = insertTimingXml(xml, timingMarkup)
       }
       archive.file(slidePath, xml)
@@ -814,17 +817,17 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
   pptx.subject = document.title
   pptx.title = document.title
   pptx.theme = {
-    headFontFace: document.master?.titleFontFamily ?? 'Aptos Display',
-    bodyFontFace: document.master?.bodyFontFamily ?? 'Aptos',
+    headFontFace: document.theme?.titleFontFamily ?? 'Aptos Display',
+    bodyFontFace: document.theme?.bodyFontFamily ?? 'Aptos',
   }
 
   const x = (pixels: number) => (pixels / pageSize.width) * slideWidthInches
   const y = (pixels: number) => (pixels / pageSize.height) * SLIDE_HEIGHT_INCHES
   const footerDate = new Intl.DateTimeFormat().format(new Date())
 
-  for (const sourceSlide of document.slides) {
+  for (const sourceSlide of document.slides.pages) {
     const slide = pptx.addSlide()
-    slide.background = { color: presentationColor(sourceSlide.background, 'FFFFFF') }
+    slide.background = { color: presentationColor(presentationSlideBackground(document.theme, sourceSlide), 'FFFFFF') }
     const commentNotes = (sourceSlide.comments ?? []).map((comment) => (
       `[${comment.resolved ? 'Resolved comment' : 'Comment'} — ${comment.author}] ${comment.text}`
     ))
@@ -903,7 +906,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }
 
       if (isPresentationImageElement(element)) {
-        const source = normalizePresentationFileSourceForExport('image', element.source)
+        const source = normalizePresentationFileSourceForExport('image', presentationElementSource(document, element))
         if (!source) continue
         const width = x(element.width)
         const height = y(element.height)
@@ -946,7 +949,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       }
 
       if (isPresentationMediaElement(element)) {
-        const source = normalizePresentationFileSourceForExport(element.type, element.source)
+        const source = normalizePresentationFileSourceForExport(element.type, presentationElementSource(document, element))
         if (!source || !hasValidPresentationMediaSignature(element.type, source)) continue
         slide.addMedia({
           type: element.type,
@@ -1106,7 +1109,7 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
       )
     }
 
-    const footer = sourceSlide.footer
+    const footer = presentationSlideFooter(document.theme, sourceSlide)
     if (isRecord(footer)) {
       const footerColor = '666571'
       const footerY = SLIDE_HEIGHT_INCHES - 0.34
@@ -1161,6 +1164,6 @@ export async function createPresentationPptx(document: PresentationDocument): Pr
     throw new Error('PPTX exporter returned an unexpected output type')
   }
   const archive = await JSZip.loadAsync(await addNativePresentationFeatures(output))
-  const { master, pageSize: storedPageSize, slides, selectedSlideId, title } = document
-  return writeOfficeRoundTrip(archive, 'presentation', { master, pageSize: storedPageSize, slides, selectedSlideId, title })
+  const { schemaVersion, version, id, title, theme, pageSize: storedPageSize, assets, slides } = document
+  return writeOfficeRoundTrip(archive, 'presentation', { schemaVersion, version, id, title, theme, pageSize: storedPageSize, assets, slides })
 }

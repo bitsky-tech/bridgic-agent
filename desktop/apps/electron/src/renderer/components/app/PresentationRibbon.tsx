@@ -63,19 +63,22 @@ import {
   ZoomIn,
   type LucideIcon,
 } from 'lucide-react'
-import type {
-  PresentationAnimationEffect,
-  PresentationAnimationStart,
-  PresentationAnimationTrigger,
-  PresentationElement,
-  PresentationPageSizePreset,
-  PresentationShapeType,
-  PresentationSlide,
-  PresentationSlideLayout,
-  PresentationTextElement,
-  PresentationTransition,
-  PresentationTransitionDirection,
-  PresentationTransitionEffect,
+import {
+  PRESENTATION_ANIMATION_EFFECTS,
+  PRESENTATION_SLIDE_LAYOUTS,
+  PRESENTATION_TRANSITION_EFFECTS,
+  type PresentationAnimationEffect,
+  type PresentationAnimationStart,
+  type PresentationAnimationTrigger,
+  type PresentationElement,
+  type PresentationPageSizePreset,
+  type PresentationShapeType,
+  type PresentationSlide,
+  type PresentationSlideLayout,
+  type PresentationTextElement,
+  type PresentationTransition,
+  type PresentationTransitionDirection,
+  type PresentationTransitionEffect,
 } from '@/atoms/presentation'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
@@ -126,6 +129,7 @@ interface PresentationRibbonProps {
   canvasScale: number
   compact: boolean
   currentSlide: PresentationSlide | undefined
+  currentSlideBackground?: string
   filmstripCollapsed: boolean
   historyStatus: { canUndo: boolean; canRedo: boolean }
   animationMarkersHidden: boolean
@@ -137,6 +141,7 @@ interface PresentationRibbonProps {
   ribbonCollapsed: boolean
   selectedElement: PresentationElement | null
   selectedText: PresentationTextElement | null
+  themeBackground?: string
   viewOptions: PresentationViewOptions
   onActiveTabChange: (tab: PresentationRibbonTab) => void
   onAddShape: (type: PresentationShapeType) => void
@@ -211,7 +216,8 @@ const transitionIcons: Record<PresentationTransitionEffect, LucideIcon> = {
 }
 
 const quickTransitionEffects: readonly PresentationTransitionEffect[] = ['none', 'fade', 'push', 'wipe']
-const extendedTransitionEffects: readonly PresentationTransitionEffect[] = ['reveal', 'cover', 'zoom', 'flip', 'cube']
+const quickTransitionEffectSet = new Set(quickTransitionEffects)
+const extendedTransitionEffects = PRESENTATION_TRANSITION_EFFECTS.filter((effect) => !quickTransitionEffectSet.has(effect))
 const quickTransitionDefinitions = presentationTransitionDefinitions.filter((definition) => (
   quickTransitionEffects.includes(definition.effect)
 ))
@@ -237,24 +243,7 @@ const entranceAnimations: Array<{ id: PresentationAnimationEffect; label: string
   { id: 'flyIn', label: 'session.presentation.effectFlyIn', icon: ArrowUpToLine },
 ]
 
-const allAnimationEffects: PresentationAnimationEffect[] = [
-  'none',
-  'appear',
-  'fade',
-  'blinds',
-  'checkerboard',
-  'dissolve',
-  'flyIn',
-  'floatIn',
-  'split',
-  'wipeIn',
-  'zoomIn',
-  'zoom',
-  'fillColor',
-  'textColor',
-  'disappear',
-  'blindsOut',
-]
+const allAnimationEffects: readonly PresentationAnimationEffect[] = PRESENTATION_ANIMATION_EFFECTS
 
 const animationColors = ['#8B7CFF', '#2678E8', '#22A06B', '#F2B91F', '#E17B47', '#DB2B32']
 const presentationBackgroundColors = [
@@ -270,6 +259,7 @@ export function PresentationRibbon({
   canvasScale,
   compact,
   currentSlide,
+  currentSlideBackground,
   filmstripCollapsed,
   historyStatus,
   inspectorOpen,
@@ -279,6 +269,7 @@ export function PresentationRibbon({
   ribbonCollapsed,
   selectedElement,
   selectedText,
+  themeBackground,
   viewOptions,
   onActiveTabChange,
   onAddShape,
@@ -321,6 +312,8 @@ export function PresentationRibbon({
   onViewOptionsChange,
 }: PresentationRibbonProps) {
   const { t } = useTranslation()
+  const effectiveSlideBackground = currentSlideBackground ?? currentSlide?.background ?? themeBackground ?? '#FFFFFF'
+  const effectiveThemeBackground = themeBackground ?? currentSlide?.background ?? '#FFFFFF'
   const [statusNotice, setStatusNotice] = useState<string | null>(null)
   const [formatPainter, setFormatPainter] = useState<{
     sourceId: string
@@ -598,7 +591,7 @@ export function PresentationRibbon({
               <CompactRibbonMenu icon={LayoutGrid} label={t('session.presentation.slideLayout')} testId="presentation-slide-layout">
                 {(close) => (
                   <div className="grid w-[260px] grid-cols-2 gap-1 p-1">
-                    {(['blank', 'title', 'titleContent', 'twoContent'] as const).map((layout) => (
+                    {PRESENTATION_SLIDE_LAYOUTS.map((layout) => (
                       <button
                         key={layout}
                         type="button"
@@ -638,11 +631,11 @@ export function PresentationRibbon({
                     <button
                       type="button"
                       aria-label={t(theme.label)}
-                      aria-pressed={currentSlide?.background === theme.background}
+                      aria-pressed={effectiveThemeBackground === theme.background}
                       onClick={() => onApplyTheme(theme.background, theme.colors)}
                       className={cn(
                         'grid h-14 w-[88px] grid-cols-4 gap-0.5 rounded-md border border-border-subtle bg-bg-surface p-1 shadow-sm transition-transform hover:-translate-y-0.5',
-                        currentSlide?.background === theme.background && 'ring-2 ring-brand-purple ring-offset-1 ring-offset-bg-app',
+                        effectiveThemeBackground === theme.background && 'ring-2 ring-brand-purple ring-offset-1 ring-offset-bg-app',
                       )}
                     >
                       {theme.colors.map((color) => <span key={color} className="rounded-[1px]" style={{ backgroundColor: color }} />)}
@@ -655,12 +648,24 @@ export function PresentationRibbon({
               <CompactRibbonMenu icon={Palette} label={t('session.presentation.moreColors')} testId="presentation-more-colors">
                 {(close) => (
                   <div className="grid w-[220px] grid-cols-6 gap-1.5 p-2">
+                    <button
+                      type="button"
+                      data-testid="presentation-use-theme-background"
+                      disabled={!currentSlide || currentSlide.background === undefined}
+                      className="col-span-6 h-8 rounded-md border border-border-subtle px-2 text-left text-xs text-text-secondary hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => {
+                        onSlideChange({ background: undefined })
+                        close()
+                      }}
+                    >
+                      {t('session.presentation.useThemeBackground')}
+                    </button>
                     {presentationBackgroundColors.map((background) => (
                       <button
                         key={background}
                         type="button"
                         aria-label={`${t('session.presentation.background')} ${background}`}
-                        aria-pressed={currentSlide?.background.toUpperCase() === background}
+                        aria-pressed={effectiveSlideBackground.toUpperCase() === background}
                         className="size-8 rounded-md border border-border-subtle shadow-sm hover:ring-2 hover:ring-brand-purple/35"
                         style={{ backgroundColor: background }}
                         onClick={() => {
@@ -673,7 +678,7 @@ export function PresentationRibbon({
                       {t('session.presentation.moreColors')}
                       <input
                         type="color"
-                        value={currentSlide?.background ?? '#FFFFFF'}
+                        value={effectiveSlideBackground}
                         className="sr-only"
                         onChange={(event) => onSlideChange({ background: event.target.value })}
                       />
@@ -713,7 +718,7 @@ export function PresentationRibbon({
                 {t('session.presentation.setBackground')}
                 <input
                   type="color"
-                  value={currentSlide?.background ?? '#FFFFFF'}
+                  value={effectiveSlideBackground}
                   onChange={(event) => onSlideChange({ background: event.target.value })}
                   className="sr-only"
                 />

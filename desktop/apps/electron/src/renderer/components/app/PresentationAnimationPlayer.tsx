@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import {
   PRESENTATION_PAGE_SIZES,
+  type PresentationAsset,
   type PresentationElement,
   type PresentationHyperlink,
   type PresentationPageSize,
   type PresentationSlide,
+  type PresentationTheme,
 } from '@/atoms/presentation'
 import {
   buildPresentationAnimationTimeline,
@@ -21,6 +23,7 @@ import {
 } from './PresentationSlidePreview'
 
 export interface PresentationAnimationPlayerProps {
+  assets?: readonly PresentationAsset[]
   baseHiddenElementIds?: ReadonlySet<string>
   completedTargetIds?: ReadonlySet<string>
   className?: string
@@ -32,6 +35,7 @@ export interface PresentationAnimationPlayerProps {
   pageSize?: PresentationPageSize
   slide: PresentationSlide
   slideNumber?: number
+  theme?: PresentationTheme
   width: number
 }
 
@@ -52,7 +56,7 @@ function applyFinalKeyframe(node: HTMLSpanElement, keyframes: Keyframe[]): void 
   if (final.clipPath !== undefined) node.style.clipPath = String(final.clipPath)
 }
 
-function PresentationAnimationPart({ elements, pageSize, part, runKey }: { elements: readonly PresentationElement[]; pageSize: PresentationPageSize; part: PresentationAnimationPartSpec; runKey: string | number }) {
+function PresentationAnimationPart({ assets, elements, pageSize, part, runKey }: { assets: readonly PresentationAsset[]; elements: readonly PresentationElement[]; pageSize: PresentationPageSize; part: PresentationAnimationPartSpec; runKey: string | number }) {
   const layerRef = useRef<HTMLSpanElement>(null)
 
   useLayoutEffect(() => {
@@ -80,7 +84,7 @@ function PresentationAnimationPart({ elements, pageSize, part, runKey }: { eleme
     >
       {elements.map((element) => (
         <span key={element.id} data-animation-element-id={element.id}>
-          <PresentationElementPreview element={element} interactive={false} suppressMediaPlayback />
+          <PresentationElementPreview assets={assets} element={element} interactive={false} suppressMediaPlayback />
         </span>
       ))}
     </span>
@@ -88,7 +92,7 @@ function PresentationAnimationPart({ elements, pageSize, part, runKey }: { eleme
 }
 
 /** PowerPoint-style element animation preview rendered independently from the editable Fabric canvas. */
-export function PresentationAnimationPlayer({ baseHiddenElementIds, completedTargetIds, className, elementIds, onComplete, onActivateHyperlink, suppressMediaPlayback = true, pageSize = PRESENTATION_PAGE_SIZES.wide, runKey, slide, slideNumber, width }: PresentationAnimationPlayerProps) {
+export function PresentationAnimationPlayer({ assets = [], baseHiddenElementIds, completedTargetIds, className, elementIds, onComplete, onActivateHyperlink, suppressMediaPlayback = true, pageSize = PRESENTATION_PAGE_SIZES.wide, runKey, slide, slideNumber, theme, width }: PresentationAnimationPlayerProps) {
   const animationStates = useMemo(() => completedTargetIds ? getPresentationAnimationDisplayStates(slide.elements, completedTargetIds) : undefined, [completedTargetIds, slide.elements])
   const requestedIds = useMemo(() => elementIds ? new Set(elementIds) : null, [elementIds])
   const elements = useMemo(() => {
@@ -121,12 +125,12 @@ export function PresentationAnimationPlayer({ baseHiddenElementIds, completedTar
       const members = slide.elements.slice(index, end)
       for (const member of members) replacements.set(member.id, null)
       replacements.set(element.id, parts.map(part => (
-        <PresentationAnimationPart key={part.id} elements={members} pageSize={pageSize} part={part} runKey={runKey} />
+        <PresentationAnimationPart key={part.id} assets={assets} elements={members} pageSize={pageSize} part={part} runKey={runKey} />
       )))
       index = end - 1
     }
     return replacements
-  }, [pageSize, runKey, slide.elements, timeline])
+  }, [assets, pageSize, runKey, slide.elements, timeline])
   const onCompleteRef = useRef(onComplete)
   const totalDuration = timeline.reduce((maximum, entry) => Math.max(maximum, entry.endsAt), 0)
 
@@ -151,6 +155,7 @@ export function PresentationAnimationPlayer({ baseHiddenElementIds, completedTar
       style={{ width, height: width * (pageSize.height / pageSize.width) }}
     >
       <PresentationSlidePreview
+        assets={assets}
         animationStates={animationStates}
         colorAnimations={colorAnimations}
         hiddenElementIds={baseHiddenElementIds}
@@ -159,6 +164,7 @@ export function PresentationAnimationPlayer({ baseHiddenElementIds, completedTar
         selected={false}
         slide={slide}
         slideNumber={slideNumber}
+        theme={theme}
         suppressMediaPlayback={suppressMediaPlayback}
         onActivateHyperlink={onActivateHyperlink}
         width={width}

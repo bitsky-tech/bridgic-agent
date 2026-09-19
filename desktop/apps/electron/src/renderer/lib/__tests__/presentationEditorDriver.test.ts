@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { createBlankPresentationDocument, createBlankPresentationSlide } from '@/atoms/presentation'
+import { createBlankPresentationDocument, createBlankPresentationSlide, selectPresentationPage } from '@/atoms/presentation'
 import { createOfficeEditorBinding } from '../office/officeEditorBinding'
 import { bindPresentationNativeEdit, createPresentationEditorDriver, type PresentationEditingObject } from '../presentationEditorDriver'
 
@@ -41,7 +41,7 @@ describe('PowerPoint native editor driver', () => {
     const active = { isEditing: true, exitEditing: () => {
       events.push('text')
       active.isEditing = false
-      binding.publishChange({ ...read(), title: 'Committed native text', version: read().version + 1 })
+      binding.publishChange({ ...read(), title: 'Committed native text', revision: read().revision + 1 })
     } }
     edit(active)
     defer(() => { events.push('transform') })
@@ -72,17 +72,18 @@ describe('PowerPoint native editor driver', () => {
     let commits = 0
     const original = read()
     let current = original
-    const callback = bindPresentationNativeEdit(binding.capture(), original.selectedSlideId, () => current, () => { commits += 1 })
+    const callback = bindPresentationNativeEdit(binding.capture(), original.slides.selectedPageId, () => current, () => { commits += 1 })
     callback()
     expect(commits).toBe(1)
-    current = { ...original, selectedSlideId: createBlankPresentationSlide('Another slide').id }
+    const another = createBlankPresentationSlide('Another slide')
+    current = { ...original, slides: selectPresentationPage({ ...original.slides, pages: [...original.slides.pages, another], slideOrder: [...original.slides.slideOrder, another.id] }, another.id) }
     callback()
     current = original
     binding.bindDocument('another-document')
     callback()
     binding.bindDocument(original.id)
     callback()
-    const final = bindPresentationNativeEdit(binding.capture(), original.selectedSlideId, () => original, () => { commits += 1 })
+    const final = bindPresentationNativeEdit(binding.capture(), original.slides.selectedPageId, () => original, () => { commits += 1 })
     binding.dispose()
     final()
     expect(commits).toBe(1)
