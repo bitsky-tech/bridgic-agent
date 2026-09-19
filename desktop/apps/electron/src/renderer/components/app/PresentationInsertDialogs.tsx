@@ -2,8 +2,9 @@ import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Modal } from '@/components/amphi/Modal'
 import { cn } from '@/lib/cn'
+import { PRESENTATION_CHART_TYPES, type PresentationChartType } from '@/atoms/presentation'
 
-export type PresentationInsertChartType = 'column' | 'bar' | 'line' | 'pie' | 'doughnut'
+export type PresentationInsertChartType = PresentationChartType
 export type PresentationInsertLinkTargetType = 'url' | 'slide'
 
 export interface PresentationInsertSlideOption {
@@ -207,7 +208,7 @@ function TableDialog({ initialValue, onClose, onSubmit }: {
   )
 }
 
-const chartTypes: readonly PresentationInsertChartType[] = ['column', 'bar', 'line', 'pie', 'doughnut']
+const chartTypes: readonly PresentationInsertChartType[] = PRESENTATION_CHART_TYPES
 
 function ChartDialog({ initialValue, onClose, onSubmit }: {
   initialValue?: PresentationInsertChartValue

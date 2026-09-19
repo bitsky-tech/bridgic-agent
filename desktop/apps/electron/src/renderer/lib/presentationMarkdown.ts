@@ -1,9 +1,19 @@
 import { dump, load } from 'js-yaml'
 import { marked, type Token, type Tokens } from 'marked'
 import {
+  PRESENTATION_ANIMATION_EFFECTS,
+  PRESENTATION_ANIMATION_STARTS,
+  PRESENTATION_ANIMATION_TRIGGERS,
+  PRESENTATION_CHART_TYPES,
   PRESENTATION_PAGE_SIZES,
+  PRESENTATION_SHAPE_TYPES,
+  PRESENTATION_SLIDE_LAYOUTS,
+  PRESENTATION_TRANSITION_DIRECTIONS,
+  PRESENTATION_TRANSITION_EFFECTS,
   createBlankPresentationDocument,
   createBlankPresentationSlide,
+  replacePresentationPages,
+  type PresentationAsset,
   type PresentationChartElement,
   type PresentationDocument,
   type PresentationElement,
@@ -13,6 +23,7 @@ import {
   type PresentationShapeType,
   type PresentationSlide,
   type PresentationSlideLayout,
+  type PresentationTheme,
   type PresentationTextElement,
   type PresentationTextRun,
   type PresentationTextParagraph,
@@ -22,6 +33,7 @@ import {
 } from '@/atoms/presentation'
 import { normalizePresentationDesignColor, presentationThemeTextColors } from '@/lib/presentationDesign'
 import { patchPresentationText, PRESENTATION_TEXT_STYLE_KEYS, PRESENTATION_TEXT_RUN_STYLE_KEYS, PRESENTATION_PARAGRAPH_STYLE_KEYS, PRESENTATION_NUMBER_FORMATS } from '@/lib/presentationText'
+import { createPresentationAsset, mergePresentationAssets, normalizePresentationProject, presentationAsset, presentationElementSource } from '@/presentation/project'
 
 export type PresentationMarkdownAssets = Record<string, PresentationFileSource>
 
@@ -40,6 +52,7 @@ interface CompilePresentationSlideMarkdownOptions extends CompilePresentationMar
 }
 
 interface CompilePresentationSlideMarkdownResult {
+  assets: PresentationAsset[]
   diagnostics: string[]
   slide: PresentationSlide
 }
@@ -51,6 +64,7 @@ interface CompilePresentationElementMarkdownOptions extends CompilePresentationM
 }
 
 interface CompilePresentationElementMarkdownResult {
+  assets: PresentationAsset[]
   diagnostics: string[]
   element: PresentationElement
 }
@@ -80,7 +94,9 @@ interface ElementCompilerContext {
   elementOrdinal: number
   existingDocument?: PresentationDocument
   pageSize: PresentationPageSize
+  projectAssets: PresentationAsset[]
   slideId: string
+  theme: PresentationTheme
   usedElementIds: Set<string>
 }
 
@@ -94,36 +110,14 @@ const MAX_SLIDES = 200
 const MAX_ELEMENTS_PER_SLIDE = 1_000
 const ID_PATTERN = /^[A-Za-z0-9_.:-]+$/
 const NATIVE_COMPONENT_PATTERN = /^<Ppt(Text|Shape|Image|Audio|Video|Table|Chart)\b([^>]*?)(?:\/\s*>|>([\s\S]*?)<\/Ppt\1\s*>)/
-const SHAPE_TYPES = new Set<PresentationShapeType>([
-  'line', 'lineArrow', 'lineDoubleArrow', 'elbowConnector', 'elbowArrow', 'curvedConnector',
-  'curvedArrow', 'rect', 'roundRect', 'snip1Rect', 'snip2DiagRect', 'round1Rect',
-  'round2SameRect', 'frame', 'ellipse', 'triangle', 'rtTriangle', 'parallelogram', 'trapezoid',
-  'diamond', 'pentagon', 'hexagon', 'octagon', 'decagon', 'dodecagon', 'pie', 'teardrop',
-  'plus', 'star4', 'star5', 'star6', 'star8', 'heart', 'lightningBolt', 'sun', 'moon',
-  'cloud', 'donut', 'arc', 'smileyFace', 'can', 'cube', 'bevel', 'bracePair', 'bracketPair',
-  'rightArrow', 'leftArrow', 'upArrow', 'downArrow', 'leftRightArrow', 'upDownArrow',
-  'quadArrow', 'bentArrow', 'bentUpArrow', 'uturnArrow', 'circularArrow', 'chevron',
-  'notchedRightArrow', 'stripedRightArrow', 'rightArrowCallout', 'leftArrowCallout',
-  'upArrowCallout', 'downArrowCallout', 'mathPlus', 'mathMinus', 'mathMultiply', 'mathDivide',
-  'mathEqual', 'mathNotEqual', 'flowChartProcess', 'flowChartAlternateProcess',
-  'flowChartDecision', 'flowChartInputOutput', 'flowChartDocument', 'flowChartMultidocument',
-  'flowChartTerminator', 'flowChartPreparation', 'flowChartManualInput',
-  'flowChartManualOperation', 'flowChartConnector', 'flowChartOffpageConnector',
-  'flowChartDelay', 'flowChartDisplay', 'flowChartPredefinedProcess', 'flowChartInternalStorage',
-])
-const LAYOUTS = new Set<PresentationSlideLayout>(['blank', 'title', 'titleContent', 'twoContent'])
-const TRANSITION_EFFECTS = new Set<PresentationTransition['effect']>([
-  'none', 'fade', 'push', 'wipe', 'reveal', 'cover', 'zoom', 'flip', 'cube',
-])
-const TRANSITION_DIRECTIONS = new Set<NonNullable<PresentationTransition['direction']>>([
-  'left', 'right', 'up', 'down', 'in', 'out',
-])
-const ANIMATION_EFFECTS = new Set([
-  'none', 'appear', 'fade', 'blinds', 'checkerboard', 'dissolve', 'flyIn', 'floatIn',
-  'split', 'wipeIn', 'zoomIn', 'zoom', 'fillColor', 'textColor', 'disappear', 'blindsOut',
-])
-const ANIMATION_STARTS = new Set(['onClick', 'withPrevious', 'afterPrevious'])
-const ANIMATION_TRIGGERS = new Set(['slideClick', 'elementClick'])
+const SHAPE_TYPES = new Set<PresentationShapeType>(PRESENTATION_SHAPE_TYPES)
+const LAYOUTS = new Set<PresentationSlideLayout>(PRESENTATION_SLIDE_LAYOUTS)
+const TRANSITION_EFFECTS = new Set<PresentationTransition['effect']>(PRESENTATION_TRANSITION_EFFECTS)
+const TRANSITION_DIRECTIONS = new Set<NonNullable<PresentationTransition['direction']>>(PRESENTATION_TRANSITION_DIRECTIONS)
+const ANIMATION_EFFECTS = new Set(PRESENTATION_ANIMATION_EFFECTS)
+const ANIMATION_STARTS = new Set(PRESENTATION_ANIMATION_STARTS)
+const ANIMATION_TRIGGERS = new Set(PRESENTATION_ANIMATION_TRIGGERS)
+const CHART_TYPES = new Set(PRESENTATION_CHART_TYPES)
 const MEDIA_COMPONENT_NAMES = new Set<NativeComponent['name']>(['PptImage', 'PptAudio', 'PptVideo'])
 const COMMON_COMPONENT_ATTRS = new Set([
   'id', 'ref', 'x', 'y', 'width', 'height', 'rotation', 'opacity', 'groupId', 'shadow',
@@ -165,33 +159,37 @@ export function compilePresentationMarkdown(
   if (sources.length > MAX_SLIDES) throw new Error(`A presentation may contain at most ${MAX_SLIDES} slides`)
   const blank = createBlankPresentationDocument(optionalString(sources[0]!.frontmatter.title) ?? '')
   const pageSize = parsePageSize(sources[0]!.frontmatter.pageSize)
-  const master = parseMaster(sources[0]!.frontmatter.master, blank.master)
+  const theme = parseTheme(sources[0]!.frontmatter.theme, blank.theme)
   const usedSlideIds = new Set<string>()
   const usedElementIds = new Set<string>()
   const diagnostics: string[] = []
+  const projectAssets: PresentationAsset[] = []
   const slides = sources.map((source) => compileSlideSource(source, {
     assets: options.assets ?? {},
     diagnostics,
     existingDocument: options.existingDocument,
     pageSize,
+    projectAssets,
+    theme,
     usedElementIds,
     usedSlideIds,
   }))
-  const existingSelection = options.existingDocument?.selectedSlideId
-  const selectedSlideId = existingSelection && slides.some((slide) => slide.id === existingSelection)
+  const existingSelection = options.existingDocument?.slides.selectedPageId
+  const selectedPageId = existingSelection && slides.some((slide) => slide.id === existingSelection)
     ? existingSelection
     : slides[0]!.id
   return {
     diagnostics,
-    document: {
+    document: normalizePresentationProject({
+      ...blank,
       id: options.existingDocument?.id ?? blank.id,
-      master,
+      theme,
       pageSize,
-      selectedSlideId,
-      slides,
+      assets: projectAssets,
+      slides: replacePresentationPages(blank.slides, slides, selectedPageId),
       title: optionalString(sources[0]!.frontmatter.title) ?? options.existingDocument?.title ?? '',
-      version: options.existingDocument?.version ?? 1,
-    },
+      revision: options.existingDocument?.revision ?? 1,
+    }),
   }
 }
 
@@ -202,22 +200,25 @@ export function compilePresentationSlideMarkdown(
 ): CompilePresentationSlideMarkdownResult {
   const sources = parsePresentationMarkdown(markdown)
   if (sources.length !== 1) throw new Error('A slide update must contain exactly one Markdown slide')
-  const usedSlideIds = new Set(options.document.slides.map((slide) => slide.id))
+  const usedSlideIds = new Set(options.document.slides.pages.map((slide) => slide.id))
   const requestedId = optionalString(sources[0]!.frontmatter.id)
   if (requestedId) usedSlideIds.delete(requestedId)
-  const usedElementIds = new Set(options.document.slides.flatMap((slide) => (
+  const usedElementIds = new Set(options.document.slides.pages.flatMap((slide) => (
     slide.id === requestedId ? [] : slide.elements.map((element) => element.id)
   )))
   const diagnostics: string[] = []
+  const projectAssets: PresentationAsset[] = []
   const slide = compileSlideSource(sources[0]!, {
     assets: options.assets ?? {},
     diagnostics,
     existingDocument: options.existingDocument ?? options.document,
     pageSize: options.document.pageSize,
+    projectAssets,
+    theme: options.document.theme,
     usedElementIds,
     usedSlideIds,
   })
-  return { diagnostics, slide }
+  return { assets: projectAssets, diagnostics, slide }
 }
 
 /** Compile exactly one canonical Ppt* element fragment against a live slide. */
@@ -241,10 +242,11 @@ export function compilePresentationElementMarkdown(
   } else if (requested) {
     throw new Error('A new PowerPoint element must not provide id or ref; the editor assigns its ref')
   }
-  const usedElementIds = new Set(options.document.slides.flatMap((slide) => (
+  const usedElementIds = new Set(options.document.slides.pages.flatMap((slide) => (
     slide.elements.flatMap((element) => element.id === options.elementId ? [] : [element.id])
   )))
   const diagnostics: string[] = []
+  const projectAssets: PresentationAsset[] = []
   const context: ElementCompilerContext = {
     assets: options.assets ?? {},
     cursor: { full: 56, left: 76, right: 76, slot: 'full' },
@@ -252,10 +254,12 @@ export function compilePresentationElementMarkdown(
     elementOrdinal: options.slide.elements.length,
     existingDocument: options.existingDocument ?? options.document,
     pageSize: options.document.pageSize,
+    projectAssets,
     slideId: options.slide.id,
+    theme: options.document.theme,
     usedElementIds,
   }
-  return { diagnostics, element: compileNativeComponent(component, context) }
+  return { assets: projectAssets, diagnostics, element: compileNativeComponent(component, context) }
 }
 
 /** Return the local paths referenced by parsed Markdown without mutating any presentation state. */
@@ -293,13 +297,14 @@ export function inspectPresentationMarkdownAssets(markdown: string): string[] {
 /** Produce one canonical, self-contained slide Markdown fragment. */
 export function decompilePresentationSlideMarkdown(
   slide: PresentationSlide,
+  project?: Pick<PresentationDocument, 'assets'>,
 ): string {
-  return decompileSlide(slide)
+  return decompileSlide(slide, project)
 }
 
 /** Produce one canonical Agent-editable element fragment with a stable ref. */
-export function decompilePresentationElementMarkdown(element: PresentationElement): string {
-  return decompileElement(element)
+export function decompilePresentationElementMarkdown(element: PresentationElement, project?: Pick<PresentationDocument, 'assets'>): string {
+  return decompileElement(element, project)
 }
 
 function parsePresentationMarkdown(markdown: string): ParsedSlideSource[] {
@@ -412,7 +417,7 @@ function compileSlideSource(
   }
   return {
     ...template,
-    background: optionalString(frontmatter.background) ?? context.existingDocument?.master.background ?? '#FFFFFF',
+    ...(frontmatter.background === undefined ? {} : { background: requiredString(frontmatter.background, 'background') }),
     ...(frontmatter.comments === undefined ? {} : { comments: parseComments(frontmatter.comments, id) }),
     elements,
     ...(frontmatter.footer === undefined ? {} : { footer: parseFooter(frontmatter.footer, 'footer') }),
@@ -667,14 +672,14 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   }
   if (component.name === 'PptText') {
     const defaults = allocateBox(context, numberAttr(attrs.height, 80))
-    const textColors = presentationThemeTextColors(context.existingDocument?.master.background ?? '#FFFFFF')
+    const textColors = presentationThemeTextColors(context.theme.background)
     const element = withCommonAttrs<PresentationTextElement>({
       ...defaults,
       id: reserveElementId(context, componentRef(attrs), 'text'),
       type: 'text',
       text: decodeEntities(component.body),
       fontSize: numberAttr(attrs.fontSize, 28),
-      fontFamily: attrs.fontFamily ?? context.existingDocument?.master.bodyFontFamily ?? 'Aptos',
+      fontFamily: attrs.fontFamily ?? context.theme.bodyFontFamily,
       fontWeight: enumNumberAttr(attrs.fontWeight, new Set([400, 500, 600, 700]), 400),
       italic: booleanAttr(attrs.italic, false),
       underline: booleanAttr(attrs.underline, false),
@@ -702,7 +707,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
         },
       } : {}),
     }, attrs)
-    const existing = context.existingDocument?.slides.find(slide => slide.id === context.slideId)?.elements.find(item => item.id === element.id)
+    const existing = context.existingDocument?.slides.pages.find(slide => slide.id === context.slideId)?.elements.find(item => item.id === element.id)
     const stylePatch: Partial<PresentationTextElement> = { text: element.text }
     if (existing?.type === 'text') {
       // Retain unchanged ranges when the Agent edits source text or frame geometry.
@@ -723,7 +728,7 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptShape') {
     const kind = enumAttr(attrs.kind ?? attrs.type, SHAPE_TYPES, 'rect')
     const defaults = allocateBox(context, numberAttr(attrs.height, 120))
-    const accent = context.existingDocument?.master.accentColors[0] ?? '#5B67F1'
+    const accent = context.theme.accentColors[0] ?? '#5B67F1'
     return withCommonAttrs({
       ...defaults,
       id: reserveElementId(context, componentRef(attrs), kind),
@@ -738,11 +743,12 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptImage') {
     const defaults = allocateBox(context, numberAttr(attrs.height, 260))
     const id = reserveElementId(context, componentRef(attrs), 'image')
+    const asset = resolveMediaAsset(attrs.src, 'image', id, context)
     return withCommonAttrs({
       ...defaults,
       id,
       type: 'image',
-      source: resolveMediaSource(attrs.src, 'image', id, context),
+      sourceAssetId: asset.id,
       altText: attrs.alt ?? attrs.altText ?? '',
       fit: enumAttr(attrs.fit, new Set(['contain', 'cover']), 'contain'),
       ...(attrs.clipShape === undefined ? {} : {
@@ -762,11 +768,12 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
     const type = component.name === 'PptAudio' ? 'audio' : 'video'
     const defaults = allocateBox(context, numberAttr(attrs.height, type === 'audio' ? 80 : 260))
     const id = reserveElementId(context, componentRef(attrs), type)
+    const asset = resolveMediaAsset(attrs.src, type, id, context)
     return withCommonAttrs({
       ...defaults,
       id,
       type,
-      source: resolveMediaSource(attrs.src, type, id, context),
+      sourceAssetId: asset.id,
       autoplay: booleanAttr(attrs.autoplay, false),
       loop: booleanAttr(attrs.loop, false),
       muted: booleanAttr(attrs.muted, false),
@@ -775,8 +782,8 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   if (component.name === 'PptTable') {
     const cells = parseMarkdownTable(component.body)
     const defaults = allocateBox(context, numberAttr(attrs.height, Math.max(100, cells.length * 42)))
-    const background = context.existingDocument?.master.background ?? '#FFFFFF'
-    const accent = context.existingDocument?.master.accentColors[0] ?? '#5B67F1'
+    const background = context.theme.background
+    const accent = context.theme.accentColors[0] ?? '#5B67F1'
     const textColors = presentationThemeTextColors(background)
     return withCommonAttrs({
       ...defaults,
@@ -794,12 +801,12 @@ function compileNativeComponent(component: NativeComponent, context: ElementComp
   }
   const chartData = parseChartData(component.body)
   const defaults = allocateBox(context, numberAttr(attrs.height, 300))
-  const chartColors = context.existingDocument?.master.accentColors ?? ['#5B67F1']
+  const chartColors = context.theme.accentColors
   return withCommonAttrs({
     ...defaults,
     id: reserveElementId(context, componentRef(attrs), 'chart'),
     type: 'chart',
-    chartType: enumAttr(attrs.type ?? attrs.chartType, new Set(['column', 'bar', 'line', 'pie', 'doughnut']), 'column'),
+    chartType: enumAttr(attrs.type ?? attrs.chartType, CHART_TYPES, 'column'),
     categories: chartData.categories,
     series: chartData.series,
     showLegend: booleanAttr(attrs.showLegend, true),
@@ -831,16 +838,16 @@ function createTextElement(
     listStyle?: PresentationTextElement['listStyle']
   },
 ): PresentationTextElement {
-  const master = context.existingDocument?.master
+  const master = context.theme
   const title = options.fontWeight >= 600 || options.fontSize >= 30
-  const textColors = presentationThemeTextColors(master?.background ?? '#FFFFFF')
+  const textColors = presentationThemeTextColors(master.background)
   return {
     ...allocateBox(context, options.height),
     id: reserveElementId(context, options.explicitId, options.kind),
     type: 'text',
     text,
     fontSize: options.fontSize,
-    fontFamily: options.fontFamily ?? (title ? master?.titleFontFamily : master?.bodyFontFamily) ?? 'Aptos',
+    fontFamily: options.fontFamily ?? (title ? master.titleFontFamily : master.bodyFontFamily),
     fontWeight: options.fontWeight,
     italic: options.italic ?? false,
     listStyle: options.listStyle ?? 'none',
@@ -857,11 +864,12 @@ function createImageElement(
   explicitId?: string,
 ): PresentationElement {
   const id = reserveElementId(context, explicitId, 'image')
+  const asset = resolveMediaAsset(src, 'image', id, context)
   return {
     ...allocateBox(context, 280),
     id,
     type: 'image',
-    source: resolveMediaSource(src, 'image', id, context),
+    sourceAssetId: asset.id,
     altText,
     fit: 'contain',
     rotation: 0,
@@ -933,33 +941,45 @@ function componentRef(attrs: Record<string, string>): string | undefined {
   return ref ?? id
 }
 
-function resolveMediaSource(
+function resolveMediaAsset(
   rawSrc: string | undefined,
   type: 'audio' | 'image' | 'video',
   elementId: string,
   context: ElementCompilerContext,
-): PresentationFileSource {
+): PresentationAsset {
   const src = optionalString(rawSrc)
   if (!src) throw new Error(`${type} ${elementId} requires src`)
   if (src.startsWith('@existing/')) {
     const existingId = src.slice('@existing/'.length)
-    const existing = context.existingDocument?.slides
+    const existing = context.existingDocument?.slides.pages
       .flatMap((slide) => slide.elements)
       .find((element) => element.id === existingId && element.type === type)
     if (!existing || (existing.type !== 'image' && existing.type !== 'audio' && existing.type !== 'video')) {
       throw new Error(`Unknown existing PowerPoint ${type} element: ${existingId}`)
     }
-    return { ...existing.source }
+    const asset = presentationAsset(context.existingDocument ?? { assets: [] }, existing.sourceAssetId)
+    if (!asset) throw new Error(`PowerPoint ${type} element has no source asset: ${existingId}`)
+    return retainProjectAsset(context, asset)
   }
   if (/^(?:data:|https?:|file:|\/|[A-Za-z]:[\\/])/i.test(src)) {
     throw new Error(`${type} ${elementId} src must be a Session-workspace-relative path or @existing reference`)
   }
-  const asset = context.assets[src]
-  if (!asset?.assetId || !asset.dataUrl) throw new Error(`PowerPoint asset was not registered: ${src}`)
-  if (asset.mimeType && !asset.mimeType.startsWith(`${type}/`)) {
-    throw new Error(`PowerPoint ${type} src has incompatible media type: ${asset.mimeType}`)
+  const source = context.assets[src]
+  if (!source?.assetId || !source.dataUrl) throw new Error(`PowerPoint asset was not registered: ${src}`)
+  if (source.mimeType && !source.mimeType.startsWith(`${type}/`)) {
+    throw new Error(`PowerPoint ${type} src has incompatible media type: ${source.mimeType}`)
   }
-  return { ...asset, path: src }
+  return retainProjectAsset(context, createPresentationAsset(type, { ...source, path: src }))
+}
+
+function retainProjectAsset(context: ElementCompilerContext, asset: PresentationAsset): PresentationAsset {
+  const existing = context.projectAssets.find((item) => item.id === asset.id)
+  if (existing) {
+    mergePresentationAssets([existing], [asset])
+    return existing
+  }
+  context.projectAssets.push(asset)
+  return asset
 }
 
 function collectAssetPath(rawSrc: string | undefined, paths: Set<string>): void {
@@ -985,9 +1005,9 @@ function parsePageSize(raw: unknown): PresentationPageSize {
   }
 }
 
-function parseMaster(raw: unknown, fallback: PresentationDocument['master']): PresentationDocument['master'] {
+function parseTheme(raw: unknown, fallback: PresentationDocument['theme']): PresentationDocument['theme'] {
   if (raw === undefined || raw === null) return structuredClone(fallback)
-  if (!isRecord(raw)) throw new TypeError('master must be a mapping')
+  if (!isRecord(raw)) throw new TypeError('theme must be a mapping')
   return {
     accentColors: raw.accentColors === undefined
       ? [...fallback.accentColors]
@@ -1113,23 +1133,23 @@ function extractBlockId(text: string): { id?: string; text: string } {
   return match ? { id: match[1], text: text.slice(0, match.index).trimEnd() } : { text }
 }
 
-function decompileSlide(slide: PresentationSlide): string {
+function decompileSlide(slide: PresentationSlide, project?: Pick<PresentationDocument, 'assets'>): string {
   const frontmatter: Record<string, unknown> = {
     id: slide.id,
     name: slide.name,
     layout: slide.layout ?? 'blank',
-    background: slide.background,
+    ...(slide.background === undefined ? {} : { background: slide.background }),
     transition: slide.transition,
     ...(slide.footer ? { footer: slide.footer } : {}),
     ...(slide.comments?.length ? { comments: slide.comments } : {}),
   }
   const yaml = dump(frontmatter, { lineWidth: -1, noRefs: true, sortKeys: false }).trimEnd()
-  const body = slide.elements.map(decompileElement).join('\n\n')
+  const body = slide.elements.map((element) => decompileElement(element, project)).join('\n\n')
   const notes = slide.notes?.trim() ? `\n\n<!-- notes\n${slide.notes.trim()}\n-->` : ''
   return `---\n${yaml}\n---\n\n${body}${notes}`.trimEnd()
 }
 
-function decompileElement(element: PresentationElement): string {
+function decompileElement(element: PresentationElement, project?: Pick<PresentationDocument, 'assets'>): string {
   const common: Record<string, unknown> = {
     ref: element.id,
     x: element.x,
@@ -1186,9 +1206,11 @@ function decompileElement(element: PresentationElement): string {
     }, escapeText(element.text))
   }
   if (element.type === 'image') {
+    const source = presentationElementSource(project ?? { assets: [] }, element)
+    if (!source) throw new Error(`PowerPoint image element has no source asset: ${element.id}`)
     return component('PptImage', {
       ...common,
-      src: element.source.path ?? `@existing/${element.id}`,
+      src: source.path ?? `@existing/${element.id}`,
       alt: element.altText,
       fit: element.fit,
       ...(element.clipShape ? { clipShape: element.clipShape } : {}),
@@ -1201,9 +1223,11 @@ function decompileElement(element: PresentationElement): string {
     })
   }
   if (element.type === 'audio' || element.type === 'video') {
+    const source = presentationElementSource(project ?? { assets: [] }, element)
+    if (!source) throw new Error(`PowerPoint media element has no source asset: ${element.id}`)
     return component(element.type === 'audio' ? 'PptAudio' : 'PptVideo', {
       ...common,
-      src: element.source.path ?? `@existing/${element.id}`,
+      src: source.path ?? `@existing/${element.id}`,
       autoplay: element.autoplay,
       loop: element.loop,
       muted: element.muted,

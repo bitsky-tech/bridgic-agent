@@ -5,21 +5,28 @@ import {
   PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
   createInitialPresentationDocument as createEmptyPresentationDocument,
+  type PresentationAsset,
+  type PresentationAssetKind,
   type PresentationElement,
+  type PresentationFileSource,
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { createPresentationTestDocument as createInitialPresentationDocument } from '@/test-fixtures/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 
+function presentationAsset(id: string, kind: PresentationAssetKind, source: PresentationFileSource): PresentationAsset {
+  return { id, kind, name: source.fileName, source }
+}
+
 describe('createPresentationPptx', () => {
   async function exportTransitionSlides(transitions: PresentationTransition[]): Promise<JSZip> {
     const document = createInitialPresentationDocument()
-    document.slides = transitions.map((transition, index) => ({
+    document.slides.pages = transitions.map((transition, index) => ({
       ...createBlankPresentationSlide(`Transition ${index + 1}`),
       id: `transition-slide-${index + 1}`,
       transition,
     }))
-    document.selectedSlideId = document.slides[0]!.id
+    document.slides.selectedPageId = document.slides.pages[0]!.id
     return JSZip.loadAsync(await createPresentationPptx(document))
   }
 
@@ -31,7 +38,7 @@ describe('createPresentationPptx', () => {
 
   it('does not export empty text boxes as slide content', async () => {
     const document = createEmptyPresentationDocument()
-    document.slides[0]!.elements = [{
+    document.slides.pages[0]!.elements = [{
       id: 'empty-title-placeholder',
       type: 'text',
       x: 120,
@@ -54,12 +61,30 @@ describe('createPresentationPptx', () => {
     expect(slideXml).not.toContain('<a:t>')
   })
 
+  it('exports inherited theme background and footer without page copies', async () => {
+    const document = createEmptyPresentationDocument()
+    document.theme = {
+      ...document.theme,
+      background: '#112233',
+      footer: { text: 'Global footer', showDate: false, showSlideNumber: true },
+    }
+    expect(document.slides.pages[0]!.background).toBeUndefined()
+    expect(document.slides.pages[0]!.footer).toBeUndefined()
+
+    const archive = await JSZip.loadAsync(await createPresentationPptx(document))
+    const slideXml = await readSlideXml(archive, 1)
+
+    expect(slideXml).toContain('<a:srgbClr val="112233"')
+    expect(slideXml).toContain('Global footer')
+    expect(slideXml).toContain('type="slidenum"')
+  })
+
   it('exports every slide into a valid PowerPoint Open XML archive', async () => {
     const document = createInitialPresentationDocument()
-    const title = document.slides[0]?.elements.find((element) => element.type === 'text')
-    if (document.slides[0]) {
-      document.slides[0].notes = 'Speaker note exported from Bridgic.'
-      document.slides[0].transition = { effect: 'fade', durationMs: 500 }
+    const title = document.slides.pages[0]?.elements.find((element) => element.type === 'text')
+    if (document.slides.pages[0]) {
+      document.slides.pages[0].notes = 'Speaker note exported from Bridgic.'
+      document.slides.pages[0].transition = { effect: 'fade', durationMs: 500 }
     }
     if (title?.type === 'text') {
       title.italic = true
@@ -72,7 +97,7 @@ describe('createPresentationPptx', () => {
       title.listStyle = 'bullet'
       title.shadow = true
     }
-    document.slides[0]?.elements.push(
+    document.slides.pages[0]?.elements.push(
       {
         id: 'heart-shape',
         type: 'heart',
@@ -107,7 +132,7 @@ describe('createPresentationPptx', () => {
     expect(archive.file('[Content_Types].xml')).not.toBeNull()
     expect(archive.file('ppt/presentation.xml')).not.toBeNull()
     expect(archive.file('ppt/slides/slide1.xml')).not.toBeNull()
-    expect(archive.file(`ppt/slides/slide${document.slides.length}.xml`)).not.toBeNull()
+    expect(archive.file(`ppt/slides/slide${document.slides.pages.length}.xml`)).not.toBeNull()
 
     const firstSlideXml = await archive.file('ppt/slides/slide1.xml')?.async('text')
     expect(firstSlideXml).toContain(' i="1"')
@@ -140,7 +165,7 @@ describe('createPresentationPptx', () => {
 
   it('exports element animations as native PowerPoint timing targeted by object id', async () => {
     const document = createInitialPresentationDocument()
-    const slide = document.slides[0]!
+    const slide = document.slides.pages[0]!
     const title = slide.elements.find((element) => element.type === 'text')!
     title.animation = 'fade'
     title.animationDuration = 860
@@ -271,7 +296,7 @@ describe('createPresentationPptx', () => {
 
   it('exports grouped card members in one synchronized native animation step', async () => {
     const document = createInitialPresentationDocument()
-    const slide = document.slides[0]!
+    const slide = document.slides.pages[0]!
     slide.elements = [
       {
         id: 'group-card',
@@ -346,7 +371,7 @@ describe('createPresentationPptx', () => {
 
   it('preserves after-previous steps when a with-previous effect follows them', async () => {
     const document = createInitialPresentationDocument()
-    const slide = document.slides[0]!
+    const slide = document.slides.pages[0]!
     const animatedShape = (id: string, animationStart: 'onClick' | 'withPrevious' | 'afterPrevious', animation: 'fade' | 'appear' | 'disappear', duration: number, x: number): PresentationElement => ({
       id,
       type: 'rect',
@@ -387,10 +412,19 @@ describe('createPresentationPptx', () => {
 
   it('exports hyperlinks, embedded media, editable tables and charts, and slide footers', async () => {
     const document = createInitialPresentationDocument()
-    const sourceSlide = document.slides[0]!
-    const targetSlide = document.slides[1]!
+    const sourceSlide = document.slides.pages[0]!
+    const targetSlide = document.slides.pages[1]!
     const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5QAAAABJRU5ErkJggg=='
     const chartTypes = ['column', 'bar', 'line', 'pie', 'doughnut'] as const
+    document.assets.push(
+      presentationAsset('linked-image-asset', 'image', { dataUrl: pngDataUrl, fileName: 'pixel.png', mimeType: 'image/png' }),
+      presentationAsset('contained-image-asset', 'image', { dataUrl: pngDataUrl, fileName: 'contained.png', mimeType: 'image/png' }),
+      presentationAsset('embedded-audio-asset', 'audio', { dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA', fileName: 'sample.mp3', mimeType: 'audio/mpeg' }),
+      presentationAsset('embedded-extensionless-audio-asset', 'audio', { dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA', fileName: 'extensionless-audio', mimeType: 'audio/mpeg' }),
+      presentationAsset('embedded-video-asset', 'video', { dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=', fileName: 'sample.mp4', mimeType: 'video/mp4' }),
+      presentationAsset('embedded-m4a-asset', 'audio', { dataUrl: 'data:audio/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=', fileName: 'sample.m4a', mimeType: 'audio/mp4' }),
+      presentationAsset('embedded-mov-asset', 'video', { dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=', fileName: 'sample.mov', mimeType: 'video/quicktime' }),
+    )
     const elements: PresentationElement[] = [
       {
         id: 'linked-text',
@@ -428,12 +462,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'linked-image',
         type: 'image',
+        sourceAssetId: 'linked-image-asset',
         x: 400,
         y: 30,
         width: 120,
         height: 80,
         rotation: 15,
-        source: { dataUrl: pngDataUrl, fileName: 'pixel.png', mimeType: 'image/png' },
         altText: 'Tiny preview',
         fit: 'cover',
         hyperlink: { type: 'url', url: 'https://example.com/image?a=1&b=2' },
@@ -441,28 +475,24 @@ describe('createPresentationPptx', () => {
       {
         id: 'contained-image',
         type: 'image',
+        sourceAssetId: 'contained-image-asset',
         x: 530,
         y: 30,
         width: 50,
         height: 80,
         rotation: 0,
-        source: { dataUrl: pngDataUrl, fileName: 'contained.png', mimeType: 'image/png' },
         altText: 'Contained preview',
         fit: 'contain',
       },
       {
         id: 'embedded-audio',
         type: 'audio',
+        sourceAssetId: 'embedded-audio-asset',
         x: 30,
         y: 120,
         width: 260,
         height: 60,
         rotation: 0,
-        source: {
-          dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
-          fileName: 'sample.mp3',
-          mimeType: 'audio/mpeg',
-        },
         autoplay: false,
         loop: false,
         muted: false,
@@ -470,16 +500,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'embedded-extensionless-audio',
         type: 'audio',
+        sourceAssetId: 'embedded-extensionless-audio-asset',
         x: 30,
         y: 300,
         width: 260,
         height: 60,
         rotation: 0,
-        source: {
-          dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA',
-          fileName: 'extensionless-audio',
-          mimeType: 'audio/mpeg',
-        },
         autoplay: false,
         loop: false,
         muted: false,
@@ -487,16 +513,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'embedded-video',
         type: 'video',
+        sourceAssetId: 'embedded-video-asset',
         x: 310,
         y: 120,
         width: 260,
         height: 145,
         rotation: 0,
-        source: {
-          dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
-          fileName: 'sample.mp4',
-          mimeType: 'video/mp4',
-        },
         autoplay: false,
         loop: false,
         muted: false,
@@ -504,16 +526,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'embedded-m4a',
         type: 'audio',
+        sourceAssetId: 'embedded-m4a-asset',
         x: 310,
         y: 270,
         width: 120,
         height: 40,
         rotation: 0,
-        source: {
-          dataUrl: 'data:audio/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
-          fileName: 'sample.m4a',
-          mimeType: 'audio/mp4',
-        },
         autoplay: false,
         loop: false,
         muted: false,
@@ -521,16 +539,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'embedded-mov',
         type: 'video',
+        sourceAssetId: 'embedded-mov-asset',
         x: 450,
         y: 270,
         width: 120,
         height: 68,
         rotation: 0,
-        source: {
-          dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
-          fileName: 'sample.mov',
-          mimeType: 'video/quicktime',
-        },
         autoplay: false,
         loop: false,
         muted: false,
@@ -665,24 +679,25 @@ describe('createPresentationPptx', () => {
 
   it('canonicalizes QuickTime content types without relying on audio or transitions', async () => {
     const document = createInitialPresentationDocument()
-    document.slides[0]!.elements = [{
+    document.assets.push(presentationAsset('quicktime-only-asset', 'video', {
+      dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+      fileName: 'quicktime-only.mov',
+      mimeType: 'video/quicktime',
+    }))
+    document.slides.pages[0]!.elements = [{
       id: 'quicktime-only',
       type: 'video',
+      sourceAssetId: 'quicktime-only-asset',
       x: 10,
       y: 10,
       width: 320,
       height: 180,
       rotation: 0,
-      source: {
-        dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
-        fileName: 'quicktime-only.mov',
-        mimeType: 'video/quicktime',
-      },
       autoplay: false,
       loop: false,
       muted: false,
     }]
-    document.slides[0]!.transition = { effect: 'none', durationMs: 1_000 }
+    document.slides.pages[0]!.transition = { effect: 'none', durationMs: 1_000 }
 
     const archive = await JSZip.loadAsync(await createPresentationPptx(document))
     const contentTypesXml = await archive.file('[Content_Types].xml')?.async('text')
@@ -693,46 +708,57 @@ describe('createPresentationPptx', () => {
 
   it('skips malformed legacy elements and dangling hyperlinks without failing export', async () => {
     const document = createInitialPresentationDocument()
-    const elements = document.slides[0]!.elements as unknown[]
+    document.assets.push(
+      presentationAsset('broken-image-asset', 'image', { dataUrl: 'not-a-data-url', fileName: 'broken.png', mimeType: 'image/png' }),
+      presentationAsset('mismatched-image-asset', 'image', {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5QAAAABJRU5ErkJggg==',
+        fileName: 'mismatch.jpg',
+        mimeType: 'image/png',
+      }),
+      presentationAsset('mismatched-audio-asset', 'audio', { dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA', fileName: 'mismatch.ogg', mimeType: 'audio/mpeg' }),
+      presentationAsset('bad-signature-audio-asset', 'audio', { dataUrl: 'data:audio/mpeg;base64,AAAA', fileName: 'broken.mp3', mimeType: 'audio/mpeg' }),
+      presentationAsset('mismatched-video-asset', 'video', {
+        dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
+        fileName: 'mismatch.mov',
+        mimeType: 'video/mp4',
+      }),
+    )
+    const elements = document.slides.pages[0]!.elements as unknown[]
     elements.push(
       { id: 'legacy-object', type: 'legacyWidget', x: 10, y: 10, width: 100, height: 100, rotation: 0 },
       {
         id: 'broken-image',
         type: 'image',
+        sourceAssetId: 'broken-image-asset',
         x: 10,
         y: 10,
         width: 100,
         height: 100,
         rotation: 0,
-        source: { dataUrl: 'not-a-data-url', fileName: 'broken.png', mimeType: 'image/png' },
         altText: 'Broken image',
         fit: 'contain',
       },
       {
         id: 'mismatched-image',
         type: 'image',
+        sourceAssetId: 'mismatched-image-asset',
         x: 120,
         y: 10,
         width: 100,
         height: 100,
         rotation: 0,
-        source: {
-          dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5QAAAABJRU5ErkJggg==',
-          fileName: 'mismatch.jpg',
-          mimeType: 'image/png',
-        },
         altText: 'Mismatched image',
         fit: 'contain',
       },
       {
         id: 'mismatched-audio',
         type: 'audio',
+        sourceAssetId: 'mismatched-audio-asset',
         x: 230,
         y: 10,
         width: 100,
         height: 50,
         rotation: 0,
-        source: { dataUrl: 'data:audio/mpeg;base64,SUQzAwAAAAAA', fileName: 'mismatch.ogg', mimeType: 'audio/mpeg' },
         autoplay: false,
         loop: false,
         muted: false,
@@ -740,12 +766,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'bad-signature-audio',
         type: 'audio',
+        sourceAssetId: 'bad-signature-audio-asset',
         x: 340,
         y: 10,
         width: 100,
         height: 50,
         rotation: 0,
-        source: { dataUrl: 'data:audio/mpeg;base64,AAAA', fileName: 'broken.mp3', mimeType: 'audio/mpeg' },
         autoplay: false,
         loop: false,
         muted: false,
@@ -753,16 +779,12 @@ describe('createPresentationPptx', () => {
       {
         id: 'mismatched-video',
         type: 'video',
+        sourceAssetId: 'mismatched-video-asset',
         x: 450,
         y: 10,
         width: 100,
         height: 50,
         rotation: 0,
-        source: {
-          dataUrl: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
-          fileName: 'mismatch.mov',
-          mimeType: 'video/mp4',
-        },
         autoplay: false,
         loop: false,
         muted: false,

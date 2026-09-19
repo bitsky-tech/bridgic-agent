@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test'
-import { createBlankPresentationDocument, type PresentationWorkspace } from '@/atoms/presentation'
+import {
+  createBlankPresentationDocument,
+  createBlankPresentationSlide,
+  presentationSlideBackground,
+  presentationSlideFooter,
+  type PresentationWorkspace,
+} from '@/atoms/presentation'
+import { createPresentationAsset } from '@/presentation/project'
 import { executePowerPointRequest } from '../powerPointProtocol'
 import { presentationTextStyleAt } from '../presentationText'
 
@@ -11,22 +18,25 @@ function workspace(): PresentationWorkspace {
 describe('PowerPoint renderer protocol', () => {
   it('invalidates cached media revisions for payload changes and rejects stale edits', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const document = initial.documents[0]!
+    const slide = document.slides.pages[0]!
     const source = { dataUrl: 'data:image/png;base64,YQ==', fileName: 'image.png', mimeType: 'image/png' }
-    slide.elements = [{ id: 'image', type: 'image', source, altText: '', fit: 'contain', x: 0, y: 0, width: 20, height: 20, rotation: 0 }]
+    const asset = createPresentationAsset('image', source)
+    document.assets = [asset]
+    slide.elements = [{ id: 'image', type: 'image', sourceAssetId: asset.id, altText: '', fit: 'contain', x: 0, y: 0, width: 20, height: 20, rotation: 0 }]
     const revision = async () => {
       const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
       return (read.result as { page: { revision: string } }).page.revision
     }
     const first = await revision()
     expect(await revision()).toBe(first)
-    source.dataUrl = 'data:image/png;base64,Yg=='
+    asset.source.dataUrl = 'data:image/png;base64,Yg=='
     const second = await revision()
     expect(second).not.toBe(first)
     expect(await revision()).toBe(second)
     await expect(executePowerPointRequest(initial, { method: 'remove_ppt_element', params: { page_id: slide.id, ref: 'image', expected_revision: first } })).rejects.toThrow('changed after it was read')
     expect(slide.elements).toHaveLength(1)
-    source.dataUrl = 'data:image/png;base64,YQ=='
+    asset.source.dataUrl = 'data:image/png;base64,YQ=='
     expect(await revision()).toBe(first)
     slide.elements[0]!.x = 10
     expect(await revision()).not.toBe(first)
@@ -34,7 +44,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('respects explicit Agent run sizes alongside base formatting and retains numbering through later edits', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     slide.elements = [{ id: 'rich', type: 'text', text: '标题 English', x: 20, y: 20, width: 600, height: 120, rotation: 0,
       fontSize: 40, fontFamily: 'Arial', fontWeight: 700, color: '#111111', align: 'left',
       textRuns: [{ start: 3, end: 10, style: { fontSize: 20, fontWeight: 400, color: '#0088CC' } }],
@@ -48,7 +58,7 @@ describe('PowerPoint renderer protocol', () => {
     const result = await executePowerPointRequest(initial, { method: 'edit_ppt_page', params: {
       page_id: slide.id, ref: 'rich', expected_revision: page.revision, replacement,
     } })
-    const text = result.workspace?.documents[0]?.slides[0]?.elements[0]
+    const text = result.workspace?.documents[0]?.slides.pages[0]?.elements[0]
     if (text?.type !== 'text') throw new Error(JSON.stringify(result.result))
     expect(presentationTextStyleAt(text, 3)).toMatchObject({ fontSize: 40, fontWeight: 400, color: '#0088CC' })
     expect(text.paragraphs?.[0]?.style.listStartAt).toBe(9)
@@ -59,7 +69,7 @@ describe('PowerPoint renderer protocol', () => {
   })
   it('keeps middle run and paragraph formatting when the Agent changes several separated words', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     slide.elements = [{
       id: 'rich', type: 'text', text: '标题 English 结尾\n正文', x: 20, y: 20, width: 500, height: 200, rotation: 0,
       fontSize: 40, fontFamily: 'Arial', fontWeight: 700, color: '#111111', align: 'left', lineSpacing: 48,
@@ -76,7 +86,7 @@ describe('PowerPoint renderer protocol', () => {
       const edited = await executePowerPointRequest(initial, { method: 'edit_ppt_page', params: {
         page_id: slide.id, ref: 'rich', expected_revision: page.revision, replacement,
       } })
-      const text = edited.workspace?.documents[0]?.slides[0]?.elements[0]
+      const text = edited.workspace?.documents[0]?.slides.pages[0]?.elements[0]
       if (text?.type !== 'text') throw new Error(JSON.stringify(edited.result))
       expect(presentationTextStyleAt(text, 4)).toMatchObject({ fontSize: 20, fontWeight: 400, color: '#0088CC' })
       expect(text.paragraphs).toEqual([
@@ -88,7 +98,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('retains authored blank-line size when the Agent edits the surrounding text', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     slide.elements = [{ id: 'blank-lines', type: 'text', text: 'Before\n\nAfter', x: 0, y: 0, width: 600, height: 400, rotation: 0,
       fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left',
       paragraphs: [{ start: 0, end: 6, style: {} }, { start: 7, end: 7, style: {}, endStyle: { fontSize: 128 } }, { start: 8, end: 13, style: {} }],
@@ -99,7 +109,7 @@ describe('PowerPoint renderer protocol', () => {
       let replacement = page.markdown.match(/<PptText\b[\s\S]*?<\/PptText>/)![0].replace('Before', 'New Before').replace('After', 'New After')
       if (omitAttributes) replacement = replacement.replace(/ paragraphs="[^"]*"/g, '')
       const edited = await executePowerPointRequest(initial, { method: 'edit_ppt_page', params: { page_id: slide.id, ref: 'blank-lines', expected_revision: page.revision, replacement } })
-      expect(edited.workspace?.documents[0]?.slides[0]?.elements[0]).toMatchObject({ text: 'New Before\n\nNew After',
+      expect(edited.workspace?.documents[0]?.slides.pages[0]?.elements[0]).toMatchObject({ text: 'New Before\n\nNew After',
         paragraphs: [{ start: 0, end: 10 }, { start: 11, end: 11, endStyle: { fontSize: 128 } }, { start: 12, end: 21 }],
       })
     }
@@ -107,7 +117,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('rejects malformed paragraph partitions and styles without mutating the document', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
     for (const paragraphs of [[], [{ start: 1, end: 4, style: {} }], [{ start: 0, end: 99, style: {} }],
       [{ start: 0, end: 4, style: { lineSpacing: -1 } }], [{ start: 0, end: 4, style: { align: 'invalid' } }],
@@ -127,7 +137,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('preserves rich text through agent moves, source edits and explicit frame formatting', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     slide.elements = [{
       id: 'rich-text', type: 'text', text: '标题 English', x: 20, y: 100, width: 400, height: 100, rotation: 0,
       fontSize: 40, fontFamily: 'Arial', fontWeight: 700, color: '#111111', align: 'left', lineSpacing: 48,
@@ -148,16 +158,16 @@ describe('PowerPoint renderer protocol', () => {
     }
     expect((await readPage(initial)).markdown).toContain('textRuns=')
     const moved = await change(initial, markdown => markdown.replace('x="20"', 'x="35"'))
-    const movedText = moved.documents[0]!.slides[0]!.elements[0]!
+    const movedText = moved.documents[0]!.slides.pages[0]!.elements[0]!
     expect(movedText).toMatchObject({ x: 35, lineSpacing: 48 })
     if (movedText.type !== 'text') throw new Error('Expected text')
     expect(presentationTextStyleAt(movedText, 3)).toMatchObject({ fontSize: 20, color: '#0088CC', fontWeight: 400 })
     const edited = await change(moved, markdown => markdown.replace('标题 English', '新标题 English'))
-    const editedText = edited.documents[0]!.slides[0]!.elements[0]!
+    const editedText = edited.documents[0]!.slides.pages[0]!.elements[0]!
     if (editedText.type !== 'text') throw new Error('Expected text')
     expect(presentationTextStyleAt(editedText, 4)).toMatchObject({ fontSize: 20, color: '#0088CC', fontWeight: 400 })
     const colored = await change(edited, markdown => markdown.replace('color="#111111"', 'color="#FF0000"'))
-    const coloredText = colored.documents[0]!.slides[0]!.elements[0]!
+    const coloredText = colored.documents[0]!.slides.pages[0]!.elements[0]!
     if (coloredText.type !== 'text') throw new Error('Expected text')
     expect(presentationTextStyleAt(coloredText, 4)).toMatchObject({ fontSize: 20, color: '#FF0000' })
     expect(slide.elements[0]).toMatchObject({ text: '标题 English', x: 20 })
@@ -165,7 +175,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('rejects invalid inline style ranges without changing the document', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     const read = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: slide.id } })
     for (const textRuns of [
       [{ start: 0, end: 99, style: { fontSize: 20 } }],
@@ -208,7 +218,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('reads refs and atomically inserts one native element', async () => {
     const initial = workspace()
-    const slideId = initial.documents[0]!.selectedSlideId
+    const slideId = initial.documents[0]!.slides.selectedPageId
     const read = await executePowerPointRequest(initial, {
       method: 'get_ppt_page',
       params: { page_id: slideId },
@@ -226,12 +236,12 @@ describe('PowerPoint renderer protocol', () => {
     })
 
     const document = applied.workspace!.documents[0]!
-    expect(document.slides[0]!.elements[0]).toMatchObject({
+    expect(document.slides.pages[0]!.elements[0]).toMatchObject({
       type: 'text',
       text: 'Revenue grew 24%',
     })
-    expect(document.version).toBe(initial.documents[0]!.version + 1)
-    expect(document.selectedSlideId).toBe(slideId)
+    expect(document.revision).toBe(initial.documents[0]!.revision + 1)
+    expect(document.slides.selectedPageId).toBe(slideId)
     expect(applied.agentChange).toEqual({
       elementIds: [expect.any(String)],
       kind: 'content',
@@ -240,13 +250,13 @@ describe('PowerPoint renderer protocol', () => {
     const result = applied.result as { element_ref: string; page: { markdown: string; refs: string[] } }
     expect(result.page.refs).toEqual([result.element_ref])
     expect(result.page.markdown).toContain(`ref="${result.element_ref}"`)
-    expect(initial.documents[0]!.slides[0]!.elements).toEqual([])
+    expect(initial.documents[0]!.slides.pages[0]!.elements).toEqual([])
   })
 
   it('edits one referenced element without replacing its identity or siblings', async () => {
     const initial = workspace()
-    const slideId = initial.documents[0]!.selectedSlideId
-    initial.documents[0]!.slides[0]!.elements = [
+    const slideId = initial.documents[0]!.slides.selectedPageId
+    initial.documents[0]!.slides.pages[0]!.elements = [
       {
         id: 'stable', type: 'text', text: 'Same', x: 20, y: 20, width: 200, height: 60,
         rotation: 0, fontSize: 24, fontFamily: 'Aptos', fontWeight: 400, color: '#111111', align: 'left',
@@ -272,18 +282,22 @@ describe('PowerPoint renderer protocol', () => {
     })
 
     expect(applied.agentChange?.elementIds).toEqual(['changed'])
-    expect(applied.workspace!.documents[0]!.slides[0]!.elements).toEqual([
-      initial.documents[0]!.slides[0]!.elements[0],
+    expect(applied.workspace!.documents[0]!.slides.pages[0]!.elements).toEqual([
+      initial.documents[0]!.slides.pages[0]!.elements[0],
       expect.objectContaining({ id: 'changed', text: 'After' }),
     ])
   })
 
   it('removes one referenced element and rejects an invented ref', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
+    const slide = initial.documents[0]!.slides.pages[0]!
     slide.elements = [{
       id: 'obsolete', type: 'text', text: 'Remove me', x: 20, y: 20, width: 200, height: 60,
       rotation: 0, fontSize: 24, fontFamily: 'Aptos', fontWeight: 400, color: '#111111', align: 'left',
+    }]
+    slide.comments = [{
+      id: 'comment', author: 'Reviewer', createdAt: new Date(0).toISOString(), resolved: false,
+      text: 'Keep this review note', elementId: 'obsolete',
     }]
     const read = await executePowerPointRequest(initial, {
       method: 'get_ppt_page', params: { page_id: slide.id },
@@ -294,12 +308,45 @@ describe('PowerPoint renderer protocol', () => {
       params: { page_id: slide.id, ref: 'obsolete', expected_revision: revision },
     })
 
-    expect(removed.workspace!.documents[0]!.slides[0]!.elements).toEqual([])
+    expect(removed.workspace!.documents[0]!.slides.pages[0]!.elements).toEqual([])
+    expect(removed.workspace!.documents[0]!.slides.pages[0]!.comments?.[0]).not.toHaveProperty('elementId')
     expect((removed.result as { element_ref: string }).element_ref).toBe('obsolete')
     await expect(executePowerPointRequest(initial, {
       method: 'remove_ppt_element',
       params: { page_id: slide.id, ref: 'invented', expected_revision: revision },
     })).rejects.toThrow('Unknown PowerPoint element ref')
+  })
+
+  it('clears links to a page when the Agent removes that page', async () => {
+    const initial = workspace()
+    const document = initial.documents[0]!
+    const first = document.slides.pages[0]!
+    const second = createBlankPresentationSlide('Second')
+    first.elements = [{
+      id: 'link', type: 'rect', x: 0, y: 0, width: 10, height: 10, rotation: 0,
+      fill: '#FFFFFF', borderColor: '#000000', borderWidth: 0,
+      hyperlink: { type: 'slide', slideId: second.id },
+    }]
+    document.slides = {
+      pages: [first, second],
+      slideOrder: [first.id, second.id],
+      selectedPageId: first.id,
+    }
+    const overview = await executePowerPointRequest(initial, {
+      method: 'view_ppt', params: { target: '/workspace/review.pptx', file_name: 'review.pptx' },
+    }, { currentTarget: '/workspace/review.pptx', fileName: 'review.pptx' })
+    const page = await executePowerPointRequest(initial, { method: 'get_ppt_page', params: { page_id: second.id } })
+    const removed = await executePowerPointRequest(initial, {
+      method: 'remove_ppt_page',
+      params: {
+        page_id: second.id,
+        expected_revision: (page.result as { page: { revision: string } }).page.revision,
+        expected_deck_revision: (overview.result as { deck_revision: string }).deck_revision,
+      },
+    })
+
+    expect(removed.workspace!.documents[0]!.slides.pages).toHaveLength(1)
+    expect(removed.workspace!.documents[0]!.slides.pages[0]!.elements[0]).not.toHaveProperty('hyperlink')
   })
 
   it('updates document-wide design with a private document revision', async () => {
@@ -323,18 +370,21 @@ describe('PowerPoint renderer protocol', () => {
     })
 
     const document = applied.workspace!.documents[0]!
-    expect(document.master).toMatchObject({
+    expect(document.theme).toMatchObject({
       background: '#17182B',
       bodyFontFamily: 'Aptos',
+      footer: { showSlideNumber: true },
       titleFontFamily: 'Aptos Display',
     })
     expect(document.pageSize.preset).toBe('standard')
-    expect(document.slides[0]).toMatchObject({
-      background: '#17182B',
-      footer: { showSlideNumber: true },
+    expect(document.slides.pages[0]).toMatchObject({
       transition: { effect: 'fade', durationMs: 650, throughBlack: true },
     })
-    expect(applied.agentChange).toMatchObject({ kind: 'design', slideId: document.selectedSlideId })
+    expect(document.slides.pages[0]).not.toHaveProperty('background')
+    expect(document.slides.pages[0]).not.toHaveProperty('footer')
+    expect(presentationSlideBackground(document.theme, document.slides.pages[0]!)).toBe('#17182B')
+    expect(presentationSlideFooter(document.theme, document.slides.pages[0]!).showSlideNumber).toBe(true)
+    expect(applied.agentChange).toMatchObject({ kind: 'design', slideId: document.slides.selectedPageId })
     expect(applied.persist).toBeTrue()
   })
 
@@ -348,7 +398,7 @@ describe('PowerPoint renderer protocol', () => {
 
   it('rejects a stale page token without publishing a workspace', async () => {
     const initial = workspace()
-    const slideId = initial.documents[0]!.selectedSlideId
+    const slideId = initial.documents[0]!.slides.selectedPageId
     await expect(executePowerPointRequest(initial, {
       method: 'insert_ppt_element',
       params: {
@@ -357,12 +407,12 @@ describe('PowerPoint renderer protocol', () => {
         element: '<PptText>Changed</PptText>',
       },
     })).rejects.toEqual(expect.objectContaining({ code: 'page_changed' }))
-    expect(initial.documents[0]!.slides[0]!.elements).toEqual([])
+    expect(initial.documents[0]!.slides.pages[0]!.elements).toEqual([])
   })
 
   it('returns compiler diagnostics without mutating the page', async () => {
     const initial = workspace()
-    const slideId = initial.documents[0]!.selectedSlideId
+    const slideId = initial.documents[0]!.slides.selectedPageId
     const read = await executePowerPointRequest(initial, {
       method: 'get_ppt_page', params: { page_id: slideId },
     })
@@ -377,34 +427,41 @@ describe('PowerPoint renderer protocol', () => {
     })
     expect(invalid.workspace).toBeUndefined()
     expect(invalid.result).toMatchObject({ status: 'invalid' })
-    expect(initial.documents[0]!.slides[0]!.elements).toEqual([])
+    expect(initial.documents[0]!.slides.pages[0]!.elements).toEqual([])
   })
 
   it('returns a workspace path for embedded assets without exposing it in Markdown', async () => {
     const initial = workspace()
-    const slide = initial.documents[0]!.slides[0]!
-    slide.elements = [{
+    const document = initial.documents[0]!
+    const slide = document.slides.pages[0]!
+    document.assets = [createPresentationAsset('image', {
+      dataUrl: 'data:image/png;base64,cG5n', fileName: 'hero.png', mimeType: 'image/png',
+    }, 'hero-asset')]
+    const hero = {
       id: 'hero',
-      type: 'image',
-      source: { dataUrl: 'data:image/png;base64,cG5n', fileName: 'hero.png', mimeType: 'image/png' },
+      type: 'image' as const,
+      sourceAssetId: 'hero-asset',
       altText: 'Hero',
-      fit: 'cover',
+      fit: 'cover' as const,
       x: 20,
       y: 20,
       width: 320,
       height: 180,
       rotation: 0,
-    }]
+    }
+    slide.elements = [hero, { ...hero, id: 'hero-copy', x: 360 }]
 
     const read = await executePowerPointRequest(initial, {
       method: 'get_ppt_page', params: { page_id: slide.id },
     })
     const result = read.result as { assets: Array<Record<string, string>>; page: { markdown: string } }
+    expect(result.assets).toHaveLength(1)
     expect(result.assets[0]).toMatchObject({
-      path: '.ppt-assets/hero-hero.png',
+      path: '.ppt-assets/hero-asset-hero.png',
       data_url: 'data:image/png;base64,cG5n',
     })
     expect(result.page.markdown).toContain('src="@existing/hero"')
+    expect(result.page.markdown).toContain('src="@existing/hero-copy"')
     expect(result.page.markdown).not.toContain('base64')
   })
 })

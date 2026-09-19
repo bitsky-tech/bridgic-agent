@@ -7,7 +7,7 @@ import { isPresentationDirty } from '../presentationWorkspaceRuntime'
 import type { OfficeFilesAPI } from '../../../shared/office-files'
 
 function setup(automatic = false, onSaveStatus?: (status: 'saving' | 'saved' | 'error', error?: string) => void) {
-  const document = { ...createBlankPresentationDocument('Report'), source: { path: '/Report.pptx', mtimeMs: 42 }, savedVersion: 1 }
+  const document = { ...createBlankPresentationDocument('Report'), source: { path: '/Report.pptx', mtimeMs: 42 }, savedRevision: 1 }
   let workspace: PresentationWorkspace = { activeDocumentId: document.id, documents: [document] }
   let recovery: string | null = null
   const files: OfficeFilesAPI = {
@@ -18,7 +18,7 @@ function setup(automatic = false, onSaveStatus?: (status: 'saving' | 'saved' | '
     setRecovery: async (_kind, _session, value) => { recovery = value },
   }
   const controller = createPresentationFileController({ automatic, onSaveStatus, sessionId: 'session-a', files, read: () => workspace, write: (value) => { workspace = value; controller.schedule() }, encode: async () => new Uint8Array([1]), flushEditor: async () => undefined, locale: () => 'en' })
-  return { controller, files, read: () => workspace, edit: () => { workspace = { ...workspace, documents: [{ ...workspace.documents[0]!, version: workspace.documents[0]!.version + 1 }] } } }
+  return { controller, files, read: () => workspace, edit: () => { workspace = { ...workspace, documents: [{ ...workspace.documents[0]!, revision: workspace.documents[0]!.revision + 1 }] } } }
 }
 
 describe('PowerPoint explicit saving', () => {
@@ -148,7 +148,7 @@ it('automatically saves PPT edits and retains a failed write for retry without a
 
 
 it('background PPT saves leave active text and IME input intact, while close commits the final text', async () => {
-  const document = { ...createBlankPresentationDocument('Report'), source: { path: '/Report.pptx', mtimeMs: 42 }, savedVersion: 0 }
+  const document = { ...createBlankPresentationDocument('Report'), source: { path: '/Report.pptx', mtimeMs: 42 }, savedRevision: 0 }
   let workspace: PresentationWorkspace = { activeDocumentId: document.id, documents: [document] }
   const writes: string[] = []
   let exits = 0
@@ -157,7 +157,7 @@ it('background PPT saves leave active text and IME input intact, while close com
     exitEditing() {
       exits++
       editing.isEditing = false
-      workspace = { ...workspace, documents: workspace.documents.map((item) => ({ ...item, version: item.version + 1, title: 'Completed text' })) }
+      workspace = { ...workspace, documents: workspace.documents.map((item) => ({ ...item, revision: item.revision + 1, title: 'Completed text' })) }
     },
   }
   const binding = createOfficeEditorBinding<PresentationWorkspace['documents'][number]>({ appKind: 'presentation', sessionId: 's', documentId: document.id })

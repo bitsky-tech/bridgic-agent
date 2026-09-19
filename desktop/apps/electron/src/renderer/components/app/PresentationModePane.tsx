@@ -154,9 +154,11 @@ function templateColor(value: string | undefined, fallback: string): string {
   return value && /^#[\da-f]{3}(?:[\da-f]{3})?$/i.test(value.trim()) ? value.trim() : fallback
 }
 
-function NativePresentationTemplatePreview({ page, pageSize }: {
+function NativePresentationTemplatePreview({ assets, page, pageSize, theme }: {
+  assets: NonNullable<Awaited<ReturnType<typeof loadPresentationTemplatePreview>>>['assets']
   page: PresentationTemplatePreviewPage
   pageSize: PresentationPageSize
+  theme: NonNullable<Awaited<ReturnType<typeof loadPresentationTemplatePreview>>>['theme']
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [previewWidth, setPreviewWidth] = useState(320)
@@ -186,9 +188,11 @@ function NativePresentationTemplatePreview({ page, pageSize }: {
       data-testid="presentation-template-native-preview"
     >
       <PresentationSlidePreview
+        assets={assets}
         pageSize={pageSize}
         slide={page.slide}
         slideNumber={page.slideNumber}
+        theme={theme}
         width={previewWidth}
         selected={false}
         suppressMediaPlayback
@@ -247,7 +251,7 @@ function PresentationTemplatePreview({ candidate, hovering }: {
   if (nativePage || previewUrl) {
     let previewContent = null
     if (nativePage && nativePreview) {
-      previewContent = <NativePresentationTemplatePreview page={nativePage} pageSize={nativePreview.pageSize} />
+      previewContent = <NativePresentationTemplatePreview assets={nativePreview.assets} page={nativePage} pageSize={nativePreview.pageSize} theme={nativePreview.theme} />
     } else if (previewUrl) {
       previewContent = (
         <img

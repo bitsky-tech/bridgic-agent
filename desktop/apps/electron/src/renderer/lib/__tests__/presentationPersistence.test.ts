@@ -3,13 +3,13 @@ import { createBlankPresentationDocument, type PresentationWorkspace } from '@/a
 import { createPresentationPersistence } from '../presentationPersistence'
 import { createPresentationWorkspaceRuntime } from '../presentationWorkspaceRuntime'
 
-function workspace(title: string, version = 1): PresentationWorkspace {
-  const document = { ...createBlankPresentationDocument(title), version }
+function workspace(title: string, revision = 1): PresentationWorkspace {
+  const document = { ...createBlankPresentationDocument(title), revision }
   return { activeDocumentId: document.id, documents: [document] }
 }
 
 function changed(state: PresentationWorkspace, title: string): PresentationWorkspace {
-  return { ...state, documents: state.documents.map((document) => ({ ...document, title, version: document.version + 1 })) }
+  return { ...state, documents: state.documents.map((document) => ({ ...document, title, revision: document.revision + 1 })) }
 }
 
 function deferred() {
@@ -61,7 +61,7 @@ describe('presentation source persistence', () => {
     const firstGate = deferred()
     const written: number[] = []
     const persistence = createPresentationPersistence({
-      sessionId: 's', encode: async (document) => new Uint8Array([document.version]),
+      sessionId: 's', encode: async (document) => new Uint8Array([document.revision]),
       write: async (_path, bytes) => { written.push(bytes[0]!); if (bytes[0] === 1) await firstGate.promise },
     })
     const state = workspace('First')
@@ -80,7 +80,7 @@ describe('presentation source persistence', () => {
     const gate = deferred()
     const written: number[] = []
     const persistence = createPresentationPersistence({
-      sessionId: 's', encode: async (document) => new Uint8Array([document.version]),
+      sessionId: 's', encode: async (document) => new Uint8Array([document.revision]),
       write: async (_path, bytes) => { written.push(bytes[0]!); if (bytes[0] === 1) await gate.promise },
     })
     const state = workspace('First')
@@ -154,7 +154,7 @@ describe('presentation source persistence', () => {
   it('includes native edits made during a close checkpoint before acknowledging the close', async () => {
     const gate = deferred()
     const written: number[] = []
-    const persistence = createPresentationPersistence({ sessionId: 's', encode: async (document) => new Uint8Array([document.version]), write: async (_path, bytes) => { written.push(bytes[0]!); if (bytes[0] === 1) await gate.promise } })
+    const persistence = createPresentationPersistence({ sessionId: 's', encode: async (document) => new Uint8Array([document.revision]), write: async (_path, bytes) => { written.push(bytes[0]!); if (bytes[0] === 1) await gate.promise } })
     let state = workspace('First')
     persistence.bindTarget('/tmp/source.pptx', state, false)
     let closed = false
@@ -209,7 +209,7 @@ describe('presentation source persistence', () => {
     )
     expect(result).toMatchObject({ ok: false, code: 'document_changed' })
     expect(commits).toBe(0)
-    expect(state.documents[0]!.slides).toHaveLength(1)
+    expect(state.documents[0]!.slides.pages).toHaveLength(1)
   })
 
   it('requires fresh source bytes when reopening a replaced document with pending writes', async () => {

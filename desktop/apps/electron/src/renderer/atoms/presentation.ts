@@ -2,7 +2,7 @@ import { atom } from 'jotai'
 import { atomFamily } from 'jotai-family'
 import { i18n } from '@/lib/i18n'
 import { createDefaultPresentationTransition } from '@/lib/presentationTransitions'
-import { presentationTextDisplaySegments, presentationTextParagraphs, presentationParagraphSegments, presentationParagraphTextStyle, patchPresentationText } from '@/lib/presentationText'
+import { presentationTextDisplaySegments, presentationTextGraphemes, presentationTextParagraphs, presentationParagraphSegments, presentationParagraphTextStyle, patchPresentationText, usesPresentationUprightVerticalGlyph, usesPresentationVerticalGlyphLayout } from '@/lib/presentationText'
 import { viewedSessionIdAtom } from './navigation'
 
 export const PRESENTATION_WIDTH = 1280
@@ -37,35 +37,29 @@ export const PRESENTATION_PAGE_SIZES: Record<PresentationPageSizePreset, Present
   standard: { width: PRESENTATION_STANDARD_WIDTH, height: PRESENTATION_HEIGHT, preset: 'standard' },
 }
 
-export function getPresentationPageSize(document: Pick<PresentationDocument, 'pageSize'> | null | undefined): PresentationPageSize {
+export function getPresentationPageSize(document: Pick<PresentationProject, 'pageSize'> | null | undefined): PresentationPageSize {
   const size = document?.pageSize
   return size && Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0
     ? size
     : PRESENTATION_PAGE_SIZES.wide
 }
 
-export type PresentationAnimationEffect =
-  | 'none'
-  | 'appear'
-  | 'fade'
-  | 'blinds'
-  | 'checkerboard'
-  | 'dissolve'
-  | 'flyIn'
-  | 'floatIn'
-  | 'split'
-  | 'wipeIn'
-  | 'zoomIn'
-  | 'zoom'
-  | 'fillColor'
-  | 'textColor'
-  | 'disappear'
-  | 'blindsOut'
-export type PresentationAnimationStart = 'onClick' | 'withPrevious' | 'afterPrevious'
-export type PresentationAnimationTrigger = 'slideClick' | 'elementClick'
-export type PresentationTransitionEffect = 'none' | 'fade' | 'push' | 'wipe' | 'reveal' | 'cover' | 'zoom' | 'flip' | 'cube'
-export type PresentationTransitionDirection = 'left' | 'right' | 'up' | 'down' | 'in' | 'out'
-export type PresentationSlideLayout = 'blank' | 'title' | 'titleContent' | 'twoContent'
+export const PRESENTATION_ANIMATION_EFFECTS = [
+  'none', 'appear', 'fade', 'blinds', 'checkerboard', 'dissolve', 'flyIn', 'floatIn',
+  'split', 'wipeIn', 'zoomIn', 'zoom', 'fillColor', 'textColor', 'disappear', 'blindsOut',
+] as const
+export const PRESENTATION_ANIMATION_STARTS = ['onClick', 'withPrevious', 'afterPrevious'] as const
+export const PRESENTATION_ANIMATION_TRIGGERS = ['slideClick', 'elementClick'] as const
+export const PRESENTATION_TRANSITION_EFFECTS = ['none', 'fade', 'push', 'wipe', 'reveal', 'cover', 'zoom', 'flip', 'cube'] as const
+export const PRESENTATION_TRANSITION_DIRECTIONS = ['left', 'right', 'up', 'down', 'in', 'out'] as const
+export const PRESENTATION_SLIDE_LAYOUTS = ['blank', 'title', 'titleContent', 'twoContent'] as const
+
+export type PresentationAnimationEffect = (typeof PRESENTATION_ANIMATION_EFFECTS)[number]
+export type PresentationAnimationStart = (typeof PRESENTATION_ANIMATION_STARTS)[number]
+export type PresentationAnimationTrigger = (typeof PRESENTATION_ANIMATION_TRIGGERS)[number]
+export type PresentationTransitionEffect = (typeof PRESENTATION_TRANSITION_EFFECTS)[number]
+export type PresentationTransitionDirection = (typeof PRESENTATION_TRANSITION_DIRECTIONS)[number]
+export type PresentationSlideLayout = (typeof PRESENTATION_SLIDE_LAYOUTS)[number]
 
 export type PresentationHyperlink =
   | { type: 'url'; url: string; tooltip?: string }
@@ -79,6 +73,17 @@ export interface PresentationFileSource {
   path?: string
 }
 
+export type PresentationAssetKind = 'image' | 'audio' | 'video'
+export type PresentationAssetSource = Omit<PresentationFileSource, 'assetId'>
+
+/** One project-owned media resource referenced by slide elements. */
+export interface PresentationAsset {
+  id: string
+  kind: PresentationAssetKind
+  name: string
+  source: PresentationAssetSource
+}
+
 export interface PresentationTransition {
   effect: PresentationTransitionEffect
   durationMs: number
@@ -86,92 +91,25 @@ export interface PresentationTransition {
   throughBlack?: boolean
 }
 
-export type PresentationShapeType =
-  | 'line'
-  | 'lineArrow'
-  | 'lineDoubleArrow'
-  | 'elbowConnector'
-  | 'elbowArrow'
-  | 'curvedConnector'
-  | 'curvedArrow'
-  | 'rect'
-  | 'roundRect'
-  | 'snip1Rect'
-  | 'snip2DiagRect'
-  | 'round1Rect'
-  | 'round2SameRect'
-  | 'frame'
-  | 'ellipse'
-  | 'triangle'
-  | 'rtTriangle'
-  | 'parallelogram'
-  | 'trapezoid'
-  | 'diamond'
-  | 'pentagon'
-  | 'hexagon'
-  | 'octagon'
-  | 'decagon'
-  | 'dodecagon'
-  | 'pie'
-  | 'teardrop'
-  | 'plus'
-  | 'star4'
-  | 'star5'
-  | 'star6'
-  | 'star8'
-  | 'heart'
-  | 'lightningBolt'
-  | 'sun'
-  | 'moon'
-  | 'cloud'
-  | 'donut'
-  | 'arc'
-  | 'smileyFace'
-  | 'can'
-  | 'cube'
-  | 'bevel'
-  | 'bracePair'
-  | 'bracketPair'
-  | 'rightArrow'
-  | 'leftArrow'
-  | 'upArrow'
-  | 'downArrow'
-  | 'leftRightArrow'
-  | 'upDownArrow'
-  | 'quadArrow'
-  | 'bentArrow'
-  | 'bentUpArrow'
-  | 'uturnArrow'
-  | 'circularArrow'
-  | 'chevron'
-  | 'notchedRightArrow'
-  | 'stripedRightArrow'
-  | 'rightArrowCallout'
-  | 'leftArrowCallout'
-  | 'upArrowCallout'
-  | 'downArrowCallout'
-  | 'mathPlus'
-  | 'mathMinus'
-  | 'mathMultiply'
-  | 'mathDivide'
-  | 'mathEqual'
-  | 'mathNotEqual'
-  | 'flowChartProcess'
-  | 'flowChartAlternateProcess'
-  | 'flowChartDecision'
-  | 'flowChartInputOutput'
-  | 'flowChartDocument'
-  | 'flowChartMultidocument'
-  | 'flowChartTerminator'
-  | 'flowChartPreparation'
-  | 'flowChartManualInput'
-  | 'flowChartManualOperation'
-  | 'flowChartConnector'
-  | 'flowChartOffpageConnector'
-  | 'flowChartDelay'
-  | 'flowChartDisplay'
-  | 'flowChartPredefinedProcess'
-  | 'flowChartInternalStorage'
+export const PRESENTATION_SHAPE_TYPES = [
+  'line', 'lineArrow', 'lineDoubleArrow', 'elbowConnector', 'elbowArrow', 'curvedConnector',
+  'curvedArrow', 'rect', 'roundRect', 'snip1Rect', 'snip2DiagRect', 'round1Rect',
+  'round2SameRect', 'frame', 'ellipse', 'triangle', 'rtTriangle', 'parallelogram', 'trapezoid',
+  'diamond', 'pentagon', 'hexagon', 'octagon', 'decagon', 'dodecagon', 'pie', 'teardrop',
+  'plus', 'star4', 'star5', 'star6', 'star8', 'heart', 'lightningBolt', 'sun', 'moon',
+  'cloud', 'donut', 'arc', 'smileyFace', 'can', 'cube', 'bevel', 'bracePair', 'bracketPair',
+  'rightArrow', 'leftArrow', 'upArrow', 'downArrow', 'leftRightArrow', 'upDownArrow',
+  'quadArrow', 'bentArrow', 'bentUpArrow', 'uturnArrow', 'circularArrow', 'chevron',
+  'notchedRightArrow', 'stripedRightArrow', 'rightArrowCallout', 'leftArrowCallout',
+  'upArrowCallout', 'downArrowCallout', 'mathPlus', 'mathMinus', 'mathMultiply', 'mathDivide',
+  'mathEqual', 'mathNotEqual', 'flowChartProcess', 'flowChartAlternateProcess',
+  'flowChartDecision', 'flowChartInputOutput', 'flowChartDocument', 'flowChartMultidocument',
+  'flowChartTerminator', 'flowChartPreparation', 'flowChartManualInput',
+  'flowChartManualOperation', 'flowChartConnector', 'flowChartOffpageConnector',
+  'flowChartDelay', 'flowChartDisplay', 'flowChartPredefinedProcess', 'flowChartInternalStorage',
+] as const
+
+export type PresentationShapeType = (typeof PRESENTATION_SHAPE_TYPES)[number]
 
 export interface PresentationElementBase {
   id: string
@@ -275,7 +213,7 @@ export interface PresentationShapeElement extends PresentationElementBase {
 
 export interface PresentationImageElement extends PresentationElementBase {
   type: 'image'
-  source: PresentationFileSource
+  sourceAssetId: string
   altText: string
   fit: 'contain' | 'cover'
   /** Preserve an OOXML picture-filled shape as an editable image crop. */
@@ -291,7 +229,7 @@ export interface PresentationImageElement extends PresentationElementBase {
 
 export interface PresentationAudioElement extends PresentationElementBase {
   type: 'audio'
-  source: PresentationFileSource
+  sourceAssetId: string
   autoplay: boolean
   loop: boolean
   muted: boolean
@@ -299,7 +237,7 @@ export interface PresentationAudioElement extends PresentationElementBase {
 
 export interface PresentationVideoElement extends PresentationElementBase {
   type: 'video'
-  source: PresentationFileSource
+  sourceAssetId: string
   autoplay: boolean
   loop: boolean
   muted: boolean
@@ -319,7 +257,8 @@ export interface PresentationTableElement extends PresentationElementBase {
   fontSize: number
 }
 
-export type PresentationChartType = 'column' | 'bar' | 'line' | 'pie' | 'doughnut'
+export const PRESENTATION_CHART_TYPES = ['column', 'bar', 'line', 'pie', 'doughnut'] as const
+export type PresentationChartType = (typeof PRESENTATION_CHART_TYPES)[number]
 
 export interface PresentationChartSeries {
   name: string
@@ -372,6 +311,7 @@ export interface PresentationVerticalTextLayout {
   columnAdvance: number
   columnOffsets: number[]
   columns: string[]
+  items: PresentationVerticalTextLayoutItem[][]
   rowAdvance: number
   rowsPerColumn: number
   sourceOffsets: number[][]
@@ -380,8 +320,18 @@ export interface PresentationVerticalTextLayout {
   columnHeights: number[]
 }
 
-/** Flow upright glyphs down the text frame, then continue in columns from right to left. */
-export function layoutPresentationVerticalText(element: PresentationTextElement): PresentationVerticalTextLayout {
+export interface PresentationVerticalTextLayoutItem {
+  blockSize: number
+  inlineSize: number
+  rotation: 0 | 90
+  rowOffset: number
+  sourceOffset: number
+  style: PresentationTextStyle
+  text: string
+}
+
+/** Flow vertical glyphs and rotated Latin runs down the frame, then continue in columns from right to left. */
+export function layoutPresentationVerticalText(element: PresentationTextElement, measureText?: (text: string, style: PresentationTextStyle) => number): PresentationVerticalTextLayout {
   const insets = element.textInsets ?? { left: 0, top: 0, right: 0, bottom: 0 }
   const contentWidth = Math.max(0, element.width - insets.left - insets.right)
   const contentHeight = Math.max(element.fontSize, element.height - insets.top - insets.bottom)
@@ -390,6 +340,7 @@ export function layoutPresentationVerticalText(element: PresentationTextElement)
   const columnAdvance = element.lineSpacing ?? element.fontSize * (element.lineHeight ?? 1.2)
   const rowsPerColumn = Math.max(1, Math.floor((contentHeight - element.fontSize) / rowAdvance) + 1)
   const columns: string[] = []
+  const items: PresentationVerticalTextLayoutItem[][] = []
   const sourceOffsets: number[][] = []
   const glyphStyles: PresentationTextStyle[][] = []
   const rowOffsets: number[][] = []
@@ -401,38 +352,67 @@ export function layoutPresentationVerticalText(element: PresentationTextElement)
     let nextRow = 0
     const startColumn = () => {
       column = columns.length
-      columns.push(''); sourceOffsets.push([]); rowOffsets.push([]); glyphStyles.push([])
+      columns.push(''); items.push([]); sourceOffsets.push([]); rowOffsets.push([]); glyphStyles.push([])
       columnParagraphs.push(paragraphStyle)
       columnWidths.push(presentationParagraphTextStyle(element, paragraphStyle).fontSize ?? element.fontSize); columnHeights.push(0)
       nextRow = 0
     }
+    const sidewaysWidth = (text: string, style: PresentationTextStyle) => {
+      if (measureText) return Math.max(1, measureText(text, style))
+      const size = style.fontSize ?? element.fontSize
+      const glyphs = presentationTextGraphemes(text)
+      const ink = glyphs.reduce((sum, glyph) => {
+        let ratio = 0.6
+        if (/\s/u.test(glyph)) ratio = 0.33
+        else if (/[ilI1.,'!|]/u.test(glyph)) ratio = 0.3
+        else if (/[mwMW@#%&]/u.test(glyph)) ratio = 0.85
+        return sum + size * ratio
+      }, 0)
+      return Math.max(1, ink + Math.max(0, glyphs.length - 1) * size * (style.characterSpacing ?? element.characterSpacing ?? 0) / 1_000)
+    }
+    const appendGlyph = (glyph: string, offset: number, style: PresentationTextStyle) => {
+      const size = style.fontSize ?? element.fontSize
+      let last = items[column]!.at(-1)
+      const sidewaysWhitespace = /^[ \t]$/u.test(glyph) && last?.rotation === 90
+      const rotation = element.textDirection === 'eastAsianVertical' && (!/\s/u.test(glyph) || sidewaysWhitespace) && !usesPresentationUprightVerticalGlyph(glyph) ? 90 : 0
+      let merge = rotation === 90 && last?.rotation === 90 && last.style === style
+      let inlineSize = size
+      if (rotation === 90) inlineSize = sidewaysWidth(merge ? last!.text + glyph : glyph, style)
+      let addedSize = merge ? inlineSize - last!.inlineSize : inlineSize
+      if (element.wordWrap !== false && columns[column] && nextRow + addedSize > contentHeight) {
+        if (/^[ \t]$/u.test(glyph)) return
+        startColumn()
+        last = undefined
+        merge = false
+        inlineSize = rotation === 90 ? sidewaysWidth(glyph, style) : size
+        addedSize = inlineSize
+      }
+      const glyphOffset = merge ? last!.rowOffset + last!.inlineSize : nextRow
+      columns[column] += glyph
+      sourceOffsets[column]!.push(offset)
+      glyphStyles[column]!.push(style)
+      rowOffsets[column]!.push(glyphOffset)
+      if (merge) {
+        last!.text += glyph
+        last!.inlineSize = inlineSize
+      } else {
+        items[column]!.push({ blockSize: size, inlineSize, rotation, rowOffset: nextRow, sourceOffset: offset, style, text: glyph })
+      }
+      columnWidths[column] = Math.max(columnWidths[column]!, size)
+      columnHeights[column] = Math.max(columnHeights[column]!, (merge ? last!.rowOffset : nextRow) + inlineSize)
+      nextRow = (merge ? last!.rowOffset : nextRow) + inlineSize + size * (style.characterSpacing ?? element.characterSpacing ?? 0) / 1_000
+    }
     startColumn()
     for (const segment of presentationParagraphSegments(element, paragraphStyle, paragraphIndex)) {
       let offset = segment.start
-      for (const glyph of Array.from(segment.text)) {
+      for (const glyph of presentationTextGraphemes(segment.text)) {
         if (glyph === '\n') {
           startColumn()
           offset += glyph.length
           continue
         }
         const style = segment.style
-        const size = style.fontSize ?? element.fontSize
-        if (element.wordWrap !== false && columns[column] && nextRow + size > contentHeight) {
-          // A breakable space at an automatic wrap boundary does not start another column.
-          if (glyph === ' ' || glyph === '\t') {
-            if (segment.end > segment.start) offset += glyph.length
-            continue
-          }
-          startColumn()
-        }
-        // Spaces occupy authored cells; generated markers share the paragraph's source offset.
-        columns[column] += glyph
-        sourceOffsets[column]!.push(offset)
-        glyphStyles[column]!.push(style)
-        rowOffsets[column]!.push(nextRow)
-        columnWidths[column] = Math.max(columnWidths[column]!, size)
-        columnHeights[column] = nextRow + size
-        nextRow += Math.max(1, size * (1 + (style.characterSpacing ?? 0) / 1_000))
+        appendGlyph(glyph, offset, style)
         if (segment.end > segment.start) offset += glyph.length
       }
     }
@@ -460,6 +440,7 @@ export function layoutPresentationVerticalText(element: PresentationTextElement)
     columnAdvance,
     columnOffsets,
     columns,
+    items,
     rowAdvance,
     rowsPerColumn,
     sourceOffsets,
@@ -472,8 +453,10 @@ export function layoutPresentationVerticalText(element: PresentationTextElement)
 /** Add visual list markers while keeping the underlying editable text marker-free. */
 export function formatPresentationText(element: PresentationTextElement): string {
   const listed = presentationTextDisplaySegments(element).map(segment => segment.text).join('')
-  if (element.textDirection !== 'eastAsianVertical' && element.textDirection !== 'stacked') return listed
-  const columns = layoutPresentationVerticalText(element).columns.map((column) => Array.from(column))
+  if (!usesPresentationVerticalGlyphLayout(element)) return listed
+  const layout = layoutPresentationVerticalText(element)
+  if (layout.items.some(column => column.some(item => item.rotation === 90))) return listed
+  const columns = layout.columns.map(presentationTextGraphemes)
   const rowCount = Math.max(0, ...columns.map((column) => column.length))
   return Array.from({ length: rowCount }, (_, rowIndex) => (
     [...columns].reverse().map((column) => column[rowIndex] ?? '　').join('　')
@@ -482,7 +465,7 @@ export function formatPresentationText(element: PresentationTextElement): string
 
 /** Remove markers generated by formatPresentationText after direct canvas editing. */
 export function stripPresentationTextFormatting(text: string, element: PresentationTextElement): string {
-  if (element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked') return element.text
+  if (usesPresentationVerticalGlyphLayout(element)) return element.text
   if (!element.paragraphs?.length) return stripPresentationListMarkers(text, element.listStyle)
   const originalMarkers = presentationTextParagraphs(element).map(paragraph => paragraph.marker).filter(Boolean)
   let offset = 0
@@ -517,10 +500,12 @@ export interface PresentationSlide {
   id: string
   layout?: PresentationSlideLayout
   name: string
-  background: string
+  /** Page-only override. Omit it to inherit theme.background. */
+  background?: string
   comments?: PresentationComment[]
   elements: PresentationElement[]
   notes?: string
+  /** Page-only override. Omit it to inherit theme.footer. */
   footer?: PresentationFooter
   transition: PresentationTransition
 }
@@ -533,6 +518,9 @@ export interface PresentationMaster {
   titleFontFamily: string
 }
 
+/** Global visual defaults shared by every page in one presentation project. */
+export type PresentationTheme = PresentationMaster
+
 export const DEFAULT_PRESENTATION_MASTER: PresentationMaster = {
   accentColors: ['#41516A', '#3478F6', '#35A3E8', '#30B26F', '#DB2B32', '#FF922B', '#FFBE0B', '#7C2AE8'],
   background: '#FFFFFF',
@@ -541,17 +529,73 @@ export const DEFAULT_PRESENTATION_MASTER: PresentationMaster = {
   titleFontFamily: 'Aptos Display',
 }
 
-export interface PresentationDocument {
+/** Resolve the background seen by every editor, preview and exporter. */
+export function presentationSlideBackground(theme: PresentationTheme, slide: Pick<PresentationSlide, 'background'>): string {
+  return slide.background ?? theme.background
+}
+
+/** Resolve the footer seen by every editor, preview and exporter. */
+export function presentationSlideFooter(theme: PresentationTheme, slide: Pick<PresentationSlide, 'footer'>): PresentationFooter {
+  return slide.footer ?? theme.footer
+}
+
+export interface PresentationSlides {
+  /** Pages are stored in canonical slideOrder after every model commit. */
+  pages: PresentationSlide[]
+  slideOrder: string[]
+  /** Editor selection follows the VideoProject timeline selection convention. */
+  selectedPageId: string
+}
+
+/** Replace the page collection while keeping order and selection references valid. */
+export function replacePresentationPages(slides: PresentationSlides, pages: PresentationSlide[], selectedPageId = slides.selectedPageId): PresentationSlides {
+  if (pages.length === 0) throw new Error('A presentation project must keep at least one page')
+  const pageIds = new Set(pages.map((page) => page.id))
+  const selected = pageIds.has(selectedPageId) ? selectedPageId : pages[0]!.id
+  return { pages, slideOrder: pages.map((page) => page.id), selectedPageId: selected }
+}
+
+/** Resolve slideOrder at read/migration boundaries before committing canonical array order. */
+export function orderPresentationPages(pages: PresentationSlide[], slideOrder: readonly string[]): PresentationSlide[] {
+  const byId = new Map(pages.map((page) => [page.id, page]))
+  const ordered = slideOrder.flatMap((pageId) => {
+    const page = byId.get(pageId)
+    if (!page) return []
+    byId.delete(pageId)
+    return [page]
+  })
+  return [...ordered, ...byId.values()]
+}
+
+/** Update editor selection without rebuilding or duplicating page data. */
+export function selectPresentationPage(slides: PresentationSlides, selectedPageId: string): PresentationSlides {
+  if (!slides.pages.some((page) => page.id === selectedPageId)) throw new Error(`PowerPoint page not found: ${selectedPageId}`)
+  return { ...slides, selectedPageId }
+}
+
+/**
+ * The authoritative, serializable PowerPoint model.
+ *
+ * File handles and save bookkeeping deliberately live on PresentationDocument,
+ * while all deck content lives here.
+ */
+export interface PresentationProject {
+  schemaVersion: 1
+  version: 1
+  id: string
+  title: string
+  theme: PresentationTheme
+  pageSize: PresentationPageSize
+  assets: PresentationAsset[]
+  slides: PresentationSlides
+}
+
+/** Renderer host metadata attached to a project without becoming deck content. */
+export interface PresentationDocument extends PresentationProject {
   sourceProtected?: boolean
   source?: import('../../shared/office-files').OfficeFileSource
-  savedVersion?: number
-  id: string
-  master: PresentationMaster
-  title: string
-  version: number
-  pageSize: PresentationPageSize
-  slides: PresentationSlide[]
-  selectedSlideId: string
+  savedRevision?: number
+  revision: number
 }
 
 export interface PresentationWorkspace {
@@ -582,7 +626,6 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
   return {
     id: createPresentationId('slide'),
     name,
-    background: '#FFFFFF',
     elements: [],
     notes: '',
     transition: createDefaultPresentationTransition(),
@@ -591,7 +634,7 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
 
 export function createInitialPresentationDocument(): PresentationDocument {
   const document = createBlankPresentationDocument('')
-  const slide = document.slides[0]!
+  const slide = document.slides.pages[0]!
   const createTextBox = (
     kind: 'body' | 'subtitle' | 'title',
     geometry: Pick<PresentationTextElement, 'height' | 'width' | 'x' | 'y'>,
@@ -610,7 +653,7 @@ export function createInitialPresentationDocument(): PresentationDocument {
       rotation: 0,
       text,
       fontSize,
-      fontFamily: isTitle ? document.master.titleFontFamily : document.master.bodyFontFamily,
+      fontFamily: isTitle ? document.theme.titleFontFamily : document.theme.bodyFontFamily,
       fontWeight: isTitle ? 700 : 400,
       italic: false,
       underline: false,
@@ -636,17 +679,23 @@ export function createInitialPresentationDocument(): PresentationDocument {
 export function createBlankPresentationDocument(title: string, slideName = 'Slide 1'): PresentationDocument {
   const slide = createBlankPresentationSlide(slideName)
   return {
+    schemaVersion: 1,
+    version: 1,
+    revision: 1,
     id: createPresentationId('presentation'),
-    master: {
+    theme: {
       ...DEFAULT_PRESENTATION_MASTER,
       accentColors: [...DEFAULT_PRESENTATION_MASTER.accentColors],
       footer: { ...DEFAULT_PRESENTATION_MASTER.footer },
     },
     title,
-    version: 1,
     pageSize: { ...PRESENTATION_PAGE_SIZES.wide },
-    slides: [slide],
-    selectedSlideId: slide.id,
+    assets: [],
+    slides: {
+      pages: [slide],
+      slideOrder: [slide.id],
+      selectedPageId: slide.id,
+    },
   }
 }
 

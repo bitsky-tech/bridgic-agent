@@ -1,6 +1,8 @@
 import {
   PRESENTATION_PAGE_SIZES,
   getPresentationPageSize,
+  presentationSlideBackground,
+  replacePresentationPages,
   type PresentationChartElement,
   type PresentationDocument,
   type PresentationElement,
@@ -98,7 +100,7 @@ export function presentationThemePreset(id: PresentationThemePresetId): Presenta
 }
 
 export function matchingPresentationTheme(document: PresentationDocument): PresentationThemePresetId | 'custom' {
-  const master = document.master
+  const master = document.theme
   return PRESENTATION_THEME_PRESETS.find((preset) => (
     preset.background === master.background
     && preset.titleFontFamily === master.titleFontFamily
@@ -110,22 +112,22 @@ export function matchingPresentationTheme(document: PresentationDocument): Prese
 
 export function applyPresentationDesign(document: PresentationDocument, patch: PresentationDesignPatch): PresentationDocument {
   const preset = patch.theme ? presentationThemePreset(patch.theme) : null
-  const background = normalizePresentationDesignColor(patch.background ?? preset?.background ?? document.master.background)
-  const accentColors = (patch.accentColors ?? preset?.accentColors ?? document.master.accentColors)
+  const background = normalizePresentationDesignColor(patch.background ?? preset?.background ?? document.theme.background)
+  const accentColors = (patch.accentColors ?? preset?.accentColors ?? document.theme.accentColors)
     .map(normalizePresentationDesignColor)
   if (accentColors.length === 0) throw new Error('PowerPoint accentColors must contain at least one color')
-  const titleFontFamily = patch.titleFontFamily ?? preset?.titleFontFamily ?? document.master.titleFontFamily
-  const bodyFontFamily = patch.bodyFontFamily ?? preset?.bodyFontFamily ?? document.master.bodyFontFamily
+  const titleFontFamily = patch.titleFontFamily ?? preset?.titleFontFamily ?? document.theme.titleFontFamily
+  const bodyFontFamily = patch.bodyFontFamily ?? preset?.bodyFontFamily ?? document.theme.bodyFontFamily
   const footer = patch.footer
-    ? { ...document.master.footer, ...patch.footer }
-    : { ...document.master.footer }
+    ? { ...document.theme.footer, ...patch.footer }
+    : { ...document.theme.footer }
   const colorsChanged = Boolean(patch.theme || patch.background || patch.accentColors)
   const fontsChanged = Boolean(patch.theme || patch.titleFontFamily || patch.bodyFontFamily)
-  const textColors = presentationThemeTextColors(background)
-  const gridLineColor = textColors.primary === '#FFFFFF' ? '#4A4B60' : '#E0E1E8'
 
-  const applyElementDesign = (element: PresentationElement, index: number): PresentationElement => {
+  const applyElementDesign = (element: PresentationElement, index: number, slideBackground: string): PresentationElement => {
     const accent = accentColors[index % accentColors.length]!
+    const textColors = presentationThemeTextColors(slideBackground)
+    const gridLineColor = textColors.primary === '#FFFFFF' ? '#4A4B60' : '#E0E1E8'
     if (element.type === 'text') {
       const text = element as PresentationTextElement
       const title = text.fontWeight >= 600 || text.fontSize >= 30
@@ -137,7 +139,7 @@ export function applyPresentationDesign(document: PresentationDocument, patch: P
     if (element.type === 'chart') {
       const chart = element as PresentationChartElement
       if (!colorsChanged) return chart
-      const chartBackground = chart.chartAreaFill === 'transparent' ? background : chart.chartAreaFill ?? '#FFFFFF'
+      const chartBackground = chart.chartAreaFill === 'transparent' ? slideBackground : chart.chartAreaFill ?? '#FFFFFF'
       const plotBackground = !chart.plotAreaFill || chart.plotAreaFill === 'transparent' ? chartBackground : chart.plotAreaFill
       const chartTextColors = presentationThemeTextColors(chartBackground)
       const plotTextColors = presentationThemeTextColors(plotBackground)
@@ -155,7 +157,7 @@ export function applyPresentationDesign(document: PresentationDocument, patch: P
       const table = element as PresentationTableElement
       return colorsChanged ? {
         ...table,
-        bodyFill: background,
+        bodyFill: slideBackground,
         borderColor: gridLineColor,
         headerFill: accentColors[0]!,
         textColor: textColors.primary,
@@ -173,13 +175,14 @@ export function applyPresentationDesign(document: PresentationDocument, patch: P
   let next: PresentationDocument = {
     ...document,
     ...(patch.title === undefined ? {} : { title: patch.title }),
-    master: { accentColors, background, bodyFontFamily, footer, titleFontFamily },
-    slides: document.slides.map((slide) => ({
-      ...slide,
-      ...(colorsChanged ? { background } : {}),
-      ...(patch.footer ? { footer: { ...footer } } : {}),
-      ...(patch.transition ? { transition: { ...patch.transition } } : {}),
-      elements: slide.elements.map(applyElementDesign),
+    theme: { accentColors, background, bodyFontFamily, footer, titleFontFamily },
+    slides: replacePresentationPages(document.slides, document.slides.pages.map((slide) => {
+      const slideBackground = presentationSlideBackground({ ...document.theme, background }, slide)
+      return {
+        ...slide,
+        ...(patch.transition ? { transition: { ...patch.transition } } : {}),
+        elements: slide.elements.map((element, index) => applyElementDesign(element, index, slideBackground)),
+      }
     })),
   }
   if (patch.pageSize) next = resizePresentationDocument(next, patch.pageSize)
@@ -231,6 +234,6 @@ export function resizePresentationDocument(document: PresentationDocument, prese
   return {
     ...document,
     pageSize: { ...nextSize },
-    slides: document.slides.map((slide) => ({ ...slide, elements: slide.elements.map(scaleElement) })),
+    slides: replacePresentationPages(document.slides, document.slides.pages.map((slide) => ({ ...slide, elements: slide.elements.map(scaleElement) }))),
   }
 }

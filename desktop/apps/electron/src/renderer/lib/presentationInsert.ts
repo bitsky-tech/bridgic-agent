@@ -1,5 +1,6 @@
 import {
   PRESENTATION_HEIGHT,
+  PRESENTATION_SHAPE_TYPES,
   PRESENTATION_WIDTH,
   createPresentationId,
   type PresentationAudioElement,
@@ -16,13 +17,9 @@ import {
   type PresentationTextElement,
   type PresentationVideoElement,
 } from '@/atoms/presentation'
-import { presentationShapeCategories } from '@/lib/presentationShapes'
-
 const DEFAULT_CHART_COLORS = ['#6957D9', '#2F8B78', '#DF6C47', '#4D7CFE', '#F2B91F'] as const
 export const PRESENTATION_AUDIO_ICON_SIZE = 64
-const presentationShapeTypes = new Set<PresentationShapeType>(
-  presentationShapeCategories.flatMap((category) => category.shapes.map((shape) => shape.type)),
-)
+const presentationShapeTypes = new Set<PresentationShapeType>(PRESENTATION_SHAPE_TYPES)
 
 export type PresentationFileKind = 'image' | PresentationMediaElement['type']
 
@@ -267,11 +264,11 @@ export function createPresentationImageElement(source: PresentationFileSource): 
   return {
     id: createPresentationId('image'),
     type: 'image',
+    sourceAssetId: source.assetId ?? createPresentationId('asset'),
     ...centeredPosition(width, height),
     width,
     height,
     rotation: 0,
-    source,
     altText: source.fileName,
     fit: 'contain',
   }
@@ -286,11 +283,11 @@ export function createPresentationMediaElement(type: PresentationMediaElement['t
   return {
     id: createPresentationId(type),
     type,
+    sourceAssetId: source.assetId ?? createPresentationId('asset'),
     ...centeredPosition(width, height),
     width,
     height,
     rotation: 0,
-    source,
     autoplay: false,
     loop: false,
     muted: false,

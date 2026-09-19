@@ -6,6 +6,8 @@ import {
   DEFAULT_PRESENTATION_MASTER,
   PRESENTATION_PAGE_SIZES,
   createPresentationId,
+  replacePresentationPages,
+  type PresentationAsset,
   type PresentationDocument,
   type PresentationFileSource,
   type PresentationElement,
@@ -24,6 +26,8 @@ import {
   type PresentationTransition,
 } from '@/atoms/presentation'
 import { getPresentationShapeDefinition, isPresentationLineShape, isSupportedPresentationShapeType, PRESENTATION_CONNECTOR_NAMESPACE } from '@/lib/presentationShapes'
+import { clearPresentationHyperlinksToPages, createPresentationAsset, migratePresentationDocument, normalizePresentationProject } from '@/presentation/project'
+import { validatePresentationDocument } from '@/presentation/model/reducer'
 import {
   presentationCharacterSpacingFromPoints,
   presentationFontSizeFromPoints,
@@ -716,6 +720,7 @@ function svgShapeFrom(
   shape: Element,
   geometry: ReturnType<typeof shapeGeometry>,
   themeColors: ReadonlyMap<string, string>,
+  registerImageAsset: (source: PresentationFileSource) => PresentationAsset,
 ): PresentationImageElement | null {
   const shapeProperties = directChildrenByLocalName(shape, 'spPr')[0] ?? firstByLocalName(shape, 'spPr')
   if (!shapeProperties) return null
@@ -765,9 +770,15 @@ function svgShapeFrom(
   const angle = geometry.rotation * Math.PI / 180
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${paddedWidth}" height="${paddedHeight}" viewBox="${-padding} ${-padding} ${paddedWidth} ${paddedHeight}"><defs>${fill.defs}</defs>${body}</svg>`
   const sourceId = firstByLocalName(shape, 'cNvPr')?.getAttribute('id') ?? createPresentationId('shape-svg')
+  const asset = registerImageAsset({
+    dataUrl: svgDataUrl(svg),
+    fileName: `shape-${sourceId}.svg`,
+    mimeType: 'image/svg+xml',
+  })
   return {
     id: createPresentationId('image'),
     type: 'image',
+    sourceAssetId: asset.id,
     ...geometry,
     x: geometry.x - padding * Math.cos(angle) + padding * Math.sin(angle),
     y: geometry.y - padding * Math.sin(angle) - padding * Math.cos(angle),
@@ -776,11 +787,6 @@ function svgShapeFrom(
     altText: firstByLocalName(shape, 'cNvPr')?.getAttribute('descr') ?? firstByLocalName(shape, 'cNvPr')?.getAttribute('name') ?? '',
     fit: 'contain',
     shadow: Boolean(firstByLocalName(shapeProperties, 'outerShdw')),
-    source: {
-      dataUrl: svgDataUrl(svg),
-      fileName: `shape-${sourceId}.svg`,
-      mimeType: 'image/svg+xml',
-    },
   }
 }
 
@@ -788,6 +794,7 @@ function visualShapeFrom(
   shape: Element,
   geometry: ReturnType<typeof shapeGeometry>,
   themeColors: ReadonlyMap<string, string>,
+  registerImageAsset: (source: PresentationFileSource) => PresentationAsset,
 ): PresentationShapeElement | PresentationImageElement | null {
   const shapeProperties = directChildrenByLocalName(shape, 'spPr')[0] ?? firstByLocalName(shape, 'spPr')
   if (!shapeProperties) return null
@@ -817,7 +824,7 @@ function visualShapeFrom(
     connectorPath += arrow('headEnd', false) + arrow('tailEnd', true)
   }
   if ((directChildrenByLocalName(shapeProperties, 'custGeom').length > 0 && !connectorPath) || directChildrenByLocalName(shapeProperties, 'gradFill').length > 0) {
-    return svgShapeFrom(shape, geometry, themeColors)
+    return svgShapeFrom(shape, geometry, themeColors, registerImageAsset)
   }
   const style = directChildrenByLocalName(shape, 'style')[0] ?? firstByLocalName(shape, 'style')
   const noFill = directChildrenByLocalName(shapeProperties, 'noFill').length > 0
@@ -826,7 +833,7 @@ function visualShapeFrom(
   const importedFill = importedColorFrom(solidFill, 'transparent', themeColors)
   const fill = noFill || importedFill.opacity === 0 ? 'transparent' : importedFill.color
   const stroke = shapeStrokeFrom(shape, shapeProperties, themeColors)
-  if (fill !== 'transparent' && stroke.width > 0 && stroke.opacity !== importedFill.opacity) return svgShapeFrom(shape, geometry, themeColors)
+  if (fill !== 'transparent' && stroke.width > 0 && stroke.opacity !== importedFill.opacity) return svgShapeFrom(shape, geometry, themeColors, registerImageAsset)
   const borderColor = stroke.color
   const borderWidth = stroke.width
   const opacity = fill === 'transparent' ? stroke.opacity : importedFill.opacity
@@ -934,7 +941,7 @@ function mimeTypeForPath(path: string): string {
   return 'image/png'
 }
 
-async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>): Promise<PresentationSlide> {
+async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>, registerImageAsset: (source: PresentationFileSource) => PresentationAsset): Promise<PresentationSlide> {
   const slideFile = archive.file(slidePath)
   if (!slideFile) throw new Error(`Missing ${slidePath}`)
   const document = parseXml(await slideFile.async('text'))
@@ -1036,9 +1043,11 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const imageSource = await imageSourceFromBlip(blip, relationshipMap)
     const opacity = opacityFrom(blip)
     const crop = imageCropFrom(blipFill)
-    const visual: PresentationShapeElement | PresentationImageElement | null = imageSource ? {
+    const imageAsset = imageSource ? registerImageAsset(imageSource) : null
+    const visual: PresentationShapeElement | PresentationImageElement | null = imageAsset ? {
       id: createPresentationId('image'),
       type: 'image',
+      sourceAssetId: imageAsset.id,
       ...geometry,
       altText: firstByLocalName(shape, 'cNvPr')?.getAttribute('descr') ?? '',
       fit: 'cover',
@@ -1046,8 +1055,7 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       ...(shapeTypeFrom(shape) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(shapeProperties && firstByLocalName(shapeProperties, 'outerShdw')),
-      source: imageSource,
-    } : visualShapeFrom(shape, geometry, themeColors)
+    } : visualShapeFrom(shape, geometry, themeColors, registerImageAsset)
     const text = textFrom(shape, geometry, pageSize, slideSizeEmu, themeColors, fallbackShape, coordinateTransform, textContext)
     const groupId = parentGroupId ?? (visual && text ? createPresentationId('group') : undefined)
     if (visual) elements.push(withGroup(visual, groupId))
@@ -1066,12 +1074,14 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const blip = firstByLocalName(picture, 'blip')
     const source = await imageSourceFromBlip(blip, relationshipMap)
     if (!source) return
+    const asset = registerImageAsset(source)
     const geometry = shapeGeometry(picture, pageSize, slideSizeEmu, coordinateTransform)
     const crop = imageCropFrom(picture)
     const opacity = opacityFrom(blip)
     const importedImage: PresentationImageElement = withGroup({
       id: createPresentationId('image'),
       type: 'image',
+      sourceAssetId: asset.id,
       ...geometry,
       altText: firstByLocalName(picture, 'cNvPr')?.getAttribute('descr') ?? '',
       fit: crop ? 'cover' : 'contain',
@@ -1079,7 +1089,6 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       ...(crop ? { crop } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(firstByLocalName(picture, 'outerShdw')),
-      source,
     }, parentGroupId)
     elements.push(importedImage)
     const sourceId = firstByLocalName(picture, 'cNvPr')?.getAttribute('id')
@@ -1324,9 +1333,11 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     ? await imageSourceFromBlip(backgroundBlip, backgroundOwner.relationships)
     : null
   if (backgroundSource) {
+    const asset = registerImageAsset(backgroundSource)
     elements.unshift({
       id: createPresentationId('image'),
       type: 'image',
+      sourceAssetId: asset.id,
       x: 0,
       y: 0,
       width: pageSize.width,
@@ -1336,7 +1347,6 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       altText: '',
       fit: 'cover',
       shadow: false,
-      source: backgroundSource,
     })
   }
   const notesTarget = [...relationships.values()].find((target) => target.includes('/notesSlides/'))
@@ -1370,20 +1380,28 @@ export async function importPresentationPptx(
   options: PresentationPptxImportOptions = {},
 ): Promise<PresentationDocument> {
   const archive = await JSZip.loadAsync(bytes)
-  const stored = (options.restoreEditorModel ? await readOfficeRoundTrip(archive, 'presentation') : null) as Partial<PresentationDocument> | null
-  if (stored?.master && stored.pageSize && Array.isArray(stored.slides) && stored.slides.length > 0
-    && stored.slides.every((slide) => slide && typeof slide.id === 'string' && Array.isArray(slide.elements))) {
-    const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= stored.slides!.length))] : null
-    const slides = requested ? (requested.length ? requested : [1]).map((number) => stored.slides![number - 1]!) : stored.slides
-    return {
-      id: createPresentationId('presentation'), version: 1,
+  const stored = options.restoreEditorModel ? await readOfficeRoundTrip(archive, 'presentation') : null
+  if (stored) {
+    const restored = migratePresentationDocument(stored, fileName.replace(/\.pptx$/i, ''))
+    const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= restored.slides.pages.length))] : null
+    const pages = requested ? (requested.length ? requested : [1]).map((number) => restored.slides.pages[number - 1]!) : restored.slides.pages
+    const retainedPageIds = new Set(pages.map((page) => page.id))
+    const removedPageIds = new Set(restored.slides.pages.flatMap((page) => retainedPageIds.has(page.id) ? [] : [page.id]))
+    const retainedPages = removedPageIds.size ? clearPresentationHyperlinksToPages(pages, removedPageIds) : pages
+    const selectedPageId = retainedPages.find((slide) => slide.id === restored.slides.selectedPageId)?.id ?? retainedPages[0]!.id
+    return validatePresentationDocument({
+      ...restored,
+      id: createPresentationId('presentation'),
+      revision: 1,
       sourceProtected: false,
       title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
-      master: stored.master, pageSize: stored.pageSize, slides,
-      selectedSlideId: slides.find((slide) => slide.id === stored.selectedSlideId)?.id ?? slides[0]!.id,
-    }
+      slides: replacePresentationPages(restored.slides, retainedPages, selectedPageId),
+    })
   }
-  const themeColors = await themeColorsFromArchive(archive)
+  const [themeColors, themeFonts] = await Promise.all([
+    themeColorsFromArchive(archive),
+    themeFontsFromArchive(archive),
+  ])
   const accentColors = ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].flatMap((name) => {
     const color = themeColors.get(name)
     return color ? [`#${color}`] : []
@@ -1419,22 +1437,60 @@ export async function importPresentationPptx(
     ? selectedSlideNumbers.map(number => ({ path: slidePaths[number - 1]!, sourceIndex: number - 1 }))
     : slidePaths.map((path, sourceIndex) => ({ path, sourceIndex }))
   const imageSources = new Map<string, Promise<PresentationFileSource>>()
+  const imageAssets = new WeakMap<PresentationFileSource, PresentationAsset>()
+  const assets: PresentationAsset[] = []
+  const registerImageAsset = (source: PresentationFileSource) => {
+    const existing = imageAssets.get(source)
+    if (existing) return existing
+    const asset = createPresentationAsset('image', source)
+    imageAssets.set(source, asset)
+    assets.push(asset)
+    return asset
+  }
   const slides: PresentationSlide[] = []
   for (const { path, sourceIndex } of selectedSlides) {
-    slides.push(await importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex, imageSources))
+    slides.push(await importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex, imageSources, registerImageAsset))
   }
-  return {
+  // PPTX writers often materialize a master color on every page. Promote the
+  // most common effective background back into our global theme default.
+  const backgroundCounts = new Map<string, number>()
+  let themeBackground = DEFAULT_PRESENTATION_MASTER.background
+  let themeBackgroundCount = 0
+  for (const slide of slides) {
+    const background = slide.background ?? DEFAULT_PRESENTATION_MASTER.background
+    const count = (backgroundCounts.get(background) ?? 0) + 1
+    backgroundCounts.set(background, count)
+    if (count > themeBackgroundCount) {
+      themeBackground = background
+      themeBackgroundCount = count
+    }
+  }
+  const pages = slides.map((slide) => {
+    if (slide.background !== themeBackground) return slide
+    const { background: _themeBackground, ...page } = slide
+    return page
+  })
+  return validatePresentationDocument(normalizePresentationProject({
+    schemaVersion: 1,
+    version: 1,
+    revision: 1,
     id: createPresentationId('presentation'),
     sourceProtected: true,
-    master: {
+    theme: {
       ...DEFAULT_PRESENTATION_MASTER,
       accentColors: accentColors.length > 0 ? accentColors : [...DEFAULT_PRESENTATION_MASTER.accentColors],
+      background: themeBackground,
+      bodyFontFamily: themeFonts.get('+mn-lt') ?? DEFAULT_PRESENTATION_MASTER.bodyFontFamily,
       footer: { ...DEFAULT_PRESENTATION_MASTER.footer },
+      titleFontFamily: themeFonts.get('+mj-lt') ?? DEFAULT_PRESENTATION_MASTER.titleFontFamily,
     },
     pageSize,
-    selectedSlideId: slides[0]!.id,
-    slides,
+    assets,
+    slides: {
+      pages,
+      slideOrder: pages.map((slide) => slide.id),
+      selectedPageId: pages[0]!.id,
+    },
     title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
-    version: 1,
-  }
+  }))
 }

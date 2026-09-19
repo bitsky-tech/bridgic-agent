@@ -1,24 +1,30 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
-import { PRESENTATION_PAGE_SIZES } from '@/atoms/presentation'
+import { PRESENTATION_PAGE_SIZES, type PresentationDocument, type PresentationFileSource } from '@/atoms/presentation'
 import { createPresentationTestDocument as createInitialPresentationDocument } from '@/test-fixtures/presentation'
 import { createPresentationPptx } from '../presentationPptx'
+import { normalizePresentationProject, presentationElementSource } from '@/presentation/project'
+import { validatePresentationDocument } from '@/presentation/model/reducer'
+
+function addImageAsset(document: PresentationDocument, id: string, source: PresentationFileSource): void {
+  document.assets.push({ id, kind: 'image', name: source.fileName, source })
+}
 
 describe('importPresentationPptx', () => {
   it('preserves the editable master and footer through repeated save and reopen cycles', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
-    source.master.footer = { text: 'Confidential', showDate: true, showSlideNumber: true }
-    source.master.bodyFontFamily = 'Arial'
-    source.master.titleFontFamily = 'Georgia'
+    const source = normalizePresentationProject(createInitialPresentationDocument())
+    source.theme.footer = { text: 'Confidential', showDate: true, showSlideNumber: true }
+    source.theme.bodyFontFamily = 'Arial'
+    source.theme.titleFontFamily = 'Georgia'
     let document = source
     for (let cycle = 0; cycle < 2; cycle++) {
       document = await importPresentationPptx(await createPresentationPptx(document), 'Report.pptx', { restoreEditorModel: true })
-      expect(document.master).toEqual(source.master)
-      expect(document.slides).toEqual(source.slides)
+      expect(document.theme).toEqual(source.theme)
+      expect(document.slides.pages).toEqual(source.slides.pages)
       expect(document.sourceProtected).toBe(false)
-      document.slides[0]!.notes = `Edited note ${cycle}`
-      source.slides[0]!.notes = `Edited note ${cycle}`
+      document.slides.pages[0]!.notes = `Edited note ${cycle}`
+      source.slides.pages[0]!.notes = `Edited note ${cycle}`
     }
   })
 
@@ -29,16 +35,16 @@ describe('importPresentationPptx', () => {
     const slide = archive.file('ppt/slides/slide1.xml')!
     archive.file(slide.name, (await slide.async('string')).replace(/<a:t>[^<]*<\/a:t>/, '<a:t>Externally corrected</a:t>'))
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'Report.pptx', { restoreEditorModel: true })
-    expect(JSON.stringify(imported.slides)).toContain('Externally corrected')
+    expect(JSON.stringify(imported.slides.pages)).toContain('Externally corrected')
     expect(imported.sourceProtected).toBe(true)
   })
 
   it('shares a master image across slides and preserves sharing through worker transfer', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = createInitialPresentationDocument()
-    const second = structuredClone(source.slides[0]!)
+    const second = structuredClone(source.slides.pages[0]!)
     second.id = 'second-slide'
-    source.slides = [source.slides[0]!, second]
+    source.slides.pages = [source.slides.pages[0]!, second]
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     for (const file of Object.values(archive.files)) {
       if (/^ppt\/(slides|slideLayouts|slideMasters)\/[^/]+\.xml$/.test(file.name)) {
@@ -51,12 +57,12 @@ describe('importPresentationPptx', () => {
     archive.file(rels.name, (await rels.async('text')).replace('</Relationships>', '<Relationship Id="sharedBackground" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shared.png"/></Relationships>'))
     archive.file('ppt/media/shared.png', new Uint8Array([137, 80, 78, 71]))
     const imported = structuredClone(await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' })))
-    const images = imported.slides.map((slide) => slide.elements[0]!)
+    const images = imported.slides.pages.map((slide) => slide.elements[0]!)
     expect(images).toHaveLength(2)
     expect(images.every((element) => element.type === 'image')).toBe(true)
     if (images[0]!.type !== 'image' || images[1]!.type !== 'image') throw new Error('Missing background')
-    expect(images[0]!.source).toBe(images[1]!.source)
-    expect(images[0]!.source.dataUrl).toBe('data:image/png;base64,iVBORw==')
+    expect(images[0]!.sourceAssetId).toBe(images[1]!.sourceAssetId)
+    expect(presentationElementSource(imported, images[0]!)!.dataUrl).toBe('data:image/png;base64,iVBORw==')
     expect(images[0]!.id).not.toBe(images[1]!.id)
   })
 
@@ -79,21 +85,24 @@ describe('importPresentationPptx', () => {
         '<Relationship Id="templateBackground" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/template-background.png"/></Relationships>'))
       archive.file('ppt/media/template-background.png', new Uint8Array([137, 80, 78, 71]))
       const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
-      const first = imported.slides[0]!.elements[0]!
+      const first = imported.slides.pages[0]!.elements[0]!
       expect(first.type).toBe('image')
       if (first.type !== 'image') throw new Error('Background missing')
-      expect(first.source.fileName).toBe('template-background.png')
+      expect(presentationElementSource(imported, first)!.fileName).toBe('template-background.png')
       expect([first.x, first.y, first.width, first.height]).toEqual([0, 0, imported.pageSize.width, imported.pageSize.height])
-      expect(imported.slides[0]!.elements.slice(1).some(element => element.type === 'text')).toBe(true)
+      expect(imported.slides.pages[0]!.elements.slice(1).some(element => element.type === 'text')).toBe(true)
     }
   })
 
   it('round-trips editable slides, geometry, notes and page size', async () => {
     const source = createInitialPresentationDocument()
-    source.master.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
+    source.theme.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
+    source.theme.background = '#112233'
+    source.theme.bodyFontFamily = 'Arial'
+    source.theme.titleFontFamily = 'Georgia'
     source.pageSize = PRESENTATION_PAGE_SIZES.standard
-    source.slides[0]!.notes = 'Presenter note'
-    const animated = source.slides[0]!.elements.find((element) => element.type === 'text')!
+    source.slides.pages[0]!.notes = 'Presenter note'
+    const animated = source.slides.pages[0]!.elements.find((element) => element.type === 'text')!
     animated.animation = 'split'
     if (animated.type === 'text') animated.characterSpacing = 125
     const bytes = await createPresentationPptx(source)
@@ -103,28 +112,31 @@ describe('importPresentationPptx', () => {
 
     expect(imported.title).toBe('round-trip')
     expect(imported.pageSize).toEqual(PRESENTATION_PAGE_SIZES.standard)
-    expect(imported.master.accentColors).toEqual(source.master.accentColors)
-    expect(imported.slides).toHaveLength(source.slides.length)
-    expect(imported.slides[0]!.notes).toContain('Presenter note')
-    expect(imported.slides[0]!.elements.some((element) => element.type === 'text')).toBe(true)
-    const importedText = imported.slides[0]!.elements.find((element) => element.type === 'text')
+    expect(imported.theme.accentColors).toEqual(source.theme.accentColors)
+    expect(imported.theme).toMatchObject({ background: '#112233', bodyFontFamily: 'Arial', titleFontFamily: 'Georgia' })
+    expect(imported.slides.pages[0]!.background).toBeUndefined()
+    expect(imported.slides.pages[1]!.background).toBe('#F7F6F2')
+    expect(imported.slides.pages).toHaveLength(source.slides.pages.length)
+    expect(imported.slides.pages[0]!.notes).toContain('Presenter note')
+    expect(imported.slides.pages[0]!.elements.some((element) => element.type === 'text')).toBe(true)
+    const importedText = imported.slides.pages[0]!.elements.find((element) => element.type === 'text')
     expect(importedText?.animation).toBe('split')
     expect(importedText?.type).toBe('text')
     if (importedText?.type === 'text') expect(importedText.characterSpacing).toBeCloseTo(125, 1)
-    expect(imported.slides[0]!.elements.some((element) => element.type !== 'text')).toBe(true)
+    expect(imported.slides.pages[0]!.elements.some((element) => element.type !== 'text')).toBe(true)
   })
 
   it('imports only the requested source slides for lightweight template previews', async () => {
     const source = createInitialPresentationDocument()
-    const first = source.slides[0]!
+    const first = source.slides.pages[0]!
     const second = structuredClone(first)
     second.id = 'preview-slide-2'
     second.name = 'Second source slide'
     const third = structuredClone(first)
     third.id = 'preview-slide-3'
     third.name = 'Third source slide'
-    source.slides = [first, second, third]
-    source.selectedSlideId = first.id
+    source.slides.pages = [first, second, third]
+    source.slides.selectedPageId = first.id
     const bytes = await createPresentationPptx(source)
     const { importPresentationPptx } = await import('../presentationPptxImport')
 
@@ -132,15 +144,53 @@ describe('importPresentationPptx', () => {
       slideNumbers: [1, 3, 3, 99],
     })
 
-    expect(imported.slides).toHaveLength(2)
-    expect(imported.slides.map(slide => slide.name)).toEqual(['Slide 1', 'Slide 3'])
+    expect(imported.slides.pages).toHaveLength(2)
+    expect(imported.slides.pages.map(slide => slide.name)).toEqual(['Slide 1', 'Slide 3'])
+  })
+
+  it('cleans omitted page links and assets when restoring a page subset', async () => {
+    const source = createInitialPresentationDocument()
+    const [first, second] = source.slides.pages
+    const firstText = first!.elements.find((element) => element.type === 'text')!
+    firstText.hyperlink = { type: 'slide', slideId: second!.id }
+    addImageAsset(source, 'retained-asset', {
+      dataUrl: 'data:image/png;base64,YQ==', fileName: 'retained.png', mimeType: 'image/png',
+    })
+    addImageAsset(source, 'omitted-asset', {
+      dataUrl: 'data:image/png;base64,Yg==', fileName: 'omitted.png', mimeType: 'image/png',
+    })
+    first!.elements.push({
+      id: 'retained-image', type: 'image', sourceAssetId: 'retained-asset', altText: '', fit: 'contain',
+      x: 10, y: 10, width: 20, height: 20, rotation: 0,
+    })
+    second!.elements.push({
+      id: 'omitted-image', type: 'image', sourceAssetId: 'omitted-asset', altText: '', fit: 'contain',
+      x: 10, y: 10, width: 20, height: 20, rotation: 0,
+    })
+    const bytes = await createPresentationPptx(source)
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+
+    const imported = await importPresentationPptx(bytes, 'subset.pptx', {
+      restoreEditorModel: true,
+      slideNumbers: [1],
+    })
+
+    expect(imported.slides.pages).toHaveLength(1)
+    expect(imported.slides.pages[0]!.elements.find((element) => element.id === firstText.id)).not.toHaveProperty('hyperlink')
+    expect(imported.assets.map((asset) => asset.id)).toEqual(['retained-asset'])
+    expect(validatePresentationDocument(imported)).toBe(imported)
   })
 
   it('preserves mixed shape-picture z-order, source crop and text-box layout', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    addImageAsset(source, 'middle-picture-asset', {
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+      fileName: 'pixel.png',
+      mimeType: 'image/png',
+    })
     slide.elements = [
       {
         id: 'background-shape',
@@ -157,6 +207,7 @@ describe('importPresentationPptx', () => {
       {
         id: 'middle-picture',
         type: 'image',
+        sourceAssetId: 'middle-picture-asset',
         x: 80,
         y: 40,
         width: 320,
@@ -165,11 +216,6 @@ describe('importPresentationPptx', () => {
         altText: 'cropped picture',
         fit: 'cover',
         crop: { left: 0.1, top: 0.2, right: 0.15, bottom: 0.05 },
-        source: {
-          dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
-          fileName: 'pixel.png',
-          mimeType: 'image/png',
-        },
       },
       {
         id: 'foreground-text',
@@ -191,7 +237,7 @@ describe('importPresentationPptx', () => {
     ]
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await createPresentationPptx(source), 'layered.pptx')
-    const elements = imported.slides[0]!.elements
+    const elements = imported.slides.pages[0]!.elements
 
     expect(elements.map((element) => element.type)).toEqual(['rect', 'image', 'text'])
     const image = elements[1]
@@ -213,12 +259,18 @@ describe('importPresentationPptx', () => {
 
   it('keeps color-keyed pictures visible and preserves picture mirroring', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    addImageAsset(source, 'color-keyed-picture-asset', {
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+      fileName: 'plum.png',
+      mimeType: 'image/png',
+    })
     slide.elements = [{
       id: 'color-keyed-picture',
       type: 'image',
+      sourceAssetId: 'color-keyed-picture-asset',
       x: 80,
       y: 40,
       width: 320,
@@ -226,11 +278,6 @@ describe('importPresentationPptx', () => {
       rotation: 0,
       altText: 'plum blossom',
       fit: 'contain',
-      source: {
-        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
-        fileName: 'plum.png',
-        mimeType: 'image/png',
-      },
     }]
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const slideFile = archive.file('ppt/slides/slide1.xml')!
@@ -245,7 +292,7 @@ describe('importPresentationPptx', () => {
     archive.file('ppt/slides/slide1.xml', withColorKey)
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'color-key.pptx')
-    const image = imported.slides[0]!.elements.find((element) => element.type === 'image')
+    const image = imported.slides.pages[0]!.elements.find((element) => element.type === 'image')
 
     expect(image?.type).toBe('image')
     if (image?.type === 'image') {
@@ -257,12 +304,18 @@ describe('importPresentationPptx', () => {
 
   it('imports an ellipse shape with a picture fill as a clipped image instead of its theme fallback color', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    addImageAsset(source, 'landscape-picture-asset', {
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+      fileName: 'landscape.png',
+      mimeType: 'image/png',
+    })
     slide.elements = [{
       id: 'landscape-picture',
       type: 'image',
+      sourceAssetId: 'landscape-picture-asset',
       x: 141,
       y: 261,
       width: 221,
@@ -270,11 +323,6 @@ describe('importPresentationPptx', () => {
       rotation: 0,
       altText: 'landscape',
       fit: 'cover',
-      source: {
-        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
-        fileName: 'landscape.png',
-        mimeType: 'image/png',
-      },
     }]
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const slideFile = archive.file('ppt/slides/slide1.xml')!
@@ -293,13 +341,13 @@ describe('importPresentationPptx', () => {
       await archive.generateAsync({ type: 'uint8array' }),
       'picture-filled-shape.pptx',
     )
-    const image = imported.slides[0]!.elements[0]
+    const image = imported.slides.pages[0]!.elements[0]
 
     expect(image?.type).toBe('image')
     if (image?.type === 'image') {
       expect(image.clipShape).toBe('ellipse')
-      expect(image.source.mimeType).toBe('image/png')
-      expect(image.source.dataUrl).toStartWith('data:image/png;base64,')
+      expect(presentationElementSource(imported, image)!.mimeType).toBe('image/png')
+      expect(presentationElementSource(imported, image)!.dataUrl).toStartWith('data:image/png;base64,')
       expect(image.altText).toBe('landscape')
     }
 
@@ -307,14 +355,14 @@ describe('importPresentationPptx', () => {
       await createPresentationPptx(imported),
       'picture-filled-shape-round-trip.pptx',
     )
-    expect(reimported.slides[0]!.elements[0]).toMatchObject({ type: 'image', clipShape: 'ellipse' })
+    expect(reimported.slides.pages[0]!.elements[0]).toMatchObject({ type: 'image', clipShape: 'ellipse' })
   })
 
   it('imports East Asian vertical text and DrawingML preset colors', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
     slide.elements = [{
       id: 'vertical-copy',
       type: 'text',
@@ -342,7 +390,7 @@ describe('importPresentationPptx', () => {
     archive.file('ppt/slides/slide1.xml', withVerticalWhiteText)
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'vertical.pptx')
-    const text = imported.slides[0]!.elements.find((element) => element.type === 'text')
+    const text = imported.slides.pages[0]!.elements.find((element) => element.type === 'text')
 
     expect(text?.type).toBe('text')
     if (text?.type === 'text') {
@@ -354,9 +402,9 @@ describe('importPresentationPptx', () => {
 
   it('prefers the East Asian run font for CJK text', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
     slide.elements = [{
       id: 'cjk-text',
       type: 'text',
@@ -384,7 +432,7 @@ describe('importPresentationPptx', () => {
     archive.file('ppt/slides/slide1.xml', withEastAsianFont)
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'cjk-font.pptx')
-    const text = imported.slides[0]!.elements.find((element) => element.type === 'text')
+    const text = imported.slides.pages[0]!.elements.find((element) => element.type === 'text')
 
     expect(text?.type).toBe('text')
     if (text?.type === 'text') expect(text.fontFamily).toBe('East Asian Font')
@@ -392,9 +440,9 @@ describe('importPresentationPptx', () => {
 
   it('keeps custom geometry as a fidelity-preserving SVG object', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
     slide.elements = [{
       id: 'accent',
       type: 'rect',
@@ -414,23 +462,29 @@ describe('importPresentationPptx', () => {
     archive.file('ppt/slides/slide1.xml', slideXml.replace(/<a:prstGeom prst="rect">.*?<\/a:prstGeom>/, customGeometry))
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'custom-shape.pptx')
-    const customShape = imported.slides[0]!.elements[0]
+    const customShape = imported.slides.pages[0]!.elements[0]
 
     expect(customShape?.type).toBe('image')
     if (customShape?.type === 'image') {
-      expect(customShape.source.mimeType).toBe('image/svg+xml')
-      expect(customShape.source.dataUrl).toStartWith('data:image/svg+xml;base64,')
+      expect(presentationElementSource(imported, customShape)!.mimeType).toBe('image/svg+xml')
+      expect(presentationElementSource(imported, customShape)!.dataUrl).toStartWith('data:image/svg+xml;base64,')
     }
   })
 
   it('imports an Office SVG extension when the picture has no raster fallback relationship', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    addImageAsset(source, 'svg-picture-asset', {
+      dataUrl: `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="#A8351A"/></svg>')}`,
+      fileName: 'circles.svg',
+      mimeType: 'image/svg+xml',
+    })
     slide.elements = [{
       id: 'svg-picture',
       type: 'image',
+      sourceAssetId: 'svg-picture-asset',
       x: 420,
       y: 180,
       width: 320,
@@ -439,11 +493,6 @@ describe('importPresentationPptx', () => {
       opacity: 0.1,
       altText: 'concentric circles',
       fit: 'contain',
-      source: {
-        dataUrl: `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="#A8351A"/></svg>')}`,
-        fileName: 'circles.svg',
-        mimeType: 'image/svg+xml',
-      },
     }]
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const slideFile = archive.file('ppt/slides/slide1.xml')!
@@ -454,20 +503,20 @@ describe('importPresentationPptx', () => {
     archive.file('ppt/slides/slide1.xml', extensionOnly)
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'svg-extension.pptx')
-    const image = imported.slides[0]!.elements.find((element) => element.type === 'image')
+    const image = imported.slides.pages[0]!.elements.find((element) => element.type === 'image')
 
     expect(image?.type).toBe('image')
     if (image?.type === 'image') {
-      expect(image.source.mimeType).toBe('image/svg+xml')
+      expect(presentationElementSource(imported, image)!.mimeType).toBe('image/svg+xml')
       expect(image.opacity).toBeCloseTo(0.1, 4)
     }
   })
 
   it('imports common editable tables and charts', async () => {
     const source = createInitialPresentationDocument()
-    const slide = source.slides[0]!
-    source.slides = [slide]
-    source.selectedSlideId = slide.id
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
     slide.elements = [
       {
         id: 'table',
@@ -510,8 +559,8 @@ describe('importPresentationPptx', () => {
     ]
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const imported = await importPresentationPptx(await createPresentationPptx(source), 'data.pptx')
-    const table = imported.slides[0]!.elements.find((element) => element.type === 'table')
-    const chart = imported.slides[0]!.elements.find((element) => element.type === 'chart')
+    const table = imported.slides.pages[0]!.elements.find((element) => element.type === 'table')
+    const chart = imported.slides.pages[0]!.elements.find((element) => element.type === 'chart')
 
     expect(table?.type).toBe('table')
     if (table?.type === 'table') expect(table.cells).toEqual([['Period', 'Users'], ['Q1', '12'], ['Q2', '18']])

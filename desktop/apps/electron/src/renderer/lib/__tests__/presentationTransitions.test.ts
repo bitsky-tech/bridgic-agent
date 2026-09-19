@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { PRESENTATION_TRANSITION_EFFECTS } from '@/atoms/presentation'
 import {
   changePresentationTransitionEffect,
   createDefaultPresentationTransition,
@@ -9,17 +10,7 @@ import {
 
 describe('presentation transitions', () => {
   it('registers every supported effect with its label and direction options', () => {
-    expect(presentationTransitionDefinitions.map((definition) => definition.effect)).toEqual([
-      'none',
-      'fade',
-      'push',
-      'wipe',
-      'reveal',
-      'cover',
-      'zoom',
-      'flip',
-      'cube',
-    ])
+    expect(presentationTransitionDefinitions.map((definition) => definition.effect)).toEqual([...PRESENTATION_TRANSITION_EFFECTS])
     expect(getPresentationTransitionDefinition('push')).toMatchObject({
       labelKey: 'session.presentation.effectPush',
       directions: ['left', 'right', 'up', 'down'],

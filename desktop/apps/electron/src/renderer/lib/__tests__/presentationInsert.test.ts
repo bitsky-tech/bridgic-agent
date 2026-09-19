@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test'
-import type {
-  PresentationFileSource,
-  PresentationShapeElement,
-  PresentationTextElement,
+import {
+  PRESENTATION_SHAPE_TYPES,
+  type PresentationFileSource,
+  type PresentationShapeElement,
+  type PresentationTextElement,
 } from '@/atoms/presentation'
+import { presentationShapeCategories } from '../presentationShapes'
 import {
   createPresentationChartElement,
   createPresentationFooter,
@@ -34,6 +36,9 @@ const imageSource: PresentationFileSource = {
 }
 
 describe('presentation insert helpers', () => {
+  it('keeps the model shape capability list aligned with the insert gallery', () => {
+    expect(presentationShapeCategories.flatMap((category) => category.shapes.map((shape) => shape.type))).toEqual([...PRESENTATION_SHAPE_TYPES])
+  })
   it('normalizes supported file MIME types and data URL headers', () => {
     expect(normalizePresentationFileSource('image', {
       dataUrl: 'data:IMAGE/PNG;base64,aW1hZ2U=',
@@ -149,10 +154,11 @@ describe('presentation insert helpers', () => {
       width: 640,
       height: 360,
       rotation: 0,
-      source: imageSource,
       altText: 'image.png',
       fit: 'contain',
     })
+    expect(image.sourceAssetId).toBeString()
+    expect(image).not.toHaveProperty('source')
 
     const audio = createPresentationMediaElement('audio', {
       dataUrl: 'data:audio/mpeg;base64,YXVkaW8=',

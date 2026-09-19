@@ -5,6 +5,7 @@ import {
 } from '@/atoms/presentation'
 import { createOfficeWorkspaceRuntime } from './office/officeWorkspaceRuntime'
 import type { OfficeEditorBinding } from './office/officeEditorBinding'
+import { editPresentationDocument } from '@/presentation/model/reducer'
 import {
   executePowerPointRequest,
   PowerPointProtocolError,
@@ -50,7 +51,7 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
         documents: workspace.documents.map((document) => ({
           id: document.id,
           title: document.title,
-          revision: document.version,
+          revision: document.revision,
           dirty: isPresentationDirty(document),
         })),
       }
@@ -125,13 +126,13 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
         sessionId,
         capability: 'document.edit',
         documentId: previous.id,
-        expectedDocumentRevision: previous.version,
+        expectedDocumentRevision: previous.revision,
       })
       const workspace = read()
       if (workspace.activeDocumentId !== previous.id || next.id !== previous.id) {
         throw new PowerPointProtocolError('The active PowerPoint document changed.', 'document_changed')
       }
-      const committed = contentChanged ? { ...next, version: previous.version + 1 } : next
+      const committed = editPresentationDocument(previous, next, contentChanged)
       publishWorkspace({
         ...workspace,
         documents: workspace.documents.map((document) => document.id === previous.id ? committed : document),
@@ -186,5 +187,5 @@ export function createPresentationWorkspaceRuntime(options: PresentationWorkspac
 export type PresentationWorkspaceRuntime = ReturnType<typeof createPresentationWorkspaceRuntime>
 
 export function isPresentationDirty(document: PresentationDocument): boolean {
-  return !document.source || document.source.mtimeMs === null || document.savedVersion !== document.version
+  return !document.source || document.source.mtimeMs === null || document.savedRevision !== document.revision
 }

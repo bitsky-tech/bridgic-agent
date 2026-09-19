@@ -4,6 +4,8 @@ import {
   createBlankPresentationDocument,
   createBlankPresentationSlide,
   presentationWorkspaceFamily,
+  replacePresentationPages,
+  selectPresentationPage,
   type PresentationDocument,
   type PresentationWorkspace,
 } from '@/atoms/presentation'
@@ -67,14 +69,14 @@ describe('presentation workspace runtime', () => {
       readSnapshot: () => read().documents[0]!,
       flush: () => {
         const current = read().documents[0]!
-        controller.commitDocument(current, { ...current, slides: current.slides.map((slide) => ({ ...slide, notes: 'Uncommitted native text' })) })
+        controller.commitDocument(current, { ...current, slides: replacePresentationPages(current.slides, current.slides.pages.map((slide) => ({ ...slide, notes: 'Uncommitted native text' }))) })
       },
       dispose: () => undefined,
     })
     controller.bindEditor(binding)
-    const result = await controller.dispatchProtocol({ method: 'get_ppt_page', params: { page_id: first.selectedSlideId } }, context, apply)
+    const result = await controller.dispatchProtocol({ method: 'get_ppt_page', params: { page_id: first.slides.selectedPageId } }, context, apply)
     expect(result).toMatchObject({ ok: true, value: { page: { has_content: true } } })
-    expect(read().documents[0]!.slides[0]!.notes).toBe('Uncommitted native text')
+    expect(read().documents[0]!.slides.pages[0]!.notes).toBe('Uncommitted native text')
   })
 
   it('flushes the original native document before creating a new tab', async () => {
@@ -153,7 +155,7 @@ describe('presentation workspace runtime', () => {
     controller.runtime.subscribe((snapshot) => { revisions.push(snapshot.documents[0]!.revision) })
     const changed = controller.commitDocument(first, { ...first, title: 'Typed' })
     expect(read().documents[0]).toBe(changed)
-    expect(changed.version).toBe(2)
+    expect(changed.revision).toBe(2)
     expect(revisions).toEqual([2])
     expect(() => controller.commitDocument(first, { ...first, title: 'Stale' })).toThrow()
     expect(read().documents[0]!.title).toBe('Typed')
@@ -162,10 +164,10 @@ describe('presentation workspace runtime', () => {
   it('does not count selecting a slide as a content revision', () => {
     const { controller, first, read } = setup()
     const nextSlide = createBlankPresentationSlide('Second')
-    const withSlide = controller.commitDocument(first, { ...first, slides: [...first.slides, nextSlide] })
-    const selected = controller.commitDocument(withSlide, { ...withSlide, selectedSlideId: nextSlide.id }, false)
-    expect(selected.version).toBe(withSlide.version)
-    expect(read().documents[0]!.selectedSlideId).toBe(nextSlide.id)
+    const withSlide = controller.commitDocument(first, { ...first, slides: replacePresentationPages(first.slides, [...first.slides.pages, nextSlide]) })
+    const selected = controller.commitDocument(withSlide, { ...withSlide, slides: selectPresentationPage(withSlide.slides, nextSlide.id) }, false)
+    expect(selected.revision).toBe(withSlide.revision)
+    expect(read().documents[0]!.slides.selectedPageId).toBe(nextSlide.id)
   })
 
   it('routes create, activate and close through the existing workspace and preserves final-tab close', async () => {
@@ -223,15 +225,15 @@ describe('presentation workspace runtime', () => {
     const { controller, first, context, apply } = setup()
     const stale = await controller.dispatchProtocol({
       method: 'insert_ppt_element',
-      params: { page_id: first.selectedSlideId, expected_revision: 'stale', element: '<PptText>Text</PptText>' },
+      params: { page_id: first.slides.selectedPageId, expected_revision: 'stale', element: '<PptText>Text</PptText>' },
     }, context, apply)
     expect(stale).toMatchObject({ ok: false, code: 'page_changed', error: expect.any(String) })
-    const readPage = await controller.dispatchProtocol({ method: 'get_ppt_page', params: { page_id: first.selectedSlideId } }, context, apply)
+    const readPage = await controller.dispatchProtocol({ method: 'get_ppt_page', params: { page_id: first.slides.selectedPageId } }, context, apply)
     if (!readPage.ok) throw new Error(readPage.error)
     const revision = (readPage.value as { page: { revision: string } }).page.revision
     const invalid = await controller.dispatchProtocol({
       method: 'insert_ppt_element',
-      params: { page_id: first.selectedSlideId, expected_revision: revision, element: '# Invalid element' },
+      params: { page_id: first.slides.selectedPageId, expected_revision: revision, element: '# Invalid element' },
     }, context, apply)
     expect(invalid).toMatchObject({ ok: true, value: { status: 'invalid' } })
     expect(await controller.dispatchProtocol({ method: 'invented' } as unknown as PowerPointRequest, context, apply))

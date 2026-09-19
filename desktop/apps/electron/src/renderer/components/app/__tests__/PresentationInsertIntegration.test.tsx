@@ -9,12 +9,13 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider } = await import('jotai')
-const { createBlankPresentationDocument, currentPresentationDocumentAtom } = await import('@/atoms/presentation')
+const { createBlankPresentationDocument, currentPresentationDocumentAtom, selectPresentationPage } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { toastAtom } = await import('@/atoms/toast')
 const { i18n } = await import('@/lib/i18n')
 const { createPresentationMediaElement } = await import('@/lib/presentationInsert')
+const { createPresentationAsset, presentationElementSource } = await import('@/presentation/project')
 const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
 const {
   canAppendPresentationFileElement,
@@ -98,7 +99,7 @@ describe('presentation Insert tab integration', () => {
     await submitOpenDialog()
 
     let presentation = store.get(currentPresentationDocumentAtom)
-    let slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    let slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const table = slide.elements.at(-1)
     expect(table?.type).toBe('table')
     if (table?.type === 'table') expect(table.cells).toHaveLength(2)
@@ -107,7 +108,7 @@ describe('presentation Insert tab integration', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-chart"]')!.click())
     await submitOpenDialog()
     presentation = store.get(currentPresentationDocumentAtom)
-    slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const chart = slide.elements.at(-1)
     expect(chart?.type).toBe('chart')
     if (chart?.type === 'chart') {
@@ -122,7 +123,7 @@ describe('presentation Insert tab integration', () => {
     await setInputValue(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-link-label"]')!, 'Documentation')
     await submitOpenDialog()
     presentation = store.get(currentPresentationDocumentAtom)
-    slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const link = slide.elements.at(-1)
     expect(link?.type).toBe('text')
     if (link?.type === 'text') {
@@ -134,8 +135,8 @@ describe('presentation Insert tab integration', () => {
     await setInputValue(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-text"]')!, 'Confidential')
     await submitOpenDialog()
     presentation = store.get(currentPresentationDocumentAtom)
-    expect(presentation.slides.every((item) => item.footer?.text === 'Confidential')).toBe(true)
-    expect(presentation.slides.every((item) => item.footer?.showSlideNumber)).toBe(true)
+    expect(presentation.theme.footer).toEqual({ text: 'Confidential', showDate: false, showSlideNumber: true })
+    expect(presentation.slides.pages.every((item) => item.footer === undefined)).toBe(true)
     expect(host.querySelector('[data-testid="presentation-slide-preview"]')?.textContent).toContain('Confidential')
 
     await act(async () => {
@@ -195,12 +196,13 @@ describe('presentation Insert tab integration', () => {
     }
 
     const presentation = store.get(currentPresentationDocumentAtom)
-    const slide = presentation.slides.find((item) => item.id === presentation.selectedSlideId)!
+    const slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const inserted = slide.elements.slice(-3)
     expect(inserted.map((element) => element.type)).toEqual(['image', 'audio', 'video'])
     for (const element of inserted) {
       if (element.type === 'image' || element.type === 'audio' || element.type === 'video') {
-        expect(element.source.dataUrl).toStartWith(`data:${element.source.mimeType};base64,`)
+        const source = presentationElementSource(presentation, element)!
+        expect(source.dataUrl).toStartWith(`data:${source.mimeType};base64,`)
       }
     }
     expect(inserted[1]).toMatchObject({ type: 'audio', width: 64, height: 64 })
@@ -230,7 +232,7 @@ describe('presentation Insert tab integration', () => {
     })
 
     const presentation = store.get(currentPresentationDocumentAtom)
-    expect(presentation.slides.every((slide) => slide.elements.every((element) => element.type !== 'audio'))).toBe(true)
+    expect(presentation.slides.pages.every((slide) => slide.elements.every((element) => element.type !== 'audio'))).toBe(true)
     expect(store.get(toastAtom)?.message).toBe('无法读取所选文件，或不支持该文件格式。')
 
     await act(async () => {
@@ -248,19 +250,22 @@ describe('presentation Insert tab integration', () => {
     }
     const first = createPresentationMediaElement('video', source)
     const second = createPresentationMediaElement('video', source)
-    documentModel.slides[0]!.elements.push(first)
+    const firstAsset = createPresentationAsset('video', source, first.sourceAssetId)
+    const secondAsset = createPresentationAsset('video', source, second.sourceAssetId)
+    documentModel.assets.push(firstAsset)
+    documentModel.slides.pages[0]!.elements.push(first)
     const currentBytes = estimatePresentationDocumentBytes(documentModel)
 
-    expect(canAppendPresentationFileElement(documentModel, second, currentBytes + 100)).toBe(false)
-    expect(canAppendPresentationFileElement(documentModel, second, currentBytes + 10_000)).toBe(true)
+    expect(canAppendPresentationFileElement(documentModel, second, secondAsset, currentBytes + 100)).toBe(false)
+    expect(canAppendPresentationFileElement(documentModel, second, secondAsset, currentBytes + 10_000)).toBe(true)
   })
 
   it('cancels an asynchronous file insertion when its target slide changes', async () => {
     const { host, root, store } = await mountPanel()
     const initial = store.get(currentPresentationDocumentAtom)
-    const targetSlide = initial.slides[0]!
-    const otherSlide = initial.slides[1]!
-    expect(initial.selectedSlideId).toBe(targetSlide.id)
+    const targetSlide = initial.slides.pages[0]!
+    const otherSlide = initial.slides.pages[1]!
+    expect(initial.slides.selectedPageId).toBe(targetSlide.id)
 
     const originalReadAsDataUrl = FileReader.prototype.readAsDataURL
     const pendingRead: { current?: { blob: Blob; reader: FileReader } } = {}
@@ -279,7 +284,7 @@ describe('presentation Insert tab integration', () => {
       expect(pendingRead.current).not.toBeUndefined()
 
       await act(async () => {
-        store.set(currentPresentationDocumentAtom, { ...initial, selectedSlideId: otherSlide.id })
+        store.set(currentPresentationDocumentAtom, { ...initial, slides: selectPresentationPage(initial.slides, otherSlide.id) })
         await Promise.resolve()
       })
       const read = pendingRead.current
@@ -290,8 +295,8 @@ describe('presentation Insert tab integration', () => {
       })
 
       const current = store.get(currentPresentationDocumentAtom)
-      expect(current.selectedSlideId).toBe(otherSlide.id)
-      expect(current.slides.every((slide) => slide.elements.every((element) => element.type !== 'audio'))).toBe(true)
+      expect(current.slides.selectedPageId).toBe(otherSlide.id)
+      expect(current.slides.pages.every((slide) => slide.elements.every((element) => element.type !== 'audio'))).toBe(true)
       expect(store.get(toastAtom)?.message).toBe('已取消')
     } finally {
       FileReader.prototype.readAsDataURL = originalReadAsDataUrl
@@ -305,7 +310,7 @@ describe('presentation Insert tab integration', () => {
   it('follows an internal slide link during slide show playback', async () => {
     const { host, root, store } = await mountPanel()
     const presentation = store.get(currentPresentationDocumentAtom)
-    const targetSlide = presentation.slides[1]!
+    const targetSlide = presentation.slides.pages[1]!
 
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-link"]')!.click())
     await setSelectValue(document.querySelector<HTMLSelectElement>('[data-testid="presentation-insert-link-type"]')!, 'slide')

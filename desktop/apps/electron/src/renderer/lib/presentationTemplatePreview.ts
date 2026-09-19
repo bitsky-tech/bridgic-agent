@@ -1,5 +1,5 @@
 import type { PresentationTemplateCandidate } from '@shared/types'
-import type { PresentationPageSize, PresentationSlide } from '@/atoms/presentation'
+import type { PresentationAsset, PresentationPageSize, PresentationSlide, PresentationTheme } from '@/atoms/presentation'
 import {
   parseLocalResourceReference,
   toLocalResourceDisplayUrl,
@@ -17,8 +17,10 @@ export interface PresentationTemplatePreviewPage {
 }
 
 export interface PresentationTemplatePreviewDeck {
+  assets: PresentationAsset[]
   pageSize: PresentationPageSize
   pages: PresentationTemplatePreviewPage[]
+  theme: PresentationTheme
 }
 
 type PreviewFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -113,11 +115,13 @@ async function importTemplatePreview(
   const slideNumbers = presentationTemplatePreviewSlideNumbers(candidate)
   const document = await importPresentationPptx(bytes, `${candidate.title}.pptx`, { slideNumbers })
   return {
+    assets: document.assets,
     pageSize: document.pageSize,
-    pages: document.slides.map((slide, index) => ({
+    pages: document.slides.pages.map((slide, index) => ({
       slide,
       slideNumber: slideNumbers[index] ?? index + 1,
     })),
+    theme: document.theme,
   }
 }
 

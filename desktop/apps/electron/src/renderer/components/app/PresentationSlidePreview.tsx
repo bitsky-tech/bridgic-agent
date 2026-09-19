@@ -2,19 +2,26 @@ import { presentationChartValueTicks, presentationChartHoleSize, presentationCha
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { Pause, Play } from 'lucide-react'
 import {
+  DEFAULT_PRESENTATION_MASTER,
   PRESENTATION_PAGE_SIZES,
   layoutPresentationVerticalText,
+  presentationSlideBackground,
+  presentationSlideFooter,
+  type PresentationAsset,
   type PresentationChartElement,
   type PresentationChartSeries,
   type PresentationElement,
+  type PresentationFileSource,
   type PresentationHyperlink,
   type PresentationPageSize,
   type PresentationShapeElement,
   type PresentationSlide,
+  type PresentationTheme,
   type PresentationTableElement,
   type PresentationTextElement,
   type PresentationTextStyle,
 } from '@/atoms/presentation'
+import { presentationElementSource } from '@/presentation/project'
 import { cn } from '@/lib/cn'
 import type { PresentationAnimationDisplayState, PresentationAnimationScale, PresentationColorAnimation } from '@/lib/presentationAnimationPreview'
 import {
@@ -32,11 +39,35 @@ import {
   presentationRenderingFontFamily,
   presentationScriptMetrics,
   presentationTextFrame,
+  presentationTextGraphemes,
   presentationTextParagraphs,
   presentationParagraphSegments,
   presentationParagraphTextStyle,
   presentationTextStyleAt,
+  usesPresentationVerticalGlyphLayout,
 } from '@/lib/presentationText'
+
+let presentationVerticalTextMeasureContext: CanvasRenderingContext2D | null = null
+
+function measurePresentationVerticalRun(element: PresentationTextElement, text: string, style: PresentationTextStyle): number {
+  const size = style.fontSize ?? element.fontSize
+  const glyphs = presentationTextGraphemes(text)
+  const tracking = Math.max(0, glyphs.length - 1) * size * (style.characterSpacing ?? element.characterSpacing ?? 0) / 1_000
+  if (typeof document !== 'undefined') {
+    const context = presentationVerticalTextMeasureContext ??= document.createElement('canvas').getContext('2d')
+    if (context) {
+      context.font = `${style.italic ? 'italic' : 'normal'} ${style.fontWeight ?? element.fontWeight} ${size}px ${presentationRenderingFontFamily(style.fontFamily ?? element.fontFamily, text)}`
+      return context.measureText(text).width + tracking
+    }
+  }
+  return glyphs.reduce((sum, glyph) => {
+    let ratio = 0.6
+    if (/\s/u.test(glyph)) ratio = 0.33
+    else if (/[ilI1.,'!|]/u.test(glyph)) ratio = 0.3
+    else if (/[mwMW@#%&]/u.test(glyph)) ratio = 0.85
+    return sum + size * ratio
+  }, 0) + tracking
+}
 
 /** Trim CSS leading at frame edges without discarding the authored advance between lines. */
 function PresentationParagraphPreview({ element, paragraph, paragraphIndex, inlineStyle }: {
@@ -125,12 +156,14 @@ function PresentationParagraphPreview({ element, paragraph, paragraphIndex, inli
 }
 
 interface PresentationSlidePreviewProps {
+  assets?: readonly PresentationAsset[]
   animationStates?: ReadonlyMap<string, PresentationAnimationDisplayState>
   colorAnimations?: ReadonlyMap<string, PresentationColorAnimation>
   hiddenElementIds?: ReadonlySet<string>
   elementReplacements?: ReadonlyMap<string, ReactNode>
   slide: PresentationSlide
   slideNumber?: number
+  theme?: PresentationTheme
   width: number
   selected: boolean
   presentation?: boolean
@@ -141,12 +174,14 @@ interface PresentationSlidePreviewProps {
 
 /** Shared static renderer used by thumbnails, transition previews and slide show playback. */
 export function PresentationSlidePreview({
+  assets = [],
   animationStates,
   colorAnimations,
   hiddenElementIds,
   elementReplacements,
   slide,
   slideNumber,
+  theme = DEFAULT_PRESENTATION_MASTER,
   width,
   selected,
   presentation = false,
@@ -205,7 +240,7 @@ export function PresentationSlidePreview({
           width: pageSize.width,
           height: pageSize.height,
           transform: `scale(${scale})`,
-          backgroundColor: slide.background,
+          backgroundColor: presentationSlideBackground(theme, slide),
         }}
       >
         {slide.elements.map((element) => {
@@ -215,7 +250,7 @@ export function PresentationSlidePreview({
             <Fragment key={element.id}>
               {elementReplacements?.get(element.id)}
               {visible && (
-                <PresentationElementPreview element={element} animationState={animationStates?.get(element.id)} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
+                <PresentationElementPreview assets={assets} element={element} animationState={animationStates?.get(element.id)} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
               )}
               {visible && interactive && element.hyperlink && supportsPresentationElementHyperlink(element) ? (
                 <HyperlinkOverlay
@@ -228,7 +263,7 @@ export function PresentationSlidePreview({
             </Fragment>
           )
         })}
-        <PresentationFooterPreview slide={slide} slideNumber={slideNumber} />
+        <PresentationFooterPreview footer={presentationSlideFooter(theme, slide)} slideNumber={slideNumber} />
       </span>
     </span>
   )
@@ -265,9 +300,9 @@ function startPresentationPlaybackMedia(media: HTMLMediaElement | null, autoplay
   }
 }
 
-function PresentationPlaybackVideo({ element, scale }: { scale?: PresentationAnimationScale; element: Extract<PresentationElement, { type: 'video' }> }) {
+function PresentationPlaybackVideo({ element, scale, source }: { scale?: PresentationAnimationScale; element: Extract<PresentationElement, { type: 'video' }>; source: PresentationFileSource }) {
   const mediaRef = useRef<HTMLVideoElement>(null)
-  const sourceUrl = element.source.dataUrl
+  const sourceUrl = source.dataUrl
   useEffect(() => {
     const media = mediaRef.current
     startPresentationPlaybackMedia(media, element.autoplay)
@@ -290,11 +325,11 @@ function PresentationPlaybackVideo({ element, scale }: { scale?: PresentationAni
   )
 }
 
-function PresentationPlaybackAudio({ element, scale }: { scale?: PresentationAnimationScale; element: Extract<PresentationElement, { type: 'audio' }> }) {
+function PresentationPlaybackAudio({ element, scale, source }: { scale?: PresentationAnimationScale; element: Extract<PresentationElement, { type: 'audio' }>; source: PresentationFileSource }) {
   const mediaRef = useRef<HTMLAudioElement>(null)
   const playAttemptRef = useRef(0)
   const [playing, setPlaying] = useState(false)
-  const sourceUrl = element.source.dataUrl
+  const sourceUrl = source.dataUrl
   useEffect(() => {
     const media = mediaRef.current
     const onPlay = () => setPlaying(true)
@@ -356,7 +391,7 @@ function PresentationPlaybackAudio({ element, scale }: { scale?: PresentationAni
       <button
         type="button"
         className="flex size-[75%] items-center justify-center rounded-full bg-[#705BE5] text-white shadow-sm"
-        aria-label={element.source.fileName}
+        aria-label={source.fileName}
         aria-pressed={playing}
         onClick={togglePlayback}
       >
@@ -368,7 +403,8 @@ function PresentationPlaybackAudio({ element, scale }: { scale?: PresentationAni
   )
 }
 
-export function PresentationElementPreview({ element: sourceElement, animationState, interactive, suppressMediaPlayback }: {
+export function PresentationElementPreview({ assets = [], element: sourceElement, animationState, interactive, suppressMediaPlayback }: {
+  assets?: readonly PresentationAsset[]
   animationState?: PresentationAnimationDisplayState
   element: PresentationElement
   interactive: boolean
@@ -377,8 +413,8 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
   const element = animationState?.element ?? sourceElement
   const scale = animationState?.scale
   if (isPresentationTextElement(element)) {
-    const verticalLayout = element.textDirection === 'eastAsianVertical' || element.textDirection === 'stacked'
-      ? layoutPresentationVerticalText(element)
+    const verticalLayout = usesPresentationVerticalGlyphLayout(element)
+      ? layoutPresentationVerticalText(element, (text, style) => measurePresentationVerticalRun(element, text, style))
       : null
     const frame = presentationTextFrame(element)
     const inlineStyle = (offset: number, lineSpacing = element.lineSpacing, resolvedStyle?: PresentationTextStyle): CSSProperties => {
@@ -429,26 +465,27 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
             paddingLeft: verticalLayout ? (element.indentLevel ?? 0) * 16 : 0,
           }}
         >
-          {verticalLayout ? verticalLayout.columns.flatMap((column, columnIndex) => {
+          {verticalLayout ? verticalLayout.items.flatMap((column, columnIndex) => {
             const availableHeight = Math.max(0, frame.height - verticalLayout.columnHeights[columnIndex]!)
             let alignmentOffset = 0
             if (element.verticalAlign === 'bottom') alignmentOffset = availableHeight
             else if (element.verticalAlign === 'middle') alignmentOffset = availableHeight / 2
-            return Array.from(column).map((glyph, rowIndex) => {
-              const style = inlineStyle(verticalLayout.sourceOffsets[columnIndex]![rowIndex]!, element.lineSpacing, verticalLayout.glyphStyles[columnIndex]![rowIndex]!)
+            return column.map((item, itemIndex) => {
+              const style = inlineStyle(item.sourceOffset, element.lineSpacing, item.style)
               return (
                 <span
                   className="absolute block"
-                  key={`${columnIndex}-${rowIndex}`}
+                  key={`${columnIndex}-${itemIndex}`}
                   data-presentation-text-color={style.color}
-                  data-presentation-color-opacity={verticalLayout.glyphStyles[columnIndex]![rowIndex]!.opacity}
+                  data-presentation-color-opacity={item.style.opacity}
                   style={{
                     ...style, position: 'absolute',
-                    left: verticalLayout.columnOffsets[columnIndex],
-                    top: alignmentOffset + verticalLayout.rowOffsets[columnIndex]![rowIndex]! + Number(style.top),
-                    lineHeight: 1, width: style.fontSize,
+                    left: verticalLayout.columnOffsets[columnIndex]! + (item.rotation === 90 ? item.blockSize : 0),
+                    top: alignmentOffset + item.rowOffset + Number(style.top),
+                    lineHeight: 1, transform: `rotate(${item.rotation}deg)`, transformOrigin: 'top left',
+                    whiteSpace: 'pre', width: item.rotation === 0 ? item.blockSize : undefined,
                   }}
-                >{glyph}</span>
+                >{item.text}</span>
               )
             })
           }) : (
@@ -464,6 +501,8 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
   }
   if (isPresentationShapeElement(element)) return <SlideShapePreview element={element} scale={scale} />
   if (isPresentationImageElement(element)) {
+    const source = presentationElementSource({ assets: [...assets] }, element)
+    if (!source) return null
     const crop = element.crop
     if (crop) {
       const visibleWidth = Math.max(0.001, 1 - crop.left - crop.right)
@@ -477,7 +516,7 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
             alt={element.altText}
             className="absolute block max-w-none"
             draggable={false}
-            src={element.source.dataUrl}
+            src={source.dataUrl}
             style={{
               left: `${-(crop.left / visibleWidth) * 100}%`,
               top: `${-(crop.top / visibleHeight) * 100}%`,
@@ -494,7 +533,7 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
         alt={element.altText}
         className="absolute block"
         draggable={false}
-        src={element.source.dataUrl}
+        src={source.dataUrl}
         style={{
           ...elementStyle(element, scale),
           objectFit: element.fit,
@@ -505,11 +544,13 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
     )
   }
   if (isPresentationMediaElement(element)) {
+    const source = presentationElementSource({ assets: [...assets] }, element)
+    if (!source) return null
     if (element.type === 'video' && interactive && !suppressMediaPlayback) {
-      return <PresentationPlaybackVideo element={element} scale={scale} />
+      return <PresentationPlaybackVideo element={element} scale={scale} source={source} />
     }
     if (element.type === 'audio' && interactive && !suppressMediaPlayback) {
-      return <PresentationPlaybackAudio element={element} scale={scale} />
+      return <PresentationPlaybackAudio element={element} scale={scale} source={source} />
     }
     if (element.type === 'audio') return (
       <span
@@ -533,7 +574,7 @@ export function PresentationElementPreview({ element: sourceElement, animationSt
           <Play className="size-6 translate-x-0.5" fill="currentColor" />
         </span>
         <span className="absolute inset-x-0 bottom-0 block bg-[linear-gradient(180deg,transparent,rgba(5,8,18,0.82))] px-4 pb-3 pt-9">
-          <span className="block truncate text-[14px] font-medium">{element.source.fileName}</span>
+          <span className="block truncate text-[14px] font-medium">{source.fileName}</span>
         </span>
       </span>
     )
@@ -906,9 +947,8 @@ function ChartLegend({ element, width, y }: { element: PresentationChartElement;
   )
 }
 
-function PresentationFooterPreview({ slide, slideNumber }: { slide: PresentationSlide; slideNumber?: number }) {
-  const footer = slide.footer
-  if (!footer || (!footer.text && !footer.showDate && !footer.showSlideNumber)) return null
+function PresentationFooterPreview({ footer, slideNumber }: { footer: ReturnType<typeof presentationSlideFooter>; slideNumber?: number }) {
+  if (!footer.text && !footer.showDate && !footer.showSlideNumber) return null
   const date = new Intl.DateTimeFormat().format(new Date())
   return (
     <>

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Root } from 'react-dom/client'
-import type { PresentationTextElement } from '@/atoms/presentation'
+import type { PresentationAsset, PresentationFileSource, PresentationImageElement, PresentationMediaElement, PresentationTextElement } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -44,6 +44,7 @@ const {
 const { importPresentationPptx } = await import('@/lib/presentationPptxImport')
 const { createPresentationPptx } = await import('@/lib/presentationPptx')
 const { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } = await import('@/lib/presentationMarkdown')
+const { createPresentationAsset } = await import('@/presentation/project')
 
 const mountedRoots = new Set<Root>()
 
@@ -63,14 +64,18 @@ function fileSource(type: string, name: string, payload = 'AA==') {
   return { dataUrl: `data:${type};base64,${payload}`, fileName: name, mimeType: type }
 }
 
+function assetFor(element: PresentationImageElement | PresentationMediaElement, source: PresentationFileSource): PresentationAsset {
+  return createPresentationAsset(element.type, source, element.sourceAssetId)
+}
+
 describe('presentation Insert runtime safeguards', () => {
   it.each([[0.2, 0.3], [2e-300, 3e-300], [2e300, 3e300]].map(values => [values] as const))('normalizes fractional pie data consistently in preview and Fabric: %j', async (values) => {
     const element = { ...createPresentationChartElement('pie'), width: 800, height: 400, title: undefined, showLegend: false,
       categories: ['A', 'B'], series: [{ name: 'Total', values }], colors: ['#FF6600', '#00AA88'] }
     const model = createBlankPresentationDocument('Proportions')
-    model.slides[0]!.elements = [element]
+    model.slides.pages[0]!.elements = [element]
     const host = document.createElement('div')
-    host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} selected={false} width={1280} />)
+    host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} selected={false} width={1280} />)
     const numbers = host.querySelector('path[fill="#FF6600"]')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)!.map(Number)
     const angle = (Math.atan2(numbers[2]! - numbers[0]!, -(numbers[3]! - numbers[1]!)) * 180 / Math.PI + 360) % 360
     expect(angle).toBeCloseTo(144)
@@ -89,9 +94,9 @@ describe('presentation Insert runtime safeguards', () => {
     const element = { ...createPresentationChartElement('doughnut'), width: 800, height: 400, title: undefined, showLegend: false,
       categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [0, 50, 0] }], colors: ['#FF6600', '#00AA88', '#2266EE'], chartAreaFill: fill, plotAreaFill: fill }
     const model = createBlankPresentationDocument('Open ring')
-    model.slides[0]!.elements = [element]
+    model.slides.pages[0]!.elements = [element]
     const host = document.createElement('div')
-    host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} selected={false} width={1280} />)
+    host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} selected={false} width={1280} />)
     const path = host.querySelector('path[fill="#00AA88"]')!
     expect(path.getAttribute('fill-rule')).toBe('evenodd')
     expect(path.getAttribute('d')!.match(/M /g)).toHaveLength(2)
@@ -117,14 +122,14 @@ describe('presentation Insert runtime safeguards', () => {
     for (const transform of [{ rotation: 0 }, { rotation: 37, flipHorizontal: true }, { rotation: 90, flipVertical: true }]) {
       let model = createBlankPresentationDocument('Connector fidelity')
       const element = { id: 'connector', type, x: 100, y: 150, width: 700, height: 300, fill: 'transparent', borderColor: '#111111', borderWidth: 6, ...transform }
-      model.slides[0]!.elements = [element]
+      model.slides.pages[0]!.elements = [element]
       const original = await createPresentationFabricObject(fabric, element, () => undefined)
       if (!(original instanceof fabric.Group)) throw new Error('Missing connector group')
       const originalPath = original.getObjects().find(object => object instanceof fabric.Path)!
       for (let round = 0; round < 2; round++) {
         model = await importPresentationPptx(await createPresentationPptx(model))
-        model.slides = [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides[0]!), { document: model }).slide]
-        const reopened = model.slides[0]!.elements[0]!
+        model.slides.pages = [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]
+        const reopened = model.slides.pages[0]!.elements[0]!
         expect(reopened.type).toBe(type)
         const current = await createPresentationFabricObject(fabric, reopened, () => undefined)
         if (!(current instanceof fabric.Group)) throw new Error('Connector lost editability')
@@ -233,12 +238,12 @@ describe('presentation Insert runtime safeguards', () => {
           { start: 8, end: 8, style: {}, endStyle: { fontSize: 128 } }, { start: 9, end: 9, style: {}, endStyle: { fontSize: 16 } },
           { start: 10, end: 15, style: {} }, { start: 16, end: 16, style: {}, endStyle: { fontSize: 80 } }],
       }
-      model.slides[0]!.elements = [element]
+      model.slides.pages[0]!.elements = [element]
       const host = document.createElement('div')
       document.body.append(host)
       const root = createRoot(host)
       mountedRoots.add(root)
-      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />) })
       const emptySpans = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="presentation-text-paragraph"] > span > span')).filter(span => span.textContent === '\u200b')
       expect(emptySpans.map(span => span.style.fontSize)).toEqual(['64px', '128px', '16px', '80px'])
       const object = createPresentationTextFabricObject(fabric, element)
@@ -279,12 +284,12 @@ describe('presentation Insert runtime safeguards', () => {
       const element: PresentationTextElement = { id: 'fixed', type: 'text', text: 'Small\nLARGE\nSmall', x: 0, y: 0, width: 600, height: 620,
         rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 32,
         textRuns: [{ start: 6, end: 11, style: { fontSize: 120 } }] }
-      model.slides[0]!.elements = [element]
+      model.slides.pages[0]!.elements = [element]
       const host = document.createElement('div')
       document.body.append(host)
       const root = createRoot(host)
       mountedRoots.add(root)
-      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />) })
       expect(host.querySelector<HTMLElement>('[data-testid="presentation-text-content"]')!.style.overflow).toBe('visible')
       let cursor = 0
       const baselines = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="presentation-text-paragraph"]')).map(paragraph => {
@@ -297,7 +302,7 @@ describe('presentation Insert runtime safeguards', () => {
       })
       expect(baselines[1]! - baselines[0]!).toBeCloseTo(32)
       expect(baselines[2]! - baselines[1]!).toBeCloseTo(32)
-      const normal = { ...model.slides[0]!, elements: [{ ...element, textRuns: undefined }] }
+      const normal = { ...model.slides.pages[0]!, elements: [{ ...element, textRuns: undefined }] }
       await act(async () => { root.render(<PresentationSlidePreview slide={normal} width={1280} selected={false} />) })
       for (const paragraph of host.querySelectorAll<HTMLElement>('[data-testid="presentation-text-paragraph"]')) expect(paragraph.style.marginBottom).toBe('0px')
     } finally {
@@ -318,12 +323,12 @@ describe('presentation Insert runtime safeguards', () => {
         paragraphs: [{ start: 0, end: 3, style: { listStyle: 'bullet', listBulletChar: '◆', listMarkerFontFamily: 'Georgia' } },
           { start: 4, end: 6, style: { listStyle: 'number', listNumberFormat: 'romanUcPeriod' } }],
         textRuns: [{ start: 2, end: 3, style: { color: '#FF0000', opacity: 0.5 } }] }
-      model.slides[0]!.elements = [element]
+      model.slides.pages[0]!.elements = [element]
       const host = document.createElement('div')
       document.body.append(host)
       const root = createRoot(host)
       mountedRoots.add(root)
-      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />) })
       const content = host.querySelector('[data-testid="presentation-text-content"]')!
       const spans = Array.from(content.children) as HTMLElement[]
       const group = createPresentationVerticalTextFabricObject(fabric, element)
@@ -334,7 +339,7 @@ describe('presentation Insert runtime safeguards', () => {
       expect(glyphs[0]!.fontFamily).toContain('Georgia')
       expect(spans[4]!.style.top).toBe('160px')
       expect(glyphs[4]!.top - glyphs[2]!.top).toBe(80)
-      expect(renderToStaticMarkup(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />)).toContain('color-mix(in srgb, #FF0000 50%, transparent)')
+      expect(renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />)).toContain('color-mix(in srgb, #FF0000 50%, transparent)')
       expect(glyphs[4]!.fill).toBe('rgba(255,0,0,0.5)')
       group.dispose()
     } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
@@ -356,14 +361,14 @@ describe('presentation Insert runtime safeguards', () => {
     } })
     try {
       const model = createBlankPresentationDocument('Fixed spacing')
-      model.slides[0]!.elements = [{ id: 'fixed', type: 'text', text: 'Small LARGE', x: 0, y: 0, width: 600, height: 96,
+      model.slides.pages[0]!.elements = [{ id: 'fixed', type: 'text', text: 'Small LARGE', x: 0, y: 0, width: 600, height: 96,
         rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 48,
         textRuns: [{ start: 6, end: 11, style: { fontSize: 80 } }] }]
       const host = document.createElement('div')
       document.body.append(host)
       const root = createRoot(host)
       mountedRoots.add(root)
-      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />) })
       const content = host.querySelector('[data-testid="presentation-text-paragraph"]')!.firstElementChild as HTMLElement
       const baseline = 42 + Number.parseFloat(content.style.marginTop)
       const contentHeight = 48 + Number.parseFloat(content.style.marginTop) + Number.parseFloat(content.style.marginBottom)
@@ -405,12 +410,12 @@ describe('presentation Insert runtime safeguards', () => {
       const element = { id: 'line-height', type: 'text' as const, text: 'Heading', x: 40, y: 40, width: 600, height: 64,
         rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400 as const, color: '#111111', align: 'left' as const,
         lineHeight, wordWrap: true }
-      model.slides[0]!.elements = [element]
+      model.slides.pages[0]!.elements = [element]
       const host = document.createElement('div')
       document.body.append(host)
       const root = createRoot(host)
       mountedRoots.add(root)
-      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides[0]!} width={1280} selected={false} />) })
+      await act(async () => { root.render(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />) })
       const paragraph = host.querySelector<HTMLElement>('[data-testid="presentation-text-paragraph"]')!
       const content = paragraph.firstElementChild as HTMLElement
       const text = Array.from(content.children).find(node => node.textContent === 'Heading') as HTMLElement
@@ -653,8 +658,9 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('keeps a live Fabric video frame inside the media element bounds', () => {
+    const source = fileSource('video/mp4', 'frame.mp4')
     const element = {
-      ...createPresentationMediaElement('video', fileSource('video/mp4', 'frame.mp4')),
+      ...createPresentationMediaElement('video', source),
       x: 80,
       y: 96,
     }
@@ -676,7 +682,7 @@ describe('presentation Insert runtime safeguards', () => {
     })
 
     try {
-      runtime.register(element, object)
+      runtime.register(element, object, source)
       expect(videos).toHaveLength(0)
       runtime.prepare(element.id)
       const video = videos[0]
@@ -701,7 +707,7 @@ describe('presentation Insert runtime safeguards', () => {
       })
       runtime.pauseAll()
       expect(group.getObjects().some((child) => child instanceof fabric.FabricImage)).toBe(true)
-      expect(video.getAttribute('src')).toBe(element.source.dataUrl)
+      expect(video.getAttribute('src')).toBe(source.dataUrl)
 
       runtime.releaseAll()
       expect(group.getObjects().some((child) => child instanceof fabric.FabricImage)).toBe(false)
@@ -716,7 +722,8 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('does not restart audio when a pending play resolves after the runtime pauses it', async () => {
-    const element = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'pending.mp3'))
+    const source = fileSource('audio/mpeg', 'pending.mp3')
+    const element = createPresentationMediaElement('audio', source)
     const object = createPresentationMediaFabricObject(fabric, element)
     const canvas = {
       renderAll: () => undefined,
@@ -761,7 +768,7 @@ describe('presentation Insert runtime safeguards', () => {
     })
 
     try {
-      runtime.register(element, object)
+      runtime.register(element, object, source)
       const pending = runtime.toggle(element.id)
       const audio = audios[0]
       if (!audio) throw new Error('Expected the runtime to create an audio element')
@@ -785,7 +792,8 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('ignores an obsolete play result after playback is restarted', async () => {
-    const element = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'restart.mp3'))
+    const source = fileSource('audio/mpeg', 'restart.mp3')
+    const element = createPresentationMediaElement('audio', source)
     const object = createPresentationMediaFabricObject(fabric, element)
     const canvas = {
       renderAll: () => undefined,
@@ -821,7 +829,7 @@ describe('presentation Insert runtime safeguards', () => {
     ).getObjects().find((child) => child instanceof fabric.Triangle)
 
     try {
-      runtime.register(element, object)
+      runtime.register(element, object, source)
       const obsolete = runtime.toggle(element.id)
       await runtime.toggle(element.id)
       const current = runtime.toggle(element.id)
@@ -846,9 +854,11 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('toggles media only from its canvas play target and pauses the previous session', async () => {
-    const first = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'first.mp3'))
+    const firstSource = fileSource('audio/mpeg', 'first.mp3')
+    const secondSource = fileSource('audio/mpeg', 'second.mp3')
+    const first = createPresentationMediaElement('audio', firstSource)
     const second = {
-      ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'second.mp3')),
+      ...createPresentationMediaElement('audio', secondSource),
       x: first.x + 40,
       y: first.y + 100,
     }
@@ -897,8 +907,8 @@ describe('presentation Insert runtime safeguards', () => {
     )
 
     try {
-      runtime.register(first, firstObject)
-      runtime.register(second, secondObject)
+      runtime.register(first, firstObject, firstSource)
+      runtime.register(second, secondObject, secondSource)
       expect(runtime.cursorFromCanvas(
         firstObject,
         new fabric.Point(first.x + 4, first.y + 4),
@@ -938,19 +948,17 @@ describe('presentation Insert runtime safeguards', () => {
   it('keeps ordinary history at 50 entries and trims embedded payloads by byte budget', () => {
     const documentModel = createBlankPresentationDocument('History')
     const plainBytes = estimatePresentationDocumentBytes(documentModel)
-    documentModel.slides[0]!.elements.push(createPresentationMediaElement('video', fileSource('video/mp4', 'large.mp4', 'A'.repeat(2_000))))
+    const source = fileSource('video/mp4', 'large.mp4', 'A'.repeat(2_000))
+    const media = createPresentationMediaElement('video', source)
+    documentModel.assets.push(assetFor(media, source))
+    documentModel.slides.pages[0]!.elements.push(media)
     const mediaBytes = estimatePresentationDocumentBytes(documentModel)
     expect(mediaBytes).toBeGreaterThan(plainBytes + 3_900)
 
     const entry = createPresentationHistoryEntry(documentModel, mediaBytes)
     expect(entry).not.toBeNull()
     expect(entry!.document).not.toBe(documentModel)
-    const clonedMedia = entry!.document.slides[0]!.elements[0]
-    const originalMedia = documentModel.slides[0]!.elements[0]
-    expect(clonedMedia?.type).toBe('video')
-    if (clonedMedia?.type === 'video' && originalMedia?.type === 'video') {
-      expect(clonedMedia.source.dataUrl).toBe(originalMedia.source.dataUrl)
-    }
+    expect(entry!.document.assets[0]!.source.dataUrl).toBe(documentModel.assets[0]!.source.dataUrl)
     expect(createPresentationHistoryEntry(documentModel, mediaBytes - 1)).toBeNull()
 
     const ordinaryEntries = Array.from({ length: 60 }, (_, index) => ({
@@ -974,14 +982,16 @@ describe('presentation Insert runtime safeguards', () => {
     const document = createBlankPresentationDocument('Shared media')
     const source = fileSource('video/mp4', 'large.mp4', 'A'.repeat(10_000))
     const media = createPresentationMediaElement('video', source)
-    document.slides[0]!.elements = [media, { ...media, id: 'duplicated-media' }]
+    document.assets.push(assetFor(media, source))
+    document.slides.pages[0]!.elements = [media, { ...media, id: 'duplicated-media' }]
     const estimatedBefore = estimatePresentationDocumentBytes(document)
     const entry = createPresentationHistoryEntry(document)
     expect(entry).not.toBeNull()
-    const [first, second] = entry!.document.slides[0]!.elements
+    const [first, second] = entry!.document.slides.pages[0]!.elements
     expect(first?.type).toBe('video')
     expect(second?.type).toBe('video')
-    if (first?.type === 'video' && second?.type === 'video') expect(first.source).toBe(second.source)
+    if (first?.type === 'video' && second?.type === 'video') expect(first.sourceAssetId).toBe(second.sourceAssetId)
+    expect(entry!.document.assets).toHaveLength(1)
     expect(estimatePresentationDocumentBytes(entry!.document)).toBe(estimatedBefore)
   })
 
@@ -1004,9 +1014,12 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('uses inert media cards during transitions, then restores stable playback controls', async () => {
-    const audio = { ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'sound.mp3')), autoplay: true, muted: false }
-    const video = { ...createPresentationMediaElement('video', fileSource('video/mp4', 'clip.mp4')), autoplay: true, muted: false }
-    const slide = { ...createBlankPresentationDocument('Media').slides[0]!, elements: [audio, video] }
+    const audioSource = fileSource('audio/mpeg', 'sound.mp3')
+    const videoSource = fileSource('video/mp4', 'clip.mp4')
+    const audio = { ...createPresentationMediaElement('audio', audioSource), autoplay: true, muted: false }
+    const video = { ...createPresentationMediaElement('video', videoSource), autoplay: true, muted: false }
+    const assets = [assetFor(audio, audioSource), assetFor(video, videoSource)]
+    const slide = { ...createBlankPresentationDocument('Media').slides.pages[0]!, elements: [audio, video] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1024,6 +1037,7 @@ describe('presentation Insert runtime safeguards', () => {
       await act(async () => {
         root.render(
           <PresentationSlidePreview
+            assets={assets}
             slide={slide}
             width={960}
             selected={false}
@@ -1059,8 +1073,9 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('ignores an obsolete slide-show audio play failure after playback restarts', async () => {
-    const audio = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'restart-slideshow.mp3'))
-    const slide = { ...createBlankPresentationDocument('Audio controls').slides[0]!, elements: [audio] }
+    const source = fileSource('audio/mpeg', 'restart-slideshow.mp3')
+    const audio = createPresentationMediaElement('audio', source)
+    const slide = { ...createBlankPresentationDocument('Audio controls').slides.pages[0]!, elements: [audio] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1068,6 +1083,7 @@ describe('presentation Insert runtime safeguards', () => {
     await act(async () => {
       root.render(
         <PresentationSlidePreview
+          assets={[assetFor(audio, source)]}
           slide={slide}
           width={960}
           selected={false}
@@ -1120,9 +1136,12 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('keeps stable slideshow media sources during StrictMode effect replay', async () => {
-    const audio = { ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'strict.mp3', 'AAAA')), autoplay: true }
-    const video = { ...createPresentationMediaElement('video', fileSource('video/mp4', 'strict.mp4', 'BBBB')), autoplay: true }
-    const slide = { ...createBlankPresentationDocument('Strict media').slides[0]!, elements: [audio, video] }
+    const audioSource = fileSource('audio/mpeg', 'strict.mp3', 'AAAA')
+    const videoSource = fileSource('video/mp4', 'strict.mp4', 'BBBB')
+    const audio = { ...createPresentationMediaElement('audio', audioSource), autoplay: true }
+    const video = { ...createPresentationMediaElement('video', videoSource), autoplay: true }
+    const assets = [assetFor(audio, audioSource), assetFor(video, videoSource)]
+    const slide = { ...createBlankPresentationDocument('Strict media').slides.pages[0]!, elements: [audio, video] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1142,6 +1161,7 @@ describe('presentation Insert runtime safeguards', () => {
         root.render(
           <StrictMode>
             <PresentationSlidePreview
+              assets={assets}
               slide={slide}
               width={960}
               selected={false}
@@ -1152,8 +1172,8 @@ describe('presentation Insert runtime safeguards', () => {
         )
       })
 
-      expect(host.querySelector('audio')?.getAttribute('src')).toBe(audio.source.dataUrl)
-      expect(host.querySelector('video')?.getAttribute('src')).toBe(video.source.dataUrl)
+      expect(host.querySelector('audio')?.getAttribute('src')).toBe(audioSource.dataUrl)
+      expect(host.querySelector('video')?.getAttribute('src')).toBe(videoSource.dataUrl)
       expect(playCalls).toBe(4)
     } finally {
       if (playDescriptor) Object.defineProperty(HTMLMediaElement.prototype, 'play', playDescriptor)
@@ -1162,24 +1182,24 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('keeps replacement audio and video sources when stable playback nodes update in place', async () => {
-    const initialAudio = createPresentationMediaElement('audio', fileSource('audio/mpeg', 'first.mp3', 'AAAA'))
-    const initialVideo = createPresentationMediaElement('video', fileSource('video/mp4', 'first.mp4', 'BBBB'))
-    const baseSlide = createBlankPresentationDocument('Media source replacement').slides[0]!
+    const initialAudioSource = fileSource('audio/mpeg', 'first.mp3', 'AAAA')
+    const initialVideoSource = fileSource('video/mp4', 'first.mp4', 'BBBB')
+    const initialAudio = createPresentationMediaElement('audio', initialAudioSource)
+    const initialVideo = createPresentationMediaElement('video', initialVideoSource)
+    const baseSlide = createBlankPresentationDocument('Media source replacement').slides.pages[0]!
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     mountedRoots.add(root)
 
-    const render = async (audioSource: typeof initialAudio.source, videoSource: typeof initialVideo.source) => {
+    const render = async (audioSource: PresentationFileSource, videoSource: PresentationFileSource) => {
       await act(async () => {
         root.render(
           <PresentationSlidePreview
+            assets={[assetFor(initialAudio, audioSource), assetFor(initialVideo, videoSource)]}
             slide={{
               ...baseSlide,
-              elements: [
-                { ...initialAudio, source: audioSource },
-                { ...initialVideo, source: videoSource },
-              ],
+              elements: [initialAudio, initialVideo],
             }}
             width={960}
             selected={false}
@@ -1190,7 +1210,7 @@ describe('presentation Insert runtime safeguards', () => {
       })
     }
 
-    await render(initialAudio.source, initialVideo.source)
+    await render(initialAudioSource, initialVideoSource)
     const originalAudioNode = host.querySelector('audio')!
     const originalVideoNode = host.querySelector('video')!
     const replacementAudio = fileSource('audio/mpeg', 'second.mp3', 'CCCC')
@@ -1205,15 +1225,17 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('keeps a linked background overlay below later media controls', async () => {
+    const imageSource = fileSource('image/png', 'background.png')
+    const audioSource = fileSource('audio/mpeg', 'sound.mp3')
     const linkedImage = {
-      ...createPresentationImageElement(fileSource('image/png', 'background.png')),
+      ...createPresentationImageElement(imageSource),
       hyperlink: { type: 'url' as const, url: 'https://example.com' },
     }
     const audio = {
-      ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'sound.mp3')),
+      ...createPresentationMediaElement('audio', audioSource),
       hyperlink: { type: 'url' as const, url: 'https://example.com/unsupported-media-link' },
     }
-    const slide = { ...createBlankPresentationDocument('Links').slides[0]!, elements: [linkedImage, audio] }
+    const slide = { ...createBlankPresentationDocument('Links').slides.pages[0]!, elements: [linkedImage, audio] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1221,6 +1243,7 @@ describe('presentation Insert runtime safeguards', () => {
     await act(async () => {
       root.render(
         <PresentationSlidePreview
+          assets={[assetFor(linkedImage, imageSource), assetFor(audio, audioSource)]}
           slide={slide}
           width={960}
           selected={false}
@@ -1289,22 +1312,24 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('locks unsupported element rotation in both runtime policy and static previews', async () => {
-    const media = { ...createPresentationMediaElement('audio', fileSource('audio/mpeg', 'sound.mp3')), rotation: 45 }
+    const mediaSource = fileSource('audio/mpeg', 'sound.mp3')
+    const imageSource = fileSource('image/png', 'image.png')
+    const media = { ...createPresentationMediaElement('audio', mediaSource), rotation: 45 }
     const table = { ...createPresentationTableElement([['A']]), rotation: 45 }
     const chart = { ...createPresentationChartElement('column'), rotation: 45 }
-    const image = { ...createPresentationImageElement(fileSource('image/png', 'image.png')), rotation: 45 }
+    const image = { ...createPresentationImageElement(imageSource), rotation: 45 }
     expect(isPresentationRotationLocked(media)).toBe(true)
     expect(isPresentationRotationLocked(table)).toBe(true)
     expect(isPresentationRotationLocked(chart)).toBe(true)
     expect(isPresentationRotationLocked(image)).toBe(false)
 
-    const slide = { ...createBlankPresentationDocument('Rotation').slides[0]!, elements: [media, table, chart, image] }
+    const slide = { ...createBlankPresentationDocument('Rotation').slides.pages[0]!, elements: [media, table, chart, image] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     mountedRoots.add(root)
     await act(async () => {
-      root.render(<PresentationSlidePreview slide={slide} width={960} selected={false} />)
+      root.render(<PresentationSlidePreview assets={[assetFor(media, mediaSource), assetFor(image, imageSource)]} slide={slide} width={960} selected={false} />)
     })
 
     expect(host.querySelector<HTMLTableElement>('[data-testid="presentation-table-preview"]')?.style.transform).toBe('rotate(0deg)')
@@ -1314,7 +1339,7 @@ describe('presentation Insert runtime safeguards', () => {
 
   it('renders centered PowerPoint text at point-correct CSS size inside the full text box width', async () => {
     const documentModel = createBlankPresentationDocument('Centered text')
-    const slide = documentModel.slides[0]!
+    const slide = documentModel.slides.pages[0]!
     slide.elements = [{
       id: 'centered-title',
       type: 'text',
@@ -1354,7 +1379,7 @@ describe('presentation Insert runtime safeguards', () => {
 
   it('renders East Asian vertical text in height-bound right-to-left columns', async () => {
     const documentModel = createBlankPresentationDocument('Vertical poem')
-    const slide = documentModel.slides[0]!
+    const slide = documentModel.slides.pages[0]!
     slide.elements = [{
       id: 'vertical-poem',
       type: 'text',
@@ -1464,9 +1489,50 @@ describe('presentation Insert runtime safeguards', () => {
     }
   })
 
+  it('keeps Latin East Asian vertical text editable as one rotated Fabric word', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')!
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true,
+      value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 24 }) }),
+    })
+    const element: PresentationTextElement = {
+      id: 'vertical-latin', type: 'text', text: 'Contents', x: 100, y: 80, width: 80, height: 260,
+      rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left',
+      textDirection: 'eastAsianVertical', wordWrap: false,
+    }
+    try {
+      const object = await createPresentationFabricObject(fabric, element, () => undefined)
+
+      expect(object).toBeInstanceOf(fabric.IText)
+      expect(object).toMatchObject({ text: 'Contents', angle: 90 })
+      expect(getPresentationTextFabricFramePatch(object, element)).toMatchObject({
+        x: element.x, y: element.y, width: element.width, height: element.height, rotation: 0,
+      })
+      const mixedElement = { ...element, id: 'vertical-mixed', text: '目录 Contents' }
+      const model = createBlankPresentationDocument('Mixed vertical text')
+      model.slides.pages[0]!.elements = [mixedElement]
+      const host = document.createElement('div')
+      host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />)
+      const previewItems = Array.from(host.querySelector('[data-testid="presentation-text-content"]')!.children) as HTMLElement[]
+      expect(previewItems.map(item => ({ text: item.textContent, transform: item.style.transform }))).toEqual([
+        { text: '目', transform: 'rotate(0deg)' }, { text: '录', transform: 'rotate(0deg)' },
+        { text: ' ', transform: 'rotate(0deg)' }, { text: 'Contents', transform: 'rotate(90deg)' },
+      ])
+      const mixed = await createPresentationFabricObject(fabric, mixedElement, () => undefined)
+      expect(mixed).toBeInstanceOf(fabric.Group)
+      if (!(mixed instanceof fabric.Group)) throw new Error('Missing mixed vertical text group')
+      const items = mixed.getObjects().filter((item): item is InstanceType<typeof fabric.Text> => item instanceof fabric.Text)
+      expect(items.map(item => ({ text: item.text, angle: item.angle }))).toEqual([
+        { text: '目', angle: 0 }, { text: '录', angle: 0 }, { text: ' ', angle: 0 }, { text: 'Contents', angle: 90 },
+      ])
+      object.dispose()
+      mixed.dispose()
+    } finally { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) }
+  })
+
   it('uses the same ellipse crop for picture-filled shapes in previews and Fabric', async () => {
+    const source = fileSource('image/png', 'landscape.png')
     const element = {
-      ...createPresentationImageElement(fileSource('image/png', 'landscape.png')),
+      ...createPresentationImageElement(source),
       x: 141,
       y: 261,
       width: 221,
@@ -1478,13 +1544,14 @@ describe('presentation Insert runtime safeguards', () => {
     expect(clipPath).toMatchObject({ rx: element.width / 2, ry: element.height / 2 })
 
     const documentModel = createBlankPresentationDocument('Picture-filled ellipse')
-    documentModel.slides[0]!.elements = [element]
+    documentModel.assets.push(assetFor(element, source))
+    documentModel.slides.pages[0]!.elements = [element]
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     mountedRoots.add(root)
     await act(async () => {
-      root.render(<PresentationSlidePreview slide={documentModel.slides[0]!} width={1280} selected={false} />)
+      root.render(<PresentationSlidePreview assets={documentModel.assets} slide={documentModel.slides.pages[0]!} width={1280} selected={false} />)
     })
 
     expect(host.querySelector<HTMLImageElement>('img')?.style.borderRadius).toBe('50%')
@@ -1511,7 +1578,7 @@ describe('presentation Insert runtime safeguards', () => {
         showLegend: false,
         title: undefined,
       }
-      const slide = { ...createBlankPresentationDocument('Negative chart').slides[0]!, elements: [chart] }
+      const slide = { ...createBlankPresentationDocument('Negative chart').slides.pages[0]!, elements: [chart] }
       await act(async () => {
         root.render(<PresentationSlidePreview slide={slide} width={960} selected={false} />)
       })
@@ -1547,7 +1614,7 @@ describe('presentation Insert runtime safeguards', () => {
 
   it('uses a minimum logical chart viewport while retaining a legacy small frame', async () => {
     const chart = { ...createPresentationChartElement('column'), width: 8, height: 8 }
-    const slide = { ...createBlankPresentationDocument('Small chart').slides[0]!, elements: [chart] }
+    const slide = { ...createBlankPresentationDocument('Small chart').slides.pages[0]!, elements: [chart] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
