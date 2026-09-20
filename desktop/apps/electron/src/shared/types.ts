@@ -557,6 +557,8 @@ export interface ElectronAPI {
     requestClose(sessionId: string): Promise<void>
     setExpanded(expanded: boolean): Promise<void>
     reportState(state: EmbeddedPowerPointRendererState): Promise<void>
+    /** Pick and open a PPTX in the Session that owns the calling renderer. */
+    openDocument(): Promise<void>
     /** Import or reactivate a local PPTX in the exact Session-owned editor. */
     openFile(sessionId: string, absPath: string): Promise<EmbeddedPowerPointOpenFileResult>
   }

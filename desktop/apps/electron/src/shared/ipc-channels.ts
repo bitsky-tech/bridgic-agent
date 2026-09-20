@@ -129,6 +129,7 @@ export const IPC = {
     requestClose: 'powerpoint:requestClose',
     setExpanded: 'powerpoint:setExpanded',
     reportState: 'powerpoint:reportState',
+    openDocument: 'powerpoint:openDocument',
     openFile: 'powerpoint:openFile',
   },
   word: {

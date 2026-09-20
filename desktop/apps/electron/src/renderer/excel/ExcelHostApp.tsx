@@ -5,7 +5,7 @@ import { OfficeLaunchEmptyState } from '../components/app/OfficeLaunchEmptyState
 import { useTranslation } from 'react-i18next'
 import { i18n } from '../lib/i18n'
 import {
-  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
 } from 'react'
 import type { IWorkbookData } from '@univerjs/core'
 import type { ExcelDocumentHandle, ExcelHostConfig, ExcelWorkbookOpenTicket } from '../../shared/types'
@@ -372,16 +372,18 @@ export function ExcelHostApp() {
     )
   }, [config, copy.saveConflict, flushActiveEditor, updateTab, workspace])
 
-  const addBlankTab = () => executeWorkspaceOperation('document.create', null, async (context) => {
-    await flushActiveEditor(context.assertCurrent)
-    await persistRef.current(context)
-    setFormulaDialog(null)
-    setInsertDialog(null)
-    const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
-    nextWorkbookOrdinal.current += 1
-    workspace.replace([...workspace.getState().tabs, tab], tab.tabId)
+  const addBlankTab = () => {
     setError(null)
-  })
+    return executeWorkspaceOperation('document.create', null, async (context) => {
+      await flushActiveEditor(context.assertCurrent)
+      await persistRef.current(context)
+      setFormulaDialog(null)
+      setInsertDialog(null)
+      const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
+      nextWorkbookOrdinal.current += 1
+      workspace.replace([...workspace.getState().tabs, tab], tab.tabId)
+    })
+  }
 
   const openWorkbook = () => executeWorkspaceOperation('document.open', null, async (context) => {
     setFormulaDialog(null)
@@ -710,8 +712,8 @@ export function ExcelHostApp() {
     void runEditorOperation((editor) => editor.setFormulaBarValue(value))
   }, [runEditorOperation])
 
-  if (!activeTab && recoveryLoaded && !recoveryFailure && !error && busy === null && pendingWorkbookOpenTickets.length === 0) {
-    return <OfficeLaunchEmptyState kind="excel" onCreate={addBlankTab} onOpen={openWorkbook} />
+  if (!activeTab && recoveryLoaded && !recoveryFailure && busy === null && pendingWorkbookOpenTickets.length === 0) {
+    return <OfficeLaunchEmptyState errorMessage={error} kind="excel" onCreate={addBlankTab} onOpen={openWorkbook} />
   }
 
   return (
@@ -837,18 +839,6 @@ export function ExcelHostApp() {
           {t('excel.host.importReading')}
         </div>
       ) : null}
-      {!activeTab && recoveryLoaded && busy === null && pendingWorkbookOpenTickets.length === 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
-          <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600">{Icons.spreadsheet(30)}</span>
-          <h1 className="text-sm font-semibold">{copy.emptyTitle}</h1>
-          <p className="mt-1 text-xs text-text-tertiary">{copy.emptyDetail}</p>
-          <div className="mt-4 flex gap-2">
-            <HostButton label={copy.new} onClick={addBlankTab}>{Icons.plus(13)} {copy.new}</HostButton>
-            <HostButton label={copy.open} onClick={() => void openWorkbook()}>{Icons.folder(13)} {copy.open}</HostButton>
-          </div>
-        </div>
-      ) : null}
-
       {insertDialog?.kind === 'hyperlink' ? (
         <ExcelHyperlinkDialog
           context={insertDialog.context}
@@ -899,25 +889,6 @@ export function ExcelHostApp() {
         />
       ) : null}
     </main>
-  )
-}
-
-function HostButton({ children, disabled, label, onClick }: {
-  children: ReactNode
-  disabled?: boolean
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      aria-label={label}
-      className="inline-flex h-7 items-center gap-1 rounded-md border border-border-subtle bg-bg-surface px-2 text-[11px] font-medium text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40"
-      disabled={disabled}
-      onClick={onClick}
-      type="button"
-    >
-      {children}
-    </button>
   )
 }
 

@@ -77,6 +77,7 @@ function powerPointApi(calls: string[]): ElectronAPI['powerpoint'] {
     requestClose: async () => undefined,
     setExpanded: async () => undefined,
     reportState: async () => undefined,
+    openDocument: async () => undefined,
     openFile: async (_sessionId, absPath) => ({
       documentId: 'document-1',
       fileName: absPath.split('/').at(-1) ?? '',

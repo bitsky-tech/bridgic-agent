@@ -184,6 +184,8 @@ it('rejects unknown close senders and preserves a replacement target during defe
   const first = await manager.ensureSession('session-a')
   const other = await manager.ensureSession('session-b')
   expect(manager.sessionForContents(first.webContentsId)).toBe('session-a')
+  expect(manager.ownedSessionForContents(first.webContentsId)).toBe('session-a')
+  expect(manager.ownedSessionForContents(99)).toBeNull()
   expect(() => manager.sessionForContents(99)).toThrow('does not own')
   manager.closeSession('session-a')
   const replacement = await manager.ensureSession('session-a')

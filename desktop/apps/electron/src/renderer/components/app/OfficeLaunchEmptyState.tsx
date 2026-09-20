@@ -39,15 +39,18 @@ const launchConfig = {
   },
 } as const
 
-export function OfficeLaunchEmptyState({ kind, onCreate, onOpen }: {
+export function OfficeLaunchEmptyState({ errorMessage = null, failure = null, kind, onCreate, onOpen }: {
   kind: OfficeLaunchKind
   onCreate: () => unknown | Promise<unknown>
   onOpen: () => unknown | Promise<unknown>
+  errorMessage?: string | null
+  failure?: LaunchOperation | null
 }) {
   const { t } = useTranslation()
   const [pending, setPending] = useState<LaunchOperation | null>(null)
   const [failed, setFailed] = useState<LaunchOperation | null>(null)
   const config = launchConfig[kind]
+  const visibleFailure = failure ?? failed
   const run = (operation: LaunchOperation, action: () => unknown | Promise<unknown>) => {
     if (pending) return
     setPending(operation)
@@ -77,7 +80,11 @@ export function OfficeLaunchEmptyState({ kind, onCreate, onOpen }: {
             type="button"
           >{t(pending === 'open' ? 'office.opening' : 'office.open')}</button>
         </div>
-        {failed ? <div className="mt-2 text-xs text-status-error" role="alert">{t(failed === 'create' ? 'office.createFailed' : 'office.openFailed')}</div> : null}
+        {errorMessage || visibleFailure ? (
+          <div className="mt-2 text-xs text-status-error" role="alert">
+            {errorMessage ?? t(visibleFailure === 'create' ? 'office.createFailed' : 'office.openFailed')}
+          </div>
+        ) : null}
       </div>
     </div>
   </section>

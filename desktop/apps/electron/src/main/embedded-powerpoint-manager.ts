@@ -127,9 +127,14 @@ export class EmbeddedPowerPointManager {
   }
 
   sessionForContents(webContentsId: number): string {
-    const surface = this.container.forWebContents(webContentsId)
-    if (!surface) throw new Error('PowerPoint Session does not own this renderer')
-    return surface.sessionId
+    const sessionId = this.ownedSessionForContents(webContentsId)
+    if (sessionId === null) throw new Error('PowerPoint Session does not own this renderer')
+    return sessionId
+  }
+
+  /** Resolve a child renderer without rejecting trusted host-window callers. */
+  ownedSessionForContents(webContentsId: number): string | null {
+    return this.container.forWebContents(webContentsId)?.sessionId ?? null
   }
 
   /** Accept authoritative project inventory only from the Session-owned renderer. */

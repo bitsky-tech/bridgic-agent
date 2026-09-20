@@ -114,6 +114,7 @@ const api: ElectronAPI = {
     requestClose: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.requestClose, sessionId),
     setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
     reportState: (state) => ipcRenderer.invoke(IPC.powerpoint.reportState, state),
+    openDocument: () => ipcRenderer.invoke(IPC.powerpoint.openDocument),
     openFile: (sessionId, absPath) => ipcRenderer.invoke(IPC.powerpoint.openFile, sessionId, absPath),
   },
   word: {

@@ -51,14 +51,7 @@ function closePowerPoint(): Promise<void> {
 }
 
 async function openPowerPoint(): Promise<void> {
-  const result = await window.api.dialog.open({
-    title: 'Open PowerPoint Presentation',
-    properties: ['openFile'],
-    filters: [{ name: 'PowerPoint presentations', extensions: ['pptx'] }],
-  })
-  const path = result.filePaths[0]
-  if (result.canceled || !path) return
-  await window.api.powerpoint.openFile(sessionId, path)
+  await window.api.powerpoint.openDocument()
 }
 
 window.__bridgicPowerPoint = {

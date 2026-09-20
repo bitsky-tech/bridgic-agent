@@ -148,6 +148,7 @@ describe('Excel routed workbook imports', () => {
     try {
       await app.open('failure')
       await waitFor(() => app.host.textContent!.includes('Broken workbook'))
+      expect(app.host.querySelector('[data-testid="excel-launch-empty-state"]')).not.toBeNull()
       expect(app.host.querySelectorAll('[data-testid="excel-document-tab"]')).toHaveLength(0)
       await app.open('retry')
       await waitFor(() => app.host.querySelectorAll('[data-testid="excel-document-tab"]').length === 1)

@@ -1,3 +1,4 @@
+import { BrowserWindow, dialog, type OpenDialogOptions } from 'electron'
 import { IPC } from '../../shared/ipc-channels'
 import type { EmbeddedPowerPointBounds } from '../../shared/types'
 import type { EmbeddedPowerPointManager } from '../embedded-powerpoint-manager'
@@ -55,9 +56,29 @@ export function registerPowerPointHandlers(
     powerpoint.reportState(event.sender.id, state)
   })
 
+  loggedHandle(IPC.powerpoint.openDocument, async (event) => {
+    const sessionId = powerpoint.sessionForContents(event.sender.id)
+    const options: OpenDialogOptions = {
+      title: 'Open PowerPoint Presentation',
+      properties: ['openFile'],
+      filters: [{ name: 'PowerPoint presentations', extensions: ['pptx'] }],
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    const path = result.filePaths[0]
+    if (result.canceled || !path) return
+    await powerpoint.openFile(sessionId, path)
+  }, { transformLogArgs: redactLocalPathLogArgs })
+
   loggedHandle(
     IPC.powerpoint.openFile,
-    (_event, sessionId: string, absPath: string) => powerpoint.openFile(sessionId, absPath),
+    (event, sessionId: string, absPath: string) => {
+      const ownedSessionId = powerpoint.ownedSessionForContents(event.sender.id)
+      if (ownedSessionId !== null && ownedSessionId !== String(sessionId ?? '').trim()) {
+        throw new Error('PowerPoint Session does not own the requested editor')
+      }
+      return powerpoint.openFile(ownedSessionId ?? sessionId, absPath)
+    },
     { transformLogArgs: redactLocalPathLogArgs },
   )
 }

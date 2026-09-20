@@ -137,6 +137,7 @@ function SessionWordEditorInstance({
   const [persistenceStatus, setPersistenceStatus] = useState<WordPersistenceStatus>('saving')
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [recoveryAttempt, setRecoveryAttempt] = useState(0)
+  const [openFileFailed, setOpenFileFailed] = useState(false)
   const persistenceStatusRef = useRef<WordPersistenceStatus>('saving')
   const [store, setStore] = useState<ReturnType<typeof createWordDomainStore> | null>(null)
   const persisterRef = useRef<WordWorkspacePersister | null>(null)
@@ -148,6 +149,10 @@ function SessionWordEditorInstance({
 
   useLayoutEffect(() => { defaultTitleRef.current = defaultTitle }, [defaultTitle])
   const setEditorFlush = useCallback((flush: WordWorkspaceFlush | null) => { editorFlushRef.current = flush }, [])
+  const openDocument = useCallback(() => {
+    setOpenFileFailed(false)
+    return onOpenDocument()
+  }, [onOpenDocument])
   const flushWorkspace = useCallback(async () => {
     if (recoveryErrorRef.current) throw new Error(recoveryErrorRef.current)
     if (!persisterRef.current) throw new Error('The Word workspace is not ready.')
@@ -317,6 +322,7 @@ function SessionWordEditorInstance({
           result = await store.dispatch({ type: 'document.activate', documentId: existing.id })
         }
         if (!result.ok) throw new Error(result.error.message)
+        if (active) setOpenFileFailed(false)
         if (prepared.warnings.length > 0) {
           rlog.warn('[word] document imported with conversion warnings', {
             name: prepared.fileName,
@@ -325,7 +331,10 @@ function SessionWordEditorInstance({
         }
       } catch (cause) {
         error = cause instanceof Error ? cause.message : String(cause)
-        if (active) onOpenFileError(openFileRequest.name, cause)
+        if (active) {
+          setOpenFileFailed(true)
+          onOpenFileError(openFileRequest.name, cause)
+        }
       } finally {
         if (active) onOpenFileRequestHandled(openFileRequest.id, error)
       }
@@ -357,7 +366,8 @@ function SessionWordEditorInstance({
       }).catch((error) => rlog.warn('[word] close failed', error))
     } : undefined}
     onSaveRequested={flushWorkspace}
-    onOpenDocument={onOpenDocument}
+    onOpenDocument={openDocument}
+    openFileFailed={openFileFailed}
     onEditorFlushHandlerChange={setEditorFlush}
     onToggleExpanded={onToggleExpanded}
     persistenceStatus={persistenceStatus}
@@ -367,13 +377,14 @@ function SessionWordEditorInstance({
   />
 }
 
-function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onOpenDocument, onSaveRequested, onToggleExpanded, openingFileName, persistenceStatus, showExpandControl, store }: {
+function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onOpenDocument, onSaveRequested, onToggleExpanded, openFileFailed, openingFileName, persistenceStatus, showExpandControl, store }: {
   expanded: boolean
   onClose?: () => void
   onEditorFlushHandlerChange: (flush: WordWorkspaceFlush | null) => void
   onOpenDocument: () => unknown | Promise<unknown>
   onSaveRequested: () => Promise<void>
   onToggleExpanded: () => void
+  openFileFailed: boolean
   openingFileName: string | null
   persistenceStatus: WordPersistenceStatus
   showExpandControl: boolean
@@ -383,7 +394,7 @@ function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onO
   if (workspace.documents.length === 0) {
     return openingFileName
       ? <WordFileOpeningState fileName={openingFileName} />
-      : <OfficeLaunchEmptyState kind="word" onCreate={() => store.dispatch({ type: 'document.create' })} onOpen={onOpenDocument} />
+      : <OfficeLaunchEmptyState failure={openFileFailed ? 'open' : null} kind="word" onCreate={() => store.dispatch({ type: 'document.create' })} onOpen={onOpenDocument} />
   }
 
   return (
