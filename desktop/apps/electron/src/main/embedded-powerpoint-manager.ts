@@ -9,6 +9,7 @@ import path from 'node:path'
 import type {
   EmbeddedPowerPointBounds,
   EmbeddedPowerPointOpenFileResult,
+  EmbeddedPowerPointRendererState,
   EmbeddedPowerPointSessionInfo,
   EmbeddedPowerPointSnapshot,
 } from '../shared/types'
@@ -20,6 +21,7 @@ import { OfficeSessionContainer, type OfficeSessionRecord } from './office-sessi
 const MAX_OPEN_PRESENTATION_BYTES = 250 * 1024 * 1024
 
 interface EmbeddedPowerPointSurface extends OfficeSessionRecord {
+  documentCount: number | null
   loading: boolean
   openingFilesByPath: Map<string, Promise<EmbeddedPowerPointOpenFileResult>>
 }
@@ -130,6 +132,22 @@ export class EmbeddedPowerPointManager {
     return surface.sessionId
   }
 
+  /** Accept authoritative project inventory only from the Session-owned renderer. */
+  reportState(webContentsId: number, value: unknown): void {
+    const surface = this.container.forWebContents(webContentsId)
+    if (!surface) throw new Error('PowerPoint Session does not own this renderer')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TypeError('Invalid PowerPoint runtime state')
+    }
+    const state = value as Partial<EmbeddedPowerPointRendererState>
+    if (!Number.isSafeInteger(state.documentCount) || state.documentCount! < 0) {
+      throw new TypeError('Invalid PowerPoint runtime document count')
+    }
+    if (surface.documentCount === state.documentCount) return
+    surface.documentCount = state.documentCount!
+    this.publishState()
+  }
+
   /** A delayed close belongs to its sender, even if this Session has since reopened. */
   closeCurrentSession(webContentsId: number): void {
     const surface = this.container.forWebContents(webContentsId)
@@ -178,6 +196,7 @@ export class EmbeddedPowerPointManager {
       sessionId,
       view,
       targetId: null,
+      documentCount: null,
       loading: true,
       crashed: false,
       ready: Promise.resolve(),
@@ -186,6 +205,7 @@ export class EmbeddedPowerPointManager {
     view.webContents.setBackgroundThrottling(false)
     view.webContents.on('did-start-loading', () => {
       if (!this.container.owns(surface)) return
+      surface.documentCount = null
       surface.loading = true
       this.publishState()
     })
@@ -206,7 +226,7 @@ export class EmbeddedPowerPointManager {
   ): Promise<EmbeddedPowerPointOpenFileResult> {
     const content = await readFile(canonicalPath)
     const value = await this.dispatchToSurface(surface, {
-      method: 'view_ppt',
+      method: 'open',
       params: {
         target: canonicalPath,
         file_name: path.basename(canonicalPath),
@@ -217,26 +237,25 @@ export class EmbeddedPowerPointManager {
       throw new Error('PowerPoint renderer returned an invalid file-open result')
     }
     const result = value as Record<string, unknown>
-    const identity = result.identity
-    const meta = result.meta
-    if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
-      throw new Error('PowerPoint renderer returned an invalid file identity')
-    }
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    const deck = result.deck
+    if (!deck || typeof deck !== 'object' || Array.isArray(deck)) {
       throw new Error('PowerPoint renderer returned invalid file metadata')
     }
-    const identityValue = identity as Record<string, unknown>
-    const metaValue = meta as Record<string, unknown>
-    if (typeof identityValue.document_id !== 'string' || typeof metaValue.total_pages !== 'number') {
+    const deckValue = deck as Record<string, unknown>
+    if (
+      typeof result.document_id !== 'string'
+      || deckValue.id !== result.document_id
+      || typeof deckValue.total_pages !== 'number'
+    ) {
       throw new Error('PowerPoint renderer returned an incomplete file-open result')
     }
     return {
-      documentId: identityValue.document_id,
+      documentId: result.document_id,
       fileName: path.basename(canonicalPath),
       reused: result.reused === true,
-      slideCount: metaValue.total_pages,
-      title: typeof identityValue.name === 'string'
-        ? identityValue.name
+      slideCount: deckValue.total_pages,
+      title: typeof deckValue.title === 'string' && deckValue.title.trim()
+        ? deckValue.title
         : path.basename(canonicalPath, '.pptx'),
     }
   }
@@ -265,6 +284,7 @@ export class EmbeddedPowerPointManager {
       webContentsId: surface.view.webContents.id,
       loading: surface.loading,
       crashed: surface.crashed,
+      documentCount: surface.documentCount,
     }
   }
 

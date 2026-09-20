@@ -2,182 +2,125 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
-from src.amphi_agent.powerpoint import (
-    PowerPointAsset,
-    PowerPointDiagnostic,
-    PowerPointPage,
-    PowerPointPageSnapshot,
-    PowerPointPageView,
-    PowerPointWriteResult,
-)
 from src.amphi_agent.tools.powerpoint import (
-    edit_ppt_page,
-    get_ppt_page,
-    goto_ppt_page,
-    insert_ppt_element,
-    insert_ppt_page,
-    move_ppt_page,
     powerpoint_tool_specs,
-    remove_ppt_element,
-    remove_ppt_page,
-    save_ppt,
-    update_ppt_design,
-    view_ppt,
+    ppt_edit_page,
+    ppt_inspect,
+    ppt_manage_deck,
+    ppt_open,
+    ppt_read_deck,
+    ppt_read_page,
+    ppt_save,
 )
 from tests.agent.tools._harness import ToolHarness
-
-
-def _page(revision: str = "page-v1") -> PowerPointPage:
-    return PowerPointPage(
-        page_id="page-a",
-        index=0,
-        revision=revision,
-        title="Page A",
-    )
-
-
-def _snapshot(markdown: str = '<PptText ref="title">Page</PptText>\n', revision: str = "page-v1") -> PowerPointPageSnapshot:
-    return PowerPointPageSnapshot(
-        page_id="page-a",
-        base_revision=revision,
-        markdown=markdown,
-        asset_paths=("assets/figure.png",),
-        refs=("title",),
-    )
 
 
 class _RecordingPowerPoint:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
 
-    async def view_ppt(self, target: str) -> Any:
-        self.calls.append(("view", target))
-        return {"identity": {"file_name": Path(target).name}, "pages": []}
+    async def open(self, target: str) -> Any:
+        self.calls.append(("open", target))
+        return {"revision": "open-v1", "deck": {"id": "deck-1", "file_name": Path(target).name}}
 
-    async def read_page(self, page_id: str) -> PowerPointPageView:
-        self.calls.append(("read", page_id))
-        return PowerPointPageView(
-            page=_page(),
-            snapshot=_snapshot(),
-            assets=(PowerPointAsset(path="assets/figure.png", mime_type="image/png"),),
-        )
+    async def read_deck(self, document_id: str, query: Any) -> Any:
+        self.calls.append(("read_deck", (document_id, query)))
+        return {"revision": "deck-v1", "deck": {"id": document_id, "document_revision": "nested-v1"}}
 
-    async def edit_page(self, page_id: str, ref: str, replacement: str) -> PowerPointWriteResult:
-        self.calls.append(("edit", (page_id, ref, replacement)))
-        return PowerPointWriteResult(
-            status="ready",
-            page=_page("page-v2"),
-            diagnostics=(PowerPointDiagnostic(code="layout-ok", message="Layout is valid", severity="info"),),
-            element_ref=ref,
-        )
+    async def read_page(self, document_id: str, page_id: str, query: Any) -> Any:
+        self.calls.append(("read_page", (document_id, page_id, query)))
+        return {
+            "revision": "page-v1",
+            "page": {"id": page_id, "revision": "nested-page-v1", "markdown": '<PptText ref="title">Page</PptText>'},
+        }
 
-    async def insert_element(self, page_id: str, element: str) -> PowerPointWriteResult:
-        self.calls.append(("insert-element", (page_id, element)))
-        return PowerPointWriteResult(status="ready", page=_page("page-v2"), element_ref="new-element")
+    async def edit_page(self, document_id: str, page_id: str, operations: Any, options: Any) -> Any:
+        self.calls.append(("edit_page", (document_id, page_id, operations, options)))
+        return {"status": "ready", "revision": "page-v2", "deck_revision": "deck-v2", "changed_page_ids": [page_id]}
 
-    async def remove_element(self, page_id: str, ref: str) -> PowerPointWriteResult:
-        self.calls.append(("remove-element", (page_id, ref)))
-        return PowerPointWriteResult(status="ready", page=_page("page-v2"), element_ref=ref)
+    async def manage_deck(self, document_id: str, operations: Any, options: Any) -> Any:
+        self.calls.append(("manage_deck", (document_id, operations, options)))
+        return {"status": "ready", "revision": "deck-v2", "changed_page_ids": ["new-page"]}
 
-    async def update_design(self, design: dict[str, Any]) -> Any:
-        self.calls.append(("design", design))
-        return {"identity": {"file_name": "deck.pptx"}, "meta": {"theme": design}, "pages": []}
+    async def inspect(self, document_id: str, query: Any) -> Any:
+        self.calls.append(("inspect", (document_id, query)))
+        return {
+            "kind": "render", "document_revision": 2,
+            "renders": [{"page_id": "page-a", "revision": "page-v2", "path": "/workspace/page-a.png"}],
+        }
 
-    async def insert_page(self, markdown: str, after_page_id: str | None = None) -> PowerPointWriteResult:
-        self.calls.append(("insert", (markdown, after_page_id)))
-        return PowerPointWriteResult(status="ready", page=_page())
-
-    async def remove_page(self, page_id: str) -> Any:
-        self.calls.append(("remove", page_id))
-        return {"removed": page_id}
-
-    async def move_page(self, page_id: str, target_page_id: str, position: str) -> Any:
-        self.calls.append(("move", (page_id, target_page_id, position)))
-        return {"moved": page_id}
-
-    async def goto_page(self, page_id: str) -> Any:
-        self.calls.append(("goto", page_id))
-        return {"visible": page_id}
-
-    async def save_ppt(self) -> Any:
-        self.calls.append(("save", None))
-        return {"status": "saved", "target": "deck.pptx"}
+    async def save(self, document_id: str, target: Any) -> Any:
+        self.calls.append(("save", (document_id, target)))
+        return {"status": "saved", "document_id": document_id, "target": target or "deck.pptx"}
 
 
-def test_powerpoint_tool_surface_has_page_and_document_tools_without_revision() -> None:
+def test_powerpoint_tool_surface_uses_structured_domain_commands() -> None:
     schemas = {spec.tool_name: spec.tool_parameters for spec in powerpoint_tool_specs}
     assert set(schemas) == {
-        "save_ppt",
-        "view_ppt",
-        "get_ppt_page",
-        "update_ppt_design",
-        "edit_ppt_page",
-        "insert_ppt_element",
-        "remove_ppt_element",
-        "insert_ppt_page",
-        "remove_ppt_page",
-        "move_ppt_page",
-        "goto_ppt_page",
+        "ppt_open", "ppt_read_deck", "ppt_read_page", "ppt_inspect",
+        "ppt_edit_page", "ppt_manage_deck", "ppt_save",
     }
-    assert all("revision" not in schema.get("properties", {}) for schema in schemas.values())
-    assert schemas["save_ppt"].get("properties", {}) == {}
-    assert set(schemas["edit_ppt_page"]["properties"]) == {"page_id", "ref", "replacement"}
-    assert set(schemas["insert_ppt_element"]["properties"]) == {"page_id", "element"}
-    assert set(schemas["remove_ppt_element"]["properties"]) == {"page_id", "ref"}
+    page_operations = schemas["ppt_edit_page"]["properties"]["operations"]
+    deck_operations = schemas["ppt_manage_deck"]["properties"]["operations"]
+    assert {variant["properties"]["type"]["const"] for variant in page_operations["items"]["oneOf"]} == {
+        "set-page", "add", "patch", "remove", "reorder", "add-comment", "patch-comment", "remove-comment",
+    }
+    assert {variant["properties"]["type"]["const"] for variant in deck_operations["items"]["oneOf"]} == {
+        "set-design", "insert-page", "duplicate-page", "remove-page", "move-page",
+    }
+    assert "markdown" not in schemas["ppt_edit_page"]["properties"]
+    add_operation = next(
+        variant for variant in page_operations["items"]["oneOf"]
+        if variant["properties"]["type"]["const"] == "add"
+    )
+    element_schema = add_operation["properties"]["element"]
+    assert {"text", "image", "audio", "video", "table", "chart"}.issubset(
+        element_schema["properties"]["type"]["enum"]
+    )
+    assert "src" in element_schema["properties"]
+    patch_variants = [
+        variant for variant in page_operations["items"]["oneOf"]
+        if variant["properties"]["type"]["const"] == "patch"
+    ]
+    assert len(patch_variants) == 1
+    assert all("element_type" in variant["required"] for variant in patch_variants)
+    group_id_schema = patch_variants[0]["properties"]["patch"]["properties"]["groupId"]
+    assert {"type": "null"} in group_id_schema["anyOf"]
 
-async def test_powerpoint_tools_use_the_page_level_session_contract(tool_harness: ToolHarness) -> None:
+
+async def test_powerpoint_tools_use_the_session_capability(tool_harness: ToolHarness) -> None:
     powerpoint = _RecordingPowerPoint()
     tool_harness.context.powerpoint = powerpoint  # type: ignore[assignment]
     workspace = Path(tool_harness.workspace.work_dir).resolve()
+    page_ops = [{"type": "patch", "id": "title", "element_type": "text", "patch": {"text": "Updated"}}]
+    deck_ops = [{"type": "insert-page", "page": {"id": "new-page"}}]
 
-    assert json.loads(await view_ppt("deck"))["identity"]["file_name"] == "deck.pptx"
-    page_source = await get_ppt_page("page-a")
-    assert "revision" not in page_source
-    assert '"path": "assets/figure.png"' in page_source
-    assert page_source.endswith('<PptText ref="title">Page</PptText>\n')
-    assert json.loads(await update_ppt_design(
-        theme="midnight", show_slide_number=True, transition_through_black=True,
-    ))["meta"]["theme"] == {
-        "theme": "midnight",
-        "footer": {"show_slide_number": True},
-        "transition": {"through_black": True},
-    }
-    replacement = '<PptText ref="title">Updated</PptText>'
-    assert json.loads(await edit_ppt_page("page-a", "title", replacement))["ref"] == "title"
-    assert json.loads(await insert_ppt_element("page-a", "<PptShape kind=\"rect\" />"))["ref"] == "new-element"
-    assert json.loads(await remove_ppt_element("page-a", "title"))["ref"] == "title"
-    assert json.loads(await insert_ppt_page("# Inserted\n", "page-a"))["status"] == "ready"
-    assert json.loads(await remove_ppt_page("page-a")) == {"removed": "page-a"}
-    assert json.loads(await move_ppt_page("page-a", "page-b", "after")) == {"moved": "page-a"}
-    assert json.loads(await goto_ppt_page("page-a")) == {"visible": "page-a"}
-    assert json.loads(await save_ppt()) == {"status": "saved", "target": "deck.pptx"}
+    opened = json.loads(await ppt_open("deck"))
+    deck = json.loads(await ppt_read_deck("deck-1", {"include_theme": True}))
+    page = json.loads(await ppt_read_page("deck-1", "page-a", {"format": "both"}))
+    assert opened["deck"]["file_name"] == "deck.pptx"
+    assert "revision" not in opened
+    assert "revision" not in deck
+    assert "document_revision" not in deck["deck"]
+    assert "revision" not in page
+    assert "revision" not in page["page"]
+    edited = json.loads(await ppt_edit_page("deck-1", "page-a", page_ops))
+    managed = json.loads(await ppt_manage_deck("deck-1", deck_ops, {"validate_only": True}))
+    inspected = json.loads(await ppt_inspect("deck-1", {"kind": "render"}))
+    assert edited["status"] == "ready"
+    assert "revision" not in edited and "deck_revision" not in edited
+    assert managed["status"] == "ready"
+    assert "revision" not in managed
+    assert inspected["renders"][0]["page_id"] == "page-a"
+    assert "document_revision" not in inspected
+    assert "revision" not in inspected["renders"][0]
+    assert json.loads(await ppt_save("deck-1"))["status"] == "saved"
     assert powerpoint.calls == [
-        ("view", str(workspace / "deck.pptx")),
-        ("read", "page-a"),
-        ("design", {
-            "theme": "midnight",
-            "footer": {"show_slide_number": True},
-            "transition": {"through_black": True},
-        }),
-        ("edit", ("page-a", "title", replacement)),
-        ("insert-element", ("page-a", "<PptShape kind=\"rect\" />")),
-        ("remove-element", ("page-a", "title")),
-        ("insert", ("# Inserted\n", "page-a")),
-        ("remove", "page-a"),
-        ("move", ("page-a", "page-b", "after")),
-        ("goto", "page-a"),
-        ("save", None),
+        ("open", str(workspace / "deck.pptx")),
+        ("read_deck", ("deck-1", {"include_theme": True})),
+        ("read_page", ("deck-1", "page-a", {"format": "both"})),
+        ("edit_page", ("deck-1", "page-a", page_ops, None)),
+        ("manage_deck", ("deck-1", deck_ops, {"validate_only": True})),
+        ("inspect", ("deck-1", {"kind": "render"})),
+        ("save", ("deck-1", None)),
     ]
-
-
-async def test_powerpoint_page_writes_reject_empty_and_oversized_markdown(tool_harness: ToolHarness) -> None:
-    tool_harness.context.powerpoint = _RecordingPowerPoint()  # type: ignore[assignment]
-
-    with pytest.raises(ValueError, match="non-empty"):
-        await edit_ppt_page("page-a", "title", "  ")
-    with pytest.raises(ValueError, match="per-element limit"):
-        await insert_ppt_element("page-a", "x" * (64 * 1024 + 1))
-    with pytest.raises(ValueError, match="per-page limit"):
-        await insert_ppt_page("x" * (64 * 1024 + 1))

@@ -4,7 +4,7 @@ import {
   presentationSlideBackground,
   replacePresentationPages,
   type PresentationChartElement,
-  type PresentationDocument,
+  type PresentationProject,
   type PresentationElement,
   type PresentationFooter,
   type PresentationPageSizePreset,
@@ -99,7 +99,7 @@ export function presentationThemePreset(id: PresentationThemePresetId): Presenta
   return preset
 }
 
-export function matchingPresentationTheme(document: PresentationDocument): PresentationThemePresetId | 'custom' {
+export function matchingPresentationTheme(document: PresentationProject): PresentationThemePresetId | 'custom' {
   const master = document.theme
   return PRESENTATION_THEME_PRESETS.find((preset) => (
     preset.background === master.background
@@ -110,7 +110,7 @@ export function matchingPresentationTheme(document: PresentationDocument): Prese
   ))?.id ?? 'custom'
 }
 
-export function applyPresentationDesign(document: PresentationDocument, patch: PresentationDesignPatch): PresentationDocument {
+export function applyPresentationDesign(document: PresentationProject, patch: PresentationDesignPatch): PresentationProject {
   const preset = patch.theme ? presentationThemePreset(patch.theme) : null
   const background = normalizePresentationDesignColor(patch.background ?? preset?.background ?? document.theme.background)
   const accentColors = (patch.accentColors ?? preset?.accentColors ?? document.theme.accentColors)
@@ -172,7 +172,7 @@ export function applyPresentationDesign(document: PresentationDocument, patch: P
     return element
   }
 
-  let next: PresentationDocument = {
+  let next: PresentationProject = {
     ...document,
     ...(patch.title === undefined ? {} : { title: patch.title }),
     theme: { accentColors, background, bodyFontFamily, footer, titleFontFamily },
@@ -185,11 +185,11 @@ export function applyPresentationDesign(document: PresentationDocument, patch: P
       }
     })),
   }
-  if (patch.pageSize) next = resizePresentationDocument(next, patch.pageSize)
+  if (patch.pageSize) next = resizePresentationProject(next, patch.pageSize)
   return next
 }
 
-export function resizePresentationDocument(document: PresentationDocument, preset: PresentationPageSizePreset): PresentationDocument {
+export function resizePresentationProject(document: PresentationProject, preset: PresentationPageSizePreset): PresentationProject {
   const previousSize = getPresentationPageSize(document)
   const nextSize = PRESENTATION_PAGE_SIZES[preset]
   if (previousSize.preset === preset && previousSize.width === nextSize.width && previousSize.height === nextSize.height) {

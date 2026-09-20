@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test'
-import { createBlankPresentationDocument, createBlankPresentationSlide, selectPresentationPage } from '@/atoms/presentation'
+import { createBlankPresentationProject, createBlankPresentationSlide, selectPresentationPage } from '@/atoms/presentation'
 import { createOfficeEditorBinding } from '../office/officeEditorBinding'
 import { bindPresentationNativeEdit, createPresentationEditorDriver, type PresentationEditingObject } from '../presentationEditorDriver'
 
 function setup() {
-  let document = createBlankPresentationDocument('Native edit')
+  let document = createBlankPresentationProject('Native edit')
   let editing: PresentationEditingObject | null = null
   let pending: (() => void) | null = null
   let disposed = 0
@@ -41,7 +41,7 @@ describe('PowerPoint native editor driver', () => {
     const active = { isEditing: true, exitEditing: () => {
       events.push('text')
       active.isEditing = false
-      binding.publishChange({ ...read(), title: 'Committed native text', revision: read().revision + 1 })
+      binding.publishChange({ ...read(), title: 'Committed native text' })
     } }
     edit(active)
     defer(() => { events.push('transform') })

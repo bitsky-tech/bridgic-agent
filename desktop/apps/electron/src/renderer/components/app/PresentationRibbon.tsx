@@ -973,7 +973,7 @@ function InsertControls({ onAddShape, onAddSlide, onAddText }: {
   const { t } = useTranslation()
   return (
     <div className="flex h-full items-center">
-      <RibbonAction icon={FilePlus2} label={t('session.presentation.newSlide')} onClick={onAddSlide} />
+      <RibbonAction icon={FilePlus2} label={t('session.presentation.newSlide')} onClick={onAddSlide} testId="presentation-add-slide" />
       <RibbonAction icon={Type} label={t('session.presentation.textBox')} onClick={() => onAddText('body')} testId="presentation-add-text" />
       <ShapePickerButton onAddShape={onAddShape} />
     </div>

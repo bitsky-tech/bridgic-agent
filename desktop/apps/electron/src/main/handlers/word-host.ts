@@ -1,3 +1,5 @@
+import { basename } from 'node:path'
+import { BrowserWindow, dialog, type OpenDialogOptions } from 'electron'
 import { IPC } from '../../shared/ipc-channels'
 import type { EmbeddedBrowserBounds, WordHostOpenRequest } from '../../shared/types'
 import type { WordHost } from '../word-host'
@@ -23,6 +25,19 @@ export function registerWordHostHandlers(word: WordHost, emitToHost: (channel: s
   loggedHandle(IPC.wordHost.openFile, (_event, sessionId: string, request: WordHostOpenRequest) => word.openFile(sessionId, request), {
     transformLogArgs: redactLocalPathLogArgs,
   })
+  loggedHandle(IPC.wordHost.openDocument, async (event) => {
+    const sessionId = word.sessionForContents(event.sender.id)
+    const options: OpenDialogOptions = {
+      title: 'Open Word Document',
+      properties: ['openFile'],
+      filters: [{ name: 'Word documents', extensions: ['docx'] }],
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    const path = result.filePaths[0]
+    if (result.canceled || !path) return
+    await word.openFile(sessionId, { id: 'renderer-open', name: basename(path), path, sessionId })
+  }, { transformLogArgs: redactLocalPathLogArgs })
   loggedHandle(IPC.wordHost.getConfig, (event) => {
     word.sessionForContents(event.sender.id)
     return word.getConfig()

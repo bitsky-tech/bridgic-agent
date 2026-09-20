@@ -1041,15 +1041,11 @@ export const currentBrowserAgentActiveAtom = atom((get) => (
 
 /** PowerPoint tools that visibly change the live presentation surface. */
 const POWERPOINT_ACTION_TOOL_NAMES = new Set([
-  'view_ppt',
-  'update_ppt_design',
-  'edit_ppt_page',
-  'insert_ppt_element',
-  'remove_ppt_element',
-  'insert_ppt_page',
-  'remove_ppt_page',
-  'move_ppt_page',
-  'goto_ppt_page',
+  'ppt_open',
+  'ppt_edit_page',
+  'ppt_manage_deck',
+  'ppt_inspect',
+  'ppt_save',
 ])
 
 /** Whether a tool is an Agent-controlled PowerPoint operation visible to the user. */

@@ -51,6 +51,10 @@ export function registerPowerPointHandlers(
     emitToHost(IPC.events.powerPointExpandedChanged, expanded)
   })
 
+  loggedHandle(IPC.powerpoint.reportState, (event, state: unknown) => {
+    powerpoint.reportState(event.sender.id, state)
+  })
+
   loggedHandle(
     IPC.powerpoint.openFile,
     (_event, sessionId: string, absPath: string) => powerpoint.openFile(sessionId, absPath),

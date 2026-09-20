@@ -25,7 +25,7 @@ from src.amphi_agent.cognitive import (
     WorkflowThink,
 )
 from src.amphi_agent.tools._switch import switch_tool
-from src.amphi_agent.tools.powerpoint import powerpoint_tool_specs
+from src.amphi_agent.tools.powerpoint import POWERPOINT_TOOL_NAMES, powerpoint_tool_specs
 from src.amphi_store import SessionRecord
 
 
@@ -78,17 +78,18 @@ def test_ppt_rag_module_supports_dependency_replacement(monkeypatch: pytest.Monk
 
 
 def test_catalog_preserves_schemas_and_registration_order() -> None:
-    """Descriptions, parameters, defaults, and catalog order are unchanged."""
+    """Existing contracts stay stable while the new PowerPoint workflow is registered."""
     assert tools.__all__ == BASELINE["exports"]
-    for key, specs in (
-        ("registered_schemas", TOOL_LIBRARY.all()),
-        ("dormant_schemas", powerpoint_tool_specs),
-    ):
-        assert [spec.tool_name for spec in specs] == list(BASELINE[key])
-        for spec in specs:
-            assert _digest(spec.to_tool().model_dump()) == BASELINE[key][spec.tool_name], spec.tool_name
+    existing = [spec for spec in TOOL_LIBRARY.all() if spec.tool_name not in POWERPOINT_TOOL_NAMES]
+    assert [spec.tool_name for spec in existing] == list(BASELINE["registered_schemas"])
+    for spec in existing:
+        assert _digest(spec.to_tool().model_dump()) == BASELINE["registered_schemas"][spec.tool_name], spec.tool_name
+    assert [spec.tool_name for spec in powerpoint_tool_specs] == [
+        "ppt_open", "ppt_read_deck", "ppt_read_page", "ppt_inspect",
+        "ppt_edit_page", "ppt_manage_deck", "ppt_save",
+    ]
+    assert {spec.tool_name for spec in TOOL_LIBRARY.select(POWERPOINT_TOOL_NAMES)} == POWERPOINT_TOOL_NAMES
     assert _digest(switch_tool.to_tool().model_dump()) == BASELINE["switch_schema"]
-    assert TOOL_LIBRARY.select(BASELINE["dormant_schemas"]) == []
 
 
 @pytest.mark.parametrize("profile, expected", BASELINE["surfaces"].items())

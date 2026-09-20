@@ -39,8 +39,8 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
     emitToHost,
   })
 
-  loggedHandle(IPC.excelHost.setDirty, (event, dirty: boolean) => {
-    excelHost.setDirty(event.sender.id, dirty)
+  loggedHandle(IPC.excelHost.reportState, (event, state: unknown) => {
+    excelHost.reportState(event.sender.id, state)
   })
 
   loggedHandle(IPC.excelHost.getRecoveryState, (event) => {

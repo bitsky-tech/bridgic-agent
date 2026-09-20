@@ -519,6 +519,7 @@ def test_presentation_structures() -> None:
         assert "Tool availability does not broaden the current stage" in persona
         assert "use only a deck-authoring capability explicitly listed" in persona
         assert "`view_ppt`" not in persona
+        assert "`edit_ppt`" not in persona
         assert "Use the PowerPoint tools" not in persona
         assert "Use the system-provided view_skill tool" in persona
         assert "inspect its files; **MUST NOT** use bash for this" in persona

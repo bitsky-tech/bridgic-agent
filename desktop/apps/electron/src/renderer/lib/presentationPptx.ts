@@ -11,7 +11,7 @@ import {
   presentationSlideBackground,
   presentationSlideFooter,
   type PresentationChartType,
-  type PresentationDocument,
+  type PresentationProject,
   type PresentationElement,
   type PresentationHyperlink,
   type PresentationTransition,
@@ -257,7 +257,7 @@ function xmlAttributeValue(value: string): string {
 
 function toPptxHyperlink(
   hyperlink: PresentationHyperlink | undefined,
-  document: PresentationDocument,
+  document: PresentationProject,
   encodeExternalTarget = false,
 ): PptxGenJS.HyperlinkProps | undefined {
   if (!isRecord(hyperlink) || typeof hyperlink.type !== 'string') return undefined
@@ -341,7 +341,7 @@ function chartDefinition(type: PresentationChartType | unknown): {
 }
 
 /** Convert the renderer-owned presentation model into an Office-compatible PPTX archive. */
-export async function createPresentationPptx(document: PresentationDocument): Promise<Uint8Array> {
+export async function createPresentationPptx(document: PresentationProject): Promise<Uint8Array> {
   const pageSize = getPresentationPageSize(document)
   const slideWidthInches = SLIDE_HEIGHT_INCHES * (pageSize.width / pageSize.height)
   async function addNativePresentationFeatures(bytes: Uint8Array): Promise<Uint8Array> {

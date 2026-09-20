@@ -233,6 +233,7 @@ export function PresentationSlidePreview({
       aria-hidden={interactive ? undefined : 'true'}
       ref={previewRef}
       data-testid="presentation-slide-preview"
+      data-presentation-page-id={slide.id}
     >
       <span
         className="absolute left-0 top-0 block origin-top-left overflow-hidden"

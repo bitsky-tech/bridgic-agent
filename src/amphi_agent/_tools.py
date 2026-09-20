@@ -47,6 +47,7 @@ from .tools import (
     workspace_tool_specs,
     write_file_tool,
 )
+from .tools.powerpoint import powerpoint_tool_specs
 
 
 class ToolLibrary:
@@ -96,6 +97,7 @@ class ToolLibrary:
             read_workflow_run_tool,
             run_subagent_tool,
             start_subagent_tool,
+            *powerpoint_tool_specs,
         ]
         self._tools: Dict[str, ToolSpec] = {spec.tool_name: spec for spec in specs}
 

@@ -2,39 +2,40 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { DOMParser } from '@xmldom/xmldom'
 import JSZip from 'jszip'
-import { presentationSlideBackground, replacePresentationPages, type PresentationChartElement, type PresentationDocument } from '@/atoms/presentation'
+import { presentationSlideBackground, type PresentationChartElement, type PresentationProject } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 const { renderToStaticMarkup } = await import('react-dom/server')
 const fabric = await import('fabric')
-const { createBlankPresentationDocument } = await import('@/atoms/presentation')
+const { createBlankPresentationProject } = await import('@/atoms/presentation')
 const { createPresentationChartElement, createPresentationTableElement } = await import('@/lib/presentationInsert')
 const { createPresentationPptx } = await import('@/lib/presentationPptx')
 const { importPresentationPptx } = await import('@/lib/presentationPptxImport')
 const { applyPresentationDesign } = await import('@/lib/presentationDesign')
-const { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } = await import('@/lib/presentationMarkdown')
+const { editPresentationPage } = await import('@/presentation/agentCommands')
 const { PresentationSlidePreview } = await import('../PresentationSlidePreview')
 const { createPresentationFabricObject } = await import('../PresentationWorkbenchPanel')
 const parse = (xml: string) => new DOMParser().parseFromString(xml, 'text/xml')
 const chartNs = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
 
-function documentFor(element: PresentationDocument['slides']['pages'][number]['elements'][number]) {
-  const model = createBlankPresentationDocument('Chart fidelity')
+function documentFor(element: PresentationProject['slides']['pages'][number]['elements'][number]) {
+  const model = createBlankPresentationProject('Chart fidelity')
   model.slides.pages[0]!.elements = [element]
   return model
 }
 
-function markup(model: PresentationDocument) {
+function markup(model: PresentationProject) {
   const host = document.createElement('div')
   host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} theme={model.theme} selected={false} width={1280} />)
   return host
 }
 
-function agentEdit(model: PresentationDocument): PresentationDocument {
-  return {
-    ...model,
-    slides: replacePresentationPages(model.slides, [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]),
-  }
+function agentEdit(model: PresentationProject): PresentationProject {
+  const page = model.slides.pages[0]!
+  const element = page.elements[0]!
+  return editPresentationPage(model, page.id, [{
+    type: 'patch', id: element.id, element_type: element.type, patch: { x: element.x },
+  }]).project
 }
 
 afterAll(() => GlobalRegistrator.unregister())

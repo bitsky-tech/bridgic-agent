@@ -20,6 +20,7 @@ from ...prompts.render import render_stage_persona
 from ...security import Permission
 from ...tools import FILE_SYSTEM_TOOL_NAMES, switch_tool
 from ...tools.ppt import PresentationStepReport, parse_presentation_step_data
+from ...tools.powerpoint import POWERPOINT_READ_TOOL_NAMES
 from ..base import BaseThink
 from .shared import (
     PRESENTATION_STAGE_ARTIFACTS, PRESENTATION_STAGE_ORDER, PRESENTATION_STAGE_STEPS,
@@ -251,9 +252,10 @@ class PresentationThink(BaseThink):
                 "request_presentation_outline_confirm",
                 "request_presentation_template_confirm",
                 "run_subagent",
+                "ppt_open",
                 "web_fetch",
                 "web_search",
-            }),
+            } | POWERPOINT_READ_TOOL_NAMES),
             *TOOL_LIBRARY.get_browser_tools(include_advanced=ota_context.browser_tool_loaded),
             *TOOL_LIBRARY.get_workspace_tools(include_advanced=ota_context.workspace_tools_loaded),
             *TOOL_LIBRARY.get_skills_tools(include_advanced=ota_context.skills_tool_loaded),

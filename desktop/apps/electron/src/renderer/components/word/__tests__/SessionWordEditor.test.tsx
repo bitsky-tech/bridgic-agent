@@ -10,6 +10,7 @@ GlobalRegistrator.register()
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { i18n } = await import('@/lib/i18n')
 const { installApiStub } = await import('@/lib/apiStub')
 installApiStub()
 const { SessionWordEditor } = await import('../SessionWordEditor')
@@ -118,16 +119,20 @@ describe('SessionWordEditor', () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
+    const onOpenDocument = mock(async () => undefined)
 
     await act(async () => {
-      root.render(<SessionWordEditor defaultTitle="Untitled" expanded={false} sessionId="session-launch" />)
+      root.render(<SessionWordEditor defaultTitle="Untitled" expanded={false} onOpenDocument={onOpenDocument} sessionId="session-launch" />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="word-open-file"]')).not.toBeNull()
     expect(await window.__bridgicWord?.dispatch({ type: 'workspace.get' })).toMatchObject({
       ok: true,
       state: { documents: [] },
     })
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-open-file"]')!.click())
+    expect(onOpenDocument).toHaveBeenCalledTimes(1)
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-testid="word-create-document"]')?.click()
@@ -284,7 +289,7 @@ describe('SessionWordEditor', () => {
       await waitForElement(host, '[data-testid="word-document-header"] [role="alert"]')
       const before = attempts
       const writes = save.mock.calls.length
-      const retry = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === '重试')!
+      const retry = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === i18n.t('word.retry'))!
       expect(retry).toBeDefined()
       // A still-failing retry must remain visibly failed.
       await act(async () => { retry.click(); await new Promise((resolve) => setTimeout(resolve, 10)) })

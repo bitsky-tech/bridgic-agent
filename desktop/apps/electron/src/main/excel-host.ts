@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url'
 import type {
   EmbeddedBrowserBounds,
   ExcelHostConfig,
+  ExcelHostRendererState,
   ExcelHostSessionInfo,
   ExcelHostSnapshot,
   ExcelWorkbookOpenRequest,
@@ -37,6 +38,7 @@ const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPrefere
 interface ExcelHostRecord extends OfficeSessionRecord {
   config: ExcelHostConfig
   dirty: boolean
+  documentCount: number | null
   recoveryState: string | null
   workbookOpenRequests: Map<string, string>
   createInitialWorkbook: boolean
@@ -160,12 +162,19 @@ export class ExcelHost {
     return results.every((result) => result.status === 'fulfilled')
   }
 
-  setDirty(webContentsId: number, dirty: boolean): void {
-    if (typeof dirty !== 'boolean') throw new TypeError('Excel dirty state must be a boolean')
+  reportState(webContentsId: number, value: unknown): void {
     const record = this.recordForWebContents(webContentsId)
     if (!record) throw new Error('Excel Session does not own this renderer')
-    if (record.dirty === dirty) return
-    record.dirty = dirty
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TypeError('Invalid Excel runtime state')
+    }
+    const state = value as Partial<ExcelHostRendererState>
+    if (!Number.isSafeInteger(state.documentCount) || state.documentCount! < 0 || typeof state.dirty !== 'boolean') {
+      throw new TypeError('Invalid Excel runtime document count or dirty state')
+    }
+    if (record.documentCount === state.documentCount && record.dirty === state.dirty) return
+    record.documentCount = state.documentCount!
+    record.dirty = state.dirty
     this.publishState()
   }
 
@@ -218,6 +227,7 @@ export class ExcelHost {
       targetId: null,
       crashed: false,
       dirty: false,
+      documentCount: null,
       recoveryState: null,
       workbookOpenRequests: new Map(),
       createInitialWorkbook,
@@ -247,6 +257,7 @@ export class ExcelHost {
     })
     contents.on('render-process-gone', () => {
       if (!this.container.owns(record) || contents.isDestroyed()) return
+      record.documentCount = null
       this.container.invalidate(record)
       void this.container.reload(record, (current) => (
         current.view.webContents.loadURL(this.rendererUrl(current))
@@ -296,6 +307,7 @@ export class ExcelHost {
       ready: record.targetId !== null && !record.crashed,
       crashed: record.crashed,
       dirty: record.dirty,
+      documentCount: record.documentCount,
     }
   }
 

@@ -573,12 +573,7 @@ export function selectPresentationPage(slides: PresentationSlides, selectedPageI
   return { ...slides, selectedPageId }
 }
 
-/**
- * The authoritative, serializable PowerPoint model.
- *
- * File handles and save bookkeeping deliberately live on PresentationDocument,
- * while all deck content lives here.
- */
+/** The authoritative, serializable PowerPoint model. */
 export interface PresentationProject {
   schemaVersion: 1
   version: 1
@@ -590,28 +585,12 @@ export interface PresentationProject {
   slides: PresentationSlides
 }
 
-/** Renderer host metadata attached to a project without becoming deck content. */
-export interface PresentationDocument extends PresentationProject {
-  sourceProtected?: boolean
-  source?: import('../../shared/office-files').OfficeFileSource
-  savedRevision?: number
-  revision: number
-}
-
-export interface PresentationWorkspace {
-  activeDocumentId: string
-  documents: PresentationDocument[]
-}
-
 export interface PresentationAgentChange {
   changeId: number
   elementIds: string[]
   kind: 'content' | 'design'
   slideId: string
 }
-
-/** One renderer-local visual transition requested by an Agent domain command. */
-export const presentationAgentChangeAtom = atom<PresentationAgentChange | null>(null)
 
 type SessionStateUpdate<T> = T | ((current: T) => T)
 
@@ -632,9 +611,9 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
   }
 }
 
-export function createInitialPresentationDocument(): PresentationDocument {
-  const document = createBlankPresentationDocument('')
-  const slide = document.slides.pages[0]!
+export function createInitialPresentationProject(): PresentationProject {
+  const project = createBlankPresentationProject('')
+  const slide = project.slides.pages[0]!
   const createTextBox = (
     kind: 'body' | 'subtitle' | 'title',
     geometry: Pick<PresentationTextElement, 'height' | 'width' | 'x' | 'y'>,
@@ -653,7 +632,7 @@ export function createInitialPresentationDocument(): PresentationDocument {
       rotation: 0,
       text,
       fontSize,
-      fontFamily: isTitle ? document.theme.titleFontFamily : document.theme.bodyFontFamily,
+      fontFamily: isTitle ? project.theme.titleFontFamily : project.theme.bodyFontFamily,
       fontWeight: isTitle ? 700 : 400,
       italic: false,
       underline: false,
@@ -669,19 +648,18 @@ export function createInitialPresentationDocument(): PresentationDocument {
   }
   slide.layout = 'title'
   slide.elements = [
-    createTextBox('title', { x: 120, y: 105, width: document.pageSize.width - 240, height: 90 }),
-    createTextBox('subtitle', { x: 160, y: 220, width: document.pageSize.width - 320, height: 60 }),
-    createTextBox('body', { x: 120, y: 320, width: document.pageSize.width - 240, height: Math.max(180, document.pageSize.height - 425) }),
+    createTextBox('title', { x: 120, y: 105, width: project.pageSize.width - 240, height: 90 }),
+    createTextBox('subtitle', { x: 160, y: 220, width: project.pageSize.width - 320, height: 60 }),
+    createTextBox('body', { x: 120, y: 320, width: project.pageSize.width - 240, height: Math.max(180, project.pageSize.height - 425) }),
   ]
-  return document
+  return project
 }
 
-export function createBlankPresentationDocument(title: string, slideName = 'Slide 1'): PresentationDocument {
+export function createBlankPresentationProject(title: string, slideName = 'Slide 1'): PresentationProject {
   const slide = createBlankPresentationSlide(slideName)
   return {
     schemaVersion: 1,
     version: 1,
-    revision: 1,
     id: createPresentationId('presentation'),
     theme: {
       ...DEFAULT_PRESENTATION_MASTER,
@@ -699,69 +677,12 @@ export function createBlankPresentationDocument(title: string, slideName = 'Slid
   }
 }
 
-export function createInitialPresentationWorkspace(): PresentationWorkspace {
-  const document = createInitialPresentationDocument()
-  return {
-    activeDocumentId: document.id,
-    documents: [document],
-  }
-}
-
-const fallbackPresentationWorkspace = createInitialPresentationWorkspace()
-const fallbackPresentationDocument = fallbackPresentationWorkspace.documents[0]!
-const presentationWorkspacesBySessionAtom = atom<ReadonlyMap<string, PresentationWorkspace>>(new Map())
 const expandedPresentationSessionsAtom = atom<ReadonlySet<string>>(new Set<string>())
 /** Dedicated PowerPoint renderers pin their exact Session independently of main navigation. */
 export const powerPointSessionIdOverrideAtom = atom<string | null>(null)
 export const presentationSessionIdAtom = atom((get) => (
   get(powerPointSessionIdOverrideAtom) ?? get(viewedSessionIdAtom)
 ))
-
-/** Explicit Session ownership for commands that can outlive a navigation change. */
-export const presentationWorkspaceFamily = atomFamily((sessionId: string) => atom(
-  (get) => get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace,
-  (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
-    const current = get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace
-    const next = typeof update === 'function' ? update(current) : update
-    const workspaces = new Map(get(presentationWorkspacesBySessionAtom))
-    workspaces.set(sessionId, next)
-    set(presentationWorkspacesBySessionAtom, workspaces)
-  },
-))
-
-/** Every open presentation tab owned by the viewed Session. */
-export const currentPresentationWorkspaceAtom = atom(
-  (get) => {
-    const sessionId = get(presentationSessionIdAtom)
-    return sessionId ? get(presentationWorkspaceFamily(sessionId)) : fallbackPresentationWorkspace
-  },
-  (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
-    const sessionId = get(presentationSessionIdAtom)
-    if (sessionId) set(presentationWorkspaceFamily(sessionId), update)
-  },
-)
-
-/** The active presentation tab's editable document. */
-export const currentPresentationDocumentAtom = atom(
-  (get) => {
-    const workspace = get(currentPresentationWorkspaceAtom)
-    return workspace.documents.find((document) => document.id === workspace.activeDocumentId)
-      ?? workspace.documents[0]
-      ?? fallbackPresentationDocument
-  },
-  (get, set, update: SessionStateUpdate<PresentationDocument>) => {
-    const workspace = get(currentPresentationWorkspaceAtom)
-    const current = get(currentPresentationDocumentAtom)
-    const next = typeof update === 'function' ? update(current) : update
-    const hasActiveDocument = workspace.documents.some((document) => document.id === current.id)
-    set(currentPresentationWorkspaceAtom, {
-      activeDocumentId: next.id,
-      documents: hasActiveDocument
-        ? workspace.documents.map((document) => document.id === current.id ? next : document)
-        : [...workspace.documents, next],
-    })
-  },
-)
 
 /** Whether the viewed Session's presentation owns the work area. */
 export const presentationExpandedAtom = atom(
@@ -784,14 +705,7 @@ export const presentationExpandedAtom = atom(
 
 /** Drop presentation state when its owning Session is deleted. */
 export const purgePresentationSessionAtom = atom(null, (get, set, sessionId: string) => {
-  presentationWorkspaceFamily.remove(sessionId)
   presentationPaneViewFamily.remove(sessionId)
-  const workspaces = get(presentationWorkspacesBySessionAtom)
-  if (workspaces.has(sessionId)) {
-    const nextWorkspaces = new Map(workspaces)
-    nextWorkspaces.delete(sessionId)
-    set(presentationWorkspacesBySessionAtom, nextWorkspaces)
-  }
   const expandedSessions = get(expandedPresentationSessionsAtom)
   if (expandedSessions.has(sessionId)) {
     const nextExpandedSessions = new Set(expandedSessions)

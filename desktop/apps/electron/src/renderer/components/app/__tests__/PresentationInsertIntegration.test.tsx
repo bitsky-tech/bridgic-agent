@@ -9,21 +9,34 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { Simulate } = await import('react-dom/test-utils')
 const { createStore, Provider } = await import('jotai')
-const { createBlankPresentationDocument, currentPresentationDocumentAtom, selectPresentationPage } = await import('@/atoms/presentation')
+const { createBlankPresentationProject, selectPresentationPage } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { toastAtom } = await import('@/atoms/toast')
 const { i18n } = await import('@/lib/i18n')
 const { createPresentationMediaElement } = await import('@/lib/presentationInsert')
 const { createPresentationAsset, presentationElementSource } = await import('@/presentation/project')
+const { estimatePresentationProjectBytes } = await import('@/presentation/history')
 const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
+const { createPresentationTestStore, readPresentationTestProject, replacePresentationTestProject } = await import('@/test-fixtures/presentation-store')
 const {
   canAppendPresentationFileElement,
-  estimatePresentationDocumentBytes,
   PresentationWorkbenchPanel,
 } = await import('../PresentationWorkbenchPanel')
 
 const mountedRoots = new Set<Root>()
+const presentationStores = new Set<Awaited<ReturnType<typeof createPresentationTestStore>>>()
+const presentationStoreByJotaiStore = new WeakMap<object, Awaited<ReturnType<typeof createPresentationTestStore>>>()
+
+function presentationStoreOf(store: object) {
+  const presentationStore = presentationStoreByJotaiStore.get(store)
+  if (!presentationStore) throw new Error('Missing presentation test Store')
+  return presentationStore
+}
+
+function projectOf(store: object) {
+  return readPresentationTestProject(presentationStoreOf(store))
+}
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh')
@@ -34,6 +47,8 @@ afterEach(async () => {
     for (const root of mountedRoots) root.unmount()
     mountedRoots.clear()
   })
+  for (const store of presentationStores) store.dispose()
+  presentationStores.clear()
   document.body.replaceChildren()
 })
 
@@ -45,8 +60,11 @@ async function mountPanel() {
   const store = createStore()
   const settings = store.get(settingsAtom)
   store.set(settingsAtom, { ...settings, ui: { ...settings.ui, lastNav: 'home' } })
-  store.set(activeSessionIdAtom, `presentation-insert-${Math.random()}`)
-  store.set(currentPresentationDocumentAtom, createPresentationTestDocument())
+  const sessionId = `presentation-insert-${Math.random()}`
+  store.set(activeSessionIdAtom, sessionId)
+  const presentationStore = await createPresentationTestStore(sessionId, createPresentationTestDocument())
+  presentationStores.add(presentationStore)
+  presentationStoreByJotaiStore.set(store, presentationStore)
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -54,7 +72,7 @@ async function mountPanel() {
   await act(async () => {
     root.render(
       <Provider store={store}>
-        <PresentationWorkbenchPanel active={false} />
+        <PresentationWorkbenchPanel active={false} presentationStore={presentationStore} />
       </Provider>,
     )
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -98,7 +116,7 @@ describe('presentation Insert tab integration', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-table"]')!.click())
     await submitOpenDialog()
 
-    let presentation = store.get(currentPresentationDocumentAtom)
+    let presentation = projectOf(store)
     let slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const table = slide.elements.at(-1)
     expect(table?.type).toBe('table')
@@ -107,7 +125,7 @@ describe('presentation Insert tab integration', () => {
 
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-chart"]')!.click())
     await submitOpenDialog()
-    presentation = store.get(currentPresentationDocumentAtom)
+    presentation = projectOf(store)
     slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const chart = slide.elements.at(-1)
     expect(chart?.type).toBe('chart')
@@ -122,7 +140,7 @@ describe('presentation Insert tab integration', () => {
     await setInputValue(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-link-url"]')!, 'https://example.com/docs')
     await setInputValue(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-link-label"]')!, 'Documentation')
     await submitOpenDialog()
-    presentation = store.get(currentPresentationDocumentAtom)
+    presentation = projectOf(store)
     slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const link = slide.elements.at(-1)
     expect(link?.type).toBe('text')
@@ -134,7 +152,7 @@ describe('presentation Insert tab integration', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-footer"]')!.click())
     await setInputValue(document.querySelector<HTMLInputElement>('[data-testid="presentation-insert-footer-text"]')!, 'Confidential')
     await submitOpenDialog()
-    presentation = store.get(currentPresentationDocumentAtom)
+    presentation = projectOf(store)
     expect(presentation.theme.footer).toEqual({ text: 'Confidential', showDate: false, showSlideNumber: true })
     expect(presentation.slides.pages.every((item) => item.footer === undefined)).toBe(true)
     expect(host.querySelector('[data-testid="presentation-slide-preview"]')?.textContent).toContain('Confidential')
@@ -195,7 +213,7 @@ describe('presentation Insert tab integration', () => {
       else Reflect.deleteProperty(URL, 'revokeObjectURL')
     }
 
-    const presentation = store.get(currentPresentationDocumentAtom)
+    const presentation = projectOf(store)
     const slide = presentation.slides.pages.find((item) => item.id === presentation.slides.selectedPageId)!
     const inserted = slide.elements.slice(-3)
     expect(inserted.map((element) => element.type)).toEqual(['image', 'audio', 'video'])
@@ -231,7 +249,7 @@ describe('presentation Insert tab integration', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
 
-    const presentation = store.get(currentPresentationDocumentAtom)
+    const presentation = projectOf(store)
     expect(presentation.slides.pages.every((slide) => slide.elements.every((element) => element.type !== 'audio'))).toBe(true)
     expect(store.get(toastAtom)?.message).toBe('无法读取所选文件，或不支持该文件格式。')
 
@@ -242,7 +260,7 @@ describe('presentation Insert tab integration', () => {
   })
 
   it('prevents embedded files from making the document exceed the undo-safe budget', () => {
-    const documentModel = createBlankPresentationDocument('Media budget')
+    const documentModel = createBlankPresentationProject('Media budget')
     const source = {
       dataUrl: `data:video/mp4;base64,${'A'.repeat(400)}`,
       fileName: 'large.mp4',
@@ -254,7 +272,7 @@ describe('presentation Insert tab integration', () => {
     const secondAsset = createPresentationAsset('video', source, second.sourceAssetId)
     documentModel.assets.push(firstAsset)
     documentModel.slides.pages[0]!.elements.push(first)
-    const currentBytes = estimatePresentationDocumentBytes(documentModel)
+    const currentBytes = estimatePresentationProjectBytes(documentModel)
 
     expect(canAppendPresentationFileElement(documentModel, second, secondAsset, currentBytes + 100)).toBe(false)
     expect(canAppendPresentationFileElement(documentModel, second, secondAsset, currentBytes + 10_000)).toBe(true)
@@ -262,7 +280,7 @@ describe('presentation Insert tab integration', () => {
 
   it('cancels an asynchronous file insertion when its target slide changes', async () => {
     const { host, root, store } = await mountPanel()
-    const initial = store.get(currentPresentationDocumentAtom)
+    const initial = projectOf(store)
     const targetSlide = initial.slides.pages[0]!
     const otherSlide = initial.slides.pages[1]!
     expect(initial.slides.selectedPageId).toBe(targetSlide.id)
@@ -284,7 +302,7 @@ describe('presentation Insert tab integration', () => {
       expect(pendingRead.current).not.toBeUndefined()
 
       await act(async () => {
-        store.set(currentPresentationDocumentAtom, { ...initial, slides: selectPresentationPage(initial.slides, otherSlide.id) })
+        replacePresentationTestProject(presentationStoreOf(store), { ...initial, slides: selectPresentationPage(initial.slides, otherSlide.id) })
         await Promise.resolve()
       })
       const read = pendingRead.current
@@ -294,7 +312,7 @@ describe('presentation Insert tab integration', () => {
         await new Promise((resolve) => setTimeout(resolve, 20))
       })
 
-      const current = store.get(currentPresentationDocumentAtom)
+      const current = projectOf(store)
       expect(current.slides.selectedPageId).toBe(otherSlide.id)
       expect(current.slides.pages.every((slide) => slide.elements.every((element) => element.type !== 'audio'))).toBe(true)
       expect(store.get(toastAtom)?.message).toBe('已取消')
@@ -309,7 +327,7 @@ describe('presentation Insert tab integration', () => {
 
   it('follows an internal slide link during slide show playback', async () => {
     const { host, root, store } = await mountPanel()
-    const presentation = store.get(currentPresentationDocumentAtom)
+    const presentation = projectOf(store)
     const targetSlide = presentation.slides.pages[1]!
 
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="presentation-insert-link"]')!.click())

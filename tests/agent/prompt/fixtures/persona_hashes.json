@@ -6,20 +6,20 @@
     "build.EXPLORE_PERSONA": "3fa4293f3e20b237b415ec3f1e4182605aabc5c8fec83cea3c2c5147b7d914be",
     "build.GENERATE_PERSONA": "d3a842195f9f4dc128b3d27b9e3ff8e69ee192630423808b2450f35b19adaed6",
     "build.VERIFY_PERSONA": "7fc71b10516bb60d51d3791ed7b2feb0837ab91cc4726d82d36b87e48a715fe0",
-    "presentation.PRESENTATION_BRIEF_PERSONA": "d27084785a3e2941d33c559231c23e81d1db5423da44daee8e8be7eee339f9e1",
-    "presentation.PRESENTATION_PLAN_PERSONA": "8c9b1a90f1a1c3051e90a6408a60e44b6e728085dc4a8ed2a6dc764d7a68de6f",
-    "presentation.PRESENTATION_COMPOSE_PERSONA": "9f6d12825c7ef05d635658391450c338d0bacb3e7b90beea3898b0bc3013d988",
-    "presentation.PRESENTATION_REVIEW_PERSONA": "8598e952b4cbfd2b73a3af12c3769207dd766b52f38e4a4fd98ed783de5ecaad",
+    "presentation.PRESENTATION_BRIEF_PERSONA": "7c3badf446eef3cad994031c83c15d5f7e00ec968295cdc7fded636ce0c95f4a",
+    "presentation.PRESENTATION_PLAN_PERSONA": "78d616354ecdb43606acf6aa912d1f8196d4b081616fa557efd87d0121bc49f9",
+    "presentation.PRESENTATION_COMPOSE_PERSONA": "6cf83a3d8ca0e633ceb8adbea294a3d4b11af022dd258edf9e52fd7c27007b4b",
+    "presentation.PRESENTATION_REVIEW_PERSONA": "0f57665a177ec9571479ebecc75791c93512d06a821318260c65d23a63bc65a0",
     "workflow.WORKFLOW_PERSONA": "d4b97df538f41f191e617ce628d756b455bdef515c4b38506f5b972ce18f4939"
   },
   "rendered": {
-    "zh:empty": "d797b61266315dbfdba7e30790b91ffe52d7e636ff99285acb0e8398ae6ad402",
-    "zh:basic": "5bef29416a9ff2f458e10519a3a1c63c80f8c4082a1c7aee8b2ad9f4c1453e77",
-    "zh:blocking": "95c21158f71d025898ca881afae1088113cbc470312673506b3b0396dd6ad0f1",
-    "zh:background": "7d3ac1208fc4fdf4bb0688b4dbbbfb6e80d591a8e2bdb1fc3248892c5aadcfdb",
-    "en:empty": "a58b6661477c506e7cbba6da10849f0a2837246b8d8d808729c4137543c482d3",
-    "en:basic": "aaab699128e70d1cb9e53367fdcbecff0587850d1930383efea912594596e4b0",
-    "en:blocking": "d8e5e80a2985d38cf57af7a4a23e20b72e881864d8d1a68a0b46086a96d1f429",
-    "en:background": "0f76bb3fea53f5f339c7ae64f2815e9e0f37aa1cd79ca088f1b53521570b9ac2"
+    "zh:empty": "b0fab8fe25ac2485f95504fd94bbe3942d40ac688e1a54d6ca8c52d78a55aff3",
+    "zh:basic": "cd1c0f6b392a486f372ac3b9c42206a371db6687ed654798b0054a71502d864e",
+    "zh:blocking": "8fea68ec7a187157fad1775fbce63700d63d8fc723731a592569de500f433fc8",
+    "zh:background": "2fd987dd4a0dcc34f3764cf64f5cc434fd37b6d7d6108e9e6091b619a9ebb014",
+    "en:empty": "f083d09640f37e16aa5823c1c31ac19ae0bda50d13c78b81ea567f19391ebcce",
+    "en:basic": "88bb9eea40e120b147fbfdbafa0f07a50d22d04e21ffa8f994f5fbe20420d46d",
+    "en:blocking": "01a340d1ad51f3614245aea021e9c5a6b0395bfcc12bbbdf1ff1c7b20bcbdfe8",
+    "en:background": "5234a7593c8da8b6ee0970ee7e49acd8ceb48397b9667a4696515cc4e6af9955"
   }
 }

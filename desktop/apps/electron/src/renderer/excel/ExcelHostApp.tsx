@@ -265,7 +265,10 @@ export function ExcelHostApp() {
 
   useEffect(() => {
     const hasUnsaved = tabs.some((tab) => tab.dirty)
-    if (recoveryLoaded) void api.setDirty(hasUnsaved).catch((cause) => setError(errorMessage(cause)))
+    if (recoveryLoaded) {
+      void api.reportState({ documentCount: tabs.length, dirty: hasUnsaved })
+        .catch((cause) => setError(errorMessage(cause)))
+    }
   }, [api, recoveryLoaded, tabs])
 
   useEffect(() => {
@@ -369,18 +372,16 @@ export function ExcelHostApp() {
     )
   }, [config, copy.saveConflict, flushActiveEditor, updateTab, workspace])
 
-  const addBlankTab = () => {
-    void executeWorkspaceOperation('document.create', null, async (context) => {
-      await flushActiveEditor(context.assertCurrent)
-      await persistRef.current(context)
-      setFormulaDialog(null)
-      setInsertDialog(null)
-      const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
-      nextWorkbookOrdinal.current += 1
-      workspace.replace([...workspace.getState().tabs, tab], tab.tabId)
-      setError(null)
-    })
-  }
+  const addBlankTab = () => executeWorkspaceOperation('document.create', null, async (context) => {
+    await flushActiveEditor(context.assertCurrent)
+    await persistRef.current(context)
+    setFormulaDialog(null)
+    setInsertDialog(null)
+    const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
+    nextWorkbookOrdinal.current += 1
+    workspace.replace([...workspace.getState().tabs, tab], tab.tabId)
+    setError(null)
+  })
 
   const openWorkbook = () => executeWorkspaceOperation('document.open', null, async (context) => {
     setFormulaDialog(null)
@@ -710,7 +711,7 @@ export function ExcelHostApp() {
   }, [runEditorOperation])
 
   if (!activeTab && recoveryLoaded && !recoveryFailure && !error && busy === null && pendingWorkbookOpenTickets.length === 0) {
-    return <OfficeLaunchEmptyState kind="excel" onCreate={async () => { addBlankTab() }} onOpen={() => void openWorkbook()} />
+    return <OfficeLaunchEmptyState kind="excel" onCreate={addBlankTab} onOpen={openWorkbook} />
   }
 
   return (

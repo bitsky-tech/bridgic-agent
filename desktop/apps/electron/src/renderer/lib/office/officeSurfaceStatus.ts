@@ -22,7 +22,7 @@ export interface OfficeSurfaceStatus {
 
 export type OfficeSurfaceStatuses = Readonly<Record<OfficeAppKind, OfficeSurfaceStatus>>
 
-/** Adapt existing producers without changing their protocols or inventing document counts. */
+/** Adapt existing producers without inventing document counts. */
 export function projectOfficeSurfaceStatuses({
   sessionId,
   powerPointSession,
@@ -47,8 +47,8 @@ export function projectOfficeSurfaceStatuses({
       sessionId,
       hasNativeTarget: ppt !== null,
       runtimeState: nativeRuntimeState(ppt, ppt?.loading ?? false),
-      documentCount: null,
-      documentInventory: 'unsupported',
+      documentCount: ppt?.documentCount ?? null,
+      documentInventory: ppt?.documentCount != null ? 'ready' : 'pending',
       agentActivity: sessionId && powerPointAgentActive ? 'active' : 'idle',
       needsAttention: sessionId !== null && powerPointNeedsAttention,
       dirty: null,
@@ -69,8 +69,8 @@ export function projectOfficeSurfaceStatuses({
       sessionId,
       hasNativeTarget: excel !== null,
       runtimeState: nativeRuntimeState(excel, excel?.ready === false),
-      documentCount: null,
-      documentInventory: 'unsupported',
+      documentCount: excel?.documentCount ?? null,
+      documentInventory: excel?.documentCount != null ? 'ready' : 'pending',
       agentActivity: 'unavailable',
       needsAttention: null,
       dirty: excel?.dirty ?? null,
@@ -84,7 +84,7 @@ function nativeRuntimeState(target: { crashed: boolean } | null, loading: boolea
   return loading ? 'loading' : 'ready'
 }
 
-/** Preserve native-target markers until those runtimes publish authoritative document counts. */
+/** Only runtimes without document inventory fall back to their native-target marker. */
 export function hasOfficeBackgroundContent(status: OfficeSurfaceStatus): boolean {
   if (status.sessionId === null) return false
   if (status.documentCount !== null) return status.documentCount > 0

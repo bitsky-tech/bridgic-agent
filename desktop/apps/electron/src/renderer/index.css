@@ -380,6 +380,7 @@ html[data-platform="win32"] .auto-hide-scrollbar::-webkit-scrollbar-button {
   html,
   body,
   #root,
+  #excel-root,
   #word-root {
     height: 100%;
     margin: 0;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  createBlankPresentationDocument,
+  createBlankPresentationProject,
   createBlankPresentationSlide,
   presentationSlideBackground,
   presentationSlideFooter,
@@ -10,7 +10,7 @@ import { applyPresentationDesign } from '../presentationDesign'
 
 describe('presentation design defaults', () => {
   it('updates global theme defaults without copying over page overrides', () => {
-    const document = createBlankPresentationDocument('Theme defaults')
+    const document = createBlankPresentationProject('Theme defaults')
     const inherited = document.slides.pages[0]!
     const overridden = {
       ...createBlankPresentationSlide('Override'),

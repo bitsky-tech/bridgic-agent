@@ -39,8 +39,8 @@ class FakeContents {
     return {
       ok: true,
       value: {
-        identity: { document_id: 'opened-document', name: 'Opened deck' },
-        meta: { total_pages: 3 },
+        document_id: 'opened-document',
+        deck: { id: 'opened-document', title: 'Opened deck', total_pages: 3 },
         reused: false,
       },
     }
@@ -93,6 +93,8 @@ it('owns exactly one CDP target per Session and presents only the active one', a
   const second = await manager.ensureSession('session-b')
   expect(first.targetId).toBe('ppt-target-1')
   expect(second.targetId).toBe('ppt-target-2')
+  expect(first.documentCount).toBeNull()
+  expect(second.documentCount).toBeNull()
   expect(views).toHaveLength(2)
 
   manager.setBounds({ x: 12, y: 24, width: 900, height: 600 })
@@ -117,7 +119,7 @@ it('owns exactly one CDP target per Session and presents only the active one', a
       slideCount: 3,
       title: 'Opened deck',
     })
-    expect(views[0]!.webContents.executedScripts.at(-1)).toContain('"method":"view_ppt"')
+    expect(views[0]!.webContents.executedScripts.at(-1)).toContain('"method":"open"')
     expect(views[0]!.webContents.executedScripts.at(-1)).toContain('"content_base64":"BAUG"')
     await expect(manager.openFile('session-a', path.join(presentationDirectory, 'deck.txt')))
       .rejects.toThrow('must end with .pptx')
@@ -128,6 +130,41 @@ it('owns exactly one CDP target per Session and presents only the active one', a
   manager.closeSession('session-b')
   expect(children).toHaveLength(1)
   expect(manager.snapshot().sessions.map((item) => item.sessionId)).toEqual(['session-a'])
+})
+
+it('publishes authoritative project counts without treating the native target as a document', async () => {
+  const views: FakeView[] = []
+  const snapshots: Array<ReturnType<EmbeddedPowerPointManager['snapshot']>> = []
+  const manager = new EmbeddedPowerPointManager(
+    () => {
+      const view = new FakeView(views.length + 1)
+      views.push(view)
+      return view as unknown as WebContentsView
+    },
+    async () => {},
+    (snapshot) => snapshots.push(snapshot),
+  )
+  manager.attachHost({
+    isDestroyed: () => false,
+    contentView: { addChildView: () => {}, removeChildView: () => {} },
+  } as unknown as BrowserWindow)
+
+  const session = await manager.ensureSession('session-a')
+  expect(session.documentCount).toBeNull()
+  manager.reportState(session.webContentsId, { documentCount: 0 })
+  expect(manager.sessionInfo('session-a')?.documentCount).toBe(0)
+  manager.reportState(session.webContentsId, { documentCount: 2 })
+  expect(manager.snapshot().sessions[0]?.documentCount).toBe(2)
+  const publishCount = snapshots.length
+  manager.reportState(session.webContentsId, { documentCount: 2 })
+  expect(snapshots).toHaveLength(publishCount)
+
+  views[0]!.webContents.emit('did-start-loading')
+  expect(manager.sessionInfo('session-a')?.documentCount).toBeNull()
+  expect(() => manager.reportState(session.webContentsId, { documentCount: -1 }))
+    .toThrow('Invalid PowerPoint runtime document count')
+  expect(() => manager.reportState(999, { documentCount: 1 })).toThrow('does not own')
+  manager.closeAll()
 })
 
 it('rejects unknown close senders and preserves a replacement target during deferred close', async () => {

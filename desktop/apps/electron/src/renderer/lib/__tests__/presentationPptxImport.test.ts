@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
-import { PRESENTATION_PAGE_SIZES, type PresentationDocument, type PresentationFileSource } from '@/atoms/presentation'
-import { createPresentationTestDocument as createInitialPresentationDocument } from '@/test-fixtures/presentation'
+import { PRESENTATION_PAGE_SIZES, type PresentationProject, type PresentationFileSource } from '@/atoms/presentation'
+import { createPresentationTestDocument as createInitialPresentationProject } from '@/test-fixtures/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 import { normalizePresentationProject, presentationElementSource } from '@/presentation/project'
-import { validatePresentationDocument } from '@/presentation/model/reducer'
+import { validatePresentationProject } from '@/presentation/model/reducer'
 
-function addImageAsset(document: PresentationDocument, id: string, source: PresentationFileSource): void {
+function addImageAsset(document: PresentationProject, id: string, source: PresentationFileSource): void {
   document.assets.push({ id, kind: 'image', name: source.fileName, source })
 }
 
 describe('importPresentationPptx', () => {
   it('preserves the editable master and footer through repeated save and reopen cycles', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = normalizePresentationProject(createInitialPresentationDocument())
+    const source = normalizePresentationProject(createInitialPresentationProject())
     source.theme.footer = { text: 'Confidential', showDate: true, showSlideNumber: true }
     source.theme.bodyFontFamily = 'Arial'
     source.theme.titleFontFamily = 'Georgia'
@@ -22,26 +22,26 @@ describe('importPresentationPptx', () => {
       document = await importPresentationPptx(await createPresentationPptx(document), 'Report.pptx', { restoreEditorModel: true })
       expect(document.theme).toEqual(source.theme)
       expect(document.slides.pages).toEqual(source.slides.pages)
-      expect(document.sourceProtected).toBe(false)
+      expect(document).not.toHaveProperty('sourceProtected')
       document.slides.pages[0]!.notes = `Edited note ${cycle}`
       source.slides.pages[0]!.notes = `Edited note ${cycle}`
     }
   })
 
-  it('invalidates its embedded model after an external edit and protects that source', async () => {
+  it('invalidates its embedded model after an external edit without adding host metadata', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const slide = archive.file('ppt/slides/slide1.xml')!
     archive.file(slide.name, (await slide.async('string')).replace(/<a:t>[^<]*<\/a:t>/, '<a:t>Externally corrected</a:t>'))
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'Report.pptx', { restoreEditorModel: true })
     expect(JSON.stringify(imported.slides.pages)).toContain('Externally corrected')
-    expect(imported.sourceProtected).toBe(true)
+    expect(imported).not.toHaveProperty('sourceProtected')
   })
 
   it('falls back to native PPTX content when a matching embedded model is invalid', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const modelFile = archive.file('bridgic/editor-model.json')!
     const envelope = JSON.parse(await modelFile.async('string')) as Record<string, unknown>
@@ -57,7 +57,7 @@ describe('importPresentationPptx', () => {
       )
       expect(imported.slides.pages.length).toBeGreaterThan(0)
       expect(JSON.stringify(imported.slides.pages)).toContain('Primary message')
-      expect(imported.sourceProtected).toBe(true)
+      expect(imported).not.toHaveProperty('sourceProtected')
       expect(warnings[0]?.[0]).toContain('Ignoring an invalid embedded editor model')
     } finally {
       console.warn = originalWarn
@@ -66,7 +66,7 @@ describe('importPresentationPptx', () => {
 
   it('shares a master image across slides and preserves sharing through worker transfer', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const second = structuredClone(source.slides.pages[0]!)
     second.id = 'second-slide'
     source.slides.pages = [source.slides.pages[0]!, second]
@@ -93,7 +93,7 @@ describe('importPresentationPptx', () => {
 
   it('preserves slide, layout and master background images behind foreground elements', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const bytes = await createPresentationPptx(createInitialPresentationDocument())
+    const bytes = await createPresentationPptx(createInitialPresentationProject())
     const owners = ['slides/slide1.xml', 'slideLayouts/slideLayout1.xml', 'slideMasters/slideMaster1.xml']
     for (const owner of owners) {
       const archive = await JSZip.loadAsync(bytes)
@@ -120,7 +120,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('round-trips editable slides, geometry, notes and page size', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     source.theme.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
     source.theme.background = '#112233'
     source.theme.bodyFontFamily = 'Arial'
@@ -152,7 +152,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('imports only the requested source slides for lightweight template previews', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const first = source.slides.pages[0]!
     const second = structuredClone(first)
     second.id = 'preview-slide-2'
@@ -174,7 +174,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('cleans omitted page links and assets when restoring a page subset', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const [first, second] = source.slides.pages
     const firstText = first!.elements.find((element) => element.type === 'text')!
     firstText.hyperlink = { type: 'slide', slideId: second!.id }
@@ -203,11 +203,11 @@ describe('importPresentationPptx', () => {
     expect(imported.slides.pages).toHaveLength(1)
     expect(imported.slides.pages[0]!.elements.find((element) => element.id === firstText.id)).not.toHaveProperty('hyperlink')
     expect(imported.assets.map((asset) => asset.id)).toEqual(['retained-asset'])
-    expect(validatePresentationDocument(imported)).toBe(imported)
+    expect(validatePresentationProject(imported)).toBe(imported)
   })
 
   it('preserves mixed shape-picture z-order, source crop and text-box layout', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -283,7 +283,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('keeps color-keyed pictures visible and preserves picture mirroring', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -328,7 +328,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('imports an ellipse shape with a picture fill as a clipped image instead of its theme fallback color', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -384,7 +384,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('imports East Asian vertical text and DrawingML preset colors', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -426,7 +426,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('prefers the East Asian run font for CJK text', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -464,7 +464,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('keeps custom geometry as a fidelity-preserving SVG object', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -497,7 +497,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('imports an Office SVG extension when the picture has no raster fallback relationship', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -538,7 +538,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('imports common editable tables and charts', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id

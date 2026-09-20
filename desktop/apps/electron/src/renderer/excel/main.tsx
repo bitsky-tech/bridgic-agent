@@ -11,7 +11,7 @@ if (!window.excelHostApi) {
     save: async () => canceled,
     saveAs: async () => canceled,
     requestClose: async () => undefined,
-    setDirty: async () => undefined,
+    reportState: async () => undefined,
     getRecoveryState: async () => null,
     setRecoveryState: async () => undefined,
     onConfigChanged: () => () => undefined,

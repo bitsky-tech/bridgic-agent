@@ -1,111 +1,98 @@
-import type { PresentationDocument, PresentationWorkspace } from '@/atoms/presentation'
-import type { OfficeFilesAPI } from '../../shared/office-files'
+import type { PresentationProject } from '@/atoms/presentation'
+import type { OfficeFileSource, OfficeFilesAPI } from '../../shared/office-files'
+import {
+  migratePresentationCheckpoint,
+  type PresentationCheckpoint,
+  type PresentationProjectMetadata,
+} from '@/presentation/checkpoint'
 import { createOfficePersistenceScheduler } from './office/officePersistence'
-import { isPresentationDirty } from './presentationWorkspaceRuntime'
 import { i18n } from './i18n'
-import { createOfficeAutoSave } from './office/officeAutoSave'
-import { migratePresentationDocument } from '@/presentation/project'
 
-/** Source files and recovery checkpoints have deliberately separate writers. */
+/** PPTX is an import/export boundary; automatic persistence stores only project checkpoints. */
 export function createPresentationFileController(options: {
   sessionId: string
   files: OfficeFilesAPI
-  read: () => PresentationWorkspace
-  write: (workspace: PresentationWorkspace) => void
-  encode: (document: PresentationDocument) => Promise<Uint8Array>
+  read: () => PresentationCheckpoint
+  commitExport: (projectId: string, fileName: string, source: OfficeFileSource, exportedRevision: number) => void
+  encode: (project: PresentationProject) => Promise<Uint8Array>
   flushEditor: () => Promise<void>
-  locale: () => string
-  automatic?: boolean
-  runAutoSave?: (save: () => Promise<void>) => Promise<void>
-  onSaveStatus?: (status: 'saving' | 'saved' | 'error', error?: string) => void
+  /** Whether the destination is a Session-managed file rather than a user-owned import. */
+  managed: boolean
+  onExportStatus?: (status: 'saving' | 'saved' | 'error', error?: string) => void
 }) {
-  const { files, read, write } = options
-  let ready = false
-  const recovery = createOfficePersistenceScheduler<PresentationWorkspace>({
+  const recovery = createOfficePersistenceScheduler<PresentationCheckpoint>({
     policy: { appKind: 'presentation', sessionId: options.sessionId, kind: 'recovery', storage: 'recovery-file', automatic: true },
     delayMs: 150,
-    write: (workspace) => files.setRecovery('presentation', options.sessionId, JSON.stringify(workspace)),
+    write: (checkpoint) => options.files.setRecovery('presentation', options.sessionId, JSON.stringify(checkpoint)),
   })
-  const save = async (documentId: string, saveAs = false, destination?: string, background = false): Promise<boolean> => {
-    if (!background) await options.flushEditor()
-    const document = read().documents.find((item) => item.id === documentId)
-    if (!document) throw new Error('The presentation is no longer open')
-    if (!saveAs && !isPresentationDirty(document)) {
-      // A successful source write can still leave a failed recovery checkpoint.
-      await recovery.persist(read())
-      return !isPresentationDirty(read().documents.find((item) => item.id === documentId)!)
+  let ready = false
+
+  const save = async (projectId: string, saveAs = false, destination?: string): Promise<boolean> => {
+    await options.flushEditor()
+    const checkpoint = options.read()
+    const project = checkpoint.projects.find((item) => item.id === projectId)
+    const metadata = checkpoint.projectMetadata[projectId]
+    if (!project || !metadata) throw new Error('The presentation project is no longer open')
+    if (!saveAs && !isPresentationProjectDirty(metadata)) {
+      await recovery.persist(options.read())
+      const current = options.read().projectMetadata[projectId]
+      return Boolean(current && !isPresentationProjectDirty(current))
     }
-    if (document.sourceProtected && !saveAs && !options.automatic) throw new Error(i18n.t('office.protectedSave'))
-    const result = await files.save({ kind: 'presentation', managed: options.automatic, documentId, source: document.source, preserveSource: document.sourceProtected, saveAs, destination, suggestedName: `${document.title.replace(/\.pptx$/i, '') || 'Untitled'}.pptx`, bytes: await options.encode(document) })
+    if (metadata.sourceProtected && !saveAs && !options.managed) throw new Error(i18n.t('office.protectedSave'))
+    const exportedRevision = metadata.revision
+    const result = await options.files.save({
+      kind: 'presentation',
+      managed: options.managed,
+      documentId: projectId,
+      source: metadata.source,
+      preserveSource: metadata.sourceProtected,
+      saveAs,
+      destination,
+      suggestedName: `${project.title.replace(/\.pptx$/i, '') || 'Untitled'}.pptx`,
+      bytes: await options.encode(project),
+    })
     if (!result.ok) {
       if (result.reason === 'conflict') throw new Error('The file changed outside the editor. Your edits have been retained; retry after resolving the file change.')
       if (result.reason === 'source-protected') throw new Error(i18n.t('office.protectedSave'))
       return false
     }
-    if (!background) await options.flushEditor()
-    const current = read()
-    write({ ...current, documents: current.documents.map((item) => {
-      if (item.id === documentId) return { ...item, title: result.fileName.replace(/\.pptx$/i, ''), source: result.source, sourceProtected: false, savedRevision: document.revision }
-      return item.source?.path === result.source.path ? { ...item, source: undefined, savedRevision: undefined } : item
-    }) })
-    await recovery.persist(read())
-    return !isPresentationDirty(read().documents.find((item) => item.id === documentId)!)
+    await options.flushEditor()
+    options.commitExport(projectId, result.fileName, result.source, exportedRevision)
+    await recovery.persist(options.read())
+    const current = options.read().projectMetadata[projectId]
+    return Boolean(current && !isPresentationProjectDirty(current))
   }
-  const saveDirty = async (requireComplete = false, background = false) => {
-    if (!background) await options.flushEditor()
-    for (const document of read().documents.filter(isPresentationDirty)) {
-      if (!await save(document.id, false, undefined, background) && requireComplete) throw new Error(i18n.t('office.changedDuringClose'))
-    }
-  }
-  const autoSave = createOfficeAutoSave(() => options.runAutoSave ? options.runAutoSave(() => saveDirty(false, true)) : saveDirty(false, true), options.onSaveStatus)
+
   return {
     recovery,
-    autoSave,
-    saveDirty,
-    async restore() {
-      const serialized = await files.getRecovery('presentation', options.sessionId)
-      if (serialized !== null) {
-        const workspace = JSON.parse(serialized) as { activeDocumentId?: unknown; documents?: unknown }
-        if (!Array.isArray(workspace.documents) || typeof workspace.activeDocumentId !== 'string') throw new Error('The PowerPoint recovery checkpoint is invalid')
-        const documents = workspace.documents.map((document) => migratePresentationDocument(document))
-        if (documents.length) write({ activeDocumentId: workspace.activeDocumentId, documents: documents.map((document) => ({
-          ...document, sourceProtected: document.sourceProtected ?? Boolean(document.source && document.source.mtimeMs !== null),
-        })) })
-      }
+    async restore(): Promise<PresentationCheckpoint | null> {
+      const serialized = await options.files.getRecovery('presentation', options.sessionId)
+      const checkpoint = serialized === null ? null : migratePresentationCheckpoint(JSON.parse(serialized))
       ready = true
-      if (options.automatic) autoSave.schedule(read().documents.filter(isPresentationDirty).map((document) => `${document.id}:${document.revision}`).join('|'))
+      return checkpoint
     },
     schedule() {
-      if (!ready) return
-      recovery.schedule(read())
-      if (options.automatic) autoSave.schedule(read().documents.filter(isPresentationDirty).map((document) => `${document.id}:${document.revision}`).join('|'))
+      if (ready) recovery.schedule(options.read())
     },
     async flush() {
       if (!ready) throw new Error('PowerPoint recovery is not ready')
       await options.flushEditor()
-      await recovery.persist(read())
+      await recovery.persist(options.read())
     },
-    async save(documentId: string, saveAs = false, destination?: string) {
-      options.onSaveStatus?.('saving')
+    async save(projectId: string, saveAs = false, destination?: string) {
+      options.onExportStatus?.('saving')
       try {
-        const saved = await save(documentId, saveAs, destination)
-        options.onSaveStatus?.(saved ? 'saved' : 'saving')
+        const saved = await save(projectId, saveAs, destination)
+        options.onExportStatus?.(saved ? 'saved' : 'saving')
         return saved
       } catch (error) {
-        options.onSaveStatus?.('error', error instanceof Error ? error.message : String(error))
+        options.onExportStatus?.('error', error instanceof Error ? error.message : String(error))
         throw error
       }
     },
-    async beforeClose(documentId: string): Promise<boolean> {
-      await options.flushEditor()
-      const document = read().documents.find((item) => item.id === documentId)
-      if (!document || !isPresentationDirty(document)) return true
-      if (options.automatic) return save(documentId)
-      const decision = await files.confirmClose(`${document.title.replace(/\.pptx$/i, '')}.pptx`, options.locale())
-      if (decision === 'cancel') return false
-      if (decision === 'save') return save(documentId, Boolean(document.sourceProtected))
-      await options.flushEditor()
-      return read().documents.find((item) => item.id === documentId)?.revision === document.revision
-    },
   }
+}
+
+export function isPresentationProjectDirty(metadata: PresentationProjectMetadata): boolean {
+  return !metadata.source || metadata.source.mtimeMs === null || metadata.savedRevision !== metadata.revision
 }

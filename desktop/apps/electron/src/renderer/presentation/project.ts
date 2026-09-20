@@ -1,10 +1,9 @@
 import {
-  createBlankPresentationDocument,
+  createBlankPresentationProject,
   createPresentationId,
   orderPresentationPages,
   type PresentationAsset,
   type PresentationAssetKind,
-  type PresentationDocument,
   type PresentationElement,
   type PresentationFileSource,
   type PresentationProject,
@@ -118,9 +117,14 @@ export function duplicatePresentationSlide(slide: PresentationSlide, name: strin
   }
 }
 
-/** Strip renderer/file metadata and expose only the durable project document. */
-export function presentationProjectOf(document: PresentationDocument): PresentationProject {
-  const { schemaVersion, version, id, title, theme, pageSize, assets, slides } = document
+/** Return a durable project value without retaining fields from legacy envelopes. */
+export function presentationProjectOf(project: PresentationProject): PresentationProject {
+  const projectKeys = ['schemaVersion', 'version', 'id', 'title', 'theme', 'pageSize', 'assets', 'slides'] as const
+  const sourceKeys = Object.keys(project)
+  if (sourceKeys.length === projectKeys.length && sourceKeys.every((key) => (projectKeys as readonly string[]).includes(key))) {
+    return project
+  }
+  const { schemaVersion, version, id, title, theme, pageSize, assets, slides } = project
   return { schemaVersion, version, id, title, theme, pageSize, assets, slides }
 }
 
@@ -128,24 +132,24 @@ export function presentationProjectOf(document: PresentationDocument): Presentat
  * Move legacy element-local media payloads into the project asset library.
  * New edits therefore have one source of truth even when an older checkpoint is opened.
  */
-export function normalizePresentationProject(document: PresentationDocument): PresentationDocument {
+export function normalizePresentationProject(project: PresentationProject): PresentationProject {
   let assetsChanged = false
-  const assets: PresentationAsset[] = document.assets.map((asset) => {
+  const assets: PresentationAsset[] = project.assets.map((asset) => {
     const legacySource = asset.source as PresentationFileSource
     if (legacySource.assetId === undefined) return asset
     const { assetId: _sourceAssetId, ...source } = legacySource
     assetsChanged = true
     return { ...asset, source }
   })
-  const pageIds = document.slides.pages.map((page) => page.id)
-  const requestedOrder = document.slides.slideOrder
+  const pageIds = project.slides.pages.map((page) => page.id)
+  const requestedOrder = project.slides.slideOrder
   const orderIsComplete = requestedOrder.length === pageIds.length
     && new Set(requestedOrder).size === requestedOrder.length
     && requestedOrder.every((pageId) => pageIds.includes(pageId))
   const sourcePages = orderIsComplete
-    ? orderPresentationPages(document.slides.pages, requestedOrder)
-    : document.slides.pages
-  const orderChanged = sourcePages.some((page, index) => page !== document.slides.pages[index])
+    ? orderPresentationPages(project.slides.pages, requestedOrder)
+    : project.slides.pages
+  const orderChanged = sourcePages.some((page, index) => page !== project.slides.pages[index])
   let pagesChanged = false
   const pages = sourcePages.map((page) => {
     let pageChanged = false
@@ -179,29 +183,29 @@ export function normalizePresentationProject(document: PresentationDocument): Pr
     pagesChanged = true
     return { ...page, elements }
   })
-  if (!pagesChanged && !assetsChanged && !orderChanged) return document
-  const selectedPageId = pages.some((page) => page.id === document.slides.selectedPageId)
-    ? document.slides.selectedPageId
+  if (!pagesChanged && !assetsChanged && !orderChanged) return project
+  const selectedPageId = pages.some((page) => page.id === project.slides.selectedPageId)
+    ? project.slides.selectedPageId
     : pages[0]!.id
   return {
-    ...document,
+    ...project,
     assets,
     slides: {
       pages,
-      slideOrder: orderIsComplete ? pages.map((page) => page.id) : document.slides.slideOrder,
+      slideOrder: orderIsComplete ? pages.map((page) => page.id) : project.slides.slideOrder,
       selectedPageId,
     },
   }
 }
 
-/** Upgrade the former flat PresentationDocument shape and current project checkpoints. */
-export function migratePresentationDocument(value: unknown, fallbackTitle = ''): PresentationDocument {
+/** Upgrade the former flat PresentationProject shape and current project checkpoints. */
+export function migratePresentationProject(value: unknown, fallbackTitle = ''): PresentationProject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The PowerPoint project must be an object')
   const raw = value as Record<string, unknown>
   const hasSchemaVersion = raw.schemaVersion !== undefined
   if (hasSchemaVersion && raw.schemaVersion !== 1) throw new Error(`Unsupported PowerPoint schema version: ${String(raw.schemaVersion)}`)
   if (hasSchemaVersion && raw.version !== 1) throw new Error(`Unsupported PowerPoint project version: ${String(raw.version)}`)
-  const base = createBlankPresentationDocument(typeof raw.title === 'string' ? raw.title : fallbackTitle)
+  const base = createBlankPresentationProject(typeof raw.title === 'string' ? raw.title : fallbackTitle)
   const rawSlides = raw.slides
   let pages = base.slides.pages
   if (!hasSchemaVersion && Array.isArray(rawSlides)) pages = rawSlides as PresentationSlide[]
@@ -219,33 +223,23 @@ export function migratePresentationDocument(value: unknown, fallbackTitle = ''):
   if (typeof raw.selectedSlideId === 'string') requestedSelection = raw.selectedSlideId
   if (typeof slideState?.selectedPageId === 'string') requestedSelection = slideState.selectedPageId
   const selectedPageId = pages.some((page) => page.id === requestedSelection) ? requestedSelection : pages[0]!.id
-  let legacyRevision = 1
-  if (!hasSchemaVersion && typeof raw.version === 'number') legacyRevision = raw.version
-  if (typeof raw.revision === 'number') legacyRevision = raw.revision
-  const savedRevision = typeof raw.savedRevision === 'number'
-    ? raw.savedRevision
-    : raw.savedVersion
   const requestedOrder = Array.isArray(slideState?.slideOrder)
     ? slideState.slideOrder.filter((pageId): pageId is string => typeof pageId === 'string')
     : pages.map((page) => page.id)
-  const document = normalizePresentationProject({
+  const project = normalizePresentationProject({
     ...base,
     id: typeof raw.id === 'string' && raw.id ? raw.id : base.id,
     title: typeof raw.title === 'string' ? raw.title : fallbackTitle,
     theme: (raw.theme ?? raw.master ?? base.theme) as PresentationTheme,
-    pageSize: (raw.pageSize ?? base.pageSize) as PresentationDocument['pageSize'],
-    assets: Array.isArray(raw.assets) ? raw.assets as PresentationDocument['assets'] : [],
+    pageSize: (raw.pageSize ?? base.pageSize) as PresentationProject['pageSize'],
+    assets: Array.isArray(raw.assets) ? raw.assets as PresentationProject['assets'] : [],
     slides: { pages, slideOrder: requestedOrder, selectedPageId },
-    revision: Number.isFinite(legacyRevision) ? legacyRevision : 1,
-    ...(raw.source && typeof raw.source === 'object' ? { source: raw.source as PresentationDocument['source'] } : {}),
-    ...(typeof raw.sourceProtected === 'boolean' ? { sourceProtected: raw.sourceProtected } : {}),
-    ...(typeof savedRevision === 'number' ? { savedRevision } : {}),
   })
-  const parsed = presentationProjectSchema.safeParse(presentationProjectOf(document))
+  const parsed = presentationProjectSchema.safeParse(presentationProjectOf(project))
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
     const location = issue?.path.length ? ` at ${issue.path.join('.')}` : ''
     throw new Error(`Invalid PowerPoint project${location}: ${issue?.message ?? 'unknown model error'}`)
   }
-  return document
+  return project
 }

@@ -1,4 +1,4 @@
-import type { PresentationDocument } from '@/atoms/presentation'
+import type { PresentationProject } from '@/atoms/presentation'
 import type { OfficeEditorDriver, OfficeEditorLease } from './office/officeEditorBinding'
 
 export interface PresentationEditingObject {
@@ -8,7 +8,7 @@ export interface PresentationEditingObject {
 }
 
 /** Canvas callbacks also belong to a slide, while the common lease identifies its document. */
-export function bindPresentationNativeEdit<TArgs extends unknown[]>(lease: OfficeEditorLease, slideId: string, readDocument: () => PresentationDocument, apply: (...args: TArgs) => void): (...args: TArgs) => void {
+export function bindPresentationNativeEdit<TArgs extends unknown[]>(lease: OfficeEditorLease, slideId: string, readDocument: () => PresentationProject, apply: (...args: TArgs) => void): (...args: TArgs) => void {
   return (...args) => {
     if (!lease.isCurrent()) return
     const document = readDocument()
@@ -17,9 +17,9 @@ export function bindPresentationNativeEdit<TArgs extends unknown[]>(lease: Offic
   }
 }
 
-/** Fabric is a projection of the Jotai document, not another document snapshot store. */
+/** Fabric is a projection of the PresentationStore project, not another project store. */
 export function createPresentationEditorDriver(options: {
-  readSnapshot: () => PresentationDocument | null
+  readSnapshot: () => PresentationProject | null
   readEditingObject: () => PresentationEditingObject | null
   flushPendingEdit: () => void
   dispose: () => void
@@ -40,5 +40,5 @@ export function createPresentationEditorDriver(options: {
       lease.assertCurrent()
     },
     dispose: options.dispose,
-  } satisfies OfficeEditorDriver<PresentationDocument>
+  } satisfies OfficeEditorDriver<PresentationProject>
 }

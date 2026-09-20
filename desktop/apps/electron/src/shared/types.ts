@@ -147,6 +147,11 @@ export interface ExcelHostConfig {
   theme: 'light' | 'dark'
 }
 
+export interface ExcelHostRendererState {
+  documentCount: number
+  dirty: boolean
+}
+
 /** One native Excel surface per Agent Session. Workbook tabs live inside this
  * target and therefore do not create additional WebContents/CDP targets. */
 export interface ExcelHostSessionInfo {
@@ -156,6 +161,7 @@ export interface ExcelHostSessionInfo {
   ready: boolean
   crashed: boolean
   dirty: boolean
+  documentCount: number | null
 }
 
 export interface ExcelHostSnapshot {
@@ -170,7 +176,7 @@ export interface ExcelHostPreloadAPI {
   saveAs(request: ExcelSaveAsRequest): Promise<ExcelSaveResult>
   /** Close the owning Session's panel and release its editor target. */
   requestClose(): Promise<void>
-  setDirty(dirty: boolean): Promise<void>
+  reportState(state: ExcelHostRendererState): Promise<void>
   /** JSON crosses contextBridge as one value, avoiding per-cell proxy copies. */
   getRecoveryState(): Promise<string | null>
   setRecoveryState(state: string): Promise<void>
@@ -354,12 +360,17 @@ export interface EmbeddedBrowserSnapshot {
 
 export type EmbeddedPowerPointBounds = EmbeddedBrowserBounds
 
+export interface EmbeddedPowerPointRendererState {
+  documentCount: number
+}
+
 export interface EmbeddedPowerPointSessionInfo {
   sessionId: string
   targetId: string | null
   webContentsId: number
   loading: boolean
   crashed: boolean
+  documentCount: number | null
 }
 
 export interface EmbeddedPowerPointSnapshot {
@@ -416,6 +427,7 @@ export interface WordHostExpandedEvent {
 /** Available only in the trusted Word renderer; all mutations are bound to its owning Session. */
 export interface WordHostPreloadAPI {
   getConfig(): Promise<GuiSettings>
+  openDocument(): Promise<void>
   readDocument(path: string): Promise<WordDocumentReadResult>
   reportState(state: WordHostRendererState): Promise<void>
   requestClose(): Promise<void>
@@ -544,6 +556,7 @@ export interface ElectronAPI {
     setVisible(visible: boolean, focusHost?: boolean): Promise<void>
     requestClose(sessionId: string): Promise<void>
     setExpanded(expanded: boolean): Promise<void>
+    reportState(state: EmbeddedPowerPointRendererState): Promise<void>
     /** Import or reactivate a local PPTX in the exact Session-owned editor. */
     openFile(sessionId: string, absPath: string): Promise<EmbeddedPowerPointOpenFileResult>
   }
@@ -683,24 +696,19 @@ declare global {
     __localResourceToken__?: string
     /** Stable renderer-domain API invoked by the SessionPowerPoint CDP client. */
     __bridgicPowerPoint?: {
-      protocolVersion: 5
+      protocolVersion: 7
       sessionId: string
       flush?(): Promise<void>
       close?(): Promise<void>
       dispatch(request: {
         method:
-          | 'save_ppt'
-          | 'view_ppt'
-          | 'inspect_ppt_assets'
-          | 'get_ppt_page'
-          | 'update_ppt_design'
-          | 'edit_ppt_page'
-          | 'insert_ppt_element'
-          | 'remove_ppt_element'
-          | 'insert_ppt_page'
-          | 'remove_ppt_page'
-          | 'move_ppt_page'
-          | 'goto_ppt_page'
+          | 'open'
+          | 'read_deck'
+          | 'read_page'
+          | 'inspect'
+          | 'edit_page'
+          | 'manage_deck'
+          | 'save'
         params?: Record<string, unknown>
       }): Promise<{ ok: true; value: unknown } | { ok: false; error: string; code?: string }>
     }

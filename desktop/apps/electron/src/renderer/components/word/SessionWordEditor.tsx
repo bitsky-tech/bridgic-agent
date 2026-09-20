@@ -17,7 +17,7 @@ import {
   type WordWorkspacePersister,
 } from '@/lib/wordPersistence'
 import { Icons } from '@/components/amphi/Icons'
-import { WordLaunchEmptyState } from './WordLaunchEmptyState'
+import { OfficeLaunchEmptyState } from '@/components/app/OfficeLaunchEmptyState'
 import { OfficeAppHeader } from '@/components/app/OfficeWorkbenchChrome'
 import { rlog } from '@/lib/logger'
 import { loadOfficeRecovery } from '@/lib/office/officePersistence'
@@ -70,6 +70,7 @@ export interface SessionWordEditorProps {
   onDocumentCountChange?: (sessionId: string, count: number) => void
   onOpenFileError?: (name: string, cause: unknown) => void
   onOpenFileRequestHandled?: (requestId: string, error?: string) => void
+  onOpenDocument?: () => unknown | Promise<unknown>
   onFlushHandlerChange?: (flush: WordWorkspaceFlush | null) => void
   onStateChange?: (state: { documentCount: number; persistenceStatus: WordPersistenceStatus }) => void
   onToggleExpanded?: () => void
@@ -87,6 +88,7 @@ export function SessionWordEditor({
   onDocumentCountChange = noop,
   onOpenFileError = noop,
   onOpenFileRequestHandled = noop,
+  onOpenDocument = noop,
   onFlushHandlerChange = noop,
   onStateChange = noop,
   onToggleExpanded = noop,
@@ -104,6 +106,7 @@ export function SessionWordEditor({
       onDocumentCountChange={onDocumentCountChange}
       onOpenFileError={onOpenFileError}
       onOpenFileRequestHandled={onOpenFileRequestHandled}
+      onOpenDocument={onOpenDocument}
       onFlushHandlerChange={onFlushHandlerChange}
       onStateChange={onStateChange}
       onToggleExpanded={onToggleExpanded}
@@ -122,6 +125,7 @@ function SessionWordEditorInstance({
   onDocumentCountChange,
   onOpenFileError,
   onOpenFileRequestHandled,
+  onOpenDocument,
   onFlushHandlerChange,
   onStateChange,
   onToggleExpanded,
@@ -353,6 +357,7 @@ function SessionWordEditorInstance({
       }).catch((error) => rlog.warn('[word] close failed', error))
     } : undefined}
     onSaveRequested={flushWorkspace}
+    onOpenDocument={onOpenDocument}
     onEditorFlushHandlerChange={setEditorFlush}
     onToggleExpanded={onToggleExpanded}
     persistenceStatus={persistenceStatus}
@@ -362,10 +367,11 @@ function SessionWordEditorInstance({
   />
 }
 
-function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onSaveRequested, onToggleExpanded, openingFileName, persistenceStatus, showExpandControl, store }: {
+function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onOpenDocument, onSaveRequested, onToggleExpanded, openingFileName, persistenceStatus, showExpandControl, store }: {
   expanded: boolean
   onClose?: () => void
   onEditorFlushHandlerChange: (flush: WordWorkspaceFlush | null) => void
+  onOpenDocument: () => unknown | Promise<unknown>
   onSaveRequested: () => Promise<void>
   onToggleExpanded: () => void
   openingFileName: string | null
@@ -377,7 +383,7 @@ function WordSessionSurface({ expanded, onClose, onEditorFlushHandlerChange, onS
   if (workspace.documents.length === 0) {
     return openingFileName
       ? <WordFileOpeningState fileName={openingFileName} />
-      : <WordLaunchEmptyState onCreate={() => { void store.dispatch({ type: 'document.create' }) }} />
+      : <OfficeLaunchEmptyState kind="word" onCreate={() => store.dispatch({ type: 'document.create' })} onOpen={onOpenDocument} />
   }
 
   return (

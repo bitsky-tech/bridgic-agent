@@ -76,6 +76,7 @@ function powerPointApi(calls: string[]): ElectronAPI['powerpoint'] {
     setVisible: async (visible) => { calls.push(`setVisible:${visible}`) },
     requestClose: async () => undefined,
     setExpanded: async () => undefined,
+    reportState: async () => undefined,
     openFile: async (_sessionId, absPath) => ({
       documentId: 'document-1',
       fileName: absPath.split('/').at(-1) ?? '',
@@ -93,6 +94,7 @@ function sessionInfo(sessionId: string): EmbeddedPowerPointSessionInfo {
     webContentsId: 42,
     loading: false,
     crashed: false,
+    documentCount: null,
   }
 }
 

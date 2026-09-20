@@ -948,18 +948,14 @@ describe('reducer: tool calls', () => {
 
   it('classifies visible PowerPoint actions and reveals their Session surface', () => {
     const visibleActions = [
-      'view_ppt',
-      'update_ppt_design',
-      'edit_ppt_page',
-      'insert_ppt_element',
-      'remove_ppt_element',
-      'insert_ppt_page',
-      'remove_ppt_page',
-      'move_ppt_page',
-      'goto_ppt_page',
+      'ppt_open',
+      'ppt_edit_page',
+      'ppt_manage_deck',
+      'ppt_inspect',
+      'ppt_save',
     ]
     expect(visibleActions.every(isPowerPointAgentActionToolName)).toBe(true)
-    expect(isPowerPointAgentActionToolName('get_ppt_page')).toBe(false)
+    expect(isPowerPointAgentActionToolName('ppt_read_page')).toBe(false)
 
     const store = makeStore()
     const id = setupSession(store)
@@ -976,7 +972,7 @@ describe('reducer: tool calls', () => {
         type: 'tool_call',
         messageId: 'powerpoint-write',
         toolUseId: 'view-deck',
-        toolName: 'view_ppt',
+        toolName: 'ppt_open',
         input: { target: 'quarterly-review' },
       },
     })

@@ -1,54 +1,27 @@
 import {
-  PRESENTATION_TRANSITION_DIRECTIONS,
-  PRESENTATION_TRANSITION_EFFECTS,
-  createBlankPresentationDocument,
-  replacePresentationPages,
+  createBlankPresentationProject,
   selectPresentationPage,
   type PresentationAgentChange,
-  type PresentationAsset,
-  type PresentationDocument,
   type PresentationFileSource,
+  type PresentationProject,
   type PresentationSlide,
-  type PresentationWorkspace,
 } from '@/atoms/presentation'
-import {
-  applyPresentationDesign,
-  normalizePresentationDesignColor,
-  type PresentationDesignPatch,
-  type PresentationThemePresetId,
-} from '@/lib/presentationDesign'
-import {
-  compilePresentationElementMarkdown,
-  compilePresentationSlideMarkdown,
-  decompilePresentationSlideMarkdown,
-  inspectPresentationMarkdownAssets,
-  type PresentationMarkdownAssets,
-} from '@/lib/presentationMarkdown'
+import { decompilePresentationSlideMarkdown } from '@/lib/presentationMarkdown'
 import { importPresentationPptx } from '@/lib/presentationPptxImport'
-import { validatePresentationDocument } from '@/presentation/model/reducer'
-import {
-  clearPresentationHyperlinksToPages,
-  detachPresentationCommentsFromElements,
-  mergePresentationAssets,
-  presentationAsset,
-  presentationElementSource,
-} from '@/presentation/project'
+import { editPresentationPage, managePresentationDeck } from '@/presentation/agentCommands'
+import { editPresentationProject } from '@/presentation/model/reducer'
+import { presentationAsset, presentationElementSource } from '@/presentation/project'
 
-export const POWERPOINT_PROTOCOL_VERSION = 5 as const
+export const POWERPOINT_PROTOCOL_VERSION = 7 as const
 
 export type PowerPointMethod =
-  | 'save_ppt'
-  | 'view_ppt'
-  | 'inspect_ppt_assets'
-  | 'get_ppt_page'
-  | 'update_ppt_design'
-  | 'edit_ppt_page'
-  | 'insert_ppt_element'
-  | 'remove_ppt_element'
-  | 'insert_ppt_page'
-  | 'remove_ppt_page'
-  | 'move_ppt_page'
-  | 'goto_ppt_page'
+  | 'open'
+  | 'read_deck'
+  | 'read_page'
+  | 'inspect'
+  | 'edit_page'
+  | 'manage_deck'
+  | 'save'
 
 export interface PowerPointRequest {
   method: PowerPointMethod
@@ -57,334 +30,222 @@ export interface PowerPointRequest {
 
 export interface PowerPointRuntimeContext {
   currentTarget: string | null
-  fileName: string
-  importPptx?: (encoded: string, fileName: string) => Promise<PresentationDocument>
+  fileNameOf?: (projectId: string) => string | undefined
+  importPptx?: (encoded: string, fileName: string) => Promise<PresentationProject>
+  revisionOf?: (projectId: string) => number
+}
+
+export interface PowerPointProjectCollection {
+  activeProjectId: string
+  projects: PresentationProject[]
 }
 
 export interface PowerPointDispatchResult {
   agentChange?: Omit<PresentationAgentChange, 'changeId'>
+  contentChanged?: boolean
+  changedProjectId?: string
+  projects?: PowerPointProjectCollection
   result: unknown
-  workspace?: PresentationWorkspace
   target?: string
-  persist?: boolean
 }
 
+export type PowerPointProtocolErrorCode = 'document_changed' | 'document_not_found' | 'page_changed'
+
 export class PowerPointProtocolError extends Error {
-  constructor(message: string, readonly code: 'deck_changed' | 'document_changed' | 'page_changed') {
+  constructor(message: string, readonly code: PowerPointProtocolErrorCode) {
     super(message)
     this.name = 'PowerPointProtocolError'
   }
 }
 
-/** Execute one page-level PPT request against the same native model used by the editor. */
+/** Execute one structured PPT request against the editor's authoritative model. */
 export async function executePowerPointRequest(
-  current: PresentationWorkspace,
+  current: PowerPointProjectCollection,
   request: PowerPointRequest,
-  context: PowerPointRuntimeContext = { currentTarget: null, fileName: 'Untitled.pptx' },
+  context: PowerPointRuntimeContext = { currentTarget: null },
 ): Promise<PowerPointDispatchResult> {
   if (!request || typeof request !== 'object') throw new TypeError('PowerPoint request is required')
   const params = request.params ?? {}
 
-  if (request.method === 'view_ppt') {
+  if (request.method === 'open') {
     const target = requiredString(params.target, 'target')
     const fileName = requiredString(params.file_name, 'file_name')
     if (context.currentTarget === target) {
-      return { result: { ...deckOverview(requireActiveDocument(current), fileName), reused: true }, target }
+      const project = requireActiveProject(current)
+      return { result: { ...deckRead(project, fileName, revisionOf(context, project.id)), reused: true }, target }
     }
     const encoded = optionalString(params.content_base64, 'content_base64')
-    const document = encoded
+    const project = encoded
       ? await (context.importPptx
         ? context.importPptx(encoded, fileName)
         : importPresentationPptx(decodeBase64(encoded), fileName, { restoreEditorModel: true }))
-      : createBlankPresentationDocument(fileName.replace(/\.pptx$/i, ''))
-    const workspace = { activeDocumentId: document.id, documents: [document] }
-    return { result: { ...deckOverview(document, fileName), reused: false }, workspace, target, persist: !encoded }
+      : createBlankPresentationProject(fileName.replace(/\.pptx$/i, ''))
+    const projects = { activeProjectId: project.id, projects: [project] }
+    return { result: { ...deckRead(project, fileName, 1), reused: false }, projects, target }
   }
 
-  if (request.method === 'inspect_ppt_assets') {
-    return { result: inspectPresentationMarkdownAssets(requiredString(params.markdown, 'markdown')) }
-  }
+  const documentId = requiredString(params.document_id, 'document_id')
+  const project = requireProject(current, documentId)
+  const activeProjects = current.activeProjectId === project.id
+    ? current
+    : { ...current, activeProjectId: project.id }
+  const projectRevision = revisionOf(context, project.id)
 
-  const document = requireActiveDocument(current)
-  if (request.method === 'get_ppt_page') {
-    return { result: pageView(document, requireSlide(document, requiredString(params.page_id, 'page_id'))) }
-  }
-
-  if (request.method === 'goto_ppt_page') {
-    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
-    const nextDocument = { ...document, slides: selectPresentationPage(document.slides, slide.id) }
+  if (request.method === 'read_deck') {
+    assertKeys(params, ['document_id', 'include_theme'], 'read_deck')
+    const includeTheme = optionalBoolean(params.include_theme, 'include_theme') ?? false
+    const fileName = context.fileNameOf?.(project.id) || `${project.title.replace(/\.pptx$/i, '') || 'Untitled'}.pptx`
     return {
-      result: { page_id: slide.id, index: document.slides.pages.indexOf(slide), visible: true },
-      workspace: replaceDocument(current, nextDocument),
+      result: deckRead(project, fileName, projectRevision, includeTheme),
+      ...(activeProjects === current ? {} : { projects: activeProjects }),
     }
   }
 
-  if (request.method === 'update_ppt_design') {
-    assertDocumentRevision(document, requiredString(params.expected_document_revision, 'expected_document_revision'))
-    const designed = applyPresentationDesign(document, designPatch(params.design, document))
-    const nextDocument = { ...designed, revision: document.revision + 1 }
-    const selectedSlide = requireSlide(nextDocument, nextDocument.slides.selectedPageId)
+  if (request.method === 'read_page') {
+    assertKeys(params, ['document_id', 'page_id', 'format', 'element_ids'], 'read_page')
+    const slide = requireSlide(project, requiredString(params.page_id, 'page_id'))
+    const format = enumValue(params.format ?? 'compact', new Set(['compact', 'model', 'both'] as const), 'format')
+    const elementIds = stringArray(params.element_ids, 'element_ids')
     return {
-      agentChange: {
-        elementIds: selectedSlide.elements.map((element) => element.id),
-        kind: 'design',
-        slideId: selectedSlide.id,
-      },
-      result: deckOverview(nextDocument, context.fileName),
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
+      result: pageRead(project, slide, format, elementIds),
+      ...(activeProjects === current ? {} : { projects: activeProjects }),
     }
   }
 
-  if (request.method === 'edit_ppt_page') {
-    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
-    assertPageRevision(document, slide, requiredString(params.expected_revision, 'expected_revision'))
-    const ref = requiredString(params.ref, 'ref')
-    const elementIndex = slide.elements.findIndex((element) => element.id === ref)
-    if (elementIndex < 0) throw new Error(`Unknown PowerPoint element ref: ${ref}`)
-    const compiled = compileElement(
-      requiredString(params.replacement, 'replacement'), document, slide, assetsValue(params.assets), ref,
-    )
-    if ('invalid' in compiled) return { result: compiled.invalid }
-    const elements = [...slide.elements]
-    elements[elementIndex] = compiled.element
-    const replacement = { ...slide, elements }
-    const nextDocument = replaceSlide(document, replacement, compiled.assets)
+  if (request.method === 'inspect') {
+    assertKeys(params, ['document_id', 'kind', 'page_id'], 'inspect')
+    if (params.kind !== 'render') throw new Error(`Unsupported PowerPoint inspection: ${String(params.kind)}`)
+    const slide = requireSlide(project, optionalString(params.page_id, 'page_id') ?? project.slides.selectedPageId)
+    const nextProject = { ...project, slides: selectPresentationPage(project.slides, slide.id) }
     return {
-      agentChange: {
-        elementIds: [ref],
-        kind: 'content',
-        slideId: replacement.id,
+      result: {
+        kind: 'render',
+        document_id: project.id,
+        document_revision: projectRevision,
+        page_id: slide.id,
+        index: project.slides.pages.indexOf(slide),
+        revision: pageRevision(project, slide),
       },
+      projects: replaceProject(activeProjects, nextProject),
+      changedProjectId: project.id,
+      contentChanged: false,
+    }
+  }
+
+  if (request.method === 'edit_page') {
+    assertKeys(params, ['document_id', 'page_id', 'expected_revision', 'operations', 'assets', 'validate_only'], 'edit_page')
+    const pageId = requiredString(params.page_id, 'page_id')
+    const slide = requireSlide(project, pageId)
+    assertPageRevision(project, slide, requiredString(params.expected_revision, 'expected_revision'))
+    const edited = editPresentationPage(project, pageId, params.operations, assetsValue(params.assets))
+    const validateOnly = optionalBoolean(params.validate_only, 'validate_only') ?? false
+    if (validateOnly) {
+      return { result: { status: 'validated', document_id: project.id, page_id: pageId, changed_page_ids: edited.changedPageIds, changed_element_ids: edited.changedElementIds } }
+    }
+    const nextProject = editPresentationProject(project, edited.project)
+    const nextSlide = requireSlide(nextProject, pageId)
+    const nextRevision = projectRevision + 1
+    return {
+      agentChange: { elementIds: edited.changedElementIds, kind: 'content', slideId: pageId },
       result: {
         status: 'ready',
-        diagnostics: diagnostics(compiled.diagnostics),
-        document_revision: documentRevision(nextDocument),
-        element_ref: ref,
-        ...pageView(nextDocument, replacement),
+        document_id: project.id,
+        page_id: pageId,
+        changed_page_ids: edited.changedPageIds,
+        changed_element_ids: edited.changedElementIds,
+        revision: pageRevision(nextProject, nextSlide),
+        deck_revision: documentRevision(nextProject, nextRevision),
       },
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
+      projects: replaceProject(activeProjects, nextProject),
+      changedProjectId: project.id,
+      contentChanged: true,
     }
   }
 
-  if (request.method === 'insert_ppt_element') {
-    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
-    assertPageRevision(document, slide, requiredString(params.expected_revision, 'expected_revision'))
-    const compiled = compileElement(
-      requiredString(params.element, 'element'), document, slide, assetsValue(params.assets),
-    )
-    if ('invalid' in compiled) return { result: compiled.invalid }
-    const replacement = { ...slide, elements: [...slide.elements, compiled.element] }
-    const nextDocument = replaceSlide(document, replacement, compiled.assets)
+  if (request.method === 'manage_deck') {
+    assertKeys(params, ['document_id', 'expected_revision', 'operations', 'validate_only'], 'manage_deck')
+    assertDocumentRevision(project, projectRevision, requiredString(params.expected_revision, 'expected_revision'))
+    const edited = managePresentationDeck(project, params.operations)
+    const validateOnly = optionalBoolean(params.validate_only, 'validate_only') ?? false
+    if (validateOnly) {
+      return { result: { status: 'validated', document_id: project.id, changed_page_ids: edited.changedPageIds } }
+    }
+    const nextProject = editPresentationProject(project, edited.project)
+    const selected = requireSlide(nextProject, nextProject.slides.selectedPageId)
     return {
-      agentChange: {
-        elementIds: [compiled.element.id],
-        kind: 'content',
-        slideId: replacement.id,
-      },
-      result: {
-        status: 'ready',
-        diagnostics: diagnostics(compiled.diagnostics),
-        document_revision: documentRevision(nextDocument),
-        element_ref: compiled.element.id,
-        ...pageView(nextDocument, replacement),
-      },
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
-    }
-  }
-
-  if (request.method === 'remove_ppt_element') {
-    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
-    assertPageRevision(document, slide, requiredString(params.expected_revision, 'expected_revision'))
-    const ref = requiredString(params.ref, 'ref')
-    if (!slide.elements.some((element) => element.id === ref)) {
-      throw new Error(`Unknown PowerPoint element ref: ${ref}`)
-    }
-    const replacement = {
-      ...detachPresentationCommentsFromElements(slide, new Set([ref])),
-      elements: slide.elements.filter((element) => element.id !== ref),
-    }
-    const nextDocument = replaceSlide(document, replacement)
-    return {
-      agentChange: { elementIds: [], kind: 'content', slideId: replacement.id },
-      result: {
-        status: 'ready',
-        diagnostics: [],
-        document_revision: documentRevision(nextDocument),
-        element_ref: ref,
-        ...pageView(nextDocument, replacement),
-      },
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
-    }
-  }
-
-  if (request.method === 'insert_ppt_page') {
-    const compiled = compilePage(requiredString(params.markdown, 'markdown'), document, assetsValue(params.assets))
-    if ('invalid' in compiled) return { result: compiled.invalid }
-    const afterPageId = optionalString(params.after_page_id, 'after_page_id')
-    const insertionIndex = afterPageId
-      ? document.slides.pages.findIndex((slide) => slide.id === afterPageId) + 1
-      : document.slides.pages.length
-    if (afterPageId && insertionIndex === 0) throw new Error(`Unknown PowerPoint page: ${afterPageId}`)
-    const slides = [...document.slides.pages]
-    slides.splice(insertionIndex, 0, compiled.slide)
-    const nextDocument = {
-      ...document,
-      assets: mergePresentationAssets(document.assets, compiled.assets),
-      slides: replacePresentationPages(document.slides, slides, compiled.slide.id),
-      revision: document.revision + 1,
-    }
-    return {
-      agentChange: {
-        elementIds: compiled.slide.elements.map((element) => element.id),
-        kind: 'content',
-        slideId: compiled.slide.id,
-      },
-      result: {
-        status: 'ready',
-        diagnostics: diagnostics(compiled.diagnostics),
-        ...deckOverview(nextDocument, context.fileName),
-        ...pageView(nextDocument, compiled.slide),
-      },
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
-    }
-  }
-
-  if (request.method === 'remove_ppt_page') {
-    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
-    assertPageRevision(document, slide, requiredString(params.expected_revision, 'expected_revision'))
-    assertDeckRevision(document, requiredString(params.expected_deck_revision, 'expected_deck_revision'))
-    if (document.slides.pages.length === 1) throw new Error('A PowerPoint must keep at least one page')
-    const oldIndex = document.slides.pages.indexOf(slide)
-    const slides = clearPresentationHyperlinksToPages(
-      document.slides.pages.filter((item) => item.id !== slide.id),
-      new Set([slide.id]),
-    )
-    const selectedPageId = document.slides.selectedPageId === slide.id
-      ? slides[Math.min(oldIndex, slides.length - 1)]!.id
-      : document.slides.selectedPageId
-    const nextDocument = {
-      ...document,
-      slides: replacePresentationPages(document.slides, slides, selectedPageId),
-      revision: document.revision + 1,
-    }
-    return {
-      result: deckOverview(nextDocument, context.fileName),
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
-    }
-  }
-
-  if (request.method === 'move_ppt_page') {
-    assertDeckRevision(document, requiredString(params.expected_deck_revision, 'expected_deck_revision'))
-    const slide = requireSlide(document, requiredString(params.page_id, 'page_id'))
-    const target = requireSlide(document, requiredString(params.target_page_id, 'target_page_id'))
-    const position = requiredString(params.position, 'position')
-    if (slide.id === target.id) throw new Error('A PowerPoint page cannot be moved relative to itself')
-    if (position !== 'before' && position !== 'after') throw new Error("position must be 'before' or 'after'")
-    const slides = document.slides.pages.filter((item) => item.id !== slide.id)
-    const targetIndex = slides.findIndex((item) => item.id === target.id)
-    slides.splice(targetIndex + (position === 'after' ? 1 : 0), 0, slide)
-    const nextDocument = {
-      ...document,
-      slides: replacePresentationPages(document.slides, slides),
-      revision: document.revision + 1,
-    }
-    return {
-      result: deckOverview(nextDocument, context.fileName),
-      workspace: replaceDocument(current, nextDocument),
-      persist: true,
+      agentChange: { elementIds: selected.elements.map((element) => element.id), kind: edited.designChanged ? 'design' : 'content', slideId: selected.id },
+      result: { status: 'ready', document_id: project.id, changed_page_ids: edited.changedPageIds, revision: documentRevision(nextProject, projectRevision + 1) },
+      projects: replaceProject(activeProjects, nextProject),
+      changedProjectId: project.id,
+      contentChanged: true,
     }
   }
 
   throw new Error(`Unsupported PowerPoint method: ${String(request.method)}`)
 }
 
-function compilePage(markdown: string, document: PresentationDocument, assets: PresentationMarkdownAssets):
-  | { assets: PresentationAsset[]; slide: PresentationSlide; diagnostics: string[] }
-  | { invalid: { status: 'invalid'; diagnostics: Array<Record<string, string>> } } {
-  try {
-    return compilePresentationSlideMarkdown(markdown, { assets, document, existingDocument: document })
-  } catch (error) {
-    return {
-      invalid: {
-        status: 'invalid',
-        diagnostics: [{
-          code: 'markdown_compile_error',
-          message: error instanceof Error ? error.message : String(error),
-          severity: 'error',
-        }],
-      },
-    }
-  }
-}
-
-function compileElement(
-  markdown: string,
-  document: PresentationDocument,
-  slide: PresentationSlide,
-  assets: PresentationMarkdownAssets,
-  elementId?: string,
-):
-  | { assets: PresentationAsset[]; element: PresentationSlide['elements'][number]; diagnostics: string[] }
-  | { invalid: { status: 'invalid'; diagnostics: Array<Record<string, string>> } } {
-  try {
-    return compilePresentationElementMarkdown(markdown, {
-      assets,
-      document,
-      elementId,
-      existingDocument: document,
-      slide,
-    })
-  } catch (error) {
-    return {
-      invalid: {
-        status: 'invalid',
-        diagnostics: [{
-          code: 'element_compile_error',
-          message: error instanceof Error ? error.message : String(error),
-          severity: 'error',
-        }],
-      },
-    }
-  }
-}
-
-function deckOverview(document: PresentationDocument, fileName: string): Record<string, unknown> {
+function deckRead(document: PresentationProject, fileName: string, revision: number, includeTheme = true): Record<string, unknown> {
   const selectedIndex = Math.max(0, document.slides.pages.findIndex((slide) => slide.id === document.slides.selectedPageId))
   return {
-    identity: {
-      document_id: document.id,
-      name: document.title || fileName.replace(/\.pptx$/i, ''),
-      file_name: fileName,
-    },
-    meta: {
+    document_id: document.id,
+    revision: documentRevision(document, revision),
+    deck: {
+      id: document.id,
       title: document.title,
-      theme: structuredClone(document.theme),
+      file_name: fileName,
       page_size: structuredClone(document.pageSize),
       total_pages: document.slides.pages.length,
-      current_page_id: document.slides.selectedPageId,
-      current_page_index: selectedIndex,
-      current_position: selectedIndex + 1,
+      active_page_id: document.slides.selectedPageId,
+      active_page_index: selectedIndex,
+      ...(includeTheme ? { theme: structuredClone(document.theme) } : {}),
+      pages: document.slides.pages.map((slide, index) => pageSummary(document, slide, index)),
     },
-    deck_revision: deckRevision(document),
-    document_revision: documentRevision(document),
-    pages: document.slides.pages.map((slide, index) => pageSummary(document, slide, index)),
   }
 }
 
-function pageSummary(document: PresentationDocument, slide: PresentationSlide, index: number): Record<string, unknown> {
+function pageRead(document: PresentationProject, slide: PresentationSlide, format: 'both' | 'compact' | 'model', elementIds?: string[]): Record<string, unknown> {
+  const index = document.slides.pages.findIndex((item) => item.id === slide.id)
+  const selectedElements = elementIds?.length
+    ? slide.elements.filter((element) => elementIds.includes(element.id))
+    : slide.elements
+  if (elementIds?.some((id) => !slide.elements.some((element) => element.id === id))) {
+    throw new Error('element_ids contains an unknown PowerPoint element')
+  }
+  const assets = pageAssets(document, { ...slide, elements: selectedElements })
+  return {
+    document_id: document.id,
+    page_id: slide.id,
+    revision: pageRevision(document, slide),
+    page: {
+      ...pageSummary(document, slide, index),
+      refs: selectedElements.map((element) => element.id),
+      ...(format === 'compact' || format === 'both' ? { markdown: decompilePresentationSlideMarkdown({ ...slide, elements: selectedElements }, document) } : {}),
+      ...(format === 'model' || format === 'both' ? {
+        model: {
+          id: slide.id,
+          name: slide.name,
+          layout: slide.layout,
+          background: slide.background,
+          notes: slide.notes,
+          footer: slide.footer,
+          transition: structuredClone(slide.transition),
+          comments: structuredClone(slide.comments ?? []),
+          elements: selectedElements.map((element) => pageModelElement(document, element)),
+        },
+      } : {}),
+    },
+    assets,
+  }
+}
+
+function pageSummary(document: PresentationProject, slide: PresentationSlide, index: number): Record<string, unknown> {
   const text = slide.elements.flatMap((element) => (
     'text' in element && typeof element.text === 'string' ? [element.text.trim()] : []
   )).filter(Boolean).join(' ')
   return {
-    page_id: slide.id,
+    id: slide.id,
     index,
-    title: slide.name,
+    name: slide.name,
     layout: slide.layout ?? 'blank',
     summary: text.slice(0, 240) || undefined,
     has_content: slide.elements.length > 0 || Boolean(slide.notes?.trim()),
@@ -392,38 +253,13 @@ function pageSummary(document: PresentationDocument, slide: PresentationSlide, i
   }
 }
 
-function pageView(document: PresentationDocument, slide: PresentationSlide): Record<string, unknown> {
-  const index = document.slides.pages.findIndex((item) => item.id === slide.id)
-  const assets = pageAssets(document, slide)
-  return {
-    page: {
-      ...pageSummary(document, slide, index),
-      markdown: decompilePresentationSlideMarkdown(slide, document),
-      asset_paths: assets.map((asset) => asset.path),
-      refs: slide.elements.map((element) => element.id),
-    },
-    assets,
-  }
-}
-
-function pageAssets(document: PresentationDocument, slide: PresentationSlide): Array<{
-  path: string
-  file_name: string
-  mime_type: string
-  data_url?: string
-}> {
-  const found = new Map<string, {
-    path: string
-    file_name: string
-    mime_type: string
-    data_url?: string
-  }>()
+function pageAssets(document: PresentationProject, slide: PresentationSlide): Array<{ path: string; file_name: string; mime_type: string; data_url?: string }> {
+  const found = new Map<string, { path: string; file_name: string; mime_type: string; data_url?: string }>()
   for (const element of slide.elements) {
     if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') continue
     const source = presentationElementSource(document, element)
     if (!source) continue
-    const safeName = source.fileName.replace(/[^A-Za-z0-9._-]+/g, '-') || `${element.id}.bin`
-    const path = source.path ?? `.ppt-assets/${encodeURIComponent(source.assetId ?? element.id)}-${safeName}`
+    const path = pageAssetPath(source, element.id)
     if (found.has(path)) continue
     found.set(path, {
       path,
@@ -435,17 +271,30 @@ function pageAssets(document: PresentationDocument, slide: PresentationSlide): A
   return [...found.values()]
 }
 
+function pageModelElement(document: PresentationProject, element: PresentationSlide['elements'][number]): Record<string, unknown> {
+  if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') {
+    return structuredClone(element) as unknown as Record<string, unknown>
+  }
+  const source = presentationElementSource(document, element)
+  if (!source) throw new Error(`PowerPoint element refers to a missing asset: ${element.id}`)
+  const { sourceAssetId: _sourceAssetId, ...projected } = structuredClone(element)
+  return { ...projected, src: pageAssetPath(source, element.id) }
+}
+
+function pageAssetPath(source: PresentationFileSource, elementId: string): string {
+  const safeName = source.fileName.replace(/[^A-Za-z0-9._-]+/g, '-') || `${elementId}.bin`
+  return source.path ?? `.ppt-assets/${encodeURIComponent(source.assetId ?? elementId)}-${safeName}`
+}
+
 const mediaRevisions = new WeakMap<object, { dataUrl: string; revision: string }>()
 
-function pageRevision(document: PresentationDocument, slide: PresentationSlide): string {
+function pageRevision(document: PresentationProject, slide: PresentationSlide): string {
   const referencedAssets = slide.elements.flatMap((element) => {
     if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') return []
     const asset = presentationAsset(document, element.sourceAssetId)
     return asset ? [asset] : []
   })
-  // Large media payloads can be shared across pages. Hash each source object once,
-  // but include every referenced asset in the optimistic page revision.
-  return fingerprint(JSON.stringify({ slide, assets: referencedAssets }, function (key, value: unknown) {
+  return fingerprint(JSON.stringify({ slide, assets: referencedAssets, pageSize: document.pageSize, theme: document.theme }, function (key, value: unknown) {
     if (key !== 'dataUrl' || typeof value !== 'string') return value
     const source = this as object
     let cached = mediaRevisions.get(source)
@@ -457,12 +306,8 @@ function pageRevision(document: PresentationDocument, slide: PresentationSlide):
   }))
 }
 
-function deckRevision(document: PresentationDocument): string {
-  return fingerprint(JSON.stringify(document.slides.pages.map((slide) => slide.id)))
-}
-
-function documentRevision(document: PresentationDocument): string {
-  return fingerprint(`${document.id}:${document.revision}`)
+function documentRevision(document: PresentationProject, revision: number): string {
+  return fingerprint(`${document.id}:${revision}`)
 }
 
 function fingerprint(value: string): string {
@@ -474,105 +319,47 @@ function fingerprint(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-function assertPageRevision(document: PresentationDocument, slide: PresentationSlide, expected: string): void {
+function assertDocumentRevision(document: PresentationProject, revision: number, expected: string): void {
+  if (documentRevision(document, revision) === expected) return
+  throw new PowerPointProtocolError('The PowerPoint changed after it was read. Read the deck again before retrying.', 'document_changed')
+}
+
+function assertPageRevision(document: PresentationProject, slide: PresentationSlide, expected: string): void {
   if (pageRevision(document, slide) === expected) return
-  throw new PowerPointProtocolError(
-    `PowerPoint page ${slide.id} changed after it was read. Call get_ppt_page again before writing.`,
-    'page_changed',
-  )
+  throw new PowerPointProtocolError(`PowerPoint page ${slide.id} changed after it was read. Read it again before retrying.`, 'page_changed')
 }
 
-function assertDeckRevision(document: PresentationDocument, expected: string): void {
-  if (deckRevision(document) === expected) return
-  throw new PowerPointProtocolError(
-    'The PowerPoint page order changed. Call view_ppt again before changing the structure.',
-    'deck_changed',
-  )
-}
-
-function assertDocumentRevision(document: PresentationDocument, expected: string): void {
-  if (documentRevision(document) === expected) return
-  throw new PowerPointProtocolError(
-    'The PowerPoint changed after its design was read. Call view_ppt again before changing global design.',
-    'document_changed',
-  )
-}
-
-function designPatch(value: unknown, document: PresentationDocument): PresentationDesignPatch {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('design must be a mapping')
-  const raw = value as Record<string, unknown>
-  const patch: PresentationDesignPatch = {}
-  const themeIds = new Set<PresentationThemePresetId>(['lavender', 'light', 'midnight', 'paper'])
-  const pageSizes = new Set(['standard', 'wide'] as const)
-  const transitionEffects = new Set(PRESENTATION_TRANSITION_EFFECTS)
-  const transitionDirections = new Set(PRESENTATION_TRANSITION_DIRECTIONS)
-
-  if (raw.theme !== undefined) patch.theme = enumValue(raw.theme, themeIds, 'design.theme')
-  if (raw.background !== undefined) patch.background = normalizePresentationDesignColor(requiredString(raw.background, 'design.background'))
-  if (raw.accent_colors !== undefined) {
-    if (!Array.isArray(raw.accent_colors) || raw.accent_colors.length === 0) {
-      throw new TypeError('design.accent_colors must be a non-empty string array')
-    }
-    patch.accentColors = raw.accent_colors.map((color) => (
-      normalizePresentationDesignColor(requiredString(color, 'design.accent_colors[]'))
-    ))
-  }
-  if (raw.title_font_family !== undefined) patch.titleFontFamily = requiredString(raw.title_font_family, 'design.title_font_family')
-  if (raw.body_font_family !== undefined) patch.bodyFontFamily = requiredString(raw.body_font_family, 'design.body_font_family')
-  if (raw.page_size !== undefined) patch.pageSize = enumValue(raw.page_size, pageSizes, 'design.page_size')
-  if (raw.title !== undefined) {
-    if (typeof raw.title !== 'string') throw new TypeError('design.title must be a string')
-    patch.title = raw.title.trim()
-  }
-  if (raw.footer !== undefined) {
-    if (!raw.footer || typeof raw.footer !== 'object' || Array.isArray(raw.footer)) {
-      throw new TypeError('design.footer must be a mapping')
-    }
-    const footerRaw = raw.footer as Record<string, unknown>
-    patch.footer = {
-      ...(footerRaw.text === undefined ? {} : { text: stringValue(footerRaw.text, 'design.footer.text') }),
-      ...(footerRaw.show_date === undefined ? {} : { showDate: booleanValue(footerRaw.show_date, 'design.footer.show_date') }),
-      ...(footerRaw.show_slide_number === undefined
-        ? {}
-        : { showSlideNumber: booleanValue(footerRaw.show_slide_number, 'design.footer.show_slide_number') }),
-    }
-  }
-  if (raw.transition !== undefined) {
-    if (!raw.transition || typeof raw.transition !== 'object' || Array.isArray(raw.transition)) {
-      throw new TypeError('design.transition must be a mapping')
-    }
-    const transitionRaw = raw.transition as Record<string, unknown>
-    const fallback = document.slides.pages.find((slide) => slide.id === document.slides.selectedPageId)?.transition
-      ?? { effect: 'none' as const, durationMs: 500 }
-    patch.transition = {
-      effect: transitionRaw.effect === undefined
-        ? fallback.effect
-        : enumValue(transitionRaw.effect, transitionEffects, 'design.transition.effect'),
-      durationMs: transitionRaw.duration_ms === undefined
-        ? fallback.durationMs
-        : nonNegativeNumber(transitionRaw.duration_ms, 'design.transition.duration_ms'),
-    }
-    const direction = transitionRaw.direction === undefined
-      ? fallback.direction
-      : enumValue(transitionRaw.direction, transitionDirections, 'design.transition.direction')
-    if (direction) patch.transition.direction = direction
-    const throughBlack = transitionRaw.through_black === undefined
-      ? fallback.throughBlack
-      : booleanValue(transitionRaw.through_black, 'design.transition.through_black')
-    if (throughBlack !== undefined) patch.transition.throughBlack = throughBlack
-  }
-  if (Object.keys(patch).length === 0) throw new Error('update_ppt_design requires at least one design change')
-  return patch
-}
-
-function diagnostics(items: string[]): Array<Record<string, string>> {
-  return items.map((message) => ({ code: 'markdown_notice', message, severity: 'warning' }))
-}
-
-function assetsValue(value: unknown): PresentationMarkdownAssets {
+function assetsValue(value: unknown): Record<string, PresentationFileSource> {
   if (value === undefined) return {}
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('assets must be a mapping')
+  if (!isRecord(value)) throw new TypeError('assets must be an object')
   return value as Record<string, PresentationFileSource>
+}
+
+function replaceProject(collection: PowerPointProjectCollection, project: PresentationProject): PowerPointProjectCollection {
+  return {
+    activeProjectId: project.id,
+    projects: collection.projects.map((candidate) => candidate.id === project.id ? project : candidate),
+  }
+}
+
+function requireActiveProject(collection: PowerPointProjectCollection): PresentationProject {
+  return requireProject(collection, collection.activeProjectId)
+}
+
+function requireProject(collection: PowerPointProjectCollection, projectId: string): PresentationProject {
+  const project = collection.projects.find((candidate) => candidate.id === projectId)
+  if (!project) throw new PowerPointProtocolError(`PowerPoint project not found: ${projectId}`, 'document_not_found')
+  return project
+}
+
+function revisionOf(context: PowerPointRuntimeContext, projectId: string): number {
+  return context.revisionOf?.(projectId) ?? 1
+}
+
+function requireSlide(document: PresentationProject, pageId: string): PresentationSlide {
+  const slide = document.slides.pages.find((candidate) => candidate.id === pageId)
+  if (!slide) throw new Error(`PowerPoint page not found: ${pageId}`)
+  return slide
 }
 
 function decodeBase64(value: string): Uint8Array {
@@ -580,70 +367,42 @@ function decodeBase64(value: string): Uint8Array {
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0))
 }
 
-function replaceDocument(workspace: PresentationWorkspace, document: PresentationDocument): PresentationWorkspace {
-  const validated = validatePresentationDocument(document)
-  return {
-    activeDocumentId: validated.id,
-    documents: workspace.documents.map((item) => item.id === validated.id ? validated : item),
-  }
-}
-
-function replaceSlide(document: PresentationDocument, slide: PresentationSlide, assets: readonly PresentationAsset[] = []): PresentationDocument {
-  return {
-    ...document,
-    assets: mergePresentationAssets(document.assets, assets),
-    slides: replacePresentationPages(
-      document.slides,
-      document.slides.pages.map((item) => item.id === slide.id ? slide : item),
-      slide.id,
-    ),
-    revision: document.revision + 1,
-  }
-}
-
-function requireActiveDocument(workspace: PresentationWorkspace): PresentationDocument {
-  const document = workspace.documents.find((item) => item.id === workspace.activeDocumentId)
-  if (!document) throw new Error('The Session has no active PowerPoint')
-  return document
-}
-
-function requireSlide(document: PresentationDocument, pageId: string): PresentationSlide {
-  const slide = document.slides.pages.find((item) => item.id === pageId)
-  if (!slide) throw new Error(`Unknown PowerPoint page: ${pageId}`)
-  return slide
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function requiredString(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${name} is required`)
+  if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${name} must be a non-empty string`)
   return value.trim()
 }
 
 function optionalString(value: unknown, name: string): string | undefined {
-  if (value === undefined || value === null || value === '') return undefined
+  if (value === undefined || value === null) return undefined
   if (typeof value !== 'string') throw new TypeError(`${name} must be a string`)
   return value.trim() || undefined
 }
 
-function stringValue(value: unknown, name: string): string {
-  if (typeof value !== 'string') throw new TypeError(`${name} must be a string`)
-  return value.trim()
-}
-
-function booleanValue(value: unknown, name: string): boolean {
+function optionalBoolean(value: unknown, name: string): boolean | undefined {
+  if (value === undefined) return undefined
   if (typeof value !== 'boolean') throw new TypeError(`${name} must be a boolean`)
   return value
 }
 
-function nonNegativeNumber(value: unknown, name: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new TypeError(`${name} must be a non-negative number`)
+function stringArray(value: unknown, name: string): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new TypeError(`${name} must be an array of non-empty strings`)
   }
-  return value
+  return [...new Set(value.map((item) => item.trim()))]
 }
 
 function enumValue<T extends string>(value: unknown, allowed: ReadonlySet<T>, name: string): T {
-  if (typeof value !== 'string' || !allowed.has(value as T)) {
-    throw new Error(`${name} must be one of: ${[...allowed].join(', ')}`)
-  }
-  return value as T
+  const normalized = requiredString(value, name)
+  if (!allowed.has(normalized as T)) throw new Error(`Unsupported ${name}: ${normalized}`)
+  return normalized as T
+}
+
+function assertKeys(value: Record<string, unknown>, allowed: readonly string[], name: string): void {
+  const unexpected = Object.keys(value).find((key) => !allowed.includes(key))
+  if (unexpected) throw new Error(`Unsupported ${name} parameter: ${unexpected}`)
 }

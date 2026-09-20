@@ -108,20 +108,19 @@ async def test_powerpoint_tools_use_read_and_write_management_capabilities(test_
     workspace.mkdir(parents=True)
     engine = PermissionEngine(str(workspace), mode=ExecutionMode.REQUEST)
     calls = [
-        _tool_call("get_ppt_page", page_id="page-a"),
-        _tool_call("goto_ppt_page", page_id="page-a"),
-        _tool_call("view_ppt", target="deck.pptx"),
-        _tool_call("update_ppt_design", theme="midnight"),
-        _tool_call("edit_ppt_page", page_id="page-a", ref="title", replacement="<PptText>Page</PptText>"),
-        _tool_call("insert_ppt_element", page_id="page-a", element="<PptShape kind=\"rect\" />"),
-        _tool_call("remove_ppt_element", page_id="page-a", ref="title"),
-        _tool_call("insert_ppt_page", markdown="# Page"),
+        _tool_call("ppt_read_deck", document_id="deck-a"),
+        _tool_call("ppt_read_page", document_id="deck-a", page_id="page-a"),
+        _tool_call("ppt_inspect", document_id="deck-a", query={"kind": "render"}),
+        _tool_call("ppt_open", target="deck.pptx"),
+        _tool_call("ppt_edit_page", document_id="deck-a", page_id="page-a", operations=[]),
+        _tool_call("ppt_manage_deck", document_id="deck-a", operations=[]),
+        _tool_call("ppt_save", document_id="deck-a"),
     ]
 
     verdicts = await engine.evaluate(calls)
 
-    assert [verdict.capability for verdict in verdicts[:2]] == ["manage"] * 2
-    assert [verdict.capability for verdict in verdicts[2:]] == ["manage_write"] * 6
+    assert [verdict.capability for verdict in verdicts[:3]] == ["manage"] * 3
+    assert [verdict.capability for verdict in verdicts[3:]] == ["manage_write"] * 4
 
 
 async def test_path_boundaries(test_sandbox: "IsolatedPaths") -> None:

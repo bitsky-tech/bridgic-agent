@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
 import { DOMParser } from '@xmldom/xmldom'
-import { createBlankPresentationDocument, createBlankPresentationSlide, type PresentationFileSource, type PresentationImageElement } from '@/atoms/presentation'
+import { createBlankPresentationProject, createBlankPresentationSlide, type PresentationFileSource, type PresentationImageElement } from '@/atoms/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 import { importPresentationPptx } from '../presentationPptxImport'
 
@@ -11,7 +11,7 @@ const pixel: PresentationFileSource = {
   mimeType: 'image/png',
 }
 
-function picture(document: ReturnType<typeof createBlankPresentationDocument>, id: string, source = pixel): PresentationImageElement {
+function picture(document: ReturnType<typeof createBlankPresentationProject>, id: string, source = pixel): PresentationImageElement {
   const sourceAssetId = `${id}-asset`
   document.assets.push({ id: sourceAssetId, kind: 'image', name: source.fileName, source })
   return { id, type: 'image', sourceAssetId, altText: id, fit: 'contain', x: 10, y: 20, width: 200, height: 100, rotation: 0 }
@@ -28,7 +28,7 @@ async function imageRelationships(archive: JSZip, slideNumber: number) {
 describe('PPTX shared image export', () => {
   it('deduplicates payloads across slides while keeping distinct images, frames, crops and links', async () => {
     const differentPixel = { ...pixel, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' }
-    const document = createBlankPresentationDocument('Shared images')
+    const document = createBlankPresentationProject('Shared images')
     const first = document.slides.pages[0]!
     const second = createBlankPresentationSlide('Second')
     document.slides.pages.push(second)
@@ -73,7 +73,7 @@ describe('PPTX shared image export', () => {
   })
 
   it('keeps repeated save and reopen cycles compact after editing an imported deck', async () => {
-    const document = createBlankPresentationDocument('Shared backgrounds')
+    const document = createBlankPresentationProject('Shared backgrounds')
     document.slides.pages = Array.from({ length: 30 }, (_, index) => ({ ...createBlankPresentationSlide(`Page ${index + 1}`), elements: [picture(document, `image-${index}`)] }))
     document.slides.selectedPageId = document.slides.pages[0]!.id
     let bytes = await createPresentationPptx(document)
@@ -99,7 +99,7 @@ describe('PPTX shared image export', () => {
     const svg = (color: string): PresentationFileSource => ({ dataUrl: `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="${color}"/></svg>`)}`, fileName: 'shape.svg', mimeType: 'image/svg+xml' })
     const red = svg('red')
     const blue = svg('blue')
-    const document = createBlankPresentationDocument('SVG sharing')
+    const document = createBlankPresentationProject('SVG sharing')
     document.slides.pages[0]!.elements = [picture(document, 'red', red), picture(document, 'blue', blue)]
     document.slides.pages.push({ ...createBlankPresentationSlide('Scaled SVG'), elements: [{ ...picture(document, 'scaled-red', { ...red }), width: 400, height: 300 }] })
     const archive = await JSZip.loadAsync(await createPresentationPptx(document))

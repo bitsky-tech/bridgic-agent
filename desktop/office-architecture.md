@@ -32,8 +32,10 @@ editor binding contract. This completes the scoped frontend architecture migrati
 | Engine adapter | Consistent mount/dispose, snapshot and change interfaces | Fabric/React presentation rendering, Univer Docs, Univer Sheets |
 
 The application projection is read-only. It must not become a second writable
-document store. The common workspace runtime identifies one authority for each
-document and receives versioned changes from the editor.
+document store. Each editor-specific Store owns its structured project model;
+the common operation runtime only orders guarded operations around that Store.
+Imported and exported Office files are boundary formats, never a second live
+document authority.
 
 ## Phase 1: shared renderer foundations
 
@@ -157,12 +159,17 @@ stay inside the editor and publish changes without per-keystroke IPC.
 
 ### Editor adapters and compatibility
 
-- [PowerPoint's controller](apps/electron/src/renderer/lib/presentationWorkspaceRuntime.ts)
-  reads and writes the Session's existing Jotai workspace. Document tabs and the
-  existing Agent entry share operation ordering. Native commits remain synchronous;
-  a prepared Agent result cannot replace a newer document revision. Protocol v5's
-  request/response shapes, diagnostic results, and revision error codes remain
-  unchanged. Closing the final tab still delegates to the native surface host.
+- [PowerPoint's Store](apps/electron/src/renderer/presentation/store.ts) owns the
+  Session's `PresentationProject` instances, active project, undo/redo history,
+  revisions, source metadata, Agent commits and persistence status. The Workbench
+  subscribes to the Store directly; Jotai carries only application UI state. Both
+  native canvas edits and Agent operation batches commit into the same project
+  authority. `PresentationProject` contains only editable presentation content;
+  revision, source path, save acknowledgement and protection state remain Store
+  metadata. There is no `PresentationDocument` or `PresentationWorkspace` model
+  wrapped around it. The shared operation runtime is a private queue/guard inside
+  the Store, not another model owner. Closing the final project still delegates to
+  the native surface host.
 - [Word's domain store](apps/electron/src/renderer/lib/wordDomain.ts) remains its
   document authority. UI and renderer API commands share its queue. Editor handlers
   bind to a document, and reference callbacks use a guarded internal reducer.
@@ -223,7 +230,7 @@ before disposing. Successfully written document payloads are released.
 | --- | --- | --- |
 | [Word](apps/electron/src/renderer/lib/wordPersistence.ts) | IndexedDB workspace recovery, with localStorage fallback; retains existing Session keys and codecs | Recovery does not overwrite the imported DOCX or add an export capability |
 | [Excel](apps/electron/src/renderer/lib/office/excelPersistence.ts) | Recovery snapshots in the owning main-process Session; survives renderer reload, not application restart or Session release | Explicit save/save-as retains file authorization, modification-time conflicts, format-fidelity confirmation and later-edit dirty protection |
-| [PowerPoint](apps/electron/src/renderer/lib/presentationPersistence.ts) | Source-file checkpoints for the document explicitly associated by `view_ppt`; no separate workspace recovery added | Existing PPTX encoding and write API; imported baselines are not re-encoded until changed, and new UI tabs do not inherit another document's destination |
+| [PowerPoint](apps/electron/src/renderer/presentation/store.ts) | Session recovery checkpoints serialize the Store's structured projects; project edits do not require a PPTX file | PPTX import/export is handled by the file adapter; an associated path is save metadata, not the editing authority |
 
 Word and Excel distinguish an empty recovery store from a read or decoding failure.
 An unsuccessful restore preserves the original record and presents a retry action
@@ -246,15 +253,34 @@ ordinary source-save checks remain intact. Closing a workbook or panel does not
 prompt for unsaved changes, and releasing the Session discards its in-memory
 recovery state.
 
-PowerPoint keeps protocol v5's request/response shapes and error codes. Its UI and
-protocol writes use the same source channel. Returning to a bound file selects its
-existing document; source mutations on an unrelated unbound tab are rejected before
-editing. Reopening a replaced target while it still has unwritten content flushes
-that content and requests fresh source bytes through the existing `document_changed`
-error. Panel close waits for queued operations and the latest source checkpoint,
-including edits received during encoding; failure leaves the panel open. This does
-not add an application-wide PowerPoint quit acknowledgement or recovery of unbound
-tabs. Word/Excel Agent integration and backend protocols remain out of scope.
+PowerPoint exposes structured page and deck commands over the same Store as its UI.
+Compact Markdown remains a read-only Agent projection; mutations use typed operation
+batches with Session-private read revisions. A batch may update page objects, deck
+design, and page structure, but commits only after the complete project validates.
+PPTX input is imported into a project and PPTX output is generated from a project;
+neither direction bypasses or replaces the Store. Panel close waits for queued project
+operations and the latest recovery checkpoint. Word/Excel Agent integration remains
+out of scope.
+
+### PowerPoint authority and file boundaries
+
+PowerPoint follows the same single-authority shape as the video editor:
+
+```text
+Workbench UI ─┐
+              ├─> PresentationStore memory ─> active PresentationProject ─> render
+Agent tools ──┘               │
+                              └─> asynchronous structured recovery checkpoint
+
+PPTX file ──importer──> PresentationProject
+PresentationProject ──exporter──> PPTX file
+```
+
+`PresentationStore` is the only mutable owner. Command handlers may build and
+validate a project draft, but publish it only through the Store's commit gate.
+Rendering reads the active `PresentationProject` from the Store. Recovery persists
+the structured project inventory and separate Store metadata; it does not create a
+live PPTX mirror. Import and export are explicit boundary conversions.
 
 ### Phase 4 verification
 
@@ -269,11 +295,11 @@ flush and reload, and Excel native value publication and tab switching. A separa
 Excel run forced an actual renderer crash and a recovery-read failure: no blank
 checkpoint was written, and retry restored both original tab IDs, their values,
 the active tab and dirty state. A hidden PowerPoint renderer exercised the actual
-v5 API and PPTX encoding: its mutation response waited for the file write, the
-resulting slide XML contained the edited text, an unbound UI tab could not alter
-the source, and `view_ppt` returned to the original document without losing the
-other tab. OS save dialogs and application-restart recovery for Excel were not
-claimed or added.
+structured API and PPTX encoding: its mutation response waited for the structured-
+project recovery checkpoint, an explicit export produced slide XML containing the
+edited text, and `ppt_open` returned to the original project without losing the other
+tab. OS save dialogs and application-restart recovery for Excel were not claimed or
+added.
 
 The Word upgrade compatibility repair additionally passed 130 tests across 19
 Word/shared-persistence files. Its storage suite covers both legacy copy orders,
@@ -298,11 +324,12 @@ recovery, source saving and export continue to use Phase 4. The caller decides w
 flush is required and handles failure before switching or closing. Native input and
 undo do not acquire another asynchronous queue.
 
-Editor adapters retain their own model, synchronization and rendering policies.
+Editor adapters retain their own synchronization and rendering policies.
 Word reconciles Univer Docs snapshots with its domain store. Excel reads its live
-Univer workbook and publishes into the owning tab. PowerPoint continues to read the
-existing presentation model and commits native edits through its current controller;
-transient animation and playback projections are not document snapshots. Format
+Univer workbook and publishes into the owning tab. PowerPoint projects the active
+`PresentationProject` from `PresentationStore` into Fabric and commits native edits
+back through that Store; transient animation and playback projections are not project
+snapshots. Format
 codecs, persistence destinations and backend Agent integrations are outside this
 increment.
 
@@ -326,9 +353,9 @@ increment.
   owns the native flush/dispose contract around the reusable Fabric canvas. It
   commits only pending user transforms and active text editing, preserving existing
   history behavior. Scene rendering and media remain presentation-specific. Text
-  composition blocks an explicit flush instead of truncating input. The workspace
-  controller flushes before document transitions and v5 operations, then revalidates
-  operation ownership. Native callbacks also retain their original slide identity.
+  composition blocks an explicit flush instead of truncating input. The Store flushes
+  native input before guarded operations, then revalidates operation ownership. Native
+  callbacks also retain their original slide identity.
 
 ### Phase 5 verification
 
@@ -348,7 +375,7 @@ native editing and tab restoration, then typing into an open cell and creating a
 new workbook through the UI callback without first blurring the cell: the pending
 value reached the original tab and did not appear in the new one.
 
-A separate actual PowerPoint renderer verified protocol v5 and source-file write
+A separate actual PowerPoint renderer verified source-file write
 acknowledgements, source-target isolation and bound-document reuse. It then entered
 text directly on the Fabric canvas and invoked an Agent page read while the native
 textarea was still focused; the response contained the latest text. OS source-save
@@ -379,23 +406,22 @@ manual/Electron scenarios passed. Remove superseded implementations only after
 parity checks, and do not modify backend files while completing these increments.
 
 
-## Session workspace files and automatic saving
+## Session workspace persistence and file handoff
 
-Office editors are shared views of Session workspace files. User edits are debounced
-into automatic source writes, while structured Agent mutations persist before returning.
-New documents receive a unique filename in `.work` and a Session Files entry. Local
-mounts, uploads and editor imports first register a managed workspace file, then open
-that file; repeating an import reuses its path and mount identity. Original import bytes
-are retained under `.internal/office/originals` before any format conversion.
+Office editors persist structured Session state independently from Office file formats.
+Structured Agent mutations checkpoint that state before returning. Word and Excel retain
+their editor-specific source-file policies. PowerPoint instead treats `.pptx` as an
+import/export boundary: UI and Agent edits automatically checkpoint `PresentationProject`
+state, but never encode or overwrite a PPTX in the background. A new presentation can
+therefore exist without a filename, and Save/Save As is an explicit project export.
 
-All three surfaces show Saving / Saved / Save failed with Retry. They do not offer a
-Save as workflow. Switching documents flushes the previous edits; closing tabs, releasing
-Sessions and application shutdown flush pending writes. A failed write keeps the editor
-and its unsaved content available for retry. Source versions are acknowledged only for
-the bytes actually written, so typing during a save schedules another write. Background
-writers serialize committed model content without ending native cell or text editing;
-foreground switching and closing still commit pending input first. Reopening an Excel
-file completes pending writes before inspecting or reading the source again.
+Switching projects first commits pending native input, then changes the active project
+immediately and schedules a recovery checkpoint. Closing tabs, releasing Sessions and
+application shutdown drain the required project operations and recovery writes. A failed
+checkpoint keeps the in-memory project available for retry. During an explicit Office
+file write, source versions are acknowledged only for the exact revision encoded, so
+later edits remain dirty. Reopening an Excel file completes its applicable pending source
+writes before inspecting or reading the file again.
 
 Each managed write records its destination and content fingerprint under
 `.internal/office/writes` before replacing the Office file. If file registration or its
@@ -406,8 +432,8 @@ The main-process file service resolves `.work` through the authenticated Session
 API, allocates collision-free names, atomically writes Office bytes, and notifies the file
 panel to refresh its entries. Private recovery remains separate from source writes and
 never marks a document saved. Word exports DOCX, Excel exports XLSX, and PowerPoint
-exports PPTX through their existing native model converters. `save_ppt` remains a flush
-tool for handing off the active workspace file; it no longer accepts a copy destination.
+exports PPTX through their existing native model converters. `ppt_save` remains the
+explicit flush/save-as command for exporting a selected project.
 
 This does not add live reload for direct external file writes or coordination between
 separate Sessions writing the same physical file.
@@ -434,6 +460,7 @@ Excel never drops a live image on conversion failure, even when simplifying unsu
 objects from an imported workbook. PPT rejects unsupported image types at insertion.
 
 Converted Word/PPT sources without a verified model and Excel sources with unsupported
-features can lose formatting during conversion. The workspace file becomes the editable
-version, while the original imported bytes are retained independently. An imported file
-is not rewritten simply by opening it; conversion is written when content changes.
+features can lose formatting during conversion. For PowerPoint, the imported source is
+converted into `PresentationProject` and retained only as source metadata; it is never
+the live editing model. An imported file is not rewritten simply by opening it, and a
+new PPTX is produced only by explicit save/export.

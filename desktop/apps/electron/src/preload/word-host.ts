@@ -36,6 +36,7 @@ function latestEvent<T>(channel: string) {
 
 const api: WordHostPreloadAPI = {
   getConfig: () => ipcRenderer.invoke(IPC.wordHost.getConfig),
+  openDocument: () => ipcRenderer.invoke(IPC.wordHost.openDocument),
   readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),
   reportState: (state) => ipcRenderer.invoke(IPC.wordHost.reportState, state),
   requestClose: () => ipcRenderer.invoke(IPC.wordHost.requestClose),

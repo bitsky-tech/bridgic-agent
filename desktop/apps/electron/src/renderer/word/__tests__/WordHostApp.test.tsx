@@ -90,6 +90,7 @@ describe('WordHostApp', () => {
     let deliver!: (request: WordHostOpenRequest) => void
     const api: WordHostPreloadAPI = {
       getConfig: async () => DEFAULT_SETTINGS,
+      openDocument: async () => undefined,
       readDocument: async (path) => {
         reads.push(path)
         return { bytes, fileName: path.split('/').at(-1)!, mtimeMs: 42 }
@@ -154,6 +155,7 @@ describe('WordHostApp', () => {
     let hides = 0
     const api: WordHostPreloadAPI = {
       getConfig: async () => ({ ...DEFAULT_SETTINGS, locale: 'en' }),
+      openDocument: async () => undefined,
       readDocument: async () => { throw new Error('No file requested') },
       reportState: async (state) => { reported.push(state) },
       requestClose: async () => { hides += 1 },
@@ -217,6 +219,7 @@ describe('WordHostApp', () => {
     let reads = 0
     const api: WordHostPreloadAPI = {
       getConfig: async () => DEFAULT_SETTINGS,
+      openDocument: async () => undefined,
       readDocument: async () => { reads += 1; throw new Error('No import should run') },
       reportState: async (state) => { reported.push(state) },
       requestClose: async () => undefined,

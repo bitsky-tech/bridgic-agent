@@ -5,10 +5,10 @@ import { PresentationSlidePreview } from '../../components/app/PresentationSlide
 import { importPresentationPptx } from '../presentationPptxImport'
 import { createPresentationPptx } from '../presentationPptx'
 import { presentationTextStyleAt, presentationTextDisplaySegments } from '../presentationText'
-import { createBlankPresentationDocument, layoutPresentationVerticalText } from '../../atoms/presentation'
+import { createBlankPresentationProject, layoutPresentationVerticalText, type PresentationProject } from '../../atoms/presentation'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
-import { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } from '../presentationMarkdown'
 import { presentationElementSource } from '@/presentation/project'
+import { editPresentationPage } from '@/presentation/agentCommands'
 
 const ns = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
 const emu = (px: number) => Math.round(px * 9525)
@@ -39,9 +39,15 @@ function firstText(model: Awaited<ReturnType<typeof readFixture>>) {
   return text
 }
 
+function agentEdit(model: PresentationProject): PresentationProject {
+  const page = model.slides.pages[0]!
+  const element = page.elements[0]!
+  return editPresentationPage(model, page.id, [{ type: 'patch', id: element.id, element_type: element.type, patch: { x: element.x } }]).project
+}
+
 describe('PowerPoint display fidelity', () => {
   it('renders theme background and footer when a page has no local overrides', () => {
-    const model = createBlankPresentationDocument('Theme preview')
+    const model = createBlankPresentationProject('Theme preview')
     model.theme = {
       ...model.theme,
       background: '#17182B',
@@ -57,7 +63,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each([0, 1, 2])('keeps category/value indices when chart point %s is absent', async (missingIndex) => {
-    const model = createBlankPresentationDocument('Sparse data')
+    const model = createBlankPresentationProject('Sparse data')
     model.slides.pages[0]!.elements = [{ id: 'chart', type: 'chart', chartType: 'column', x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['Jan', 'Feb', 'Mar'], series: [{ name: 'North', values: [10, 20, 30] }, { name: 'South', values: [40, 50, 60] }], colors: ['#2266EE', '#00AA88'], showLegend: true }]
     const zip = await JSZip.loadAsync(await createPresentationPptx(model))
@@ -83,7 +89,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each(['', '<c:ptCount val="3"/>'])('retains sparse indices without relying on an ordered or complete cache (%s)', async (count) => {
-    const model = createBlankPresentationDocument('Unordered cache')
+    const model = createBlankPresentationProject('Unordered cache')
     model.slides.pages[0]!.elements = [{ id: 'chart', type: 'chart', chartType: 'line', x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['Jan', 'Feb', 'Mar'], series: [{ name: 'Sales', values: [10, 20, 30] }], colors: ['#2266EE'], showLegend: true }]
     const zip = await JSZip.loadAsync(await createPresentationPptx(model))
@@ -103,7 +109,7 @@ describe('PowerPoint display fidelity', () => {
     expect(original.connectorPath).toStartWith('M 0 0 L 100 100')
     expect(original.connectorPath!.match(/ M /g)?.length).toBe(ends === 'both' ? 2 : 1)
     for (let round = 0; round < 2; round++) {
-      model.slides.pages = [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]
+      model = agentEdit(model)
       model = await importPresentationPptx(await createPresentationPptx(model))
       const arrow = model.slides.pages[0]!.elements[0]!
       if (!('connectorPath' in arrow)) throw new Error('Lost arrow geometry')
@@ -127,7 +133,7 @@ describe('PowerPoint display fidelity', () => {
       if (headerRow) expect(table).toMatchObject({ headerTextColor: '#000000', headerFill: '#FFFFFF' })
       const markup = new DOMParser().parseFromString(preview(model), 'text/html')
       expect(markup.getElementsByTagName('td')[0]!.getAttribute('style')).toContain('color:#000000')
-      const edited = compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide
+      const edited = agentEdit(model).slides.pages[0]!
       expect(edited.elements[0]).toMatchObject({ headerRow, ...(headerRow ? { headerTextColor: '#000000' } : {}) })
       model.slides.pages = [edited]
       const bytes = await createPresentationPptx(model)
@@ -138,7 +144,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('retains the existing white-on-accent default header separately from black body text', async () => {
-    const model = createBlankPresentationDocument('Header colors')
+    const model = createBlankPresentationProject('Header colors')
     model.slides.pages[0]!.elements = [{ id: 'table', type: 'table', x: 80, y: 80, width: 600, height: 300, rotation: 0,
       cells: [['Header', 'Value'], ['Body', '10']], headerRow: true, headerFill: '#6957D9', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#D8D9E0', fontSize: 24 }]
     const reopened = await importPresentationPptx(await createPresentationPptx(model))
@@ -146,7 +152,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each(['pie', 'doughnut'] as const)('retains per-category %s colors through repeated exports', async (chartType) => {
-    let model = createBlankPresentationDocument('Category colors')
+    let model = createBlankPresentationProject('Category colors')
     model.slides.pages[0]!.elements = [{ id: 'pie', type: 'chart', chartType, x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [50, 0, 20] }], colors: ['#FF0000', '#00AA00', '#0000FF'], showLegend: true }]
     for (let round = 0; round < 2; round++) {
@@ -158,7 +164,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each(['pie', 'doughnut'] as const)('matches sparse, unordered %s point overrides by index and retains single-series fallback', async (chartType) => {
-    const model = createBlankPresentationDocument('Point overrides')
+    const model = createBlankPresentationProject('Point overrides')
     model.slides.pages[0]!.elements = [{ id: 'pie', type: 'chart', chartType, x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [50, 30, 20] }], colors: ['#FF0000', '#00AA00', '#0000FF'], showLegend: true }]
     const zip = await JSZip.loadAsync(await createPresentationPptx(model))
@@ -213,7 +219,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('exports CSS-pixel stroke widths in DrawingML point units', async () => {
-    const model = createBlankPresentationDocument('Stroke units')
+    const model = createBlankPresentationProject('Stroke units')
     model.slides.pages[0]!.elements = [{ id: 'outline', type: 'rect', x: 100, y: 100, width: 400, height: 300, rotation: 0,
       fill: 'transparent', borderColor: '#000000', borderWidth: 4 }]
     const xml = await (await JSZip.loadAsync(await createPresentationPptx(model))).file('ppt/slides/slide1.xml')!.async('text')
@@ -242,7 +248,7 @@ describe('PowerPoint display fidelity', () => {
     let model = await readFixture(shape(1, 100, `<p:txBody><a:bodyPr/>${paragraphs}</p:txBody>`))
     const text = firstText(model)
     expect(text.paragraphs?.map(paragraph => paragraph.endStyle?.fontSize)).toEqual([64, undefined, 128, 16, undefined, 80])
-    const slide = compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide
+    const slide = agentEdit(model).slides.pages[0]!
     expect(slide.elements.find(element => element.type === 'text')).toMatchObject({ paragraphs: text.paragraphs })
     model.slides.pages = [slide]
     for (let round = 0; round < 2; round++) {
@@ -257,7 +263,7 @@ describe('PowerPoint display fidelity', () => {
 
   it.each(['rect', 'line'] as const)('exports whole-object opacity on %s outlines as well as fills', async (type) => {
     for (const opacity of [0, 0.2, 0.65]) {
-      const model = createBlankPresentationDocument('Faded outline')
+      const model = createBlankPresentationProject('Faded outline')
       model.slides.pages[0]!.elements = [{ id: 'faded', type, x: 100, y: 100, width: 500, height: type === 'line' ? 1 : 300,
         rotation: 0, fill: 'transparent', borderColor: '#000000', borderWidth: 8, opacity }]
       const bytes = await createPresentationPptx(model)
@@ -271,7 +277,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('keeps outline interiors transparent and their borders visible through export and reopening', async () => {
-    let model = createBlankPresentationDocument('Outline')
+    let model = createBlankPresentationProject('Outline')
     model.slides.pages[0]!.background = '#152945'
     model.slides.pages[0]!.elements = [{ id: 'outline', type: 'rect', x: 80, y: 80, width: 500, height: 300, rotation: 0,
       fill: 'transparent', borderColor: '#FFCC00', borderWidth: 3 }]
@@ -283,7 +289,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('keeps matching fill and border opacity editable through repeated exports', async () => {
-    let model = createBlankPresentationDocument('Faded filled shape')
+    let model = createBlankPresentationProject('Faded filled shape')
     model.slides.pages[0]!.elements = [{ id: 'faded', type: 'rect', x: 100, y: 100, width: 400, height: 200, rotation: 0,
       fill: '#FF0000', borderColor: '#000000', borderWidth: 8, opacity: 0.25 }]
     for (let count = 0; count < 2; count++) {
@@ -342,7 +348,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each([0, 1])('keeps borderless ellipses borderless through repeated export/import with width=%s', async (borderWidth) => {
-    let model = createBlankPresentationDocument('Borderless')
+    let model = createBlankPresentationProject('Borderless')
     model.slides.pages[0]!.elements = [{ id: 'circle', type: 'ellipse', x: 40, y: 40, width: 200, height: 100, rotation: 0,
       fill: '#745ADD', borderColor: 'transparent', borderWidth }]
     for (let count = 0; count < 2; count++) {
@@ -372,7 +378,7 @@ describe('PowerPoint display fidelity', () => {
     expect(svg).toContain('fill-opacity="1"')
   })
   it('writes legal rich-text paragraphs, including soft breaks, blank paragraphs, and hyperlink relationships', async () => {
-    const model = createBlankPresentationDocument('Rich text')
+    const model = createBlankPresentationProject('Rich text')
     model.slides.pages[0]!.elements = [{
       id: 'rich', type: 'text', text: 'First\nSecond\n\nThird', x: 40, y: 40, width: 500, height: 250, rotation: 0,
       fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left',
@@ -443,7 +449,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('draws ellipse and round-rectangle previews at the same bounds and radii as the canvas', () => {
-    const model = createBlankPresentationDocument('Shapes')
+    const model = createBlankPresentationProject('Shapes')
     model.slides.pages[0]!.elements = ['ellipse', 'roundRect'].map((type, index) => ({
       id: type, type: type as 'ellipse' | 'roundRect', x: index * 300, y: 0, width: 200, height: 100, rotation: 0,
       fill: '#FF0000', borderColor: 'transparent', borderWidth: 0,

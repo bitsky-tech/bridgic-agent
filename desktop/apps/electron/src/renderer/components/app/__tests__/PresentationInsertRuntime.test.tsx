@@ -11,7 +11,7 @@ const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
 const { Simulate } = await import('react-dom/test-utils')
 const fabric = await import('fabric')
-const { createBlankPresentationDocument } = await import('@/atoms/presentation')
+const { createBlankPresentationProject } = await import('@/atoms/presentation')
 const {
   createPresentationImageElement,
   createPresentationMediaElement,
@@ -19,7 +19,6 @@ const {
   createPresentationChartElement,
 } = await import('@/lib/presentationInsert')
 const {
-  createPresentationHistoryEntry,
   createPresentationImageFabricClipPath,
   createPresentationMediaFabricObject,
   createPresentationMediaRuntime,
@@ -27,13 +26,12 @@ const {
   createPresentationTextFabricObject,
   createPresentationFabricObject,
   getPresentationTextFabricFramePatch,
-  estimatePresentationDocumentBytes,
   isPresentationRotationLocked,
   PresentationNumberField,
   resolvePresentationNumberFieldValue,
   resolvePresentationSlideshowKeyAction,
-  trimPresentationHistoryEntries,
 } = await import('../PresentationWorkbenchPanel')
+const { createPresentationHistoryEntry, estimatePresentationProjectBytes, trimPresentationHistoryEntries } = await import('@/presentation/history')
 const {
   getPresentationPieSlices,
   getPresentationChartRange,
@@ -43,7 +41,7 @@ const {
 
 const { importPresentationPptx } = await import('@/lib/presentationPptxImport')
 const { createPresentationPptx } = await import('@/lib/presentationPptx')
-const { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } = await import('@/lib/presentationMarkdown')
+const { editPresentationPage } = await import('@/presentation/agentCommands')
 const { createPresentationAsset } = await import('@/presentation/project')
 
 const mountedRoots = new Set<Root>()
@@ -72,7 +70,7 @@ describe('presentation Insert runtime safeguards', () => {
   it.each([[0.2, 0.3], [2e-300, 3e-300], [2e300, 3e300]].map(values => [values] as const))('normalizes fractional pie data consistently in preview and Fabric: %j', async (values) => {
     const element = { ...createPresentationChartElement('pie'), width: 800, height: 400, title: undefined, showLegend: false,
       categories: ['A', 'B'], series: [{ name: 'Total', values }], colors: ['#FF6600', '#00AA88'] }
-    const model = createBlankPresentationDocument('Proportions')
+    const model = createBlankPresentationProject('Proportions')
     model.slides.pages[0]!.elements = [element]
     const host = document.createElement('div')
     host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} selected={false} width={1280} />)
@@ -93,7 +91,7 @@ describe('presentation Insert runtime safeguards', () => {
   it.each(['transparent', '#FFFFFF', '#152945'])('leaves a real hole in single-value doughnuts over %s', async (fill) => {
     const element = { ...createPresentationChartElement('doughnut'), width: 800, height: 400, title: undefined, showLegend: false,
       categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [0, 50, 0] }], colors: ['#FF6600', '#00AA88', '#2266EE'], chartAreaFill: fill, plotAreaFill: fill }
-    const model = createBlankPresentationDocument('Open ring')
+    const model = createBlankPresentationProject('Open ring')
     model.slides.pages[0]!.elements = [element]
     const host = document.createElement('div')
     host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} selected={false} width={1280} />)
@@ -120,7 +118,7 @@ describe('presentation Insert runtime safeguards', () => {
 
   it.each(['line', 'lineArrow', 'lineDoubleArrow', 'elbowConnector', 'elbowArrow', 'curvedConnector', 'curvedArrow'] as const)('preserves the existing %s path, transform and editability across repeated exports', async (type) => {
     for (const transform of [{ rotation: 0 }, { rotation: 37, flipHorizontal: true }, { rotation: 90, flipVertical: true }]) {
-      let model = createBlankPresentationDocument('Connector fidelity')
+      let model = createBlankPresentationProject('Connector fidelity')
       const element = { id: 'connector', type, x: 100, y: 150, width: 700, height: 300, fill: 'transparent', borderColor: '#111111', borderWidth: 6, ...transform }
       model.slides.pages[0]!.elements = [element]
       const original = await createPresentationFabricObject(fabric, element, () => undefined)
@@ -128,7 +126,11 @@ describe('presentation Insert runtime safeguards', () => {
       const originalPath = original.getObjects().find(object => object instanceof fabric.Path)!
       for (let round = 0; round < 2; round++) {
         model = await importPresentationPptx(await createPresentationPptx(model))
-        model.slides.pages = [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]
+        const page = model.slides.pages[0]!
+        const connector = page.elements[0]!
+        model = editPresentationPage(model, page.id, [{
+          type: 'patch', id: connector.id, element_type: connector.type, patch: { x: connector.x },
+        }]).project
         const reopened = model.slides.pages[0]!.elements[0]!
         expect(reopened.type).toBe(type)
         const current = await createPresentationFabricObject(fabric, reopened, () => undefined)
@@ -231,7 +233,7 @@ describe('presentation Insert runtime safeguards', () => {
       value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
     })
     try {
-      const model = createBlankPresentationDocument('Blank paragraphs')
+      const model = createBlankPresentationProject('Blank paragraphs')
       const element: PresentationTextElement = { id: 'blank', type: 'text', text: '\nBefore\n\n\nAfter\n', x: 0, y: 0, width: 600, height: 600,
         rotation: 0, fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', wordWrap, lineHeight: 1,
         paragraphs: [{ start: 0, end: 0, style: {}, endStyle: { fontSize: 64 } }, { start: 1, end: 7, style: {} },
@@ -280,7 +282,7 @@ describe('presentation Insert runtime safeguards', () => {
       return 0
     } })
     try {
-      const model = createBlankPresentationDocument('Short fixed spacing')
+      const model = createBlankPresentationProject('Short fixed spacing')
       const element: PresentationTextElement = { id: 'fixed', type: 'text', text: 'Small\nLARGE\nSmall', x: 0, y: 0, width: 600, height: 620,
         rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 32,
         textRuns: [{ start: 6, end: 11, style: { fontSize: 120 } }] }
@@ -317,7 +319,7 @@ describe('presentation Insert runtime safeguards', () => {
       value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 24 }) }),
     })
     try {
-      const model = createBlankPresentationDocument('Vertical list')
+      const model = createBlankPresentationProject('Vertical list')
       const element: PresentationTextElement = { id: 'vertical', type: 'text', text: '背　景\n甲乙', x: 40, y: 40, width: 600, height: 600,
         rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', textDirection,
         paragraphs: [{ start: 0, end: 3, style: { listStyle: 'bullet', listBulletChar: '◆', listMarkerFontFamily: 'Georgia' } },
@@ -360,7 +362,7 @@ describe('presentation Insert runtime safeguards', () => {
       return 0
     } })
     try {
-      const model = createBlankPresentationDocument('Fixed spacing')
+      const model = createBlankPresentationProject('Fixed spacing')
       model.slides.pages[0]!.elements = [{ id: 'fixed', type: 'text', text: 'Small LARGE', x: 0, y: 0, width: 600, height: 96,
         rotation: 0, fontSize: 24, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', lineSpacing: 48,
         textRuns: [{ start: 6, end: 11, style: { fontSize: 80 } }] }]
@@ -406,7 +408,7 @@ describe('presentation Insert runtime safeguards', () => {
       value: () => ({ font: '', textBaseline: 'alphabetic', measureText: (value: string) => ({ width: value.length * 12 }) }),
     })
     try {
-      const model = createBlankPresentationDocument('Line height')
+      const model = createBlankPresentationProject('Line height')
       const element = { id: 'line-height', type: 'text' as const, text: 'Heading', x: 40, y: 40, width: 600, height: 64,
         rotation: 0, fontSize: 40, fontFamily: 'Arial', fontWeight: 400 as const, color: '#111111', align: 'left' as const,
         lineHeight, wordWrap: true }
@@ -946,53 +948,53 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('keeps ordinary history at 50 entries and trims embedded payloads by byte budget', () => {
-    const documentModel = createBlankPresentationDocument('History')
-    const plainBytes = estimatePresentationDocumentBytes(documentModel)
+    const documentModel = createBlankPresentationProject('History')
+    const plainBytes = estimatePresentationProjectBytes(documentModel)
     const source = fileSource('video/mp4', 'large.mp4', 'A'.repeat(2_000))
     const media = createPresentationMediaElement('video', source)
     documentModel.assets.push(assetFor(media, source))
     documentModel.slides.pages[0]!.elements.push(media)
-    const mediaBytes = estimatePresentationDocumentBytes(documentModel)
+    const mediaBytes = estimatePresentationProjectBytes(documentModel)
     expect(mediaBytes).toBeGreaterThan(plainBytes + 3_900)
 
     const entry = createPresentationHistoryEntry(documentModel, mediaBytes)
     expect(entry).not.toBeNull()
-    expect(entry!.document).not.toBe(documentModel)
-    expect(entry!.document.assets[0]!.source.dataUrl).toBe(documentModel.assets[0]!.source.dataUrl)
+    expect(entry!.project).not.toBe(documentModel)
+    expect(entry!.project.assets[0]!.source.dataUrl).toBe(documentModel.assets[0]!.source.dataUrl)
     expect(createPresentationHistoryEntry(documentModel, mediaBytes - 1)).toBeNull()
 
     const ordinaryEntries = Array.from({ length: 60 }, (_, index) => ({
-      document: { ...documentModel, id: `document-${index}` },
+      project: { ...documentModel, id: `document-${index}` },
       estimatedBytes: 1,
     }))
     const entryLimited = trimPresentationHistoryEntries(ordinaryEntries, 50, 1_000)
     expect(entryLimited).toHaveLength(50)
-    expect(entryLimited[0]?.document.id).toBe('document-10')
-    expect(entryLimited.at(-1)?.document.id).toBe('document-59')
+    expect(entryLimited[0]?.project.id).toBe('document-10')
+    expect(entryLimited.at(-1)?.project.id).toBe('document-59')
 
     const byteLimited = trimPresentationHistoryEntries(
       ordinaryEntries.slice(0, 4).map((item) => ({ ...item, estimatedBytes: 40 })),
       50,
       100,
     )
-    expect(byteLimited.map((item) => item.document.id)).toEqual(['document-2', 'document-3'])
+    expect(byteLimited.map((item) => item.project.id)).toEqual(['document-2', 'document-3'])
   })
 
   it('preserves shared media sources across history clones', () => {
-    const document = createBlankPresentationDocument('Shared media')
+    const document = createBlankPresentationProject('Shared media')
     const source = fileSource('video/mp4', 'large.mp4', 'A'.repeat(10_000))
     const media = createPresentationMediaElement('video', source)
     document.assets.push(assetFor(media, source))
     document.slides.pages[0]!.elements = [media, { ...media, id: 'duplicated-media' }]
-    const estimatedBefore = estimatePresentationDocumentBytes(document)
+    const estimatedBefore = estimatePresentationProjectBytes(document)
     const entry = createPresentationHistoryEntry(document)
     expect(entry).not.toBeNull()
-    const [first, second] = entry!.document.slides.pages[0]!.elements
+    const [first, second] = entry!.project.slides.pages[0]!.elements
     expect(first?.type).toBe('video')
     expect(second?.type).toBe('video')
     if (first?.type === 'video' && second?.type === 'video') expect(first.sourceAssetId).toBe(second.sourceAssetId)
-    expect(entry!.document.assets).toHaveLength(1)
-    expect(estimatePresentationDocumentBytes(entry!.document)).toBe(estimatedBefore)
+    expect(entry!.project.assets).toHaveLength(1)
+    expect(estimatePresentationProjectBytes(entry!.project)).toBe(estimatedBefore)
   })
 
   it('leaves media navigation keys to native controls while preserving slideshow shortcuts', () => {
@@ -1019,7 +1021,7 @@ describe('presentation Insert runtime safeguards', () => {
     const audio = { ...createPresentationMediaElement('audio', audioSource), autoplay: true, muted: false }
     const video = { ...createPresentationMediaElement('video', videoSource), autoplay: true, muted: false }
     const assets = [assetFor(audio, audioSource), assetFor(video, videoSource)]
-    const slide = { ...createBlankPresentationDocument('Media').slides.pages[0]!, elements: [audio, video] }
+    const slide = { ...createBlankPresentationProject('Media').slides.pages[0]!, elements: [audio, video] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1075,7 +1077,7 @@ describe('presentation Insert runtime safeguards', () => {
   it('ignores an obsolete slide-show audio play failure after playback restarts', async () => {
     const source = fileSource('audio/mpeg', 'restart-slideshow.mp3')
     const audio = createPresentationMediaElement('audio', source)
-    const slide = { ...createBlankPresentationDocument('Audio controls').slides.pages[0]!, elements: [audio] }
+    const slide = { ...createBlankPresentationProject('Audio controls').slides.pages[0]!, elements: [audio] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1141,7 +1143,7 @@ describe('presentation Insert runtime safeguards', () => {
     const audio = { ...createPresentationMediaElement('audio', audioSource), autoplay: true }
     const video = { ...createPresentationMediaElement('video', videoSource), autoplay: true }
     const assets = [assetFor(audio, audioSource), assetFor(video, videoSource)]
-    const slide = { ...createBlankPresentationDocument('Strict media').slides.pages[0]!, elements: [audio, video] }
+    const slide = { ...createBlankPresentationProject('Strict media').slides.pages[0]!, elements: [audio, video] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1186,7 +1188,7 @@ describe('presentation Insert runtime safeguards', () => {
     const initialVideoSource = fileSource('video/mp4', 'first.mp4', 'BBBB')
     const initialAudio = createPresentationMediaElement('audio', initialAudioSource)
     const initialVideo = createPresentationMediaElement('video', initialVideoSource)
-    const baseSlide = createBlankPresentationDocument('Media source replacement').slides.pages[0]!
+    const baseSlide = createBlankPresentationProject('Media source replacement').slides.pages[0]!
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1235,7 +1237,7 @@ describe('presentation Insert runtime safeguards', () => {
       ...createPresentationMediaElement('audio', audioSource),
       hyperlink: { type: 'url' as const, url: 'https://example.com/unsupported-media-link' },
     }
-    const slide = { ...createBlankPresentationDocument('Links').slides.pages[0]!, elements: [linkedImage, audio] }
+    const slide = { ...createBlankPresentationProject('Links').slides.pages[0]!, elements: [linkedImage, audio] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1323,7 +1325,7 @@ describe('presentation Insert runtime safeguards', () => {
     expect(isPresentationRotationLocked(chart)).toBe(true)
     expect(isPresentationRotationLocked(image)).toBe(false)
 
-    const slide = { ...createBlankPresentationDocument('Rotation').slides.pages[0]!, elements: [media, table, chart, image] }
+    const slide = { ...createBlankPresentationProject('Rotation').slides.pages[0]!, elements: [media, table, chart, image] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -1338,7 +1340,7 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('renders centered PowerPoint text at point-correct CSS size inside the full text box width', async () => {
-    const documentModel = createBlankPresentationDocument('Centered text')
+    const documentModel = createBlankPresentationProject('Centered text')
     const slide = documentModel.slides.pages[0]!
     slide.elements = [{
       id: 'centered-title',
@@ -1378,7 +1380,7 @@ describe('presentation Insert runtime safeguards', () => {
   })
 
   it('renders East Asian vertical text in height-bound right-to-left columns', async () => {
-    const documentModel = createBlankPresentationDocument('Vertical poem')
+    const documentModel = createBlankPresentationProject('Vertical poem')
     const slide = documentModel.slides.pages[0]!
     slide.elements = [{
       id: 'vertical-poem',
@@ -1508,7 +1510,7 @@ describe('presentation Insert runtime safeguards', () => {
         x: element.x, y: element.y, width: element.width, height: element.height, rotation: 0,
       })
       const mixedElement = { ...element, id: 'vertical-mixed', text: '目录 Contents' }
-      const model = createBlankPresentationDocument('Mixed vertical text')
+      const model = createBlankPresentationProject('Mixed vertical text')
       model.slides.pages[0]!.elements = [mixedElement]
       const host = document.createElement('div')
       host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} width={1280} selected={false} />)
@@ -1543,7 +1545,7 @@ describe('presentation Insert runtime safeguards', () => {
     expect(clipPath).toBeInstanceOf(fabric.Ellipse)
     expect(clipPath).toMatchObject({ rx: element.width / 2, ry: element.height / 2 })
 
-    const documentModel = createBlankPresentationDocument('Picture-filled ellipse')
+    const documentModel = createBlankPresentationProject('Picture-filled ellipse')
     documentModel.assets.push(assetFor(element, source))
     documentModel.slides.pages[0]!.elements = [element]
     const host = document.createElement('div')
@@ -1578,7 +1580,7 @@ describe('presentation Insert runtime safeguards', () => {
         showLegend: false,
         title: undefined,
       }
-      const slide = { ...createBlankPresentationDocument('Negative chart').slides.pages[0]!, elements: [chart] }
+      const slide = { ...createBlankPresentationProject('Negative chart').slides.pages[0]!, elements: [chart] }
       await act(async () => {
         root.render(<PresentationSlidePreview slide={slide} width={960} selected={false} />)
       })
@@ -1614,7 +1616,7 @@ describe('presentation Insert runtime safeguards', () => {
 
   it('uses a minimum logical chart viewport while retaining a legacy small frame', async () => {
     const chart = { ...createPresentationChartElement('column'), width: 8, height: 8 }
-    const slide = { ...createBlankPresentationDocument('Small chart').slides.pages[0]!, elements: [chart] }
+    const slide = { ...createBlankPresentationProject('Small chart').slides.pages[0]!, elements: [chart] }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)

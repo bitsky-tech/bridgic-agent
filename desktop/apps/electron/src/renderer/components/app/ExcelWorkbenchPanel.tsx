@@ -29,7 +29,7 @@ const excelSurfacePolicy: NativeOfficeSurfacePolicy = {
   onError: (error) => rlog.warn('[excel-host] native surface sync failed', error),
 }
 
-/** Renderer chrome around one Session-owned native Excel WebContentsView. */
+/** Main-window viewport for one Session-owned native Excel WebContentsView. */
 export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   const { t, i18n } = useTranslation()
   const sessionId = useAtomValue(viewedSessionIdAtom)
@@ -122,29 +122,32 @@ export function ExcelWorkbenchPanel({ active = true }: { active?: boolean }) {
   if (hostSession?.crashed) status = t('excel.hostCrashed')
   else if (error) status = t('excel.hostFailed')
   else if (hostSession?.ready) status = t('excel.hostReady')
+  const showShellHeader = !nativeVisible || (hostSession.documentCount ?? 0) > 0
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-bg-surface" data-testid="excel-workbench">
-      <OfficeAppHeader
-        icon={Icons.spreadsheet(16)}
-        iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-        subtitle={`${status} · ${sessionId.slice(0, 8).toUpperCase()}`}
-        testId="excel-app-header"
-        title="Excel"
-      >
-        <OfficePanelControls
-          closeLabel={t('excel.closePanel')}
-          expanded={expanded}
-          expandLabel={expanded ? t('excel.exitExpanded') : t('excel.expand')}
-          onClose={() => {
-            void window.api.excelHost.closeSession(sessionId).catch((error) => {
-              rlog.warn('[excel-host] panel close failed', error)
-            })
-          }}
-          onToggleExpanded={() => setExpanded((value) => !value)}
-          testIdPrefix="excel"
-        />
-      </OfficeAppHeader>
+      {showShellHeader ? (
+        <OfficeAppHeader
+          icon={Icons.spreadsheet(16)}
+          iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          subtitle={`${status} · ${sessionId.slice(0, 8).toUpperCase()}`}
+          testId="excel-app-header"
+          title="Excel"
+        >
+          <OfficePanelControls
+            closeLabel={t('excel.closePanel')}
+            expanded={expanded}
+            expandLabel={expanded ? t('excel.exitExpanded') : t('excel.expand')}
+            onClose={() => {
+              void window.api.excelHost.closeSession(sessionId).catch((error) => {
+                rlog.warn('[excel-host] panel close failed', error)
+              })
+            }}
+            onToggleExpanded={() => setExpanded((value) => !value)}
+            testIdPrefix="excel"
+          />
+        </OfficeAppHeader>
+      ) : null}
 
       <div ref={viewportRef} className="relative min-h-0 flex-1 bg-bg-app" data-testid="excel-native-canvas">
         {!nativeVisible ? (

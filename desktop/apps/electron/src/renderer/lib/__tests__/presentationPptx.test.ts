@@ -4,14 +4,14 @@ import { DOMParser } from '@xmldom/xmldom'
 import {
   PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
-  createInitialPresentationDocument as createEmptyPresentationDocument,
+  createInitialPresentationProject as createEmptyPresentationProject,
   type PresentationAsset,
   type PresentationAssetKind,
   type PresentationElement,
   type PresentationFileSource,
   type PresentationTransition,
 } from '@/atoms/presentation'
-import { createPresentationTestDocument as createInitialPresentationDocument } from '@/test-fixtures/presentation'
+import { createPresentationTestDocument as createInitialPresentationProject } from '@/test-fixtures/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 
 function presentationAsset(id: string, kind: PresentationAssetKind, source: PresentationFileSource): PresentationAsset {
@@ -20,7 +20,7 @@ function presentationAsset(id: string, kind: PresentationAssetKind, source: Pres
 
 describe('createPresentationPptx', () => {
   async function exportTransitionSlides(transitions: PresentationTransition[]): Promise<JSZip> {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     document.slides.pages = transitions.map((transition, index) => ({
       ...createBlankPresentationSlide(`Transition ${index + 1}`),
       id: `transition-slide-${index + 1}`,
@@ -37,7 +37,7 @@ describe('createPresentationPptx', () => {
   }
 
   it('does not export empty text boxes as slide content', async () => {
-    const document = createEmptyPresentationDocument()
+    const document = createEmptyPresentationProject()
     document.slides.pages[0]!.elements = [{
       id: 'empty-title-placeholder',
       type: 'text',
@@ -62,7 +62,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('exports inherited theme background and footer without page copies', async () => {
-    const document = createEmptyPresentationDocument()
+    const document = createEmptyPresentationProject()
     document.theme = {
       ...document.theme,
       background: '#112233',
@@ -80,7 +80,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('exports every slide into a valid PowerPoint Open XML archive', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     const title = document.slides.pages[0]?.elements.find((element) => element.type === 'text')
     if (document.slides.pages[0]) {
       document.slides.pages[0].notes = 'Speaker note exported from Bridgic.'
@@ -154,7 +154,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('exports the document page size instead of forcing widescreen', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     document.pageSize = PRESENTATION_PAGE_SIZES.standard
 
     const archive = await JSZip.loadAsync(await createPresentationPptx(document))
@@ -164,7 +164,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('exports element animations as native PowerPoint timing targeted by object id', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     const slide = document.slides.pages[0]!
     const title = slide.elements.find((element) => element.type === 'text')!
     title.animation = 'fade'
@@ -295,7 +295,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('exports grouped card members in one synchronized native animation step', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     const slide = document.slides.pages[0]!
     slide.elements = [
       {
@@ -370,7 +370,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('preserves after-previous steps when a with-previous effect follows them', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     const slide = document.slides.pages[0]!
     const animatedShape = (id: string, animationStart: 'onClick' | 'withPrevious' | 'afterPrevious', animation: 'fade' | 'appear' | 'disappear', duration: number, x: number): PresentationElement => ({
       id,
@@ -411,7 +411,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('exports hyperlinks, embedded media, editable tables and charts, and slide footers', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     const sourceSlide = document.slides.pages[0]!
     const targetSlide = document.slides.pages[1]!
     const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5QAAAABJRU5ErkJggg=='
@@ -678,7 +678,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('canonicalizes QuickTime content types without relying on audio or transitions', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     document.assets.push(presentationAsset('quicktime-only-asset', 'video', {
       dataUrl: 'data:video/quicktime;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=',
       fileName: 'quicktime-only.mov',
@@ -707,7 +707,7 @@ describe('createPresentationPptx', () => {
   })
 
   it('skips malformed legacy elements and dangling hyperlinks without failing export', async () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     document.assets.push(
       presentationAsset('broken-image-asset', 'image', { dataUrl: 'not-a-data-url', fileName: 'broken.png', mimeType: 'image/png' }),
       presentationAsset('mismatched-image-asset', 'image', {

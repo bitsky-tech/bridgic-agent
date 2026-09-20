@@ -1,5 +1,5 @@
 import { OfficeSaveActions } from './OfficeSaveActions'
-import { isPresentationDirty } from '@/lib/presentationWorkspaceRuntime'
+import { isPresentationProjectDirty } from '@/lib/presentationFileController'
 import { presentationChartValueTicks, presentationChartHoleSize, presentationChartValue, presentationChartLineSegments, presentationLineLabelY, presentationPieLabels } from '@/lib/presentationCharts'
 import {
   useCallback,
@@ -8,12 +8,13 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent,
   type FormEvent,
   type ReactElement,
   type ReactNode,
 } from 'react'
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type {
   Canvas as FabricCanvas,
@@ -38,17 +39,12 @@ import {
 import {
   createBlankPresentationSlide,
   createPresentationId,
-  currentPresentationDocumentAtom,
-  currentPresentationWorkspaceAtom,
   formatPresentationText,
   getPresentationPageSize,
   layoutPresentationVerticalText,
   presentationSlideBackground,
   presentationSlideFooter,
-  presentationAgentChangeAtom,
   presentationExpandedAtom,
-  presentationSessionIdAtom,
-  presentationWorkspaceFamily,
   replacePresentationPages,
   selectPresentationPage,
   stripPresentationTextFormatting,
@@ -56,7 +52,7 @@ import {
   type PresentationAsset,
   type PresentationChartElement,
   type PresentationComment,
-  type PresentationDocument,
+  type PresentationProject,
   type PresentationElement,
   type PresentationFileSource,
   type PresentationHyperlink,
@@ -79,7 +75,7 @@ import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
-import { presentationThemeTextColors, resizePresentationDocument } from '@/lib/presentationDesign'
+import { presentationThemeTextColors, resizePresentationProject } from '@/lib/presentationDesign'
 import {
   clearPresentationHyperlinksToPages,
   createPresentationAsset,
@@ -151,9 +147,13 @@ import {
   supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
-import { createPresentationWorkspaceRuntime, type PresentationWorkspaceRuntime } from '@/lib/presentationWorkspaceRuntime'
 import { createOfficeEditorBinding, type OfficeEditorBinding, type OfficeEditorLease } from '@/lib/office/officeEditorBinding'
 import { bindPresentationNativeEdit, createPresentationEditorDriver, type PresentationEditingObject } from '@/lib/presentationEditorDriver'
+import {
+  PRESENTATION_HISTORY_MAX_BYTES,
+  estimatePresentationProjectBytes,
+} from '@/presentation/history'
+import type { PresentationStore } from '@/presentation/store'
 import {
   getPresentationShapePath,
   getPresentationShapeDefinition,
@@ -188,11 +188,9 @@ import {
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
-  workspaceRuntime?: PresentationWorkspaceRuntime
+  presentationStore: PresentationStore
   onClose?: () => void
   onExpandedChange?: (expanded: boolean) => void
-  onSave?: (documentId: string, saveAs: boolean) => Promise<boolean>
-  saveError?: string | null
 }
 
 interface SlideshowTransitionRun {
@@ -222,73 +220,8 @@ interface SlideshowTransitionView extends SlideshowTransitionRun {
   transition: PresentationTransition
 }
 
-export const PRESENTATION_HISTORY_MAX_ENTRIES = 50
-export const PRESENTATION_HISTORY_MAX_BYTES = 192 * 1024 * 1024
-
-export interface PresentationHistoryEntry {
-  document: PresentationDocument
-  estimatedBytes: number
-}
-
-/** Estimate retained JS heap without serializing large embedded data URLs. */
-export function estimatePresentationDocumentBytes(document: PresentationDocument): number {
-  const seen = new Set<object>()
-  let bytes = 0
-
-  const visit = (value: unknown) => {
-    if (value === null || value === undefined) {
-      bytes += 4
-      return
-    }
-    if (typeof value === 'string') {
-      // UTF-16 is deliberately conservative; data URLs are ASCII but can still be
-      // promoted internally, and the budget should remain safe across runtimes.
-      bytes += value.length * 2
-      return
-    }
-    if (typeof value === 'number' || typeof value === 'boolean') {
-      bytes += 8
-      return
-    }
-    if (typeof value !== 'object' || seen.has(value)) return
-    seen.add(value)
-    bytes += Array.isArray(value) ? 24 : 32
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item)
-      return
-    }
-    for (const [key, item] of Object.entries(value)) {
-      bytes += key.length * 2
-      visit(item)
-    }
-  }
-
-  visit(document)
-  return bytes
-}
-
-function cloneDocument(document: PresentationDocument): PresentationDocument {
-  // structuredClone would duplicate every Base64 payload for every undo step.
-  // Strip the immutable payloads while cloning the mutable model, then reattach
-  // the original strings by index so snapshots cannot mutate one another.
-  const payloads = document.assets.map((asset) => asset.source.dataUrl)
-  const payloadFreeDocument: PresentationDocument = {
-    ...document,
-    assets: document.assets.map((asset) => ({ ...asset, source: { ...asset.source, dataUrl: '' } })),
-  }
-  const cloned = structuredClone(payloadFreeDocument)
-  cloned.assets.forEach((asset, index) => { asset.source.dataUrl = payloads[index] ?? '' })
-  return cloned
-}
-
-export function createPresentationHistoryEntry(document: PresentationDocument, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry | null {
-  const estimatedBytes = estimatePresentationDocumentBytes(document)
-  if (estimatedBytes > maxBytes) return null
-  return { document: cloneDocument(document), estimatedBytes }
-}
-
 export function canAppendPresentationFileElement(
-  document: PresentationDocument,
+  document: PresentationProject,
   element: PresentationImageElement | PresentationMediaElement,
   asset: PresentationAsset,
   maxBytes = PRESENTATION_HISTORY_MAX_BYTES,
@@ -302,39 +235,13 @@ export function canAppendPresentationFileElement(
       ? { ...item, elements: [...item.elements, element] }
       : item)),
   }
-  return estimatePresentationDocumentBytes(nextDocument) <= maxBytes
+  return estimatePresentationProjectBytes(nextDocument) <= maxBytes
 }
 
 export function resolvePresentationNumberFieldValue(draft: string, min: number | undefined, fallback: number): number {
   const parsed = draft.trim() ? Number(draft) : Number.NaN
   if (!Number.isFinite(parsed)) return Math.round(fallback)
   return Math.round(min === undefined ? parsed : Math.max(min, parsed))
-}
-
-/** Keep the newest contiguous history segment within both entry and byte limits. */
-export function trimPresentationHistoryEntries(entries: readonly PresentationHistoryEntry[], maxEntries = PRESENTATION_HISTORY_MAX_ENTRIES, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry[] {
-  const kept: PresentationHistoryEntry[] = []
-  let retainedBytes = 0
-  for (let index = entries.length - 1; index >= 0 && kept.length < Math.max(0, maxEntries); index -= 1) {
-    const entry = entries[index]!
-    if (entry.estimatedBytes > maxBytes - retainedBytes) break
-    kept.unshift(entry)
-    retainedBytes += entry.estimatedBytes
-  }
-  return kept
-}
-
-function trimPresentationHistoryPair(past: PresentationHistoryEntry[], future: PresentationHistoryEntry[]): void {
-  let entryCount = past.length + future.length
-  let retainedBytes = [...past, ...future].reduce((sum, entry) => sum + entry.estimatedBytes, 0)
-  while (entryCount > PRESENTATION_HISTORY_MAX_ENTRIES || retainedBytes > PRESENTATION_HISTORY_MAX_BYTES) {
-    // Prefer discarding the oldest undo state. Once none remain, discard the
-    // farthest redo state (future[0]); the nearest redo lives at the end.
-    const removed = past.length > 0 ? past.shift() : future.shift()
-    if (!removed) break
-    entryCount -= 1
-    retainedBytes -= removed.estimatedBytes
-  }
 }
 
 export function isPresentationRotationLocked(element: PresentationElement): boolean {
@@ -1841,25 +1748,18 @@ function createFooterFabricObjects(fabric: FabricModule, theme: PresentationMast
 }
 
 /** A focused PowerPoint-style editor embedded in the Session workbench. */
-export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, workspaceRuntime, onSave, saveError }: PresentationWorkbenchPanelProps) {
+export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, presentationStore }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
-  const sessionId = useAtomValue(presentationSessionIdAtom)
-  const agentChange = useAtomValue(presentationAgentChangeAtom)
-  const workspace = useAtomValue(currentPresentationWorkspaceAtom)
-  const document = useAtomValue(currentPresentationDocumentAtom)
-  const store = useStore()
-  const presentationRuntime = useMemo(() => {
-    if (workspaceRuntime) return workspaceRuntime
-    const workspaceAtom = presentationWorkspaceFamily(sessionId ?? '')
-    return createPresentationWorkspaceRuntime({
-      sessionId: sessionId ?? '',
-      read: () => store.get(workspaceAtom),
-      write: (next) => store.set(workspaceAtom, next),
-    })
-  }, [sessionId, store, workspaceRuntime])
-  useEffect(() => store.sub(presentationWorkspaceFamily(sessionId ?? ''), () => {
-    presentationRuntime.runtime.publish()
-  }), [presentationRuntime, sessionId, store])
+  const sessionId = presentationStore.sessionId
+  const presentationSnapshot = useSyncExternalStore(
+    presentationStore.subscribe,
+    presentationStore.getSnapshot,
+    presentationStore.getSnapshot,
+  )
+  const agentChange = presentationSnapshot.agentChange
+  const document = presentationSnapshot.project!
+  const documentMetadata = presentationSnapshot.projectMetadata[document.id]!
+  const documentRevision = documentMetadata.revision
   const pageSize = getPresentationPageSize(document)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
@@ -1867,6 +1767,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const showToast = useSetAtom(showToastAtom)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
   const [canvasGeneration, setCanvasGeneration] = useState(0)
+  const [canvasRenderState, setCanvasRenderState] = useState<{
+    key: string | null
+    status: 'error' | 'loading' | 'ready'
+  }>({ key: null, status: 'loading' })
   const [canvasScale, setCanvasScale] = useState(0.4)
   const [compact, setCompact] = useState(true)
   const [ribbonCollapsed, setRibbonCollapsed] = useState(false)
@@ -1887,7 +1791,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const [slideshowTransition, setSlideshowTransition] = useState<SlideshowTransitionRun | null>(null)
   const [animationPreviewRun, setAnimationPreviewRun] = useState<AnimationPreviewRun | null>(null)
   const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
-  const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
+  const historyStatus = { canUndo: presentationSnapshot.canUndo, canRedo: presentationSnapshot.canRedo }
   const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
   const [masterDialogOpen, setMasterDialogOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -1901,8 +1805,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const mediaRuntimeRef = useRef<PresentationMediaRuntime | null>(null)
   const objectIdsRef = useRef(new WeakMap<FabricObject, string>())
   const documentRef = useRef(document)
-  const editorBindingRef = useRef<OfficeEditorBinding<PresentationDocument> | null>(null)
-  const nativeCommitRef = useRef<(next: PresentationDocument) => void>(() => undefined)
+  const editorBindingRef = useRef<OfficeEditorBinding<PresentationProject> | null>(null)
+  const nativeCommitRef = useRef<(next: PresentationProject) => void>(() => undefined)
   const flushNativeEditRef = useRef<(() => void) | null>(null)
   const pendingCanvasEditRef = useRef<(() => void) | null>(null)
   const pageSizeRef = useRef(pageSize)
@@ -1917,8 +1821,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   })
   const suppressCanvasSelectionRef = useRef(false)
   const canvasSelectionFrameRef = useRef<number | null>(null)
-  const pastRef = useRef<PresentationHistoryEntry[]>([])
-  const futureRef = useRef<PresentationHistoryEntry[]>([])
   const animationRunIdRef = useRef(0)
   const transitionRunIdRef = useRef(0)
   const consumedAgentChangeIdRef = useRef(0)
@@ -1931,6 +1833,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const currentSlide = document.slides.pages.find((slide) => slide.id === document.slides.selectedPageId)
     ?? document.slides.pages[0]
+  const currentCanvasRenderKey = currentSlide
+    ? JSON.stringify([document.id, documentRevision, currentSlide.id, canvasGeneration, agentChange?.changeId ?? 0])
+    : null
+  const currentCanvasRenderStatus = canvasRenderState.key === currentCanvasRenderKey
+    ? canvasRenderState.status
+    : 'loading'
   const currentSlideBackground = currentSlide
     ? presentationSlideBackground(document.theme, currentSlide)
     : document.theme.background
@@ -1945,30 +1853,17 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     : []
   const selectedText = selectedElement && isPresentationTextElement(selectedElement) ? selectedElement : null
 
-  const commitDocument = useCallback((next: PresentationDocument, recordHistory = true) => {
+  const commitDocument = useCallback((next: PresentationProject, recordHistory = true) => {
     const current = documentRef.current
-    let versionedNext: PresentationDocument
+    let versionedNext: PresentationProject
     try {
-      versionedNext = presentationRuntime.commitDocument(current, next)
+      versionedNext = presentationStore.commitProject(current, next, true, recordHistory)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error))
       return
     }
-    if (recordHistory) {
-      const entry = createPresentationHistoryEntry(current)
-      // An oversized state is an undo barrier. Keeping older entries would make
-      // Undo skip the latest change and restore an unrelated document state.
-      pastRef.current = entry
-        ? trimPresentationHistoryEntries([...pastRef.current, entry])
-        : []
-      futureRef.current = []
-    }
     documentRef.current = versionedNext
-    setHistoryStatus({
-      canUndo: pastRef.current.length > 0,
-      canRedo: futureRef.current.length > 0,
-    })
-  }, [presentationRuntime, showToast])
+  }, [presentationStore, showToast])
 
   const replaceCurrentSlide = useCallback((nextSlide: PresentationSlide) => {
     const current = documentRef.current
@@ -2170,8 +2065,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   }, [syncFabricObject, syncFabricObjects])
 
   useEffect(() => {
-    pastRef.current = []
-    futureRef.current = []
     isolatedElementIdRef.current = null
     selectedElementIdRef.current = null
     const timer = window.setTimeout(() => {
@@ -2181,7 +2074,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       setTransitionPreviewRun(null)
       setInsertDialog(null)
       setSelectedElementId(null)
-      setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
     return () => window.clearTimeout(timer)
   }, [document.id, sessionId])
@@ -2303,10 +2195,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   useEffect(() => {
     if (!active || !canvasElementRef.current) return
-    const binding = createOfficeEditorBinding<PresentationDocument>({
+    const binding = createOfficeEditorBinding<PresentationProject>({
       appKind: 'presentation', sessionId: sessionId ?? '', documentId: documentRef.current.id,
       onChange: (next, identity) => {
-        if (identity.documentId !== presentationRuntime.runtime.getSnapshot().activeDocumentId) return
+        if (identity.documentId !== presentationStore.runtime.getSnapshot().activeDocumentId) return
         nativeCommitRef.current(next)
       },
     })
@@ -2474,7 +2366,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         setInsertDialog({ kind: element.type, elementId: element.id })
       })
       const driver = createPresentationEditorDriver({
-        readSnapshot: () => store.get(presentationWorkspaceFamily(sessionId ?? '')).documents
+        readSnapshot: () => presentationStore.getSnapshot().projects
           .find((item) => item.id === binding.capture().identity.documentId) ?? null,
         readEditingObject: () => canvas.getActiveObject() as (FabricObject & PresentationEditingObject) | null,
         flushPendingEdit: () => {
@@ -2509,7 +2401,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       })
       if (!binding.attach(driver)) return
       flushNativeEditRef.current = () => { void driver.flush(binding.capture()) }
-      unregisterEditor = presentationRuntime.bindEditor(binding)
+      unregisterEditor = presentationStore.bindEditor(binding)
       setCanvasGeneration((value) => value + 1)
     })
     return () => {
@@ -2517,7 +2409,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       binding.dispose()
       if (editorBindingRef.current === binding) editorBindingRef.current = null
     }
-  }, [activateFabricElement, active, presentationRuntime, sessionId, store])
+  }, [activateFabricElement, active, presentationStore, sessionId])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -2526,6 +2418,19 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     if (!active || !canvas || !fabric || !mediaRuntime || !currentSlide) return
     const lease = editorBindingRef.current?.capture()
     let cancelled = false
+    const renderKey = JSON.stringify([document.id, documentRevision, currentSlide.id, canvasGeneration, agentChange?.changeId ?? 0])
+    let pendingElements = currentSlide.elements.length
+    let renderFailed = false
+    const finishElement = () => {
+      pendingElements -= 1
+      if (!cancelled && !renderFailed && pendingElements === 0) {
+        setCanvasRenderState({ key: renderKey, status: 'ready' })
+      }
+    }
+    const failRender = () => {
+      renderFailed = true
+      if (!cancelled) setCanvasRenderState({ key: renderKey, status: 'error' })
+    }
     const revealFrameIds = new Set<number>()
     const visibleAgentChange = agentChange
       && agentChange.slideId === currentSlide.id
@@ -2543,7 +2448,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       revealFrameIds.add(frameId)
     }
     const animateAgentObject = (object: FabricObject, element: PresentationElement, index: number) => {
-      if (!visibleAgentChange || reducedMotion || !revealedElementIds.has(element.id)) return
+      if (!visibleAgentChange || reducedMotion || !revealedElementIds.has(element.id)) {
+        finishElement()
+        return
+      }
       const delayMs = Math.min(240, index * 32)
       const targetOpacity = element.opacity ?? 1
       if (
@@ -2569,7 +2477,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
           object.setCoords()
           canvas.requestRenderAll()
           if (progress < 1) scheduleRevealFrame(tick)
-          else object.set({ text: fullText })
+          else {
+            object.set({ text: fullText })
+            canvas.requestRenderAll()
+            finishElement()
+          }
         }
         scheduleRevealFrame(tick)
         return
@@ -2588,7 +2500,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         object.set({ opacity: targetOpacity * eased })
         canvas.requestRenderAll()
         if (progress < 1) scheduleRevealFrame(tick)
-        else object.set({ opacity: targetOpacity })
+        else {
+          object.set({ opacity: targetOpacity })
+          canvas.requestRenderAll()
+          finishElement()
+        }
       }
       scheduleRevealFrame(tick)
     }
@@ -2608,6 +2524,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const slideNumber = documentRef.current.slides.pages.findIndex((slide) => slide.id === currentSlide.id) + 1
     createFooterFabricObjects(fabric, document.theme, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
     canvas.requestRenderAll()
+    if (pendingElements === 0) {
+      scheduleRevealFrame(() => {
+        if (!cancelled) setCanvasRenderState({ key: renderKey, status: 'ready' })
+      })
+    }
 
     currentSlide.elements.forEach((element, index) => {
       const source = isPresentationImageElement(element) || isPresentationMediaElement(element)
@@ -2621,7 +2542,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         }) : () => undefined,
         source,
       ).then((object) => {
-        if (cancelled || !lease?.isCurrent() || canvasRef.current !== canvas) return
+        if (cancelled || (lease && !lease.isCurrent()) || canvasRef.current !== canvas) return
         let hoverCursor = 'move'
         if (isPresentationMediaElement(element)) hoverCursor = 'default'
         else if (element.hyperlink && supportsPresentationElementHyperlink(element)) hoverCursor = 'pointer'
@@ -2655,6 +2576,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         canvas.requestRenderAll()
       }).catch((error: unknown) => {
         if (cancelled || canvasRef.current !== canvas) return
+        failRender()
         rlog.warn('[presentation] canvas element render failed', {
           elementId: element.id,
           elementType: element.type,
@@ -2668,27 +2590,17 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       for (const frameId of revealFrameIds) window.cancelAnimationFrame(frameId)
       if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
-  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.theme, pageSize])
+  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.id, documentRevision, document.theme, pageSize])
 
   const undo = useCallback(() => {
-    const previous = pastRef.current.pop()
-    if (!previous) return
-    const current = createPresentationHistoryEntry(documentRef.current)
-    if (current) futureRef.current.push(current)
-    else futureRef.current = []
-    trimPresentationHistoryPair(pastRef.current, futureRef.current)
-    commitDocument(previous.document, false)
-  }, [commitDocument])
+    const previous = presentationStore.undo()
+    if (previous) documentRef.current = previous
+  }, [presentationStore])
 
   const redo = useCallback(() => {
-    const next = futureRef.current.pop()
-    if (!next) return
-    const current = createPresentationHistoryEntry(documentRef.current)
-    if (current) pastRef.current.push(current)
-    else pastRef.current = []
-    trimPresentationHistoryPair(pastRef.current, futureRef.current)
-    commitDocument(next.document, false)
-  }, [commitDocument])
+    const next = presentationStore.redo()
+    if (next) documentRef.current = next
+  }, [presentationStore])
 
   const deleteSelectedElement = useCallback(() => {
     const elementId = selectedElementIdRef.current
@@ -2804,7 +2716,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     if (current.slides.selectedPageId === slideId) return
     const selected = { ...current, slides: selectPresentationPage(current.slides, slideId) }
     try {
-      documentRef.current = presentationRuntime.commitDocument(current, selected, false)
+      documentRef.current = presentationStore.commitProject(current, selected, false, false)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error))
     }
@@ -2812,12 +2724,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const [saving, setSaving] = useState(false)
   const savePresentation = useCallback((saveAs: boolean) => {
-    if (!onSave) return
     setSaving(true)
-    void onSave(document.id, saveAs).catch((error) => showToast(String(error))).finally(() => setSaving(false))
-  }, [document.id, onSave, showToast])
+    void presentationStore.save(document.id, saveAs).catch((error) => showToast(String(error))).finally(() => setSaving(false))
+  }, [document.id, presentationStore, showToast])
   useEffect(() => {
-    if (!onSave) return
     const key = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
       event.preventDefault()
@@ -2825,33 +2735,28 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [onSave, savePresentation])
+  }, [savePresentation])
 
-  const selectPresentationDocument = (documentId: string) => {
-    void presentationRuntime.activateDocument(documentId).then((result) => {
-      if (!result.ok) showToast(result.error.message)
-    })
+  const selectPresentationProject = (documentId: string) => {
+    void presentationStore.selectProject(documentId).catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
-  const createPresentationDocument = () => {
-    void presentationRuntime.createDocument().then((result) => {
-      if (!result.ok) showToast(result.error.message)
-    })
+  const createPresentationProject = () => {
+    void presentationStore.createProject().catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
-  const closePresentationDocument = (documentId: string) => {
-    void presentationRuntime.closeDocument(documentId).then((result) => {
-      if (!result.ok) showToast(result.error.message)
-      else if (result.value.closeSurface) {
+  const closePresentationProject = (documentId: string) => {
+    void presentationStore.closeProject(documentId).then((result) => {
+      if (result.closeSurface) {
         setExpanded(false)
         if (onClose) onClose()
         else setRightCollapsed(true)
       }
-    })
+    }).catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
   const closePresentationPanel = () => {
-    void presentationRuntime.flushEditor().then(() => {
+    void presentationStore.flushEditor().then(() => {
       setExpanded(false)
       if (onClose) onClose()
       else setRightCollapsed(true)
@@ -3318,7 +3223,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const changePageSize = (preset: PresentationPageSizePreset) => {
     const current = documentRef.current
-    commitDocument(resizePresentationDocument(current, preset))
+    commitDocument(resizePresentationProject(current, preset))
   }
 
   const applyCurrentTransitionToAll = () => {
@@ -3492,7 +3397,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const previewWidth = compact ? 78 : 126
   const sessionTarget = sessionId ? sessionId.slice(0, 8).toUpperCase() : '—'
-  const documentFileName = (item: PresentationDocument) => {
+  const documentFileName = (item: PresentationProject) => {
     const title = item.title.trim() || t('session.presentation.untitled')
     return title.toLowerCase().endsWith('.pptx') ? title : `${title}.pptx`
   }
@@ -3590,21 +3495,22 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       </OfficeAppHeader>
 
       <OfficeDocumentTabs
-        actions={onSave ? <OfficeSaveActions dirty={isPresentationDirty(document)} error={saveError} disabled={saving} onSave={savePresentation} /> : undefined}
-        activeId={workspace.activeDocumentId}
+        actions={<OfficeSaveActions dirty={isPresentationProjectDirty(documentMetadata)} error={presentationSnapshot.exportError} disabled={saving} onSave={savePresentation} />}
+        activeId={presentationSnapshot.activeProjectId}
         icon={<span className="shrink-0 text-[#D97706]"><PresentationMark /></span>}
         label={t('session.presentation.documentTabs')}
         newIcon={<PlusIcon />}
         newLabel={t('session.presentation.newPresentation')}
-        onClose={closePresentationDocument}
-        onCreate={createPresentationDocument}
-        onSelect={selectPresentationDocument}
-        tabs={workspace.documents.map((item) => {
-          const fileName = item.source?.path.split(/[\\/]/).at(-1) || documentFileName(item)
+        onClose={closePresentationProject}
+        onCreate={createPresentationProject}
+        onSelect={selectPresentationProject}
+        tabs={presentationSnapshot.projects.map((item) => {
+          const metadata = presentationSnapshot.projectMetadata[item.id]!
+          const fileName = metadata.source?.path.split(/[\\/]/).at(-1) || documentFileName(item)
           return {
             id: item.id,
             label: fileName,
-            dirtyLabel: isPresentationDirty(item) ? t('office.unsaved') : undefined,
+            dirtyLabel: isPresentationProjectDirty(metadata) ? t('office.unsaved') : undefined,
             closeLabel: t('session.presentation.closeDocument', { name: fileName }),
           }
         })}
@@ -3612,7 +3518,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
       />
 
-      {document.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
+      {documentMetadata.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
       <PresentationRibbon
         activeTab={ribbonTab}
         animationTargetElements={selectedAnimationTargetElements}
@@ -3723,6 +3629,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
             <main ref={stageRef} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_36%,#F5F6F8_0%,#E4E6EB_78%)] dark:bg-[radial-gradient(circle_at_50%_36%,#35363D_0%,#25262C_82%)]">
               <div
                 className="relative shrink-0 overflow-hidden ring-1 ring-black/5 shadow-[0_24px_62px_rgba(30,27,48,0.18),0_3px_12px_rgba(30,27,48,0.1)] dark:ring-white/10"
+                data-testid="presentation-editing-canvas"
+                data-presentation-document-revision={documentRevision}
+                data-presentation-page-id={currentSlide?.id}
+                data-presentation-render-status={currentCanvasRenderStatus}
                 style={{ width: pageSize.width * canvasScale, height: pageSize.height * canvasScale }}
               >
                 <div className="absolute left-0 top-0 origin-top-left" style={{ width: pageSize.width, height: pageSize.height, transform: `scale(${canvasScale})` }}>

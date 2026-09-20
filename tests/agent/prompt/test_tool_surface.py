@@ -36,18 +36,15 @@ from src.amphi_store import SessionRecord, SkillRepository
 USER_ID = "local"
 SESSION_ID = "session-tools"
 POWERPOINT_TOOL_NAMES = {
-    "save_ppt",
-    "view_ppt",
-    "get_ppt_page",
-    "update_ppt_design",
-    "edit_ppt_page",
-    "insert_ppt_element",
-    "remove_ppt_element",
-    "insert_ppt_page",
-    "remove_ppt_page",
-    "move_ppt_page",
-    "goto_ppt_page",
+    "ppt_open",
+    "ppt_read_deck",
+    "ppt_read_page",
+    "ppt_inspect",
+    "ppt_edit_page",
+    "ppt_manage_deck",
+    "ppt_save",
 }
+POWERPOINT_INSPECTION_TOOL_NAMES = {"ppt_open", "ppt_read_deck", "ppt_read_page", "ppt_inspect"}
 
 
 class _RecordingLlm:
@@ -230,14 +227,14 @@ def test_mode_tools() -> None:
       "main": ["delegation", "no switch"],
       "child": ["no delegation", "no root controls"],
       "build": ["switch", "stage completion control"],
-      "presentation": ["switch", "no PowerPoint tools", "no mode-entry controls"],
+      "presentation": ["switch", "stage-scoped PowerPoint tools", "no mode-entry controls"],
       "workflow": ["switch", "report_workflow_step", "no mode-entry controls"]
     }
 
     Checks:
     1. Main and Child expose their distinct root and delegated capabilities.
     2. Build stages expose only the control actions owned by each stage.
-    3. Presentation stages retain their process controls without exposing dormant PowerPoint tools.
+    3. Presentation stages expose PowerPoint inspection and writing by stage ownership.
     4. Workflow stages expose reporting and exit controls without mode-entry controls.
     5. Every mode can execute the common interaction, Browser-load, and Skill-read guidance.
     """
@@ -263,6 +260,7 @@ def test_mode_tools() -> None:
     # Check 1: Main and Child expose their distinct root and delegated capabilities.
     assert {"run_subagent", "start_subagent"} <= main
     assert "request_presentation" in main
+    assert POWERPOINT_TOOL_NAMES <= main
     assert "ppt_rag" not in main
     assert "report_presentation_step" not in main
     assert "switch" not in main
@@ -277,17 +275,19 @@ def test_mode_tools() -> None:
     assert "request_human_task_confirm" not in explore | generate | verify
     assert "request_human_workflow_confirm" not in clarify | explore | generate
 
-    # Check 3: Presentation stages expose process controls without the dormant deck bridge.
+    # Check 3: Presentation stages expose inspection first and writes only in Compose/Review.
     presentation_surfaces = (ppt_brief, ppt_plan, ppt_compose, ppt_review)
     for surface in presentation_surfaces:
         assert "switch" in surface
         assert "run_subagent" in surface
         assert "start_subagent" not in surface
-        assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
         assert {"ppt_rag", "request_presentation_template_confirm"}.isdisjoint(surface)
         assert {"request_build", "request_presentation", "request_run_workflow"}.isdisjoint(surface)
     assert "report_presentation_step" not in ppt_brief
     assert all("report_presentation_step" in surface for surface in (ppt_plan, ppt_compose, ppt_review))
+    assert POWERPOINT_INSPECTION_TOOL_NAMES <= ppt_brief & ppt_plan
+    assert {"ppt_edit_page", "ppt_manage_deck", "ppt_save"}.isdisjoint(ppt_brief | ppt_plan)
+    assert all(POWERPOINT_TOOL_NAMES <= surface for surface in (ppt_compose, ppt_review))
 
     # Check 4: Workflow execution exposes reporting and exit controls without mode-entry controls.
     assert {"switch", "report_workflow_step"} <= execute
@@ -298,8 +298,7 @@ def test_mode_tools() -> None:
     common = {"request_human_choice", "load_browser_tools", "view_skill"}
     for surface in (*surfaces, *presentation_surfaces):
         assert common <= surface
-    for surface in (*surfaces, *presentation_surfaces):
-        assert surface.isdisjoint(POWERPOINT_TOOL_NAMES)
+    assert all(surface.isdisjoint(POWERPOINT_TOOL_NAMES) for surface in (child, clarify, explore, generate, verify, execute))
 
 
 @pytest.mark.parametrize("selection_status", ["idle", "pending", "selected", "skipped"])
@@ -332,8 +331,8 @@ def test_ppt_rag_remains_visible_throughout_confirmed_visual_direction(selection
     assert inspected_tools == after_tools
 
 
-async def test_powerpoint_bridge_is_dormant_and_bridgic_skill_is_absent(prompt_store: None) -> None:
-    assert TOOL_LIBRARY.select(POWERPOINT_TOOL_NAMES) == []
+async def test_powerpoint_bridge_is_registered_and_legacy_skill_is_absent(prompt_store: None) -> None:
+    assert {tool.tool_name for tool in TOOL_LIBRARY.select(POWERPOINT_TOOL_NAMES)} == POWERPOINT_TOOL_NAMES
     assert "bridgic-ppt" not in SkillLibrary.builtin_names()
     assert "pptx" in SkillLibrary.builtin_names()
 

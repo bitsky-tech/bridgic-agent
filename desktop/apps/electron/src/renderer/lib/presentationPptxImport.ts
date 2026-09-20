@@ -8,7 +8,7 @@ import {
   createPresentationId,
   replacePresentationPages,
   type PresentationAsset,
-  type PresentationDocument,
+  type PresentationProject,
   type PresentationFileSource,
   type PresentationElement,
   type PresentationPageSize,
@@ -29,11 +29,11 @@ import { getPresentationShapeDefinition, isPresentationLineShape, isSupportedPre
 import {
   clearPresentationHyperlinksToPages,
   createPresentationAsset,
-  migratePresentationDocument,
+  migratePresentationProject,
   normalizePresentationProject,
   presentationAssetsForPages,
 } from '@/presentation/project'
-import { validatePresentationDocument } from '@/presentation/model/reducer'
+import { validatePresentationProject } from '@/presentation/model/reducer'
 import {
   presentationCharacterSpacingFromPoints,
   presentationFontSizeFromPoints,
@@ -1384,23 +1384,21 @@ export async function importPresentationPptx(
   bytes: ArrayBuffer | Uint8Array,
   fileName = 'Imported presentation.pptx',
   options: PresentationPptxImportOptions = {},
-): Promise<PresentationDocument> {
+): Promise<PresentationProject> {
   const archive = await JSZip.loadAsync(bytes)
   const stored = options.restoreEditorModel ? await readOfficeRoundTrip(archive, 'presentation') : null
   if (stored) {
     try {
-      const restored = migratePresentationDocument(stored, fileName.replace(/\.pptx$/i, ''))
+      const restored = migratePresentationProject(stored, fileName.replace(/\.pptx$/i, ''))
       const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= restored.slides.pages.length))] : null
       const pages = requested ? (requested.length ? requested : [1]).map((number) => restored.slides.pages[number - 1]!) : restored.slides.pages
       const retainedPageIds = new Set(pages.map((page) => page.id))
       const removedPageIds = new Set(restored.slides.pages.flatMap((page) => retainedPageIds.has(page.id) ? [] : [page.id]))
       const retainedPages = removedPageIds.size ? clearPresentationHyperlinksToPages(pages, removedPageIds) : pages
       const selectedPageId = retainedPages.find((slide) => slide.id === restored.slides.selectedPageId)?.id ?? retainedPages[0]!.id
-      return validatePresentationDocument({
+      return validatePresentationProject({
         ...restored,
         id: createPresentationId('presentation'),
-        revision: 1,
-        sourceProtected: false,
         title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
         assets: requested ? presentationAssetsForPages(restored.assets, retainedPages) : restored.assets,
         slides: replacePresentationPages(restored.slides, retainedPages, selectedPageId),
@@ -1481,12 +1479,10 @@ export async function importPresentationPptx(
     const { background: _themeBackground, ...page } = slide
     return page
   })
-  return validatePresentationDocument(normalizePresentationProject({
+  return validatePresentationProject(normalizePresentationProject({
     schemaVersion: 1,
     version: 1,
-    revision: 1,
     id: createPresentationId('presentation'),
-    sourceProtected: true,
     theme: {
       ...DEFAULT_PRESENTATION_MASTER,
       accentColors: accentColors.length > 0 ? accentColors : [...DEFAULT_PRESENTATION_MASTER.accentColors],

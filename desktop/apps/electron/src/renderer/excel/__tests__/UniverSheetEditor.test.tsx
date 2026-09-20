@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { DrawingTypeEnum, LocaleType, type IWorkbookData } from '@univerjs/core'
-import type { ExcelHostConfig, ExcelHostPreloadAPI, ExcelWorkbookOpenTicket } from '../../../shared/types'
+import type { ExcelHostConfig, ExcelHostPreloadAPI, ExcelHostRendererState, ExcelWorkbookOpenTicket } from '../../../shared/types'
 import type { ExcelUniverAdapter, SheetEditorHandle } from '../excelUniverAdapter'
 
 GlobalRegistrator.register({ url: 'http://localhost/' })
@@ -58,6 +58,7 @@ async function mountHost(initialWorkbook: 'empty' | 'blank', recovery: string | 
   window.history.replaceState(null, '', `http://localhost/excel.html?sessionId=session&initialWorkbook=${initialWorkbook}`)
   let deliver!: (ticket: ExcelWorkbookOpenTicket) => void
   const reads: string[] = []
+  const stateReports: ExcelHostRendererState[] = []
   let checkpoint: string | null = recovery
   const api: ExcelHostPreloadAPI = {
     open: async () => ({ canceled: true }),
@@ -71,7 +72,7 @@ async function mountHost(initialWorkbook: 'empty' | 'blank', recovery: string | 
     save: async () => ({ ok: false, reason: 'canceled' }),
     saveAs: async () => ({ ok: false, reason: 'canceled' }),
     requestClose: async () => undefined,
-    setDirty: async () => undefined,
+    reportState: async (state) => { stateReports.push(state) },
     getRecoveryState: async () => recovery,
     setRecoveryState: async (value) => { checkpoint = value },
     onConfigChanged: () => () => undefined,
@@ -83,7 +84,7 @@ async function mountHost(initialWorkbook: 'empty' | 'blank', recovery: string | 
   const root = createRoot(host)
   await act(async () => root.render(<StrictMode><ExcelHostApp /></StrictMode>))
   return {
-    api, host, reads,
+    api, host, reads, stateReports,
     recovery: () => checkpoint === null ? null : JSON.parse(checkpoint) as { tabs: Array<{ tabId: string; documentId: string | null; snapshot: IWorkbookData; mtimeMs: number | null; dirty: boolean }>; activeTabId: string },
     open: async (requestId: string) => { await act(async () => deliver({ requestId, replaceInitialBlank: true })) },
     close: async () => {
@@ -96,6 +97,18 @@ async function mountHost(initialWorkbook: 'empty' | 'blank', recovery: string | 
 }
 
 describe('Excel routed workbook imports', () => {
+  it('reports the authoritative empty and populated workbook inventory to the shell', async () => {
+    const app = await mountHost('empty')
+    try {
+      await waitFor(() => app.stateReports.at(-1)?.documentCount === 0)
+      await act(async () => app.host.querySelector<HTMLButtonElement>('[data-testid="excel-create-workbook"]')!.click())
+      await waitFor(() => app.stateReports.at(-1)?.documentCount === 1)
+      expect(app.stateReports.at(-1)).toEqual({ documentCount: 1, dirty: true })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('loads without a blank workbook, imports repeated requests once and reactivates edited tabs by file identity', async () => {
     let finish!: (snapshot: IWorkbookData) => void
     const importing = spyOn(workbookImport, 'importExcelWorkbook')

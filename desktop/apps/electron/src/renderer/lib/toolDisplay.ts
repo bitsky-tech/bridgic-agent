@@ -236,26 +236,13 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   load_browser_tools: { verb: 'tool.verb.loadBrowserTools' },
 
   // ── PowerPoint ──
-  view_ppt: { verb: 'tool.verb.pptView', subjectKeys: ['target'], subjectAs: 'path' },
-  get_ppt_page: { verb: 'tool.verb.pptGetPage', subjectKeys: ['page_id'], subjectMono: true },
-  update_ppt_design: { verb: 'tool.verb.pptUpdateDesign', subjectKeys: ['theme', 'page_size'] },
-  edit_ppt_page: { verb: 'tool.verb.pptEditPage', subjectKeys: ['page_id'], noteKeys: ['ref'], subjectMono: true },
-  insert_ppt_element: { verb: 'tool.verb.pptInsertElement', subjectKeys: ['page_id'], subjectMono: true },
-  remove_ppt_element: {
-    verb: 'tool.verb.pptRemoveElement',
-    subjectKeys: ['page_id'],
-    noteKeys: ['ref'],
-    subjectMono: true,
-  },
-  insert_ppt_page: { verb: 'tool.verb.pptInsertPage', subjectKeys: ['after_page_id'], subjectMono: true },
-  remove_ppt_page: { verb: 'tool.verb.pptRemovePage', subjectKeys: ['page_id'], subjectMono: true },
-  move_ppt_page: {
-    verb: 'tool.verb.pptMovePage',
-    subjectKeys: ['page_id'],
-    subjectMono: true,
-    noteKeys: ['target_page_id'],
-  },
-  goto_ppt_page: { verb: 'tool.verb.pptGotoPage', subjectKeys: ['page_id'], subjectMono: true },
+  ppt_open: { verb: 'tool.verb.pptView', subjectKeys: ['target'], subjectAs: 'path' },
+  ppt_read_deck: { verb: 'tool.verb.pptReadDeck', subjectKeys: ['document_id'], subjectMono: true },
+  ppt_read_page: { verb: 'tool.verb.pptReadPage', subjectKeys: ['page_id'], subjectMono: true },
+  ppt_edit_page: { verb: 'tool.verb.pptEditPage', subjectKeys: ['page_id'], subjectMono: true },
+  ppt_manage_deck: { verb: 'tool.verb.pptManageDeck', subjectKeys: ['document_id'], subjectMono: true },
+  ppt_inspect: { verb: 'tool.verb.pptRender', subjectKeys: ['document_id'], subjectMono: true },
+  ppt_save: { verb: 'tool.verb.pptSave', subjectKeys: ['target', 'document_id'], subjectAs: 'path' },
 }
 
 /** Look up a tool's single-line spec; returns null when unregistered (the caller uses the generic fallback). */
