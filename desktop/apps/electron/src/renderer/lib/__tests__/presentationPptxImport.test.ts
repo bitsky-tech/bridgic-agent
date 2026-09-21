@@ -13,6 +13,42 @@ function addImageAsset(document: PresentationProject, id: string, source: Presen
 }
 
 describe('importPresentationPptx', () => {
+  it('keeps uneven table grids, merged cells and individual cell formatting editable across export and import', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'complex-table', type: 'table', x: 100, y: 100, width: 600, height: 300, rotation: 0,
+      cells: [['Merged', '', 'Top'], ['', '', 'Middle'], ['A', 'B', 'C']],
+      columnWidths: [1, 2, 3], rowHeights: [1, 2, 3],
+      cellStyles: [
+        [{ colSpan: 2, rowSpan: 2, fill: '#FF0000', textColor: '#FFFFFF', fontSize: 28, bold: true, align: 'center',
+          padding: { left: 2, right: 4, top: 6, bottom: 8 } }, { covered: true }, { fill: '#00FF00' }],
+        [{ covered: true }, { covered: true }, { fill: '#0000FF' }],
+        [{ fill: '#FFFF00' }, { fill: '#00FFFF' }, { fill: '#FF00FF' }],
+      ],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 16,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const archive = await JSZip.loadAsync(bytes)
+    const slideXml = await archive.file('ppt/slides/slide1.xml')!.async('text')
+    expect(slideXml).toContain('gridSpan="2"')
+    expect(slideXml).toContain('rowSpan="2"')
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    expect(table).toMatchObject({ type: 'table', cells: [['Merged', '', 'Top'], ['', '', 'Middle'], ['A', 'B', 'C']] })
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    if (!table.columnWidths || !table.rowHeights) throw new Error('Missing imported table grid')
+    expect(table.columnWidths[1]! / table.columnWidths[0]!).toBeCloseTo(2, 2)
+    expect(table.rowHeights[2]! / table.rowHeights[0]!).toBeCloseTo(3, 2)
+    expect(table.cellStyles?.[0]?.[0]).toMatchObject({ colSpan: 2, rowSpan: 2, fill: '#FF0000', textColor: '#FFFFFF', bold: true, align: 'center' })
+    expect(table.cellStyles?.[0]?.[0]?.padding?.left).toBeCloseTo(2, 1)
+    expect(table.cellStyles?.[0]?.[0]?.padding?.bottom).toBeCloseTo(8, 1)
+    expect(table.cellStyles?.[0]?.[1]).toMatchObject({ covered: true })
+    expect(table.cellStyles?.[1]?.[0]).toMatchObject({ covered: true })
+    expect(table.cellStyles?.[2]?.[1]).toMatchObject({ fill: '#00FFFF' })
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
   it('preserves the editable master and footer through repeated save and reopen cycles', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = normalizePresentationProject(createInitialPresentationProject())

@@ -9,6 +9,7 @@ const { renderToStaticMarkup } = await import('react-dom/server')
 const fabric = await import('fabric')
 const { createBlankPresentationProject } = await import('@/atoms/presentation')
 const { createPresentationChartElement, createPresentationTableElement } = await import('@/lib/presentationInsert')
+const { presentationTableCellAppearance } = await import('@/lib/presentationTable')
 const { createPresentationPptx } = await import('@/lib/presentationPptx')
 const { importPresentationPptx } = await import('@/lib/presentationPptxImport')
 const { applyPresentationDesign } = await import('@/lib/presentationDesign')
@@ -301,6 +302,7 @@ describe('chart and table display round trips', () => {
         fontSize: 24, flipHorizontal, flipVertical })
       for (let round = 0; round < 2; round++) {
         const element = model.slides.pages[0]!.elements[0]!
+        if (element.type !== 'table') throw new Error('Missing table')
         const td = markup(model).querySelectorAll('td')[3]!
         expect(td.textContent).toBe(cells[1]![1]!)
         expect(td.querySelector<HTMLElement>('[style*="white-space"]')!.style.whiteSpace).toBe('pre-wrap')
@@ -318,10 +320,11 @@ describe('chart and table display round trips', () => {
           const b = fabric.util.transformPoint(new fabric.Point(clip.width / 2, clip.height / 2), matrix)
           const column = flipHorizontal ? 1 - index % 2 : index % 2
           const row = flipVertical ? 2 - Math.floor(index / 2) : Math.floor(index / 2)
-          expect(Math.min(a.x, b.x)).toBeCloseTo(180 + column * 360 + 10)
-          expect(Math.max(a.x, b.x)).toBeCloseTo(180 + (column + 1) * 360 - 10)
-          expect(Math.min(a.y, b.y)).toBeCloseTo(140 + row * 80 + 4)
-          expect(Math.max(a.y, b.y)).toBeCloseTo(140 + (row + 1) * 80 - 4)
+          const padding = presentationTableCellAppearance(element, Math.floor(index / 2), index % 2).padding
+          expect(Math.min(a.x, b.x)).toBeCloseTo(180 + column * 360 + (flipHorizontal ? padding.right : padding.left))
+          expect(Math.max(a.x, b.x)).toBeCloseTo(180 + (column + 1) * 360 - (flipHorizontal ? padding.left : padding.right))
+          expect(Math.min(a.y, b.y)).toBeCloseTo(140 + row * 80 + (flipVertical ? padding.bottom : padding.top))
+          expect(Math.max(a.y, b.y)).toBeCloseTo(140 + (row + 1) * 80 - (flipVertical ? padding.top : padding.bottom))
         })
         group.dispose()
         model = await importPresentationPptx(await createPresentationPptx(agentEdit(model)))

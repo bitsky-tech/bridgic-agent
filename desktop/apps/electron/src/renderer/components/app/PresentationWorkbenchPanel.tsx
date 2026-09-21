@@ -78,6 +78,7 @@ import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
 import { presentationThemeTextColors, resizePresentationProject } from '@/lib/presentationDesign'
+import { presentationTableCellAppearance, presentationTableGrid } from '@/lib/presentationTable'
 import {
   clearPresentationHyperlinksToPages,
   detachPresentationCommentsFromElements,
@@ -937,47 +938,53 @@ function createFixedGraphicGroup(fabric: FabricModule, element: PresentationTabl
 }
 
 function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
-  const rows = Math.max(1, element.cells.length)
-  const columns = Math.max(1, ...element.cells.map((row) => row.length))
-  const cellWidth = element.width / columns
-  const cellHeight = element.height / rows
+  const grid = presentationTableGrid(element)
   const objects: FabricObject[] = []
-  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
-    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
-      const header = element.headerRow && rowIndex === 0
+  for (let rowIndex = 0; rowIndex < grid.rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < grid.columns; columnIndex += 1) {
+      const style = presentationTableCellAppearance(element, rowIndex, columnIndex)
+      if (style.covered) continue
+      const cellX = grid.columnOffsets[columnIndex]!
+      const cellY = grid.rowOffsets[rowIndex]!
+      const cellWidth = grid.columnWidths.slice(columnIndex, columnIndex + style.colSpan).reduce((sum, width) => sum + width, 0)
+      const cellHeight = grid.rowHeights.slice(rowIndex, rowIndex + style.rowSpan).reduce((sum, height) => sum + height, 0)
+      const contentWidth = Math.max(0, cellWidth - style.padding.left - style.padding.right)
+      const contentHeight = Math.max(0, cellHeight - style.padding.top - style.padding.bottom)
       objects.push(new fabric.Rect({
         originX: 'left',
         originY: 'top',
-        left: columnIndex * cellWidth,
-        top: rowIndex * cellHeight,
+        left: cellX,
+        top: cellY,
         width: cellWidth - 1,
         height: cellHeight - 1,
         strokeWidth: 1,
-        fill: header ? element.headerFill : element.bodyFill,
-        stroke: element.borderColor,
+        fill: style.fill,
+        stroke: style.borderColor,
       }))
       const text = new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
         originX: 'left',
         originY: 'center',
         strokeWidth: 0,
-        left: (columnIndex * cellWidth) + 10,
-        top: (rowIndex + 0.5) * cellHeight,
-        width: Math.max(12, cellWidth - 20),
-        height: Math.max(12, cellHeight - 8),
-        fill: header ? element.headerTextColor ?? '#FFFFFF' : element.textColor,
-        fontFamily: presentationRenderingFontFamily('Aptos', element.cells[rowIndex]?.[columnIndex] ?? ''),
+        left: cellX + style.padding.left,
+        top: cellY + cellHeight / 2,
+        width: Math.max(1, contentWidth),
+        height: Math.max(1, contentHeight),
+        fill: style.textColor,
+        fontFamily: presentationRenderingFontFamily(style.fontFamily, element.cells[rowIndex]?.[columnIndex] ?? ''),
         splitByGrapheme: shouldSplitPresentationTextByGrapheme(element.cells[rowIndex]?.[columnIndex] ?? ''),
-        fontSize: element.fontSize,
-        fontWeight: header ? 600 : 400,
-        textAlign: 'left',
+        fontSize: style.fontSize,
+        fontWeight: style.bold ? 600 : 400,
+        textAlign: style.align,
       })
-      const contentHeight = Math.max(0, cellHeight - 8)
+      let textOffset = 0
+      if (style.verticalAlign === 'middle') textOffset = Math.max(0, (contentHeight - text.height) / 2)
+      if (style.verticalAlign === 'bottom') textOffset = Math.max(0, contentHeight - text.height)
       // Clip each cell independently; overflowing text starts at the top of its own row.
       text.set({
-        top: rowIndex * cellHeight + 4 + Math.max(contentHeight, text.height) / 2,
+        top: cellY + style.padding.top + textOffset + text.height / 2,
         clipPath: new fabric.Rect({
-          width: Math.max(0, cellWidth - 20), height: contentHeight,
-          left: (cellWidth - 20 - text.width) / 2,
+          width: contentWidth, height: contentHeight,
+          left: (contentWidth - text.width) / 2,
           top: Math.min(0, (contentHeight - text.height) / 2),
           originX: 'center', originY: 'center', strokeWidth: 0,
         }),

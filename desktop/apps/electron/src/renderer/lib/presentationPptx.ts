@@ -6,6 +6,7 @@ import { writeOfficeRoundTrip } from './office/officeRoundTrip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { correctPresentationTextXml } from '@/lib/presentationTextPptx'
 import { presentationElementSource } from '@/presentation/project'
+import { presentationTableCellAppearance, presentationTableGrid } from '@/lib/presentationTable'
 import {
   getPresentationPageSize,
   presentationSlideBackground,
@@ -1278,33 +1279,40 @@ export async function createPresentationPptx(document: PresentationProject): Pro
         const columnCount = Math.max(0, ...cells.map((row) => row.length))
         if (cells.length === 0 || columnCount === 0) continue
 
-        const headerFill = presentationColor(element.headerFill, '6957D9')
-        const bodyFill = presentationColor(element.bodyFill, 'FFFFFF')
-        const textColor = presentationColor(element.textColor, '20202B')
-        const borderColor = presentationColor(element.borderColor, 'D8D9E0')
-        const fontSize = Number.isFinite(element.fontSize) && element.fontSize > 0 ? presentationFontSizeToPoints(element.fontSize) : 13.5
-        const rows: PptxGenJS.TableRow[] = cells.map((row, rowIndex) => (
-          Array.from({ length: columnCount }, (_, columnIndex) => ({
-            text: typeof row[columnIndex] === 'string' ? row[columnIndex] : '',
-            options: {
-              fill: { color: element.headerRow && rowIndex === 0 ? headerFill : bodyFill },
-              color: element.headerRow && rowIndex === 0 ? presentationColor(element.headerTextColor, 'FFFFFF') : textColor,
-              bold: element.headerRow && rowIndex === 0,
-              border: { color: borderColor, pt: 1 },
-              fontFace: 'Aptos',
-              fontSize,
-              margin: 0.05,
-              valign: 'middle',
-            },
-          }))
-        ))
+        const grid = presentationTableGrid(element)
+        const rows: PptxGenJS.TableRow[] = cells.map((row, rowIndex) => {
+          const output: PptxGenJS.TableRow = []
+          for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+            const style = presentationTableCellAppearance(element, rowIndex, columnIndex)
+            if (style.covered) continue
+            output.push({
+              text: typeof row[columnIndex] === 'string' ? row[columnIndex] : '',
+              options: {
+                fill: { color: presentationColor(style.fill, 'FFFFFF') },
+                color: presentationColor(style.textColor, '20202B'),
+                bold: style.bold,
+                border: { color: presentationColor(style.borderColor, 'D8D9E0'), pt: 1 },
+                fontFace: style.fontFamily,
+                fontSize: presentationFontSizeToPoints(style.fontSize),
+                margin: element.cellStyles?.[rowIndex]?.[columnIndex]?.padding
+                  ? [y(style.padding.top), x(style.padding.right), y(style.padding.bottom), x(style.padding.left)]
+                  : 0.05,
+                align: style.align,
+                valign: style.verticalAlign,
+                ...(style.colSpan > 1 ? { colspan: style.colSpan } : {}),
+                ...(style.rowSpan > 1 ? { rowspan: style.rowSpan } : {}),
+              },
+            })
+          }
+          return output
+        })
         slide.addTable(rows, {
           x: x(element.x),
           y: y(element.y),
           w: x(element.width),
           h: y(element.height),
-          colW: Array.from({ length: columnCount }, () => x(element.width) / columnCount),
-          rowH: Array.from({ length: cells.length }, () => y(element.height) / cells.length),
+          colW: grid.columnWidths.map(width => x(width)),
+          rowH: grid.rowHeights.map(height => y(height)),
           autoPage: false,
           margin: 0,
           objectName: typeof element.id === 'string' ? element.id : undefined,

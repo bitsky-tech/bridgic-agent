@@ -219,7 +219,18 @@ export function resizePresentationProject(document: PresentationProject, preset:
       })
     }
     if (scaled.type === 'table') {
-      return { ...scaled, fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))) }
+      return {
+        ...scaled,
+        fontSize: Math.max(8, Number((scaled.fontSize * scale).toFixed(1))),
+        cellStyles: scaled.cellStyles?.map(row => row.map(style => ({
+          ...style,
+          ...(style.fontSize ? { fontSize: Math.max(8, Number((style.fontSize * scale).toFixed(1))) } : {}),
+          ...(style.padding ? { padding: {
+            left: style.padding.left * scale, right: style.padding.right * scale,
+            top: style.padding.top * scale, bottom: style.padding.bottom * scale,
+          } } : {}),
+        }))),
+      }
     }
     if ('borderWidth' in scaled && 'fill' in scaled) {
       return {

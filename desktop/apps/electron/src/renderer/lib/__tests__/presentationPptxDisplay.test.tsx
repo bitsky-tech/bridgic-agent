@@ -50,6 +50,24 @@ function agentEdit(model: PresentationProject): PresentationProject {
 }
 
 describe('PowerPoint display fidelity', () => {
+  it('previews imported table cell spans, grid dimensions and individual cell colors', () => {
+    const model = createBlankPresentationProject('Table grid')
+    model.slides.pages[0]!.elements = [{
+      id: 'table', type: 'table', x: 100, y: 100, width: 600, height: 240, rotation: 0,
+      cells: [['Merged', '', 'Right'], ['A', 'B', 'C']],
+      columnWidths: [1, 2, 3], rowHeights: [1, 2],
+      cellStyles: [[{ colSpan: 2, fill: '#FF0000', textColor: '#FFFFFF' }, { covered: true }, { fill: '#00FF00' }], [{}, {}, {}]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 16,
+    }]
+    const markup = preview(model)
+    expect(markup).toContain('colSpan="2"')
+    expect(markup).toContain('background-color:#FF0000')
+    expect(markup).toContain('background-color:#00FF00')
+    expect(markup).toContain('width:100px')
+    expect(markup).toContain('width:200px')
+    expect(markup).toContain('width:300px')
+  })
+
   it('previews an imported patterned shape from its editable pattern data', async () => {
     const tree = shape(1, 100).replace(
       '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',

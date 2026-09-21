@@ -319,9 +319,27 @@ export interface PresentationVideoElement extends PresentationElementBase {
 
 export type PresentationMediaElement = PresentationAudioElement | PresentationVideoElement
 
+export interface PresentationTableCellStyle {
+  fill?: string
+  textColor?: string
+  borderColor?: string
+  fontSize?: number
+  fontFamily?: string
+  bold?: boolean
+  align?: 'left' | 'center' | 'right'
+  verticalAlign?: 'top' | 'middle' | 'bottom'
+  padding?: { left: number; right: number; top: number; bottom: number }
+  colSpan?: number
+  rowSpan?: number
+  covered?: boolean
+}
+
 export interface PresentationTableElement extends PresentationElementBase {
   type: 'table'
   cells: string[][]
+  columnWidths?: number[]
+  rowHeights?: number[]
+  cellStyles?: PresentationTableCellStyle[][]
   headerRow: boolean
   headerFill: string
   headerTextColor?: string

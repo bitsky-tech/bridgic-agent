@@ -22,6 +22,7 @@ import {
   type PresentationTextStyle,
 } from '@/atoms/presentation'
 import { presentationElementSource } from '@/presentation/project'
+import { presentationTableCellAppearance, presentationTableGrid } from '@/lib/presentationTable'
 import { cn } from '@/lib/cn'
 import type { PresentationAnimationDisplayState, PresentationAnimationScale, PresentationColorAnimation } from '@/lib/presentationAnimationPreview'
 import {
@@ -708,38 +709,40 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
 }
 
 function PresentationTablePreview({ element, scale }: { scale?: PresentationAnimationScale; element: PresentationTableElement }) {
-  const columns = Math.max(1, ...element.cells.map((row) => row.length))
-  const cellHeight = element.height / Math.max(1, element.cells.length)
+  const grid = presentationTableGrid(element)
   return (
     <table
       className="absolute table-fixed border-collapse overflow-hidden"
       style={{ ...elementStyle(element, scale), color: element.textColor, fontSize: element.fontSize }}
       data-testid="presentation-table-preview"
     >
+      <colgroup>{grid.columnWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
       <tbody>
         {element.cells.map((row, rowIndex) => (
-          <tr key={rowIndex} style={{ height: `${100 / Math.max(1, element.cells.length)}%` }}>
-            {Array.from({ length: columns }, (_, columnIndex) => (
-              <td
-                key={columnIndex}
-                className="overflow-hidden p-0 align-middle"
-                style={{
-                  width: `${100 / columns}%`,
-                  border: `1px solid ${element.borderColor}`,
-                  backgroundColor: element.headerRow && rowIndex === 0 ? element.headerFill : element.bodyFill,
-                  color: element.headerRow && rowIndex === 0 ? element.headerTextColor ?? '#FFFFFF' : element.textColor,
-                  fontWeight: element.headerRow && rowIndex === 0 ? 600 : 400,
-                }}
-              >
-                <div style={{ height: Math.max(0, cellHeight - 1), padding: '4px 10px', boxSizing: 'border-box',
-                  display: 'flex', flexDirection: 'column', justifyContent: 'safe center', overflow: 'hidden' }}>
-                  <div style={{ flexShrink: 0, whiteSpace: 'pre-wrap', lineHeight: PRESENTATION_TEXT_LINE_METRICS.height * 1.16,
-                    fontFamily: presentationRenderingFontFamily('Aptos', row[columnIndex] ?? '') }}>
-                    {row[columnIndex] ?? ''}
+          <tr key={rowIndex} style={{ height: grid.rowHeights[rowIndex] }}>
+            {Array.from({ length: grid.columns }, (_, columnIndex) => {
+              const cell = presentationTableCellAppearance(element, rowIndex, columnIndex)
+              if (cell.covered) return null
+              const cellHeight = grid.rowHeights.slice(rowIndex, rowIndex + cell.rowSpan).reduce((sum, size) => sum + size, 0)
+              let justifyContent = 'safe center'
+              if (cell.verticalAlign === 'top') justifyContent = 'flex-start'
+              if (cell.verticalAlign === 'bottom') justifyContent = 'flex-end'
+              return (
+                <td key={columnIndex} colSpan={cell.colSpan} rowSpan={cell.rowSpan} className="overflow-hidden p-0"
+                  style={{ border: `1px solid ${cell.borderColor}`, backgroundColor: cell.fill, color: cell.textColor,
+                    fontWeight: cell.bold ? 600 : 400, fontSize: cell.fontSize, textAlign: cell.align,
+                    verticalAlign: cell.verticalAlign === 'middle' ? 'middle' : cell.verticalAlign }}>
+                  <div style={{ height: Math.max(0, cellHeight - 1), paddingTop: cell.padding.top, paddingRight: cell.padding.right,
+                    paddingBottom: cell.padding.bottom, paddingLeft: cell.padding.left, boxSizing: 'border-box',
+                    display: 'flex', flexDirection: 'column', justifyContent, overflow: 'hidden' }}>
+                    <div style={{ flexShrink: 0, whiteSpace: 'pre-wrap', lineHeight: PRESENTATION_TEXT_LINE_METRICS.height * 1.16,
+                      fontFamily: presentationRenderingFontFamily(cell.fontFamily, row[columnIndex] ?? '') }}>
+                      {row[columnIndex] ?? ''}
+                    </div>
                   </div>
-                </div>
-              </td>
-            ))}
+                </td>
+              )
+            })}
           </tr>
         ))}
       </tbody>

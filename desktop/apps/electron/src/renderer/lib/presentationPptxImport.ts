@@ -23,6 +23,7 @@ import {
   type PresentationShapeType,
   type PresentationSlide,
   type PresentationTableElement,
+  type PresentationTableCellStyle,
   type PresentationChartElement,
   type PresentationTextElement,
   type PresentationTextRun,
@@ -1383,12 +1384,61 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
     const sourceId = firstByLocalName(frame, 'cNvPr')?.getAttribute('id')
     const table = firstByLocalName(frame, 'tbl')
     if (table) {
-      const rows = directChildrenByLocalName(table, 'tr').map((row) => (
+      const rowNodes = directChildrenByLocalName(table, 'tr')
+      const rows = rowNodes.map((row) => (
         directChildrenByLocalName(row, 'tc').map((cell) => (
           elementsByLocalName(cell, 'p').map((paragraph) => elementsByLocalName(paragraph, 't').map((text) => text.textContent ?? '').join('')).join('\n')
         ))
       ))
       if (rows.length === 0 || rows.every((row) => row.length === 0)) return
+      const tableScale = Math.hypot(coordinateTransform.c * pageSize.width / slideSizeEmu.width,
+        coordinateTransform.d * pageSize.height / slideSizeEmu.height) * EMU_PER_INCH / 96
+      const gridColumns = firstByLocalName(table, 'tblGrid')
+      const columnWidths = gridColumns ? directChildrenByLocalName(gridColumns, 'gridCol').map(column => numberAttribute(column, 'w')) : []
+      const rowHeights = rowNodes.map(row => numberAttribute(row, 'h'))
+      const horizontalScale = geometry.width / (columnWidths.reduce((sum, width) => sum + width, 0)
+        || numberAttribute(firstByLocalName(frame, 'ext'), 'cx', EMU_PER_INCH))
+      const verticalScale = geometry.height / (rowHeights.reduce((sum, height) => sum + height, 0)
+        || numberAttribute(firstByLocalName(frame, 'ext'), 'cy', EMU_PER_INCH))
+      const cellStyles: PresentationTableCellStyle[][] = rowNodes.map(row => directChildrenByLocalName(row, 'tc').map(cell => {
+        const properties = directChildrenByLocalName(cell, 'tcPr')[0] ?? null
+        const run = firstByLocalName(cell, 'rPr') ?? firstByLocalName(cell, 'endParaRPr')
+        const paragraph = firstByLocalName(cell, 'pPr')
+        const fill = properties ? directChildrenByLocalName(properties, 'solidFill')[0] : null
+        const line = properties ? directChildrenByLocalName(properties, 'lnL')[0] ?? directChildrenByLocalName(properties, 'lnT')[0] : null
+        const lineFill = line ? directChildrenByLocalName(line, 'solidFill')[0] : null
+        const align = paragraph?.getAttribute('algn')
+        const anchor = properties?.getAttribute('anchor')
+        let horizontalAlign: PresentationTableCellStyle['align'] = 'left'
+        if (align === 'ctr') horizontalAlign = 'center'
+        if (align === 'r') horizontalAlign = 'right'
+        let verticalAlign: PresentationTableCellStyle['verticalAlign'] = 'top'
+        if (anchor === 'ctr') verticalAlign = 'middle'
+        if (anchor === 'b') verticalAlign = 'bottom'
+        const fontFace = firstByLocalName(run ?? cell, 'latin')?.getAttribute('typeface')
+        const padding = properties && ['marL', 'marR', 'marT', 'marB'].some(name => properties.hasAttribute(name))
+          ? {
+            left: numberAttribute(properties, 'marL', 45_720) * horizontalScale,
+            right: numberAttribute(properties, 'marR', 45_720) * horizontalScale,
+            top: numberAttribute(properties, 'marT', 45_720) * verticalScale,
+            bottom: numberAttribute(properties, 'marB', 45_720) * verticalScale,
+          }
+          : undefined
+        return {
+          ...(fill ? { fill: colorFrom(fill, '#FFFFFF', themeColors) } : {}),
+          ...(run && firstByLocalName(run, 'solidFill') ? { textColor: colorFrom(run, '#20202B', themeColors) } : {}),
+          ...(lineFill ? { borderColor: colorFrom(lineFill, '#D9D7E2', themeColors) } : {}),
+          ...(run?.hasAttribute('sz') ? { fontSize: presentationFontSizeFromPoints(Math.max(1, numberAttribute(run, 'sz') / 100)) * tableScale } : {}),
+          ...(fontFace ? { fontFamily: fontFace } : {}),
+          ...(run?.hasAttribute('b') ? { bold: /^(1|true)$/.test(run.getAttribute('b') ?? '') } : {}),
+          ...(align ? { align: horizontalAlign } : {}),
+          ...(anchor ? { verticalAlign } : {}),
+          ...(padding ? { padding } : {}),
+          ...(cell.hasAttribute('gridSpan') ? { colSpan: Math.max(1, numberAttribute(cell, 'gridSpan', 1)) } : {}),
+          ...(cell.hasAttribute('rowSpan') ? { rowSpan: Math.max(1, numberAttribute(cell, 'rowSpan', 1)) } : {}),
+          ...(/^(1|true)$/.test(cell.getAttribute('hMerge') ?? '') || /^(1|true)$/.test(cell.getAttribute('vMerge') ?? '') ? { covered: true } : {}),
+        } as PresentationTableCellStyle
+      }))
       const firstCell = firstByLocalName(table, 'tc')
       const firstCellProperties = firstCell ? firstByLocalName(firstCell, 'tcPr') : null
       const firstRunProperties = firstCell ? firstByLocalName(firstCell, 'rPr') : null
@@ -1404,14 +1454,16 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
         type: 'table',
         ...geometry,
         cells: rows,
+        ...(columnWidths.length > 0 && columnWidths.every(width => width > 0) ? { columnWidths } : {}),
+        ...(rowHeights.every(height => height > 0) ? { rowHeights } : {}),
+        cellStyles,
         headerRow,
         headerFill: colorFrom(cellFill(firstCellProperties), '#F4F1FF', themeColors),
         ...(headerRow ? { headerTextColor: colorFrom(firstRunProperties, '#20202B', themeColors) } : {}),
         bodyFill: colorFrom(cellFill(bodyCellProperties), '#FFFFFF', themeColors),
         textColor: colorFrom(bodyRunProperties, '#20202B', themeColors),
         borderColor: colorFrom(firstByLocalName(line ?? table, 'solidFill'), '#D9D7E2', themeColors),
-        fontSize: presentationFontSizeFromPoints(Math.max(6, numberAttribute(firstRunProperties, 'sz', 1_400) / 100))
-          * Math.hypot(coordinateTransform.c * pageSize.width / slideSizeEmu.width, coordinateTransform.d * pageSize.height / slideSizeEmu.height) * EMU_PER_INCH / 96,
+        fontSize: presentationFontSizeFromPoints(Math.max(6, numberAttribute(firstRunProperties, 'sz', 1_400) / 100)) * tableScale,
       }, parentGroupId)
       elements.push(importedTable)
       if (sourceId) sourceShapeIds.set(sourceId, importedTable.id)
