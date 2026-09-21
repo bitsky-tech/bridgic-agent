@@ -673,14 +673,14 @@ export class PresentationStore {
       let changed = false
       const assets = entry.project.assets.map((asset) => {
         const source = replacements.get(asset.source)
-        const removal = asset.imageEffects?.backgroundRemoval
-        const layerSource = removal ? replacements.get(removal.layerSource) : undefined
+        const officeLayer = asset.imageEffects?.officeLayer
+        const layerSource = officeLayer ? replacements.get(officeLayer.source) : undefined
         if (!source && !layerSource) return asset
         changed = true
         return {
           ...asset,
           source: source ?? asset.source,
-          ...(removal && layerSource ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: { ...removal, layerSource } } } : {}),
+          ...(officeLayer && layerSource ? { imageEffects: { ...asset.imageEffects, officeLayer: { ...officeLayer, source: layerSource } } } : {}),
         }
       })
       if (!changed) return entry

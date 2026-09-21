@@ -77,17 +77,22 @@ export interface PresentationFileSource {
 
 export type PresentationAssetKind = 'image' | 'audio' | 'video' | 'text'
 
+export type PresentationOfficeImageEffect =
+  | { type: 'backgroundRemoval'; bounds: { top: number; bottom: number; left: number; right: number }; foregroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }>; backgroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }> }
+  | { type: 'brightnessContrast'; bright: number; contrast: number }
+  | { type: 'colorTemperature'; colorTemp: number }
+  | { type: 'saturation'; sat: number }
+  | { type: 'artisticPhotocopy'; detail?: number }
+  | { type: 'sharpenSoften'; amount: number }
+  | { type: 'artisticCrisscrossEtching' }
+  | { type: 'artisticBlur' }
+
 export interface PresentationImageEffects {
   colorChange?: { from: string; to: string; opacity: number }
   grayscale?: boolean
   biLevelThreshold?: number
-  backgroundRemoval?: {
-    /** The Office image layer remains inside the imported PPTX, not in the Files mount list. */
-    layerSource: string
-    bounds: { top: number; bottom: number; left: number; right: number }
-    foregroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }>
-    backgroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }>
-  }
+  /** The Office image layer remains inside the imported PPTX, not in the Files mount list. */
+  officeLayer?: { source: string; effects: PresentationOfficeImageEffect[] }
 }
 
 /** One project-owned source resource referenced by slide elements. */
@@ -161,7 +166,15 @@ export interface PresentationShapeGradientStop {
 
 export type PresentationShapeGradientFill =
   | { type: 'linear'; angle: number; stops: PresentationShapeGradientStop[] }
-  | { type: 'radial'; stops: PresentationShapeGradientStop[] }
+  | { type: 'radial'; path?: string; fillToRect?: { left: number; top: number; right: number; bottom: number }; stops: PresentationShapeGradientStop[] }
+
+export interface PresentationShapePatternFill {
+  preset: string
+  foregroundColor: string
+  foregroundOpacity: number
+  backgroundColor: string
+  backgroundOpacity: number
+}
 
 export interface PresentationElementBase {
   id: string
@@ -260,6 +273,7 @@ export interface PresentationShapeElement extends PresentationElementBase {
   fill: string
   fillOpacity?: number
   gradientFill?: PresentationShapeGradientFill
+  patternFill?: PresentationShapePatternFill
   borderColor: string
   borderWidth: number
   borderOpacity?: number

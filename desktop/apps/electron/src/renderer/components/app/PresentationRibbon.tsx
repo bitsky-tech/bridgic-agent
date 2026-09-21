@@ -473,6 +473,7 @@ export function PresentationRibbon({
       fill: '#8B7CFF',
       fillOpacity: undefined,
       gradientFill: undefined,
+      patternFill: undefined,
       borderColor: '#6957D9',
       borderWidth: 0,
       borderOpacity: undefined,
@@ -1128,7 +1129,7 @@ function ObjectControls({ inspectorOpen, selectedElement, onMoveElement, onToggl
       <FormatButton label={t('session.presentation.bringToFront')} disabled={!selectedElement} onClick={() => onMoveElement('front')}><BringToFront className="size-4" /></FormatButton>
       <FormatButton label={t('session.presentation.sendToBack')} disabled={!selectedElement} onClick={() => onMoveElement('back')}><SendToBack className="size-4" /></FormatButton>
       <FormatButton label={t('session.presentation.effects')} disabled={!shadowSupported} pressed={Boolean(selectedElement?.shadow)} onClick={() => shadowSupported && onUpdateElement({ shadow: !selectedElement?.shadow })}><Sparkles className="size-4" /></FormatButton>
-      <ColorButton label={t('session.presentation.fillColor')} color={shape?.fill ?? '#8B7CFF'} disabled={!shape} icon={<PaintBucket className="size-4" />} onChange={(fill) => onUpdateElement({ fill, fillOpacity: undefined, gradientFill: undefined })} />
+      <ColorButton label={t('session.presentation.fillColor')} color={shape?.fill ?? '#8B7CFF'} disabled={!shape} icon={<PaintBucket className="size-4" />} onChange={(fill) => onUpdateElement({ fill, fillOpacity: undefined, gradientFill: undefined, patternFill: undefined })} />
       <ColorButton label={t('session.presentation.borderColor')} color={shape?.borderColor ?? '#6957D9'} disabled={!shape} icon={<Square className="size-4" />} onChange={(borderColor) => onUpdateElement({ borderColor, borderWidth: Math.max(1, shape?.borderWidth ?? 0) })} />
       <FormatButton label={t('session.presentation.borderWidth')} disabled={!shape} pressed={(shape?.borderWidth ?? 0) > 0} onClick={() => onUpdateElement({ borderWidth: (shape?.borderWidth ?? 0) >= 4 ? 0 : Math.max(1, (shape?.borderWidth ?? 0) + 1) })}><span className="text-sm">▱</span></FormatButton>
       <FormatButton label={t('session.presentation.arrange')} disabled={!selectedElement} onClick={() => onMoveElement('front')}><Layers3 className="size-4" /></FormatButton>
@@ -1452,7 +1453,7 @@ function ShapeRibbon({ canRedo, canUndo, formatPainterActive, layersOpen, onAddS
         </div>
       </RibbonGroup>
       <RibbonGroup label={t('session.presentation.shapeAppearance')}>
-        <RibbonColorAction color={shape?.fill ?? '#4D7CFE'} disabled={!shape} icon={PaintBucket} label={t('session.presentation.fillColor')} onChange={(fill) => onUpdateElement({ fill, fillOpacity: undefined, gradientFill: undefined })} />
+        <RibbonColorAction color={shape?.fill ?? '#4D7CFE'} disabled={!shape} icon={PaintBucket} label={t('session.presentation.fillColor')} onChange={(fill) => onUpdateElement({ fill, fillOpacity: undefined, gradientFill: undefined, patternFill: undefined })} />
         <RibbonColorAction color={shape?.borderColor ?? '#20202B'} disabled={!shape} icon={Square} label={t('session.presentation.borderColor')} onChange={(borderColor) => onUpdateElement({ borderColor, borderWidth: Math.max(1, shape?.borderWidth ?? 0) })} />
         <RibbonAction dropdown disabled={!shadowSupported} icon={Sparkles} label={t('session.presentation.effects')} onClick={() => shadowSupported && selectedElement && onUpdateElement({ shadow: !selectedElement.shadow })} />
       </RibbonGroup>

@@ -76,15 +76,15 @@ describe('PresentationWorkspace', () => {
       projectMetadata: { [project.id]: { revision: 1 } },
     }).projects[0]!.assets[0]!.source).toBe(presentationPptxSource(project.id, 'ppt/media/source-image.png'))
 
-    project.assets[0]!.imageEffects = { backgroundRemoval: {
-      layerSource: presentationPptxSource(project.id, 'ppt/media/source-layer.wdp'),
-      bounds: { top: 0, bottom: 100000, left: 0, right: 100000 }, foregroundMarks: [], backgroundMarks: [],
+    project.assets[0]!.imageEffects = { officeLayer: {
+      source: presentationPptxSource(project.id, 'ppt/media/source-layer.wdp'),
+      effects: [{ type: 'backgroundRemoval', bounds: { top: 0, bottom: 100000, left: 0, right: 100000 }, foregroundMarks: [], backgroundMarks: [] }],
     } }
     expect(migratePresentationWorkspace({
       schemaVersion: 1, activeProjectId: project.id, projects: [project],
       projectMetadata: { [project.id]: { revision: 1 } },
-    }).projects[0]!.assets[0]!.imageEffects?.backgroundRemoval?.layerSource).toBe(presentationPptxSource(project.id, 'ppt/media/source-layer.wdp'))
-    project.assets[0]!.imageEffects!.backgroundRemoval!.layerSource = 'data:image/vnd.ms-photo;base64,d2Rw'
+    }).projects[0]!.assets[0]!.imageEffects?.officeLayer?.source).toBe(presentationPptxSource(project.id, 'ppt/media/source-layer.wdp'))
+    project.assets[0]!.imageEffects!.officeLayer!.source = 'data:image/vnd.ms-photo;base64,d2Rw'
     expect(() => migratePresentationWorkspace({
       schemaVersion: 1, activeProjectId: project.id, projects: [project],
       projectMetadata: { [project.id]: { revision: 1 } },

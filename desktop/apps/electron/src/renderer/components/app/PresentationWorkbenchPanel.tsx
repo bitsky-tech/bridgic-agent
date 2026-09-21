@@ -21,6 +21,7 @@ import type {
   FabricImage,
   FabricObject,
   Gradient as FabricGradient,
+  Pattern as FabricPattern,
   Group as FabricGroup,
   Point as FabricPoint,
   TextStyle,
@@ -1266,7 +1267,7 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
   const linearGradient = element.gradientFill?.type === 'linear'
     ? presentationLinearGradientCoordinates(element.gradientFill.angle)
     : null
-  let shapeFill: string | FabricGradient<'linear'> | FabricGradient<'radial'> = presentationColorWithOpacity(element.fill, element.fillOpacity)
+  let shapeFill: string | FabricGradient<'linear'> | FabricGradient<'radial'> | FabricPattern = presentationColorWithOpacity(element.fill, element.fillOpacity)
   if (element.gradientFill?.type === 'linear' && linearGradient) {
     shapeFill = new fabric.Gradient<'linear'>({
       type: 'linear', gradientUnits: 'percentage', coords: linearGradient,
@@ -1278,6 +1279,46 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
       coords: { x1: 0.5, y1: 0.5, r1: 0, x2: 0.5, y2: 0.5, r2: 0.71 },
       colorStops: element.gradientFill.stops.map(stop => ({ ...stop, opacity: stop.opacity * (element.fillOpacity ?? 1) })),
     })
+  } else if (element.patternFill) {
+    const { patternFill } = element
+    const canvas = document.createElement('canvas')
+    canvas.width = 8
+    canvas.height = 8
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.globalAlpha = patternFill.backgroundOpacity * (element.fillOpacity ?? 1)
+      context.fillStyle = patternFill.backgroundColor
+      context.fillRect(0, 0, 8, 8)
+      context.globalAlpha = patternFill.foregroundOpacity * (element.fillOpacity ?? 1)
+      context.strokeStyle = patternFill.foregroundColor
+      let lineWidth = 1.2
+      if (patternFill.preset.startsWith('dk')) lineWidth = 2.5
+      else if (patternFill.preset.startsWith('lt')) lineWidth = 0.6
+      context.lineWidth = lineWidth
+      context.beginPath()
+      if (patternFill.preset === 'lgGrid') {
+        context.moveTo(0, 0)
+        context.lineTo(8, 0)
+        context.moveTo(0, 0)
+        context.lineTo(0, 8)
+      } else if (patternFill.preset.endsWith('DnDiag')) {
+        context.moveTo(-8, 0)
+        context.lineTo(8, 16)
+        context.moveTo(0, -8)
+        context.lineTo(16, 8)
+        context.moveTo(8, -8)
+        context.lineTo(24, 8)
+      } else if (patternFill.preset.endsWith('UpDiag')) {
+        context.moveTo(-8, 8)
+        context.lineTo(8, -8)
+        context.moveTo(0, 16)
+        context.lineTo(16, 0)
+        context.moveTo(8, 16)
+        context.lineTo(24, 0)
+      }
+      context.stroke()
+      shapeFill = new fabric.Pattern({ source: canvas, repeat: 'repeat' })
+    }
   }
   const shapeStroke = presentationColorWithOpacity(element.borderColor, element.borderOpacity)
   const shapeStyle = { left: 0, top: 0, originX: 'center', originY: 'center',
@@ -1986,6 +2027,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                 fill: accent,
                 fillOpacity: undefined,
                 gradientFill: undefined,
+                patternFill: undefined,
                 borderColor: accent,
                 borderOpacity: undefined,
               }
@@ -4562,7 +4604,7 @@ function PresentationInspector({
             <ColorField
               label={t('session.presentation.fill')}
               value={selectedElement.fill}
-              onChange={(value) => onElementChange({ fill: value })}
+              onChange={(value) => onElementChange({ fill: value, gradientFill: undefined, patternFill: undefined })}
             />
           ) : null}
           {isPresentationTextElement(selectedElement) ? (

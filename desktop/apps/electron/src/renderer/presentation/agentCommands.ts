@@ -39,7 +39,7 @@ const textElementKeys = [
   'listStyle', 'textDirection', 'wordWrap', 'textInsets', 'textRuns', 'paragraphs',
 ] as const
 const shapeElementKeys = [
-  'fill', 'fillOpacity', 'gradientFill', 'borderColor', 'borderWidth', 'borderOpacity', 'radius', 'customGeometry', 'connectorPath',
+  'fill', 'fillOpacity', 'gradientFill', 'patternFill', 'borderColor', 'borderWidth', 'borderOpacity', 'radius', 'customGeometry', 'connectorPath',
 ] as const
 const imageElementKeys = ['src', 'altText', 'fit', 'clipShape', 'crop', 'softEdgeRadius'] as const
 const mediaElementKeys = ['src', 'autoplay', 'loop', 'muted'] as const
@@ -305,7 +305,10 @@ function patchElement(current: PresentationElement, patch: Record<string, unknow
   if (shapeTypes.has(current.type) && normalized.fill !== undefined && normalized.gradientFill === undefined) {
     if (normalized.fillOpacity === undefined) normalized.fillOpacity = null
     normalized.gradientFill = null
+    if (normalized.patternFill === undefined) normalized.patternFill = null
   }
+  if (shapeTypes.has(current.type) && normalized.gradientFill !== undefined && normalized.patternFill === undefined) normalized.patternFill = null
+  if (shapeTypes.has(current.type) && normalized.patternFill !== undefined && normalized.gradientFill === undefined) normalized.gradientFill = null
   return { assets: createdAssets, element: nullablePatch(current as unknown as Record<string, unknown>, normalized) as unknown as PresentationElement }
 }
 

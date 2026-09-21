@@ -33,11 +33,23 @@ const asset = z.strictObject({
     colorChange: z.strictObject({ from: z.string(), to: z.string(), opacity: finite.min(0).max(1) }).optional(),
     grayscale: z.boolean().optional(),
     biLevelThreshold: finite.min(0).max(1).optional(),
-    backgroundRemoval: z.strictObject({
-      layerSource: z.string().min(1).refine(isValidPresentationSource, 'Invalid Office image layer source'),
-      bounds: z.strictObject({ top: finite, bottom: finite, left: finite, right: finite }),
-      foregroundMarks: z.array(z.strictObject({ x1: finite, y1: finite, x2: finite, y2: finite })),
-      backgroundMarks: z.array(z.strictObject({ x1: finite, y1: finite, x2: finite, y2: finite })),
+    officeLayer: z.strictObject({
+      source: z.string().min(1).refine(isValidPresentationSource, 'Invalid Office image layer source'),
+      effects: z.array(z.discriminatedUnion('type', [
+        z.strictObject({
+          type: z.literal('backgroundRemoval'),
+          bounds: z.strictObject({ top: finite, bottom: finite, left: finite, right: finite }),
+          foregroundMarks: z.array(z.strictObject({ x1: finite, y1: finite, x2: finite, y2: finite })),
+          backgroundMarks: z.array(z.strictObject({ x1: finite, y1: finite, x2: finite, y2: finite })),
+        }),
+        z.strictObject({ type: z.literal('brightnessContrast'), bright: finite, contrast: finite }),
+        z.strictObject({ type: z.literal('colorTemperature'), colorTemp: finite }),
+        z.strictObject({ type: z.literal('saturation'), sat: finite }),
+        z.strictObject({ type: z.literal('artisticPhotocopy'), detail: finite.optional() }),
+        z.strictObject({ type: z.literal('sharpenSoften'), amount: finite }),
+        z.strictObject({ type: z.literal('artisticCrisscrossEtching') }),
+        z.strictObject({ type: z.literal('artisticBlur') }),
+      ])).min(1),
     }).optional(),
   }).optional(),
   sourceModifiedAt: nonnegative.optional(),
@@ -155,9 +167,18 @@ const shapeElement = z.strictObject({
     }),
     z.strictObject({
       type: z.literal('radial'),
+      path: z.string().min(1).optional(),
+      fillToRect: z.strictObject({ left: finite, top: finite, right: finite, bottom: finite }).optional(),
       stops: z.array(z.strictObject({ offset: finite.min(0).max(1), color: z.string(), opacity: finite.min(0).max(1) })).min(1),
     }),
   ]).optional(),
+  patternFill: z.strictObject({
+    preset: z.string().min(1),
+    foregroundColor: z.string(),
+    foregroundOpacity: finite.min(0).max(1),
+    backgroundColor: z.string(),
+    backgroundOpacity: finite.min(0).max(1),
+  }).optional(),
   borderColor: z.string(),
   borderWidth: nonnegative,
   borderOpacity: finite.min(0).max(1).optional(),
@@ -327,6 +348,9 @@ export const presentationProjectSchema = z.strictObject({
       if (item.type === 'image' || item.type === 'audio' || item.type === 'video' || (item.type === 'text' && item.sourceAssetId)) {
         const referenced = assetById.get(item.sourceAssetId!)
         if (!referenced || referenced.kind !== item.type) issue([...path, 'sourceAssetId'], 'Source-backed element must reference an existing matching asset')
+      }
+      if ('gradientFill' in item && item.gradientFill && 'patternFill' in item && item.patternFill) {
+        issue([...path, 'patternFill'], 'A shape cannot have both a gradient and a pattern fill')
       }
       if (item.hyperlink?.type === 'slide' && !pageIds.includes(item.hyperlink.slideId)) {
         issue([...path, 'hyperlink', 'slideId'], 'Slide hyperlink refers to a missing page')

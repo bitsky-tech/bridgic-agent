@@ -189,7 +189,7 @@ function correctShapeGradientXml(xml: string, elements: readonly PresentationEle
     const properties = shape.getElementsByTagNameNS(presentationNs, 'spPr')[0]
     if (!properties) continue
     for (const child of Array.from(properties.childNodes)) {
-      if (child.nodeType === 1 && ['solidFill', 'noFill', 'gradFill'].includes((child as Element).localName)) properties.removeChild(child)
+      if (child.nodeType === 1 && ['solidFill', 'noFill', 'gradFill', 'pattFill'].includes((child as Element).localName)) properties.removeChild(child)
     }
     const gradient = document.createElementNS(drawingNs, 'a:gradFill')
     gradient.setAttribute('rotWithShape', '1')
@@ -216,11 +216,58 @@ function correctShapeGradientXml(xml: string, elements: readonly PresentationEle
       gradient.appendChild(linear)
     } else {
       const path = document.createElementNS(drawingNs, 'a:path')
-      path.setAttribute('path', 'circle')
+      path.setAttribute('path', element.gradientFill.path ?? 'circle')
+      if (element.gradientFill.fillToRect) {
+        const rect = document.createElementNS(drawingNs, 'a:fillToRect')
+        const { left, top, right, bottom } = element.gradientFill.fillToRect
+        for (const [key, value] of [['l', left], ['t', top], ['r', right], ['b', bottom]] as const) {
+          if (value !== 0) rect.setAttribute(key, String(Math.round(value * 100_000)))
+        }
+        path.appendChild(rect)
+      }
       gradient.appendChild(path)
     }
     const line = Array.from(properties.childNodes).find(child => child.nodeType === 1 && (child as Element).localName === 'ln')
     properties.insertBefore(gradient, line ?? null)
+  }
+  return new XMLSerializer().serializeToString(document)
+}
+
+function correctShapePatternXml(xml: string, elements: readonly PresentationElement[]): string {
+  const patternedShapes = new Map(elements.filter(isPresentationShapeElement)
+    .filter(element => element.patternFill)
+    .map(element => [element.id, element]))
+  if (patternedShapes.size === 0) return xml
+  const document = new DOMParser().parseFromString(xml, 'text/xml')
+  const presentationNs = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+  const drawingNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+  for (const name of Array.from(document.getElementsByTagNameNS(presentationNs, 'cNvPr'))) {
+    const element = patternedShapes.get(name.getAttribute('name') ?? '')
+    if (!element?.patternFill) continue
+    const shape = name.parentNode?.parentNode as Element | null
+    const properties = shape?.getElementsByTagNameNS(presentationNs, 'spPr')[0]
+    if (!properties) continue
+    for (const child of Array.from(properties.childNodes)) {
+      if (child.nodeType === 1 && ['solidFill', 'noFill', 'gradFill', 'pattFill'].includes((child as Element).localName)) properties.removeChild(child)
+    }
+    const pattern = document.createElementNS(drawingNs, 'a:pattFill')
+    pattern.setAttribute('prst', element.patternFill.preset)
+    const appendColor = (tag: 'fgClr' | 'bgClr', color: string, opacity: number) => {
+      const wrapper = document.createElementNS(drawingNs, `a:${tag}`)
+      const rgb = document.createElementNS(drawingNs, 'a:srgbClr')
+      rgb.setAttribute('val', presentationColor(color, 'FFFFFF'))
+      if (opacity < 1) {
+        const alpha = document.createElementNS(drawingNs, 'a:alpha')
+        alpha.setAttribute('val', String(Math.round(Math.max(0, opacity) * 100_000)))
+        rgb.appendChild(alpha)
+      }
+      wrapper.appendChild(rgb)
+      pattern.appendChild(wrapper)
+    }
+    appendColor('fgClr', element.patternFill.foregroundColor, element.patternFill.foregroundOpacity)
+    appendColor('bgClr', element.patternFill.backgroundColor, element.patternFill.backgroundOpacity)
+    const line = Array.from(properties.childNodes).find(child => child.nodeType === 1 && (child as Element).localName === 'ln')
+    properties.insertBefore(pattern, line ?? null)
   }
   return new XMLSerializer().serializeToString(document)
 }
@@ -285,10 +332,10 @@ async function correctImageEffectsXml(archive: JSZip, xml: string, elements: rea
       biLevel.setAttribute('thresh', String(Math.round(effects.biLevelThreshold * 100_000)))
       appendBlipEffect(biLevel)
     }
-    const removal = effects?.backgroundRemoval
-    if (!removal) continue
+    const officeLayer = effects?.officeLayer
+    if (!officeLayer) continue
     if (!relationships) throw new Error(`PowerPoint slide ${slideNumber} has no image-effect relationship part`)
-    const payload = /^data:image\/vnd\.ms-photo;base64,([A-Za-z0-9+/]*={0,2})$/i.exec(removal.layerSource)?.[1]
+    const payload = /^data:image\/vnd\.ms-photo;base64,([A-Za-z0-9+/]*={0,2})$/i.exec(officeLayer.source)?.[1]
     if (!payload) throw new Error(`PowerPoint image effect layer is unavailable: ${element.id}`)
     while (usedIds.has(`rId${nextRelationshipId}`)) nextRelationshipId += 1
     const relationshipId = `rId${nextRelationshipId++}`
@@ -309,18 +356,33 @@ async function correctImageEffectsXml(archive: JSZip, xml: string, elements: rea
     const imageProperties = document.createElementNS(drawing2010Ns, 'a14:imgProps')
     const layer = document.createElementNS(drawing2010Ns, 'a14:imgLayer')
     layer.setAttributeNS(relationshipAttributeNs, 'r:embed', relationshipId)
-    const imageEffect = document.createElementNS(drawing2010Ns, 'a14:imgEffect')
-    const backgroundRemoval = document.createElementNS(drawing2010Ns, 'a14:backgroundRemoval')
-    for (const [key, value] of Object.entries(removal.bounds)) backgroundRemoval.setAttribute(key[0]!, String(value))
-    for (const [kind, marks] of [['foregroundMark', removal.foregroundMarks], ['backgroundMark', removal.backgroundMarks]] as const) {
-      for (const mark of marks) {
-        const node = document.createElementNS(drawing2010Ns, `a14:${kind}`)
-        for (const [key, value] of Object.entries(mark)) node.setAttribute(key, String(value))
-        backgroundRemoval.appendChild(node)
+    for (const effect of officeLayer.effects) {
+      const imageEffect = document.createElementNS(drawing2010Ns, 'a14:imgEffect')
+      const node = document.createElementNS(drawing2010Ns, `a14:${effect.type}`)
+      if (effect.type === 'backgroundRemoval') {
+        for (const [key, value] of Object.entries(effect.bounds)) node.setAttribute(key[0]!, String(value))
+        for (const [kind, marks] of [['foregroundMark', effect.foregroundMarks], ['backgroundMark', effect.backgroundMarks]] as const) {
+          for (const mark of marks) {
+            const markNode = document.createElementNS(drawing2010Ns, `a14:${kind}`)
+            for (const [key, value] of Object.entries(mark)) markNode.setAttribute(key, String(value))
+            node.appendChild(markNode)
+          }
+        }
+      } else if (effect.type === 'brightnessContrast') {
+        node.setAttribute('bright', String(effect.bright))
+        node.setAttribute('contrast', String(effect.contrast))
+      } else if (effect.type === 'colorTemperature') {
+        node.setAttribute('colorTemp', String(effect.colorTemp))
+      } else if (effect.type === 'saturation') {
+        node.setAttribute('sat', String(effect.sat))
+      } else if (effect.type === 'artisticPhotocopy' && effect.detail !== undefined) {
+        node.setAttribute('detail', String(effect.detail))
+      } else if (effect.type === 'sharpenSoften') {
+        node.setAttribute('amount', String(effect.amount))
       }
+      imageEffect.appendChild(node)
+      layer.appendChild(imageEffect)
     }
-    imageEffect.appendChild(backgroundRemoval)
-    layer.appendChild(imageEffect)
     imageProperties.appendChild(layer)
     extension.appendChild(imageProperties)
     extensions.appendChild(extension)
@@ -1010,7 +1072,7 @@ export async function createPresentationPptx(document: PresentationProject): Pro
       archive.file(themePath!, themeXml)
     }
     await correctMediaContentTypes(archive)
-    if (document.assets.some(asset => asset.imageEffects?.backgroundRemoval)) {
+    if (document.assets.some(asset => asset.imageEffects?.officeLayer)) {
       const path = '[Content_Types].xml'
       const file = archive.file(path)
       if (!file) throw new Error('PPTX exporter did not create content types')
@@ -1037,6 +1099,7 @@ export async function createPresentationPptx(document: PresentationProject): Pro
       xml = correctConnectorGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = correctCustomShapeGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = correctShapeGradientXml(xml, document.slides.pages[index]?.elements ?? [])
+      xml = correctShapePatternXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = await correctImageEffectsXml(archive, xml, document.slides.pages[index]?.elements ?? [], document.assets, index + 1, pageSize.height)
       await correctPresentationChartData(archive, xml, index + 1, document.slides.pages[index]?.elements ?? [])
       xml = correctPresentationGraphicFlips(xml, document.slides.pages[index]?.elements ?? [])

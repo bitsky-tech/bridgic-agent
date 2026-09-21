@@ -14,9 +14,11 @@ import {
   type PresentationPageSize,
   type PresentationImageElement,
   type PresentationImageEffects,
+  type PresentationOfficeImageEffect,
   type PresentationCustomShapeGeometry,
   type PresentationCustomShapeCommand,
   type PresentationShapeGradientFill,
+  type PresentationShapePatternFill,
   type PresentationShapeElement,
   type PresentationShapeType,
   type PresentationSlide,
@@ -218,16 +220,29 @@ function selfOrFirstByLocalName(root: Element, name: string): Element | null {
 
 function colorFrom(root: Element | null, fallback: string, themeColors: ReadonlyMap<string, string> = defaultThemeColors): string {
   if (!root) return fallback
-  const srgb = selfOrFirstByLocalName(root, 'srgbClr')?.getAttribute('val')
-  if (srgb && /^[\dA-F]{6}$/i.test(srgb)) return `#${srgb.toUpperCase()}`
-  const system = selfOrFirstByLocalName(root, 'sysClr')?.getAttribute('lastClr')
-  if (system && /^[\dA-F]{6}$/i.test(system)) return `#${system.toUpperCase()}`
-  const preset = selfOrFirstByLocalName(root, 'prstClr')?.getAttribute('val')
-  const presetValue = preset ? presetColors.get(preset) : null
-  if (presetValue) return `#${presetValue}`
-  const scheme = selfOrFirstByLocalName(root, 'schemeClr')?.getAttribute('val')
-  const themed = scheme ? themeColors.get(scheme) : null
-  return themed && /^[\dA-F]{6}$/i.test(themed) ? `#${themed.toUpperCase()}` : fallback
+  const colorNode = selfOrFirstByLocalName(root, 'srgbClr')
+    ?? selfOrFirstByLocalName(root, 'sysClr')
+    ?? selfOrFirstByLocalName(root, 'prstClr')
+    ?? selfOrFirstByLocalName(root, 'schemeClr')
+  if (!colorNode) return fallback
+  let value: string | null | undefined
+  if (colorNode.localName === 'srgbClr') value = colorNode.getAttribute('val')
+  else if (colorNode.localName === 'sysClr') value = colorNode.getAttribute('lastClr')
+  else if (colorNode.localName === 'prstClr') value = presetColors.get(colorNode.getAttribute('val') ?? '')
+  else value = themeColors.get(colorNode.getAttribute('val') ?? '')
+  if (!value || !/^[\dA-F]{6}$/i.test(value)) return fallback
+  const channels = [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16))
+  for (const transform of Array.from(colorNode.childNodes)) {
+    if (transform.nodeType !== 1) continue
+    const element = transform as Element
+    if (element.localName !== 'tint' && element.localName !== 'shade') continue
+    const amount = Math.max(0, Math.min(1, numberAttribute(element, 'val', 100_000) / 100_000))
+    for (let index = 0; index < channels.length; index++) {
+      const channel = channels[index]!
+      channels[index] = element.localName === 'tint' ? channel * amount + 255 * (1 - amount) : channel * amount
+    }
+  }
+  return `#${channels.map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('').toUpperCase()}`
 }
 
 function opacityFrom(root: Element | null): number {
@@ -440,22 +455,26 @@ function textFrom(
     : null
   const resolveRunProperties = (node: Element, paragraph: Element) => {
     const merged = parseXml('<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>').documentElement
-    const defaults = [
+    const inheritedDefaults = [
       fallbackTextBody ? firstByLocalName(fallbackTextBody, 'endParaRPr') : null,
       fallbackTextBody ? firstByLocalName(fallbackTextBody, 'defRPr') : null,
       fallbackTextBody ? firstByLocalName(fallbackTextBody, 'rPr') : null,
       ...paragraphDefaults(paragraph).slice(0, 4).map(properties => properties ? directChildrenByLocalName(properties, 'defRPr')[0] ?? null : null),
+    ]
+    const defaults = [
+      ...inheritedDefaults,
       themeRunProperties,
       ...paragraphDefaults(paragraph).slice(4).map(properties => properties ? directChildrenByLocalName(properties, 'defRPr')[0] ?? null : null),
       directChildrenByLocalName(node, node === paragraph ? 'endParaRPr' : 'rPr')[0],
     ]
-    for (const properties of defaults) {
+    for (const [index, properties] of defaults.entries()) {
       if (!properties) continue
       for (const attribute of Array.from(properties.attributes)) merged.setAttribute(attribute.name, attribute.value)
       const childNames = new Set<string>()
       for (const child of Array.from(properties.childNodes)) {
         if (child.nodeType !== 1) continue
         const name = (child as Element).localName
+        if (name === 'solidFill' && fontReference && !firstByLocalName(shape, 'ph') && index < inheritedDefaults.length) continue
         if (childNames.has(name)) continue
         childNames.add(name)
         const old = directChildrenByLocalName(merged, (child as Element).localName)[0]
@@ -763,9 +782,50 @@ function shapeGradientFillFrom(gradient: Element, themeColors: ReadonlyMap<strin
   })
   if (stops.length === 0) return undefined
   const linear = firstByLocalName(gradient, 'lin')
-  return linear
-    ? { type: 'linear', angle: numberAttribute(linear, 'ang') / 60_000, stops }
-    : { type: 'radial', stops }
+  if (linear) return { type: 'linear', angle: numberAttribute(linear, 'ang') / 60_000, stops }
+  const path = directChildrenByLocalName(gradient, 'path')[0]
+  const fillToRect = path ? firstByLocalName(path, 'fillToRect') : null
+  return {
+    type: 'radial', stops,
+    ...(path?.getAttribute('path') ? { path: path.getAttribute('path')! } : {}),
+    ...(fillToRect ? { fillToRect: {
+      left: numberAttribute(fillToRect, 'l') / 100_000,
+      top: numberAttribute(fillToRect, 't') / 100_000,
+      right: numberAttribute(fillToRect, 'r') / 100_000,
+      bottom: numberAttribute(fillToRect, 'b') / 100_000,
+    } } : {}),
+  }
+}
+
+function shapePatternFillFrom(pattern: Element, themeColors: ReadonlyMap<string, string>): PresentationShapePatternFill {
+  const foreground = importedColorFrom(firstByLocalName(pattern, 'fgClr'), '#000000', themeColors)
+  const background = importedColorFrom(firstByLocalName(pattern, 'bgClr'), '#FFFFFF', themeColors)
+  return {
+    preset: pattern.getAttribute('prst') || 'pct5',
+    foregroundColor: foreground.color,
+    foregroundOpacity: foreground.opacity,
+    backgroundColor: background.color,
+    backgroundOpacity: background.opacity,
+  }
+}
+
+interface ImportedGroupFill {
+  solid?: ImportedColor
+  gradient?: PresentationShapeGradientFill
+  pattern?: PresentationShapePatternFill
+}
+
+function groupFillFrom(properties: Element | null, inherited: ImportedGroupFill | undefined, themeColors: ReadonlyMap<string, string>): ImportedGroupFill | undefined {
+  if (!properties) return inherited
+  if (directChildrenByLocalName(properties, 'grpFill').length > 0) return inherited
+  if (directChildrenByLocalName(properties, 'noFill').length > 0) return { solid: { color: 'transparent', opacity: 0 } }
+  const solid = directChildrenByLocalName(properties, 'solidFill')[0]
+  if (solid) return { solid: importedColorFrom(solid, 'transparent', themeColors) }
+  const gradient = directChildrenByLocalName(properties, 'gradFill')[0]
+  if (gradient) return { gradient: shapeGradientFillFrom(gradient, themeColors) }
+  const pattern = directChildrenByLocalName(properties, 'pattFill')[0]
+  if (pattern) return { pattern: shapePatternFillFrom(pattern, themeColors) }
+  return inherited
 }
 
 function svgGradientFrom(gradient: Element, themeColors: ReadonlyMap<string, string>): { defs: string; paint: string } {
@@ -873,6 +933,7 @@ function visualShapeFrom(
   geometry: ReturnType<typeof shapeGeometry>,
   themeColors: ReadonlyMap<string, string>,
   registerImageAsset: (source: PresentationFileSource) => PresentationAsset,
+  groupFill?: ImportedGroupFill,
 ): PresentationShapeElement | PresentationImageElement | null {
   const shapeProperties = directChildrenByLocalName(shape, 'spPr')[0] ?? firstByLocalName(shape, 'spPr')
   if (!shapeProperties) return null
@@ -904,7 +965,10 @@ function visualShapeFrom(
   const customGeometryNode = directChildrenByLocalName(shapeProperties, 'custGeom')[0]
   const customGeometry = customGeometryNode && !connectorPath ? customShapeGeometryFrom(customGeometryNode) : undefined
   const gradientNode = directChildrenByLocalName(shapeProperties, 'gradFill')[0]
-  const gradientFill = gradientNode ? shapeGradientFillFrom(gradientNode, themeColors) : undefined
+  const inheritedFill = directChildrenByLocalName(shapeProperties, 'grpFill').length > 0 ? groupFill : undefined
+  const gradientFill = gradientNode ? shapeGradientFillFrom(gradientNode, themeColors) : inheritedFill?.gradient
+  const patternNode = directChildrenByLocalName(shapeProperties, 'pattFill')[0]
+  const patternFill = patternNode ? shapePatternFillFrom(patternNode, themeColors) : inheritedFill?.pattern
   if ((customGeometryNode && !connectorPath && !customGeometry) || (gradientNode && !gradientFill)) {
     return svgShapeFrom(shape, geometry, themeColors, registerImageAsset)
   }
@@ -912,10 +976,10 @@ function visualShapeFrom(
   const noFill = directChildrenByLocalName(shapeProperties, 'noFill').length > 0
   const solidFill = directChildrenByLocalName(shapeProperties, 'solidFill')[0]
     ?? (style ? firstByLocalName(style, 'fillRef') : null)
-  const importedFill = importedColorFrom(solidFill, 'transparent', themeColors)
-  const fill = noFill || (!gradientFill && importedFill.opacity === 0)
+  const importedFill = inheritedFill?.solid ?? importedColorFrom(solidFill, 'transparent', themeColors)
+  const fill = noFill || (!gradientFill && !patternFill && importedFill.opacity === 0)
     ? 'transparent'
-    : gradientFill?.stops[0]?.color ?? importedFill.color
+    : patternFill?.backgroundColor ?? gradientFill?.stops[0]?.color ?? importedFill.color
   const stroke = shapeStrokeFrom(shape, shapeProperties, themeColors)
   const borderColor = stroke.color
   const borderWidth = stroke.width
@@ -925,7 +989,7 @@ function visualShapeFrom(
   let opacity: number | undefined
   let fillOpacity: number | undefined
   let borderOpacity: number | undefined
-  if (!gradientFill) {
+  if (!gradientFill && !patternFill) {
     if (hasFill && hasBorder && Math.abs(importedFill.opacity - stroke.opacity) < 0.00001) opacity = importedFill.opacity
     else if (hasFill && !hasBorder) opacity = importedFill.opacity
     else if (!hasFill && hasBorder) opacity = stroke.opacity
@@ -942,6 +1006,7 @@ function visualShapeFrom(
     ...(connectorPath ? { connectorPath } : {}),
     fill,
     ...(gradientFill ? { gradientFill } : {}),
+    ...(patternFill ? { patternFill } : {}),
     ...(fillOpacity !== undefined && fillOpacity < 1 ? { fillOpacity } : {}),
     borderColor,
     borderWidth,
@@ -1058,6 +1123,20 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
   const [themeColors, fonts, presentationXml] = await Promise.all([
     themeColorsFromArchive(archive, themePath), themeFontsFromArchive(archive, themePath), archive.file('ppt/presentation.xml')!.async('text'),
   ])
+  const colorMap = firstByLocalName(document, 'overrideClrMapping')
+    ?? (layoutDocument ? firstByLocalName(layoutDocument, 'overrideClrMapping') : null)
+    ?? (masterDocument ? firstByLocalName(masterDocument, 'clrMap') : null)
+  const baseColors = new Map(themeColors)
+  for (const [name, target] of [['tx1', 'dk1'], ['bg1', 'lt1'], ['tx2', 'dk2'], ['bg2', 'lt2']] as const) {
+    const mapped = baseColors.get(colorMap?.getAttribute(name) ?? target)
+    if (mapped) themeColors.set(name, mapped)
+  }
+  if (colorMap) {
+    for (const attribute of Array.from(colorMap.attributes)) {
+      const mapped = baseColors.get(attribute.value)
+      if (mapped) themeColors.set(attribute.localName, mapped)
+    }
+  }
   const textContext: TextImportContext = {
     fonts,
     defaultTextStyle: firstByLocalName(parseXml(presentationXml), 'defaultTextStyle'),
@@ -1147,26 +1226,45 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
       }
     }
     const layer = firstByLocalName(blip, 'imgLayer')
-    const removal = layer ? firstByLocalName(layer, 'backgroundRemoval') : null
     const layerId = layer?.getAttribute('r:embed')
       ?? layer?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
     const layerPath = layerId ? relationshipMap.get(layerId) : undefined
-    if (removal && layerPath && archive.file(layerPath)) {
-      const marks = (name: string) => elementsByLocalName(removal, name).map(mark => ({
-        x1: numberAttribute(mark, 'x1'), y1: numberAttribute(mark, 'y1'),
-        x2: numberAttribute(mark, 'x2'), y2: numberAttribute(mark, 'y2'),
-      }))
-      effects.backgroundRemoval = {
-        layerSource: presentationPptxSource(projectId, layerPath),
-        bounds: {
-          top: numberAttribute(removal, 't'), bottom: numberAttribute(removal, 'b'),
-          left: numberAttribute(removal, 'l'), right: numberAttribute(removal, 'r'),
-        },
-        foregroundMarks: marks('foregroundMark'),
-        backgroundMarks: marks('backgroundMark'),
+    if (layer && layerPath && archive.file(layerPath)) {
+      const officeEffects: PresentationOfficeImageEffect[] = []
+      for (const imageEffect of directChildrenByLocalName(layer, 'imgEffect')) {
+        const effect = Array.from(imageEffect.childNodes).find((child): child is Element => child.nodeType === 1)
+        if (!effect) continue
+        if (effect.localName === 'backgroundRemoval') {
+          const marks = (name: string) => elementsByLocalName(effect, name).map(mark => ({
+            x1: numberAttribute(mark, 'x1'), y1: numberAttribute(mark, 'y1'),
+            x2: numberAttribute(mark, 'x2'), y2: numberAttribute(mark, 'y2'),
+          }))
+          officeEffects.push({
+            type: 'backgroundRemoval',
+            bounds: {
+              top: numberAttribute(effect, 't'), bottom: numberAttribute(effect, 'b'),
+              left: numberAttribute(effect, 'l'), right: numberAttribute(effect, 'r'),
+            },
+            foregroundMarks: marks('foregroundMark'),
+            backgroundMarks: marks('backgroundMark'),
+          })
+        } else if (effect.localName === 'brightnessContrast') {
+          officeEffects.push({ type: 'brightnessContrast', bright: numberAttribute(effect, 'bright'), contrast: numberAttribute(effect, 'contrast') })
+        } else if (effect.localName === 'colorTemperature') {
+          officeEffects.push({ type: 'colorTemperature', colorTemp: numberAttribute(effect, 'colorTemp') })
+        } else if (effect.localName === 'saturation') {
+          officeEffects.push({ type: 'saturation', sat: numberAttribute(effect, 'sat') })
+        } else if (effect.localName === 'artisticPhotocopy') {
+          officeEffects.push({ type: 'artisticPhotocopy', ...(effect.hasAttribute('detail') ? { detail: numberAttribute(effect, 'detail') } : {}) })
+        } else if (effect.localName === 'sharpenSoften') {
+          officeEffects.push({ type: 'sharpenSoften', amount: numberAttribute(effect, 'amount') })
+        } else if (effect.localName === 'artisticCrisscrossEtching' || effect.localName === 'artisticBlur') {
+          officeEffects.push({ type: effect.localName })
+        }
       }
+      if (officeEffects.length > 0) effects.officeLayer = { source: presentationPptxSource(projectId, layerPath), effects: officeEffects }
     }
-    return effects.colorChange || effects.backgroundRemoval || effects.grayscale || effects.biLevelThreshold !== undefined ? effects : undefined
+    return effects.colorChange || effects.officeLayer || effects.grayscale || effects.biLevelThreshold !== undefined ? effects : undefined
   }
 
   const softEdgeRadiusFrom = (properties: Element | null): number | undefined => {
@@ -1180,6 +1278,7 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
     coordinateTransform: CoordinateTransform,
     relationshipMap: ReadonlyMap<string, string>,
     parentGroupId?: string,
+    groupFill?: ImportedGroupFill,
   ) => {
     const fallbackShape = placeholderPrototypeFor(shape)
     const geometry = shapeGeometry(shape, pageSize, slideSizeEmu, coordinateTransform, fallbackShape)
@@ -1203,7 +1302,7 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
       ...(shapeTypeFrom(shape) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(shapeProperties && firstByLocalName(shapeProperties, 'outerShdw')),
-    } : visualShapeFrom(shape, geometry, themeColors, registerImageAsset)
+    } : visualShapeFrom(shape, geometry, themeColors, registerImageAsset, groupFill)
     const text = textFrom(shape, geometry, pageSize, slideSizeEmu, themeColors, fallbackShape, coordinateTransform, textContext)
     const groupId = parentGroupId ?? (visual && text ? createPresentationId('group') : undefined)
     if (visual) elements.push(withGroup(visual, groupId))
@@ -1316,6 +1415,25 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
       }, parentGroupId)
       elements.push(importedTable)
       if (sourceId) sourceShapeIds.set(sourceId, importedTable.id)
+      return
+    }
+
+    const fallbackPicture = firstByLocalName(frame, 'oleObj') ? firstByLocalName(frame, 'pic') : null
+    if (fallbackPicture) {
+      const blip = firstByLocalName(fallbackPicture, 'blip')
+      const source = await imageSourceFromBlip(blip, relationshipMap)
+      if (source) {
+        const asset = registerImageAsset(source, imageEffectsFromBlip(blip, relationshipMap))
+        const image: PresentationImageElement = withGroup({
+          id: createPresentationId('image'), type: 'image', sourceAssetId: asset.id,
+          ...geometry,
+          altText: firstByLocalName(frame, 'cNvPr')?.getAttribute('name') ?? '',
+          fit: firstByLocalName(fallbackPicture, 'stretch') ? 'stretch' : 'contain',
+          shadow: false,
+        }, parentGroupId)
+        elements.push(image)
+        if (sourceId) sourceShapeIds.set(sourceId, image.id)
+      }
       return
     }
 
@@ -1440,24 +1558,27 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
     relationshipMap: ReadonlyMap<string, string>,
     parentGroupId?: string,
     skipPlaceholders = false,
+    groupFill?: ImportedGroupFill,
   ): Promise<void> => {
     for (const node of Array.from(root.childNodes)) {
       if (node.nodeType !== 1) continue
       const child = node as Element
       if (skipPlaceholders && firstByLocalName(child, 'ph')) continue
-      if (child.localName === 'sp' || child.localName === 'cxnSp') await importShape(child, coordinateTransform, relationshipMap, parentGroupId)
+      if (child.localName === 'sp' || child.localName === 'cxnSp') await importShape(child, coordinateTransform, relationshipMap, parentGroupId, groupFill)
       else if (child.localName === 'pic') await importPicture(child, coordinateTransform, relationshipMap, parentGroupId)
       else if (child.localName === 'graphicFrame') await importGraphicFrame(child, coordinateTransform, relationshipMap, parentGroupId)
       else if (child.localName === 'grpSp') {
         const groupId = parentGroupId ?? createPresentationId('group')
         const firstElementIndex = elements.length
-        await importTree(child, groupTransform(child, coordinateTransform), relationshipMap, groupId, skipPlaceholders)
+        const groupProperties = directChildrenByLocalName(child, 'grpSpPr')[0] ?? null
+        const nestedFill = groupFillFrom(groupProperties, groupFill, themeColors)
+        await importTree(child, groupTransform(child, coordinateTransform), relationshipMap, groupId, skipPlaceholders, nestedFill)
         const sourceId = firstByLocalName(child, 'cNvPr')?.getAttribute('id')
         const firstMember = elements[firstElementIndex]
         if (sourceId && firstMember) sourceShapeIds.set(sourceId, firstMember.id)
       } else if (child.localName === 'AlternateContent') {
         const fallback = firstByLocalName(child, 'Fallback') ?? firstByLocalName(child, 'Choice')
-        if (fallback) await importTree(fallback, coordinateTransform, relationshipMap, parentGroupId, skipPlaceholders)
+        if (fallback) await importTree(fallback, coordinateTransform, relationshipMap, parentGroupId, skipPlaceholders, groupFill)
       }
     }
   }
@@ -1481,6 +1602,8 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
   ].find(owner => owner.document && firstByLocalName(owner.document, 'bg'))
   const backgroundRoot = backgroundOwner?.document ? firstByLocalName(backgroundOwner.document, 'bg') : null
   const background = colorFrom(backgroundRoot, '#FFFFFF', themeColors)
+  const backgroundGradientNode = backgroundRoot ? firstByLocalName(backgroundRoot, 'gradFill') : null
+  const backgroundGradient = backgroundGradientNode ? shapeGradientFillFrom(backgroundGradientNode, themeColors) : undefined
   const backgroundBlip = backgroundRoot ? firstByLocalName(backgroundRoot, 'blip') : null
   const backgroundSource = backgroundOwner
     ? await imageSourceFromBlip(backgroundBlip, backgroundOwner.relationships)
@@ -1500,6 +1623,20 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
       altText: '',
       fit: 'cover',
       shadow: false,
+    })
+  } else if (backgroundGradient) {
+    elements.unshift({
+      id: createPresentationId('shape'),
+      type: 'rect',
+      x: 0,
+      y: 0,
+      width: pageSize.width,
+      height: pageSize.height,
+      rotation: 0,
+      fill: backgroundGradient.stops[0]?.color ?? background,
+      gradientFill: backgroundGradient,
+      borderColor: 'transparent',
+      borderWidth: 0,
     })
   }
   const notesTarget = [...relationships.values()].find((target) => target.includes('/notesSlides/'))
@@ -1552,11 +1689,11 @@ export async function importPresentationPptx(
         return payload ? presentationDerivedSource(source) : source
       }
       const assets = restored.assets.map((asset) => {
-        const removal = asset.imageEffects?.backgroundRemoval
+        const officeLayer = asset.imageEffects?.officeLayer
         return {
           ...asset,
           source: rebaseSource(asset.source),
-          ...(removal ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: { ...removal, layerSource: rebaseSource(removal.layerSource) } } } : {}),
+          ...(officeLayer ? { imageEffects: { ...asset.imageEffects, officeLayer: { ...officeLayer, source: rebaseSource(officeLayer.source) } } } : {}),
         }
       })
       const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= restored.slides.pages.length))] : null

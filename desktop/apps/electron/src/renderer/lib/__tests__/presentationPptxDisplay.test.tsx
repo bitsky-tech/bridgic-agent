@@ -50,6 +50,18 @@ function agentEdit(model: PresentationProject): PresentationProject {
 }
 
 describe('PowerPoint display fidelity', () => {
+  it('previews an imported patterned shape from its editable pattern data', async () => {
+    const tree = shape(1, 100).replace(
+      '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+      '<a:pattFill prst="wdDnDiag"><a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="FFEEDD"/></a:bgClr></a:pattFill>',
+    )
+    const model = await readFixture(tree)
+    const markup = preview(model)
+    expect(markup).toContain('<pattern')
+    expect(markup).toContain('fill="#FFEEDD"')
+    expect(markup).toContain('stroke="#112233"')
+  })
+
   it('renders theme background and footer when a page has no local overrides', () => {
     const model = createBlankPresentationProject('Theme preview')
     model.theme = {
@@ -441,6 +453,62 @@ describe('PowerPoint display fidelity', () => {
     expect(presentationTextStyleAt(text, 0).fontFamily).toBe(collection === 'major' ? 'Georgia' : 'Arial')
     expect(presentationTextStyleAt(text, 7).fontFamily).toBe(collection === 'major' ? 'Songti SC' : 'PingFang SC')
     expect(presentationTextStyleAt(text, 9).fontFamily).toBe('Courier New')
+  })
+
+  it('applies theme tint to an editable shape instead of using its unmodified scheme color', async () => {
+    const theme = `<a:theme ${ns}><a:themeElements><a:clrScheme name="Custom"><a:dk2><a:srgbClr val="053D86"/></a:dk2></a:clrScheme></a:themeElements></a:theme>`
+    const style = '<p:style><a:fillRef idx="1"><a:schemeClr val="dk2"><a:tint val="40000"/></a:schemeClr></a:fillRef></p:style>'
+    const tree = shape(1, 100, style).replace('<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>', '')
+    const model = await readFixture(tree, undefined, undefined, { 'ppt/theme/theme1.xml': theme })
+    expect(model.slides.pages[0]!.elements[0]).toMatchObject({ fill: '#9BB1CF' })
+  })
+
+  it('resolves a grouped shape fill through the master color map', async () => {
+    const rel = (type: string, target: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ref" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`
+    const extras = {
+      'ppt/slides/_rels/slide1.xml.rels': rel('slideLayout', '../slideLayouts/slideLayout1.xml'),
+      'ppt/slideLayouts/slideLayout1.xml': `<p:sldLayout ${ns}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`,
+      'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rel('slideMaster', '../slideMasters/slideMaster1.xml'),
+      'ppt/slideMasters/slideMaster1.xml': `<p:sldMaster ${ns}><p:cSld><p:spTree/></p:cSld><p:clrMap tx2="dk2"/></p:sldMaster>`,
+      'ppt/slideMasters/_rels/slideMaster1.xml.rels': rel('theme', '../theme/theme1.xml'),
+      'ppt/theme/theme1.xml': `<a:theme ${ns}><a:themeElements><a:clrScheme name="Custom"><a:dk2><a:srgbClr val="4B778B"/></a:dk2></a:clrScheme></a:themeElements></a:theme>`,
+    }
+    const child = shape(1, 100).replace('<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>', '<a:grpFill/>')
+    const tree = `<p:grpSp><p:grpSpPr><a:solidFill><a:schemeClr val="tx2"/></a:solidFill></p:grpSpPr>${child}</p:grpSp>`
+    const model = await readFixture(tree, undefined, undefined, extras)
+    expect(model.slides.pages[0]!.elements[0]).toMatchObject({ type: 'rect', fill: '#4B778B' })
+    expect(preview(model)).toContain('fill="#4B778B"')
+    const reopened = await importPresentationPptx(await createPresentationPptx(model))
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ fill: '#4B778B' })
+  })
+
+  it('keeps an OLE object picture fallback visible as an editable image', async () => {
+    const tree = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="7" name="Embedded diagram"/></p:nvGraphicFramePr><p:xfrm><a:off x="${emu(100)}" y="${emu(80)}"/><a:ext cx="${emu(400)}" cy="${emu(300)}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj><p:pic><p:nvPicPr><p:cNvPr id="8" name="Preview"/></p:nvPicPr><p:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="image1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${emu(100)}" y="${emu(80)}"/><a:ext cx="${emu(400)}" cy="${emu(300)}"/></a:xfrm></p:spPr></p:pic></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
+    const extras = {
+      'ppt/slides/_rels/slide1.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/preview.svg"/></Relationships>',
+      'ppt/media/preview.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="blue"/></svg>',
+    }
+    const bytes = await fixtureBytes(tree, undefined, undefined, extras)
+    const model = await importPresentationPptx(bytes)
+    expect(model.slides.pages[0]!.elements[0]).toMatchObject({ type: 'image', x: 100, y: 80, width: 400, height: 300, fit: 'stretch' })
+    const sources = await presentationPptxSourceUrls(model, Buffer.from(bytes).toString('base64'))
+    const markup = renderToStaticMarkup(<PresentationSlidePreview assets={model.assets} sources={sources} slide={model.slides.pages[0]!} width={1280} selected={false} />)
+    expect(markup).toContain('data:image/svg+xml;base64,')
+    const reopened = await importPresentationPptx(await createPresentationPptx(await materializePresentationProjectSources(model, sources)))
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ type: 'image', x: 100, y: 80 })
+  })
+
+  it('lets a shape font reference override an inherited master default color', async () => {
+    const rel = (type: string, target: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ref" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`
+    const extras = {
+      'ppt/slides/_rels/slide1.xml.rels': rel('slideLayout', '../slideLayouts/slideLayout1.xml'),
+      'ppt/slideLayouts/slideLayout1.xml': `<p:sldLayout ${ns}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`,
+      'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rel('slideMaster', '../slideMasters/slideMaster1.xml'),
+      'ppt/slideMasters/slideMaster1.xml': `<p:sldMaster ${ns}><p:cSld><p:spTree/></p:cSld><p:txStyles><p:otherStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:defRPr></a:lvl1pPr></p:otherStyle></p:txStyles></p:sldMaster>`,
+    }
+    const body = `<p:style><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>${textBody('', '<a:r><a:t>1</a:t></a:r>')}`
+    const text = firstText(await readFixture(shape(1, 100, body), undefined, undefined, extras))
+    expect(text.color).toBe('#FFFFFF')
   })
 
   it.each(['0', 'false', '1'] as const)('honors showMasterSp="%s" on slides and layouts', async (flag) => {

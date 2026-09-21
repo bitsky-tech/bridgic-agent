@@ -36,7 +36,7 @@ export function migratePresentationWorkspace(value: unknown): PresentationWorksp
 
   const projects = rawProjects.map((project) => migratePresentationProject(project))
   if (projects.some((project) => project.assets.some((asset) => !isDurablePresentationSource(asset.source)
-    || (asset.imageEffects?.backgroundRemoval && !isDurablePresentationSource(asset.imageEffects.backgroundRemoval.layerSource))))) {
+    || (asset.imageEffects?.officeLayer && !isDurablePresentationSource(asset.imageEffects.officeLayer.source))))) {
     throw new Error('The PowerPoint workspace contains an embedded or unresolved asset source')
   }
   const projectMetadata: Record<string, PresentationProjectMetadata> = {}

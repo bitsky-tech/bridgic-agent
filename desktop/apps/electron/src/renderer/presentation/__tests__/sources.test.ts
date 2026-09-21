@@ -60,8 +60,8 @@ it('resolves and rebases the embedded layer used by an Office picture effect', a
   const imageSource = presentationPptxSource(project.id, 'ppt/media/original.png')
   const layerSource = presentationPptxSource(project.id, 'ppt/media/original.wdp')
   project.assets = [{ id: 'effect-image', kind: 'image', mimeType: 'image/png', name: 'original.png', source: imageSource,
-    imageEffects: { backgroundRemoval: { layerSource,
-      bounds: { top: 0, bottom: 100000, left: 0, right: 100000 }, foregroundMarks: [], backgroundMarks: [] } } }]
+    imageEffects: { officeLayer: { source: layerSource, effects: [{ type: 'backgroundRemoval',
+      bounds: { top: 0, bottom: 100000, left: 0, right: 100000 }, foregroundMarks: [], backgroundMarks: [] }] } } }]
   const original = new JSZip()
   original.file('ppt/media/original.png', 'png')
   original.file('ppt/media/original.wdp', 'wdp')
@@ -70,11 +70,11 @@ it('resolves and rebases the embedded layer used by an Office picture effect', a
   expect(urls[layerSource]).toBe('data:image/vnd.ms-photo;base64,d2Rw')
 
   const materialized = { ...project, assets: [{ ...project.assets[0]!, source: urls[imageSource]!,
-    imageEffects: { backgroundRemoval: { ...project.assets[0]!.imageEffects!.backgroundRemoval!, layerSource: urls[layerSource]! } } }] }
+    imageEffects: { officeLayer: { ...project.assets[0]!.imageEffects!.officeLayer!, source: urls[layerSource]! } } }] }
   const output = new JSZip()
   output.file('ppt/media/new.png', 'png')
   output.file('ppt/media/new.wdp', 'wdp')
   const rebased = await rebasePresentationPptxSources(project, materialized, await output.generateAsync({ type: 'base64' }))
   expect(rebased.project.assets[0]!.source).toBe(presentationPptxSource(project.id, 'ppt/media/new.png'))
-  expect(rebased.project.assets[0]!.imageEffects?.backgroundRemoval?.layerSource).toBe(presentationPptxSource(project.id, 'ppt/media/new.wdp'))
+  expect(rebased.project.assets[0]!.imageEffects?.officeLayer?.source).toBe(presentationPptxSource(project.id, 'ppt/media/new.wdp'))
 })

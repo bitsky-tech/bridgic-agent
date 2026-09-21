@@ -110,6 +110,28 @@ describe('PowerPoint renderer protocol', () => {
     expect(updated.projects!.projects[0]!.slides.pages[0]!.elements[0]).not.toHaveProperty('gradientFill')
   })
 
+  it('replaces an imported pattern when an Agent applies a solid shape fill', async () => {
+    const initial = workspace()
+    const document = initial.projects[0]!
+    const slide = document.slides.pages[0]!
+    slide.elements = [{
+      id: 'card', type: 'rect', x: 10, y: 10, width: 100, height: 60, rotation: 0,
+      fill: '#FFFFFF', borderColor: 'transparent', borderWidth: 0,
+      patternFill: {
+        preset: 'wdUpDiag', foregroundColor: '#F8FCFE', foregroundOpacity: 1,
+        backgroundColor: '#FFFFFF', backgroundOpacity: 1,
+      },
+    }]
+    const read = await readPage(initial, slide.id)
+    const updated = await executePowerPointRequest(initial, { method: 'edit_page', params: {
+      document_id: document.id, page_id: slide.id,
+      expected_revision: (read.result as { revision: string }).revision,
+      operations: [{ type: 'patch', id: 'card', element_type: 'rect', patch: { fill: '#00FF00' } }],
+    } })
+    expect(updated.projects!.projects[0]!.slides.pages[0]!.elements[0]).toMatchObject({ fill: '#00FF00' })
+    expect(updated.projects!.projects[0]!.slides.pages[0]!.elements[0]).not.toHaveProperty('patternFill')
+  })
+
   it('adds, patches, and removes comments atomically', async () => {
     const initial = workspace()
     const document = initial.projects[0]!

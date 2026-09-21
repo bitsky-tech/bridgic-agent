@@ -125,6 +125,28 @@ describe('importPresentationPptx', () => {
     }
   })
 
+  it('imports a master gradient background as an editable shape behind slide content', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const archive = await JSZip.loadAsync(await createPresentationPptx(createInitialPresentationProject()))
+    for (const part of ['slides/slide1.xml', 'slideLayouts/slideLayout1.xml', 'slideMasters/slideMaster1.xml']) {
+      const file = archive.file(`ppt/${part}`)!
+      archive.file(file.name, (await file.async('text')).replace(/<p:bg>.*?<\/p:bg>/s, ''))
+    }
+    const master = archive.file('ppt/slideMasters/slideMaster1.xml')!
+    const background = '<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs><a:gs pos="100000"><a:srgbClr val="F3EFE9"/></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill></p:bgPr></p:bg>'
+    archive.file(master.name, (await master.async('text')).replace(/(<p:cSld[^>]*>)/, `$1${background}`))
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
+    const first = imported.slides.pages[0]!.elements[0]!
+    expect(first).toMatchObject({
+      type: 'rect', x: 0, y: 0, width: imported.pageSize.width, height: imported.pageSize.height,
+      gradientFill: { type: 'radial', path: 'circle', fillToRect: { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 } },
+    })
+    if (first.type !== 'rect' || !first.gradientFill) throw new Error('Gradient background missing')
+    first.gradientFill.stops[1]!.color = '#E9DDCC'
+    const reopened = await importPresentationPptx(await createPresentationPptx(imported))
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ gradientFill: first.gradientFill })
+  })
+
   it('round-trips editable slides, geometry, notes and page size', async () => {
     const source = createInitialPresentationProject()
     source.theme.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
@@ -360,6 +382,56 @@ describe('importPresentationPptx', () => {
     expect(reopened.slides.pages[0]!.elements.find(element => element.type === 'image')).toMatchObject({ type: 'image', fit: 'stretch' })
   })
 
+  it('keeps an editable patterned shape through native PPTX import and export', async () => {
+    const source = createInitialPresentationProject()
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    const patternFill = {
+      preset: 'wdUpDiag', foregroundColor: '#F8FCFE', foregroundOpacity: 1,
+      backgroundColor: '#FFFFFF', backgroundOpacity: 1,
+    }
+    slide.elements = [{
+      id: 'patterned-card', type: 'roundRect', x: 40, y: 50, width: 700, height: 360, rotation: 0,
+      fill: '#FFFFFF', borderColor: 'transparent', borderWidth: 0,
+      patternFill,
+    }]
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const bytes = await createPresentationPptx(source)
+    const imported = await importPresentationPptx(bytes, 'patterned.pptx')
+    expect(imported.slides.pages[0]!.elements[0]).toMatchObject({
+      type: 'roundRect', fill: '#FFFFFF', patternFill,
+    })
+    const reopenedBytes = await createPresentationPptx(imported)
+    const reopenedXml = await (await JSZip.loadAsync(reopenedBytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(reopenedXml).toContain('<a:pattFill prst="wdUpDiag">')
+    expect((await importPresentationPptx(reopenedBytes, 'patterned-again.pptx')).slides.pages[0]!.elements[0]).toMatchObject({
+      type: 'roundRect', patternFill,
+    })
+  })
+
+  it('preserves an Office radial gradient path and fill rectangle', async () => {
+    const source = createInitialPresentationProject()
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    slide.elements = [{
+      id: 'radial-card', type: 'ellipse', x: 30, y: 40, width: 300, height: 300, rotation: 0,
+      fill: '#FFFFFF', borderColor: 'transparent', borderWidth: 0,
+      gradientFill: { type: 'radial', path: 'circle', fillToRect: { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 }, stops: [
+        { offset: 0, color: '#FFFFFF', opacity: 1 }, { offset: 1, color: '#004950', opacity: 1 },
+      ] },
+    }]
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const exported = await createPresentationPptx(source)
+    const imported = await importPresentationPptx(exported, 'radial.pptx')
+    expect(imported.slides.pages[0]!.elements[0]).toMatchObject({
+      type: 'ellipse', gradientFill: { type: 'radial', path: 'circle', fillToRect: { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 } },
+    })
+    const roundTrip = await JSZip.loadAsync(await createPresentationPptx(imported))
+    expect(await roundTrip.file('ppt/slides/slide1.xml')!.async('text')).toContain('<a:fillToRect l="50000" t="50000" r="50000" b="50000"/>')
+  })
+
   it('imports an ellipse shape with a picture fill as a clipped image instead of its theme fallback color', async () => {
     const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
@@ -429,7 +501,7 @@ describe('importPresentationPptx', () => {
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const slideFile = archive.file('ppt/slides/slide1.xml')!
     const effect = '<a:clrChange><a:clrFrom><a:srgbClr val="FFFFFF"/></a:clrFrom><a:clrTo><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:clrTo></a:clrChange>'
-      + '<a:extLst><a:ext uri="{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}"><a14:imgProps xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a14:imgLayer r:embed="rId77"><a14:imgEffect><a14:backgroundRemoval t="10" b="90000" l="20" r="80000"><a14:foregroundMark x1="1" y1="2" x2="3" y2="4"/><a14:backgroundMark x1="5" y1="6" x2="7" y2="8"/></a14:backgroundRemoval></a14:imgEffect></a14:imgLayer></a14:imgProps></a:ext></a:extLst>'
+      + '<a:extLst><a:ext uri="{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}"><a14:imgProps xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a14:imgLayer r:embed="rId77"><a14:imgEffect><a14:backgroundRemoval t="10" b="90000" l="20" r="80000"><a14:foregroundMark x1="1" y1="2" x2="3" y2="4"/><a14:backgroundMark x1="5" y1="6" x2="7" y2="8"/></a14:backgroundRemoval></a14:imgEffect><a14:imgEffect><a14:brightnessContrast bright="20000" contrast="-20000"/></a14:imgEffect><a14:imgEffect><a14:colorTemperature colorTemp="4700"/></a14:imgEffect></a14:imgLayer></a14:imgProps></a:ext></a:extLst>'
     archive.file(slideFile.name, (await slideFile.async('text')).replace(/<a:blip (r:embed="[^"]+")><\/a:blip>/, `<a:blip $1>${effect}</a:blip>`))
     const relationships = archive.file('ppt/slides/_rels/slide1.xml.rels')!
     archive.file(relationships.name, (await relationships.async('text')).replace('</Relationships>',
@@ -442,20 +514,32 @@ describe('importPresentationPptx', () => {
     expect(asset).toBeDefined()
     expect(asset.imageEffects).toMatchObject({
       colorChange: { from: '#FFFFFF', to: '#FFFFFF', opacity: 0 },
-      backgroundRemoval: { bounds: { top: 10, bottom: 90000, left: 20, right: 80000 },
-        foregroundMarks: [{ x1: 1, y1: 2, x2: 3, y2: 4 }], backgroundMarks: [{ x1: 5, y1: 6, x2: 7, y2: 8 }] },
+      officeLayer: { effects: [
+        { type: 'backgroundRemoval', bounds: { top: 10, bottom: 90000, left: 20, right: 80000 },
+          foregroundMarks: [{ x1: 1, y1: 2, x2: 3, y2: 4 }], backgroundMarks: [{ x1: 5, y1: 6, x2: 7, y2: 8 }] },
+        { type: 'brightnessContrast', bright: 20000, contrast: -20000 },
+        { type: 'colorTemperature', colorTemp: 4700 },
+      ] },
     })
-    expect(asset.imageEffects?.backgroundRemoval?.layerSource).toStartWith(`bridgic-pptx:${imported.id}/`)
+    expect(asset.imageEffects?.officeLayer?.source).toStartWith(`bridgic-pptx:${imported.id}/`)
+    const image = imported.slides.pages[0]!.elements.find(value => value.type === 'image')!
+    image.x += 20
+    const brightness = asset.imageEffects?.officeLayer?.effects.find(value => value.type === 'brightnessContrast')
+    if (brightness?.type !== 'brightnessContrast') throw new Error('Brightness adjustment missing')
+    brightness.bright = 30000
     const urls = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
     const exported = await createPresentationPptx(await materializePresentationProjectSources(imported, urls))
     const output = await JSZip.loadAsync(exported)
     const outputXml = await output.file('ppt/slides/slide1.xml')!.async('text')
     expect(outputXml).toContain('<a:clrChange>')
     expect(outputXml).toContain('<a14:backgroundRemoval')
+    expect(outputXml).toContain('<a14:brightnessContrast bright="30000" contrast="-20000"/>')
+    expect(outputXml).toContain('<a14:colorTemperature colorTemp="4700"/>')
     expect(outputXml).toContain('<a14:foregroundMark x1="1" y1="2" x2="3" y2="4"/>')
     expect(Object.keys(output.files).some(path => path.endsWith('.wdp'))).toBe(true)
     const reopened = await importPresentationPptx(exported, 'effects-export.pptx')
-    expect(reopened.assets.some(value => value.imageEffects?.backgroundRemoval)).toBe(true)
+    expect(reopened.assets.some(value => value.imageEffects?.officeLayer?.effects.length === 3)).toBe(true)
+    expect(reopened.slides.pages[0]!.elements.find(value => value.type === 'image')?.x).toBeCloseTo(image.x)
   })
 
   it('imports East Asian vertical text and DrawingML preset colors', async () => {

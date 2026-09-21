@@ -604,7 +604,18 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
   const definition = getPresentationShapeDefinition(element.type)
   const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
   const gradientId = `presentation-shape-gradient-${element.id.replace(/[^\w-]/g, '-')}`
-  const shapeFill = element.gradientFill ? `url(#${gradientId})` : element.fill
+  const patternId = `presentation-shape-pattern-${element.id.replace(/[^\w-]/g, '-')}`
+  const preset = element.patternFill?.preset
+  let patternPath: string | undefined
+  if (preset === 'lgGrid') patternPath = 'M 0 0 H 2 M 0 0 V 2'
+  else if (preset?.endsWith('DnDiag')) patternPath = 'M -2 0 L 2 4 M 0 -2 L 4 2 M 2 -2 L 6 2'
+  else if (preset?.endsWith('UpDiag')) patternPath = 'M -2 2 L 2 -2 M 0 4 L 4 0 M 2 4 L 6 0'
+  let shapeFill = element.fill
+  if (element.gradientFill) shapeFill = `url(#${gradientId})`
+  if (patternPath) shapeFill = `url(#${patternId})`
+  let patternStrokeWidth = 0.45
+  if (preset?.startsWith('dk')) patternStrokeWidth = 0.8
+  else if (preset?.startsWith('lt')) patternStrokeWidth = 0.2
   const linearGradient = element.gradientFill?.type === 'linear'
     ? presentationLinearGradientCoordinates(element.gradientFill.angle)
     : null
@@ -670,17 +681,25 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
         filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
       }}
     >
-      {element.gradientFill ? (
+      {element.gradientFill || (element.patternFill && patternPath) ? (
         <defs>
-          {element.gradientFill.type === 'linear' && linearGradient ? (
+          {element.patternFill && patternPath ? (
+            <pattern id={patternId} patternUnits="userSpaceOnUse" width="2" height="2">
+              <rect width="2" height="2" fill={element.patternFill.backgroundColor} fillOpacity={element.patternFill.backgroundOpacity} />
+              <path d={patternPath} fill="none" stroke={element.patternFill.foregroundColor} strokeOpacity={element.patternFill.foregroundOpacity}
+                strokeWidth={patternStrokeWidth} />
+            </pattern>
+          ) : null}
+          {element.gradientFill?.type === 'linear' && linearGradient ? (
             <linearGradient id={gradientId} x1={`${linearGradient.x1 * 100}%`} y1={`${linearGradient.y1 * 100}%`} x2={`${linearGradient.x2 * 100}%`} y2={`${linearGradient.y2 * 100}%`}>
               {element.gradientFill.stops.map((stop, index) => <stop key={index} offset={`${stop.offset * 100}%`} stopColor={stop.color} stopOpacity={stop.opacity} />)}
             </linearGradient>
-          ) : (
+          ) : null}
+          {element.gradientFill?.type === 'radial' ? (
             <radialGradient id={gradientId} cx="50%" cy="50%" r="71%">
               {element.gradientFill.stops.map((stop, index) => <stop key={index} offset={`${stop.offset * 100}%`} stopColor={stop.color} stopOpacity={stop.opacity} />)}
             </radialGradient>
-          )}
+          ) : null}
         </defs>
       ) : null}
       {shape}

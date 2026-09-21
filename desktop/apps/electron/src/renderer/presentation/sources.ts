@@ -31,8 +31,8 @@ export function presentationSourceUrls(sourceRefs: Iterable<string>, mounts: rea
 export async function presentationPptxSourceUrls(project: PresentationProject, encodedPptx: string): Promise<Record<string, string>> {
   const embedded = project.assets.flatMap((asset) => [
     { source: asset.source, mimeType: asset.mimeType, name: asset.name },
-    ...(asset.imageEffects?.backgroundRemoval ? [{
-      source: asset.imageEffects.backgroundRemoval.layerSource,
+    ...(asset.imageEffects?.officeLayer ? [{
+      source: asset.imageEffects.officeLayer.source,
       mimeType: 'image/vnd.ms-photo',
       name: `${asset.name} effect layer`,
     }] : []),
@@ -70,13 +70,13 @@ export async function rebasePresentationPptxSources(project: PresentationProject
   const assets = project.assets.map((asset) => {
     const materializedAsset = materializedById.get(asset.id)
     const source = rebase(asset.source, materializedAsset?.source)
-    const removal = asset.imageEffects?.backgroundRemoval
-    const layerSource = removal ? rebase(removal.layerSource, materializedAsset?.imageEffects?.backgroundRemoval?.layerSource) : undefined
-    if (source === asset.source && (!removal || layerSource === removal.layerSource)) return asset
+    const officeLayer = asset.imageEffects?.officeLayer
+    const layerSource = officeLayer ? rebase(officeLayer.source, materializedAsset?.imageEffects?.officeLayer?.source) : undefined
+    if (source === asset.source && (!officeLayer || layerSource === officeLayer.source)) return asset
     return {
       ...asset,
       source,
-      ...(removal && layerSource ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: { ...removal, layerSource } } } : {}),
+      ...(officeLayer && layerSource ? { imageEffects: { ...asset.imageEffects, officeLayer: { ...officeLayer, source: layerSource } } } : {}),
     }
   })
   return { project: replacements.size ? { ...project, assets } : project, replacements }
@@ -103,11 +103,11 @@ export function resolvePresentationProjectSources(project: PresentationProject, 
     ...project,
     assets: project.assets.map((asset) => {
       const resolve = (source: string) => derivedPresentationSource(source) ?? (source.startsWith('bridgic-') ? sources[source] ?? source : source)
-      const removal = asset.imageEffects?.backgroundRemoval
+      const officeLayer = asset.imageEffects?.officeLayer
       return {
         ...asset,
         source: resolve(asset.source),
-        ...(removal ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: { ...removal, layerSource: resolve(removal.layerSource) } } } : {}),
+        ...(officeLayer ? { imageEffects: { ...asset.imageEffects, officeLayer: { ...officeLayer, source: resolve(officeLayer.source) } } } : {}),
       }
     }),
   }
@@ -140,13 +140,13 @@ export async function materializePresentationProjectSources(project: Presentatio
   return {
     ...project,
     assets: await Promise.all(project.assets.map(async (asset) => {
-      const removal = asset.imageEffects?.backgroundRemoval
+      const officeLayer = asset.imageEffects?.officeLayer
       return {
         ...asset,
         source: await dataUrl(asset.source, asset.name, asset.mimeType),
-        ...(removal ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: {
-          ...removal,
-          layerSource: await dataUrl(removal.layerSource, `${asset.name} effect layer`, 'image/vnd.ms-photo'),
+        ...(officeLayer ? { imageEffects: { ...asset.imageEffects, officeLayer: {
+          ...officeLayer,
+          source: await dataUrl(officeLayer.source, `${asset.name} effect layer`, 'image/vnd.ms-photo'),
         } } } : {}),
       }
     })),

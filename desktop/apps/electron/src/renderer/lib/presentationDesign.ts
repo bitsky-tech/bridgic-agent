@@ -166,7 +166,7 @@ export function applyPresentationDesign(document: PresentationProject, patch: Pr
     if ('fill' in element && 'borderColor' in element) {
       const shape = element as PresentationShapeElement
       return colorsChanged && shape.fill !== 'transparent'
-        ? { ...shape, borderColor: accent, borderOpacity: undefined, fill: accent, fillOpacity: undefined, gradientFill: undefined }
+        ? { ...shape, borderColor: accent, borderOpacity: undefined, fill: accent, fillOpacity: undefined, gradientFill: undefined, patternFill: undefined }
         : shape
     }
     return element
