@@ -15,6 +15,7 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai-family'
 import type { DirListResult } from '@shared/dir-tree'
+import type { MountReferenceUsage } from '@shared/mount-references'
 import { graftTree } from '@/lib/fileTree'
 import type { MountSummary } from '@/lib/amphiClient'
 import type { PasteItem } from '@/components/composer/pasteClassify'
@@ -25,6 +26,9 @@ import {
   notifySessionWorkbenchActivityAtom,
 } from './workbench'
 import { rlog } from '@/lib/logger'
+import { i18n } from '@/lib/i18n'
+import { requestConfirmAtom } from './confirm'
+import { showToastAtom } from './toast'
 
 /** Primitive: sessionId → that session's mounts. Not exported (§1.13). */
 const _mounts = atom<Record<string, MountSummary[]>>({})
@@ -318,6 +322,30 @@ export const consumeMentionInsertsAtom = atom(null, (_get, set) => {
   set(_pendingMentionInserts, [])
 })
 
+/** Repoint a stale mount without changing its id, preserving project references. */
+export const rebindMountAtom = atom(
+  null,
+  async (get, set, payload: { sessionId: string; mount: MountSummary }): Promise<boolean> => {
+    const result = await window.api.dialog.open({ properties: payload.mount.kind === 'folder' ? ['openDirectory'] : ['openFile'] })
+    const path = result.filePaths[0]
+    if (result.canceled || !path) return false
+    try {
+      const rebound = await window.api.mountReferences.rebind(payload.sessionId, payload.mount.id, path)
+      if (!rebound.ok) {
+        set(showToastAtom, i18n.t('asset.toast.relinkRejected', { name: rebound.validation.assetName }))
+        return false
+      }
+      const current = get(_mounts)[payload.sessionId] ?? []
+      set(_mounts, { ...get(_mounts), [payload.sessionId]: current.map((mount) => mount.id === rebound.mount.id ? rebound.mount : mount) })
+      return true
+    } catch (err) {
+      rlog.warn('[mounts] rebindMount failed', { sessionId: payload.sessionId, mountId: payload.mount.id, err })
+      set(showToastAtom, i18n.t('asset.toast.relinkFailed'))
+      return false
+    }
+  },
+)
+
 /** Action: unmount; uploaded attachments are deleted, external sources remain. */
 export const removeMountAtom = atom(
   null,
@@ -325,6 +353,24 @@ export const removeMountAtom = atom(
     const { sessionId, mountId } = payload
     const client = buildAmphiClient(get)
     if (!client) return
+    let usage: MountReferenceUsage
+    try {
+      usage = await window.api.mountReferences.usage(sessionId, mountId)
+      if (usage.assetCount > 0) {
+        const confirmed = await set(requestConfirmAtom, {
+          title: i18n.t('asset.mount.removeReferencedTitle'),
+          message: i18n.t('asset.mount.removeReferencedMessage', { ...usage }),
+          confirmLabel: i18n.t('asset.mount.removeReferencedConfirm'),
+          cancelLabel: i18n.t('common.cancel'),
+          danger: true,
+        })
+        if (!confirmed) return
+      }
+    } catch (err) {
+      rlog.warn('[mounts] inspect mount references failed', { sessionId, mountId, err })
+      set(showToastAtom, i18n.t('asset.toast.removeFailed'))
+      return
+    }
     try {
       await client.removeMount(sessionId, mountId)
       const current = get(_mounts)[sessionId] ?? []
@@ -334,6 +380,17 @@ export const removeMountAtom = atom(
       })
     } catch (err) {
       rlog.warn('[mounts] removeMount failed', { sessionId, mountId, err })
+      set(showToastAtom, i18n.t('asset.toast.removeFailed'))
+      return
+    }
+    try { await window.api.mountReferences.refresh(sessionId) }
+    catch (err) { rlog.warn('[mounts] refresh sources after unmount failed', { sessionId, mountId, err }) }
+    if (usage.assetCount > 0) {
+      try { await window.api.mountReferences.remove(sessionId, mountId) }
+      catch (err) {
+        rlog.warn('[mounts] remove mount references failed', { sessionId, mountId, err })
+        set(showToastAtom, i18n.t('asset.toast.removeCleanupFailed'))
+      }
     }
   },
 )

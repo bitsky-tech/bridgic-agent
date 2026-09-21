@@ -55,6 +55,7 @@ export interface MountRowProps {
   onOpenInFileManager: () => void
   /** Absent for system-owned roots such as the Session `.work` directory. */
   onRemove?: () => void
+  onRelink?: () => void
   onMentionRoot: () => void
   onMentionChild: (node: DirTreeNode) => void
   /** Child-row ⋯ menu (the single-open state lives in the panel, keyed by relPath; no "remove" — child items are not mounts). */
@@ -80,6 +81,7 @@ export function MountRow({
   onCopyPath,
   onOpenInFileManager,
   onRemove,
+  onRelink,
   onMentionRoot,
   onMentionChild,
   childMenuFor,
@@ -236,6 +238,7 @@ export function MountRow({
             items={[
               { label: t('asset.common.copyPath'), onSelect: onCopyPath },
               { label: t('asset.common.revealInFileManager'), onSelect: onOpenInFileManager },
+              ...(onRelink ? [{ label: t('asset.mount.relink'), onSelect: onRelink }] : []),
               ...(onRemove
                 ? [{
                   label: (

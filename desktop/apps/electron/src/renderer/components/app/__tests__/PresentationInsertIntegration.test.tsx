@@ -219,7 +219,7 @@ describe('presentation Insert tab integration', () => {
     expect(inserted.map((element) => element.type)).toEqual(['image', 'audio', 'video'])
     for (const element of inserted) {
       if (element.type === 'image' || element.type === 'audio' || element.type === 'video') {
-        const source = presentationElementSource(presentation, element)!
+        const source = presentationElementSource(presentation, element, presentationStoreOf(store).getSnapshot().sources)!
         expect(source.dataUrl).toStartWith(`data:${source.mimeType};base64,`)
       }
     }

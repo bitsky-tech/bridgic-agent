@@ -4,6 +4,7 @@ import { DOMParser } from '@xmldom/xmldom'
 import { createBlankPresentationProject, createBlankPresentationSlide, type PresentationFileSource, type PresentationImageElement } from '@/atoms/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 import { importPresentationPptx } from '../presentationPptxImport'
+import { materializePresentationProjectSources, presentationPptxSourceUrls } from '@/presentation/sources'
 
 const pixel: PresentationFileSource = {
   dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
@@ -13,7 +14,7 @@ const pixel: PresentationFileSource = {
 
 function picture(document: ReturnType<typeof createBlankPresentationProject>, id: string, source = pixel): PresentationImageElement {
   const sourceAssetId = `${id}-asset`
-  document.assets.push({ id: sourceAssetId, kind: 'image', name: source.fileName, source })
+  document.assets.push({ id: sourceAssetId, kind: 'image', mimeType: source.mimeType, name: source.fileName, source: source.dataUrl })
   return { id, type: 'image', sourceAssetId, altText: id, fit: 'contain', x: 10, y: 20, width: 200, height: 100, rotation: 0 }
 }
 
@@ -82,7 +83,8 @@ describe('PPTX shared image export', () => {
       const imported = await importPresentationPptx(bytes, 'shared.pptx')
       imported.slides.pages[29]!.notes = `Edit ${cycle}`
       imported.slides.pages[29]!.elements[0]!.x = 120 + cycle
-      bytes = await createPresentationPptx(imported)
+      const sources = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
+      bytes = await createPresentationPptx(await materializePresentationProjectSources(imported, sources))
       const archive = await JSZip.loadAsync(bytes)
       const media = Object.keys(archive.files).filter((name) => name.startsWith('ppt/media/') && !name.endsWith('/'))
       expect(media).toHaveLength(1)

@@ -132,6 +132,12 @@ export const IPC = {
     openDocument: 'powerpoint:openDocument',
     openFile: 'powerpoint:openFile',
   },
+  mountReferences: {
+    usage: 'mount-references:usage',
+    remove: 'mount-references:remove',
+    rebind: 'mount-references:rebind',
+    refresh: 'mount-references:refresh',
+  },
   word: {
     readDocument: 'word:read-document',
   },

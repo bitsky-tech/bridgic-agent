@@ -97,6 +97,10 @@ class SessionMountsHandler(BaseHandler):
             )
         kind = "folder" if os.path.isdir(path) else "file"
         repository = SessionMountRepository()
+        canonical = os.path.realpath(path)
+        for existing in await repository.list_for_session(session_id, user.id):
+            if os.path.realpath(existing.abs_path) == canonical:
+                return self.response(mount_summary(existing))
         if kind == "file" and Path(path).suffix.lower() in OFFICE_EXTENSIONS:
             original = str(Path(path).resolve())
             path = str(await asyncio.to_thread(import_office_file, record.workspace_root, Path(path)))

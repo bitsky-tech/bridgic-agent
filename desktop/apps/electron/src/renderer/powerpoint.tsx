@@ -15,10 +15,12 @@ import { rlog } from './lib/logger'
 import { createPresentationPptx } from './lib/presentationPptx'
 import { importPresentationInBackground } from './lib/presentationImport'
 import { officeFiles } from './lib/office/officeFileClient'
+import { createIndexedDbWorkspacePersistence } from './lib/office/workspacePersistence'
 import { OfficeLaunchEmptyState } from './components/app/OfficeLaunchEmptyState'
 import { useApplyTheme } from './hooks/useTheme'
 import { useSettingsBridge } from './hooks/useSettingsBridge'
 import { PresentationStore } from './presentation/store'
+import { materializePresentationProjectSources } from './presentation/sources'
 
 installApiStub()
 
@@ -29,7 +31,13 @@ const sessionId: string = requestedSessionId
 const jotaiStore = createStore()
 jotaiStore.set(powerPointSessionIdOverrideAtom, sessionId)
 const presentationStore = new PresentationStore(sessionId, {
-  encode: createPresentationPptx,
+  workspacePersistence: createIndexedDbWorkspacePersistence({
+    appKind: 'presentation',
+    databaseName: 'bridgic-presentation-workbench-v1',
+    sessionId,
+    storeName: 'projects',
+  }),
+  encode: async (project, sources) => createPresentationPptx(await materializePresentationProjectSources(project, sources)),
   files: officeFiles(),
   importPptx: importPresentationInBackground,
   managedFiles: Boolean(window.officeFiles?.prepare),
@@ -59,6 +67,10 @@ window.__bridgicPowerPoint = {
   sessionId,
   flush: async () => { await restoring; await presentationStore.flush() },
   close: closePowerPoint,
+  mountUsage: async (mountId) => { await restoring; await presentationStore.flush(); return presentationStore.mountUsage(mountId) },
+  validateMountReplacement: async (mountId, path) => { await restoring; return presentationStore.validateMountReplacement(mountId, path) },
+  removeMountReferences: async (mountId) => { await restoring; await presentationStore.flush(); return presentationStore.removeMountReferences(mountId) },
+  refreshSources: async () => { await restoring; await presentationStore.refreshSources() },
   dispatch: async (request) => {
     try { await restoring } catch (error) { return { ok: false, error: String(error), code: 'document_changed' } }
     return presentationStore.dispatch(request)
@@ -80,6 +92,13 @@ function PowerPointRuntime() {
   const snapshot = useSyncExternalStore(presentationStore.subscribe, presentationStore.getSnapshot, presentationStore.getSnapshot)
   const [recovery, setRecovery] = useState<'loading' | 'ready' | string>('loading')
   useEffect(() => { void restoring.then(() => setRecovery('ready'), (error) => setRecovery(String(error))) }, [])
+
+  useEffect(() => {
+    const refresh = () => { void presentationStore.refreshSources() }
+    const unsubscribeFiles = window.officeFiles?.onChanged?.((id) => { if (id === sessionId) refresh() }) ?? (() => {})
+    const unsubscribeFs = window.api.events.onFsChanged(refresh)
+    return () => { unsubscribeFiles(); unsubscribeFs() }
+  }, [])
 
   useEffect(() => {
     if (i18n.language !== locale.resolved) void i18n.changeLanguage(locale.resolved)

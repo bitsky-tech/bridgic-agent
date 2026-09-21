@@ -166,10 +166,12 @@ stay inside the editor and publish changes without per-keystroke IPC.
   native canvas edits and Agent operation batches commit into the same project
   authority. `PresentationProject` contains only editable presentation content;
   revision, source path, save acknowledgement and protection state remain Store
-  metadata. There is no `PresentationDocument` or `PresentationWorkspace` model
-  wrapped around it. The shared operation runtime is a private queue/guard inside
-  the Store, not another model owner. Closing the final project still delegates to
-  the native surface host.
+  metadata. There is no `PresentationDocument` envelope wrapped around each
+  project. `PresentationWorkspace` is only the Store-owned
+  serialization envelope for the project inventory and metadata; it is not a
+  second mutable model owner. The shared operation runtime is a private queue/guard
+  inside the Store. Closing the final project still delegates to the native surface
+  host.
 - [Word's domain store](apps/electron/src/renderer/lib/wordDomain.ts) remains its
   document authority. UI and renderer API commands share its queue. Editor handlers
   bind to a document, and reference callbacks use a guarded internal reducer.
@@ -230,9 +232,9 @@ before disposing. Successfully written document payloads are released.
 | --- | --- | --- |
 | [Word](apps/electron/src/renderer/lib/wordPersistence.ts) | IndexedDB workspace recovery, with localStorage fallback; retains existing Session keys and codecs | Recovery does not overwrite the imported DOCX or add an export capability |
 | [Excel](apps/electron/src/renderer/lib/office/excelPersistence.ts) | Recovery snapshots in the owning main-process Session; survives renderer reload, not application restart or Session release | Explicit save/save-as retains file authorization, modification-time conflicts, format-fidelity confirmation and later-edit dirty protection |
-| [PowerPoint](apps/electron/src/renderer/presentation/store.ts) | Session recovery checkpoints serialize the Store's structured projects; project edits do not require a PPTX file | PPTX import/export is handled by the file adapter; an associated path is save metadata, not the editing authority |
+| [PowerPoint](apps/electron/src/renderer/presentation/store.ts) | IndexedDB stores one Session-keyed `PresentationWorkspace` directly from the renderer Store; it contains structured projects and durable source references, never source-file bytes | PPTX import/export is handled by the file adapter; an associated path is save metadata, not the editing authority |
 
-Word and Excel distinguish an empty recovery store from a read or decoding failure.
+Word, Excel and PowerPoint distinguish an empty recovery store from a read or decoding failure.
 An unsuccessful restore preserves the original record and presents a retry action
 instead of writing a default blank workspace over it. Word records an adapter-only
 checkpoint sequence alongside each snapshot to order saves, tab switches and closed
@@ -254,23 +256,37 @@ prompt for unsaved changes, and releasing the Session discards its in-memory
 recovery state.
 
 PowerPoint exposes structured page and deck commands over the same Store as its UI.
+Its `PresentationWorkspace` is written to renderer IndexedDB under the Session ID,
+matching the Video Store's in-memory-authority and asynchronous workspace-save model.
 Compact Markdown remains a read-only Agent projection; mutations use typed operation
 batches with Session-private read revisions. A batch may update page objects, deck
 design, and page structure, but commits only after the complete project validates.
 PPTX input is imported into a project and PPTX output is generated from a project;
-neither direction bypasses or replaces the Store. Panel close waits for queued project
-operations and the latest recovery checkpoint. Word/Excel Agent integration remains
-out of scope.
+neither direction bypasses or replaces the Store. Assets already embedded in an
+imported PPTX stay inside that source package and use `bridgic-pptx:` references to
+their OOXML part paths without creating Files mounts or extracted copies. Files
+explicitly inserted after import use stable `bridgic-mount:` references. An explicit
+export embeds referenced media in the output package and may rebase matching project
+sources to its new OOXML parts; existing Files mounts remain untouched. Runtime URLs
+for both reference kinds live only in the Store's ephemeral `sources` map and are never
+written to IndexedDB. Panel close waits for queued project operations and the latest
+workspace write. Word/Excel Agent integration remains out of scope.
 
 ### PowerPoint authority and file boundaries
 
 PowerPoint follows the same single-authority shape as the video editor:
 
 ```text
-Workbench UI ─┐
-              ├─> PresentationStore memory ─> active PresentationProject ─> render
-Agent tools ──┘               │
-                              └─> asynchronous structured recovery checkpoint
+Agent tools ─┐
+            ├─> PresentationStore memory ─> PresentationWorkspace ─> active PPTProject ─> render
+Workbench UI ┘             │                         │
+                           │                         └─ assets[].source
+                           │                              ├─ bridgic-pptx:... (source package part)
+                           │                              └─ bridgic-mount:... (new external insert)
+                           ├─ 150 ms coalesced write ─> IndexedDB projects[sessionId]
+                           │
+Original PPTX package ──────┬─> ephemeral sources map (runtime URLs only)
+Session Files mounts ───────┘
 
 PPTX file ──importer──> PresentationProject
 PresentationProject ──exporter──> PPTX file
@@ -279,8 +295,11 @@ PresentationProject ──exporter──> PPTX file
 `PresentationStore` is the only mutable owner. Command handlers may build and
 validate a project draft, but publish it only through the Store's commit gate.
 Rendering reads the active `PresentationProject` from the Store. Recovery persists
-the structured project inventory and separate Store metadata; it does not create a
-live PPTX mirror. Import and export are explicit boundary conversions.
+the structured project inventory, durable asset references and separate Store metadata;
+it does not persist extracted source-file copies, runtime URLs or a live PPTX mirror. Import keeps one
+source PPTX and resolves its embedded parts directly rather than extracting them or
+adding one Files mount per part. External inserts use Files mounts; those entries remain
+user-owned and are not automatically removed after export.
 
 ### Phase 4 verification
 
@@ -409,16 +428,16 @@ parity checks, and do not modify backend files while completing these increments
 ## Session workspace persistence and file handoff
 
 Office editors persist structured Session state independently from Office file formats.
-Structured Agent mutations checkpoint that state before returning. Word and Excel retain
+Structured Agent mutations persist that state before returning. Word and Excel retain
 their editor-specific source-file policies. PowerPoint instead treats `.pptx` as an
-import/export boundary: UI and Agent edits automatically checkpoint `PresentationProject`
+import/export boundary: UI and Agent edits automatically persist `PresentationWorkspace`
 state, but never encode or overwrite a PPTX in the background. A new presentation can
 therefore exist without a filename, and Save/Save As is an explicit project export.
 
 Switching projects first commits pending native input, then changes the active project
-immediately and schedules a recovery checkpoint. Closing tabs, releasing Sessions and
+immediately and schedules a workspace write. Closing tabs, releasing Sessions and
 application shutdown drain the required project operations and recovery writes. A failed
-checkpoint keeps the in-memory project available for retry. During an explicit Office
+workspace write keeps the in-memory project available for retry. During an explicit Office
 file write, source versions are acknowledged only for the exact revision encoded, so
 later edits remain dirty. Reopening an Excel file completes its applicable pending source
 writes before inspecting or reading the file again.
@@ -442,8 +461,9 @@ separate Sessions writing the same physical file.
 
 All three native editors start restoration when their Session rail is activated.
 Starting an editor does not create a document. A recovered inventory appears
-immediately; an empty inventory shows the explicit New action. Word's existing
-browser recovery and Excel/PPT's private recovery files remain Session-scoped.
+immediately; an empty inventory shows the explicit New action. Word and PowerPoint
+use browser recovery keyed by Session, while Excel's private recovery file remains
+Session-scoped.
 
 Word and PPT exports include the editable model in a separate OPC part alongside
 standard Office content. The model is accepted only when a SHA-256 fingerprint

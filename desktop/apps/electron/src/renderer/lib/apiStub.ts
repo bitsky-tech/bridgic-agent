@@ -134,6 +134,12 @@ export function installApiStub(): void {
       openDocument: async () => { throw new Error('Opening PowerPoint files requires Electron') },
       openFile: async () => { throw new Error('Opening PowerPoint files requires Electron') },
     },
+    mountReferences: {
+      usage: async () => ({ assetCount: 0, elementCount: 0, projectCount: 0 }),
+      remove: async () => ({ assetCount: 0, elementCount: 0, projectCount: 0 }),
+      rebind: async () => { throw new Error('Session files require Electron') },
+      refresh: async () => {},
+    },
     word: {
       readDocument: async () => {
         throw new Error('Word document reads require Electron')

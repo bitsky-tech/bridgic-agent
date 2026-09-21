@@ -88,6 +88,28 @@ describe('PowerPoint renderer protocol', () => {
     })
   })
 
+  it('keeps an explicit fill opacity when an Agent replaces a gradient fill', async () => {
+    const initial = workspace()
+    const document = initial.projects[0]!
+    const slide = document.slides.pages[0]!
+    slide.elements = [{
+      id: 'accent', type: 'rect', x: 10, y: 10, width: 100, height: 60, rotation: 0,
+      fill: '#FF0000', borderColor: 'transparent', borderWidth: 0,
+      gradientFill: { type: 'linear', angle: 0, stops: [
+        { offset: 0, color: '#FF0000', opacity: 1 },
+        { offset: 1, color: '#0000FF', opacity: 1 },
+      ] },
+    }]
+    const read = await readPage(initial, slide.id)
+    const updated = await executePowerPointRequest(initial, { method: 'edit_page', params: {
+      document_id: document.id, page_id: slide.id,
+      expected_revision: (read.result as { revision: string }).revision,
+      operations: [{ type: 'patch', id: 'accent', element_type: 'rect', patch: { fill: '#00FF00', fillOpacity: 0.35 } }],
+    } })
+    expect(updated.projects!.projects[0]!.slides.pages[0]!.elements[0]).toMatchObject({ fill: '#00FF00', fillOpacity: 0.35 })
+    expect(updated.projects!.projects[0]!.slides.pages[0]!.elements[0]).not.toHaveProperty('gradientFill')
+  })
+
   it('adds, patches, and removes comments atomically', async () => {
     const initial = workspace()
     const document = initial.projects[0]!
@@ -261,6 +283,28 @@ describe('PowerPoint renderer protocol', () => {
     const read = await readPage(initial, second.id, 'both')
     expect(read.result).toMatchObject({ assets: [{ path: '.ppt-assets/hero-asset-hero.png', data_url: 'data:image/png;base64,cG5n' }] })
     expect(read.result).toMatchObject({ page: { model: { elements: [{ id: 'hero', src: '.ppt-assets/hero-asset-hero.png' }] } } })
+    expect(JSON.stringify(read.result)).not.toContain('sourceAssetId')
+  })
+
+  it('projects source-backed text through the same asset contract as media', async () => {
+    const initial = workspace()
+    const document = initial.projects[0]!
+    const slide = document.slides.pages[0]!
+    document.assets = [createPresentationAsset('text', {
+      dataUrl: 'data:text/plain;base64,SGVsbG8=', fileName: 'speaker-notes.txt', mimeType: 'text/plain',
+    }, 'text-asset')]
+    slide.elements = [{
+      id: 'source-text', type: 'text', sourceAssetId: 'text-asset', text: 'Hello', x: 20, y: 20,
+      width: 320, height: 80, rotation: 0, fontSize: 24, fontFamily: 'Aptos', fontWeight: 400,
+      color: '#111111', align: 'left',
+    }]
+
+    const read = await readPage(initial, slide.id, 'both')
+    expect(read.result).toMatchObject({
+      assets: [{ path: '.ppt-assets/text-asset-speaker-notes.txt', data_url: 'data:text/plain;base64,SGVsbG8=' }],
+      page: { model: { elements: [{ id: 'source-text', src: '.ppt-assets/text-asset-speaker-notes.txt', text: 'Hello' }] } },
+    })
+    expect((read.result as { page: { markdown: string } }).page.markdown).toContain('<PptText ref="source-text" src="@existing/source-text">')
     expect(JSON.stringify(read.result)).not.toContain('sourceAssetId')
   })
 })

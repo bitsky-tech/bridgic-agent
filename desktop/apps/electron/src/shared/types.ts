@@ -562,6 +562,12 @@ export interface ElectronAPI {
     /** Import or reactivate a local PPTX in the exact Session-owned editor. */
     openFile(sessionId: string, absPath: string): Promise<EmbeddedPowerPointOpenFileResult>
   }
+  mountReferences: {
+    usage(sessionId: string, mountId: string): Promise<import('./mount-references').MountReferenceUsage>
+    remove(sessionId: string, mountId: string): Promise<import('./mount-references').MountReferenceUsage>
+    rebind(sessionId: string, mountId: string, path: string): Promise<import('./mount-references').MountReferenceRebindResult>
+    refresh(sessionId: string): Promise<void>
+  }
   word: {
     /** Read one explicitly opened .docx file for renderer-side conversion. */
     readDocument(path: string): Promise<WordDocumentReadResult>
@@ -702,6 +708,10 @@ declare global {
       sessionId: string
       flush?(): Promise<void>
       close?(): Promise<void>
+      mountUsage(mountId: string): Promise<import('./presentation-host').PresentationMountUsage>
+      validateMountReplacement(mountId: string, path: string): Promise<import('./presentation-host').PresentationMountReplacementValidation>
+      removeMountReferences(mountId: string): Promise<import('./presentation-host').PresentationMountUsage>
+      refreshSources(): Promise<void>
       dispatch(request: {
         method:
           | 'open'

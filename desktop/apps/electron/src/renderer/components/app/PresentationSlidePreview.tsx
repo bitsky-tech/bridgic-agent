@@ -33,7 +33,13 @@ import {
   isPresentationTextElement,
   supportsPresentationElementHyperlink,
 } from '@/lib/presentationInsert'
-import { getPresentationShapePath, getPresentationShapeDefinition, isPresentationLineShape } from '@/lib/presentationShapes'
+import {
+  getPresentationShapePath,
+  getPresentationShapeDefinition,
+  isPresentationLineShape,
+  presentationCustomShapePathData,
+  presentationLinearGradientCoordinates,
+} from '@/lib/presentationShapes'
 import {
   PRESENTATION_TEXT_LINE_METRICS,
   presentationRenderingFontFamily,
@@ -166,6 +172,7 @@ interface PresentationSlidePreviewProps {
   theme?: PresentationTheme
   width: number
   selected: boolean
+  sources?: Readonly<Record<string, string>>
   presentation?: boolean
   suppressMediaPlayback?: boolean
   onActivateHyperlink?: (hyperlink: PresentationHyperlink) => void
@@ -184,6 +191,7 @@ export function PresentationSlidePreview({
   theme = DEFAULT_PRESENTATION_MASTER,
   width,
   selected,
+  sources = {},
   presentation = false,
   suppressMediaPlayback = false,
   onActivateHyperlink,
@@ -251,7 +259,7 @@ export function PresentationSlidePreview({
             <Fragment key={element.id}>
               {elementReplacements?.get(element.id)}
               {visible && (
-                <PresentationElementPreview assets={assets} element={element} animationState={animationStates?.get(element.id)} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
+                <PresentationElementPreview assets={assets} element={element} animationState={animationStates?.get(element.id)} interactive={interactive} sources={sources} suppressMediaPlayback={suppressMediaPlayback} />
               )}
               {visible && interactive && element.hyperlink && supportsPresentationElementHyperlink(element) ? (
                 <HyperlinkOverlay
@@ -404,11 +412,12 @@ function PresentationPlaybackAudio({ element, scale, source }: { scale?: Present
   )
 }
 
-export function PresentationElementPreview({ assets = [], element: sourceElement, animationState, interactive, suppressMediaPlayback }: {
+export function PresentationElementPreview({ assets = [], element: sourceElement, animationState, interactive, sources = {}, suppressMediaPlayback }: {
   assets?: readonly PresentationAsset[]
   animationState?: PresentationAnimationDisplayState
   element: PresentationElement
   interactive: boolean
+  sources?: Readonly<Record<string, string>>
   suppressMediaPlayback: boolean
 }) {
   const element = animationState?.element ?? sourceElement
@@ -502,7 +511,7 @@ export function PresentationElementPreview({ assets = [], element: sourceElement
   }
   if (isPresentationShapeElement(element)) return <SlideShapePreview element={element} scale={scale} />
   if (isPresentationImageElement(element)) {
-    const source = presentationElementSource({ assets: [...assets] }, element)
+    const source = presentationElementSource({ assets: [...assets] }, element, sources)
     if (!source) return null
     const crop = element.crop
     if (crop) {
@@ -537,7 +546,7 @@ export function PresentationElementPreview({ assets = [], element: sourceElement
         src={source.dataUrl}
         style={{
           ...elementStyle(element, scale),
-          objectFit: element.fit,
+          objectFit: element.fit === 'stretch' ? 'fill' : element.fit,
           borderRadius: element.clipShape === 'ellipse' ? '50%' : undefined,
           filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
         }}
@@ -545,7 +554,7 @@ export function PresentationElementPreview({ assets = [], element: sourceElement
     )
   }
   if (isPresentationMediaElement(element)) {
-    const source = presentationElementSource({ assets: [...assets] }, element)
+    const source = presentationElementSource({ assets: [...assets] }, element, sources)
     if (!source) return null
     if (element.type === 'video' && interactive && !suppressMediaPlayback) {
       return <PresentationPlaybackVideo element={element} scale={scale} source={source} />
@@ -594,8 +603,29 @@ function presentationVerticalAlignment(alignment: PresentationTextElement['verti
 function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationScale; element: PresentationShapeElement }) {
   const definition = getPresentationShapeDefinition(element.type)
   const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
+  const gradientId = `presentation-shape-gradient-${element.id.replace(/[^\w-]/g, '-')}`
+  const shapeFill = element.gradientFill ? `url(#${gradientId})` : element.fill
+  const linearGradient = element.gradientFill?.type === 'linear'
+    ? presentationLinearGradientCoordinates(element.gradientFill.angle)
+    : null
   let shape: React.ReactNode
-  if (element.type === 'rect' || element.type === 'roundRect') shape = (
+  if (element.customGeometry) shape = element.customGeometry.paths.map((path, index) => (
+    <path
+      key={index}
+      d={presentationCustomShapePathData(path)}
+      transform={`scale(${100 / path.width} ${100 / path.height})`}
+      fill={path.fill === 'none' ? 'none' : shapeFill}
+      fillOpacity={element.fillOpacity ?? 1}
+      fillRule="evenodd"
+      stroke={path.stroke ? element.borderColor : 'none'}
+      strokeOpacity={element.borderOpacity ?? 1}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={element.borderWidth}
+      vectorEffect="non-scaling-stroke"
+    />
+  ))
+  else if (element.type === 'rect' || element.type === 'roundRect') shape = (
     <rect
       x="0"
       y="0"
@@ -603,22 +633,26 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
       height="100"
       rx={Math.min(50, ((element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0) / element.width) * 100)}
       ry={Math.min(50, ((element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0) / element.height) * 100)}
-      fill={element.fill}
+      fill={shapeFill}
+      fillOpacity={element.fillOpacity ?? 1}
       stroke={element.borderColor}
+      strokeOpacity={element.borderOpacity ?? 1}
       strokeWidth={element.borderWidth}
       vectorEffect="non-scaling-stroke"
     />
   )
   else if (element.type === 'ellipse') shape = (
-    <ellipse cx="50" cy="50" rx="50" ry="50" fill={element.fill} stroke={element.borderColor}
-      strokeWidth={element.borderWidth} vectorEffect="non-scaling-stroke" />
+    <ellipse cx="50" cy="50" rx="50" ry="50" fill={shapeFill} fillOpacity={element.fillOpacity ?? 1} stroke={element.borderColor}
+      strokeOpacity={element.borderOpacity ?? 1} strokeWidth={element.borderWidth} vectorEffect="non-scaling-stroke" />
   )
   else shape = (
     <path
       d={getPresentationShapePath(element)}
-      fill={strokeOnly ? 'none' : element.fill}
+      fill={strokeOnly ? 'none' : shapeFill}
+      fillOpacity={element.fillOpacity ?? 1}
       fillRule="evenodd"
       stroke={element.borderColor}
+      strokeOpacity={element.borderOpacity ?? 1}
       strokeLinecap="round"
       strokeLinejoin="round"
       strokeWidth={strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth}
@@ -636,6 +670,19 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
         filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
       }}
     >
+      {element.gradientFill ? (
+        <defs>
+          {element.gradientFill.type === 'linear' && linearGradient ? (
+            <linearGradient id={gradientId} x1={`${linearGradient.x1 * 100}%`} y1={`${linearGradient.y1 * 100}%`} x2={`${linearGradient.x2 * 100}%`} y2={`${linearGradient.y2 * 100}%`}>
+              {element.gradientFill.stops.map((stop, index) => <stop key={index} offset={`${stop.offset * 100}%`} stopColor={stop.color} stopOpacity={stop.opacity} />)}
+            </linearGradient>
+          ) : (
+            <radialGradient id={gradientId} cx="50%" cy="50%" r="71%">
+              {element.gradientFill.stops.map((stop, index) => <stop key={index} offset={`${stop.offset * 100}%`} stopColor={stop.color} stopOpacity={stop.opacity} />)}
+            </radialGradient>
+          )}
+        </defs>
+      ) : null}
       {shape}
     </svg>
   )

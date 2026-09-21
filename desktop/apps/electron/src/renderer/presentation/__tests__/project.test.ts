@@ -39,8 +39,10 @@ describe('PresentationProject model', () => {
     expect(edited.slides.pages[0]!.elements[0]).toMatchObject({ sourceAssetId: edited.assets[0]!.id })
     expect(edited.slides.pages[0]!.elements[0]).not.toHaveProperty('source')
     expect(presentationElementSource(edited, edited.slides.pages[0]!.elements[0] as typeof image)).toEqual({
-      ...edited.assets[0]!.source,
       assetId: edited.assets[0]!.id,
+      dataUrl: imageSource.dataUrl,
+      fileName: imageSource.fileName,
+      mimeType: imageSource.mimeType,
     })
     expect(presentationProjectSchema.safeParse(presentationProjectOf(edited)).success).toBe(true)
   })
@@ -78,28 +80,6 @@ describe('PresentationProject model', () => {
     expect(edited.slides.pages[0]!.elements[0]).not.toHaveProperty('zIndex')
   })
 
-  it('migrates the former flat document without retaining duplicate media payloads', () => {
-    const current = createBlankPresentationProject('Legacy')
-    const page = current.slides.pages[0]!
-    const legacy = {
-      id: current.id,
-      master: current.theme,
-      pageSize: current.pageSize,
-      selectedSlideId: page.id,
-      slides: [{ ...page, elements: [{ ...createPresentationImageElement(imageSource), source: imageSource } as never] }],
-      title: current.title,
-      version: 7,
-    }
-    const migrated = migratePresentationProject(legacy)
-
-    expect(migrated).toMatchObject({ schemaVersion: 1, version: 1 })
-    expect(migrated).not.toHaveProperty('revision')
-    expect(migrated.theme).toEqual(current.theme)
-    expect(migrated.slides.selectedPageId).toBe(page.id)
-    expect(migrated.assets).toHaveLength(1)
-    expect(() => validatePresentationProject(migrated)).not.toThrow()
-  })
-
   it('does not serialize current asset payloads while normalizing routine edits', () => {
     const document = createBlankPresentationProject('Large assets')
     const page = document.slides.pages[0]!
@@ -113,7 +93,7 @@ describe('PresentationProject model', () => {
         return 'data:image/png;base64,large-payload'
       },
     })
-    document.assets = [{ id: 'large-asset', kind: 'image', name: source.fileName, source }]
+    document.assets = [{ id: 'large-asset', kind: 'image', mimeType: source.mimeType, name: source.fileName, source: imageSource.dataUrl }]
     document.slides.pages = [{ ...page, elements: [image] }]
 
     expect(normalizePresentationProject(document)).toBe(document)
@@ -246,22 +226,4 @@ describe('PresentationProject model', () => {
     })).toThrow('elementId')
   })
 
-  it('rejects conflicting legacy media that reuse one asset identity', () => {
-    const document = createBlankPresentationProject('Legacy collision')
-    const page = document.slides.pages[0]!
-    const legacyImage = (dataUrl: string) => ({
-      id: createPresentationImageElement(imageSource).id,
-      type: 'image', sourceAssetId: 'shared-asset', source: { ...imageSource, dataUrl },
-      altText: '', fit: 'contain', x: 0, y: 0, width: 100, height: 100, rotation: 0,
-    })
-    expect(() => migratePresentationProject({
-      id: document.id,
-      master: document.theme,
-      pageSize: document.pageSize,
-      selectedSlideId: page.id,
-      slides: [{ ...page, elements: [legacyImage('data:image/png;base64,YQ=='), legacyImage('data:image/png;base64,Yg==')] }],
-      title: document.title,
-      version: 1,
-    })).toThrow('identity collision')
-  })
 })

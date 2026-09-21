@@ -71,17 +71,37 @@ export interface PresentationFileSource {
   fileName: string
   mimeType: string
   path?: string
+  /** Durable logical reference when runtime bytes came from a containing document. */
+  source?: string
 }
 
-export type PresentationAssetKind = 'image' | 'audio' | 'video'
-export type PresentationAssetSource = Omit<PresentationFileSource, 'assetId'>
+export type PresentationAssetKind = 'image' | 'audio' | 'video' | 'text'
 
-/** One project-owned media resource referenced by slide elements. */
+export interface PresentationImageEffects {
+  colorChange?: { from: string; to: string; opacity: number }
+  grayscale?: boolean
+  biLevelThreshold?: number
+  backgroundRemoval?: {
+    /** The Office image layer remains inside the imported PPTX, not in the Files mount list. */
+    layerSource: string
+    bounds: { top: number; bottom: number; left: number; right: number }
+    foregroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }>
+    backgroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }>
+  }
+}
+
+/** One project-owned source resource referenced by slide elements. */
 export interface PresentationAsset {
   id: string
   kind: PresentationAssetKind
+  mimeType: string
   name: string
-  source: PresentationAssetSource
+  /** Durable source reference. Runtime URLs are resolved outside PPTProject. */
+  source: string
+  /** Non-destructive Office picture effects attached to this source instance. */
+  imageEffects?: PresentationImageEffects
+  sourceModifiedAt?: number
+  sourceSize?: number
 }
 
 export interface PresentationTransition {
@@ -111,6 +131,38 @@ export const PRESENTATION_SHAPE_TYPES = [
 
 export type PresentationShapeType = (typeof PRESENTATION_SHAPE_TYPES)[number]
 
+export type PresentationCustomShapeCommand =
+  | { type: 'moveTo'; x: number; y: number }
+  | { type: 'lineTo'; x: number; y: number }
+  | { type: 'cubicBezierTo'; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+  | { type: 'quadraticBezierTo'; x1: number; y1: number; x: number; y: number }
+  | { type: 'arcTo'; widthRadius: number; heightRadius: number; startAngle: number; sweepAngle: number }
+  | { type: 'close' }
+
+export interface PresentationCustomShapePath {
+  width: number
+  height: number
+  /** OOXML paths may independently opt out of their parent shape fill or stroke. */
+  fill: 'normal' | 'none'
+  stroke: boolean
+  commands: PresentationCustomShapeCommand[]
+}
+
+export interface PresentationCustomShapeGeometry {
+  /** Each path owns its source coordinate space, matching DrawingML custom geometry. */
+  paths: PresentationCustomShapePath[]
+}
+
+export interface PresentationShapeGradientStop {
+  offset: number
+  color: string
+  opacity: number
+}
+
+export type PresentationShapeGradientFill =
+  | { type: 'linear'; angle: number; stops: PresentationShapeGradientStop[] }
+  | { type: 'radial'; stops: PresentationShapeGradientStop[] }
+
 export interface PresentationElementBase {
   id: string
   /** Elements sharing a group id behave as one visual object for selection and animation. */
@@ -137,6 +189,8 @@ export interface PresentationElementBase {
 
 export interface PresentationTextElement extends PresentationElementBase {
   type: 'text'
+  /** Present when this editable text originated from a mounted text asset. */
+  sourceAssetId?: string
   text: string
   /** Inline style ranges use UTF-16 offsets into text, excluding generated list markers. */
   textRuns?: PresentationTextRun[]
@@ -204,9 +258,14 @@ export interface PresentationTextParagraph {
 export interface PresentationShapeElement extends PresentationElementBase {
   type: PresentationShapeType
   fill: string
+  fillOpacity?: number
+  gradientFill?: PresentationShapeGradientFill
   borderColor: string
   borderWidth: number
+  borderOpacity?: number
   radius?: number
+  /** Native per-shape geometry imported from or exported to DrawingML a:custGeom. */
+  customGeometry?: PresentationCustomShapeGeometry
   /** Connector geometry in a 100 x 100 coordinate space. */
   connectorPath?: string
 }
@@ -215,7 +274,8 @@ export interface PresentationImageElement extends PresentationElementBase {
   type: 'image'
   sourceAssetId: string
   altText: string
-  fit: 'contain' | 'cover'
+  fit: 'contain' | 'cover' | 'stretch'
+  softEdgeRadius?: number
   /** Preserve an OOXML picture-filled shape as an editable image crop. */
   clipShape?: 'ellipse'
   /** Normalized source crop fractions copied from OOXML a:srcRect. */

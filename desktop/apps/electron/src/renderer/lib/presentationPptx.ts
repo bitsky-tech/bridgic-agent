@@ -105,6 +105,231 @@ function correctConnectorGeometryXml(xml: string, elements: readonly Presentatio
   return new XMLSerializer().serializeToString(document)
 }
 
+function correctCustomShapeGeometryXml(xml: string, elements: readonly PresentationElement[]): string {
+  const customShapes = new Map(elements.filter(isPresentationShapeElement)
+    .filter(element => element.customGeometry)
+    .map(element => [element.id, element]))
+  if (customShapes.size === 0) return xml
+  const document = new DOMParser().parseFromString(xml, 'text/xml')
+  const presentationNs = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+  const drawingNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+  for (const name of Array.from(document.getElementsByTagNameNS(presentationNs, 'cNvPr'))) {
+    const element = customShapes.get(name.getAttribute('name') ?? '')
+    if (!element?.customGeometry) continue
+    const shape = name.parentNode?.parentNode as typeof name | null | undefined
+    if (!shape || shape.nodeType !== 1) continue
+    const preset = shape.getElementsByTagNameNS(drawingNs, 'prstGeom')[0]
+    const properties = preset?.parentNode
+    if (!preset || !properties) continue
+    const geometry = document.createElementNS(drawingNs, 'a:custGeom')
+    for (const tag of ['avLst', 'gdLst', 'ahLst', 'cxnLst']) geometry.appendChild(document.createElementNS(drawingNs, `a:${tag}`))
+    const textBounds = document.createElementNS(drawingNs, 'a:rect')
+    for (const attribute of ['l', 't', 'r', 'b'] as const) textBounds.setAttribute(attribute, attribute)
+    geometry.appendChild(textBounds)
+    const paths = document.createElementNS(drawingNs, 'a:pathLst')
+    for (const sourcePath of element.customGeometry.paths) {
+      const path = document.createElementNS(drawingNs, 'a:path')
+      path.setAttribute('w', String(sourcePath.width))
+      path.setAttribute('h', String(sourcePath.height))
+      if (sourcePath.fill === 'none') path.setAttribute('fill', 'none')
+      if (!sourcePath.stroke) path.setAttribute('stroke', '0')
+      const appendPoint = (parent: Element, x: number, y: number) => {
+        const point = document.createElementNS(drawingNs, 'a:pt')
+        point.setAttribute('x', String(x))
+        point.setAttribute('y', String(y))
+        parent.appendChild(point)
+      }
+      for (const command of sourcePath.commands) {
+        if (command.type === 'close') {
+          path.appendChild(document.createElementNS(drawingNs, 'a:close'))
+          continue
+        }
+        if (command.type === 'arcTo') {
+          const arc = document.createElementNS(drawingNs, 'a:arcTo')
+          arc.setAttribute('wR', String(command.widthRadius))
+          arc.setAttribute('hR', String(command.heightRadius))
+          arc.setAttribute('stAng', String(Math.round(command.startAngle * 60_000)))
+          arc.setAttribute('swAng', String(Math.round(command.sweepAngle * 60_000)))
+          path.appendChild(arc)
+          continue
+        }
+        let tag = 'quadBezTo'
+        if (command.type === 'moveTo') tag = 'moveTo'
+        else if (command.type === 'lineTo') tag = 'lnTo'
+        else if (command.type === 'cubicBezierTo') tag = 'cubicBezTo'
+        const node = document.createElementNS(drawingNs, `a:${tag}`)
+        if (command.type === 'cubicBezierTo') {
+          appendPoint(node, command.x1, command.y1)
+          appendPoint(node, command.x2, command.y2)
+        } else if (command.type === 'quadraticBezierTo') appendPoint(node, command.x1, command.y1)
+        appendPoint(node, command.x, command.y)
+        path.appendChild(node)
+      }
+      paths.appendChild(path)
+    }
+    geometry.appendChild(paths)
+    properties.replaceChild(geometry, preset)
+  }
+  return new XMLSerializer().serializeToString(document)
+}
+
+function correctShapeGradientXml(xml: string, elements: readonly PresentationElement[]): string {
+  const gradientShapes = new Map(elements.filter(isPresentationShapeElement)
+    .filter(element => element.gradientFill)
+    .map(element => [element.id, element]))
+  if (gradientShapes.size === 0) return xml
+  const document = new DOMParser().parseFromString(xml, 'text/xml')
+  const presentationNs = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+  const drawingNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+  for (const name of Array.from(document.getElementsByTagNameNS(presentationNs, 'cNvPr'))) {
+    const element = gradientShapes.get(name.getAttribute('name') ?? '')
+    if (!element?.gradientFill) continue
+    const shape = name.parentNode?.parentNode as typeof name | null | undefined
+    if (!shape || shape.nodeType !== 1) continue
+    const properties = shape.getElementsByTagNameNS(presentationNs, 'spPr')[0]
+    if (!properties) continue
+    for (const child of Array.from(properties.childNodes)) {
+      if (child.nodeType === 1 && ['solidFill', 'noFill', 'gradFill'].includes((child as Element).localName)) properties.removeChild(child)
+    }
+    const gradient = document.createElementNS(drawingNs, 'a:gradFill')
+    gradient.setAttribute('rotWithShape', '1')
+    const stops = document.createElementNS(drawingNs, 'a:gsLst')
+    for (const stop of element.gradientFill.stops) {
+      const node = document.createElementNS(drawingNs, 'a:gs')
+      node.setAttribute('pos', String(Math.round(Math.max(0, Math.min(1, stop.offset)) * 100_000)))
+      const color = document.createElementNS(drawingNs, 'a:srgbClr')
+      color.setAttribute('val', presentationColor(stop.color, '000000'))
+      const opacity = Math.max(0, Math.min(1, stop.opacity * (element.fillOpacity ?? 1) * (element.opacity ?? 1)))
+      if (opacity < 1) {
+        const alpha = document.createElementNS(drawingNs, 'a:alpha')
+        alpha.setAttribute('val', String(Math.round(opacity * 100_000)))
+        color.appendChild(alpha)
+      }
+      node.appendChild(color)
+      stops.appendChild(node)
+    }
+    gradient.appendChild(stops)
+    if (element.gradientFill.type === 'linear') {
+      const linear = document.createElementNS(drawingNs, 'a:lin')
+      linear.setAttribute('ang', String(Math.round(element.gradientFill.angle * 60_000)))
+      linear.setAttribute('scaled', '1')
+      gradient.appendChild(linear)
+    } else {
+      const path = document.createElementNS(drawingNs, 'a:path')
+      path.setAttribute('path', 'circle')
+      gradient.appendChild(path)
+    }
+    const line = Array.from(properties.childNodes).find(child => child.nodeType === 1 && (child as Element).localName === 'ln')
+    properties.insertBefore(gradient, line ?? null)
+  }
+  return new XMLSerializer().serializeToString(document)
+}
+
+async function correctImageEffectsXml(archive: JSZip, xml: string, elements: readonly PresentationElement[], assets: PresentationProject['assets'], slideNumber: number, pageHeight: number): Promise<string> {
+  const pictures = new Map(elements.filter(isPresentationImageElement).map(element => [element.id, element]))
+  if (!assets.some(asset => asset.imageEffects) && !elements.some(element => isPresentationImageElement(element) && element.softEdgeRadius)) return xml
+  const document = new DOMParser().parseFromString(xml, 'text/xml')
+  const presentationNs = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+  const drawingNs = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+  const drawing2010Ns = 'http://schemas.microsoft.com/office/drawing/2010/main'
+  const relationshipsNs = 'http://schemas.openxmlformats.org/package/2006/relationships'
+  const relationshipAttributeNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const relationshipPath = `ppt/slides/_rels/slide${slideNumber}.xml.rels`
+  const relationshipFile = archive.file(relationshipPath)
+  const relationships = relationshipFile ? new DOMParser().parseFromString(await relationshipFile.async('text'), 'text/xml') : null
+  const usedIds = new Set(relationships ? Array.from(relationships.getElementsByTagNameNS(relationshipsNs, 'Relationship')).map(node => node.getAttribute('Id')) : [])
+  let nextRelationshipId = 1
+  let effectIndex = 0
+  for (const name of Array.from(document.getElementsByTagNameNS(presentationNs, 'cNvPr'))) {
+    const element = pictures.get(name.getAttribute('name') ?? '')
+    if (!element) continue
+    const effects = assets.find(asset => asset.id === element.sourceAssetId)?.imageEffects
+    if (!effects && !element.softEdgeRadius) continue
+    const picture = name.parentNode?.parentNode as Element | null
+    const blip = picture?.getElementsByTagNameNS(drawingNs, 'blip')[0]
+    if (!blip) continue
+    const existingExtensions = Array.from(blip.childNodes).find(node => node.nodeType === 1 && (node as Element).localName === 'extLst') as Element | undefined
+    const appendBlipEffect = (effect: Element) => blip.insertBefore(effect, existingExtensions ?? null)
+    if (element.softEdgeRadius && picture) {
+      const properties = picture.getElementsByTagNameNS(presentationNs, 'spPr')[0]
+      if (properties) {
+        const effectList = properties.getElementsByTagNameNS(drawingNs, 'effectLst')[0]
+          ?? properties.appendChild(document.createElementNS(drawingNs, 'a:effectLst'))
+        const softEdge = document.createElementNS(drawingNs, 'a:softEdge')
+        softEdge.setAttribute('rad', String(Math.round(element.softEdgeRadius / pageHeight * SLIDE_HEIGHT_INCHES * 914_400)))
+        effectList.appendChild(softEdge)
+      }
+    }
+    if (effects?.colorChange) {
+      const change = document.createElementNS(drawingNs, 'a:clrChange')
+      const from = document.createElementNS(drawingNs, 'a:clrFrom')
+      const fromColor = document.createElementNS(drawingNs, 'a:srgbClr')
+      fromColor.setAttribute('val', presentationColor(effects.colorChange.from, 'FFFFFF'))
+      from.appendChild(fromColor)
+      const to = document.createElementNS(drawingNs, 'a:clrTo')
+      const toColor = document.createElementNS(drawingNs, 'a:srgbClr')
+      toColor.setAttribute('val', presentationColor(effects.colorChange.to, 'FFFFFF'))
+      if (effects.colorChange.opacity < 1) {
+        const alpha = document.createElementNS(drawingNs, 'a:alpha')
+        alpha.setAttribute('val', String(Math.round(effects.colorChange.opacity * 100_000)))
+        toColor.appendChild(alpha)
+      }
+      to.appendChild(toColor)
+      change.appendChild(from)
+      change.appendChild(to)
+      appendBlipEffect(change)
+    }
+    if (effects?.grayscale) appendBlipEffect(document.createElementNS(drawingNs, 'a:grayscl'))
+    if (effects?.biLevelThreshold !== undefined) {
+      const biLevel = document.createElementNS(drawingNs, 'a:biLevel')
+      biLevel.setAttribute('thresh', String(Math.round(effects.biLevelThreshold * 100_000)))
+      appendBlipEffect(biLevel)
+    }
+    const removal = effects?.backgroundRemoval
+    if (!removal) continue
+    if (!relationships) throw new Error(`PowerPoint slide ${slideNumber} has no image-effect relationship part`)
+    const payload = /^data:image\/vnd\.ms-photo;base64,([A-Za-z0-9+/]*={0,2})$/i.exec(removal.layerSource)?.[1]
+    if (!payload) throw new Error(`PowerPoint image effect layer is unavailable: ${element.id}`)
+    while (usedIds.has(`rId${nextRelationshipId}`)) nextRelationshipId += 1
+    const relationshipId = `rId${nextRelationshipId++}`
+    usedIds.add(relationshipId)
+    const mediaName = `bridgic-effect-${slideNumber}-${effectIndex++}.wdp`
+    const binary = atob(payload)
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
+    archive.file(`ppt/media/${mediaName}`, bytes)
+    const relationship = relationships.createElementNS(relationshipsNs, 'Relationship')
+    relationship.setAttribute('Id', relationshipId)
+    relationship.setAttribute('Type', 'http://schemas.microsoft.com/office/2007/relationships/hdphoto')
+    relationship.setAttribute('Target', `../media/${mediaName}`)
+    relationships.documentElement.appendChild(relationship)
+    const extensions = existingExtensions ?? document.createElementNS(drawingNs, 'a:extLst')
+    const extension = document.createElementNS(drawingNs, 'a:ext')
+    extension.setAttribute('uri', '{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}')
+    const imageProperties = document.createElementNS(drawing2010Ns, 'a14:imgProps')
+    const layer = document.createElementNS(drawing2010Ns, 'a14:imgLayer')
+    layer.setAttributeNS(relationshipAttributeNs, 'r:embed', relationshipId)
+    const imageEffect = document.createElementNS(drawing2010Ns, 'a14:imgEffect')
+    const backgroundRemoval = document.createElementNS(drawing2010Ns, 'a14:backgroundRemoval')
+    for (const [key, value] of Object.entries(removal.bounds)) backgroundRemoval.setAttribute(key[0]!, String(value))
+    for (const [kind, marks] of [['foregroundMark', removal.foregroundMarks], ['backgroundMark', removal.backgroundMarks]] as const) {
+      for (const mark of marks) {
+        const node = document.createElementNS(drawing2010Ns, `a14:${kind}`)
+        for (const [key, value] of Object.entries(mark)) node.setAttribute(key, String(value))
+        backgroundRemoval.appendChild(node)
+      }
+    }
+    imageEffect.appendChild(backgroundRemoval)
+    layer.appendChild(imageEffect)
+    imageProperties.appendChild(layer)
+    extension.appendChild(imageProperties)
+    extensions.appendChild(extension)
+    if (!existingExtensions) blip.appendChild(extensions)
+  }
+  if (relationships) archive.file(relationshipPath, new XMLSerializer().serializeToString(relationships))
+  return new XMLSerializer().serializeToString(document)
+}
+
 function correctTableHeaderXml(xml: string, elements: readonly PresentationElement[]): string {
   const tables = new Map(elements.filter(isPresentationTableElement).map(element => [element.id, element]))
   if (tables.size === 0) return xml
@@ -785,6 +1010,22 @@ export async function createPresentationPptx(document: PresentationProject): Pro
       archive.file(themePath!, themeXml)
     }
     await correctMediaContentTypes(archive)
+    if (document.assets.some(asset => asset.imageEffects?.backgroundRemoval)) {
+      const path = '[Content_Types].xml'
+      const file = archive.file(path)
+      if (!file) throw new Error('PPTX exporter did not create content types')
+      const contentTypes = new DOMParser().parseFromString(await file.async('text'), 'text/xml')
+      const namespace = 'http://schemas.openxmlformats.org/package/2006/content-types'
+      const hasWdp = Array.from(contentTypes.getElementsByTagNameNS(namespace, 'Default'))
+        .some(node => node.getAttribute('Extension')?.toLowerCase() === 'wdp')
+      if (!hasWdp) {
+        const entry = contentTypes.createElementNS(namespace, 'Default')
+        entry.setAttribute('Extension', 'wdp')
+        entry.setAttribute('ContentType', 'image/vnd.ms-photo')
+        contentTypes.documentElement.appendChild(entry)
+      }
+      archive.file(path, new XMLSerializer().serializeToString(contentTypes))
+    }
     await correctChartAxisReferences(archive)
     await correctChartRelationshipTargets(archive)
     await Promise.all(transitions.map(async (transition, index) => {
@@ -794,6 +1035,9 @@ export async function createPresentationPptx(document: PresentationProject): Pro
       let xml = correctPresentationTextXml(await slideFile.async('text'), document.slides.pages[index]?.elements ?? [])
       xml = correctTableHeaderXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = correctConnectorGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
+      xml = correctCustomShapeGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
+      xml = correctShapeGradientXml(xml, document.slides.pages[index]?.elements ?? [])
+      xml = await correctImageEffectsXml(archive, xml, document.slides.pages[index]?.elements ?? [], document.assets, index + 1, pageSize.height)
       await correctPresentationChartData(archive, xml, index + 1, document.slides.pages[index]?.elements ?? [])
       xml = correctPresentationGraphicFlips(xml, document.slides.pages[index]?.elements ?? [])
       if (slidesWithAudio[index]) xml = await correctAudioFileTags(archive, xml, index + 1)
@@ -916,23 +1160,24 @@ export async function createPresentationPptx(document: PresentationProject): Pro
         const visibleHeight = crop ? Math.max(0.001, 1 - crop.top - crop.bottom) : 1
         const naturalWidth = crop ? width / visibleWidth : width
         const naturalHeight = crop ? height / visibleHeight : width / aspectRatio
+        const sizing = (() => {
+          if (crop) return {
+            type: 'crop' as const,
+            x: naturalWidth * crop.left,
+            y: naturalHeight * crop.top,
+            w: width,
+            h: height,
+          }
+          if (element.fit === 'stretch') return undefined
+          return { type: element.fit === 'cover' ? 'cover' as const : 'contain' as const, w: width, h: height }
+        })()
         slide.addImage({
           data: source.dataUrl,
           x: x(frameX),
           y: y(frameY),
           w: naturalWidth,
-          h: naturalHeight,
-          sizing: crop ? {
-            type: 'crop',
-            x: naturalWidth * crop.left,
-            y: naturalHeight * crop.top,
-            w: width,
-            h: height,
-          } : {
-              type: element.fit === 'cover' ? 'cover' : 'contain',
-              w: width,
-              h: height,
-            },
+          h: element.fit === 'stretch' && !crop ? height : naturalHeight,
+          sizing,
           rotate: element.rotation,
           flipH: element.flipHorizontal,
           flipV: element.flipVertical,
@@ -1078,6 +1323,9 @@ export async function createPresentationPptx(document: PresentationProject): Pro
       const lineShape = isPresentationLineShape(element.type)
       const borderWidth = Number.isFinite(element.borderWidth) ? element.borderWidth : 0
       const opacity = typeof element.opacity === 'number' ? Math.max(0, Math.min(1, element.opacity)) : 1
+      const fillOpacity = opacity * (element.fillOpacity ?? 1)
+      const borderOpacity = opacity * (element.borderOpacity ?? 1)
+      const fillColor = element.gradientFill?.stops[0]?.color ?? element.fill
       slide.addShape(
         shapeType,
         {
@@ -1092,13 +1340,13 @@ export async function createPresentationPptx(document: PresentationProject): Pro
           fill: lineShape
             ? { color: 'FFFFFF', transparency: 100 }
             : {
-                color: presentationColor(element.fill, 'FFFFFF'),
-                transparency: element.fill === 'transparent' ? 100 : Math.round((1 - opacity) * 100),
+                color: presentationColor(fillColor, 'FFFFFF'),
+                transparency: element.fill === 'transparent' ? 100 : Math.round((1 - fillOpacity) * 100),
               },
           line: {
             color: presentationColor(element.borderColor, '20202B'),
             width: presentationFontSizeToPoints(lineShape ? Math.max(1, borderWidth) : borderWidth),
-            transparency: element.borderColor === 'transparent' || (!lineShape && borderWidth === 0) ? 100 : Math.round((1 - opacity) * 100),
+            transparency: element.borderColor === 'transparent' || (!lineShape && borderWidth === 0) ? 100 : Math.round((1 - borderOpacity) * 100),
             ...getPresentationLineEnds(element.type),
           },
           hyperlink: toPptxHyperlink(element.hyperlink, document),

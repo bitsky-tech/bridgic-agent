@@ -39,6 +39,7 @@ import { showToastAtom } from '@/atoms/toast'
 import {
   mountsFamily,
   pickAndMountAtom,
+  rebindMountAtom,
   removeMountAtom,
   requestMentionInsertAtom,
 } from '@/atoms/mounts'
@@ -123,6 +124,7 @@ export function SessionAssetsPanel({
   const mounts = useAtomValue(mountsFamily(sessionId ?? ''))
   const pickAndMount = useSetAtom(pickAndMountAtom)
   const removeMount = useSetAtom(removeMountAtom)
+  const rebindMount = useSetAtom(rebindMountAtom)
   const requestMentionInsert = useSetAtom(requestMentionInsertAtom)
   const requestSessionFileOpen = useSetAtom(requestSessionFileOpenAtom)
   const showToast = useSetAtom(showToastAtom)
@@ -171,6 +173,11 @@ export function SessionAssetsPanel({
   const remove = (m: MountSummary) => {
     setMenuFor(null)
     if (sessionId) void removeMount({ sessionId, mountId: m.id })
+  }
+
+  const relink = (m: MountSummary) => {
+    setMenuFor(null)
+    if (sessionId) void rebindMount({ sessionId, mount: m })
   }
 
   return (
@@ -225,6 +232,7 @@ export function SessionAssetsPanel({
           onCopyPath={copyAbsPath}
           onReveal={revealAbsPath}
           onRemove={remove}
+          onRelink={relink}
           onMentionRoot={addToChat}
           onMentionChild={addChildToChat}
           onOpen={requestSessionFileOpen}
@@ -242,6 +250,7 @@ interface MountListProps {
   onCopyPath: (abs: string) => void
   onReveal: (abs: string) => void
   onRemove: (m: MountSummary) => void
+  onRelink: (m: MountSummary) => void
   onMentionRoot: (m: MountSummary) => void
   onMentionChild: (m: MountSummary, node: DirTreeNode) => void
   onOpen: (req: { path: string; name: string }) => void
@@ -256,6 +265,7 @@ function MountList({
   onCopyPath,
   onReveal,
   onRemove,
+  onRelink,
   onMentionRoot,
   onMentionChild,
   onOpen,
@@ -282,6 +292,7 @@ function MountList({
           onCopyPath={() => onCopyPath(m.path)}
           onOpenInFileManager={() => onReveal(m.path)}
           onRemove={m.removable === false ? undefined : () => onRemove(m)}
+          onRelink={!m.exists && m.removable !== false ? () => onRelink(m) : undefined}
           onMentionRoot={() => onMentionRoot(m)}
           onMentionChild={(node) => onMentionChild(m, node)}
           childMenuFor={menuFor?.startsWith(`${m.id}:`) ? menuFor.slice(m.id.length + 1) : null}

@@ -33,12 +33,15 @@ const commonElementKeys = [
   'hyperlink', 'animation', 'animationDuration', 'animationDelay', 'animationStart', 'animationTrigger', 'animationColor',
 ] as const
 const textElementKeys = [
+  'src',
   'text', 'fontSize', 'fontFamily', 'fontWeight', 'italic', 'underline', 'strikethrough', 'baseline',
   'highlightColor', 'characterSpacing', 'color', 'align', 'verticalAlign', 'lineHeight', 'lineSpacing', 'indentLevel',
   'listStyle', 'textDirection', 'wordWrap', 'textInsets', 'textRuns', 'paragraphs',
 ] as const
-const shapeElementKeys = ['fill', 'borderColor', 'borderWidth', 'radius', 'connectorPath'] as const
-const imageElementKeys = ['src', 'altText', 'fit', 'clipShape', 'crop'] as const
+const shapeElementKeys = [
+  'fill', 'fillOpacity', 'gradientFill', 'borderColor', 'borderWidth', 'borderOpacity', 'radius', 'customGeometry', 'connectorPath',
+] as const
+const imageElementKeys = ['src', 'altText', 'fit', 'clipShape', 'crop', 'softEdgeRadius'] as const
 const mediaElementKeys = ['src', 'autoplay', 'loop', 'muted'] as const
 const tableElementKeys = [
   'cells', 'headerRow', 'headerFill', 'headerTextColor', 'bodyFill', 'textColor', 'borderColor', 'fontSize',
@@ -246,16 +249,17 @@ function createElement(document: PresentationProject, value: Record<string, unkn
     const path = requiredString(value.src, 'element.src')
     const resolved = assets[path]
     if (!resolved) throw new Error(`PowerPoint asset was not supplied: ${path}`)
-    const asset = createPresentationAsset(type as 'image' | 'audio' | 'video', resolved)
+    const asset = createPresentationAsset(type as 'image' | 'audio' | 'video' | 'text', resolved)
     createdAssets = [asset]
     return asset.id
   }
   if (type === 'text') {
     const colors = presentationThemeTextColors(document.theme.background)
+    const sourceAssetId = value.src === undefined ? undefined : source()
     element = {
       ...base,
       text: '', fontSize: 28, fontFamily: document.theme.bodyFontFamily, fontWeight: 400,
-      color: colors.primary, align: 'left', ...value,
+      color: colors.primary, align: 'left', ...without(value, ['src']), ...(sourceAssetId ? { sourceAssetId } : {}),
     }
   } else if (type === 'image') {
     element = { ...base, width: 640, height: 360, altText: '', fit: 'contain', ...without(value, ['src']), sourceAssetId: source() }
@@ -289,9 +293,7 @@ function patchElement(current: PresentationElement, patch: Record<string, unknow
   let createdAssets: PresentationProject['assets'] = []
   const normalized = { ...patch }
   if (normalized.src !== undefined) {
-    if (current.type !== 'image' && current.type !== 'audio' && current.type !== 'video') {
-      throw new Error('Only media elements accept src')
-    }
+    if (current.type !== 'image' && current.type !== 'audio' && current.type !== 'video' && current.type !== 'text') throw new Error('This element does not accept src')
     const path = requiredString(normalized.src, 'patch.src')
     const source = assets[path]
     if (!source) throw new Error(`PowerPoint asset was not supplied: ${path}`)
@@ -299,6 +301,10 @@ function patchElement(current: PresentationElement, patch: Record<string, unknow
     createdAssets = [asset]
     normalized.sourceAssetId = asset.id
     delete normalized.src
+  }
+  if (shapeTypes.has(current.type) && normalized.fill !== undefined && normalized.gradientFill === undefined) {
+    if (normalized.fillOpacity === undefined) normalized.fillOpacity = null
+    normalized.gradientFill = null
   }
   return { assets: createdAssets, element: nullablePatch(current as unknown as Record<string, unknown>, normalized) as unknown as PresentationElement }
 }

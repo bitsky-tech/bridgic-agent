@@ -947,7 +947,7 @@ describe('presentation Insert runtime safeguards', () => {
     }
   })
 
-  it('keeps ordinary history at 50 entries and trims embedded payloads by byte budget', () => {
+  it('keeps ordinary history at 50 entries and trims large project snapshots by byte budget', () => {
     const documentModel = createBlankPresentationProject('History')
     const plainBytes = estimatePresentationProjectBytes(documentModel)
     const source = fileSource('video/mp4', 'large.mp4', 'A'.repeat(2_000))
@@ -960,7 +960,7 @@ describe('presentation Insert runtime safeguards', () => {
     const entry = createPresentationHistoryEntry(documentModel, mediaBytes)
     expect(entry).not.toBeNull()
     expect(entry!.project).not.toBe(documentModel)
-    expect(entry!.project.assets[0]!.source.dataUrl).toBe(documentModel.assets[0]!.source.dataUrl)
+    expect(entry!.project.assets[0]!.source).toBe(documentModel.assets[0]!.source)
     expect(createPresentationHistoryEntry(documentModel, mediaBytes - 1)).toBeNull()
 
     const ordinaryEntries = Array.from({ length: 60 }, (_, index) => ({

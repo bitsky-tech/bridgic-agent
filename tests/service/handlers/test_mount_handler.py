@@ -60,6 +60,14 @@ async def test_external_mount_lifecycle(service_client: httpx.AsyncClient, test_
     assert mounted["exists"] is True
     assert mounted["removable"] is True
 
+    repeated_response = await service_client.post(
+        f"/sessions/{session_id}/mounts",
+        json={"path": str(external)},
+    )
+    assert repeated_response.status_code == 200
+    assert repeated_response.json()["id"] == mounted["id"]
+    assert len((await service_client.get(f"/sessions/{session_id}/mounts")).json()) == 2
+
     # Check 3: Unmounting removes the API entry without deleting the external target.
     delete_response = await service_client.delete(
         f"/sessions/{session_id}/mounts",

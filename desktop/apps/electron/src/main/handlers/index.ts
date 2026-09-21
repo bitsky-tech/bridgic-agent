@@ -11,6 +11,7 @@ import { registerFsHandlers } from './fs'
 import { registerFsWatchHandlers } from './fs-watch'
 import { registerIssueReportHandlers } from './issue-report'
 import { registerMarketHandlers } from './market'
+import { registerMountReferenceHandlers } from './mount-references'
 import { registerNotifyHandlers } from './notify'
 import { registerPowerPointHandlers } from './powerpoint'
 import { registerSettingsHandlers } from './settings'
@@ -52,6 +53,13 @@ export function registerAllHandlers(windowManager: WindowManager, quitApp: () =>
     const window = windowManager.getMainWindow()
     if (window && !window.isDestroyed()) window.webContents.send(channel, value)
   })
+  const powerpoint = windowManager.getEmbeddedPowerPoint()
+  registerMountReferenceHandlers([{
+    usage: (sessionId, mountId) => powerpoint.mountUsage(sessionId, mountId),
+    validateReplacement: (sessionId, mountId, path) => powerpoint.validateMountReplacement(sessionId, mountId, path),
+    remove: (sessionId, mountId) => powerpoint.removeMountReferences(sessionId, mountId),
+    refresh: (sessionId) => powerpoint.refreshSources(sessionId),
+  }])
   registerWordHandlers()
   registerWordHostHandlers(windowManager.getWordHost(), (channel, value) => {
     const window = windowManager.getMainWindow()

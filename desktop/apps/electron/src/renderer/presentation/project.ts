@@ -12,27 +12,20 @@ import {
 } from '@/atoms/presentation'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
 import { presentationProjectSchema } from './schema'
+import { resolvedPresentationSource } from './sources'
 
-type PresentationAssetElement = Extract<PresentationElement, { type: 'image' | 'audio' | 'video' }>
+type PresentationAssetElement = Extract<PresentationElement, { type: 'image' | 'audio' | 'video' }> | (Extract<PresentationElement, { type: 'text' }> & { sourceAssetId: string })
 
-function assetSourceOf(source: PresentationFileSource): PresentationAsset['source'] {
-  const { assetId: _sourceAssetId, ...assetSource } = source
-  return assetSource
-}
-
-function sameAssetSource(left: PresentationAsset['source'], right: PresentationAsset['source']): boolean {
-  return left.dataUrl === right.dataUrl
-    && left.fileName === right.fileName
-    && left.mimeType === right.mimeType
-    && left.path === right.path
+function sameAssetSource(left: PresentationAsset, right: PresentationAsset): boolean {
+  return left.source === right.source && left.mimeType === right.mimeType
 }
 
 export function createPresentationAsset(kind: PresentationAssetKind, source: PresentationFileSource, id = source.assetId ?? createPresentationId('asset')): PresentationAsset {
-  return { id, kind, name: source.fileName, source: assetSourceOf(source) }
+  return { id, kind, mimeType: source.mimeType, name: source.fileName, source: source.source ?? source.path ?? source.dataUrl }
 }
 
 export function isPresentationAssetElement(element: PresentationElement): element is PresentationAssetElement {
-  return element.type === 'image' || element.type === 'audio' || element.type === 'video'
+  return element.type === 'image' || element.type === 'audio' || element.type === 'video' || (element.type === 'text' && Boolean(element.sourceAssetId))
 }
 
 export function presentationAsset(project: Pick<PresentationProject, 'assets'>, assetId: string | undefined): PresentationAsset | undefined {
@@ -45,7 +38,7 @@ export function mergePresentationAssets(current: readonly PresentationAsset[], i
   for (const asset of incoming) {
     const existing = byId.get(asset.id)
     if (existing) {
-      if (existing.kind !== asset.kind || existing.name !== asset.name || !sameAssetSource(existing.source, asset.source)) {
+      if (existing.kind !== asset.kind || existing.name !== asset.name || !sameAssetSource(existing, asset)) {
         throw new Error(`PowerPoint asset identity collision: ${asset.id}`)
       }
       continue
@@ -56,9 +49,9 @@ export function mergePresentationAssets(current: readonly PresentationAsset[], i
   return merged
 }
 
-export function presentationElementSource(project: Pick<PresentationProject, 'assets'>, element: PresentationAssetElement): PresentationFileSource | undefined {
+export function presentationElementSource(project: Pick<PresentationProject, 'assets'>, element: PresentationAssetElement, sources: Readonly<Record<string, string>> = {}): PresentationFileSource | undefined {
   const asset = presentationAsset(project, element.sourceAssetId)
-  return asset ? { ...asset.source, assetId: asset.id } : undefined
+  return resolvedPresentationSource(asset, sources)
 }
 
 /** Build a bounded asset collection for an explicitly selected page subset. */
@@ -128,19 +121,8 @@ export function presentationProjectOf(project: PresentationProject): Presentatio
   return { schemaVersion, version, id, title, theme, pageSize, assets, slides }
 }
 
-/**
- * Move legacy element-local media payloads into the project asset library.
- * New edits therefore have one source of truth even when an older checkpoint is opened.
- */
+/** Normalize ordering and remove obsolete rendering-only fields. */
 export function normalizePresentationProject(project: PresentationProject): PresentationProject {
-  let assetsChanged = false
-  const assets: PresentationAsset[] = project.assets.map((asset) => {
-    const legacySource = asset.source as PresentationFileSource
-    if (legacySource.assetId === undefined) return asset
-    const { assetId: _sourceAssetId, ...source } = legacySource
-    assetsChanged = true
-    return { ...asset, source }
-  })
   const pageIds = project.slides.pages.map((page) => page.id)
   const requestedOrder = project.slides.slideOrder
   const orderIsComplete = requestedOrder.length === pageIds.length
@@ -159,37 +141,20 @@ export function normalizePresentationProject(project: PresentationProject): Pres
       const element = _legacyZIndex === undefined ? sourceElement : elementWithoutZIndex as PresentationElement
       if (_legacyZIndex !== undefined) pageChanged = true
       if (!isPresentationAssetElement(element)) return element
-      const legacySource = (element as PresentationAssetElement & { source?: PresentationFileSource }).source
-      let asset = presentationAsset({ assets }, element.sourceAssetId)
+      const asset = presentationAsset(project, element.sourceAssetId)
       if (asset && asset.kind !== element.type) throw new Error(`PowerPoint asset ${asset.id} cannot be used by a ${element.type} element`)
-      if (asset && legacySource && !sameAssetSource(asset.source, assetSourceOf(legacySource))) {
-        throw new Error(`PowerPoint asset identity collision: ${asset.id}`)
-      }
-      if (!asset && legacySource) {
-        const source = assetSourceOf(legacySource)
-        asset = assets.find((candidate) => candidate.kind === element.type && sameAssetSource(candidate.source, source))
-        if (!asset) {
-          asset = createPresentationAsset(element.type, legacySource, element.sourceAssetId)
-          assets.push(asset)
-        }
-      }
-      if (!asset) return element
-      if (element.sourceAssetId === asset.id && !legacySource) return element
-      const { source: _legacySource, ...rest } = element as PresentationAssetElement & { source?: PresentationFileSource }
-      pageChanged = true
-      return { ...rest, sourceAssetId: asset.id } as PresentationElement
+      return element
     })
     if (!pageChanged) return page
     pagesChanged = true
     return { ...page, elements }
   })
-  if (!pagesChanged && !assetsChanged && !orderChanged) return project
+  if (!pagesChanged && !orderChanged) return project
   const selectedPageId = pages.some((page) => page.id === project.slides.selectedPageId)
     ? project.slides.selectedPageId
     : pages[0]!.id
   return {
     ...project,
-    assets,
     slides: {
       pages,
       slideOrder: orderIsComplete ? pages.map((page) => page.id) : project.slides.slideOrder,
@@ -198,7 +163,7 @@ export function normalizePresentationProject(project: PresentationProject): Pres
   }
 }
 
-/** Upgrade the former flat PresentationProject shape and current project checkpoints. */
+/** Upgrade the former flat PresentationProject shape and validate current projects. */
 export function migratePresentationProject(value: unknown, fallbackTitle = ''): PresentationProject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The PowerPoint project must be an object')
   const raw = value as Record<string, unknown>

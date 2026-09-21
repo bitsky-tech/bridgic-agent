@@ -1,27 +1,56 @@
 import { createInitialPresentationProject, replacePresentationPages, type PresentationProject } from '@/atoms/presentation'
 import type { OfficeFilesAPI } from '../../shared/office-files'
 import { PresentationStore } from '@/presentation/store'
+import { presentationMountSource } from '@/presentation/sourceReference'
+import { createMemoryWorkspacePersistence } from './presentation-workspace'
 
 export async function createPresentationTestStore(sessionId: string, project: PresentationProject = createInitialPresentationProject()): Promise<PresentationStore> {
-  project = { ...project, slides: replacePresentationPages(project.slides, project.slides.pages) }
-  let recovery: string | null = JSON.stringify({
+  const sourceValues = new Map<string, string>()
+  project = {
+    ...project,
+    assets: project.assets.map((asset) => {
+      const source = presentationMountSource(`test-${asset.id}`)
+      sourceValues.set(source, asset.source)
+      return { ...asset, source }
+    }),
+    slides: replacePresentationPages(project.slides, project.slides.pages),
+  }
+  const workspaces = createMemoryWorkspacePersistence({
     schemaVersion: 1,
     activeProjectId: project.id,
     projects: [project],
     projectMetadata: { [project.id]: { revision: 1 } },
-  })
+  }, sessionId)
+  let mountedSourceOrdinal = 0
   const files: OfficeFilesAPI = {
-    confirmClose: async () => 'cancel',
-    getRecovery: async () => recovery,
+    confirmClose: async () => 'discard',
+    getRecovery: async () => null,
     inspect: async (_kind, path) => ({ path, mtimeMs: null }),
+    listPresentationMounts: async () => [],
+    mountPresentationSource: async ({ fileName }) => ({
+      id: `test-mounted-${++mountedSourceOrdinal}`,
+      name: fileName,
+      path: `/presentation-test-assets/${fileName}`,
+      kind: 'file',
+      exists: true,
+      size_bytes: null,
+      item_count: null,
+      removable: true,
+      created_at: new Date(0).toISOString(),
+    }),
     save: async () => ({ ok: false, reason: 'canceled' }),
-    setRecovery: async (_kind, _sessionId, value) => { recovery = value },
+    setRecovery: async () => undefined,
   }
   const store = new PresentationStore(sessionId, {
+    workspacePersistence: workspaces.persistence,
     encode: async () => new Uint8Array(),
     files,
     importPptx: async () => { throw new Error('PPTX import is not configured for this test') },
     managedFiles: false,
+    resolveSources: async (sourceRefs) => Object.fromEntries(sourceRefs.flatMap((source) => {
+      const value = sourceValues.get(source)
+      return value ? [[source, value]] : []
+    })),
   })
   await store.restore()
   return store

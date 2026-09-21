@@ -15,7 +15,7 @@ import { createPresentationTestDocument as createInitialPresentationProject } fr
 import { createPresentationPptx } from '../presentationPptx'
 
 function presentationAsset(id: string, kind: PresentationAssetKind, source: PresentationFileSource): PresentationAsset {
-  return { id, kind, name: source.fileName, source }
+  return { id, kind, mimeType: source.mimeType, name: source.fileName, source: source.dataUrl }
 }
 
 describe('createPresentationPptx', () => {

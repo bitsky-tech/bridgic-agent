@@ -10,7 +10,7 @@ import { decompilePresentationSlideMarkdown } from '@/lib/presentationMarkdown'
 import { importPresentationPptx } from '@/lib/presentationPptxImport'
 import { editPresentationPage, managePresentationDeck } from '@/presentation/agentCommands'
 import { editPresentationProject } from '@/presentation/model/reducer'
-import { presentationAsset, presentationElementSource } from '@/presentation/project'
+import { isPresentationAssetElement, presentationAsset, presentationElementSource } from '@/presentation/project'
 
 export const POWERPOINT_PROTOCOL_VERSION = 7 as const
 
@@ -32,6 +32,7 @@ export interface PowerPointRuntimeContext {
   currentTarget: string | null
   fileNameOf?: (projectId: string) => string | undefined
   importPptx?: (encoded: string, fileName: string) => Promise<PresentationProject>
+  materializeProject?: (project: PresentationProject) => Promise<PresentationProject>
   revisionOf?: (projectId: string) => number
 }
 
@@ -106,8 +107,9 @@ export async function executePowerPointRequest(
     const slide = requireSlide(project, requiredString(params.page_id, 'page_id'))
     const format = enumValue(params.format ?? 'compact', new Set(['compact', 'model', 'both'] as const), 'format')
     const elementIds = stringArray(params.element_ids, 'element_ids')
+    const assetProject = context.materializeProject ? await context.materializeProject(project) : project
     return {
-      result: pageRead(project, slide, format, elementIds),
+      result: pageRead(project, slide, format, elementIds, assetProject),
       ...(activeProjects === current ? {} : { projects: activeProjects }),
     }
   }
@@ -203,7 +205,7 @@ function deckRead(document: PresentationProject, fileName: string, revision: num
   }
 }
 
-function pageRead(document: PresentationProject, slide: PresentationSlide, format: 'both' | 'compact' | 'model', elementIds?: string[]): Record<string, unknown> {
+function pageRead(document: PresentationProject, slide: PresentationSlide, format: 'both' | 'compact' | 'model', elementIds?: string[], assetProject = document): Record<string, unknown> {
   const index = document.slides.pages.findIndex((item) => item.id === slide.id)
   const selectedElements = elementIds?.length
     ? slide.elements.filter((element) => elementIds.includes(element.id))
@@ -211,7 +213,7 @@ function pageRead(document: PresentationProject, slide: PresentationSlide, forma
   if (elementIds?.some((id) => !slide.elements.some((element) => element.id === id))) {
     throw new Error('element_ids contains an unknown PowerPoint element')
   }
-  const assets = pageAssets(document, { ...slide, elements: selectedElements })
+  const assets = pageAssets(assetProject, { ...slide, elements: selectedElements })
   return {
     document_id: document.id,
     page_id: slide.id,
@@ -219,7 +221,7 @@ function pageRead(document: PresentationProject, slide: PresentationSlide, forma
     page: {
       ...pageSummary(document, slide, index),
       refs: selectedElements.map((element) => element.id),
-      ...(format === 'compact' || format === 'both' ? { markdown: decompilePresentationSlideMarkdown({ ...slide, elements: selectedElements }, document) } : {}),
+      ...(format === 'compact' || format === 'both' ? { markdown: decompilePresentationSlideMarkdown({ ...slide, elements: selectedElements }, assetProject) } : {}),
       ...(format === 'model' || format === 'both' ? {
         model: {
           id: slide.id,
@@ -230,7 +232,7 @@ function pageRead(document: PresentationProject, slide: PresentationSlide, forma
           footer: slide.footer,
           transition: structuredClone(slide.transition),
           comments: structuredClone(slide.comments ?? []),
-          elements: selectedElements.map((element) => pageModelElement(document, element)),
+          elements: selectedElements.map((element) => pageModelElement(assetProject, element)),
         },
       } : {}),
     },
@@ -256,7 +258,7 @@ function pageSummary(document: PresentationProject, slide: PresentationSlide, in
 function pageAssets(document: PresentationProject, slide: PresentationSlide): Array<{ path: string; file_name: string; mime_type: string; data_url?: string }> {
   const found = new Map<string, { path: string; file_name: string; mime_type: string; data_url?: string }>()
   for (const element of slide.elements) {
-    if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') continue
+    if (!isPresentationAssetElement(element)) continue
     const source = presentationElementSource(document, element)
     if (!source) continue
     const path = pageAssetPath(source, element.id)
@@ -272,7 +274,7 @@ function pageAssets(document: PresentationProject, slide: PresentationSlide): Ar
 }
 
 function pageModelElement(document: PresentationProject, element: PresentationSlide['elements'][number]): Record<string, unknown> {
-  if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') {
+  if (!isPresentationAssetElement(element)) {
     return structuredClone(element) as unknown as Record<string, unknown>
   }
   const source = presentationElementSource(document, element)
@@ -286,24 +288,13 @@ function pageAssetPath(source: PresentationFileSource, elementId: string): strin
   return source.path ?? `.ppt-assets/${encodeURIComponent(source.assetId ?? elementId)}-${safeName}`
 }
 
-const mediaRevisions = new WeakMap<object, { dataUrl: string; revision: string }>()
-
 function pageRevision(document: PresentationProject, slide: PresentationSlide): string {
   const referencedAssets = slide.elements.flatMap((element) => {
-    if (element.type !== 'image' && element.type !== 'audio' && element.type !== 'video') return []
+    if (!isPresentationAssetElement(element)) return []
     const asset = presentationAsset(document, element.sourceAssetId)
     return asset ? [asset] : []
   })
-  return fingerprint(JSON.stringify({ slide, assets: referencedAssets, pageSize: document.pageSize, theme: document.theme }, function (key, value: unknown) {
-    if (key !== 'dataUrl' || typeof value !== 'string') return value
-    const source = this as object
-    let cached = mediaRevisions.get(source)
-    if (!cached || cached.dataUrl !== value) {
-      cached = { dataUrl: value, revision: `${value.length}:${fingerprint(value)}` }
-      mediaRevisions.set(source, cached)
-    }
-    return cached.revision
-  }))
+  return fingerprint(JSON.stringify({ slide, assets: referencedAssets, pageSize: document.pageSize, theme: document.theme }))
 }
 
 function documentRevision(document: PresentationProject, revision: number): string {

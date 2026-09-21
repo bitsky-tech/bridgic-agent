@@ -1,40 +1,29 @@
 import type { PresentationProject } from '@/atoms/presentation'
 import type { OfficeFileSource, OfficeFilesAPI } from '../../shared/office-files'
 import {
-  migratePresentationCheckpoint,
-  type PresentationCheckpoint,
+  type PresentationWorkspace,
   type PresentationProjectMetadata,
-} from '@/presentation/checkpoint'
-import { createOfficePersistenceScheduler } from './office/officePersistence'
+} from '@/presentation/workspace'
 import { i18n } from './i18n'
 
-/** PPTX is an import/export boundary; automatic persistence stores only project checkpoints. */
+/** PPTX is an explicit import/export boundary; workspace persistence belongs to PresentationStore. */
 export function createPresentationFileController(options: {
-  sessionId: string
   files: OfficeFilesAPI
-  read: () => PresentationCheckpoint
-  commitExport: (projectId: string, fileName: string, source: OfficeFileSource, exportedRevision: number) => void
+  read: () => PresentationWorkspace
+  commitExport: (projectId: string, fileName: string, source: OfficeFileSource, exportedRevision: number) => void | Promise<void>
   encode: (project: PresentationProject) => Promise<Uint8Array>
   flushEditor: () => Promise<void>
   /** Whether the destination is a Session-managed file rather than a user-owned import. */
   managed: boolean
   onExportStatus?: (status: 'saving' | 'saved' | 'error', error?: string) => void
 }) {
-  const recovery = createOfficePersistenceScheduler<PresentationCheckpoint>({
-    policy: { appKind: 'presentation', sessionId: options.sessionId, kind: 'recovery', storage: 'recovery-file', automatic: true },
-    delayMs: 150,
-    write: (checkpoint) => options.files.setRecovery('presentation', options.sessionId, JSON.stringify(checkpoint)),
-  })
-  let ready = false
-
   const save = async (projectId: string, saveAs = false, destination?: string): Promise<boolean> => {
     await options.flushEditor()
-    const checkpoint = options.read()
-    const project = checkpoint.projects.find((item) => item.id === projectId)
-    const metadata = checkpoint.projectMetadata[projectId]
+    const workspace = options.read()
+    const project = workspace.projects.find((item) => item.id === projectId)
+    const metadata = workspace.projectMetadata[projectId]
     if (!project || !metadata) throw new Error('The presentation project is no longer open')
     if (!saveAs && !isPresentationProjectDirty(metadata)) {
-      await recovery.persist(options.read())
       const current = options.read().projectMetadata[projectId]
       return Boolean(current && !isPresentationProjectDirty(current))
     }
@@ -57,28 +46,12 @@ export function createPresentationFileController(options: {
       return false
     }
     await options.flushEditor()
-    options.commitExport(projectId, result.fileName, result.source, exportedRevision)
-    await recovery.persist(options.read())
+    await options.commitExport(projectId, result.fileName, result.source, exportedRevision)
     const current = options.read().projectMetadata[projectId]
     return Boolean(current && !isPresentationProjectDirty(current))
   }
 
   return {
-    recovery,
-    async restore(): Promise<PresentationCheckpoint | null> {
-      const serialized = await options.files.getRecovery('presentation', options.sessionId)
-      const checkpoint = serialized === null ? null : migratePresentationCheckpoint(JSON.parse(serialized))
-      ready = true
-      return checkpoint
-    },
-    schedule() {
-      if (ready) recovery.schedule(options.read())
-    },
-    async flush() {
-      if (!ready) throw new Error('PowerPoint recovery is not ready')
-      await options.flushEditor()
-      await recovery.persist(options.read())
-    },
     async save(projectId: string, saveAs = false, destination?: string) {
       options.onExportStatus?.('saving')
       try {

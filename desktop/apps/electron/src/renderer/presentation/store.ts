@@ -1,11 +1,14 @@
 import {
   createInitialPresentationProject,
   type PresentationAgentChange,
+  type PresentationAssetKind,
   type PresentationProject,
 } from '@/atoms/presentation'
+import type { PresentationMountReplacementValidation, PresentationMountUsage } from '@shared/presentation-host'
 import type { OfficeFileSource, OfficeFilesAPI } from '../../shared/office-files'
 import { createPresentationFileController, isPresentationProjectDirty } from '@/lib/presentationFileController'
 import type { OfficeEditorBinding } from '@/lib/office/officeEditorBinding'
+import type { WorkspacePersistence } from '@/lib/office/workspacePersistence'
 import { createOfficeWorkspaceRuntime } from '@/lib/office/officeWorkspaceRuntime'
 import { i18n } from '@/lib/i18n'
 import {
@@ -13,15 +16,17 @@ import {
   POWERPOINT_PROTOCOL_VERSION,
   PowerPointProtocolError,
   type PowerPointDispatchResult,
+  type PowerPointProjectCollection,
   type PowerPointRequest,
   type PowerPointRuntimeContext,
 } from '@/lib/powerPointProtocol'
 import {
   initialPresentationProjectMetadata,
+  migratePresentationWorkspace,
   validatePresentationInventory,
-  type PresentationCheckpoint,
+  type PresentationWorkspace,
   type PresentationProjectMetadata,
-} from './checkpoint'
+} from './workspace'
 import {
   createPresentationHistoryEntry,
   trimPresentationHistoryEntries,
@@ -29,6 +34,21 @@ import {
   type PresentationHistoryEntry,
 } from './history'
 import { editPresentationProject } from './model/reducer'
+import { detachPresentationCommentsFromElements } from './project'
+import {
+  embeddedPresentationSource,
+  isDurablePresentationSource,
+  mountedPresentationSource,
+  presentationMountSource,
+  presentationPptxSource,
+} from './sourceReference'
+import {
+  materializePresentationProjectSources,
+  presentationPptxSourceUrls,
+  presentationSourceUrlForPath,
+  presentationSourceUrls,
+  rebasePresentationPptxSources,
+} from './sources'
 
 const POWERPOINT_METHODS = [
   'open', 'read_deck', 'read_page', 'inspect', 'edit_page', 'manage_deck',
@@ -51,13 +71,18 @@ export interface PresentationStoreSnapshot {
   projects: readonly PresentationProject[]
   ready: boolean
   saveStatus: 'error' | 'loading' | 'saved' | 'saving'
+  /** Runtime URLs keyed by durable source reference; never persisted. */
+  sources: Readonly<Record<string, string>>
 }
 
 export interface PresentationStoreOptions {
-  encode: (project: PresentationProject) => Promise<Uint8Array>
+  workspacePersistence: WorkspacePersistence<PresentationWorkspace>
+  encode: (project: PresentationProject, sources: Readonly<Record<string, string>>) => Promise<Uint8Array>
   files: OfficeFilesAPI
   importPptx: NonNullable<PowerPointRuntimeContext['importPptx']>
   managedFiles: boolean
+  /** Optional host resolver; persisted projects still contain only source references. */
+  resolveSources?: (sourceRefs: readonly string[]) => Promise<Record<string, string>>
 }
 
 export type PresentationStoreDispatchResult =
@@ -73,13 +98,14 @@ export class PresentationStore {
   private readonly histories = new Map<string, PresentationHistory>()
   private readonly officeRuntime
   private readonly fileController
-  private readonly unsubscribeRecovery
+  private readonly unsubscribePersistence
   private state: PresentationStoreSnapshot
   private editor: OfficeEditorBinding<PresentationProject> | null = null
   private agentChangeId = 0
   private openingSource: OfficeFileSource | null = null
   private refreshing = false
   private closing: Promise<boolean> | null = null
+  private workspaceReady = false
 
   constructor(readonly sessionId: string, private readonly options: PresentationStoreOptions) {
     this.state = {
@@ -94,6 +120,7 @@ export class PresentationStore {
       projects: [],
       ready: false,
       saveStatus: 'loading',
+      sources: {},
     }
     this.officeRuntime = createOfficeWorkspaceRuntime({
       appKind: 'presentation',
@@ -113,24 +140,37 @@ export class PresentationStore {
       }),
     })
     this.fileController = createPresentationFileController({
-      encode: options.encode,
+      encode: (project) => options.encode(project, this.state.sources),
       files: options.files,
       flushEditor: () => this.flushEditor(),
       managed: options.managedFiles,
       onExportStatus: (status, error) => this.publish({ exportError: status === 'error' ? error ?? 'PowerPoint export failed' : null }),
-      read: () => this.checkpoint(),
-      commitExport: (projectId, _fileName, source, exportedRevision) => {
+      read: () => this.workspace(),
+      commitExport: async (projectId, _fileName, source, exportedRevision) => {
+        const exported = this.state.projects.find((project) => project.id === projectId)
+        const exportedMetadata = this.state.projectMetadata[projectId]
+        let rebased = exported
+        if (exported && exportedMetadata?.revision === exportedRevision && this.options.files.readBase64) {
+          const materialized = await materializePresentationProjectSources(exported, this.state.sources)
+          const encoded = await this.options.files.readBase64('presentation', source.path)
+          const result = await rebasePresentationPptxSources(exported, materialized, encoded)
+          rebased = result.project
+          if (result.replacements.size) this.replaceHistorySources(projectId, result.replacements)
+        }
         const projectMetadata = Object.fromEntries(Object.entries(this.state.projectMetadata).map(([id, current]) => {
           let next = current
           if (id === projectId) next = { ...current, source, sourceProtected: false, savedRevision: exportedRevision }
           else if (current.source?.path === source.path) next = withoutPresentationSource(current)
           return [id, next]
         }))
-        this.replaceInventory(this.state.activeProjectId, this.state.projects, projectMetadata)
+        const projects = rebased
+          ? this.state.projects.map((project) => project.id === projectId ? rebased! : project)
+          : this.state.projects
+        this.replaceInventory(this.state.activeProjectId, projects, projectMetadata)
+        await this.refreshSources()
       },
-      sessionId,
     })
-    this.unsubscribeRecovery = this.fileController.recovery.subscribe((snapshot) => {
+    this.unsubscribePersistence = options.workspacePersistence.subscribe((snapshot) => {
       if (snapshot.status === 'disposed') return
       let saveStatus = this.state.saveStatus
       if (snapshot.status === 'error') saveStatus = 'error'
@@ -138,7 +178,7 @@ export class PresentationStore {
       else if (snapshot.status === 'saved') saveStatus = 'saved'
       this.publish({
         saveStatus,
-        persistenceError: snapshot.status === 'error' ? snapshot.error?.message ?? 'PowerPoint recovery failed' : null,
+        persistenceError: snapshot.status === 'error' ? snapshot.error?.message ?? 'PowerPoint workspace save failed' : null,
       })
     })
   }
@@ -157,7 +197,7 @@ export class PresentationStore {
     for (const listener of this.listeners) listener()
   }
 
-  private checkpoint(): PresentationCheckpoint {
+  private workspace(): PresentationWorkspace {
     return {
       schemaVersion: 1,
       activeProjectId: this.state.activeProjectId,
@@ -176,6 +216,7 @@ export class PresentationStore {
     activeProjectId: string,
     projects: readonly PresentationProject[],
     projectMetadata: Readonly<Record<string, PresentationProjectMetadata>>,
+    persist = true,
   ): void {
     validatePresentationInventory(activeProjectId, projects)
     const metadata = Object.fromEntries(projects.map((project) => [
@@ -196,7 +237,7 @@ export class PresentationStore {
       canRedo: Boolean(history?.future.length),
     })
     this.officeRuntime.publish()
-    this.fileController.schedule()
+    if (persist && this.workspaceReady) this.options.workspacePersistence.schedule(this.workspace())
   }
 
   private historyFor(projectId: string): PresentationHistory {
@@ -238,6 +279,9 @@ export class PresentationStore {
     })
     if (this.state.activeProjectId !== previous.id || next.id !== previous.id) {
       throw new PowerPointProtocolError('The active PowerPoint project changed.', 'document_changed')
+    }
+    if (next.assets.some((asset) => !isDurablePresentationSource(asset.source))) {
+      throw new Error('PowerPoint project edits must reference durable sources')
     }
     const current = this.state.projects.find((project) => project.id === previous.id)
     if (current !== previous) throw new PowerPointProtocolError('The PowerPoint changed before the edit was committed.', 'document_changed')
@@ -340,15 +384,19 @@ export class PresentationStore {
 
   async restore(): Promise<void> {
     try {
-      const restored = await this.fileController.restore()
+      const stored = await this.options.workspacePersistence.load()
+      const restored = stored === null ? null : migratePresentationWorkspace(stored)
       this.histories.clear()
+      this.workspaceReady = true
       if (restored) {
-        this.replaceInventory(restored.activeProjectId, restored.projects, restored.projectMetadata)
+        this.replaceInventory(restored.activeProjectId, restored.projects, restored.projectMetadata, false)
       } else {
-        this.replaceInventory('', [], {})
+        this.replaceInventory('', [], {}, false)
       }
+      await this.refreshSources()
       this.publish({ agentChange: null, ready: true, saveStatus: 'saved', persistenceError: null })
     } catch (error) {
+      this.workspaceReady = false
       this.publish({ ready: false, saveStatus: 'error', persistenceError: error instanceof Error ? error.message : String(error) })
       throw error
     }
@@ -361,13 +409,148 @@ export class PresentationStore {
       documentId: projectId,
     }, () => this.fileController.save(projectId, saveAs, destination))
     if (!result.ok) throw new Error(result.error.message)
+    if (result.value) await this.options.workspacePersistence.persist(this.workspace())
     return result.value
   }
 
   async flush(): Promise<void> {
     await this.officeRuntime.whenIdle()
     await this.flushEditor()
-    await this.fileController.flush()
+    if (!this.workspaceReady) throw new Error('PowerPoint workspace persistence is not ready')
+    await this.options.workspacePersistence.persist(this.workspace())
+  }
+
+  async retryPersistence(): Promise<void> {
+    await this.flushEditor()
+    await this.options.workspacePersistence.persist(this.workspace())
+  }
+
+  async mountFileSource(kind: PresentationAssetKind, source: { dataUrl: string; fileName: string; mimeType: string }, path: string | undefined, sourceSize?: number, sourceModifiedAt?: number): Promise<PresentationProject['assets'][number]> {
+    const mountSource = this.options.files.mountPresentationSource
+    if (!mountSource) throw new Error('PowerPoint Session files are unavailable')
+    const encoded = /^data:[^;,]+;base64,([\s\S]*)$/i.exec(source.dataUrl)?.[1]?.replace(/\s/g, '')
+    const mounted = await mountSource({ fileName: source.fileName, mimeType: source.mimeType, ...(path ? { path } : { dataBase64: encoded }) })
+    const reference = presentationMountSource(mounted.id, mounted.relativePath)
+    const durableSize = sourceSize ?? mounted.size_bytes ?? undefined
+    const asset = {
+      id: crypto.randomUUID(),
+      kind,
+      mimeType: source.mimeType,
+      name: source.fileName,
+      source: reference,
+      ...(durableSize === undefined ? {} : { sourceSize: durableSize }),
+      ...(sourceModifiedAt === undefined ? {} : { sourceModifiedAt }),
+    }
+    this.publish({ sources: { ...this.state.sources, [reference]: source.dataUrl } })
+    return asset
+  }
+
+  mountUsage(mountId: string): PresentationMountUsage {
+    if (!this.state.ready) throw new Error('PowerPoint workspace is not ready')
+    let assetCount = 0
+    let elementCount = 0
+    let projectCount = 0
+    for (const project of this.state.projects) {
+      const assetIds = new Set(project.assets.filter((asset) => mountedPresentationSource(asset.source)?.mountId === mountId).map((asset) => asset.id))
+      if (assetIds.size === 0) continue
+      projectCount += 1
+      assetCount += assetIds.size
+      elementCount += project.slides.pages.reduce((count, page) => count + page.elements.filter((element) => 'sourceAssetId' in element && element.sourceAssetId && assetIds.has(element.sourceAssetId)).length, 0)
+    }
+    return { assetCount, elementCount, projectCount }
+  }
+
+  async validateMountReplacement(mountId: string, path: string): Promise<PresentationMountReplacementValidation> {
+    if (!this.state.ready) throw new Error('PowerPoint workspace is not ready')
+    const assets = this.state.projects.flatMap((project) => project.assets).filter((asset) => mountedPresentationSource(asset.source)?.mountId === mountId)
+    const inspected = new Map<string, Promise<{ mimeType: string; size?: number }>>()
+    for (const asset of assets) {
+      const reference = mountedPresentationSource(asset.source)!
+      const candidate = reference.relativePath ? `${path.replace(/[\\/]+$/, '')}/${reference.relativePath}` : path
+      let pending = inspected.get(candidate)
+      if (!pending) {
+        pending = (async () => {
+          const url = presentationSourceUrlForPath(candidate)
+          if (!url) throw new Error('PowerPoint source unavailable')
+          const response = await fetch(url, { method: 'HEAD' })
+          if (!response.ok) throw new Error('PowerPoint source unavailable')
+          const rawSize = Number(response.headers.get('content-length'))
+          return {
+            mimeType: response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '',
+            ...(Number.isSafeInteger(rawSize) && rawSize >= 0 ? { size: rawSize } : {}),
+          }
+        })()
+        inspected.set(candidate, pending)
+      }
+      let replacement
+      try { replacement = await pending } catch { return { compatible: false, reason: 'unavailable', assetName: asset.name } }
+      if (replacement.mimeType && replacement.mimeType !== asset.mimeType.toLowerCase()) {
+        return { compatible: false, reason: 'type-mismatch', assetName: asset.name }
+      }
+      if (asset.sourceSize !== undefined && replacement.size !== undefined && asset.sourceSize !== replacement.size) {
+        return { compatible: false, reason: 'content-mismatch', assetName: asset.name }
+      }
+    }
+    return { compatible: true }
+  }
+
+  removeMountReferences(mountId: string): PresentationMountUsage {
+    if (!this.state.ready) throw new Error('PowerPoint workspace is not ready')
+    const usage = this.mountUsage(mountId)
+    if (usage.assetCount === 0) return usage
+    const changedIds = new Set<string>()
+    const projects = this.state.projects.map((project) => {
+      const assetIds = new Set(project.assets.filter((asset) => mountedPresentationSource(asset.source)?.mountId === mountId).map((asset) => asset.id))
+      if (assetIds.size === 0) return project
+      changedIds.add(project.id)
+      const pages = project.slides.pages.map((page) => {
+        const removedElementIds = new Set(page.elements.flatMap((element) => (
+          'sourceAssetId' in element && element.sourceAssetId && assetIds.has(element.sourceAssetId) ? [element.id] : []
+        )))
+        if (removedElementIds.size === 0) return page
+        return detachPresentationCommentsFromElements({
+          ...page,
+          elements: page.elements.filter((element) => !removedElementIds.has(element.id)),
+        }, removedElementIds)
+      })
+      return editPresentationProject(project, {
+        ...project,
+        assets: project.assets.filter((asset) => !assetIds.has(asset.id)),
+        slides: { ...project.slides, pages },
+      })
+    })
+    const metadata = Object.fromEntries(Object.entries(this.state.projectMetadata).map(([projectId, value]) => [
+      projectId,
+      changedIds.has(projectId) ? { ...value, revision: value.revision + 1 } : value,
+    ]))
+    this.histories.clear()
+    this.replaceInventory(this.state.activeProjectId, projects, metadata)
+    this.publish({ sources: Object.fromEntries(Object.entries(this.state.sources).filter(([source]) => mountedPresentationSource(source)?.mountId !== mountId)) })
+    return usage
+  }
+
+  async refreshSources(): Promise<void> {
+    const refs = this.state.projects.flatMap((project) => project.assets.map((asset) => asset.source))
+    if (this.options.resolveSources) {
+      try { this.publish({ sources: await this.options.resolveSources(refs) }) }
+      catch { this.publish({ sources: {} }) }
+      return
+    }
+    const sources: Record<string, string> = {}
+    try {
+      const mounts = await this.options.files.listPresentationMounts?.() ?? []
+      Object.assign(sources, presentationSourceUrls(refs, mounts))
+    } catch { /* A missing Files inventory must not hide package-owned assets. */ }
+    if (this.options.files.readBase64) {
+      for (const project of this.state.projects) {
+        const source = this.state.projectMetadata[project.id]?.source
+        if (!source) continue
+        try {
+          Object.assign(sources, await presentationPptxSourceUrls(project, await this.options.files.readBase64('presentation', source.path)))
+        } catch { /* An unavailable original PPTX leaves only that project's embedded sources unresolved. */ }
+      }
+    }
+    this.publish({ sources })
   }
 
   async closeAll(): Promise<boolean> {
@@ -385,8 +568,8 @@ export class PresentationStore {
           const metadata = this.state.projectMetadata[project.id]
           return metadata && isPresentationProjectDirty(metadata) && approved.get(project.id) !== metadata.revision
         })) throw new Error(i18n.t('office.changedDuringClose'))
-        this.replaceInventory('', [], {})
-        await this.fileController.recovery.persist(this.checkpoint())
+        await this.options.workspacePersistence.persist({ schemaVersion: 1, activeProjectId: '', projects: [], projectMetadata: {} })
+        this.replaceInventory('', [], {}, false)
         return true
       })
       if (!result.ok) throw new Error(result.error.message)
@@ -431,8 +614,7 @@ export class PresentationStore {
             throw new PowerPointProtocolError('The PowerPoint changed while the command was being prepared. Read it again before retrying.', 'document_changed')
           }
         }
-        this.applyProtocolResult(dispatched)
-        await this.fileController.flush()
+        await this.applyProtocolResult(dispatched)
         return { ok: true as const, value: dispatched.result }
       } catch (error) {
         return failure(error)
@@ -444,12 +626,78 @@ export class PresentationStore {
     return result.ok ? result.value : { ok: false, error: result.error.message, code: result.error.code }
   }
 
+  private async durableProjectCollection(collection: PowerPointProjectCollection): Promise<PowerPointProjectCollection> {
+    const transient = collection.projects.flatMap((project) => project.assets).filter((asset) => !isDurablePresentationSource(asset.source))
+    if (transient.length === 0) return collection
+    const replacements = new Map<string, { size?: number; source: string }>()
+    for (const asset of transient) {
+      if (replacements.has(asset.source)) continue
+      const dataUrl = /^data:([^;,]+);base64,([\s\S]*)$/i.exec(asset.source)
+      const mountSource = this.options.files.mountPresentationSource
+      if (!mountSource) throw new Error('PowerPoint Session files are unavailable')
+      const mounted = await mountSource({
+        ...(dataUrl ? { dataBase64: dataUrl[2]!.replace(/\s/g, '') } : { path: asset.source }),
+        fileName: asset.name,
+        mimeType: asset.mimeType,
+      })
+      replacements.set(asset.source, {
+        ...(mounted.size_bytes === null ? {} : { size: mounted.size_bytes }),
+        source: presentationMountSource(mounted.id, mounted.relativePath),
+      })
+    }
+    const projects = collection.projects.map((project) => ({
+      ...project,
+      assets: project.assets.map((asset) => {
+        const replacement = replacements.get(asset.source)
+        return replacement ? {
+          ...asset,
+          source: replacement.source,
+          ...(asset.sourceSize === undefined && replacement.size !== undefined ? { sourceSize: replacement.size } : {}),
+        } : asset
+      }),
+    }))
+    const refs = projects.flatMap((project) => project.assets.map((asset) => asset.source))
+    if (this.options.resolveSources) {
+      this.publish({ sources: { ...this.state.sources, ...await this.options.resolveSources(refs) } })
+    } else {
+      const mounts = await this.options.files.listPresentationMounts?.() ?? []
+      this.publish({ sources: { ...this.state.sources, ...presentationSourceUrls(refs, mounts) } })
+    }
+    return { ...collection, projects }
+  }
+
+  private replaceHistorySources(projectId: string, replacements: ReadonlyMap<string, string>): void {
+    const history = this.histories.get(projectId)
+    if (!history || replacements.size === 0) return
+    const replace = (entry: PresentationHistoryEntry): PresentationHistoryEntry => {
+      let changed = false
+      const assets = entry.project.assets.map((asset) => {
+        const source = replacements.get(asset.source)
+        const removal = asset.imageEffects?.backgroundRemoval
+        const layerSource = removal ? replacements.get(removal.layerSource) : undefined
+        if (!source && !layerSource) return asset
+        changed = true
+        return {
+          ...asset,
+          source: source ?? asset.source,
+          ...(removal && layerSource ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: { ...removal, layerSource } } } : {}),
+        }
+      })
+      if (!changed) return entry
+      return createPresentationHistoryEntry({ ...entry.project, assets }) ?? entry
+    }
+    history.past = history.past.map(replace)
+    history.future = history.future.map(replace)
+    trimPresentationHistoryPair(history.past, history.future)
+  }
+
   private protocolContext(): PowerPointRuntimeContext {
     const metadata = this.state.project ? this.metadataOf(this.state.project.id) : null
     return {
       currentTarget: this.refreshing ? null : metadata?.source?.path ?? null,
       fileNameOf: (projectId) => this.state.projectMetadata[projectId]?.source?.path?.split(/[\\/]/).pop(),
       importPptx: this.options.importPptx,
+      materializeProject: (project) => materializePresentationProjectSources(project, this.state.sources),
       revisionOf: (projectId) => this.metadataOf(projectId).revision,
     }
   }
@@ -478,9 +726,13 @@ export class PresentationStore {
     }
   }
 
-  private applyProtocolResult(dispatched: PowerPointDispatchResult): void {
+  private async applyProtocolResult(dispatched: PowerPointDispatchResult): Promise<void> {
     if (dispatched.projects) {
-      if (dispatched.target && this.openingSource) this.applyOpenedProject(dispatched)
+      dispatched.projects = await this.durableProjectCollection(dispatched.projects)
+      if (dispatched.target && this.openingSource) {
+        this.applyOpenedProject(dispatched)
+        await this.refreshSources()
+      }
       else this.applyProjectCollection(dispatched)
     }
     if (dispatched.agentChange) {
@@ -496,7 +748,16 @@ export class PresentationStore {
     const imported = collection.projects.find((project) => project.id === collection.activeProjectId)
     if (!imported || !this.openingSource) throw new Error('The imported PowerPoint project is missing')
     const existing = this.state.projects.find((project) => this.state.projectMetadata[project.id]?.source?.path === this.openingSource?.path)
-    const project = { ...imported, id: existing?.id ?? imported.id }
+    const project = existing ? {
+      ...imported,
+      id: existing.id,
+      assets: imported.assets.map((asset) => {
+        const embedded = embeddedPresentationSource(asset.source)
+        return embedded?.projectId === imported.id
+          ? { ...asset, source: presentationPptxSource(existing.id, embedded.partPath) }
+          : asset
+      }),
+    } : imported
     const revision = existing ? this.metadataOf(existing.id).revision + 1 : 1
     const metadata: PresentationProjectMetadata = {
       revision,
@@ -549,8 +810,8 @@ export class PresentationStore {
   }
 
   dispose(): void {
-    this.unsubscribeRecovery()
-    this.fileController.recovery.dispose()
+    this.unsubscribePersistence()
+    this.options.workspacePersistence.dispose()
     this.officeRuntime.dispose()
     this.listeners.clear()
   }

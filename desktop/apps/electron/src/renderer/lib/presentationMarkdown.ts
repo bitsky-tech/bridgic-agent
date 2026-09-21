@@ -38,8 +38,13 @@ function decompileElement(element: PresentationElement, project?: Pick<Presentat
     ...(element.hyperlink?.tooltip ? { tooltip: element.hyperlink.tooltip } : {}),
   }
   if (element.type === 'text') {
+    const source = element.sourceAssetId
+      ? presentationElementSource(project ?? { assets: [] }, element as typeof element & { sourceAssetId: string })
+      : undefined
+    if (element.sourceAssetId && !source) throw new Error(`PowerPoint text element has no source asset: ${element.id}`)
     return component('PptText', {
       ...common,
+      ...(source ? { src: source.path ?? `@existing/${element.id}` } : {}),
       ...(element.textDirection === undefined ? {} : { textDirection: element.textDirection }),
     }, escapeText(element.text))
   }

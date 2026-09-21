@@ -1,6 +1,7 @@
 import { afterAll, afterEach, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { OfficeFilesAPI } from '../../../../shared/office-files'
+import type { PresentationWorkspace } from '@/presentation/workspace'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -11,6 +12,7 @@ const { createStore, Provider } = await import('jotai')
 const { powerPointSessionIdOverrideAtom } = await import('@/atoms/presentation')
 const { settingsAtom } = await import('@/atoms/settings')
 const { PresentationStore } = await import('@/presentation/store')
+const { createMemoryWorkspacePersistence } = await import('@/test-fixtures/presentation-workspace')
 const { createPresentationTestDocument } = await import('@/test-fixtures/presentation')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
 
@@ -19,20 +21,22 @@ afterAll(async () => { await GlobalRegistrator.unregister() })
 
 it('renders and edits the project owned by PresentationStore', async () => {
   const project = createPresentationTestDocument()
-  let recovery: string | null = JSON.stringify({
+  const workspace: PresentationWorkspace = {
     schemaVersion: 1,
     activeProjectId: project.id,
     projects: [project],
     projectMetadata: { [project.id]: { revision: 1 } },
-  })
+  }
+  const workspaces = createMemoryWorkspacePersistence(workspace, 'presentation-store-workbench')
   const files: OfficeFilesAPI = {
     inspect: async (_kind, path) => ({ path, mtimeMs: 1 }),
     save: async () => ({ ok: true, fileName: 'Project.pptx', source: { path: '/Project.pptx', mtimeMs: 2 } }),
     confirmClose: async () => 'cancel',
-    getRecovery: async () => recovery,
-    setRecovery: async (_kind, _sessionId, value) => { recovery = value },
+    getRecovery: async () => null,
+    setRecovery: async () => undefined,
   }
   const presentationStore = new PresentationStore('presentation-store-workbench', {
+    workspacePersistence: workspaces.persistence,
     encode: async () => new Uint8Array(),
     files,
     importPptx: async () => { throw new Error('not used') },

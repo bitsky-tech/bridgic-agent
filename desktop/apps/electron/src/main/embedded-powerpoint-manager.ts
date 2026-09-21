@@ -17,6 +17,7 @@ import { clampZoomLevel, type GuiSettings } from '@app/shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { windowLog } from './logger'
 import { OfficeSessionContainer, type OfficeSessionRecord } from './office-session-container'
+import type { PresentationMountReplacementValidation, PresentationMountUsage } from '../shared/presentation-host'
 
 const MAX_OPEN_PRESENTATION_BYTES = 250 * 1024 * 1024
 
@@ -172,6 +173,23 @@ export class EmbeddedPowerPointManager {
     this.container.closeAll()
   }
 
+  async mountUsage(sessionId: string, mountId: string): Promise<PresentationMountUsage> {
+    return this.callWorkspace(sessionId, 'mountUsage', [mountId])
+  }
+
+  async validateMountReplacement(sessionId: string, mountId: string, path: string): Promise<PresentationMountReplacementValidation> {
+    return this.callWorkspace(sessionId, 'validateMountReplacement', [mountId, path])
+  }
+
+  async removeMountReferences(sessionId: string, mountId: string): Promise<PresentationMountUsage> {
+    return this.callWorkspace(sessionId, 'removeMountReferences', [mountId], true)
+  }
+
+  refreshSources(sessionId: string): void {
+    const surface = this.container.get(this.normalizeSessionId(sessionId))
+    if (surface && !surface.view.webContents.isDestroyed()) surface.view.webContents.send('office-files:changed', surface.sessionId)
+  }
+
   /** Keep dedicated PPT renderers aligned with the main App theme, locale, and zoom. */
   applySettings(settings: GuiSettings): void {
     const zoomLevel = clampZoomLevel(settings.zoomLevel)
@@ -280,6 +298,17 @@ export class EmbeddedPowerPointManager {
       throw new Error(typeof response.error === 'string' ? response.error : 'PowerPoint renderer request failed')
     }
     return response.value
+  }
+
+  private async callWorkspace<T>(sessionId: string, method: 'mountUsage' | 'validateMountReplacement' | 'removeMountReferences', args: string[], flush = false): Promise<T> {
+    if (typeof args[0] !== 'string' || !args[0].trim()) throw new Error('A mount is required')
+    const id = this.normalizeSessionId(sessionId)
+    await this.ensureSession(id)
+    const surface = this.container.get(id)!
+    const serialized = args.map((value) => JSON.stringify(value)).join(', ')
+    return surface.ready.then(() => surface.view.webContents.executeJavaScript(
+      `(async () => { const workspace = window.__bridgicPowerPoint; if (!workspace || workspace.sessionId !== ${JSON.stringify(id)} || typeof workspace.${method} !== 'function') throw new Error('PowerPoint workspace unavailable'); const value = await workspace.${method}(${serialized}); ${flush ? 'await workspace.flush?.();' : ''} return value; })()`,
+    )) as Promise<T>
   }
 
   private infoFor(surface: EmbeddedPowerPointSurface): EmbeddedPowerPointSessionInfo {

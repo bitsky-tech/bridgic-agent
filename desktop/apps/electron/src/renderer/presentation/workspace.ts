@@ -1,6 +1,7 @@
 import type { PresentationProject } from '@/atoms/presentation'
 import type { OfficeFileSource } from '../../shared/office-files'
 import { migratePresentationProject } from './project'
+import { isDurablePresentationSource } from './sourceReference'
 
 export interface PresentationProjectMetadata {
   revision: number
@@ -9,7 +10,7 @@ export interface PresentationProjectMetadata {
   sourceProtected?: boolean
 }
 
-export interface PresentationCheckpoint {
+export interface PresentationWorkspace {
   schemaVersion: 1
   activeProjectId: string
   projects: PresentationProject[]
@@ -20,17 +21,24 @@ export function initialPresentationProjectMetadata(): PresentationProjectMetadat
   return { revision: 1 }
 }
 
-export function migratePresentationCheckpoint(value: unknown): PresentationCheckpoint {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The PowerPoint recovery checkpoint is invalid')
+export function migratePresentationWorkspace(value: unknown): PresentationWorkspace {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The PowerPoint workspace is invalid')
   const raw = value as Record<string, unknown>
+  if (raw.schemaVersion !== undefined && raw.schemaVersion !== 1) {
+    throw new Error(`Unsupported PowerPoint workspace schema version: ${String(raw.schemaVersion)}`)
+  }
   const legacyDocuments = Array.isArray(raw.documents) ? raw.documents : null
   const rawProjects = Array.isArray(raw.projects) ? raw.projects : legacyDocuments
   let rawActiveProjectId: string | null = null
   if (typeof raw.activeProjectId === 'string') rawActiveProjectId = raw.activeProjectId
   else if (typeof raw.activeDocumentId === 'string') rawActiveProjectId = raw.activeDocumentId
-  if (!rawProjects || rawActiveProjectId === null) throw new Error('The PowerPoint recovery checkpoint is invalid')
+  if (!rawProjects || rawActiveProjectId === null) throw new Error('The PowerPoint workspace is invalid')
 
   const projects = rawProjects.map((project) => migratePresentationProject(project))
+  if (projects.some((project) => project.assets.some((asset) => !isDurablePresentationSource(asset.source)
+    || (asset.imageEffects?.backgroundRemoval && !isDurablePresentationSource(asset.imageEffects.backgroundRemoval.layerSource))))) {
+    throw new Error('The PowerPoint workspace contains an embedded or unresolved asset source')
+  }
   const projectMetadata: Record<string, PresentationProjectMetadata> = {}
   const suppliedMetadata = raw.projectMetadata && typeof raw.projectMetadata === 'object' && !Array.isArray(raw.projectMetadata)
     ? raw.projectMetadata as Record<string, unknown>
@@ -67,7 +75,7 @@ export function validatePresentationInventory(activeProjectId: string, projects:
   if (projectIds.size !== projects.length
     || (projects.length > 0 && !projectIds.has(activeProjectId))
     || (projects.length === 0 && activeProjectId !== '')) {
-    throw new Error('The PowerPoint recovery checkpoint has an invalid project inventory')
+    throw new Error('The PowerPoint workspace has an invalid project inventory')
   }
 }
 
@@ -82,12 +90,12 @@ function finiteOptionalRevision(value: unknown): number | undefined {
 function officeFileSource(value: unknown): OfficeFileSource | undefined {
   if (value === undefined || value === null) return undefined
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('The PowerPoint recovery checkpoint has invalid source metadata')
+    throw new Error('The PowerPoint workspace has invalid source metadata')
   }
   const source = value as Record<string, unknown>
   if (typeof source.path !== 'string' || !source.path
     || (source.mtimeMs !== null && (typeof source.mtimeMs !== 'number' || !Number.isFinite(source.mtimeMs) || source.mtimeMs < 0))) {
-    throw new Error('The PowerPoint recovery checkpoint has invalid source metadata')
+    throw new Error('The PowerPoint workspace has invalid source metadata')
   }
   return { path: source.path, mtimeMs: source.mtimeMs as number | null }
 }

@@ -8,7 +8,7 @@ export interface PresentationHistoryEntry {
   estimatedBytes: number
 }
 
-/** Estimate retained JS heap without serializing large embedded data URLs. */
+/** Estimate the retained JS heap of one structured project snapshot. */
 export function estimatePresentationProjectBytes(project: PresentationProject): number {
   const seen = new Set<object>()
   let bytes = 0
@@ -19,8 +19,7 @@ export function estimatePresentationProjectBytes(project: PresentationProject): 
       return
     }
     if (typeof value === 'string') {
-      // UTF-16 is deliberately conservative; data URLs are ASCII but can still be
-      // promoted internally, and the budget should remain safe across runtimes.
+      // UTF-16 is deliberately conservative across renderer runtimes.
       bytes += value.length * 2
       return
     }
@@ -46,15 +45,7 @@ export function estimatePresentationProjectBytes(project: PresentationProject): 
 }
 
 function cloneProject(project: PresentationProject): PresentationProject {
-  // Keep immutable payload strings shared across history snapshots.
-  const payloads = project.assets.map((asset) => asset.source.dataUrl)
-  const payloadFreeProject: PresentationProject = {
-    ...project,
-    assets: project.assets.map((asset) => ({ ...asset, source: { ...asset.source, dataUrl: '' } })),
-  }
-  const cloned = structuredClone(payloadFreeProject)
-  cloned.assets.forEach((asset, index) => { asset.source.dataUrl = payloads[index] ?? '' })
-  return cloned
+  return structuredClone(project)
 }
 
 export function createPresentationHistoryEntry(project: PresentationProject, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry | null {

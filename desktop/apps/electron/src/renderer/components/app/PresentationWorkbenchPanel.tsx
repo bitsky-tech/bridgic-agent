@@ -20,6 +20,7 @@ import type {
   Canvas as FabricCanvas,
   FabricImage,
   FabricObject,
+  Gradient as FabricGradient,
   Group as FabricGroup,
   Point as FabricPoint,
   TextStyle,
@@ -78,7 +79,6 @@ import { rlog } from '@/lib/logger'
 import { presentationThemeTextColors, resizePresentationProject } from '@/lib/presentationDesign'
 import {
   clearPresentationHyperlinksToPages,
-  createPresentationAsset,
   detachPresentationCommentsFromElements,
   duplicatePresentationSlide,
   mergePresentationAssets,
@@ -159,6 +159,9 @@ import {
   getPresentationShapeDefinition,
   getPresentationShapeSize,
   isPresentationLineShape,
+  presentationColorWithOpacity,
+  presentationCustomShapePathData,
+  presentationLinearGradientCoordinates,
 } from '@/lib/presentationShapes'
 import {
   PresentationInsertDialogs,
@@ -1248,9 +1251,9 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
   const shadow = element.shadow
     ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 })
     : undefined
-  const frameShape = (shape: FabricObject) => {
+  const frameShape = (shape: FabricObject | FabricObject[]) => {
     const frame = new fabric.Rect({ left: 0, top: 0, width: element.width, height: element.height, originX: 'center', originY: 'center', fill: 'transparent', strokeWidth: 0 })
-    return new fabric.Group([frame, shape], {
+    return new fabric.Group([frame, ...(Array.isArray(shape) ? shape : [shape])], {
       left: element.x, top: element.y, width: element.width, height: element.height,
       originX: 'left', originY: 'top', angle: element.rotation,
       flipX: element.flipHorizontal, flipY: element.flipVertical,
@@ -1260,9 +1263,48 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
       layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
     })
   }
+  const linearGradient = element.gradientFill?.type === 'linear'
+    ? presentationLinearGradientCoordinates(element.gradientFill.angle)
+    : null
+  let shapeFill: string | FabricGradient<'linear'> | FabricGradient<'radial'> = presentationColorWithOpacity(element.fill, element.fillOpacity)
+  if (element.gradientFill?.type === 'linear' && linearGradient) {
+    shapeFill = new fabric.Gradient<'linear'>({
+      type: 'linear', gradientUnits: 'percentage', coords: linearGradient,
+      colorStops: element.gradientFill.stops.map(stop => ({ ...stop, opacity: stop.opacity * (element.fillOpacity ?? 1) })),
+    })
+  } else if (element.gradientFill?.type === 'radial') {
+    shapeFill = new fabric.Gradient<'radial'>({
+      type: 'radial', gradientUnits: 'percentage',
+      coords: { x1: 0.5, y1: 0.5, r1: 0, x2: 0.5, y2: 0.5, r2: 0.71 },
+      colorStops: element.gradientFill.stops.map(stop => ({ ...stop, opacity: stop.opacity * (element.fillOpacity ?? 1) })),
+    })
+  }
+  const shapeStroke = presentationColorWithOpacity(element.borderColor, element.borderOpacity)
   const shapeStyle = { left: 0, top: 0, originX: 'center', originY: 'center',
-    fill: element.fill, stroke: element.borderColor, strokeWidth: element.borderWidth,
+    fill: shapeFill, stroke: shapeStroke, strokeWidth: element.borderWidth,
   } as const
+  if (element.customGeometry) {
+    return frameShape(element.customGeometry.paths.map((customPath) => {
+      const path = new fabric.Path(presentationCustomShapePathData(customPath), {
+        originX: 'center',
+        originY: 'center',
+        fill: customPath.fill === 'none' ? 'transparent' : shapeFill,
+        fillRule: 'evenodd',
+        stroke: customPath.stroke ? shapeStroke : 'transparent',
+        strokeWidth: element.borderWidth,
+        strokeLineCap: 'round',
+        strokeLineJoin: 'round',
+        strokeUniform: true,
+      })
+      path.set({
+        left: (path.pathOffset.x - customPath.width / 2) * element.width / customPath.width,
+        top: (path.pathOffset.y - customPath.height / 2) * element.height / customPath.height,
+        scaleX: element.width / customPath.width,
+        scaleY: element.height / customPath.height,
+      })
+      return path
+    }))
+  }
   if (element.type === 'ellipse') {
     return frameShape(new fabric.Ellipse({ ...shapeStyle, rx: element.width / 2, ry: element.height / 2 }))
   }
@@ -1275,9 +1317,9 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
   const path = new fabric.Path(getPresentationShapePath(element), {
     originX: 'center',
     originY: 'center',
-    fill: strokeOnly ? 'transparent' : element.fill,
+    fill: strokeOnly ? 'transparent' : shapeFill,
     fillRule: 'evenodd',
-    stroke: element.borderColor,
+    stroke: shapeStroke,
     strokeWidth: strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth,
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
@@ -1665,6 +1707,8 @@ export async function createPresentationFabricObject(
           scaleX: element.width / cropWidth,
           scaleY: element.height / cropHeight,
         })
+      } else if (element.fit === 'stretch') {
+        image.set({ left: 0, top: 0, scaleX: element.width / naturalWidth, scaleY: element.height / naturalHeight })
       } else if (element.fit === 'cover') {
         const scale = Math.max(element.width / naturalWidth, element.height / naturalHeight)
         const cropWidth = element.width / scale
@@ -1937,7 +1981,14 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
             }
             if (isPresentationShapeElement(element) && element.fill !== 'transparent') {
               const accent = colors[index % colors.length] ?? element.fill
-              return { ...element, fill: accent, borderColor: accent }
+              return {
+                ...element,
+                fill: accent,
+                fillOpacity: undefined,
+                gradientFill: undefined,
+                borderColor: accent,
+                borderOpacity: undefined,
+              }
             }
             return element
           }),
@@ -2532,7 +2583,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
     currentSlide.elements.forEach((element, index) => {
       const source = isPresentationImageElement(element) || isPresentationMediaElement(element)
-        ? presentationElementSource(documentRef.current, element)
+        ? presentationElementSource(documentRef.current, element, presentationSnapshot.sources)
         : undefined
       void createPresentationFabricObject(
         fabric,
@@ -2590,7 +2641,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       for (const frameId of revealFrameIds) window.cancelAnimationFrame(frameId)
       if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
-  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.id, documentRevision, document.theme, pageSize])
+  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.id, documentRevision, document.theme, pageSize, presentationSnapshot.sources])
 
   const undo = useCallback(() => {
     const previous = presentationStore.undo()
@@ -2727,6 +2778,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     setSaving(true)
     void presentationStore.save(document.id, saveAs).catch((error) => showToast(String(error))).finally(() => setSaving(false))
   }, [document.id, presentationStore, showToast])
+  const retryPresentationWorkspace = useCallback(() => {
+    void presentationStore.retryPersistence().catch((error) => showToast(error instanceof Error ? error.message : String(error)))
+  }, [presentationStore, showToast])
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
@@ -2746,6 +2800,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   }
 
   const closePresentationProject = (documentId: string) => {
+    if (presentationSnapshot.projects.length === 1) {
+      setExpanded(false)
+      if (onClose) onClose()
+      else setRightCollapsed(true)
+      return
+    }
     void presentationStore.closeProject(documentId).then((result) => {
       if (result.closeSurface) {
         setExpanded(false)
@@ -2989,13 +3049,21 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         showToast(t('session.common.cancelled'))
         return
       }
-      const asset = createPresentationAsset(kind, source, element.sourceAssetId)
+      const mountedAsset = await presentationStore.mountFileSource(
+        kind,
+        source,
+        window.api?.shell?.getPathForFile?.(file) || undefined,
+        file.size,
+        file.lastModified,
+      )
+      const asset = { ...mountedAsset, id: element.sourceAssetId }
       if (!canAppendPresentationFileElement(documentRef.current, element, asset)) {
         showToast(t('session.presentation.insertDialog.totalFileSizeTooLarge'))
         return
       }
       appendElement(element, asset)
-    } catch {
+    } catch (error) {
+      rlog.warn('[presentation] file insertion failed', { kind, error })
       showToast(t('session.presentation.insertDialog.fileReadError'))
     }
   }
@@ -3495,7 +3563,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       </OfficeAppHeader>
 
       <OfficeDocumentTabs
-        actions={<OfficeSaveActions dirty={isPresentationProjectDirty(documentMetadata)} error={presentationSnapshot.exportError} disabled={saving} onSave={savePresentation} />}
+        actions={presentationSnapshot.persistenceError ? undefined : <OfficeSaveActions dirty={presentationSnapshot.saveStatus === 'saving'} error={presentationSnapshot.exportError} disabled={saving} onSave={savePresentation} />}
         activeId={presentationSnapshot.activeProjectId}
         icon={<span className="shrink-0 text-[#D97706]"><PresentationMark /></span>}
         label={t('session.presentation.documentTabs')}
@@ -3518,6 +3586,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
       />
 
+      {presentationSnapshot.persistenceError ? (
+        <div className="flex items-center justify-between gap-3 border-b border-status-error/30 bg-status-error/10 px-3 py-2 text-xs text-status-error" role="alert">
+          <span title={presentationSnapshot.persistenceError}>{t('office.checkpointFailed')}</span>
+          <button className="shrink-0 rounded px-2 py-1 hover:bg-status-error/10" onClick={retryPresentationWorkspace} type="button">{t('office.retry')}</button>
+        </div>
+      ) : null}
       {documentMetadata.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
       <PresentationRibbon
         activeTab={ribbonTab}
@@ -3607,7 +3681,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                       aria-label={t('session.presentation.slideAria', { index: index + 1, name: slide.name })}
                     >
                       <span className={cn('w-4 shrink-0 pt-0.5 text-right text-2xs text-text-tertiary', slide.id === currentSlide?.id && 'font-semibold text-brand-purple')}>{index + 1}</span>
-                      <PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={slide} slideNumber={index + 1} theme={document.theme} width={previewWidth} selected={slide.id === currentSlide?.id} />
+                      <PresentationSlidePreview assets={document.assets} sources={presentationSnapshot.sources} pageSize={pageSize} slide={slide} slideNumber={index + 1} theme={document.theme} width={previewWidth} selected={slide.id === currentSlide?.id} />
                     </button>
                   ))}
                 </div>
@@ -3683,6 +3757,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                   <div className="absolute inset-0 z-20">
                     <PresentationAnimationPlayer
                       assets={document.assets}
+                      sources={presentationSnapshot.sources}
                       className="size-full"
                       elementIds={animationPreviewRun.elementIds}
                       onComplete={() => setAnimationPreviewRun((run) => run?.runKey === animationPreviewRun.runKey ? null : run)}
@@ -3699,9 +3774,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                   <div className="absolute inset-0 z-20">
                     <PresentationTransitionPlayer
                       previous={transitionPreviewPreviousSlide
-                        ? <PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />
+                        ? <PresentationSlidePreview assets={document.assets} sources={presentationSnapshot.sources} pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />
                         : <span className="block size-full bg-black" />}
-                      current={<PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />}
+                      current={<PresentationSlidePreview assets={document.assets} sources={presentationSnapshot.sources} pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />}
                       transition={transitionPreviewRun.transition}
                       runKey={transitionPreviewRun.runKey}
                       onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
@@ -3826,6 +3901,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       {slideshowOpen && slideshowSlide ? (
         <SlideshowOverlay
           assets={document.assets}
+          sources={presentationSnapshot.sources}
           key={slideshowSlide.id}
           current={slideshowTargetIndex + 1}
           pageSize={pageSize}
@@ -3934,7 +4010,7 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
   )
 }
 
-function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, theme, total, transitionRun }: {
+function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, sources, theme, total, transitionRun }: {
   assets: readonly PresentationAsset[]
   current: number
   onActivateHyperlink: (hyperlink: PresentationHyperlink, completedTargetIds: ReadonlySet<string>) => void
@@ -3944,6 +4020,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
   onTransitionComplete: () => void
   pageSize: PresentationPageSize
   slide: PresentationSlide
+  sources: Readonly<Record<string, string>>
   theme: PresentationMaster
   total: number
   transitionRun: SlideshowTransitionView | null
@@ -4047,6 +4124,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
         previous={(
           <PresentationSlidePreview
             assets={assets}
+            sources={sources}
             pageSize={pageSize}
             animationStates={getPresentationAnimationDisplayStates(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
             hiddenElementIds={getPresentationAnimationHiddenElementIds(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
@@ -4060,7 +4138,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
             onActivateHyperlink={activateHyperlink}
           />
         )}
-        current={<PresentationSlidePreview assets={assets} pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} theme={theme} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
+        current={<PresentationSlidePreview assets={assets} sources={sources} pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} theme={theme} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
         transition={transitionRun.transition}
         runKey={transitionRun.runKey}
         direction={transitionRun.direction}
@@ -4073,6 +4151,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
     slideshowContent = (
       <PresentationAnimationPlayer
         assets={assets}
+        sources={sources}
         baseHiddenElementIds={hiddenElementIds}
         completedTargetIds={completedTargetIds}
         className="size-full"
@@ -4523,6 +4602,7 @@ function PresentationInspector({
                 >
                   <option value="contain">{t('session.presentation.insertDialog.contain')}</option>
                   <option value="cover">{t('session.presentation.insertDialog.cover')}</option>
+                  <option value="stretch">{t('session.presentation.insertDialog.stretch')}</option>
                 </select>
               </label>
               <label className="block text-2xs font-medium text-text-tertiary">

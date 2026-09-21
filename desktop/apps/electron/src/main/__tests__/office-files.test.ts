@@ -54,14 +54,12 @@ describe('Office source files and durable recovery', () => {
       expect(await readFile(path, 'utf8')).toBe('external')
     })
   }
-  it('restores independent Session drafts through a fresh store instance', async () => {
+  it('restores independent Excel Session drafts through a fresh store instance', async () => {
     const directory = await root()
     const first = createOfficeRecoveryStore(directory)
-    await Promise.all([first.write('excel', 'session-a', '{"draft":1}'), first.write('excel', 'session-b', '{"draft":2}'), first.write('presentation', 'session-a', '{"draft":3}')])
+    await Promise.all([first.write('excel', 'session-a', '{"draft":1}'), first.write('excel', 'session-b', '{"draft":2}')])
     const next = createOfficeRecoveryStore(directory)
     expect(await next.read('excel', 'session-a')).toBe('{"draft":1}')
     expect(await next.read('excel', 'session-b')).toBe('{"draft":2}')
-    expect(await next.read('presentation', 'session-a')).toBe('{"draft":3}')
-    expect(await next.read('word', 'session-a')).toBeNull()
   })
 })

@@ -26,8 +26,12 @@
       "itemCount": "{{n}} 项",
       "pathStale": "路径已失效",
       "pathWithStale": "{{path}}（路径已失效）",
+      "relink": "重新定位…",
       "remove": "移除",
-      "removeHint": "不会删除本地文件/文件夹"
+      "removeHint": "不会删除本地文件/文件夹",
+      "removeReferencedConfirm": "移除并清理幻灯片",
+      "removeReferencedMessage": "该文件被 {{projectCount}} 个演示文稿中的 {{assetCount}} 个素材引用，并用于 {{elementCount}} 个幻灯片元素。继续后，这些素材和元素也会被删除。",
+      "removeReferencedTitle": "该文件正在被演示文稿使用"
     },
     "search": {
       "capped": "共 {{total}} 个匹配，已显示前 {{shown}} 个",
@@ -46,7 +50,11 @@
     },
     "toast": {
       "copyFailed": "复制失败",
-      "pathCopied": "已复制路径"
+      "pathCopied": "已复制路径",
+      "relinkFailed": "无法重新定位文件，请重试。",
+      "relinkRejected": "所选文件与「{{name}}」不匹配，请选择原文件。",
+      "removeCleanupFailed": "挂载已移除，但部分离线 PowerPoint 引用未能清理。",
+      "removeFailed": "无法移除挂载，PowerPoint 内容未发生变化。"
     },
     "tree": {
       "denied": "无访问权限 · 需在系统设置中授权",
@@ -1669,6 +1677,7 @@
   },
   "office": {
     "changedDuringClose": "关闭期间产生了新修改，文档已保留，请再次保存或关闭。",
+    "checkpointFailed": "无法保存草稿修改。",
     "createFailed": "文档创建失败，请重试。",
     "creating": "正在新建…",
     "importedCopyNotice": "此文件的部分格式可能无法完整保留，导入的原始文件已保留。",
@@ -2448,6 +2457,7 @@
         "columns": "列数",
         "contain": "完整显示",
         "cover": "填满区域",
+        "stretch": "拉伸填充",
         "defaultSeries": "系列 1",
         "editData": "编辑数据",
         "fileReadError": "无法读取所选文件，或不支持该文件格式。",

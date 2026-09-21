@@ -316,7 +316,7 @@ function dissolveOrder(elementId: string): number[] {
 
 function animationColorElement(animation: NormalizedPresentationAnimation, element: PresentationElement): PresentationElement {
   if (animation.effect === 'fillColor' && isPresentationShapeElement(element)) {
-    return { ...element, fill: animation.color }
+    return { ...element, fill: animation.color, fillOpacity: undefined, gradientFill: undefined }
   }
   if (animation.effect === 'textColor' && isPresentationTextElement(element)) {
     return patchPresentationText(element, { color: animation.color })

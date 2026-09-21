@@ -26,8 +26,12 @@
       "itemCount": "{{n}} items",
       "pathStale": "Path is no longer available",
       "pathWithStale": "{{path}} (path is no longer available)",
+      "relink": "Relocate…",
       "remove": "Remove",
-      "removeHint": "This does not delete the local file or folder"
+      "removeHint": "This does not delete the local file or folder",
+      "removeReferencedConfirm": "Remove and clean up slides",
+      "removeReferencedMessage": "This file is referenced by {{assetCount}} assets in {{projectCount}} presentations and used by {{elementCount}} slide elements. Continuing also removes those assets and elements.",
+      "removeReferencedTitle": "This file is used by a presentation"
     },
     "search": {
       "capped": "{{shown}} of {{total}} matches shown",
@@ -46,7 +50,11 @@
     },
     "toast": {
       "copyFailed": "Copy failed",
-      "pathCopied": "Path copied"
+      "pathCopied": "Path copied",
+      "relinkFailed": "Could not relocate the file. Try again.",
+      "relinkRejected": "The selected file does not match {{name}}. Choose the original file.",
+      "removeCleanupFailed": "The mount was removed, but some offline PowerPoint references could not be cleaned up.",
+      "removeFailed": "Could not remove the mount. No PowerPoint edits were changed."
     },
     "tree": {
       "denied": "Access denied · allow it in System Settings",
@@ -1669,6 +1677,7 @@
   },
   "office": {
     "changedDuringClose": "New edits were made while closing. Your documents remain open.",
+    "checkpointFailed": "Draft changes could not be saved.",
     "createFailed": "The document could not be created. Please retry.",
     "creating": "Creating…",
     "importedCopyNotice": "Some imported formatting may not be preserved. The original imported file has been retained.",
@@ -2448,6 +2457,7 @@
         "columns": "Columns",
         "contain": "Fit",
         "cover": "Fill",
+        "stretch": "Stretch",
         "defaultSeries": "Series 1",
         "editData": "Edit data",
         "fileReadError": "The selected file could not be read or its format is not supported.",

@@ -26,11 +26,12 @@ a replacement blank tab or leave an empty native window behind.
 | Actually close the app window, quit, or install an update | Release all editor targets without an Office unsaved-changes confirmation or unload veto. Any best-effort recovery checkpoint must be bounded and must not cancel exit on failure. |
 | Close the window with hide-to-tray enabled | Follow the existing application hide behavior; this is not an editor shutdown. |
 
-Closing is not an implicit source-file save. Do not add a modal dirty-close
-confirmation. Automatic source writes and workspace recovery have different
-guarantees; declare them explicitly below. Native input commits or an existing
-source-save contract can fail before a panel close is accepted. Report such
-failures through the editor's error UI, without introducing an app-quit veto.
+Closing is not an implicit source-file save. Use the editor-specific close policy
+declared below; do not introduce a generic Office confirmation shared by editors
+with different persistence guarantees. Automatic source writes and workspace
+recovery have different guarantees. Native input commits or an existing source-save
+contract can fail before a panel close is accepted. Report such failures through
+the editor's error UI, without introducing an app-quit veto.
 
 The final-tab decision belongs **inside the serialized document operation**,
 after reconciling pending native input. Two quick closes must not both use an old
@@ -156,12 +157,12 @@ Declare recovery and source-save guarantees for every new editor. Current adapte
 | --- | --- | --- |
 | Word | Durable IndexedDB workspace recovery with localStorage fallback; does not overwrite imported DOCX | Bounded best-effort recovery checkpoint before panel/app closure; failure does not veto exit. |
 | Excel | Main-process Session recovery survives renderer reload, not app restart or Session release; source save is explicit | No dirty-close prompt; closing releases that recovery state. Source save retains conflict/fidelity checks. |
-| PowerPoint | Source checkpoints for an explicitly bound PPTX; no durable recovery for unbound tabs | Panel close waits for queued source writes and stays open on save failure. App quit has no PowerPoint-wide save acknowledgement or veto. |
+| PowerPoint | Durable renderer IndexedDB recovery for one structured `PresentationWorkspace`; imported PPTX parts use hidden internal asset references, while newly inserted external files use Session mounts until an explicit export snapshots them | Dirty project closure asks to save, discard or cancel. Session closure drains the workspace write and any requested PPTX export. |
 
 These are storage policies, not different tab designs. In particular, a shared
 close handshake does not promise that every editor saves every change on quit.
-Preserve the existing PowerPoint source contract; document and test any deliberate
-future change to it separately.
+Keep each editor's declared persistence boundary documented and covered by restore,
+write-failure and close tests.
 
 ## Adding another editor
 

@@ -81,4 +81,5 @@ export function registerPowerPointHandlers(
     },
     { transformLogArgs: redactLocalPathLogArgs },
   )
+
 }

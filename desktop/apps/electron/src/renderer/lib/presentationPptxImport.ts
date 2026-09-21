@@ -13,6 +13,10 @@ import {
   type PresentationElement,
   type PresentationPageSize,
   type PresentationImageElement,
+  type PresentationImageEffects,
+  type PresentationCustomShapeGeometry,
+  type PresentationCustomShapeCommand,
+  type PresentationShapeGradientFill,
   type PresentationShapeElement,
   type PresentationShapeType,
   type PresentationSlide,
@@ -33,6 +37,7 @@ import {
   normalizePresentationProject,
   presentationAssetsForPages,
 } from '@/presentation/project'
+import { embeddedPresentationSource, presentationDerivedSource, presentationPptxSource } from '@/presentation/sourceReference'
 import { validatePresentationProject } from '@/presentation/model/reducer'
 import {
   presentationCharacterSpacingFromPoints,
@@ -696,6 +701,73 @@ function customPathData(path: Element): string {
   return commands.join(' ')
 }
 
+function customShapeGeometryFrom(root: Element): PresentationCustomShapeGeometry | undefined {
+  const pathList = firstByLocalName(root, 'pathLst')
+  if (!pathList) return undefined
+  const paths = directChildrenByLocalName(pathList, 'path').flatMap((path) => {
+    const commands: PresentationCustomShapeCommand[] = []
+    for (const node of Array.from(path.childNodes)) {
+      if (node.nodeType !== 1) continue
+      const command = node as Element
+      const points = elementsByLocalName(command, 'pt').map(point => ({
+        x: numberAttribute(point, 'x'),
+        y: numberAttribute(point, 'y'),
+      }))
+      if (command.localName === 'moveTo' && points[0]) commands.push({ type: 'moveTo', ...points[0] })
+      else if (command.localName === 'lnTo' && points[0]) commands.push({ type: 'lineTo', ...points[0] })
+      else if (command.localName === 'cubicBezTo' && points.length >= 3) commands.push({
+        type: 'cubicBezierTo',
+        x1: points[0]!.x,
+        y1: points[0]!.y,
+        x2: points[1]!.x,
+        y2: points[1]!.y,
+        x: points[2]!.x,
+        y: points[2]!.y,
+      })
+      else if (command.localName === 'quadBezTo' && points.length >= 2) commands.push({
+        type: 'quadraticBezierTo',
+        x1: points[0]!.x,
+        y1: points[0]!.y,
+        x: points[1]!.x,
+        y: points[1]!.y,
+      })
+      else if (command.localName === 'arcTo') commands.push({
+        type: 'arcTo',
+        widthRadius: Math.max(0, numberAttribute(command, 'wR')),
+        heightRadius: Math.max(0, numberAttribute(command, 'hR')),
+        startAngle: numberAttribute(command, 'stAng') / 60_000,
+        sweepAngle: numberAttribute(command, 'swAng') / 60_000,
+      })
+      else if (command.localName === 'close') commands.push({ type: 'close' })
+    }
+    if (commands.length === 0) return []
+    return [{
+      width: Math.max(1, numberAttribute(path, 'w', 100)),
+      height: Math.max(1, numberAttribute(path, 'h', 100)),
+      fill: path.getAttribute('fill') === 'none' ? 'none' as const : 'normal' as const,
+      stroke: path.getAttribute('stroke') !== '0',
+      commands,
+    }]
+  })
+  return paths.length > 0 ? { paths } : undefined
+}
+
+function shapeGradientFillFrom(gradient: Element, themeColors: ReadonlyMap<string, string>): PresentationShapeGradientFill | undefined {
+  const stops = elementsByLocalName(gradient, 'gs').map((stop, index) => {
+    const imported = importedColorFrom(stop, index === 0 ? '#000000' : '#FFFFFF', themeColors)
+    return {
+      offset: Math.max(0, Math.min(1, numberAttribute(stop, 'pos') / 100_000)),
+      color: imported.color,
+      opacity: imported.opacity,
+    }
+  })
+  if (stops.length === 0) return undefined
+  const linear = firstByLocalName(gradient, 'lin')
+  return linear
+    ? { type: 'linear', angle: numberAttribute(linear, 'ang') / 60_000, stops }
+    : { type: 'radial', stops }
+}
+
 function svgGradientFrom(gradient: Element, themeColors: ReadonlyMap<string, string>): { defs: string; paint: string } {
   const stops = elementsByLocalName(gradient, 'gs').map((stop, index) => {
     const imported = importedColorFrom(stop, index === 0 ? '#000000' : '#FFFFFF', themeColors)
@@ -829,7 +901,11 @@ function visualShapeFrom(
     }
     connectorPath += arrow('headEnd', false) + arrow('tailEnd', true)
   }
-  if ((directChildrenByLocalName(shapeProperties, 'custGeom').length > 0 && !connectorPath) || directChildrenByLocalName(shapeProperties, 'gradFill').length > 0) {
+  const customGeometryNode = directChildrenByLocalName(shapeProperties, 'custGeom')[0]
+  const customGeometry = customGeometryNode && !connectorPath ? customShapeGeometryFrom(customGeometryNode) : undefined
+  const gradientNode = directChildrenByLocalName(shapeProperties, 'gradFill')[0]
+  const gradientFill = gradientNode ? shapeGradientFillFrom(gradientNode, themeColors) : undefined
+  if ((customGeometryNode && !connectorPath && !customGeometry) || (gradientNode && !gradientFill)) {
     return svgShapeFrom(shape, geometry, themeColors, registerImageAsset)
   }
   const style = directChildrenByLocalName(shape, 'style')[0] ?? firstByLocalName(shape, 'style')
@@ -837,22 +913,40 @@ function visualShapeFrom(
   const solidFill = directChildrenByLocalName(shapeProperties, 'solidFill')[0]
     ?? (style ? firstByLocalName(style, 'fillRef') : null)
   const importedFill = importedColorFrom(solidFill, 'transparent', themeColors)
-  const fill = noFill || importedFill.opacity === 0 ? 'transparent' : importedFill.color
+  const fill = noFill || (!gradientFill && importedFill.opacity === 0)
+    ? 'transparent'
+    : gradientFill?.stops[0]?.color ?? importedFill.color
   const stroke = shapeStrokeFrom(shape, shapeProperties, themeColors)
-  if (fill !== 'transparent' && stroke.width > 0 && stroke.opacity !== importedFill.opacity) return svgShapeFrom(shape, geometry, themeColors, registerImageAsset)
   const borderColor = stroke.color
   const borderWidth = stroke.width
-  const opacity = fill === 'transparent' ? stroke.opacity : importedFill.opacity
-  if (fill === 'transparent' && borderColor === 'transparent') return null
+  const hasFill = fill !== 'transparent' && (customGeometry?.paths.some(path => path.fill !== 'none') ?? true)
+  const hasBorder = borderColor !== 'transparent' && borderWidth > 0 && (customGeometry?.paths.some(path => path.stroke) ?? true)
+  if (!hasFill && !hasBorder) return null
+  let opacity: number | undefined
+  let fillOpacity: number | undefined
+  let borderOpacity: number | undefined
+  if (!gradientFill) {
+    if (hasFill && hasBorder && Math.abs(importedFill.opacity - stroke.opacity) < 0.00001) opacity = importedFill.opacity
+    else if (hasFill && !hasBorder) opacity = importedFill.opacity
+    else if (!hasFill && hasBorder) opacity = stroke.opacity
+    else {
+      if (hasFill) fillOpacity = importedFill.opacity
+      if (hasBorder) borderOpacity = stroke.opacity
+    }
+  } else if (hasBorder) borderOpacity = stroke.opacity
   return {
     id: createPresentationId('shape'),
     type,
     ...geometry,
+    ...(customGeometry ? { customGeometry } : {}),
     ...(connectorPath ? { connectorPath } : {}),
     fill,
+    ...(gradientFill ? { gradientFill } : {}),
+    ...(fillOpacity !== undefined && fillOpacity < 1 ? { fillOpacity } : {}),
     borderColor,
     borderWidth,
-    ...(opacity < 1 ? { opacity } : {}),
+    ...(borderOpacity !== undefined && borderOpacity < 1 ? { borderOpacity } : {}),
+    ...(opacity !== undefined && opacity < 1 ? { opacity } : {}),
     shadow: Boolean(firstByLocalName(shapeProperties, 'outerShdw')),
   }
 }
@@ -947,7 +1041,7 @@ function mimeTypeForPath(path: string): string {
   return 'image/png'
 }
 
-async function importSlide(archive: JSZip, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>, registerImageAsset: (source: PresentationFileSource) => PresentationAsset): Promise<PresentationSlide> {
+async function importSlide(archive: JSZip, projectId: string, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>, registerImageAsset: (source: PresentationFileSource, effects?: PresentationImageEffects) => PresentationAsset): Promise<PresentationSlide> {
   const slideFile = archive.file(slidePath)
   if (!slideFile) throw new Error(`Missing ${slidePath}`)
   const document = parseXml(await slideFile.async('text'))
@@ -1017,6 +1111,7 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
         dataUrl: bytesToDataUrl(bytes, mimeType),
         fileName: target.slice(target.lastIndexOf('/') + 1),
         mimeType,
+        source: presentationPptxSource(projectId, target),
       }))
       // Master/layout images are often reused by every slide. Share both the
       // in-flight decode and its source object, including across worker transfer.
@@ -1035,6 +1130,51 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     } : undefined
   }
 
+  const imageEffectsFromBlip = (blip: Element | null, relationshipMap: ReadonlyMap<string, string>): PresentationImageEffects | undefined => {
+    if (!blip) return undefined
+    const effects: PresentationImageEffects = {}
+    if (directChildrenByLocalName(blip, 'grayscl').length > 0) effects.grayscale = true
+    const biLevel = directChildrenByLocalName(blip, 'biLevel')[0]
+    if (biLevel) effects.biLevelThreshold = numberAttribute(biLevel, 'thresh') / 100_000
+    const change = directChildrenByLocalName(blip, 'clrChange')[0]
+    if (change) {
+      const from = firstByLocalName(change, 'clrFrom')
+      const to = firstByLocalName(change, 'clrTo')
+      effects.colorChange = {
+        from: colorFrom(from, '#FFFFFF', themeColors),
+        to: colorFrom(to, '#FFFFFF', themeColors),
+        opacity: opacityFrom(to ? firstByLocalName(to, 'srgbClr') ?? to : null),
+      }
+    }
+    const layer = firstByLocalName(blip, 'imgLayer')
+    const removal = layer ? firstByLocalName(layer, 'backgroundRemoval') : null
+    const layerId = layer?.getAttribute('r:embed')
+      ?? layer?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
+    const layerPath = layerId ? relationshipMap.get(layerId) : undefined
+    if (removal && layerPath && archive.file(layerPath)) {
+      const marks = (name: string) => elementsByLocalName(removal, name).map(mark => ({
+        x1: numberAttribute(mark, 'x1'), y1: numberAttribute(mark, 'y1'),
+        x2: numberAttribute(mark, 'x2'), y2: numberAttribute(mark, 'y2'),
+      }))
+      effects.backgroundRemoval = {
+        layerSource: presentationPptxSource(projectId, layerPath),
+        bounds: {
+          top: numberAttribute(removal, 't'), bottom: numberAttribute(removal, 'b'),
+          left: numberAttribute(removal, 'l'), right: numberAttribute(removal, 'r'),
+        },
+        foregroundMarks: marks('foregroundMark'),
+        backgroundMarks: marks('backgroundMark'),
+      }
+    }
+    return effects.colorChange || effects.backgroundRemoval || effects.grayscale || effects.biLevelThreshold !== undefined ? effects : undefined
+  }
+
+  const softEdgeRadiusFrom = (properties: Element | null): number | undefined => {
+    const softEdge = properties ? firstByLocalName(properties, 'softEdge') : null
+    const radius = numberAttribute(softEdge, 'rad') * pageSize.width / slideSizeEmu.width
+    return radius > 0 ? radius : undefined
+  }
+
   const importShape = async (
     shape: Element,
     coordinateTransform: CoordinateTransform,
@@ -1049,7 +1189,8 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const imageSource = await imageSourceFromBlip(blip, relationshipMap)
     const opacity = opacityFrom(blip)
     const crop = imageCropFrom(blipFill)
-    const imageAsset = imageSource ? registerImageAsset(imageSource) : null
+    const softEdgeRadius = softEdgeRadiusFrom(shapeProperties)
+    const imageAsset = imageSource ? registerImageAsset(imageSource, imageEffectsFromBlip(blip, relationshipMap)) : null
     const visual: PresentationShapeElement | PresentationImageElement | null = imageAsset ? {
       id: createPresentationId('image'),
       type: 'image',
@@ -1058,6 +1199,7 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       altText: firstByLocalName(shape, 'cNvPr')?.getAttribute('descr') ?? '',
       fit: 'cover',
       ...(crop ? { crop } : {}),
+      ...(softEdgeRadius ? { softEdgeRadius } : {}),
       ...(shapeTypeFrom(shape) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(shapeProperties && firstByLocalName(shapeProperties, 'outerShdw')),
@@ -1080,9 +1222,13 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
     const blip = firstByLocalName(picture, 'blip')
     const source = await imageSourceFromBlip(blip, relationshipMap)
     if (!source) return
-    const asset = registerImageAsset(source)
+    const asset = registerImageAsset(source, imageEffectsFromBlip(blip, relationshipMap))
     const geometry = shapeGeometry(picture, pageSize, slideSizeEmu, coordinateTransform)
     const crop = imageCropFrom(picture)
+    let fit: PresentationImageElement['fit'] = 'contain'
+    if (crop) fit = 'cover'
+    else if (firstByLocalName(picture, 'stretch')) fit = 'stretch'
+    const softEdgeRadius = softEdgeRadiusFrom(firstByLocalName(picture, 'spPr'))
     const opacity = opacityFrom(blip)
     const importedImage: PresentationImageElement = withGroup({
       id: createPresentationId('image'),
@@ -1090,9 +1236,10 @@ async function importSlide(archive: JSZip, slidePath: string, pageSize: Presenta
       sourceAssetId: asset.id,
       ...geometry,
       altText: firstByLocalName(picture, 'cNvPr')?.getAttribute('descr') ?? '',
-      fit: crop ? 'cover' : 'contain',
+      fit,
       ...(shapeTypeFrom(picture) === 'ellipse' ? { clipShape: 'ellipse' as const } : {}),
       ...(crop ? { crop } : {}),
+      ...(softEdgeRadius ? { softEdgeRadius } : {}),
       ...(opacity < 1 ? { opacity } : {}),
       shadow: Boolean(firstByLocalName(picture, 'outerShdw')),
     }, parentGroupId)
@@ -1386,10 +1533,32 @@ export async function importPresentationPptx(
   options: PresentationPptxImportOptions = {},
 ): Promise<PresentationProject> {
   const archive = await JSZip.loadAsync(bytes)
+  const projectId = createPresentationId('presentation')
   const stored = options.restoreEditorModel ? await readOfficeRoundTrip(archive, 'presentation') : null
   if (stored) {
     try {
       const restored = migratePresentationProject(stored, fileName.replace(/\.pptx$/i, ''))
+      const mediaByPayload = new Map<string, string>()
+      await Promise.all(Object.keys(archive.files).filter((path) => /^ppt\/media\/[^/]+$/i.test(path)).map(async (path) => {
+        const file = archive.file(path)
+        if (file) mediaByPayload.set(await file.async('base64'), path)
+      }))
+      const rebaseSource = (source: string) => {
+        const embedded = embeddedPresentationSource(source)
+        if (embedded && archive.file(embedded.partPath)) return presentationPptxSource(projectId, embedded.partPath)
+        const payload = /^data:[^;,]+;base64,([\s\S]*)$/i.exec(source)?.[1]?.replace(/\s/g, '')
+        const partPath = payload ? mediaByPayload.get(payload) : undefined
+        if (partPath) return presentationPptxSource(projectId, partPath)
+        return payload ? presentationDerivedSource(source) : source
+      }
+      const assets = restored.assets.map((asset) => {
+        const removal = asset.imageEffects?.backgroundRemoval
+        return {
+          ...asset,
+          source: rebaseSource(asset.source),
+          ...(removal ? { imageEffects: { ...asset.imageEffects, backgroundRemoval: { ...removal, layerSource: rebaseSource(removal.layerSource) } } } : {}),
+        }
+      })
       const requested = options.slideNumbers ? [...new Set(options.slideNumbers.filter((number) => Number.isInteger(number) && number >= 1 && number <= restored.slides.pages.length))] : null
       const pages = requested ? (requested.length ? requested : [1]).map((number) => restored.slides.pages[number - 1]!) : restored.slides.pages
       const retainedPageIds = new Set(pages.map((page) => page.id))
@@ -1398,9 +1567,9 @@ export async function importPresentationPptx(
       const selectedPageId = retainedPages.find((slide) => slide.id === restored.slides.selectedPageId)?.id ?? retainedPages[0]!.id
       return validatePresentationProject({
         ...restored,
-        id: createPresentationId('presentation'),
+        id: projectId,
         title: fileName.replace(/\.pptx$/i, '') || 'Imported presentation',
-        assets: requested ? presentationAssetsForPages(restored.assets, retainedPages) : restored.assets,
+        assets: requested ? presentationAssetsForPages(assets, retainedPages) : assets,
         slides: replacePresentationPages(restored.slides, retainedPages, selectedPageId),
       })
     } catch (error) {
@@ -1446,19 +1615,23 @@ export async function importPresentationPptx(
     ? selectedSlideNumbers.map(number => ({ path: slidePaths[number - 1]!, sourceIndex: number - 1 }))
     : slidePaths.map((path, sourceIndex) => ({ path, sourceIndex }))
   const imageSources = new Map<string, Promise<PresentationFileSource>>()
-  const imageAssets = new WeakMap<PresentationFileSource, PresentationAsset>()
+  const imageAssets = new Map<string, PresentationAsset>()
   const assets: PresentationAsset[] = []
-  const registerImageAsset = (source: PresentationFileSource) => {
-    const existing = imageAssets.get(source)
+  const registerImageAsset = (source: PresentationFileSource, effects?: PresentationImageEffects) => {
+    const key = `${source.source ?? source.dataUrl}\n${JSON.stringify(effects ?? null)}`
+    const existing = imageAssets.get(key)
     if (existing) return existing
-    const asset = createPresentationAsset('image', source)
-    imageAssets.set(source, asset)
+    const asset = {
+      ...createPresentationAsset('image', source.source ? source : { ...source, source: presentationDerivedSource(source.dataUrl) }),
+      ...(effects ? { imageEffects: effects } : {}),
+    }
+    imageAssets.set(key, asset)
     assets.push(asset)
     return asset
   }
   const slides: PresentationSlide[] = []
   for (const { path, sourceIndex } of selectedSlides) {
-    slides.push(await importSlide(archive, path, pageSize, slideSizeEmu, sourceIndex, imageSources, registerImageAsset))
+    slides.push(await importSlide(archive, projectId, path, pageSize, slideSizeEmu, sourceIndex, imageSources, registerImageAsset))
   }
   // PPTX writers often materialize a master color on every page. Promote the
   // most common effective background back into our global theme default.
@@ -1482,7 +1655,7 @@ export async function importPresentationPptx(
   return validatePresentationProject(normalizePresentationProject({
     schemaVersion: 1,
     version: 1,
-    id: createPresentationId('presentation'),
+    id: projectId,
     theme: {
       ...DEFAULT_PRESENTATION_MASTER,
       accentColors: accentColors.length > 0 ? accentColors : [...DEFAULT_PRESENTATION_MASTER.accentColors],
