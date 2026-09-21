@@ -6,7 +6,7 @@ import { writeOfficeRoundTrip } from './office/officeRoundTrip'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { correctPresentationTextXml } from '@/lib/presentationTextPptx'
 import { presentationElementSource } from '@/presentation/project'
-import { presentationTableCellAppearance, presentationTableGrid } from '@/lib/presentationTable'
+import { presentationTableCellAppearance, presentationTableCellSegments, presentationTableGrid } from '@/lib/presentationTable'
 import {
   getPresentationPageSize,
   presentationSlideBackground,
@@ -393,7 +393,7 @@ async function correctImageEffectsXml(archive: JSZip, xml: string, elements: rea
   return new XMLSerializer().serializeToString(document)
 }
 
-function correctTableHeaderXml(xml: string, elements: readonly PresentationElement[]): string {
+function correctTableXml(xml: string, elements: readonly PresentationElement[]): string {
   const tables = new Map(elements.filter(isPresentationTableElement).map(element => [element.id, element]))
   if (tables.size === 0) return xml
   const document = new DOMParser().parseFromString(xml, 'text/xml')
@@ -404,6 +404,77 @@ function correctTableHeaderXml(xml: string, elements: readonly PresentationEleme
     const properties = frame.getElementsByTagNameNS(drawingNs, 'tblPr')[0]
     // PptxGenJS writes cell formatting but omits the semantic first-row flag.
     if (element && properties) properties.setAttribute('firstRow', element.headerRow ? '1' : '0')
+    if (!element?.cellStyles?.some(row => row.some(cell => cell.textRuns?.length))) continue
+    const table = frame.getElementsByTagNameNS(drawingNs, 'tbl')[0]
+    if (!table) continue
+    const rows = Array.from(table.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === 'tr')
+    rows.forEach((row, rowIndex) => {
+      const cells = Array.from(row.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === 'tc')
+      cells.forEach((cell, columnIndex) => {
+        if (!element.cellStyles?.[rowIndex]?.[columnIndex]?.textRuns?.length) return
+        const body = cell.getElementsByTagNameNS(drawingNs, 'txBody')[0]
+        if (!body) return
+        for (const child of Array.from(body.childNodes)) if (child.nodeType === 1 && (child as Element).localName === 'p') body.removeChild(child)
+        const base = presentationTableCellAppearance(element, rowIndex, columnIndex)
+        const addParagraph = () => {
+          const paragraph = document.createElementNS(drawingNs, 'a:p')
+          const paragraphProperties = document.createElementNS(drawingNs, 'a:pPr')
+          let alignment = 'l'
+          if (base.align === 'center') alignment = 'ctr'
+          if (base.align === 'right') alignment = 'r'
+          paragraphProperties.setAttribute('algn', alignment)
+          paragraph.appendChild(paragraphProperties)
+          body.appendChild(paragraph)
+          return paragraph
+        }
+        let paragraph = addParagraph()
+        for (const segment of presentationTableCellSegments(element, rowIndex, columnIndex)) {
+          const pieces = segment.text.split('\n')
+          pieces.forEach((piece, index) => {
+            if (index > 0) paragraph = addParagraph()
+            if (!piece) return
+            const style = segment.style
+            const run = document.createElementNS(drawingNs, 'a:r')
+            const runProperties = document.createElementNS(drawingNs, 'a:rPr')
+            runProperties.setAttribute('lang', 'en-US')
+            runProperties.setAttribute('sz', String(Math.round(presentationFontSizeToPoints(style.fontSize ?? base.fontSize) * 100)))
+            runProperties.setAttribute('b', (style.fontWeight ?? (base.bold ? 700 : 400)) >= 600 ? '1' : '0')
+            runProperties.setAttribute('i', style.italic ? '1' : '0')
+            runProperties.setAttribute('u', style.underline ? 'sng' : 'none')
+            runProperties.setAttribute('strike', style.strikethrough ? 'sngStrike' : 'noStrike')
+            const fill = document.createElementNS(drawingNs, 'a:solidFill')
+            const color = document.createElementNS(drawingNs, 'a:srgbClr')
+            color.setAttribute('val', presentationColor(style.color ?? base.textColor, '20202B'))
+            if (style.opacity !== undefined && style.opacity < 1) {
+              const alpha = document.createElementNS(drawingNs, 'a:alpha')
+              alpha.setAttribute('val', String(Math.round(style.opacity * 100_000)))
+              color.appendChild(alpha)
+            }
+            fill.appendChild(color)
+            runProperties.appendChild(fill)
+            if (style.highlightColor) {
+              const highlight = document.createElementNS(drawingNs, 'a:highlight')
+              const highlightColor = document.createElementNS(drawingNs, 'a:srgbClr')
+              highlightColor.setAttribute('val', presentationColor(style.highlightColor, 'FFFF00'))
+              highlight.appendChild(highlightColor)
+              runProperties.appendChild(highlight)
+            }
+            const font = document.createElementNS(drawingNs, 'a:latin')
+            font.setAttribute('typeface', style.fontFamily ?? base.fontFamily)
+            runProperties.appendChild(font)
+            const eastAsianFont = document.createElementNS(drawingNs, 'a:ea')
+            eastAsianFont.setAttribute('typeface', style.fontFamily ?? base.fontFamily)
+            runProperties.appendChild(eastAsianFont)
+            run.appendChild(runProperties)
+            const text = document.createElementNS(drawingNs, 'a:t')
+            if (/^\s|\s$/u.test(piece)) text.setAttribute('xml:space', 'preserve')
+            text.appendChild(document.createTextNode(piece))
+            run.appendChild(text)
+            paragraph.appendChild(run)
+          })
+        }
+      })
+    })
   }
   return new XMLSerializer().serializeToString(document)
 }
@@ -1096,7 +1167,7 @@ export async function createPresentationPptx(document: PresentationProject): Pro
       const slideFile = archive.file(slidePath)
       if (!slideFile) throw new Error(`PPTX exporter did not create ${slidePath}`)
       let xml = correctPresentationTextXml(await slideFile.async('text'), document.slides.pages[index]?.elements ?? [])
-      xml = correctTableHeaderXml(xml, document.slides.pages[index]?.elements ?? [])
+      xml = correctTableXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = correctConnectorGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = correctCustomShapeGeometryXml(xml, document.slides.pages[index]?.elements ?? [])
       xml = correctShapeGradientXml(xml, document.slides.pages[index]?.elements ?? [])

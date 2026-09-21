@@ -1,4 +1,4 @@
-import type { PresentationTableElement } from '@/atoms/presentation'
+import type { PresentationTableElement, PresentationTextStyle } from '@/atoms/presentation'
 
 function tableSizes(values: number[] | undefined, count: number, extent: number): number[] {
   const known = values?.filter(value => Number.isFinite(value) && value > 0) ?? []
@@ -39,4 +39,31 @@ export function presentationTableCellAppearance(element: PresentationTableElemen
     rowSpan: Math.min(Math.max(1, style?.rowSpan ?? 1), element.cells.length - row),
     covered: style?.covered ?? false,
   }
+}
+
+export function presentationTableCellSegments(element: PresentationTableElement, row: number, column: number): Array<{ text: string; style: PresentationTextStyle }> {
+  const text = element.cells[row]?.[column] ?? ''
+  const runs = element.cellStyles?.[row]?.[column]?.textRuns ?? []
+  const segments: Array<{ text: string; style: PresentationTextStyle }> = []
+  let offset = 0
+  for (const run of runs) {
+    if (run.start > offset) segments.push({ text: text.slice(offset, run.start), style: {} })
+    if (run.end > run.start && run.end <= text.length) segments.push({ text: text.slice(run.start, run.end), style: run.style })
+    offset = Math.max(offset, run.end)
+  }
+  if (offset < text.length) segments.push({ text: text.slice(offset), style: {} })
+  return segments
+}
+
+export function presentationTableCellsPatch(element: PresentationTableElement, value: string[][]): Partial<PresentationTableElement> {
+  const cells = value.map(row => [...row])
+  if (!element.cellStyles?.length) return { cells }
+  const cellStyles = cells.map((row, rowIndex) => row.map((text, columnIndex) => {
+    const style = element.cellStyles?.[rowIndex]?.[columnIndex] ?? {}
+    if (text === element.cells[rowIndex]?.[columnIndex]) return style
+    const formatting = { ...style }
+    delete formatting.textRuns
+    return formatting
+  }))
+  return { cells, cellStyles }
 }

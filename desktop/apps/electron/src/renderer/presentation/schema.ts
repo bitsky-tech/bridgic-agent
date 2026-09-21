@@ -251,6 +251,7 @@ const tableElement = z.strictObject({
     align: z.enum(['left', 'center', 'right']).optional(),
     verticalAlign: z.enum(['top', 'middle', 'bottom']).optional(),
     padding: z.strictObject({ left: nonnegative, right: nonnegative, top: nonnegative, bottom: nonnegative }).optional(),
+    textRuns: z.array(z.strictObject({ start: finite.int().nonnegative(), end: finite.int().nonnegative(), style: textStyle })).optional(),
     colSpan: positive.int().optional(),
     rowSpan: positive.int().optional(),
     covered: z.boolean().optional(),
@@ -262,6 +263,17 @@ const tableElement = z.strictObject({
   textColor: z.string(),
   borderColor: z.string(),
   fontSize: positive,
+}).superRefine((value, context) => {
+  value.cellStyles?.forEach((row, rowIndex) => row.forEach((cell, columnIndex) => {
+    const length = value.cells[rowIndex]?.[columnIndex]?.length ?? 0
+    let previousEnd = 0
+    cell.textRuns?.forEach((run, runIndex) => {
+      if (run.start < previousEnd || run.end <= run.start || run.end > length) {
+        context.addIssue({ code: 'custom', path: ['cellStyles', rowIndex, columnIndex, 'textRuns', runIndex], message: 'Table text runs must be ordered, non-overlapping ranges inside the cell text' })
+      }
+      previousEnd = run.end
+    })
+  }))
 })
 const chartElement = z.strictObject({
   ...elementBase,

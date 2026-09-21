@@ -225,6 +225,13 @@ export function resizePresentationProject(document: PresentationProject, preset:
         cellStyles: scaled.cellStyles?.map(row => row.map(style => ({
           ...style,
           ...(style.fontSize ? { fontSize: Math.max(8, Number((style.fontSize * scale).toFixed(1))) } : {}),
+          ...(style.textRuns ? { textRuns: style.textRuns.map(run => ({
+            ...run,
+            style: {
+              ...run.style,
+              ...(run.style.fontSize ? { fontSize: Math.max(8, Number((run.style.fontSize * scale).toFixed(1))) } : {}),
+            },
+          })) } : {}),
           ...(style.padding ? { padding: {
             left: style.padding.left * scale, right: style.padding.right * scale,
             top: style.padding.top * scale, bottom: style.padding.bottom * scale,

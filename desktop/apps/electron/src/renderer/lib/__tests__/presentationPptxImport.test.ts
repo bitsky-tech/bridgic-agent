@@ -13,6 +13,33 @@ function addImageAsset(document: PresentationProject, id: string, source: Presen
 }
 
 describe('importPresentationPptx', () => {
+  it('keeps mixed formatting within an editable table cell through native PPTX round trips', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'rich-table', type: 'table', x: 80, y: 80, width: 500, height: 180, rotation: 0,
+      cells: [['Red Blue']],
+      cellStyles: [[{ textRuns: [
+        { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700, fontSize: 24 } },
+        { start: 4, end: 8, style: { color: '#0000FF', italic: true, fontSize: 16 } },
+      ] }]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(xml).toContain('val="FF0000"')
+    expect(xml).toContain('val="0000FF"')
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    expect(table.cells).toEqual([['Red Blue']])
+    expect(table.cellStyles?.[0]?.[0]?.textRuns).toMatchObject([
+      { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700 } },
+      { start: 4, end: 8, style: { color: '#0000FF', italic: true } },
+    ])
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
   it('keeps uneven table grids, merged cells and individual cell formatting editable across export and import', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = createInitialPresentationProject()

@@ -332,6 +332,23 @@ describe('chart and table display round trips', () => {
     }
   })
 
+  it('renders individual table text runs with their own canvas styles', async () => {
+    const element = {
+      ...createPresentationTableElement([['Red Blue']]),
+      cellStyles: [[{ textRuns: [
+        { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700 as const } },
+        { start: 4, end: 8, style: { color: '#0000FF', italic: true } },
+      ] }]],
+    }
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing table group')
+    const text = group.getObjects().find(object => object instanceof fabric.Textbox)
+    if (!(text instanceof fabric.Textbox)) throw new Error('Missing table text')
+    expect(text.styles[0]?.[0]).toMatchObject({ fill: '#FF0000', fontWeight: 700 })
+    expect(text.styles[0]?.[4]).toMatchObject({ fill: '#0000FF', fontStyle: 'italic' })
+    group.dispose()
+  })
+
   it.each(['pie', 'doughnut'] as const)('separates crowded %s value labels without losing values or changing the frame', async chartType => {
     Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: () => ({
       font: '', textBaseline: 'alphabetic', measureText(value: string) {

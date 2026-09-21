@@ -78,7 +78,7 @@ import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
 import { presentationThemeTextColors, resizePresentationProject } from '@/lib/presentationDesign'
-import { presentationTableCellAppearance, presentationTableGrid } from '@/lib/presentationTable'
+import { presentationTableCellAppearance, presentationTableCellSegments, presentationTableCellsPatch, presentationTableGrid } from '@/lib/presentationTable'
 import {
   clearPresentationHyperlinksToPages,
   detachPresentationCommentsFromElements,
@@ -961,7 +961,29 @@ function createTableFabricObject(fabric: FabricModule, element: PresentationTabl
         fill: style.fill,
         stroke: style.borderColor,
       }))
-      const text = new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
+      const cellText = element.cells[rowIndex]?.[columnIndex] ?? ''
+      const textStyles: TextStyle = {}
+      let textLine = 0
+      let character = 0
+      for (const segment of presentationTableCellSegments(element, rowIndex, columnIndex)) {
+        for (const glyph of fabric.Text.prototype.graphemeSplit(segment.text)) {
+          if (glyph === '\n') { textLine += 1; character = 0; continue }
+          if (Object.keys(segment.style).length > 0) {
+            textStyles[textLine] ??= {}
+            textStyles[textLine]![character] = {
+              ...(segment.style.color ? { fill: segment.style.color } : {}),
+              ...(segment.style.fontSize ? { fontSize: segment.style.fontSize } : {}),
+              ...(segment.style.fontFamily ? { fontFamily: presentationRenderingFontFamily(segment.style.fontFamily, glyph) } : {}),
+              ...(segment.style.fontWeight ? { fontWeight: segment.style.fontWeight } : {}),
+              ...(segment.style.italic !== undefined ? { fontStyle: segment.style.italic ? 'italic' : 'normal' } : {}),
+              ...(segment.style.underline !== undefined ? { underline: segment.style.underline } : {}),
+              ...(segment.style.strikethrough !== undefined ? { linethrough: segment.style.strikethrough } : {}),
+            }
+          }
+          character += 1
+        }
+      }
+      const text = new fabric.Textbox(cellText, {
         originX: 'left',
         originY: 'center',
         strokeWidth: 0,
@@ -975,6 +997,7 @@ function createTableFabricObject(fabric: FabricModule, element: PresentationTabl
         fontSize: style.fontSize,
         fontWeight: style.bold ? 600 : 400,
         textAlign: style.align,
+        styles: textStyles,
       })
       let textOffset = 0
       if (style.verticalAlign === 'middle') textOffset = Math.max(0, (contentHeight - text.height) / 2)
@@ -3136,7 +3159,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
     if (value.kind === 'table') {
       if (existing && isPresentationTableElement(existing)) {
-        patchElement(existing.id, { cells: value.cells.map((row) => [...row]) } as Partial<PresentationTableElement>)
+        patchElement(existing.id, presentationTableCellsPatch(existing, value.cells))
       } else {
         appendElement(createPresentationTableElement(value.cells))
       }

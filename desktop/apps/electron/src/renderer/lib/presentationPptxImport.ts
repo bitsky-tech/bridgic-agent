@@ -1385,14 +1385,46 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
     const table = firstByLocalName(frame, 'tbl')
     if (table) {
       const rowNodes = directChildrenByLocalName(table, 'tr')
-      const rows = rowNodes.map((row) => (
-        directChildrenByLocalName(row, 'tc').map((cell) => (
-          elementsByLocalName(cell, 'p').map((paragraph) => elementsByLocalName(paragraph, 't').map((text) => text.textContent ?? '').join('')).join('\n')
-        ))
-      ))
-      if (rows.length === 0 || rows.every((row) => row.length === 0)) return
       const tableScale = Math.hypot(coordinateTransform.c * pageSize.width / slideSizeEmu.width,
         coordinateTransform.d * pageSize.height / slideSizeEmu.height) * EMU_PER_INCH / 96
+      const cellContent = rowNodes.map(row => directChildrenByLocalName(row, 'tc').map(cell => {
+        const body = firstByLocalName(cell, 'txBody')
+        const paragraphs = body ? directChildrenByLocalName(body, 'p') : []
+        const textRuns: PresentationTextRun[] = []
+        let text = ''
+        paragraphs.forEach((paragraph, paragraphIndex) => {
+          if (paragraphIndex > 0) text += '\n'
+          for (const child of Array.from(paragraph.childNodes)) {
+            if (child.nodeType !== 1) continue
+            const item = child as Element
+            if (item.localName === 'br') { text += '\n'; continue }
+            if (item.localName !== 'r' && item.localName !== 'fld') continue
+            const content = firstByLocalName(item, 't')?.textContent ?? ''
+            if (!content) continue
+            const run = directChildrenByLocalName(item, 'rPr')[0] ?? null
+            const fill = run ? firstByLocalName(run, 'solidFill') : null
+            const importedColor = fill ? importedColorFrom(fill, '#20202B', themeColors) : null
+            const latin = run ? firstByLocalName(run, 'latin')?.getAttribute('typeface') : null
+            const eastAsian = run ? firstByLocalName(run, 'ea')?.getAttribute('typeface') : null
+            const fontFamily = presentationTextUsesCjk(content) ? eastAsian || latin : latin || eastAsian
+            const style: PresentationTextStyle = {
+              ...(run?.hasAttribute('sz') ? { fontSize: presentationFontSizeFromPoints(Math.max(1, numberAttribute(run, 'sz') / 100)) * tableScale } : {}),
+              ...(fontFamily ? { fontFamily } : {}),
+              ...(run?.hasAttribute('b') ? { fontWeight: run.getAttribute('b') === '1' ? 700 : 400 } : {}),
+              ...(run?.hasAttribute('i') ? { italic: run.getAttribute('i') === '1' } : {}),
+              ...(run?.hasAttribute('u') ? { underline: run.getAttribute('u') !== 'none' } : {}),
+              ...(run?.hasAttribute('strike') ? { strikethrough: run.getAttribute('strike') !== 'noStrike' } : {}),
+              ...(importedColor ? { color: importedColor.color, ...(importedColor.opacity < 1 ? { opacity: importedColor.opacity } : {}) } : {}),
+              ...(run && firstByLocalName(run, 'highlight') ? { highlightColor: colorFrom(firstByLocalName(run, 'highlight'), '#FFFF00', themeColors) } : {}),
+            }
+            textRuns.push({ start: text.length, end: text.length + content.length, style })
+            text += content
+          }
+        })
+        return { text, textRuns }
+      }))
+      const rows = cellContent.map(row => row.map(cell => cell.text))
+      if (rows.length === 0 || rows.every(row => row.length === 0)) return
       const gridColumns = firstByLocalName(table, 'tblGrid')
       const columnWidths = gridColumns ? directChildrenByLocalName(gridColumns, 'gridCol').map(column => numberAttribute(column, 'w')) : []
       const rowHeights = rowNodes.map(row => numberAttribute(row, 'h'))
@@ -1400,7 +1432,7 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
         || numberAttribute(firstByLocalName(frame, 'ext'), 'cx', EMU_PER_INCH))
       const verticalScale = geometry.height / (rowHeights.reduce((sum, height) => sum + height, 0)
         || numberAttribute(firstByLocalName(frame, 'ext'), 'cy', EMU_PER_INCH))
-      const cellStyles: PresentationTableCellStyle[][] = rowNodes.map(row => directChildrenByLocalName(row, 'tc').map(cell => {
+      const cellStyles: PresentationTableCellStyle[][] = rowNodes.map((row, rowIndex) => directChildrenByLocalName(row, 'tc').map((cell, columnIndex) => {
         const properties = directChildrenByLocalName(cell, 'tcPr')[0] ?? null
         const run = firstByLocalName(cell, 'rPr') ?? firstByLocalName(cell, 'endParaRPr')
         const paragraph = firstByLocalName(cell, 'pPr')
@@ -1416,6 +1448,7 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
         if (anchor === 'ctr') verticalAlign = 'middle'
         if (anchor === 'b') verticalAlign = 'bottom'
         const fontFace = firstByLocalName(run ?? cell, 'latin')?.getAttribute('typeface')
+        const importedRuns = cellContent[rowIndex]?.[columnIndex]?.textRuns ?? []
         const padding = properties && ['marL', 'marR', 'marT', 'marB'].some(name => properties.hasAttribute(name))
           ? {
             left: numberAttribute(properties, 'marL', 45_720) * horizontalScale,
@@ -1434,6 +1467,7 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
           ...(align ? { align: horizontalAlign } : {}),
           ...(anchor ? { verticalAlign } : {}),
           ...(padding ? { padding } : {}),
+          ...(importedRuns.length > 1 ? { textRuns: importedRuns } : {}),
           ...(cell.hasAttribute('gridSpan') ? { colSpan: Math.max(1, numberAttribute(cell, 'gridSpan', 1)) } : {}),
           ...(cell.hasAttribute('rowSpan') ? { rowSpan: Math.max(1, numberAttribute(cell, 'rowSpan', 1)) } : {}),
           ...(/^(1|true)$/.test(cell.getAttribute('hMerge') ?? '') || /^(1|true)$/.test(cell.getAttribute('vMerge') ?? '') ? { covered: true } : {}),

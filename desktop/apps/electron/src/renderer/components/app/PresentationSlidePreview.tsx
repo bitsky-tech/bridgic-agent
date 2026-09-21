@@ -22,7 +22,7 @@ import {
   type PresentationTextStyle,
 } from '@/atoms/presentation'
 import { presentationElementSource } from '@/presentation/project'
-import { presentationTableCellAppearance, presentationTableGrid } from '@/lib/presentationTable'
+import { presentationTableCellAppearance, presentationTableCellSegments, presentationTableGrid } from '@/lib/presentationTable'
 import { cn } from '@/lib/cn'
 import type { PresentationAnimationDisplayState, PresentationAnimationScale, PresentationColorAnimation } from '@/lib/presentationAnimationPreview'
 import {
@@ -737,7 +737,18 @@ function PresentationTablePreview({ element, scale }: { scale?: PresentationAnim
                     display: 'flex', flexDirection: 'column', justifyContent, overflow: 'hidden' }}>
                     <div style={{ flexShrink: 0, whiteSpace: 'pre-wrap', lineHeight: PRESENTATION_TEXT_LINE_METRICS.height * 1.16,
                       fontFamily: presentationRenderingFontFamily(cell.fontFamily, row[columnIndex] ?? '') }}>
-                      {row[columnIndex] ?? ''}
+                      {presentationTableCellSegments(element, rowIndex, columnIndex).map((segment, index) => (
+                        <span key={index} style={{
+                          ...(segment.style.color ? { color: segment.style.color } : {}),
+                          ...(segment.style.fontSize ? { fontSize: segment.style.fontSize } : {}),
+                          ...(segment.style.fontFamily ? { fontFamily: presentationRenderingFontFamily(segment.style.fontFamily, segment.text) } : {}),
+                          ...(segment.style.fontWeight ? { fontWeight: segment.style.fontWeight } : {}),
+                          ...(segment.style.italic ? { fontStyle: 'italic' } : {}),
+                          ...(segment.style.underline || segment.style.strikethrough ? { textDecoration: [segment.style.underline && 'underline', segment.style.strikethrough && 'line-through'].filter(Boolean).join(' ') } : {}),
+                          ...(segment.style.opacity !== undefined ? { opacity: segment.style.opacity } : {}),
+                          ...(segment.style.highlightColor ? { backgroundColor: segment.style.highlightColor } : {}),
+                        }}>{segment.text}</span>
+                      ))}
                     </div>
                   </div>
                 </td>

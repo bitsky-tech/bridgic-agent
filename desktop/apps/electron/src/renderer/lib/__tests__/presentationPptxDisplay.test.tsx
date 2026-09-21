@@ -50,6 +50,24 @@ function agentEdit(model: PresentationProject): PresentationProject {
 }
 
 describe('PowerPoint display fidelity', () => {
+  it('previews mixed colors and emphasis inside one table cell', () => {
+    const model = createBlankPresentationProject('Rich table')
+    model.slides.pages[0]!.elements = [{
+      id: 'table', type: 'table', x: 80, y: 80, width: 500, height: 180, rotation: 0,
+      cells: [['Red Blue']],
+      cellStyles: [[{ textRuns: [
+        { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700 } },
+        { start: 4, end: 8, style: { color: '#0000FF', italic: true } },
+      ] }]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const markup = preview(model)
+    expect(markup).toContain('color:#FF0000;font-weight:700')
+    expect(markup).toContain('color:#0000FF;font-style:italic')
+    expect(markup).toContain('Red ')
+    expect(markup).toContain('Blue')
+  })
+
   it('previews imported table cell spans, grid dimensions and individual cell colors', () => {
     const model = createBlankPresentationProject('Table grid')
     model.slides.pages[0]!.elements = [{

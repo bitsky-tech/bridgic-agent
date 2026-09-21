@@ -9,6 +9,7 @@ import {
   type PresentationSlide,
 } from '@/atoms/presentation'
 import { applyPresentationDesign, presentationThemeTextColors, type PresentationDesignPatch } from '@/lib/presentationDesign'
+import { presentationTableCellsPatch } from '@/lib/presentationTable'
 import {
   clearPresentationHyperlinksToPages,
   createPresentationAsset,
@@ -44,7 +45,7 @@ const shapeElementKeys = [
 const imageElementKeys = ['src', 'altText', 'fit', 'clipShape', 'crop', 'softEdgeRadius'] as const
 const mediaElementKeys = ['src', 'autoplay', 'loop', 'muted'] as const
 const tableElementKeys = [
-  'cells', 'headerRow', 'headerFill', 'headerTextColor', 'bodyFill', 'textColor', 'borderColor', 'fontSize',
+  'cells', 'columnWidths', 'rowHeights', 'cellStyles', 'headerRow', 'headerFill', 'headerTextColor', 'bodyFill', 'textColor', 'borderColor', 'fontSize',
 ] as const
 const chartElementKeys = [
   'chartType', 'categories', 'series', 'showLegend', 'showValue', 'title', 'colors', 'displayBlanksAs', 'holeSize',
@@ -309,6 +310,11 @@ function patchElement(current: PresentationElement, patch: Record<string, unknow
   }
   if (shapeTypes.has(current.type) && normalized.gradientFill !== undefined && normalized.patternFill === undefined) normalized.patternFill = null
   if (shapeTypes.has(current.type) && normalized.patternFill !== undefined && normalized.gradientFill === undefined) normalized.gradientFill = null
+  if (current.type === 'table' && normalized.cells !== undefined && normalized.cellStyles === undefined
+    && Array.isArray(normalized.cells) && normalized.cells.every(row => Array.isArray(row) && row.every(cell => typeof cell === 'string'))) {
+    const reconciled = presentationTableCellsPatch(current, normalized.cells as string[][])
+    if (reconciled.cellStyles) normalized.cellStyles = reconciled.cellStyles
+  }
   return { assets: createdAssets, element: nullablePatch(current as unknown as Record<string, unknown>, normalized) as unknown as PresentationElement }
 }
 

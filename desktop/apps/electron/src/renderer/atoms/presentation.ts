@@ -329,6 +329,8 @@ export interface PresentationTableCellStyle {
   align?: 'left' | 'center' | 'right'
   verticalAlign?: 'top' | 'middle' | 'bottom'
   padding?: { left: number; right: number; top: number; bottom: number }
+  /** UTF-16 ranges into the corresponding cells[row][column] string. */
+  textRuns?: PresentationTextRun[]
   colSpan?: number
   rowSpan?: number
   covered?: boolean
