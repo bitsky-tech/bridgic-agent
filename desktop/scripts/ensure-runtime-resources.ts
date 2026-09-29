@@ -143,7 +143,10 @@ export class RuntimeResourcesPreflight {
       return execFileSync(executable, arguments_, {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 5_000,
+        // The first launch of a freshly downloaded binary waits on antivirus:
+        // Defender alone took 4.3s for the 60 MB uv.exe on an idle Windows
+        // laptop (2026-09-29), and more under build load. 5s failed the check.
+        timeout: 60_000,
       }).trim()
     } catch {
       return null
