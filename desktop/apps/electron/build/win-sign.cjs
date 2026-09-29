@@ -74,12 +74,22 @@ function withoutValidSignature(files) {
   try {
     const list = path.join(dir, 'files.txt')
     writeFileSync(list, files.join('\n'), 'utf-8')
+    // 'Stop' turns any error into a non-zero exit, which throws below. Without
+    // it a failed check prints an error, exits 0 and reports "nothing to sign".
     const script =
+      `$ErrorActionPreference = 'Stop'; ` +
       `Get-Content -LiteralPath '${list}' -Encoding UTF8 | ` +
       `Where-Object { (Get-AuthenticodeSignature -LiteralPath $_).Status -ne 'Valid' }`
+    // Under a pwsh 7 parent (every CI step), the inherited PSModulePath points
+    // Windows PowerShell 5.1 at pwsh 7's modules, and Get-AuthenticodeSignature
+    // then fails to load. Dropping it lets 5.1 use its own default path.
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'),
+    )
     const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf-8',
       maxBuffer: 64 * 1024 * 1024,
+      env,
     })
     return output.split(/\r?\n/).filter(Boolean)
   } finally {
