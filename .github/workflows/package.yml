@@ -572,6 +572,37 @@ jobs:
         shell: pwsh
         run: .\build\build-pyinstaller.ps1
 
+      # Fails in seconds instead of after the build when signing cannot proceed.
+      # The halt file is written by build/win-sign.cjs on any signing failure;
+      # see that file for why a failure must never be retried automatically.
+      # jsign and its JRE are provisioned on the signing machine under C:\codesign;
+      # the JRE directory name carries its version, so resolve it rather than pin it.
+      - name: Check the signing machine
+        shell: pwsh
+        env:
+          WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
+        run: |
+          if (Test-Path $env:WIN_SIGN_HALT_FILE) {
+            Get-Content $env:WIN_SIGN_HALT_FILE | Write-Host
+            throw "signing is halted by $env:WIN_SIGN_HALT_FILE after an earlier failure; fix the cause, then delete the file. Re-running does not help and may lock the token."
+          }
+          $java = Get-ChildItem C:\codesign\jre -Recurse -Filter java.exe | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $java) { throw 'no JRE under C:\codesign\jre; the signing machine is not provisioned' }
+          "WIN_SIGN_JAVA=$java" >> $env:GITHUB_ENV
+
+      # Signed here, before the smoke test below runs it, not at packaging time:
+      # the signing machine keeps Smart App Control on, and it blocks a freshly
+      # built unsigned exe whenever it has no cloud reputation — which a new
+      # PyInstaller build never has. prebuild-fetch-amphi copies these files
+      # as-is, so afterPack later finds them validly signed and skips them.
+      - name: Sign the amphi bundle
+        env:
+          WIN_SIGN_PIN: ${{ secrets.WIN_TOKEN_PIN }}
+          WIN_SIGN_JSIGN_JAR: C:\codesign\jsign.jar
+          WIN_SIGN_ALIAS: te-77823577-5786-46ba-aee7-111fbfd021bb
+          WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
+        run: node desktop/apps/electron/build/win-sign.cjs dist/amphi
+
       # Bun is pulled ahead of the smoke test: the smoke test starts a real
       # daemon, and the daemon's AppCommandEnvironment.prepare() is strict:
       # the process-wide singleton (_environment.py, `app_command_environment =
@@ -697,24 +728,6 @@ jobs:
               Write-Warning "server smoke cleanup exited with code $LASTEXITCODE"
             }
           }
-
-      # Fails in seconds instead of after the build when signing cannot proceed.
-      # The halt file is written by build/win-sign.cjs on any signing failure;
-      # see that file for why a failure must never be retried automatically.
-      # jsign and its JRE are provisioned on the signing machine under C:\codesign;
-      # the JRE directory name carries its version, so resolve it rather than pin it.
-      - name: Check the signing machine
-        shell: pwsh
-        env:
-          WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
-        run: |
-          if (Test-Path $env:WIN_SIGN_HALT_FILE) {
-            Get-Content $env:WIN_SIGN_HALT_FILE | Write-Host
-            throw "signing is halted by $env:WIN_SIGN_HALT_FILE after an earlier failure; fix the cause, then delete the file. Re-running does not help and may lock the token."
-          }
-          $java = Get-ChildItem C:\codesign\jre -Recurse -Filter java.exe | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $java) { throw 'no JRE under C:\codesign\jre; the signing machine is not provisioned' }
-          "WIN_SIGN_JAVA=$java" >> $env:GITHUB_ENV
 
       # --- Frontend: package Electron, flattening dist/amphi/ into resources/bin/ ---
       - name: Package Windows installer (x64)

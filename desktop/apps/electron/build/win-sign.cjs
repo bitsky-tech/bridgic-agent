@@ -29,7 +29,7 @@
  */
 
 const { execFileSync } = require('node:child_process')
-const { existsSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs')
+const { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
@@ -151,3 +151,13 @@ exports.default = async function sign(configuration) {
 }
 
 exports.signFiles = signFiles
+
+// CLI: `node win-sign.cjs <dir>` signs every PE image under <dir>. CI uses it on
+// the PyInstaller bundle, which has to be signed before its smoke test runs.
+if (require.main === module) {
+  const root = path.resolve(process.argv[2] || '')
+  const files = readdirSync(root, { recursive: true })
+    .map((relative) => path.join(root, relative))
+    .filter((file) => /\.(?:exe|dll|pyd|node)$/i.test(file) && statSync(file).isFile())
+  signFiles(files)
+}
