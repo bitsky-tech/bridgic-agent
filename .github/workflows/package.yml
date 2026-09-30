@@ -529,8 +529,11 @@ jobs:
     # The machine holding the code-signing token (see the header comment).
     runs-on: [self-hosted, windows, codesign]
     name: package (Windows x64)
-    # Signing a few hundred PE files through the token adds ~10-20 minutes.
-    timeout-minutes: 90
+    # Measured on the signing machine (2026-09-30): ~35 min to a signed
+    # installer, signing included, then ~60 min for the nine installer smoke
+    # scenarios, which run twice as slow as on a hosted runner because every
+    # install passes through antivirus. 90 cut the ninth scenario off.
+    timeout-minutes: 150
 
     steps:
       # Unlike a hosted runner this machine persists between runs. A daemon or app
