@@ -797,6 +797,22 @@ jobs:
         working-directory: desktop
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File apps/electron/scripts/test-installer.ps1 -Scenario ReleaseArtifacts
 
+      # The signing machine doubles as a test machine, so a Bridgic Agent of some
+      # other account may be running there. Its daemon would hold the default
+      # port 7421 (and 9123 is the custom port a scenario records), and the
+      # scenarios would then fail, or worse, pass against that daemon instead of
+      # the build under test. Refuse to smoke rather than kill a process that is
+      # not ours.
+      - name: Check the installer smoke ports are free
+        if: ${{ github.event_name == 'push' || inputs.smoke }}
+        shell: pwsh
+        run: |
+          $busy = @(Get-NetTCPConnection -State Listen -LocalPort 7421, 9123 -ErrorAction SilentlyContinue)
+          if ($busy.Count -gt 0) {
+            $busy | ForEach-Object { Write-Host "port $($_.LocalPort) is held by PID $($_.OwningProcess)" }
+            throw 'Another Bridgic Agent is running on this machine. Quit it and turn off its autostart, then run this workflow again.'
+          }
+
       # Everything below actually installs, updates and uninstalls Amphi on the
       # runner. Each scenario guards a failure that is silent on Windows: an
       # update relocating an existing installation, an autostart opt-out coming
