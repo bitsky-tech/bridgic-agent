@@ -29,7 +29,15 @@
  */
 
 const { execFileSync } = require('node:child_process')
-const { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } = require('node:fs')
+const {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
@@ -100,6 +108,35 @@ function withoutValidSignature(files) {
   }
 }
 
+/**
+ * Clear a certificate-table entry that points past the end of the file.
+ *
+ * The VCRUNTIME140*.dll copies in the PyInstaller bundle arrive cut off exactly
+ * where Microsoft's signature began, while the header still points at it
+ * (size 103936, table at 103936 + 20608). Windows reads that as NotSigned and
+ * jsign refuses the file outright ("Invalid data directory (index=4)"). The
+ * entry is excluded from the Authenticode digest and ignored by the loader, so
+ * zeroing it turns the file into a plain unsigned PE without changing what it
+ * does. A file whose table is intact is never touched.
+ */
+function dropDanglingCertificateTable(file) {
+  const bytes = readFileSync(file)
+  if (bytes.length < 0x40 || bytes.toString('latin1', 0, 2) !== 'MZ') return
+  const pe = bytes.readUInt32LE(0x3c)
+  if (pe + 0x18 + 2 > bytes.length || bytes.toString('latin1', pe, pe + 4) !== 'PE\0\0') return
+  const optionalHeader = pe + 0x18
+  const pe32Plus = bytes.readUInt16LE(optionalHeader) === 0x20b
+  // Data directory index 4 (IMAGE_DIRECTORY_ENTRY_SECURITY): file offset, size.
+  const entry = optionalHeader + (pe32Plus ? 112 : 96) + 4 * 8
+  if (entry + 8 > bytes.length) return
+  const offset = bytes.readUInt32LE(entry)
+  const size = bytes.readUInt32LE(entry + 4)
+  if (size === 0 || offset + size <= bytes.length) return
+  bytes.fill(0, entry, entry + 8)
+  writeFileSync(file, bytes)
+  console.log(`[win-sign] cleared a certificate table past the end of ${file}`)
+}
+
 /** Sign every file in `files` that is not validly signed yet. */
 function signFiles(files) {
   const config = signingConfig()
@@ -116,6 +153,7 @@ function signFiles(files) {
   }
   const targets = withoutValidSignature(files)
   console.log(`[win-sign] ${targets.length} of ${files.length} file(s) need signing`)
+  targets.forEach(dropDanglingCertificateTable)
   for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
     try {
       execFileSync(
@@ -154,6 +192,7 @@ exports.default = async function sign(configuration) {
 }
 
 exports.signFiles = signFiles
+exports.dropDanglingCertificateTable = dropDanglingCertificateTable
 
 // CLI: `node win-sign.cjs <dir>` signs every PE image under <dir>. CI uses it on
 // the PyInstaller bundle, which has to be signed before its smoke test runs.
