@@ -13,18 +13,20 @@
  * after packaging instead, by the signature audit in package.yml.
  *
  * The token allows 5 wrong PINs before it locks for good (and 5 wrong admin
- * PINs brick it), so a failure must never be retried by automation. Any jsign
- * failure writes WIN_SIGN_HALT_FILE, and while that file exists no build logs
- * in to the token at all. A human reads the log, fixes the cause, and deletes
- * the file. A single build cannot spend more than one attempt either: the first
- * failure aborts packaging before any other file is sent to the token.
+ * PINs brick it), so a failure that may be a wrong PIN must never be retried by
+ * automation. Such a failure writes WIN_SIGN_HALT_FILE, and while that file
+ * exists no build logs in to the token at all; a human reads the log, fixes the
+ * cause, and deletes the file. A failure after the token has accepted the PIN
+ * (see haltUnlessLoginProven) cannot cost an attempt and writes no halt. A
+ * single build cannot spend more than one attempt either: the first failure
+ * aborts packaging before any other file is sent to the token.
  *
  * Environment:
  *   WIN_SIGN_PIN        token user PIN; its presence is what turns signing on
  *   WIN_SIGN_JAVA       java.exe used to run jsign
  *   WIN_SIGN_JSIGN_JAR  path to the jsign jar
  *   WIN_SIGN_ALIAS      key alias (the token's key container name)
- *   WIN_SIGN_HALT_FILE  marker that blocks signing after a failure; must survive
+ *   WIN_SIGN_HALT_FILE  marker that blocks signing after a possible PIN failure; must survive
  *                       between runs, so it lives outside the job workspace
  */
 
@@ -137,6 +139,31 @@ function dropDanglingCertificateTable(file) {
   console.log(`[win-sign] cleared a certificate table past the end of ${file}`)
 }
 
+/**
+ * Decide whether a failed jsign run may have spent a PIN attempt.
+ *
+ * If any file of the failed chunk is signed now, the token accepted the PIN in
+ * this very run — which also resets its wrong-PIN counter — so a retry cannot
+ * lock it and no halt is needed. Otherwise the failure may be a wrong PIN, and
+ * the halt file is written. The error text is deliberately not parsed: a PIN
+ * error worded in a way nobody anticipated would read as "safe" and let every
+ * later run spend another attempt. Signed-or-not is observable; wording is not.
+ */
+function haltUnlessLoginProven(haltFile, chunk, error) {
+  let loginProven = false
+  try {
+    const unsigned = new Set(withoutValidSignature(chunk))
+    loginProven = chunk.some((file) => !unsigned.has(file))
+  } catch {
+    // Could not tell: treat it as a possible PIN failure.
+  }
+  if (loginProven) {
+    console.warn('[win-sign] the token accepted the PIN before this failure; no halt written')
+    return
+  }
+  writeFileSync(haltFile, `${new Date().toISOString()} jsign failed: ${error.message}\n`)
+}
+
 /** Sign every file in `files` that is not validly signed yet. */
 function signFiles(files) {
   const config = signingConfig()
@@ -174,9 +201,7 @@ function signFiles(files) {
         { stdio: 'inherit', env: { ...process.env, WIN_SIGN_PIN: config.pin } },
       )
     } catch (error) {
-      // Fail closed: from the exit code alone a wrong PIN is indistinguishable
-      // from a timestamp outage, and guessing wrong costs a token attempt.
-      writeFileSync(config.haltFile, `${new Date().toISOString()} jsign failed: ${error.message}\n`)
+      haltUnlessLoginProven(config.haltFile, targets.slice(i, i + CHUNK_SIZE), error)
       throw error
     }
   }
