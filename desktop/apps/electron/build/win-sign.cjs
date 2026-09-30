@@ -30,7 +30,7 @@
  *                       between runs, so it lives outside the job workspace
  */
 
-const { execFileSync } = require('node:child_process')
+const { execFileSync, spawnSync } = require('node:child_process')
 const {
   existsSync,
   mkdtempSync,
@@ -140,28 +140,53 @@ function dropDanglingCertificateTable(file) {
 }
 
 /**
+ * Proof that the token accepted the PIN earlier in this CI job. A job signs in
+ * several separate jsign runs (the PyInstaller bundle, then one run per .exe
+ * during packaging), all with the same PIN from the same secret, so one
+ * success vouches for the PIN for the rest of the job. RUNNER_TEMP is emptied
+ * at the start of every job, so the proof never outlives it; outside CI there
+ * is none and every failure is judged on its own.
+ */
+const PIN_ACCEPTED_MARKER = process.env.RUNNER_TEMP
+  ? path.join(process.env.RUNNER_TEMP, 'win-sign-pin-accepted')
+  : null
+
+function recordPinAccepted() {
+  if (PIN_ACCEPTED_MARKER !== null) {
+    writeFileSync(PIN_ACCEPTED_MARKER, `${new Date().toISOString()}\n`)
+  }
+}
+
+/**
  * Decide whether a failed jsign run may have spent a PIN attempt.
  *
- * If any file of the failed chunk is signed now, the token accepted the PIN in
- * this very run — which also resets its wrong-PIN counter — so a retry cannot
- * lock it and no halt is needed. Otherwise the failure may be a wrong PIN, and
- * the halt file is written. The error text is deliberately not parsed: a PIN
- * error worded in a way nobody anticipated would read as "safe" and let every
- * later run spend another attempt. Signed-or-not is observable; wording is not.
+ * The PIN is proven right when the token accepted it earlier in this job, or
+ * when any file of the failed chunk is signed now — a successful login also
+ * resets the token's wrong-PIN counter — so a retry cannot lock it and no halt
+ * is needed. Otherwise the failure may be a wrong PIN, and the halt file is
+ * written. The error text is deliberately not parsed: a PIN error worded in a
+ * way nobody anticipated would read as "safe" and let every later run spend
+ * another attempt. Signed-or-not is observable; wording is not. The output is
+ * still kept in the halt file, so the cause can be read on the machine even
+ * when the job log never reaches GitHub.
  */
-function haltUnlessLoginProven(haltFile, chunk, error) {
-  let loginProven = false
-  try {
-    const unsigned = new Set(withoutValidSignature(chunk))
-    loginProven = chunk.some((file) => !unsigned.has(file))
-  } catch {
-    // Could not tell: treat it as a possible PIN failure.
+function haltUnlessLoginProven(haltFile, chunk, output) {
+  let loginProven = PIN_ACCEPTED_MARKER !== null && existsSync(PIN_ACCEPTED_MARKER)
+  if (!loginProven) {
+    try {
+      const unsigned = new Set(withoutValidSignature(chunk))
+      loginProven = chunk.some((file) => !unsigned.has(file))
+    } catch {
+      // Could not tell: treat it as a possible PIN failure.
+    }
   }
   if (loginProven) {
-    console.warn('[win-sign] the token accepted the PIN before this failure; no halt written')
+    recordPinAccepted()
+    console.warn('[win-sign] the token accepted the PIN earlier; no halt written')
     return
   }
-  writeFileSync(haltFile, `${new Date().toISOString()} jsign failed: ${error.message}\n`)
+  const tail = output.split(/\r?\n/).filter(Boolean).slice(-40).join('\n')
+  writeFileSync(haltFile, `${new Date().toISOString()} jsign failed:\n${tail}\n`)
 }
 
 /** Sign every file in `files` that is not validly signed yet. */
@@ -182,28 +207,36 @@ function signFiles(files) {
   console.log(`[win-sign] ${targets.length} of ${files.length} file(s) need signing`)
   targets.forEach(dropDanglingCertificateTable)
   for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
-    try {
-      execFileSync(
-        config.java,
-        [
-          '-jar', config.jar,
-          '--storetype', 'ETOKEN',
-          '--keystore', config.pkcs11,
-          // `env:` makes jsign read the PIN itself, keeping it off the command line.
-          '--storepass', 'env:WIN_SIGN_PIN',
-          '--alias', config.alias,
-          '--alg', 'SHA-256',
-          '--tsaurl', TIMESTAMP_URL,
-          '--tsmode', 'RFC3161',
-          '--replace',
-          ...targets.slice(i, i + CHUNK_SIZE),
-        ],
-        { stdio: 'inherit', env: { ...process.env, WIN_SIGN_PIN: config.pin } },
-      )
-    } catch (error) {
-      haltUnlessLoginProven(config.haltFile, targets.slice(i, i + CHUNK_SIZE), error)
-      throw error
+    const chunk = targets.slice(i, i + CHUNK_SIZE)
+    const result = spawnSync(
+      config.java,
+      [
+        '-jar', config.jar,
+        '--storetype', 'ETOKEN',
+        '--keystore', config.pkcs11,
+        // `env:` makes jsign read the PIN itself, keeping it off the command line.
+        '--storepass', 'env:WIN_SIGN_PIN',
+        '--alias', config.alias,
+        '--alg', 'SHA-256',
+        '--tsaurl', TIMESTAMP_URL,
+        '--tsmode', 'RFC3161',
+        '--replace',
+        ...chunk,
+      ],
+      {
+        encoding: 'utf-8',
+        maxBuffer: 64 * 1024 * 1024,
+        env: { ...process.env, WIN_SIGN_PIN: config.pin },
+      },
+    )
+    // Captured rather than inherited so a failure's output can go into the halt file.
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}${result.error ? `${result.error.message}\n` : ''}`
+    process.stdout.write(output)
+    if (result.status !== 0) {
+      haltUnlessLoginProven(config.haltFile, chunk, output)
+      throw new Error(`[win-sign] jsign exited with ${result.status ?? result.signal ?? 'an error'}`)
     }
+    recordPinAccepted()
   }
 }
 
