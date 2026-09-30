@@ -40,8 +40,11 @@ Bridgic Agent currently supports macOS and Windows. Download the appropriate
 installer from the [Releases](https://github.com/bitsky-tech/bridgic-agent/releases)
 page: a `.pkg` file for macOS or an `.exe` file for Windows.
 
-> **Note:** The Windows installer is not currently code-signed. If Windows
-> blocks it, you may need to adjust the relevant settings in Windows Security and Smart App Control.
+> **Note:** The Windows installer and every binary it installs are code-signed
+> by BitSky-Tech; Windows shows the publisher under the company's registered
+> Chinese name. SmartScreen reputation for a new certificate
+> builds up over downloads, so early releases may still show an "unrecognized
+> app" prompt; choose *More info → Run anyway* after checking the publisher.
 
 ### Install from source
 
@@ -301,6 +304,11 @@ Tags are bare semver with no `v` prefix:
 
 A tag push always builds the full matrix — macOS arm64, macOS x64, and Windows
 x64 — and always runs the Windows installer smoke suite.
+
+The Windows job runs on a self-hosted runner (label `codesign`): the
+code-signing key sits on a USB hardware token plugged into that machine and
+cannot be copied off it. If the machine is offline, the Windows job waits in the
+queue instead of producing an unsigned build.
 
 ### Build without releasing
 

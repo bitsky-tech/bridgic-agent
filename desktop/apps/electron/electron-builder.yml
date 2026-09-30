@@ -226,9 +226,19 @@ win:
   # space would land in every artifact filename and therefore in the update
   # feed's download URL. Keep the slug hyphenated here.
   artifactName: "Bridgic-Agent-${version}-${arch}.${ext}"
-  # Windows artifacts are not Authenticode-signed; CI has no signing certificate configured.
+  # Authenticode signing goes through a hardware token, so it only happens on the
+  # machine the token is plugged into; see build/win-sign.cjs. The hook covers
+  # every .exe (app, extraResources, uninstaller, installer); afterPack covers
+  # the DLLs and .pyd/.node modules. Both are no-ops without WIN_SIGN_PIN.
+  signtoolOptions:
+    sign: build/win-sign.cjs
+    # The default is sha1 AND sha256, i.e. every file signed twice. SHA-1
+    # signatures only matter to Windows 7 and earlier, which this app does not
+    # support, and each signature is a round trip to the token.
+    signingHashAlgorithms: [sha256]
   #
-  # This flag has a one-way door built into it: whenever it is not `false`,
+  # Signing does not mean the updater verifies signatures. This flag has a
+  # one-way door built into it: whenever it is not `false`,
   # electron-builder writes the signing certificate's publisher name into the
   # packaged app-update.yml (PublishManager.js:202-206), and electron-updater
   # reads that file from the *currently installed* build to decide whether the

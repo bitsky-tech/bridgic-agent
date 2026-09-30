@@ -3,7 +3,7 @@
  *
  * Runs once per platform/arch combination after files are copied to the app
  * payload but before signing. It makes bundled CLI/runtime binaries executable
- * and signs the native runtime payload on macOS.
+ * and signs the native runtime payload on macOS and Windows.
  */
 
 const { execFileSync, spawnSync } = require('node:child_process')
@@ -19,11 +19,14 @@ const {
   readdirSync,
 } = require('node:fs')
 const path = require('node:path')
+const { signFiles } = require('./win-sign.cjs')
 
 const AMPHI_BIN_NAMES_POSIX = ['amphi']
 const AMPHI_BIN_NAMES_WIN = ['amphi.exe', 'amphi-autostart.exe']
 const UV_BIN_NAMES_POSIX = ['uv']
 const UV_BIN_NAMES_WIN = ['uv.exe']
+/** Portable Executable images: everything Authenticode can sign and Windows checks on load. */
+const WIN_PE_FILE = /\.(?:exe|dll|pyd|node)$/i
 /**
  * Files needing the exec bit inside node_runtime: `node` itself, plus the three
  * JS entry points that `bin/npm`, `bin/npx` and `bin/corepack` symlink to.
@@ -205,6 +208,10 @@ exports.default = async function afterPack(context) {
     chmodNodeRuntime(nodeRuntimeDir)
   }
 
+  if (context.electronPlatformName === 'win32') {
+    signWindowsPayload(context)
+    return
+  }
   if (context.electronPlatformName !== 'darwin') {
     return
   }
@@ -268,6 +275,30 @@ function chmodNodeRuntime(rootDir) {
     chmodSync(filePath, 0o755)
     console.log(`[after-pack] chmod +x ${filePath}`)
   })
+}
+
+/**
+ * Sign every PE image in the payload that electron-builder does not reach.
+ *
+ * Its sign hook only sees .exe files, so the DLLs and Python extension modules —
+ * PyInstaller's `_internal/`, `python_runtime`, Electron's own DLLs — would
+ * otherwise ship unsigned. Smart App Control and antivirus judge every image a
+ * process loads, not just the executable, so one unsigned .pyd is enough to get
+ * the app blocked. Done here in one batch because each jsign run pays a JVM
+ * start and a token login.
+ *
+ * The app exe is left out: electron-builder rewrites its resources after this
+ * hook, which would break a signature applied now, and signs it itself then.
+ */
+function signWindowsPayload(context) {
+  const appExe = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.exe`)
+  const targets = []
+  walkDir(context.appOutDir, (filePath, name, st) => {
+    if (st.isFile() && WIN_PE_FILE.test(name) && filePath !== appExe) {
+      targets.push(filePath)
+    }
+  })
+  signFiles(targets)
 }
 
 /** Sign every Mach-O binary under `rootDir`, deepest path first. */
