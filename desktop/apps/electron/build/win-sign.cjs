@@ -61,10 +61,13 @@ function signingConfig() {
 }
 
 /**
- * Drop files that already carry a valid, trusted signature — the Microsoft,
- * Python Software Foundation and OpenJS binaries among the bundled runtimes.
- * They are not blocked as they are, and re-signing would replace their
- * publisher's signature with ours.
+ * Keep only files with no signature at all. Files already signed by their
+ * publisher — the Microsoft, Python Software Foundation and OpenJS binaries
+ * among the bundled runtimes — keep that signature, even when this machine
+ * cannot confirm it as Valid (under the runner's service account the chain
+ * check can fail offline). Re-signing them is not just unwanted: jsign rejects
+ * the existing certificate table of Microsoft's VCRUNTIME140.dll outright.
+ * A signature that is genuinely broken is still caught by the audit step.
  */
 function withoutValidSignature(files) {
   if (files.length === 0) {
@@ -79,7 +82,7 @@ function withoutValidSignature(files) {
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
       `Get-Content -LiteralPath '${list}' -Encoding UTF8 | ` +
-      `Where-Object { (Get-AuthenticodeSignature -LiteralPath $_).Status -ne 'Valid' }`
+      `Where-Object { (Get-AuthenticodeSignature -LiteralPath $_).Status -eq 'NotSigned' }`
     // Under a pwsh 7 parent (every CI step), the inherited PSModulePath points
     // Windows PowerShell 5.1 at pwsh 7's modules, and Get-AuthenticodeSignature
     // then fails to load. Dropping it lets 5.1 use its own default path.
