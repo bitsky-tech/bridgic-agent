@@ -535,10 +535,16 @@ jobs:
     steps:
       # Unlike a hosted runner this machine persists between runs. A daemon or app
       # left running by a failed earlier run keeps files under the workspace open,
-      # and checkout's clean step then fails on them.
+      # and checkout's clean step then fails on them. Only this runner's own
+      # copies are touched — the build tree and its installs under its own
+      # LOCALAPPDATA. Another account's Bridgic Agent on the same machine is out of
+      # reach (Path reads as empty across accounts) and not ours to kill.
       - name: Stop processes left by an earlier run
         shell: pwsh
-        run: Get-Process -Name amphi, amphi-autostart, 'Bridgic Agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+        run: |
+          Get-Process -Name amphi, amphi-autostart, 'Bridgic Agent' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and ($_.Path.StartsWith($env:RUNNER_WORKSPACE, 'OrdinalIgnoreCase') -or $_.Path.StartsWith($env:LOCALAPPDATA, 'OrdinalIgnoreCase')) } |
+            Stop-Process -Force
 
       - name: Checkout
         uses: actions/checkout@v5
