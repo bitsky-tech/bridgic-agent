@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
+from openai import APIError
 
 from ...i18n import backend_i18n
 from bridgic.core.model.types import Message, Role
@@ -18,6 +20,7 @@ from ._streaming import (
     accumulate_tool_deltas,
     is_model_not_found_error,
     is_retryable_stream_error,
+    is_retryable_transport_error,
     model_not_found_message,
     parse_tool_calls,
     rate_limit_delay,
@@ -259,12 +262,17 @@ class OpenAICompatLlm(OpenAILlm):
             reasoning_detail_buffers: dict = {}
             tool_buffers: dict = {}
             usage: Any = None
+            stream_error = None
+            finish_reason = None
             try:
                 async for chunk in response:
                     if getattr(chunk, "usage", None) is not None:
                         usage = chunk.usage
                     if not chunk.choices:
                         continue
+                    finish_reason = getattr(chunk.choices[0], "finish_reason", None) or finish_reason
+                    if finish_reason in {"length", "content_filter"}:
+                        stream_error = f"Model stream ended with finish_reason={finish_reason}."
                     delta = chunk.choices[0].delta
                     reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
                     if reasoning:
@@ -280,10 +288,23 @@ class OpenAICompatLlm(OpenAILlm):
                         attempt_publish("token", text=delta.content)
                     if delta.tool_calls:
                         accumulate_tool_deltas(tool_buffers, delta.tool_calls)
+            except Exception as exc:
+                if not any(buffer.get("name") for buffer in tool_buffers.values()) or not (
+                    isinstance(exc, (APIError, json.JSONDecodeError)) or is_retryable_transport_error(exc)
+                ):
+                    raise
+                # Completed JSON calls survive; broken siblings become failed
+                # actions. Do not retry and replace an already identified batch.
+                stream_error = f"Model stream interrupted ({type(exc).__name__})."
             finally:
                 with contextlib.suppress(Exception):
                     await response.close()
             capture: Dict[str, Any] = {}
+            if finish_reason == "content_filter":
+                for buffer in tool_buffers.values():
+                    buffer["error"] = "The provider rejected this tool output (content_filter)."
+            if stream_error:
+                capture["model_stream_error"] = stream_error
             if reasoning_parts:
                 capture["reasoning_content"] = "".join(reasoning_parts)
             if reasoning_detail_buffers:
@@ -291,7 +312,7 @@ class OpenAICompatLlm(OpenAILlm):
                     reasoning_detail_buffers[i] for i in sorted(reasoning_detail_buffers)
                 ]
             return StreamResult(
-                tool_calls=parse_tool_calls(tool_buffers[i] for i in sorted(tool_buffers)),
+                tool_calls=parse_tool_calls((tool_buffers[i] for i in sorted(tool_buffers)), stream_error),
                 content="".join(content_parts), usage=usage, capture=capture)
 
         return await stream_with_transport_retry(run_attempt, publish)

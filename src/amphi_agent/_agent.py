@@ -402,8 +402,9 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         # Push tool result to stream except internal control-flow tools
         if stream is not None and result is not None:
             tool_durations = getattr(ota_context._current_record(), "tool_durations_ms", {}) or {}
+            parse_errors = getattr(ota_context._current_record(), "tool_call_errors", {}) or {}
             for step in getattr(result, "results", None) or []:
-                if step.tool_name in self.no_display_tools:
+                if step.tool_name in self.no_display_tools or step.tool_id in parse_errors:
                     continue
                 stream.publish(
                     "tool_result",
@@ -426,9 +427,11 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 self._denied_step(verdict) for verdict in duplicate_verdicts
             ])
         visible_names = {spec.tool_name for spec in ota_context.tools}
+        errors = getattr(ota_context._current_record(), "tool_call_errors", {}) or {}
         executable = [
             call for call in calls
             if getattr(call, "call_id", None) and getattr(call, "tool", None) in visible_names
+            and call.call_id not in errors
         ]
         executable_decision = decision.model_copy(update={"tool_calls": executable})
         matched = _decision_to_matched_calls(executable_decision, ota_context.tools)
@@ -468,6 +471,8 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
                 if tool_name not in visible_names
                 else f"tool `{tool_name}` was not executed because its call id is missing."
             )
+            if call_id in errors:
+                reason = errors[call_id]["error"]
             results.append(ActionStepResult(
                 tool_id=call_id,
                 tool_name=tool_name,
@@ -521,6 +526,23 @@ class AmphiAgent(AmphibiousAutoma[AmphiOTAContext, AmphiContext]):
         denied = [cv for cv in gate.verdicts if cv.verdict == Permission.DENY.value]
         if denied and ota_context.action_result is None and not isinstance(ota_context.interaction_status, AwaitingPermission):
             ota_context.action_result = ActionResult(results=[self._denied_step(cv) for cv in denied])
+
+        # Parse failures never enter action_tool_call's admitted-call stream.
+        # Publish both events here, including all-failed batches and approval
+        # resumes, while preserving internal control-tool visibility rules.
+        parse_errors = getattr(ota_context._current_record(), "tool_call_errors", {}) or {}
+        if ota_context.stream is not None and parse_errors:
+            for step in getattr(ota_context.action_result, "results", None) or []:
+                if step.tool_id not in parse_errors or step.tool_name in self.no_display_tools:
+                    continue
+                ota_context.stream.publish(
+                    "tool", tool_id=step.tool_id, tool_name=step.tool_name,
+                    arguments=step.tool_arguments,
+                )
+                ota_context.stream.publish(
+                    "tool_result", tool_id=step.tool_id, success=False,
+                    error=step.error, output="", duration_ms=0,
+                )
 
         successful_steps = [
             step for step in getattr(ota_context.action_result, "results", None) or []

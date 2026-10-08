@@ -1,10 +1,11 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
-from anthropic.types import RawContentBlockDeltaEvent, RawContentBlockStartEvent, RawContentBlockStopEvent
+from anthropic.types import RawContentBlockDeltaEvent, RawContentBlockStartEvent, RawContentBlockStopEvent, RawMessageDeltaEvent, RawMessageStartEvent
 from bridgic.core.model import ModelUnrecoverableError
 from bridgic.core.model.types import Message, Role
 from bridgic.llms.openai import OpenAIConfiguration, OpenAILlm
@@ -259,6 +260,10 @@ async def test_anthropic_stream_turn_reduces_native_events() -> None:
     original_async_client = llm.async_client
     events, publish = _events()
     raw_events = [
+        RawMessageStartEvent(type="message_start", message={
+            "id": "msg-1", "type": "message", "role": "assistant", "model": "claude-test",
+            "content": [], "usage": {"input_tokens": 3, "output_tokens": 0},
+        }),
         RawContentBlockStartEvent(type="content_block_start", index=0, content_block={"type": "thinking", "thinking": "", "signature": ""}),
         RawContentBlockDeltaEvent(type="content_block_delta", index=0, delta={"type": "thinking_delta", "thinking": "plan"}),
         RawContentBlockDeltaEvent(type="content_block_delta", index=0, delta={"type": "signature_delta", "signature": "sig"}),
@@ -269,6 +274,7 @@ async def test_anthropic_stream_turn_reduces_native_events() -> None:
         RawContentBlockStartEvent(type="content_block_start", index=2, content_block={"type": "tool_use", "id": "call-1", "name": "inspect", "input": {}}),
         RawContentBlockDeltaEvent(type="content_block_delta", index=2, delta={"type": "input_json_delta", "partial_json": '{"path":"."}'}),
         RawContentBlockStopEvent(type="content_block_stop", index=2),
+        RawMessageDeltaEvent(type="message_delta", delta={"stop_reason": "tool_use", "stop_sequence": None}, usage={"output_tokens": 2}),
     ]
 
     class Response:
@@ -285,10 +291,11 @@ async def test_anthropic_stream_turn_reduces_native_events() -> None:
             for event in raw_events:
                 yield event
 
-        async def get_final_message(self):
-            return SimpleNamespace(usage={"input_tokens": 3, "output_tokens": 2})
+    async def create(**params):
+        assert params["stream"] is True
+        return Response()
 
-    llm.async_client = SimpleNamespace(messages=SimpleNamespace(stream=lambda **_params: Response()))
+    llm.async_client = SimpleNamespace(messages=SimpleNamespace(create=create))
     try:
         result = await llm.stream_turn(
             [Message.from_text("inspect", role=Role.USER)],
@@ -360,6 +367,49 @@ async def test_google_stream_turn_reduces_native_chunks() -> None:
     }
     assert result.capture == {"thought_signatures": ["c2ln"]}
     assert events == [("reasoning", {"text": "plan"}), ("token", {"text": "done"})]
+
+
+@pytest.mark.parametrize("has_call,stopped", [(True, False), (False, False), (True, True)])
+async def test_google_interruption_preserves_only_identified_calls(monkeypatch, has_call: bool, stopped: bool) -> None:
+    """Completed SDK calls survive interruption; thinking errors and Stop still raise."""
+    llm = GoogleLlm(api_key="test-key", configuration=GoogleConfiguration(model="gemini-test"))
+    original_client = llm.async_client
+    attempts = 0
+
+    async def no_sleep(_delay):
+        pass
+
+    monkeypatch.setattr("src.amphi_service.protocol.llms._streaming.asyncio.sleep", no_sleep)
+
+    class Stream:
+        async def __aiter__(self):
+            if has_call:
+                yield types.GenerateContentResponse.model_validate({"candidates": [{"content": {"role": "model", "parts": [
+                    {"function_call": {"id": "a", "name": "inspect", "args": {"path": "."}}, "thought_signature": b"sig"},
+                ]}}]})
+            if stopped:
+                raise asyncio.CancelledError()
+            raise httpx.ReadError("connection reset")
+
+    async def open_stream(**_params):
+        nonlocal attempts
+        attempts += 1
+        return Stream()
+
+    llm.async_client = SimpleNamespace(models=SimpleNamespace(generate_content_stream=open_stream))
+    try:
+        if stopped or not has_call:
+            with pytest.raises(asyncio.CancelledError if stopped else httpx.ReadError):
+                await llm.stream_turn([Message.from_text("inspect")], None, publish=lambda *_args, **_kwargs: None)
+        else:
+            result = await llm.stream_turn([Message.from_text("inspect")], None, publish=lambda *_args, **_kwargs: None)
+            assert result.tool_calls == [{"name": "inspect", "call_id": "a", "arguments": {"path": "."}}]
+            assert result.capture["thought_signatures"] == ["c2ln"]
+            assert "ReadError" in result.capture["model_stream_error"]
+        assert attempts == (3 if not has_call else 1)
+    finally:
+        llm.client.close()
+        await original_client.aclose()
 
 
 async def test_codex_stream_turn_refreshes_401_and_reduces_sse() -> None:

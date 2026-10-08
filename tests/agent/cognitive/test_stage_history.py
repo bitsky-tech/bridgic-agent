@@ -8,7 +8,7 @@ import pytest
 from bridgic.amphibious import ActionResult, ActionStepResult, OTARecord
 from bridgic.core.model.types import Message, ToolCallBlock, ToolResultBlock
 
-from src.amphi_agent import AmphiAgent, AmphiOTAContext, MainThink
+from src.amphi_agent import AmphiAgent, AmphiOTAContext, ContextWindowExceededError, MainThink
 from src.amphi_agent.cognitive import ClarifyThink, ExploreThink, GenerateThink, PresentationBriefThink, PresentationThink, VerifyThink
 from src.amphi_agent.cognitive.base import BaseThink
 from src.amphi_agent.cognitive.build.state import BuildStageState
@@ -109,7 +109,7 @@ async def test_normal_compaction_covers_retired_validation_without_reexpansion(t
 @pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "verify"), ("run_workflow", "execute"), ("presentation", "ppt_review")])
 @pytest.mark.parametrize("status", [TurnStatus.COMPLETED, TurnStatus.FAILED, TurnStatus.CANCELLED])
 async def test_compacted_turn_tail_does_not_expand_in_session_history(test_sandbox: IsolatedPaths, mode: str, stage: str, status: TurnStatus) -> None:
-    """A protected large-argument round keeps the same bounded replay in the next Turn."""
+    """A protected round keeps complete arguments while covered rounds stay compacted."""
     think = {"mode": mode, "stage": stage}
     if mode == "run_workflow":
         think.update(workflow_id="workflow-a", generation="generation-a")
@@ -136,21 +136,24 @@ async def test_compacted_turn_tail_does_not_expand_in_session_history(test_sandb
     next_turn = AmphiOTAContext(user_input="Continue", state={"think": think})
     next_turn.tools = current.tools
     history = await worker.session_messages_block(next_turn, historical_context)
-    replay = history[1:3]
+    replay = history[1:1 + len(live)]
     assert [message.blocks for message in replay] == [message.blocks for message in live]
     assert all(not message.extras for message in replay)
-    assert large not in _serialized(history)
+    assert large in _serialized(history)
     assert "COVERED RAW" not in _serialized(history)
-    assert "120000 characters" in _serialized(history)
+    calls = [block for message in replay for block in message.blocks if isinstance(block, ToolCallBlock)]
+    assert len(calls) == 1
+    assert calls[0].arguments == args
     assert "Wrote generated.txt" in _serialized(history)
     assert previous.model_dump(mode="json") == raw_before
-    # A new request must fit without trying to compact the protected last Turn.
+    # Oversized protected history fails explicitly instead of silently dropping arguments.
     messages = await worker.assemble_messages(next_turn, historical_context)
-    await worker.compact_messages(messages, next_turn.tools, next_turn, historical_context)
+    with pytest.raises(ContextWindowExceededError):
+        await worker.compact_messages(messages, next_turn.tools, next_turn, historical_context)
     assert not llm.calls
 
 
-@pytest.mark.parametrize("case", ["safe", "oversized", "structured", "missing", "partial", "steps_only", "choice", "large_choice"])
+@pytest.mark.parametrize("case", ["safe", "oversized", "structured", "missing", "partial", "steps_only", "choice", "large_choice", "large_choice_answered"])
 async def test_session_tool_replay_matches_completed_action_steps(test_sandbox: IsolatedPaths, case: str) -> None:
     """Use executed arguments, preserve every completed pair, and omit old reasoning."""
     args = {"file_path": "actual.txt", "content": "small"}
@@ -161,11 +164,11 @@ async def test_session_tool_replay_matches_completed_action_steps(test_sandbox: 
     elif case == "missing":
         args.pop("file_path")
     tool_name = "write_file"
-    if case in {"choice", "large_choice"}:
+    if case in {"choice", "large_choice", "large_choice_answered"}:
         question = {"header": "Choice", "question": "Choose an option", "options": [
-            {"label": f"Option {i}", "description": "d" * (200 if case == "large_choice" else 1)} for i in range(3)
+            {"label": f"Option {i}", "description": "d" * (200 if "large_choice" in case else 1)} for i in range(3)
         ]}
-        args = {"questions": json.dumps([question] * (3 if case == "large_choice" else 1)), "prompt": "Choose the next action"}
+        args = {"questions": json.dumps([question] * (3 if "large_choice" in case else 1)), "prompt": "Choose the next action"}
         tool_name = "request_human_choice"
     record = _round("normal", "main", "Executed tools")
     record.think_result["tool_calls"] = [
@@ -176,6 +179,8 @@ async def test_session_tool_replay_matches_completed_action_steps(test_sandbox: 
         ActionStepResult(tool_id="write-id", tool_name=tool_name, tool_arguments=args, tool_result="" if "choice" in case else "written"),
         ActionStepResult(tool_id="read-id", tool_name="read_file", tool_arguments={"file_path": "actual.txt"}, tool_result=None, success=False, error="read failed"),
     ])
+    if case == "large_choice_answered":
+        record.action_result.results[0].tool_result = "The user selected Option 1."
     if case == "partial":
         record.action_result.results.pop()
     elif case == "steps_only":
@@ -197,7 +202,14 @@ async def test_session_tool_replay_matches_completed_action_steps(test_sandbox: 
     calls = [block for message in history for block in message.blocks if isinstance(block, ToolCallBlock)]
     results = [block for message in history for block in message.blocks if isinstance(block, ToolResultBlock)]
     assert [call.id for call in calls] == [result.id for result in results]
-    assert len(calls) == (0 if case in {"oversized", "structured", "missing", "large_choice"} else 1 if case == "partial" else 2)
+    assert len(calls) == (1 if case == "partial" else 2)
+    if calls:
+        assert calls[0].arguments == args
+        for message in live:
+            if any(isinstance(block, ToolCallBlock) for block in message.blocks):
+                assert message.extras.get("thought_signatures") == record.thought_signatures
+    if case == "large_choice_answered":
+        assert results[0].content == "The user selected Option 1."
 
 
 @pytest.mark.parametrize("mode,stage", [("normal", "main"), ("build", "clarify"), ("build", "verify"), ("run_workflow", "execute"), ("presentation", "ppt_brief")])

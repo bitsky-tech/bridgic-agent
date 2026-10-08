@@ -12,12 +12,14 @@ from bridgic.core.model.types import (
 )
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 
 from ._image_inputs import image_inputs_of, read_image_input
 from ._streaming import (
     StreamResult,
     convert_tools,
+    is_retryable_transport_error,
     open_stream_with_retry,
     stream_with_transport_retry,
 )
@@ -323,10 +325,22 @@ class GoogleLlm(BaseLlm):
                 model=self.configuration.model,
                 publish=attempt_publish,
             )
-            async for chunk in stream:
-                self._reduce_chunk(chunk, state, attempt_publish)
+            stream_error = None
+            try:
+                async for chunk in stream:
+                    self._reduce_chunk(chunk, state, attempt_publish)
+            except Exception as exc:
+                if not any(call.get("name") for call in state["tool_calls"]) or not (
+                    isinstance(exc, APIError) or is_retryable_transport_error(exc)
+                ):
+                    raise
+                # Gemini exposes complete structured calls, not JSON fragments.
+                # Preserve those calls rather than replacing the entire batch.
+                stream_error = f"Model stream interrupted ({type(exc).__name__})."
 
             capture = {"thought_signatures": state["signatures"]} if any(state["signatures"]) else {}
+            if stream_error:
+                capture["model_stream_error"] = stream_error
             return StreamResult(
                 tool_calls=state["tool_calls"],
                 content="".join(state["content"]),

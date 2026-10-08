@@ -615,20 +615,21 @@ async def test_session_replay() -> None:
     assert "Provider unavailable" not in serialized_messages
 
 
-async def test_turn_fallback() -> None:
+@pytest.mark.parametrize("size", [1200, 1201, 100_000])
+async def test_turn_large_arguments_are_preserved(size: int) -> None:
     """Final current Turn replay:
 
     {
       "safe_call": {"shape": "native", "result_paired": true},
-      "oversized_call": {"shape": "assistant summary", "large_value_replayed": false}
+      "oversized_call": {"shape": "native", "large_value_replayed": true}
     }
 
     Checks:
-    1. A complete bounded call is replayed as a native Assistant and Tool pair.
-    2. A call with an oversized argument is summarized without exposing an invalid Tool Call.
-    3. Only native calls contribute Tool Result messages to the model input.
+    1. A complete call is replayed as a native Assistant and Tool pair.
+    2. Large argument values are replayed in full without a text-summary fallback.
+    3. Every call keeps its paired Tool Result and its original stored arguments.
     """
-    large_content = "x" * 1300
+    large_content = "x" * size
     ota_context = AmphiOTAContext(
         user_input="Update the files",
         prompt_time=PROMPT_TIME,
@@ -667,7 +668,7 @@ async def test_turn_fallback() -> None:
 
     messages = await MainThink().assemble_messages(ota_context, _context([]))
 
-    # Check 1: A complete bounded call is replayed as a native Assistant and Tool pair.
+    # Check 1: A complete call is replayed as a native Assistant and Tool pair.
     safe_call = next(block for block in messages[2].blocks if isinstance(block, ToolCallBlock))
     safe_result = next(block for block in messages[3].blocks if isinstance(block, ToolResultBlock))
     assert safe_call.id == "call-safe"
@@ -675,23 +676,24 @@ async def test_turn_fallback() -> None:
     assert safe_result.id == safe_call.id
     assert safe_result.content == "Source contents"
 
-    # Check 2: A call with an oversized argument is summarized without exposing an invalid Tool Call.
-    summary = messages[4]
-    assert summary.role is Role.AI
-    assert "Completed historical tool activity is summarized as text" in summary.content
-    assert "`content` (1300 characters)" in summary.content
-    assert "Wrote generated.txt" in summary.content
-    assert large_content not in summary.content
-    assert not any(isinstance(block, ToolCallBlock) for block in summary.blocks)
+    # Check 2: Large argument values are replayed in full without a text-summary fallback.
+    large_call = next(block for block in messages[4].blocks if isinstance(block, ToolCallBlock))
+    large_result = next(block for block in messages[5].blocks if isinstance(block, ToolResultBlock))
+    assert large_call.id == "call-large"
+    assert large_call.arguments == {"file_path": "generated.txt", "content": large_content}
+    assert large_result.id == large_call.id
+    assert large_result.content == "Wrote generated.txt"
+    assert "Completed historical tool activity" not in (messages[4].content or "")
 
-    # Check 3: Only native calls contribute Tool Result messages to the model input.
+    # Check 3: Every call keeps its paired Tool Result and its original stored arguments.
     tool_results = [
         block
         for message in messages
         for block in message.blocks
         if isinstance(block, ToolResultBlock)
     ]
-    assert [result.id for result in tool_results] == ["call-safe"]
+    assert [result.id for result in tool_results] == ["call-safe", "call-large"]
+    assert ota_context.ota_record[1].action_result.results[0].tool_arguments == large_call.arguments
 
 
 async def test_session_history_has_no_record_limit() -> None:
