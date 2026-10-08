@@ -939,7 +939,9 @@ function createFixedGraphicGroup(fabric: FabricModule, element: PresentationTabl
 
 function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
   const grid = presentationTableGrid(element)
-  const objects: FabricObject[] = []
+  const fills: FabricObject[] = []
+  const borders: FabricObject[] = []
+  const texts: FabricObject[] = []
   for (let rowIndex = 0; rowIndex < grid.rows; rowIndex += 1) {
     for (let columnIndex = 0; columnIndex < grid.columns; columnIndex += 1) {
       const style = presentationTableCellAppearance(element, rowIndex, columnIndex)
@@ -950,17 +952,30 @@ function createTableFabricObject(fabric: FabricModule, element: PresentationTabl
       const cellHeight = grid.rowHeights.slice(rowIndex, rowIndex + style.rowSpan).reduce((sum, height) => sum + height, 0)
       const contentWidth = Math.max(0, cellWidth - style.padding.left - style.padding.right)
       const contentHeight = Math.max(0, cellHeight - style.padding.top - style.padding.bottom)
-      objects.push(new fabric.Rect({
+      fills.push(new fabric.Rect({
         originX: 'left',
         originY: 'top',
         left: cellX,
         top: cellY,
-        width: cellWidth - 1,
-        height: cellHeight - 1,
-        strokeWidth: 1,
+        width: cellWidth,
+        height: cellHeight,
+        strokeWidth: 0,
         fill: style.fill,
-        stroke: style.borderColor,
       }))
+      for (const edge of ['top', 'right', 'bottom', 'left'] as const) {
+        const border = style.borders[edge]
+        if (border.type === 'none' || border.width === 0) continue
+        const inset = border.width / 2
+        let points: [number, number, number, number]
+        if (edge === 'top') points = [cellX, cellY + inset, cellX + cellWidth, cellY + inset]
+        else if (edge === 'right') points = [cellX + cellWidth - inset, cellY, cellX + cellWidth - inset, cellY + cellHeight]
+        else if (edge === 'bottom') points = [cellX, cellY + cellHeight - inset, cellX + cellWidth, cellY + cellHeight - inset]
+        else points = [cellX + inset, cellY, cellX + inset, cellY + cellHeight]
+        borders.push(new fabric.Line(points, {
+          stroke: border.color, strokeWidth: border.width,
+          ...(border.type === 'dash' ? { strokeDashArray: [4 * border.width, 2 * border.width] } : {}),
+        }))
+      }
       const cellText = element.cells[rowIndex]?.[columnIndex] ?? ''
       const textStyles: TextStyle = {}
       let textLine = 0
@@ -1012,10 +1027,10 @@ function createTableFabricObject(fabric: FabricModule, element: PresentationTabl
           originX: 'center', originY: 'center', strokeWidth: 0,
         }),
       })
-      objects.push(text)
+      texts.push(text)
     }
   }
-  return createFixedGraphicGroup(fabric, element, objects)
+  return createFixedGraphicGroup(fabric, element, [...fills, ...borders, ...texts])
 }
 
 function createChartFabricObject(fabric: FabricModule, element: Extract<PresentationElement, { type: 'chart' }>): FabricObject {

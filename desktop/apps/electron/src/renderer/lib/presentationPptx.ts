@@ -404,16 +404,50 @@ function correctTableXml(xml: string, elements: readonly PresentationElement[]):
     const properties = frame.getElementsByTagNameNS(drawingNs, 'tblPr')[0]
     // PptxGenJS writes cell formatting but omits the semantic first-row flag.
     if (element && properties) properties.setAttribute('firstRow', element.headerRow ? '1' : '0')
-    if (!element?.cellStyles?.some(row => row.some(cell => cell.textRuns?.length))) continue
+    if (!element?.cellStyles?.some(row => row.some(cell => cell.textRuns?.length || cell.bold !== undefined || cell.textColor !== undefined))) continue
     const table = frame.getElementsByTagNameNS(drawingNs, 'tbl')[0]
     if (!table) continue
     const rows = Array.from(table.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === 'tr')
     rows.forEach((row, rowIndex) => {
       const cells = Array.from(row.childNodes).filter((node): node is Element => node.nodeType === 1 && (node as Element).localName === 'tc')
       cells.forEach((cell, columnIndex) => {
-        if (!element.cellStyles?.[rowIndex]?.[columnIndex]?.textRuns?.length) return
+        const cellStyle = element.cellStyles?.[rowIndex]?.[columnIndex]
+        if (!cellStyle?.textRuns?.length && cellStyle?.bold === undefined && cellStyle?.textColor === undefined) return
         const body = cell.getElementsByTagNameNS(drawingNs, 'txBody')[0]
         if (!body) return
+        if (!cellStyle?.textRuns?.length) {
+          if (cellStyle.bold !== undefined) {
+            for (const name of ['rPr', 'endParaRPr']) {
+              for (const properties of Array.from(body.getElementsByTagNameNS(drawingNs, name))) {
+                properties.setAttribute('b', cellStyle.bold ? '1' : '0')
+              }
+            }
+          }
+          if (cellStyle.textColor !== undefined && !(element.cells[rowIndex]?.[columnIndex] ?? '').trim()) {
+            for (const paragraph of Array.from(body.getElementsByTagNameNS(drawingNs, 'p'))) {
+              let properties = Array.from(paragraph.childNodes).find((node): node is Element => (
+                node.nodeType === 1 && (node as Element).localName === 'endParaRPr'
+              ))
+              if (!properties) {
+                properties = document.createElementNS(drawingNs, 'a:endParaRPr')
+                paragraph.appendChild(properties)
+              }
+              if (cellStyle.bold !== undefined) properties.setAttribute('b', cellStyle.bold ? '1' : '0')
+              for (const fill of Array.from(properties.childNodes).filter((node): node is Element => (
+                node.nodeType === 1 && (node as Element).localName === 'solidFill'
+              ))) properties.removeChild(fill)
+              const fill = document.createElementNS(drawingNs, 'a:solidFill')
+              const color = document.createElementNS(drawingNs, 'a:srgbClr')
+              color.setAttribute('val', presentationColor(cellStyle.textColor, '20202B'))
+              fill.appendChild(color)
+              const font = Array.from(properties.childNodes).find((node): node is Element => (
+                node.nodeType === 1 && ['latin', 'ea', 'cs', 'sym'].includes((node as Element).localName)
+              ))
+              properties.insertBefore(fill, font ?? null)
+            }
+          }
+          return
+        }
         for (const child of Array.from(body.childNodes)) if (child.nodeType === 1 && (child as Element).localName === 'p') body.removeChild(child)
         const base = presentationTableCellAppearance(element, rowIndex, columnIndex)
         const addParagraph = () => {
@@ -1356,13 +1390,19 @@ export async function createPresentationPptx(document: PresentationProject): Pro
           for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
             const style = presentationTableCellAppearance(element, rowIndex, columnIndex)
             if (style.covered) continue
+            const border = (edge: keyof typeof style.borders): PptxGenJS.BorderProps => {
+              const value = style.borders[edge]
+              return value.type === 'none' || value.width === 0
+                ? { type: 'none', pt: 0 }
+                : { type: value.type, color: presentationColor(value.color, 'D8D9E0'), pt: presentationFontSizeToPoints(value.width) }
+            }
             output.push({
               text: typeof row[columnIndex] === 'string' ? row[columnIndex] : '',
               options: {
                 fill: { color: presentationColor(style.fill, 'FFFFFF') },
                 color: presentationColor(style.textColor, '20202B'),
                 bold: style.bold,
-                border: { color: presentationColor(style.borderColor, 'D8D9E0'), pt: 1 },
+                border: [border('top'), border('right'), border('bottom'), border('left')],
                 fontFace: style.fontFamily,
                 fontSize: presentationFontSizeToPoints(style.fontSize),
                 margin: element.cellStyles?.[rowIndex]?.[columnIndex]?.padding

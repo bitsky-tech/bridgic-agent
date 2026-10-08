@@ -349,6 +349,30 @@ describe('chart and table display round trips', () => {
     group.dispose()
   })
 
+  it('renders independent table cell borders in preview and editable canvas', async () => {
+    const element = {
+      ...createPresentationTableElement([['Border']]),
+      cellStyles: [[{ borders: {
+        top: { color: '#FF0000', width: 4, type: 'solid' as const },
+        right: { color: '#0000FF', width: 2, type: 'dash' as const },
+        bottom: { color: '#00AA00', width: 1, type: 'solid' as const },
+        left: { color: 'transparent', width: 0, type: 'none' as const },
+      } }]],
+    }
+    const td = markup(documentFor(element)).querySelector('td')!
+    expect(td.style.borderTop).toContain('4px solid')
+    expect(td.style.borderRight).toContain('2px dashed')
+    expect(td.style.borderBottom).toContain('1px solid')
+    expect(td.style.borderLeft).toContain('none')
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing table group')
+    const lines = group.getObjects().filter(object => object instanceof fabric.Line) as InstanceType<typeof fabric.Line>[]
+    expect(lines).toHaveLength(3)
+    expect(lines.map(line => [line.stroke, line.strokeWidth])).toEqual([['#FF0000', 4], ['#0000FF', 2], ['#00AA00', 1]])
+    expect(lines[1]?.strokeDashArray).toEqual([8, 4])
+    group.dispose()
+  })
+
   it.each(['pie', 'doughnut'] as const)('separates crowded %s value labels without losing values or changing the frame', async chartType => {
     Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: () => ({
       font: '', textBaseline: 'alphabetic', measureText(value: string) {

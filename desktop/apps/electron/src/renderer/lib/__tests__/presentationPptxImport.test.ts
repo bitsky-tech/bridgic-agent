@@ -13,6 +13,54 @@ function addImageAsset(document: PresentationProject, id: string, source: Presen
 }
 
 describe('importPresentationPptx', () => {
+  it('keeps an explicitly non-bold table header non-bold after native PPTX export', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'plain-header-table', type: 'table', x: 80, y: 80, width: 400, height: 160, rotation: 0,
+      cells: [['Plain heading'], ['Body'], ['']], cellStyles: [[{ bold: false }], [{}], [{ bold: false, textColor: '#FF0000' }]],
+      headerRow: true, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(xml).toMatch(/<a:rPr[^>]*b="0"[^>]*>/)
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    expect(table.cellStyles?.[0]?.[0]?.bold).toBe(false)
+    expect(table.cellStyles?.[2]?.[0]).toMatchObject({ bold: false, textColor: '#FF0000' })
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
+  it('preserves independent table cell borders through native PPTX export and import', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'border-table', type: 'table', x: 80, y: 80, width: 400, height: 160, rotation: 0,
+      cells: [['Border']], cellStyles: [[{ borders: {
+        top: { color: '#FF0000', width: 4, type: 'solid' },
+        right: { color: '#0000FF', width: 2, type: 'dash' },
+        bottom: { color: '#00AA00', width: 1, type: 'solid' },
+        left: { color: 'transparent', width: 0, type: 'none' },
+      } }]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(xml).toContain('FF0000')
+    expect(xml).toContain('0000FF')
+    expect(xml).toContain('00AA00')
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    const borders = table.cellStyles?.[0]?.[0]?.borders
+    expect(borders?.top).toMatchObject({ color: '#FF0000', width: 4, type: 'solid' })
+    expect(borders?.right).toMatchObject({ color: '#0000FF', width: 2, type: 'dash' })
+    expect(borders?.bottom).toMatchObject({ color: '#00AA00', width: 1, type: 'solid' })
+    expect(borders?.left).toMatchObject({ width: 0, type: 'none' })
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
   it('keeps mixed formatting within an editable table cell through native PPTX round trips', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = createInitialPresentationProject()

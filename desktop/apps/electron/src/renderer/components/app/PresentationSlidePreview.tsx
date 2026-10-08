@@ -727,9 +727,14 @@ function PresentationTablePreview({ element, scale }: { scale?: PresentationAnim
               let justifyContent = 'safe center'
               if (cell.verticalAlign === 'top') justifyContent = 'flex-start'
               if (cell.verticalAlign === 'bottom') justifyContent = 'flex-end'
+              const border = (edge: keyof typeof cell.borders) => {
+                const value = cell.borders[edge]
+                return value.type === 'none' || value.width === 0 ? 'none' : `${value.width}px ${value.type === 'dash' ? 'dashed' : 'solid'} ${value.color}`
+              }
               return (
                 <td key={columnIndex} colSpan={cell.colSpan} rowSpan={cell.rowSpan} className="overflow-hidden p-0"
-                  style={{ border: `1px solid ${cell.borderColor}`, backgroundColor: cell.fill, color: cell.textColor,
+                  style={{ borderTop: border('top'), borderRight: border('right'), borderBottom: border('bottom'), borderLeft: border('left'),
+                    backgroundColor: cell.fill, color: cell.textColor,
                     fontWeight: cell.bold ? 600 : 400, fontSize: cell.fontSize, textAlign: cell.align,
                     verticalAlign: cell.verticalAlign === 'middle' ? 'middle' : cell.verticalAlign }}>
                   <div style={{ height: Math.max(0, cellHeight - 1), paddingTop: cell.padding.top, paddingRight: cell.padding.right,

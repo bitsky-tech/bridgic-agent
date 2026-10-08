@@ -319,10 +319,17 @@ export interface PresentationVideoElement extends PresentationElementBase {
 
 export type PresentationMediaElement = PresentationAudioElement | PresentationVideoElement
 
+export interface PresentationTableCellBorder {
+  color: string
+  width: number
+  type: 'solid' | 'dash' | 'none'
+}
+
 export interface PresentationTableCellStyle {
   fill?: string
   textColor?: string
   borderColor?: string
+  borders?: Partial<Record<'top' | 'right' | 'bottom' | 'left', PresentationTableCellBorder>>
   fontSize?: number
   fontFamily?: string
   bold?: boolean

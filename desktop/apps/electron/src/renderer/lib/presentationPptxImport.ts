@@ -23,6 +23,7 @@ import {
   type PresentationShapeType,
   type PresentationSlide,
   type PresentationTableElement,
+  type PresentationTableCellBorder,
   type PresentationTableCellStyle,
   type PresentationChartElement,
   type PresentationTextElement,
@@ -1439,6 +1440,29 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
         const fill = properties ? directChildrenByLocalName(properties, 'solidFill')[0] : null
         const line = properties ? directChildrenByLocalName(properties, 'lnL')[0] ?? directChildrenByLocalName(properties, 'lnT')[0] : null
         const lineFill = line ? directChildrenByLocalName(line, 'solidFill')[0] : null
+        const borderFrom = (edge: 'lnL' | 'lnR' | 'lnT' | 'lnB'): PresentationTableCellBorder | undefined => {
+          const border = properties ? directChildrenByLocalName(properties, edge)[0] : null
+          if (!border) return undefined
+          if (directChildrenByLocalName(border, 'noFill').length > 0) return { color: 'transparent', width: 0, type: 'none' }
+          const solidFill = directChildrenByLocalName(border, 'solidFill')[0]
+          if (!solidFill) return undefined
+          const dash = directChildrenByLocalName(border, 'prstDash')[0]?.getAttribute('val')
+          return {
+            color: colorFrom(solidFill, '#D9D7E2', themeColors),
+            width: presentationFontSizeFromPoints(numberAttribute(border, 'w', 12_700) / 12_700) * tableScale,
+            type: dash && dash !== 'solid' ? 'dash' : 'solid',
+          }
+        }
+        const leftBorder = borderFrom('lnL')
+        const rightBorder = borderFrom('lnR')
+        const topBorder = borderFrom('lnT')
+        const bottomBorder = borderFrom('lnB')
+        const borders = {
+          ...(leftBorder ? { left: leftBorder } : {}),
+          ...(rightBorder ? { right: rightBorder } : {}),
+          ...(topBorder ? { top: topBorder } : {}),
+          ...(bottomBorder ? { bottom: bottomBorder } : {}),
+        }
         const align = paragraph?.getAttribute('algn')
         const anchor = properties?.getAttribute('anchor')
         let horizontalAlign: PresentationTableCellStyle['align'] = 'left'
@@ -1461,6 +1485,7 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
           ...(fill ? { fill: colorFrom(fill, '#FFFFFF', themeColors) } : {}),
           ...(run && firstByLocalName(run, 'solidFill') ? { textColor: colorFrom(run, '#20202B', themeColors) } : {}),
           ...(lineFill ? { borderColor: colorFrom(lineFill, '#D9D7E2', themeColors) } : {}),
+          ...(Object.keys(borders).length > 0 ? { borders } : {}),
           ...(run?.hasAttribute('sz') ? { fontSize: presentationFontSizeFromPoints(Math.max(1, numberAttribute(run, 'sz') / 100)) * tableScale } : {}),
           ...(fontFace ? { fontFamily: fontFace } : {}),
           ...(run?.hasAttribute('b') ? { bold: /^(1|true)$/.test(run.getAttribute('b') ?? '') } : {}),

@@ -236,6 +236,9 @@ export function resizePresentationProject(document: PresentationProject, preset:
             left: style.padding.left * scale, right: style.padding.right * scale,
             top: style.padding.top * scale, bottom: style.padding.bottom * scale,
           } } : {}),
+          ...(style.borders ? { borders: Object.fromEntries(Object.entries(style.borders).filter(([, border]) => border).map(([edge, border]) => (
+            [edge, { ...border, width: border.width * scale }]
+          ))) as typeof style.borders } : {}),
         }))),
       }
     }

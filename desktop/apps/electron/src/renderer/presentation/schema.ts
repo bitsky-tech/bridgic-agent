@@ -245,6 +245,12 @@ const tableElement = z.strictObject({
     fill: z.string().optional(),
     textColor: z.string().optional(),
     borderColor: z.string().optional(),
+    borders: z.strictObject({
+      top: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+      right: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+      bottom: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+      left: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+    }).optional(),
     fontSize: positive.optional(),
     fontFamily: z.string().optional(),
     bold: z.boolean().optional(),

@@ -1,4 +1,4 @@
-import type { PresentationTableElement, PresentationTextStyle } from '@/atoms/presentation'
+import type { PresentationTableCellBorder, PresentationTableElement, PresentationTextStyle } from '@/atoms/presentation'
 
 function tableSizes(values: number[] | undefined, count: number, extent: number): number[] {
   const known = values?.filter(value => Number.isFinite(value) && value > 0) ?? []
@@ -25,10 +25,20 @@ export function presentationTableCellAppearance(element: PresentationTableElemen
   const style = element.cellStyles?.[row]?.[column]
   const header = element.headerRow && row === 0
   const columns = Math.max(1, ...element.cells.map(cells => cells.length))
+  const borderColor = style?.borderColor ?? element.borderColor
+  const defaultBorder: PresentationTableCellBorder = borderColor === 'transparent'
+    ? { color: 'transparent', width: 0, type: 'none' }
+    : { color: borderColor, width: 96 / 72, type: 'solid' }
   return {
     fill: style?.fill ?? (header ? element.headerFill : element.bodyFill),
     textColor: style?.textColor ?? (header ? element.headerTextColor ?? '#FFFFFF' : element.textColor),
-    borderColor: style?.borderColor ?? element.borderColor,
+    borderColor,
+    borders: {
+      top: style?.borders?.top ?? defaultBorder,
+      right: style?.borders?.right ?? defaultBorder,
+      bottom: style?.borders?.bottom ?? defaultBorder,
+      left: style?.borders?.left ?? defaultBorder,
+    },
     fontSize: style?.fontSize ?? element.fontSize,
     fontFamily: style?.fontFamily ?? 'Aptos',
     bold: style?.bold ?? header,
