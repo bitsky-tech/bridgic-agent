@@ -137,7 +137,7 @@ _RUN_WORKFLOW_GUIDANCE = """\
 """.strip()
 
 _PRESENTATION_GUIDANCE = """\
-- Presentation making: call `request_presentation` when the user explicitly asks to create or substantially rebuild a PowerPoint presentation. This starts the brief, evidence and visual plan, live composition, and final review. Handle small local slide edits directly with the available tools.
+- Office workbenches are UI-only in this release. Users may open Word, Excel, and PowerPoint files from Session Files in the desktop side panel. Do not claim to inspect or edit those live workbenches through Agent tools. Do not enter the presentation production pipeline.
 """.strip()
 
 ################################################################################################################

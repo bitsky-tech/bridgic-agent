@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from src.amphi_agent.tools.powerpoint import (
     powerpoint_tool_specs,
     ppt_edit_page,
@@ -88,9 +90,9 @@ def test_powerpoint_tool_surface_uses_structured_domain_commands() -> None:
     assert {"type": "null"} in group_id_schema["anyOf"]
 
 
-async def test_powerpoint_tools_use_the_session_capability(tool_harness: ToolHarness) -> None:
+async def test_retained_powerpoint_tool_contract(tool_harness: ToolHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     powerpoint = _RecordingPowerPoint()
-    tool_harness.context.powerpoint = powerpoint  # type: ignore[assignment]
+    monkeypatch.setattr("src.amphi_agent.tools.powerpoint._get_powerpoint", lambda: powerpoint)
     workspace = Path(tool_harness.workspace.work_dir).resolve()
     page_ops = [{"type": "patch", "id": "title", "element_type": "text", "patch": {"text": "Updated"}}]
     deck_ops = [{"type": "insert-page", "page": {"id": "new-page"}}]

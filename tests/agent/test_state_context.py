@@ -5,7 +5,7 @@ import pytest
 from bridgic.amphibious import OTARecord
 from pydantic import ValidationError
 
-from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, BrowserHost, ContextUsageSnapshot, PowerPointHost, Session
+from src.amphi_agent import AmphiAgent, AmphiContext, AmphiOTAContext, BrowserHost, ContextUsageSnapshot, Session
 from src.amphi_agent.cognitive.state import AgentState, AwaitingSubAgent, ContextCompactionState, SubAgentCall
 from src.amphi_agent.cognitive.normal.state import AwaitingBuildConfirm
 from src.amphi_agent.cognitive.build.state import BuildStageState
@@ -14,21 +14,21 @@ from src.amphi_agent.cognitive.workflow.state import WorkflowStageState
 from src.amphi_store import SessionRecord, SessionTurnRecord, TurnStatus, UserInput
 
 
-@pytest.mark.parametrize("field_name, host_type", [
-    ("browser", BrowserHost),
-    ("powerpoint", PowerPointHost),
-])
-def test_context_accepts_session_capabilities_and_rejects_hosts(field_name: str, host_type: type) -> None:
+def test_context_accepts_browser_session_capability_and_rejects_host() -> None:
     """Context validation keeps tools bound to Session handles after relocation."""
-    host = host_type(prepare_playwright=lambda: None)
+    host = BrowserHost(prepare_playwright=lambda: None)
     handle = host.for_session("session-capability")
 
-    context = AmphiContext(**{field_name: handle})
+    context = AmphiContext(browser=handle)
 
-    assert getattr(context, field_name) is handle
+    assert context.browser is handle
     assert host.for_session("session-capability") is handle
-    with pytest.raises(ValidationError, match=field_name):
-        AmphiContext(**{field_name: host})
+    with pytest.raises(ValidationError, match="browser"):
+        AmphiContext(browser=host)
+
+
+def test_context_has_no_powerpoint_agent_capability() -> None:
+    assert "powerpoint" not in AmphiContext.model_fields
 
 
 def test_state_round_trip() -> None:

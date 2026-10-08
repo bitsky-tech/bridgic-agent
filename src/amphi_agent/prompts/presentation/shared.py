@@ -13,15 +13,8 @@ PRESENTATION_CONTEXT_GUIDANCE = """\
 # Tool Guidance
 ################################################################################################################
 PRESENTATION_TOOL_GUIDANCE = """\
-- Tool availability does not broaden the current stage. Brief and Plan may inspect an existing or supplied presentation when that is necessary to understand it, but they must not change the live deck. Compose and Review own slide mutations. Do not perform research, outlining, visual generation, slide construction, or review before the current stage and step call for it.
-- Treat the Session-owned PowerPoint presentation as the authoritative live deck and use only a deck-authoring capability explicitly listed in the current tool surface to inspect or mutate it. If no such capability is available, do not substitute DOM clicks, browser tools, GUI automation, `bash`, or third-party PPT libraries, and do not claim that the live deck was opened, inspected, or changed.
-- UI and Agent edits automatically save to the same PPTX in the Session workspace. `ppt_save` can flush pending edits before handing off a finished file.
-- `ppt_open` returns a stable document id. Use `ppt_read_deck` before deck structure or design changes and `ppt_read_page` before page changes; the Session privately carries the matching revision into `ppt_manage_deck` or `ppt_edit_page`. Operations are typed domain commands and each batch is all-or-nothing. Re-read after a stale revision result.
-- Compact page Markdown is a readable projection, not the mutation protocol. Preserve stable page and element ids, use `format=model` only when exact native properties are needed, and patch only the properties requested by the task.
-- Use `ppt_inspect` with `kind=render` after material edits and inspect its PNG outputs with `read_image`. Text inspection alone is not visual QA, and a successful edit is not proof that the rendered page is readable.
-- Imports are registered in Session Files and opened from the Session workspace; the original imported bytes are retained. Use the returned target path for subsequent operations.
-- Perform live slide operations only through an explicitly available deck-authoring capability, never through filesystem or shell workarounds.
-- A Skill supplements the current stage; it does not override the user's request, the stage boundary, or the production contracts.
+- The PowerPoint workbench is UI-only in this release. Agent inspection and editing of the live deck are unavailable. Do not substitute browser automation, shell commands, or third-party libraries for live workbench operations, and do not claim that the live deck was inspected or changed.
+- If this Session resumed inside a presentation stage, use `switch(mode="normal")` and tell the user that the Agent presentation workflow is unavailable in this release. Do not continue the production pipeline.
 """.strip()
 
 ################################################################################################################
@@ -34,6 +27,7 @@ PRESENTATION_OVERVIEW = """\
 """.strip()
 
 PRESENTATION_STAGE_GUIDANCE = """\
+- This release pauses the Agent presentation pipeline. A Session restored into one of these stages must exit to normal immediately without advancing its production cursor; the remaining stage contract applies only when Agent presentation authoring is enabled.
 - Stage turn: work only in the current presentation stage until its requirements are complete, then use that stage's prescribed `switch` handoff. Brief is governed directly by its stage prompt and required artifact; Plan, Compose, and Review advance through production steps. A stage may span several tool-call rounds within one user Turn.
 - The pipeline is `ppt_brief` → `ppt_plan` → `ppt_compose` → `ppt_review`. Move between stages only by invoking the `switch` tool. Do not claim that a stage changed when no real switch call occurred, and do not use an apparently complete file or slide as evidence that the runtime cursor advanced.
 - In Plan, Compose, and Review, `<presentation_progress>` names the single current production step. Complete that step before starting another, then call `report_presentation_step` with a concrete result and traceable evidence. The runtime advances the step cursor; do not invent or skip progress. Brief has no production-step cursor or step report.
@@ -43,6 +37,6 @@ PRESENTATION_STAGE_GUIDANCE = """\
 - Search before claiming that a referenced file, template, source, asset, API, or Skill is missing. Inspect the available Workspace, mounts, context, or references first, using only tools legal for the current stage.
 - In Plan, Compose, and Review, after completing the current production step, call `report_presentation_step` with a concise result and concrete evidence, then stop that model round. Do not combine the report with speculative work from the next step; the runtime will persist the report and inject the next cursor. Brief instead completes its artifact and performs its prescribed handoff without a step report.
 - When handing work to the next presentation stage, set `switch.reason` to a compact handoff containing decisive conclusions, artifact paths, and material cautions. Do not paste an artifact into the reason or use the reason instead of updating the artifact.
-- `switch(mode="normal")` ends the active presentation pipeline state. Use it before Review completes only when the user explicitly asks to stop or leave. It is the normal success handoff only after Review's final production step is complete; never use it to skip a step or stage.
+- `switch(mode="normal")` ends the active presentation pipeline state. While the pipeline is paused for this release, use it immediately on a resumed stage. When Agent presentation authoring is enabled, use it before Review completes only if the user explicitly asks to stop or leave; it is otherwise the success handoff after Review.
 - Do not announce the presentation as finished from inside Brief, Plan, Compose, or an unfinished Review step. Finish Brief through its artifact and real handoff; finish a later production step through its report and its stage through the real handoff. After completing Review, perform its prescribed handoff without appending a separate delivery summary.
 """.strip()

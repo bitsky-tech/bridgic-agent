@@ -516,8 +516,10 @@ def test_presentation_structures() -> None:
     for name in names:
         persona = personas[name]
         assert "Session-owned live PowerPoint presentation" in persona
-        assert "Tool availability does not broaden the current stage" in persona
-        assert "use only a deck-authoring capability explicitly listed" in persona
+        assert "The PowerPoint workbench is UI-only in this release" in persona
+        assert 'use `switch(mode="normal")`' in persona
+        assert "`ppt_open`" not in persona
+        assert "`ppt_save`" not in persona
         assert "`view_ppt`" not in persona
         assert "`edit_ppt`" not in persona
         assert "Use the PowerPoint tools" not in persona

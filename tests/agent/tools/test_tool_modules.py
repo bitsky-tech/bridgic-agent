@@ -78,9 +78,9 @@ def test_ppt_rag_module_supports_dependency_replacement(monkeypatch: pytest.Monk
 
 
 def test_catalog_preserves_schemas_and_registration_order() -> None:
-    """Existing contracts stay stable while the new PowerPoint workflow is registered."""
+    """Keep the PowerPoint tool design available without exposing it to the Agent."""
     assert tools.__all__ == BASELINE["exports"]
-    existing = [spec for spec in TOOL_LIBRARY.all() if spec.tool_name not in POWERPOINT_TOOL_NAMES]
+    existing = TOOL_LIBRARY.all()
     assert [spec.tool_name for spec in existing] == list(BASELINE["registered_schemas"])
     for spec in existing:
         assert _digest(spec.to_tool().model_dump()) == BASELINE["registered_schemas"][spec.tool_name], spec.tool_name
@@ -88,7 +88,7 @@ def test_catalog_preserves_schemas_and_registration_order() -> None:
         "ppt_open", "ppt_read_deck", "ppt_read_page", "ppt_inspect",
         "ppt_edit_page", "ppt_manage_deck", "ppt_save",
     ]
-    assert {spec.tool_name for spec in TOOL_LIBRARY.select(POWERPOINT_TOOL_NAMES)} == POWERPOINT_TOOL_NAMES
+    assert not TOOL_LIBRARY.select(POWERPOINT_TOOL_NAMES)
     assert _digest(switch_tool.to_tool().model_dump()) == BASELINE["switch_schema"]
 
 

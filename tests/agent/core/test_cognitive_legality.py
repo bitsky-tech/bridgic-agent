@@ -89,7 +89,6 @@ async def test_one_human_call_runs_alone_in_every_stage(orchestration: _Harness,
 @pytest.mark.parametrize(("stage", "tool"), [
     ("main", "request_build"),
     ("main", "edit_workflow"),
-    ("main", "request_presentation"),
     ("main", "request_run_workflow"),
     ("clarify", "request_human_task_confirm"),
     ("verify", "request_human_workflow_confirm"),
@@ -101,7 +100,6 @@ async def test_stage_control_is_exclusive_across_inherited_rules(orchestration: 
     """A mode-owned control wins alone; adding Base's human control rejects the complete batch."""
     arguments = {
         "request_build": {"mode": "start", "goal": "Create a report"},
-        "request_presentation": {"goal": "Explain the report"},
         "request_human_workflow_confirm": {"prompt": "Review the verified Workflow"},
         "report_presentation_step": {"summary": "Created the slide shells"},
         "report_workflow_step": {"status": "success", "summary": "Created the report"},
