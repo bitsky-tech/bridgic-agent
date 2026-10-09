@@ -574,6 +574,7 @@ class CodexResponsesLlm(BaseLlm):
                     "call_id": item.get("call_id", ""),
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", "") or "",
+                    "incomplete": True,
                 }
                 state["order"].append(iid)
         elif etype == "response.function_call_arguments.delta":
@@ -590,6 +591,7 @@ class CodexResponsesLlm(BaseLlm):
                 buf = state["tool_items"].get(iid)
                 if buf is not None:
                     # The done event carries the authoritative final fields.
+                    buf["incomplete"] = item.get("status") == "incomplete"
                     if item.get("arguments"):
                         buf["arguments"] = item["arguments"]
                     if item.get("name"):
@@ -598,6 +600,14 @@ class CodexResponsesLlm(BaseLlm):
                         buf["call_id"] = item["call_id"]
         elif etype == "response.completed":
             state["usage"] = (event.get("response", {}) or {}).get("usage")
+            for buf in state["tool_items"].values():
+                buf["incomplete"] = False
+        elif etype in {"response.failed", "response.incomplete", "error"}:
+            response = event.get("response") or {}
+            detail = response.get("incomplete_details") or response.get("error") or event.get("error") or {}
+            reason = (detail.get("reason") or detail.get("code") or "unknown") if isinstance(detail, dict) else "unknown"
+            state["stream_error"] = f"Model stream ended with {etype} ({reason})."
+            state["usage"] = response.get("usage") or state["usage"]
 
     async def stream_turn(
         self,
@@ -637,19 +647,27 @@ class CodexResponsesLlm(BaseLlm):
                     "content": [], "tool_items": {}, "order": [], "usage": None,
                     "reasoning_items": [],
                 }
-                async for line in response.aiter_lines():
-                    event = parse_sse_event(line)
-                    if event is not None:
-                        self._reduce_event(event, attempt_state, attempt_publish)
+                try:
+                    async for line in response.aiter_lines():
+                        event = parse_sse_event(line)
+                        if event is not None:
+                            self._reduce_event(event, attempt_state, attempt_publish)
+                except Exception as exc:
+                    if not any(buf.get("name") for buf in attempt_state["tool_items"].values()) or not is_retryable_transport_error(exc):
+                        raise
+                    attempt_state["stream_error"] = f"Model stream interrupted ({type(exc).__name__})."
+                if attempt_state.get("stream_error") and not any(buf.get("name") for buf in attempt_state["tool_items"].values()):
+                    raise RuntimeError(attempt_state["stream_error"])
                 return attempt_state
 
             state = await self._astream_responses(body, consume, attempt_publish)
             capture = {"reasoning_items": state["reasoning_items"]} if state["reasoning_items"] else {}
+            if state.get("stream_error"):
+                capture["model_stream_error"] = state["stream_error"]
             return StreamResult(
                 tool_calls=parse_tool_calls(
-                    state["tool_items"][iid]
-                    for iid in state["order"]
-                    if iid in state["tool_items"]
+                    (state["tool_items"][iid] for iid in state["order"] if iid in state["tool_items"]),
+                    state.get("stream_error"),
                 ),
                 content="".join(state["content"]),
                 usage=state["usage"],

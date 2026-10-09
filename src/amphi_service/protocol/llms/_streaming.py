@@ -161,25 +161,37 @@ def accumulate_reasoning_details(buffers: Dict[int, Dict[str, Any]], fragments: 
                 block[key] = value
 
 
-def parse_tool_calls(buffers: Iterable[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """Ordered ``{"name", "arguments"}`` buffers → ``{"name", "arguments"}``
-    wire dicts: skip a no-name buffer, JSON-parse the arguments string
-    (malformed / non-dict → ``{}``). Shared by the OpenAI (index-sorted) and
-    Codex (emission-ordered) paths — the caller supplies the order.
+def parse_tool_calls(buffers: Iterable[Dict[str, Any]], stream_error: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Parse each named call independently, retaining failures for the action phase.
+
+    Invalid JSON uses an empty protocol placeholder, never executable defaults.
+    Its error and original text travel separately so admission can reject only
+    that call and history can explain the failure without sending broken JSON.
     """
     calls: List[Dict[str, Any]] = []
     for buffer in buffers:
         if not buffer.get("name"):
             continue
+        raw = buffer.get("arguments", "")
+        error = str(buffer.get("error") or "")
         try:
-            arguments = json.loads(buffer.get("arguments") or "{}")
-        except (json.JSONDecodeError, TypeError):
+            arguments = json.loads(raw)
+        except (ValueError, TypeError, RecursionError) as exc:
             arguments = {}
+            error = error or f"Invalid tool argument JSON: {exc}."
         if not isinstance(arguments, dict):
             arguments = {}
+            error = error or "Tool arguments must be a JSON object."
+        if buffer.get("incomplete"):
+            error = error or "The tool argument stream ended before this call completed."
         call = {"name": buffer["name"], "arguments": arguments}
         if buffer.get("call_id"):
             call["call_id"] = buffer["call_id"]
+        if error:
+            if stream_error:
+                error = f"{error} {stream_error}"
+            call["error"] = f"{error} This tool was not executed. Correct this call before retrying it."
+            call["raw_arguments"] = raw
         calls.append(call)
     return calls
 

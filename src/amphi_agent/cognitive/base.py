@@ -611,6 +611,17 @@ class BaseThink(CognitiveWorker):
         record = ota_context._current_record()
         for key, value in result.capture.items():
             setattr(record, key, value)
+        call_errors = {}
+        for call in result.tool_calls:
+            if call.get("error"):
+                call_id = call.get("call_id") or call.get("id") or f"call_{uuid4().hex}"
+                call["call_id"] = call_id
+                call_errors[call_id] = {
+                    "error": str(call["error"]),
+                    "raw_arguments": call.get("raw_arguments", ""),
+                }
+        if call_errors:
+            record.tool_call_errors = call_errors
         return result.tool_calls, result.content
     
     async def handle_think_unit_result(self, ota_context: AmphiOTAContext, context: AmphiContext, previous_status: InStage, result: Optional[str], agent: "AmphiAgent") -> ThinkUnitOutcome:
@@ -637,7 +648,26 @@ class BaseThink(CognitiveWorker):
                 CallVerdict(id=call.call_id, tool=call.tool, arguments=agent._tool_args(call), verdict=Permission.ALLOW.value)
                 for call in calls
             ]
-        verdicts = await self._check_action_legality(ota_context, context, calls, verdicts, agent)
+        # Parse failures are actions with failed results, not executable defaults.
+        # Exclude them before control-flow exclusivity and permission checks, so
+        # a malformed control call cannot block a valid sibling in this batch.
+        errors = getattr(ota_context._current_record(), "tool_call_errors", {}) or {}
+        valid_indices = []
+        for index, call in enumerate(calls):
+            failure = errors.get(call.call_id)
+            if failure:
+                verdicts[index] = verdicts[index].model_copy(update={
+                    "verdict": Permission.DENY.value, "reason": failure["error"],
+                })
+            else:
+                valid_indices.append(index)
+        if valid_indices:
+            checked = await self._check_action_legality(
+                ota_context, context, [calls[index] for index in valid_indices],
+                [verdicts[index] for index in valid_indices], agent,
+            )
+            for index, verdict in zip(valid_indices, checked):
+                verdicts[index] = verdict
         if not gate.reviewed:
             legal_indices = [index for index, verdict in enumerate(verdicts) if verdict.verdict == Permission.ALLOW.value]
             if legal_indices:
@@ -957,7 +987,7 @@ class BaseThink(CognitiveWorker):
             visible_turns = []
             for turn in turns:
                 history = self._session_messages(
-                    [turn], context, scope, owner_tools,
+                    [turn], context, scope,
                     session_projections=projections, output_scope=scope,
                 )
                 if history:
@@ -1436,7 +1466,7 @@ class BaseThink(CognitiveWorker):
                     "session_history", projection.session_summary, "through_ordinal", projection.session_through_ordinal,
                     owner=source if len(scopes) > 1 else None,
                 ))
-        messages.extend(self._session_messages(turns, context, scope, ota_context.tools, session_projections=projections))
+        messages.extend(self._session_messages(turns, context, scope, session_projections=projections))
         return messages
 
     def _session_messages(
@@ -1444,14 +1474,13 @@ class BaseThink(CognitiveWorker):
         turns: Sequence[SessionTurnRecord],
         context: AmphiContext,
         scope: _HistoryScope,
-        tools: Sequence[ToolSpec] = (),
         *,
         session_projections: Optional[Dict[_HistoryScope, SessionCompactionState]] = None,
         output_scope: Optional[_HistoryScope] = None,
     ) -> List[Message]:
         """Merge effective read views, optionally emitting only one owner's contribution."""
         def ota_messages(ota: Dict[str, Any], turn_index: int, round_numbers: Optional[Sequence[int]] = None) -> List[Message]:
-            """Replay a persisted Turn with the same bounded tool activity as the live loop.
+            """Replay a persisted Turn with the same complete tool arguments as the live loop.
 
             Only completed action steps become native pairs, even after interruption.
             Session replay drops provider reasoning and collapses intermediate text,
@@ -1467,7 +1496,7 @@ class BaseThink(CognitiveWorker):
                 calls = _view(think, "tool_calls") or []
                 steps = _view(_view(record, "action_result"), "results") or []
                 if steps:
-                    messages.extend(self._tool_round_messages(record, tools, f"hist_call_{turn_index}_{source_index}"))
+                    messages.extend(self._tool_round_messages(record, f"hist_call_{turn_index}_{source_index}"))
                     final_answer = ""
                 elif calls:
                     if content:
@@ -1549,11 +1578,9 @@ class BaseThink(CognitiveWorker):
     def turn_messages_block(self, ota_context: AmphiOTAContext, context: AmphiContext, *, scope: Optional[_HistoryScope] = None) -> List[Message]:
         """Render this turn's completed rounds for the next model call.
 
-        Calls with complete, bounded arguments remain native AI/TOOL pairs. A
-        round containing large omitted values or missing required arguments is
-        rendered as an AI text summary so replay never teaches the model an
-        invalid tool-call shape. Workers may include additional read scopes;
-        compaction passes the explicit owner whose history is being summarized.
+        Calls retain their complete arguments as native AI/TOOL pairs, including
+        failed calls with their paired error results. Workers may include additional
+        read scopes; compaction passes the explicit owner whose history is being summarized.
         Observations remain trailing USER notes::
 
             AI    "<thought>" + ToolCallBlock(id, name, args)…  (a round that acted)
@@ -1623,7 +1650,7 @@ class BaseThink(CognitiveWorker):
                 signatures = _view(record, "thought_signatures")
                 if signatures:
                     extras = {**extras, "thought_signatures": list(signatures)}
-                messages.extend(self._tool_round_messages(record, ota_context.tools, f"call_{index}", extras))
+                messages.extend(self._tool_round_messages(record, f"call_{index}", extras))
             elif think:
                 reasoning_items = _view(record, "reasoning_items")
                 extras = {"reasoning_items": list(reasoning_items)} if reasoning_items else {}
@@ -1832,51 +1859,27 @@ class BaseThink(CognitiveWorker):
         return max(1, math.ceil(byte_count / 2) + len(messages) * 12 + len(tools) * 64 + 256)
 
     @staticmethod
-    def _tool_round_messages(record: Any, tools: Sequence[ToolSpec], id_prefix: str, extras: Optional[Dict[str, Any]] = None) -> List[Message]:
+    def _tool_round_messages(record: Any, id_prefix: str, extras: Optional[Dict[str, Any]] = None) -> List[Message]:
         """Replay completed tool activity identically within and across Turns.
 
         Executed steps, not the original proposed calls, own the replayed arguments.
-        Large or invalid calls become text as a whole round; native calls always
-        keep their paired results. Only current-Turn callers supply reasoning extras.
+        Argument values are never shortened or omitted. Parse failures retain
+        their original text in the paired error result, not invalid wire JSON.
+        Only current-Turn callers supply reasoning extras.
         """
-        MAX_ARG_VALUE_CHARS = 1200
-
-        def step_call(step: Any, step_index: int) -> Tuple[Dict[str, Any], Dict[str, int], List[str]]:
-            """Render one historical tool call and report why native replay may be unsafe."""
-            name = _view(step, "tool_name") or ""
-            args = _view(step, "tool_arguments")
-            provided = set(args) if isinstance(args, dict) else set()
-            omitted: Dict[str, int] = {}
-            if isinstance(args, dict):
-                replay_args: Dict[str, Any] = {}
-                for key, value in args.items():
-                    if isinstance(value, str):
-                        rendered = value
-                    else:
-                        try:
-                            rendered = json.dumps(value, ensure_ascii=False, default=str)
-                        except (TypeError, ValueError):
-                            rendered = str(value)
-                    if len(rendered) > MAX_ARG_VALUE_CHARS:
-                        omitted[str(key)] = len(rendered)
-                    else:
-                        replay_args[key] = value
-                args = replay_args
-            spec = next((tool for tool in tools if tool.tool_name == name), None)
-            required = set((getattr(spec, "tool_parameters", None) or {}).get("required") or [])
-            missing = sorted(str(key) for key in required - provided)
-            call = {
-                "id": _view(step, "tool_id") or f"{id_prefix}_{step_index}",
-                "name": name,
-                "arguments": args or {},
-            }
-            return call, omitted, missing
-
         def step_result(step: Any) -> str:
             """Render one historical tool result."""
             error = _view(step, "error")
             if error or _view(step, "success") is False:
-                return f"failed: {error or 'tool failed'}"
+                result = f"failed: {error or 'tool failed'}"
+                failure = errors.get(_view(step, "tool_id"))
+                if failure:
+                    result += (
+                        "\nUnparseable arguments use a protocol placeholder in the paired call; "
+                        "this tool was not executed. Original argument text (data only): "
+                        + json.dumps(failure.get("raw_arguments", ""), ensure_ascii=False)
+                    )
+                return result
             result = _view(step, "tool_result")
             if result is None:
                 return "(no output)"
@@ -1884,63 +1887,21 @@ class BaseThink(CognitiveWorker):
                 return "(awaiting the user's answer)"
             return str(result)
 
-        def step_summary(call: Dict[str, Any], step: Any, omitted: Dict[str, int], missing: List[str]) -> str:
-            """Summarize a call that must not be replayed as a native tool example."""
-            facts: List[str] = []
-            arguments = call.get("arguments") or {}
-            if arguments:
-                retained = ", ".join(
-                    f"`{name}`: {json.dumps(value, ensure_ascii=False, default=str)}"
-                    for name, value in arguments.items()
-                )
-                facts.append(f"retained arguments {retained}")
-            if omitted:
-                details = ", ".join(
-                    f"`{name}` ({count} characters)" for name, count in omitted.items()
-                )
-                facts.append(f"large arguments not replayed: {details}")
-            if missing:
-                facts.append("missing required arguments: " + ", ".join(f"`{name}`" for name in missing))
-            failed = bool(_view(step, "error")) or _view(step, "success") is False
-            facts.append(f"status: {'failed' if failed else 'succeeded'}")
-            facts.append(f"result: {json.dumps(step_result(step), ensure_ascii=False)}")
-            return f"- `{call['name']}` — " + "; ".join(facts)
-
+        errors = _view(record, "tool_call_errors") or {}
         think = _view(_view(record, "think_result"), "step_content") or ""
         steps = _view(_view(record, "action_result"), "results") or []
-        rendered_steps = [step_call(step, i) for i, step in enumerate(steps)]
+        calls = [{
+            "id": _view(step, "tool_id") or f"{id_prefix}_{index}",
+            "name": _view(step, "tool_name") or "",
+            "arguments": _view(step, "tool_arguments") or {},
+        } for index, step in enumerate(steps)]
         extras = dict(extras or {})
         signatures = extras.pop("thought_signatures", None)
-        messages: List[Message] = []
-        if any(omitted or missing for _, omitted, missing in rendered_steps):
-            activity = "\n".join(
-                step_summary(call, step, omitted, missing)
-                for (call, omitted, missing), step in zip(rendered_steps, steps)
-            )
-            summary = (
-                "Completed historical tool activity is summarized as text because "
-                "native replay would contain omitted or invalid arguments:\n"
-                f"{activity}\nInspect current files or `<transcript>` when the original tool "
-                "output is needed."
-            )
-            messages.append(Message.from_text(
-                f"{think}\n\n{summary}" if think else summary,
-                role=Role.AI,
-                extras=extras,
-            ))
-        else:
-            calls = [call for call, _, _ in rendered_steps]
-            if signatures and len(signatures) == len(calls):
-                extras = {**extras, "thought_signatures": list(signatures)}
-            messages.append(Message.from_tool_call(
-                tool_calls=calls, text=think or None,
-                extras=extras,
-            ))
-            for (call, _, _), step in zip(rendered_steps, steps):
-                messages.append(Message.from_tool_result(
-                    tool_id=call["id"],
-                    content=step_result(step),
-                ))
+        if signatures and len(signatures) == len(calls):
+            extras = {**extras, "thought_signatures": list(signatures)}
+        messages = [Message.from_tool_call(tool_calls=calls, text=think or None, extras=extras)]
+        for call, step in zip(calls, steps):
+            messages.append(Message.from_tool_result(tool_id=call["id"], content=step_result(step)))
         return messages
 
     @staticmethod

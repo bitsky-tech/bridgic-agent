@@ -2,7 +2,7 @@ import base64
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from anthropic import Anthropic, AsyncAnthropic
+from anthropic import APIError, Anthropic, AsyncAnthropic
 from bridgic.core.model import BaseLlm
 from bridgic.core.model.types import (
     ContentBlock,
@@ -19,6 +19,8 @@ from ._streaming import (
     RATE_LIMIT_MAX_RETRIES,
     StreamResult,
     convert_tools,
+    is_retryable_transport_error,
+    parse_tool_calls,
     stream_with_transport_retry,
 )
 
@@ -340,8 +342,8 @@ class AnthropicLlm(BaseLlm):
             tools=convert_tools(tools, "anthropic") if tools else None,
             extra_body=extra_body,
         )
-        # ``messages.stream`` is a context manager — must NOT pass stream=True.
-        params.pop("stream", None)
+        # The raw Messages stream leaves tool argument parsing to this adapter.
+        params["stream"] = True
 
         key = self._reject_key()
         heal = 0
@@ -395,14 +397,12 @@ class AnthropicLlm(BaseLlm):
 
         return await stream_with_transport_retry(run_attempt, publish)
 
-    async def _run_stream(
-        self, params: Dict[str, Any], publish: Callable[..., None]
-    ) -> StreamResult:
+    async def _run_stream(self, params: Dict[str, Any], publish: Callable[..., None]) -> StreamResult:
         """Open one Anthropic stream and drain it into a StreamResult.
 
         Split out of :meth:`stream_turn` so the self-heal retry can re-open the
-        stream with a fresh accumulator set. The deprecated-param 400 fires at
-        ``__aenter__`` (before any ``publish``), so a retry never double-emits.
+        stream with a fresh accumulator set. The deprecated-param 400 fires when
+        opening the request (before any ``publish``), so a retry never double-emits.
         """
         # Lazy-imported so the module stays import-safe where anthropic types
         # aren't needed (e.g. OpenAI-only runs, dispatch tests).
@@ -410,16 +410,42 @@ class AnthropicLlm(BaseLlm):
             RawContentBlockDeltaEvent,
             RawContentBlockStartEvent,
             RawContentBlockStopEvent,
+            RawMessageDeltaEvent,
+            RawMessageStartEvent,
         )
 
         content_parts: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
+        tool_buffers: List[Dict[str, Any]] = []
         current_tool: Optional[Dict[str, Any]] = None
         thinking_blocks: List[Dict[str, Any]] = []
         current_thinking: Optional[Dict[str, str]] = None
-        async with self.async_client.messages.stream(**params) as response:
-            async for event in response:
-                if isinstance(event, RawContentBlockStartEvent):
+        usage: Optional[Dict[str, Any]] = None
+        stream_error = None
+
+        async def events(response: Any):
+            nonlocal stream_error
+            try:
+                async for event in response:
+                    yield event
+            except Exception as exc:
+                if not any(buf.get("name") for buf in tool_buffers) or not (
+                    isinstance(exc, (APIError, json.JSONDecodeError)) or is_retryable_transport_error(exc)
+                ):
+                    raise
+                stream_error = f"Model stream interrupted ({type(exc).__name__})."
+
+        # messages.stream() eagerly parses input_json_delta with the SDK's
+        # accumulator and aborts before yielding a malformed fragment. Raw
+        # create(stream=True) preserves that fragment and all following calls.
+        response = await self.async_client.messages.create(**{**params, "stream": True})
+        async with response:
+            async for event in events(response):
+                if isinstance(event, RawMessageStartEvent):
+                    usage = event.message.usage.model_dump(exclude_none=True)
+                elif isinstance(event, RawMessageDeltaEvent):
+                    # Message deltas contain cumulative totals, not increments.
+                    usage = {**(usage or {}), **event.usage.model_dump(exclude_none=True)}
+                elif isinstance(event, RawContentBlockStartEvent):
                     block = getattr(event, "content_block", None)
                     btype = getattr(block, "type", None) if block is not None else None
                     if btype == "thinking":
@@ -432,9 +458,12 @@ class AnthropicLlm(BaseLlm):
                     elif btype == "tool_use":
                         current_tool = {
                             "name": getattr(block, "name", ""),
-                            "id": getattr(block, "id", ""),
+                            "call_id": getattr(block, "id", ""),
                             "arguments": "",
+                            "initial_input": getattr(block, "input", {}),
+                            "incomplete": True,
                         }
+                        tool_buffers.append(current_tool)
                 elif isinstance(event, RawContentBlockDeltaEvent):
                     delta = getattr(event, "delta", None)
                     if delta is None:
@@ -462,28 +491,19 @@ class AnthropicLlm(BaseLlm):
                         thinking_blocks.append(current_thinking)
                         current_thinking = None
                     if current_tool is not None:
-                        try:
-                            args = json.loads(current_tool["arguments"] or "{}")
-                        except (json.JSONDecodeError, TypeError):
-                            args = {}
-                        if not isinstance(args, dict):
-                            args = {}
-                        if current_tool["name"]:
-                            call = {"name": current_tool["name"], "arguments": args}
-                            if current_tool.get("id"):
-                                call["call_id"] = current_tool["id"]
-                            tool_calls.append(call)
+                        current_tool["incomplete"] = False
+                        if not current_tool["arguments"]:
+                            # A completed no-argument block need not emit deltas.
+                            current_tool["arguments"] = json.dumps(current_tool["initial_input"], ensure_ascii=False)
                         current_tool = None
-            try:  # best-effort usage from the finished message; metering never raises
-                final_usage = getattr(await response.get_final_message(), "usage", None)
-            except Exception:  # noqa: BLE001
-                final_usage = None
 
         capture = {"thinking_blocks": thinking_blocks} if thinking_blocks else {}
+        if stream_error:
+            capture["model_stream_error"] = stream_error
         return StreamResult(
-            tool_calls=tool_calls,
+            tool_calls=parse_tool_calls(tool_buffers, stream_error),
             content="".join(content_parts),
-            usage=final_usage,
+            usage=usage,
             capture=capture,
         )
 
