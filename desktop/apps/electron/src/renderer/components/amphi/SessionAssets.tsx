@@ -43,7 +43,8 @@ import {
   removeMountAtom,
   requestMentionInsertAtom,
 } from '@/atoms/mounts'
-import { isPowerPointFileTarget, requestSessionFileOpenAtom } from '@/atoms/fileOpen'
+import { requestSessionFileOpenAtom } from '@/atoms/fileOpen'
+import { isOfficePreviewFileName } from '@/lib/fileTypes'
 import type { DirTreeNode } from '@shared/dir-tree'
 import type { MountSummary } from '@/lib/amphiClient'
 
@@ -304,7 +305,7 @@ function MountList({
           onRevealChild={(node) => onReveal(`${m.path}/${node.relPath}`)}
           onOpenRoot={() => onOpen({ path: m.path, name: m.name })}
           onOpenChild={(node) => onOpen({ path: `${m.path}/${node.relPath}`, name: node.name })}
-          openOnSingleClick={(name) => isPowerPointFileTarget({ name })}
+          openOnSingleClick={isOfficePreviewFileName}
         />
       ))}
     </div>

@@ -15,7 +15,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { cn } from '@/lib/cn'
-import { isDocxFileName } from '@/lib/fileTypes'
+import { isOfficePreviewFileName } from '@/lib/fileTypes'
 import { extColor, findNode, formatSize, pruneExpanded } from '@/lib/fileTree'
 import { APP_PRODUCT_NAME } from '@shared/app-meta'
 import type { DirListResult, DirTreeNode } from '@shared/dir-tree'
@@ -110,7 +110,7 @@ export function MountRow({
   const expandable = m.kind === 'folder' && m.exists
   // In-app file owners open on one click; other files retain the established double-click behaviour.
   const rootOpenable = m.kind === 'file' && m.exists
-  const rootOpensOnSingleClick = rootOpenable && (openOnSingleClick(m.name) || isDocxFileName(m.name))
+  const rootOpensOnSingleClick = rootOpenable && (isOfficePreviewFileName(m.name) || openOnSingleClick(m.name))
   const toggleRoot = (): void => {
     if (!expandable) return
     if (!open) {

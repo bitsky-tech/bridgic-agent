@@ -20,7 +20,7 @@ import { useTranslation } from 'react-i18next'
 import type { MouseEvent } from 'react'
 import type { DirTreeNode } from '@shared/dir-tree'
 import { cn } from '@/lib/cn'
-import { isDocxFileName } from '@/lib/fileTypes'
+import { isOfficePreviewFileName } from '@/lib/fileTypes'
 import { extColor, formatSize } from '@/lib/fileTree'
 import { Icons } from './Icons'
 import { RowActionMenu } from './RowActionMenu'
@@ -131,7 +131,7 @@ function TreeNodeRow({
   const pickable = !isFolder && onPickFile !== undefined
   // File rows are openable only in the Files panel; the @ picker keeps its own selection behaviour.
   const openable = !isFolder && onOpen !== undefined
-  const opensOnClick = openable && (isDocxFileName(node.name) || openOnSingleClick?.(node))
+  const opensOnClick = openable && (isOfficePreviewFileName(node.name) || openOnSingleClick?.(node))
 
   const handleRowClick = (event: MouseEvent<HTMLDivElement>): void => {
     if (expandable) onToggle(node)
