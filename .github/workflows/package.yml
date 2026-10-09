@@ -33,9 +33,18 @@ name: Package
 #
 # macOS: signing & notarization run when the Apple secrets are present (see
 # below); otherwise electron-builder falls back to an unsigned build (Gatekeeper
-# trips on first open). Windows: always unsigned — no Authenticode cert in CI,
-# so SmartScreen trips on first open. Either way forks and secret-less runs
-# still produce artifacts.
+# trips on first open). Either way forks and secret-less runs still produce
+# artifacts.
+#
+# Windows: signed for every real Release (tag push or `release_tag`) and for a
+# manual run with `sign` ticked. The code-signing key lives on a hardware token
+# that cannot leave its USB port, so a signed build runs on the self-hosted
+# runner (label `codesign`) the token is plugged into, and signs through
+# desktop/apps/electron/build/win-sign.cjs; when that machine is offline the job
+# queues until it is back — a Release never falls back to an unsigned build.
+# Every other manual run (a nightly) is unsigned and runs on a hosted
+# windows-latest runner, so an internal build does not need the signing machine
+# switched on. `meta` makes that call, so runner and signing cannot drift apart.
 #
 # PyInstaller cannot cross-compile, so each OS/arch needs its own runner and its
 # own invocation: build-pyinstaller.sh is POSIX-only, build-pyinstaller.ps1 is
@@ -96,6 +105,12 @@ on:
           electron-builder.yml changed. Tag pushes always run it regardless."
         type: boolean
         default: false
+      sign:
+        description: "Sign the Windows build on the self-hosted token runner
+          (needs that machine online). Tag pushes and release_tag always sign;
+          this only matters for a nightly."
+        type: boolean
+        default: false
       release_tag:
         description: "Publish a REAL release under this tag (bare semver, e.g.
           0.1.14) instead of a nightly prerelease. Use this to rehearse the
@@ -131,6 +146,8 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
+      windows_signed: ${{ steps.tag.outputs.windows_signed }}
+      windows_runs_on: ${{ steps.tag.outputs.windows_runs_on }}
     steps:
       # Needed only to read the version out of package.json for the guard below.
       - uses: actions/checkout@v4
@@ -204,8 +221,32 @@ jobs:
               ;;
           esac
 
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          # Step 3 — decide WHERE Windows builds. A real Release is signed, on
+          # the self-hosted machine holding the token; a nightly is unsigned on
+          # a hosted runner unless `sign` asks for the token machine, so an
+          # internal build never waits for that machine to be switched on.
+          # Emitted as JSON because `runs-on` takes either a label string or a
+          # label array, and fromJSON() in the job turns this back into one.
+          case "$tag" in
+            nightly-*)
+              if [ "${{ inputs.sign }}" = true ]; then windows_signed=true; else windows_signed=false; fi
+              ;;
+            *)
+              windows_signed=true
+              ;;
+          esac
+          if [ "$windows_signed" = true ]; then
+            windows_runs_on='["self-hosted", "windows", "codesign"]'
+          else
+            windows_runs_on='"windows-latest"'
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "windows_signed=$windows_signed"
+            echo "windows_runs_on=$windows_runs_on"
+          } >> "$GITHUB_OUTPUT"
 
   macos-arm64:
     needs: meta
@@ -521,11 +562,31 @@ jobs:
   windows-x64:
     needs: meta
     if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'windows' }}
-    runs-on: windows-latest
+    # A signed build runs on the machine holding the code-signing token, an
+    # unsigned one on a hosted runner; `meta` picks (see the header comment).
+    runs-on: ${{ fromJSON(needs.meta.outputs.windows_runs_on) }}
     name: package (Windows x64)
-    timeout-minutes: 45
+    # Measured on the signing machine (2026-09-30): ~35 min to a signed
+    # installer, signing included, then ~60 min for the nine installer smoke
+    # scenarios, which run twice as slow as on a hosted runner because every
+    # install passes through antivirus. 90 cut the ninth scenario off. A hosted
+    # runner did the same work, unsigned, within 45 before signing existed.
+    timeout-minutes: ${{ needs.meta.outputs.windows_signed == 'true' && 150 || 45 }}
 
     steps:
+      # Unlike a hosted runner this machine persists between runs. A daemon or app
+      # left running by a failed earlier run keeps files under the workspace open,
+      # and checkout's clean step then fails on them. Only this runner's own
+      # copies are touched — the build tree and its installs under its own
+      # LOCALAPPDATA. Another account's Bridgic Agent on the same machine is out of
+      # reach (Path reads as empty across accounts) and not ours to kill.
+      - name: Stop processes left by an earlier run
+        shell: pwsh
+        run: |
+          Get-Process -Name amphi, amphi-autostart, 'Bridgic Agent' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and ($_.Path.StartsWith($env:RUNNER_WORKSPACE, 'OrdinalIgnoreCase') -or $_.Path.StartsWith($env:LOCALAPPDATA, 'OrdinalIgnoreCase')) } |
+            Stop-Process -Force
+
       - name: Checkout
         uses: actions/checkout@v5
 
@@ -557,6 +618,39 @@ jobs:
         # cross-compile, so both Windows launchers must be produced here.
         shell: pwsh
         run: .\build\build-pyinstaller.ps1
+
+      # Fails in seconds instead of after the build when signing cannot proceed.
+      # The halt file is written by build/win-sign.cjs on any signing failure;
+      # see that file for why a failure must never be retried automatically.
+      # jsign and its JRE are provisioned on the signing machine under C:\codesign;
+      # the JRE directory name carries its version, so resolve it rather than pin it.
+      - name: Check the signing machine
+        if: ${{ needs.meta.outputs.windows_signed == 'true' }}
+        shell: pwsh
+        env:
+          WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
+        run: |
+          if (Test-Path $env:WIN_SIGN_HALT_FILE) {
+            Get-Content $env:WIN_SIGN_HALT_FILE | Write-Host
+            throw "signing is halted by $env:WIN_SIGN_HALT_FILE after an earlier failure; fix the cause, then delete the file. Re-running does not help and may lock the token."
+          }
+          $java = Get-ChildItem C:\codesign\jre -Recurse -Filter java.exe | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $java) { throw 'no JRE under C:\codesign\jre; the signing machine is not provisioned' }
+          "WIN_SIGN_JAVA=$java" >> $env:GITHUB_ENV
+
+      # Signed here, before the smoke test below runs it, not at packaging time:
+      # the signing machine keeps Smart App Control on, and it blocks a freshly
+      # built unsigned exe whenever it has no cloud reputation — which a new
+      # PyInstaller build never has. prebuild-fetch-amphi copies these files
+      # as-is, so afterPack later finds them validly signed and skips them.
+      - name: Sign the amphi bundle
+        if: ${{ needs.meta.outputs.windows_signed == 'true' }}
+        env:
+          WIN_SIGN_PIN: ${{ secrets.WIN_TOKEN_PIN }}
+          WIN_SIGN_JSIGN_JAR: C:\codesign\jsign.jar
+          WIN_SIGN_ALIAS: te-77823577-5786-46ba-aee7-111fbfd021bb
+          WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
+        run: node desktop/apps/electron/build/win-sign.cjs dist/amphi
 
       # Bun is pulled ahead of the smoke test: the smoke test starts a real
       # daemon, and the daemon's AppCommandEnvironment.prepare() is strict:
@@ -688,6 +782,15 @@ jobs:
       - name: Package Windows installer (x64)
         working-directory: desktop
         env:
+          # Read by build/win-sign.cjs; without the PIN every file ships unsigned,
+          # which the audit step below then refuses. Withheld from an unsigned
+          # build on purpose: that is what makes it unsigned, and a hosted
+          # runner has no business holding the token PIN anyway.
+          WIN_SIGN_PIN: ${{ needs.meta.outputs.windows_signed == 'true' && secrets.WIN_TOKEN_PIN || '' }}
+          WIN_SIGN_JSIGN_JAR: C:\codesign\jsign.jar
+          # The token's key container name. It changes only if the token is reissued.
+          WIN_SIGN_ALIAS: te-77823577-5786-46ba-aee7-111fbfd021bb
+          WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
           POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
           # Derived, not hardcoded: `?private` makes electron-updater use the
           # authenticated provider (needs GH_TOKEN at runtime). Once the repo is
@@ -701,6 +804,24 @@ jobs:
         # Browser tools use Electron's embedded Chromium; no standalone browser
         # is fetched, bundled, or downloaded at runtime.
         run: bun run dist:win
+
+      # Signing fails open by design (no PIN → no signature, so local builds work),
+      # which makes this the only thing standing between a misconfiguration and an
+      # unsigned release. Every PE image in the app plus the installer itself must
+      # carry a valid signature — ours, or its original publisher's. An unsigned
+      # nightly is unsigned by decision, not by accident, so it skips the audit.
+      - name: Audit Authenticode signatures
+        if: ${{ needs.meta.outputs.windows_signed == 'true' }}
+        shell: pwsh
+        working-directory: desktop/apps/electron/release
+        run: |
+          $files = @(Get-ChildItem win-unpacked -Recurse -File -Include *.exe, *.dll, *.pyd, *.node) + @(Get-ChildItem *.exe)
+          $bad = @($files | Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne 'Valid' })
+          Write-Host "$($files.Count) PE files checked, $($bad.Count) without a valid signature"
+          if ($bad.Count -gt 0) {
+            $bad | ForEach-Object { Write-Host "  $($_.FullName)" }
+            throw "$($bad.Count) file(s) are not validly signed"
+          }
 
       # Static assertions first: they need no install and fail in seconds, so a
       # config regression does not burn a full install/uninstall cycle.
@@ -722,6 +843,22 @@ jobs:
         shell: pwsh
         working-directory: desktop
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File apps/electron/scripts/test-installer.ps1 -Scenario ReleaseArtifacts
+
+      # The signing machine doubles as a test machine, so a Bridgic Agent of some
+      # other account may be running there. Its daemon would hold the default
+      # port 7421 (and 9123 is the custom port a scenario records), and the
+      # scenarios would then fail, or worse, pass against that daemon instead of
+      # the build under test. Refuse to smoke rather than kill a process that is
+      # not ours.
+      - name: Check the installer smoke ports are free
+        if: ${{ github.event_name == 'push' || inputs.smoke }}
+        shell: pwsh
+        run: |
+          $busy = @(Get-NetTCPConnection -State Listen -LocalPort 7421, 9123 -ErrorAction SilentlyContinue)
+          if ($busy.Count -gt 0) {
+            $busy | ForEach-Object { Write-Host "port $($_.LocalPort) is held by PID $($_.OwningProcess)" }
+            throw 'Another Bridgic Agent is running on this machine. Quit it and turn off its autostart, then run this workflow again.'
+          }
 
       # Everything below actually installs, updates and uninstalls Amphi on the
       # runner. Each scenario guards a failure that is silent on Windows: an

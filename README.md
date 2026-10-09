@@ -40,8 +40,11 @@ Bridgic Agent currently supports macOS and Windows. Download the appropriate
 installer from the [Releases](https://github.com/bitsky-tech/bridgic-agent/releases)
 page: a `.pkg` file for macOS or an `.exe` file for Windows.
 
-> **Note:** The Windows installer is not currently code-signed. If Windows
-> blocks it, you may need to adjust the relevant settings in Windows Security and Smart App Control.
+> **Note:** The Windows installer and every binary it installs are code-signed
+> by BitSky-Tech; Windows shows the publisher under the company's registered
+> Chinese name. SmartScreen reputation for a new certificate
+> builds up over downloads, so early releases may still show an "unrecognized
+> app" prompt; choose *More info → Run anyway* after checking the publisher.
 
 ### Install from source
 
@@ -274,6 +277,20 @@ Installers are built and published by the `Package` workflow
 rationale. Only two things reach that workflow — a tag push and a manual run.
 Ordinary pushes and pull requests build nothing.
 
+What each trigger produces:
+
+| Trigger | Release | Platforms | Windows runner | Windows signed | Installer smoke |
+| --- | --- | --- | --- | --- | --- |
+| Tag push `0.1.3` | normal — becomes `/releases/latest` | full matrix | signing machine | yes | always |
+| Tag push `0.1.3-rc1` | prerelease | full matrix | signing machine | yes | always |
+| Manual run with `release_tag` | normal, under that tag | `all` (enforced) | signing machine | yes | only with `smoke` |
+| Manual run (nightly) | prerelease `nightly-<UTC yyyymmdd-hhmm>` | per `platform` | hosted `windows-latest` | no | only with `smoke` |
+| Manual run (nightly) with `sign` | the same nightly | per `platform` | signing machine | yes | only with `smoke` |
+
+The signing machine is the self-hosted runner labelled `codesign`. The two
+subsections below explain each column; the workflow's `meta` job is where the
+table is enforced, so change both together.
+
 **A tag is a delivery, not a checkpoint.** A normal release becomes
 `/releases/latest`, which is exactly the endpoint every installed client
 resolves on its next update check. GitHub excludes prereleases from it, so a
@@ -302,6 +319,12 @@ Tags are bare semver with no `v` prefix:
 A tag push always builds the full matrix — macOS arm64, macOS x64, and Windows
 x64 — and always runs the Windows installer smoke suite.
 
+A release's Windows job runs on a self-hosted runner (label `codesign`): the
+code-signing key sits on a USB hardware token plugged into that machine and
+cannot be copied off it. If the machine is offline, the Windows job waits in the
+queue instead of producing an unsigned build. A nightly does not need that
+machine at all — see `sign` below.
+
 ### Build without releasing
 
 Run the workflow by hand (Actions -> Package -> Run workflow) for an internal
@@ -311,7 +334,8 @@ build:
 | --- | --- | --- |
 | `release_tag` | empty | Empty publishes a prerelease under `nightly-<UTC yyyymmdd-hhmm>`. A bare semver publishes a normal release under that tag instead. |
 | `platform` | `all` | `all`, `macos` (arm64 only), `macos-intel`, or `windows`. |
-| `smoke` | off | The Windows installer E2E suite (~25 min). Required when `installer.nsh`, `test-installer.ps1`, or `electron-builder.yml` changed. |
+| `smoke` | off | The Windows installer E2E suite (~25 min on a hosted runner, about twice that on the signing machine). Required when `installer.nsh`, `test-installer.ps1`, or `electron-builder.yml` changed. |
+| `sign` | off | Off builds Windows unsigned on a hosted `windows-latest` runner, so the signing machine can stay switched off. On runs it on the self-hosted token runner and signs, exactly as a release does — use it to exercise the signing pipeline without releasing. |
 
 A nightly skips both release guards. Setting `release_tag` does not: the
 version must match, and `platform` must stay `all`, because the two macOS
