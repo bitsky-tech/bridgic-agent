@@ -48,7 +48,7 @@ PROVIDER_POLICIES: Tuple[dict, ...] = (
     },
     {
         "id": "kimi",
-        "source_provider_id": "kimi-for-coding",
+        "source_provider_id": "kimi-code-plan-cn",
         "display_name": "Kimi Code",
         "protocol": "openai",
         "default_base_url": "https://api.kimi.com/coding/v1",

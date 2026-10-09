@@ -14,7 +14,7 @@ def test_packaged_catalog_lookup() -> None:
     """Product provider ids resolve into the packaged models.dev namespace."""
     kimi = catalog_model("kimi", "k3")
     assert kimi is not None
-    assert kimi["source_provider_id"] == "kimi-for-coding"
+    assert kimi["source_provider_id"] == "kimi-code-plan-cn"
     assert kimi["limits"]["context"] > 0
 
     free_openrouter = catalog_model("openrouter", "openai/gpt-oss-120b:free")
