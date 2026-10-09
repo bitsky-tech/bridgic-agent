@@ -5,7 +5,8 @@ import { LocaleType } from '@univerjs/core'
 import JSZip from 'jszip'
 
 GlobalRegistrator.register()
-const { prepareOfficeImage } = await import('../office/officeImage')
+const { prepareOfficeImage, normalizeLegacyEmfHeader } = await import('../office/officeImage')
+const { prepareWordHtmlImages } = await import('../wordImages')
 const { createWordWorkspace, createWordDomainStore, isWordDocumentDirty, reduceWordCommand } = await import('../wordDomain')
 const { exportWordDocx } = await import('../wordDocxExport')
 const { importDocxToHtml } = await import('../wordDocxImport')
@@ -43,6 +44,25 @@ afterEach(() => {
 })
 afterAll(() => GlobalRegistrator.unregister())
 
+it('removes a legacy EMF description without confusing its text with OpenGL header fields', () => {
+  const source = new Uint8Array(136)
+  const view = new DataView(source.buffer)
+  view.setUint32(4, 116, true)
+  view.setUint32(48, 136, true)
+  view.setUint32(60, 13, true)
+  view.setUint32(64, 88, true)
+  view.setUint32(96, 12345, true)
+  source[116] = 14
+  const normalized = normalizeLegacyEmfHeader(source)
+  const header = new DataView(normalized.buffer)
+  expect(normalized.length).toBe(108)
+  expect(header.getUint32(4, true)).toBe(88)
+  expect(header.getUint32(48, true)).toBe(108)
+  expect(header.getUint32(60, true)).toBe(0)
+  expect(normalized[88]).toBe(14)
+  expect(view.getUint32(96, true)).toBe(12345)
+})
+
 it('converts BMP and WebP to PNG while retaining supported image payloads', async () => {
   for (const [mime, payload] of [['bmp', BMP], ['webp', WEBP]]) {
     expect(await prepareOfficeImage(`data:image/${mime};base64,${payload}`, 'word')).toEqual({ extension: 'png', base64: PNG, dataUrl: pngSource })
@@ -55,6 +75,18 @@ it('converts BMP and WebP to PNG while retaining supported image payloads', asyn
   expect(decoded).toHaveLength(2)
 })
 
+it('shows a warning placeholder for an unsupported imported image while explicit edits stay strict', async () => {
+  const html = `<p>Before<img alt="diagram" src="data:image/tiff;base64,AAAA"/>After<img src="${pngSource}"/></p>`
+  const warnings: string[] = []
+  const preview = await prepareWordHtmlImages(html, (message) => warnings.push(message))
+  expect(preview).toContain('Before')
+  expect(preview).toContain('After')
+  expect(preview).toContain('[图片未能预览：diagram]')
+  expect(preview).toContain(pngSource)
+  expect(warnings).toHaveLength(1)
+  await expect(prepareWordHtmlImages(html)).rejects.toThrow('Use an embedded')
+})
+
 async function workbookWithImage(source: string) {
   const workbook = new Workbook()
   const sheet = workbook.addWorksheet('Images')
@@ -63,7 +95,7 @@ async function workbookWithImage(source: string) {
   const snapshot = await importXlsx(new Uint8Array(await workbook.xlsx.writeBuffer()), LocaleType.EN_US)
   const resource = snapshot.resources!.find((item) => item.name === 'SHEET_DRAWING_PLUGIN')!
   const drawings = JSON.parse(resource.data)
-  const drawing = Object.values(drawings[snapshot.sheetOrder[0]!])[0] as { source: string }
+  const drawing = Object.values(drawings[snapshot.sheetOrder[0]!].data)[0] as { source: string }
   drawing.source = source
   resource.data = JSON.stringify(drawings)
   return snapshot

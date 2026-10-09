@@ -13,6 +13,28 @@ function addImageAsset(document: PresentationProject, id: string, source: Presen
 }
 
 describe('importPresentationPptx', () => {
+  it('inherits placeholder frames through empty layouts and matches master placeholders by type rather than index', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = []
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const placeholder = (id: number, type: string, index: number, properties: string, text = '') => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Placeholder ${id}"/><p:cNvSpPr/><p:nvPr><p:ph ${type ? `type="${type}"` : ''} idx="${index}"/></p:nvPr></p:nvSpPr><p:spPr>${properties}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+    for (const [path, shapes] of [
+      ['ppt/slideMasters/slideMaster1.xml', placeholder(2, 'title', 31, '<a:xfrm><a:off x="914400" y="457200"/><a:ext cx="7315200" cy="914400"/></a:xfrm>') + placeholder(3, 'body', 42, '<a:xfrm><a:off x="914400" y="1828800"/><a:ext cx="7315200" cy="3657600"/></a:xfrm>')],
+      ['ppt/slideLayouts/slideLayout1.xml', placeholder(2, 'title', 0, '') + placeholder(3, 'body', 1, '')],
+      ['ppt/slides/slide1.xml', placeholder(2, 'title', 0, '', 'Title') + placeholder(3, '', 1, '<a:xfrm><a:off x="1371600" y="1828800"/></a:xfrm>', 'Body')],
+    ] as const) {
+      const xml = await archive.file(path)!.async('text')
+      archive.file(path, xml.replace('</p:spTree>', `${shapes}</p:spTree>`))
+    }
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
+    const title = imported.slides.pages[0]!.elements.find((element) => element.type === 'text' && element.text === 'Title')!
+    const body = imported.slides.pages[0]!.elements.find((element) => element.type === 'text' && element.text === 'Body')!
+    expect(title.width).toBeGreaterThan(imported.pageSize!.width * 0.5)
+    expect(body.width).toBe(title.width)
+    expect(body.y).toBeGreaterThan(title.y + title.height)
+    expect(body.x).toBeGreaterThan(title.x)
+  })
   it('keeps an explicitly non-bold table header non-bold after native PPTX export', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
     const source = createInitialPresentationProject()

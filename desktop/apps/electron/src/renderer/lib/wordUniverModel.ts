@@ -23,6 +23,7 @@ import {
   type IDocumentBody,
   type IDocumentData,
   type IParagraph,
+  type ISectionBreak,
   type ITable,
   type ITableCell,
   type ITableRow,
@@ -53,6 +54,21 @@ const PAGE_MARGIN = {
 const HEADER_ID = 'bridgic-word-header'
 const FOOTER_ID = 'bridgic-word-footer'
 const DEFAULT_TABLE_WIDTH = 650
+
+/** Import-only HTML parts; the native snapshot remains the workspace authority. */
+export interface WordHeaderFooterHtmlVariant {
+  kind: 'header' | 'footer'
+  variant: 'default' | 'first' | 'even'
+  html: string
+  id?: string
+}
+
+/** Import transfer data, materialized into native sectionBreaks and shared parts. */
+export interface WordHtmlSection {
+  html: string
+  style: Omit<ISectionBreak, 'startIndex'> & { pageNumberFormat?: 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' }
+  parts: WordHeaderFooterHtmlVariant[]
+}
 
 export interface WordReferenceMetadata {
   citations: WordCitationEntry[]
@@ -88,9 +104,47 @@ export function createUniverDocumentSnapshot(
   page: WordPageSettings,
   headerFooter: WordHeaderFooterSettings,
   html = '<p><br></p>',
+  variants: readonly WordHeaderFooterHtmlVariant[] = [],
 ): IDocumentData {
   const snapshot = htmlToUniverSnapshot(html, id, title)
-  return applyHeaderFooterToSnapshot(applyPageSettingsToSnapshot(snapshot, page), headerFooter)
+  return applyHeaderFooterToSnapshot(applyPageSettingsToSnapshot(snapshot, page), headerFooter, undefined, variants)
+}
+
+/** Keep section boundaries and inherited part identities in the existing native model. */
+export function createUniverSectionedDocumentSnapshot(id: string, title: string, page: WordPageSettings, settings: WordHeaderFooterSettings, sections: readonly WordHtmlSection[]): IDocumentData {
+  let result = applyPageSettingsToSnapshot(htmlToUniverSnapshot('<p><br></p>', id, title), page)
+  const body: IDocumentBody = { dataStream: '', paragraphs: [], textRuns: [], customBlocks: [], customRanges: [], tables: [], sectionBreaks: [] }
+  const parts = new Map<string, WordHeaderFooterHtmlVariant>()
+  for (const section of sections) {
+    const parsed = htmlToUniverSnapshot(section.html, id, title)
+    const offset = body.dataStream.length
+    const source = parsed.body!
+    body.dataStream += source.dataStream
+    body.paragraphs!.push(...shiftIndexes(source.paragraphs ?? [], 0, offset))
+    body.textRuns!.push(...shiftRanges(source.textRuns ?? [], 0, offset))
+    body.customBlocks!.push(...shiftIndexes(source.customBlocks ?? [], 0, offset))
+    body.customRanges!.push(...shiftRanges(source.customRanges ?? [], 0, offset))
+    body.tables!.push(...shiftRanges(source.tables ?? [], 0, offset))
+    body.sectionBreaks!.push(...(source.sectionBreaks ?? []).map((item) => ({
+      ...item,
+      ...(item.startIndex === source.dataStream.length - 1 ? section.style : {}),
+      startIndex: item.startIndex + offset,
+    })))
+    for (const key of ['drawings', 'lists', 'tableSource'] as const) Object.assign(result[key] ??= {}, parsed[key])
+    result.drawingsOrder!.push(...(parsed.drawingsOrder ?? []))
+    for (const part of section.parts) parts.set(part.id!, part)
+  }
+  result.body = body
+  result = applyHeaderFooterToSnapshot(result, settings, [], [...parts.values()])
+  // The default editor edits the first section's shared part. Section-specific
+  // overrides remain in sectionBreaks rather than being flattened into this style.
+  const first = sections[0]?.style
+  if (first) {
+    const style = { ...first }
+    delete style.sectionType
+    result.documentStyle = { ...result.documentStyle, ...style }
+  }
+  return result
 }
 
 /** Normalize persisted or externally supplied data into a complete Univer snapshot. */
@@ -117,7 +171,15 @@ export function normalizeUniverDocumentSnapshot(
   snapshot.drawingsOrder ??= []
   snapshot.headers ??= {}
   snapshot.footers ??= {}
-  return applyHeaderFooterToSnapshot(applyPageSettingsToSnapshot(snapshot, page), headerFooter)
+  const normalized = applyPageSettingsToSnapshot(snapshot, page)
+  // A native header/footer is part of the canonical snapshot. Rebuilding it from
+  // import HTML here would undo native formatting and image edits on every commit.
+  const missingHeader = headerFooter.headerHtml.trim() && Object.keys(snapshot.headers).length === 0
+  const missingFooter = headerFooter.footerHtml.trim() && Object.keys(snapshot.footers).length === 0
+  const missingFields: ('headerHtml' | 'footerHtml')[] = []
+  if (missingHeader) missingFields.push('headerHtml')
+  if (missingFooter) missingFields.push('footerHtml')
+  return missingFields.length ? applyHeaderFooterToSnapshot(normalized, headerFooter, missingFields) : normalized
 }
 
 /** Convert legacy, sanitized HTML workspaces to Univer's native document model. */
@@ -223,9 +285,26 @@ export function htmlToUniverSnapshot(html: string, id: string, title: string): I
   }
 }
 
-export function applyPageSettingsToSnapshot(snapshot: IDocumentData, page: WordPageSettings): IDocumentData {
+export function applyPageSettingsToSnapshot(snapshot: IDocumentData, page: WordPageSettings, fields?: readonly (keyof WordPageSettings)[]): IDocumentData {
   const result = clone(snapshot)
   const margin = PAGE_MARGIN[page.margins]
+  if (fields) {
+    // Ribbon settings apply document-wide, but changing margins must not flatten
+    // imported section sizes/orientations (and vice versa).
+    for (const style of [result.documentStyle, ...(result.body?.sectionBreaks ?? []).filter((section) => result.body!.dataStream[section.startIndex] === '\n')]) {
+      if (fields.includes('size') || fields.includes('orientation')) {
+        const source = fields.includes('size') ? PAGE_SIZE[page.size] : style.pageSize ?? result.documentStyle.pageSize ?? PAGE_SIZE[page.size]
+        const landscape = fields.includes('orientation') ? page.orientation === 'landscape' : (style.pageOrient ?? result.documentStyle.pageOrient) === PageOrientType.LANDSCAPE
+        style.pageOrient = landscape ? PageOrientType.LANDSCAPE : PageOrientType.PORTRAIT
+        style.pageSize = {
+          width: landscape ? Math.max(source.width!, source.height!) : Math.min(source.width!, source.height!),
+          height: landscape ? Math.min(source.width!, source.height!) : Math.max(source.width!, source.height!),
+        }
+      }
+      if (fields.includes('margins')) style.marginTop = style.marginBottom = style.marginLeft = style.marginRight = margin
+    }
+    return result
+  }
   result.documentStyle = {
     ...result.documentStyle,
     pageSize: { ...PAGE_SIZE[page.size] },
@@ -238,20 +317,116 @@ export function applyPageSettingsToSnapshot(snapshot: IDocumentData, page: WordP
   return result
 }
 
-export function applyHeaderFooterToSnapshot(snapshot: IDocumentData, settings: WordHeaderFooterSettings): IDocumentData {
+export function applyHeaderFooterToSnapshot(snapshot: IDocumentData, settings: WordHeaderFooterSettings, fields: readonly ('headerHtml' | 'footerHtml')[] = ['headerHtml', 'footerHtml'], variants: readonly WordHeaderFooterHtmlVariant[] = []): IDocumentData {
   const result = clone(snapshot)
-  const headerText = htmlToPlainText(settings.headerHtml)
-  const footerText = htmlToPlainText(settings.footerHtml)
-  result.headers = headerText ? { [HEADER_ID]: { headerId: HEADER_ID, body: textBody(headerText) } } : {}
-  result.footers = footerText ? { [FOOTER_ID]: { footerId: FOOTER_ID, body: textBody(footerText) } } : {}
+  result.drawings ??= {}
+  result.drawingsOrder ??= []
+  result.lists ??= {}
+  result.tableSource ??= {}
+  result.headers ??= {}
+  result.footers ??= {}
+  const updateHeader = fields.includes('headerHtml')
+  const updateFooter = fields.includes('footerHtml')
+  const retainedBodies = [snapshot.body,
+    ...(!updateHeader ? Object.values(snapshot.headers ?? {}).map((part) => part.body) : []),
+    ...(!updateFooter ? Object.values(snapshot.footers ?? {}).map((part) => part.body) : []),
+  ]
+  const retainedDrawings = new Set(retainedBodies.flatMap((body) => body?.customBlocks?.map((block) => block.blockId) ?? []))
+  const retainedTables = new Set(retainedBodies.flatMap((body) => body?.tables?.map((table) => table.tableId) ?? []))
+  const retainedLists = new Set(retainedBodies.flatMap((body) => body?.paragraphs?.map((paragraph) => paragraph.bullet?.listId) ?? []))
+  for (const part of [
+    ...(updateHeader ? Object.values(snapshot.headers ?? {}) : []),
+    ...(updateFooter ? Object.values(snapshot.footers ?? {}) : []),
+  ]) {
+    for (const block of part.body.customBlocks ?? []) if (!retainedDrawings.has(block.blockId)) delete result.drawings[block.blockId]
+    for (const table of part.body.tables ?? []) if (!retainedTables.has(table.tableId)) delete result.tableSource[table.tableId]
+    for (const paragraph of part.body.paragraphs ?? []) {
+      const id = paragraph.bullet?.listId
+      if (id && !retainedLists.has(id)) delete result.lists[id]
+    }
+  }
+  result.drawingsOrder = result.drawingsOrder.filter((id) => result.drawings![id])
+  const segmentBody = (html: string, segmentId: string): IDocumentBody | null => {
+    const parsed = htmlToUniverSnapshot(html, result.id, result.title ?? '')
+    const body = parsed.body!
+    if (!body.dataStream.replace(/[\r\n]/g, '').trim()) return null
+    const template = document.createElement('template')
+    template.innerHTML = html
+    const images = Array.from(template.content.querySelectorAll('img[src]'))
+    const tables = Array.from(template.content.querySelectorAll('table'))
+    // Stable, segment-scoped identities avoid aliasing body assets or generating
+    // a different snapshot whenever the same header/footer settings are applied.
+    const resourceId = (kind: string, index: number, occupied: object) => {
+      let id = `${segmentId}-${kind}-${index + 1}`
+      while (Object.hasOwn(occupied, id)) id += '-copy'
+      return id
+    }
+    Object.entries(parsed.drawings ?? {}).forEach(([oldId, drawing], index) => {
+      const id = resourceId('drawing', index, result.drawings!)
+      for (const block of body.customBlocks ?? []) if (block.blockId === oldId) block.blockId = id
+      const native = snapshot.drawings?.[images[index]?.getAttribute('data-word-drawing-id') ?? '']
+      // A text edit must not reset an existing image's wrapping, rotation or crop.
+      result.drawings![id] = native && 'source' in native && 'source' in drawing && native.source === drawing.source
+        ? { ...clone(native), drawingId: id, docTransform: { ...clone(native.docTransform), size: drawing.docTransform.size }, transform: { ...clone(native.transform), width: drawing.transform?.width, height: drawing.transform?.height } }
+        : { ...drawing, drawingId: id }
+      result.drawingsOrder!.push(id)
+    })
+    Object.entries(parsed.tableSource ?? {}).forEach(([oldId, table], index) => {
+      const id = resourceId('table', index, result.tableSource!)
+      for (const range of body.tables ?? []) if (range.tableId === oldId) range.tableId = id
+      const native = snapshot.tableSource?.[tables[index]?.getAttribute('data-word-table-id') ?? '']
+      const sameStructure = native && native.tableColumns.length === table.tableColumns.length
+        && native.tableRows.length === table.tableRows.length
+        && native.tableRows.every((row, rowIndex) => row.tableCells.length === table.tableRows[rowIndex]!.tableCells.length
+          && row.tableCells.every((cell, columnIndex) => {
+            const parsedCell = table.tableRows[rowIndex]!.tableCells[columnIndex]!
+            return (cell.rowSpan ?? 1) === (parsedCell.rowSpan ?? 1) && (cell.columnSpan ?? 1) === (parsedCell.columnSpan ?? 1)
+          }))
+      // Header text editing does not reset native column widths, borders or row heights.
+      result.tableSource![id] = { ...clone(sameStructure ? native : table), tableId: id }
+    })
+    Object.entries(parsed.lists ?? {}).forEach(([oldId, list], index) => {
+      const id = resourceId('list', index, result.lists!)
+      for (const paragraph of body.paragraphs ?? []) if (paragraph.bullet?.listId === oldId) paragraph.bullet.listId = id
+      result.lists![id] = list
+    })
+    body.customRanges?.filter((range) => range.rangeType === CustomRangeType.HYPERLINK).forEach((range, index) => {
+      range.rangeId = `${segmentId}-hyperlink-${index + 1}`
+    })
+    return body
+  }
+  if (updateHeader) {
+    const body = segmentBody(settings.headerHtml, HEADER_ID)
+    result.headers = body ? { [HEADER_ID]: { headerId: HEADER_ID, body } } : {}
+    result.documentStyle.defaultHeaderId = body ? HEADER_ID : ''
+  }
+  if (updateFooter) {
+    const body = segmentBody(settings.footerHtml, FOOTER_ID)
+    result.footers = body ? { [FOOTER_ID]: { footerId: FOOTER_ID, body } } : {}
+    result.documentStyle.defaultFooterId = body ? FOOTER_ID : ''
+  }
   result.documentStyle = {
     ...result.documentStyle,
-    defaultHeaderId: headerText ? HEADER_ID : '',
-    defaultFooterId: footerText ? FOOTER_ID : '',
     firstPageHeaderId: settings.differentFirstPage ? '' : undefined,
     firstPageFooterId: settings.differentFirstPage ? '' : undefined,
     useFirstPageHeaderFooter: settings.differentFirstPage ? BooleanNumber.TRUE : BooleanNumber.FALSE,
     pageNumberStart: settings.pageNumberStart,
+  }
+  for (const { kind, variant, html, id: suppliedId } of variants) {
+    const id = suppliedId ?? `${kind === 'header' ? HEADER_ID : FOOTER_ID}-${variant}`
+    // An explicitly empty first/even part is meaningful: it overrides the default.
+    const body = segmentBody(html, id) ?? textBody('')
+    if (kind === 'header') {
+      result.headers![id] = { headerId: id, body }
+      if (variant === 'default') result.documentStyle.defaultHeaderId = id
+      else if (variant === 'first') result.documentStyle.firstPageHeaderId = id
+      else result.documentStyle.evenPageHeaderId = id
+    } else {
+      result.footers![id] = { footerId: id, body }
+      if (variant === 'default') result.documentStyle.defaultFooterId = id
+      else if (variant === 'first') result.documentStyle.firstPageFooterId = id
+      else result.documentStyle.evenPageFooterId = id
+    }
   }
   return result
 }
@@ -455,6 +630,13 @@ function parseBlocks(root: ParentNode): ParsedBlock[] {
     }
     if (!(node instanceof HTMLElement)) continue
     const tag = node.tagName.toLowerCase()
+    if (tag === 'img') {
+      // Mammoth emits legacy VML pictures outside their containing paragraph.
+      const paragraph = document.createElement('p')
+      paragraph.appendChild(node.cloneNode(true))
+      blocks.push(inlineBlock(paragraph))
+      continue
+    }
     if (tag === 'ul' || tag === 'ol') {
       const listType = tag === 'ol' ? PresetListType.ORDER_LIST : PresetListType.BULLET_LIST
       parseList(node, listType, blocks, 0, `list-${Math.random().toString(36).slice(2)}`)
@@ -488,7 +670,7 @@ function parseList(element: HTMLElement, listType: PresetListType, target: Parse
     if (child.tagName.toLowerCase() !== 'li') continue
     const holder = child.cloneNode(true) as HTMLElement
     for (const nested of holder.querySelectorAll('ul,ol')) nested.remove()
-    const block = inlineBlock(holder)
+    const block = inlineBlock(holder, paragraphStyleForElement(holder.querySelector<HTMLElement>(':scope > p') ?? holder))
     block.bullet = { listType, listId, nestingLevel }
     target.push(block)
     for (const nested of child.children) {
@@ -649,6 +831,19 @@ function inlineBlock(element: HTMLElement, paragraphStyle?: IParagraph['paragrap
       return
     }
     if (!(node instanceof HTMLElement)) return
+    const field = node.dataset.wordField
+    if (field === 'PAGE' || field === 'NUMPAGES') {
+      const startIndex = block.text.length
+      const instruction = node.dataset.wordFieldInstruction?.trim() ?? field
+      // A field occupies one source character regardless of its rendered value.
+      // This keeps native selections and subsequent runs stable for 9 -> 10, etc.
+      block.text += '\uFFFC'
+      block.textRuns.push({ start: startIndex, end: startIndex + 1, style: styleForElement(node, inherited) })
+      block.customRanges.push({ startIndex, endIndex: startIndex, rangeId: `word-field-${crypto.randomUUID()}`, rangeType: CustomRangeType.CUSTOM, wholeEntity: true,
+        properties: { bridgicKind: 'pageField', field, instruction: instruction.match(/^(PAGE|NUMPAGES)\b/i)?.[1]?.toUpperCase() === field ? instruction : field, cached: node.textContent ?? '1' },
+      })
+      return
+    }
     if (node.tagName === 'BR') {
       block.text += '\r'
       return
@@ -660,12 +855,20 @@ function inlineBlock(element: HTMLElement, paragraphStyle?: IParagraph['paragrap
         const startIndex = block.text.length
         block.text += '\b'
         block.customBlocks.push({ startIndex, blockId: drawingId })
-        block.drawings[drawingId] = imageDrawing(drawingId, source, node.getAttribute('alt') ?? '', node.getAttribute('title') ?? '')
+        const drawing = imageDrawing(drawingId, source, node.getAttribute('alt') ?? '', node.getAttribute('title') ?? '')
+        const width = Number(node.getAttribute('width'))
+        const height = Number(node.getAttribute('height'))
+        if (width > 0 && height > 0) {
+          drawing.transform = { ...drawing.transform, width, height }
+          drawing.docTransform = { ...drawing.docTransform, size: { width, height } }
+        }
+        block.drawings[drawingId] = drawing
       }
       return
     }
     const style = styleForElement(node, inherited)
     const reference = referenceForElement(node)
+    const href = node.tagName === 'A' ? node.getAttribute('href')?.trim() : undefined
     const startIndex = block.text.length
     for (const child of node.childNodes) visit(child, style)
     if (reference && block.text.length > startIndex) {
@@ -676,6 +879,14 @@ function inlineBlock(element: HTMLElement, paragraphStyle?: IParagraph['paragrap
         rangeType: CustomRangeType.CUSTOM,
         wholeEntity: true,
         properties: reference,
+      })
+    } else if (href && /^(https?:|mailto:)/i.test(href) && block.text.length > startIndex) {
+      block.customRanges.push({
+        startIndex,
+        endIndex: block.text.length - 1,
+        rangeId: `hyperlink-${Math.random().toString(36).slice(2)}`,
+        rangeType: CustomRangeType.HYPERLINK,
+        properties: { url: href },
       })
     }
   }
@@ -700,6 +911,18 @@ function paragraphStyleForElement(element: HTMLElement): IParagraph['paragraphSt
   if (align === 'center') style.horizontalAlign = HorizontalAlign.CENTER
   if (align === 'right') style.horizontalAlign = HorizontalAlign.RIGHT
   if (align === 'justify') style.horizontalAlign = HorizontalAlign.JUSTIFIED
+  const lineSpacing = Number(element.style.lineHeight)
+  if (Number.isFinite(lineSpacing) && lineSpacing > 0) style.lineSpacing = lineSpacing
+  const spacing = (value: string): number | undefined => {
+    const match = /^(\d+(?:\.\d*)?|\.\d+)(px|pt)?$/i.exec(value.trim())
+    if (!match) return undefined
+    const pixels = Number(match[1]) * (match[2]?.toLowerCase() === 'pt' ? 96 / 72 : 1)
+    return Number.isFinite(pixels) ? pixels : undefined
+  }
+  const above = spacing(element.style.marginTop)
+  const below = spacing(element.style.marginBottom)
+  if (above !== undefined) style.spaceAbove = { v: above }
+  if (below !== undefined) style.spaceBelow = { v: below }
   return Object.keys(style).length > 0 ? style : undefined
 }
 
@@ -822,12 +1045,6 @@ function headingLevel(value: NamedStyleType | undefined): number {
   if (value === NamedStyleType.HEADING_4) return 4
   if (value === NamedStyleType.HEADING_5) return 5
   return 0
-}
-
-function htmlToPlainText(value: string): string {
-  const template = document.createElement('template')
-  template.innerHTML = value
-  return (template.content.textContent ?? '').trim()
 }
 
 function isBlockTag(tag: string): boolean {

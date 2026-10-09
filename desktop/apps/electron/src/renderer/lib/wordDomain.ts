@@ -226,7 +226,7 @@ const ALLOWED_TAGS = new Set([
 const ALLOWED_STYLE_PROPERTIES = new Set([
   'background-color', 'border', 'border-bottom', 'border-collapse', 'break-after', 'color',
   'font-family', 'font-size', 'font-style', 'font-weight', 'height', 'letter-spacing', 'line-height',
-  'list-style-type', 'margin', 'margin-left', 'max-width', 'padding', 'text-align', 'text-decoration',
+  'list-style-type', 'margin', 'margin-bottom', 'margin-left', 'margin-top', 'max-width', 'padding', 'text-align', 'text-decoration',
   'vertical-align', 'width',
 ])
 
@@ -686,7 +686,9 @@ export function reduceWordCommand(state: WordWorkspaceState, command: unknown, d
     if (!document) return failure('document_not_found', 'The requested Word document does not exist in this Session.')
     const page = mergePageSettings(document.page, command.page)
     if (!page) return failure('invalid_page_settings', 'Unsupported Word page setting.')
-    return replaceDocument(state, documentId, { page, snapshot: applyPageSettingsToSnapshot(document.snapshot, page) })
+    const requested = command.page
+    const fields = (['size', 'orientation', 'margins'] as const).filter((field) => requested[field] !== undefined)
+    return replaceDocument(state, documentId, { page, snapshot: applyPageSettingsToSnapshot(document.snapshot, page, fields) })
   }
 
   if (command.type === 'document.headerFooter.update') {
@@ -697,9 +699,11 @@ export function reduceWordCommand(state: WordWorkspaceState, command: unknown, d
     if (!document) return failure('document_not_found', 'The requested Word document does not exist in this Session.')
     const headerFooter = mergeHeaderFooter(document.headerFooter, command.settings)
     if (!headerFooter) return failure('invalid_header_footer', 'Unsupported Word header or footer setting.')
+    if (JSON.stringify(headerFooter) === JSON.stringify(document.headerFooter)) return { ok: true, state }
+    const fields = (['headerHtml', 'footerHtml'] as const).filter((field) => headerFooter[field] !== document.headerFooter[field])
     return replaceDocument(state, documentId, {
       headerFooter,
-      snapshot: applyHeaderFooterToSnapshot(document.snapshot, headerFooter),
+      snapshot: applyHeaderFooterToSnapshot(document.snapshot, headerFooter, fields),
     })
   }
 
@@ -973,14 +977,18 @@ function sanitizedAttributes(element: Element): Array<[string, string]> {
     preserveTextAttribute(element, attributes, 'title', 500)
     preserveNumberAttribute(element, attributes, 'width')
     preserveNumberAttribute(element, attributes, 'height')
+    preserveTextAttribute(element, attributes, 'data-word-drawing-id', 160)
   }
   if (element.tagName === 'TD' || element.tagName === 'TH') {
     preserveNumberAttribute(element, attributes, 'colspan')
     preserveNumberAttribute(element, attributes, 'rowspan')
   }
+  if (element.tagName === 'TABLE') preserveTextAttribute(element, attributes, 'data-word-table-id', 160)
   preserveEnumAttribute(element, attributes, 'data-type', ['taskList', 'taskItem'])
   preserveEnumAttribute(element, attributes, 'data-checked', ['true', 'false'])
   preserveEnumAttribute(element, attributes, 'data-word-page-break', ['true'])
+  preserveEnumAttribute(element, attributes, 'data-word-field', ['PAGE', 'NUMPAGES'])
+  preserveTextAttribute(element, attributes, 'data-word-field-instruction', 500)
   preserveTextAttribute(element, attributes, 'data-word-footnote-id', 80)
   preserveNumberAttribute(element, attributes, 'data-word-footnote-number')
   preserveTextAttribute(element, attributes, 'data-word-footnote-text', 2_000)
@@ -1029,7 +1037,7 @@ function safeImageSource(value: string | null): string | null {
   if (!value) return null
   const source = value.trim()
   if (/^https:\/\//i.test(source)) return source
-  return /^data:image\/(?:png|jpe?g|gif|bmp|x-ms-bmp|webp);base64,[a-z0-9+/=\s]+$/i.test(source) ? source : null
+  return /^data:image\/(?:png|jpe?g|gif|bmp|x-ms-bmp|webp|(?:x-)?wmf|(?:x-)?emf);base64,[a-z0-9+/=\s]+$/i.test(source) ? source : null
 }
 
 function normalizedReferenceId(value: string): string {

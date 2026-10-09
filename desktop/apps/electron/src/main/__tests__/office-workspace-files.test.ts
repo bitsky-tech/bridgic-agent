@@ -64,9 +64,55 @@ for (const [kind, extension] of [['word', 'docx'], ['excel', 'xlsx'], ['presenta
     expect((await service.prepare('session', kind, external)).path).toBe(imported.path)
     expect(await readFile(external, 'utf8')).toBe('original')
     expect(await readFile(imported.path, 'utf8')).toBe('new content')
+    const preserved = await service.save('session', { ...request, documentId: 'protected-import', source: await inspectOfficeFile(kind, imported.path), preserveSource: true, bytes: new TextEncoder().encode('editable copy') })
+    expect(preserved.ok).toBe(true)
+    if (!preserved.ok) throw new Error('save failed')
+    expect(preserved.source.path).not.toBe(imported.path)
+    expect(await readFile(imported.path, 'utf8')).toBe('new content')
+    expect(await readFile(preserved.source.path, 'utf8')).toBe('editable copy')
+    service = createService()
+    const retried = await service.save('session', { ...request, documentId: 'protected-import', source: await inspectOfficeFile(kind, imported.path), preserveSource: true, bytes: new TextEncoder().encode('editable copy') })
+    expect(retried.ok && retried.source.path).toBe(preserved.source.path)
+    let copy = preserved.source
+    for (const content of ['second edit', 'third edit']) {
+      service = createService()
+      const nextCopy = await service.save('session', { ...request, documentId: 'protected-import', suggestedName: basename(copy.path), source: copy, preserveSource: true, bytes: new TextEncoder().encode(content) })
+      expect(nextCopy.ok).toBe(true)
+      if (!nextCopy.ok) throw new Error('copy save failed')
+      expect(nextCopy.source.path).toBe(preserved.source.path)
+      expect(await readFile(nextCopy.source.path, 'utf8')).toBe(content)
+      expect(await readFile(imported.path, 'utf8')).toBe('new content')
+      copy = nextCopy.source
+    }
+    await writeFile(copy.path, 'changed outside the editor')
+    await utimes(copy.path, new Date(), new Date(Date.now() + 10_000))
+    expect(await service.save('session', { ...request, documentId: 'protected-import', source: copy, preserveSource: true })).toEqual({ ok: false, reason: 'conflict' })
+    expect(await readFile(copy.path, 'utf8')).toBe('changed outside the editor')
     expect(notifications).toBeGreaterThan(0)
     const second = await service.save('session', { ...request, documentId: 'second' })
-    expect(second.ok && second.fileName).toBe(`Report (2).${extension}`)
+    expect(second.ok && second.fileName).toBe(`Report (3).${extension}`)
+  })
+
+  it(`${kind}: reuses protected saves of a new document and allocates a copy when protecting a previously saved original`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    const service = createOfficeWorkspaceFiles(async (_endpoint, body) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }, () => undefined)
+    const input = { kind, documentId: 'new-protected', suggestedName: `New.${extension}`, preserveSource: true, bytes: new TextEncoder().encode('first edit') }
+    const first = await service.save('session', input)
+    if (!first.ok) throw new Error('save failed')
+    const second = await service.save('session', { ...input, source: first.source, bytes: new TextEncoder().encode('second edit') })
+    expect(second.ok && second.source.path).toBe(first.source.path)
+    expect(await readdir(work)).toEqual([`New.${extension}`])
+    const original = await service.save('session', { ...input, preserveSource: false, documentId: 'original', suggestedName: `Original.${extension}` })
+    if (!original.ok) throw new Error('save failed')
+    const copy = await service.save('session', { ...input, documentId: 'original', source: original.source, bytes: new TextEncoder().encode('protected edit') })
+    expect(copy.ok && copy.source.path).not.toBe(original.source.path)
+    expect(await readFile(original.source.path, 'utf8')).toBe('first edit')
   })
 
   it(`${kind}: a recovery receipt never acknowledges unrelated file content`, async () => {

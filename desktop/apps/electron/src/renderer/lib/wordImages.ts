@@ -2,7 +2,7 @@ import { ImageSourceType, type IDocumentData } from '@univerjs/core'
 import { prepareOfficeImage } from './office/officeImage'
 
 /** Run before committing a command, so an unavailable image cannot block later saves. */
-export async function prepareWordHtmlImages(html: string): Promise<string> {
+export async function prepareWordHtmlImages(html: string, onImportWarning?: (message: string) => void): Promise<string> {
   if (!/<img\b/i.test(html)) return html
   const template = document.createElement('template')
   template.innerHTML = html
@@ -10,7 +10,17 @@ export async function prepareWordHtmlImages(html: string): Promise<string> {
   for (const image of template.content.querySelectorAll('img[src]')) {
     const source = image.getAttribute('src')!
     if (!sources.has(source)) sources.set(source, prepareOfficeImage(source, 'word').then((value) => value.dataUrl))
-    image.setAttribute('src', await sources.get(source)!)
+    try {
+      image.setAttribute('src', await sources.get(source)!)
+    } catch (error) {
+      // Explicit image edits remain strict; imports can preserve the rest of the document.
+      if (!onImportWarning) throw error
+      onImportWarning(`An embedded image could not be previewed: ${error instanceof Error ? error.message : String(error)}`)
+      const placeholder = document.createElement('span')
+      const alt = image.getAttribute('alt')
+      placeholder.textContent = `[图片未能预览${alt ? `：${alt}` : ''}]`
+      image.replaceWith(placeholder)
+    }
   }
   return template.innerHTML
 }

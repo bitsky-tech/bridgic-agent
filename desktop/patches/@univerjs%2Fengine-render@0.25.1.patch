@@ -1,5 +1,5 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index cb8606f8fd6e17873cf7fe4df228353f4c067306..5b0dc1cd961f021664dcaeeb25853a42e247cdad 100644
+index cb8606f8fd6e17873cf7fe4df228353f4c067306..34c8ab2ae38bbde30615a3631a8eae12d3602c6b 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
 @@ -387,6 +387,9 @@ function isEmojiGrapheme(grapheme) {
@@ -12,7 +12,40 @@ index cb8606f8fd6e17873cf7fe4df228353f4c067306..5b0dc1cd961f021664dcaeeb25853a42
  	const first = getFirstGrapheme(text);
  	return first ? isEmojiGrapheme(first) : false;
  }
-@@ -14528,7 +14531,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+@@ -13693,8 +13696,8 @@ function _lineOperator(ctx, glyphGroup, pages, sectionBreakConfig, paragraphConf
+ 	if (!section) section = getLastSection(lastPage);
+ 	const lineTop = ((preLine === null || preLine === void 0 ? void 0 : preLine.lineHeight) || 0) + ((preLine === null || preLine === void 0 ? void 0 : preLine.top) || 0);
+ 	const { pageWidth, headerId, footerId, segmentId } = lastPage;
+-	const headerPage = skeHeaders === null || skeHeaders === void 0 || (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
+-	const footerPage = skeFooters === null || skeFooters === void 0 || (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++	const headerPage = lastPage.headerSkeleton ?? (skeHeaders === null || skeHeaders === void 0 || (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
++	const footerPage = lastPage.footerSkeleton ?? (skeFooters === null || skeFooters === void 0 || (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 	let needOpenNewPageByTableLayout = false;
+ 	if (preLine) {
+ 		const drawingsInLine = _getCustomBlockIdsInLine(preLine);
+@@ -14159,6 +14162,7 @@ function getCustomDecorationStyle(customDecoration) {
+ //#endregion
+ //#region src/components/docs/layout/style/custom-range.ts
+ function getCustomRangeStyle(customRange) {
++	if (customRange.properties?.bridgicKind === "pageField") return null;
+ 	if (customRange.rangeType === _univerjs_core.CustomRangeType.HYPERLINK || customRange.rangeType === _univerjs_core.CustomRangeType.MENTION || customRange.rangeType === _univerjs_core.CustomRangeType.CUSTOM) {
+ 		var _customRange$active;
+ 		return {
+@@ -14267,6 +14271,13 @@ function updateBlockIndex(pages, start = -1) {
+ 	let prePageStartIndex = start;
+ 	for (const page of pages) {
+ 		const { sections, skeTables } = page;
++		// Implicit odd/even section pages have no body and consume no text indexes.
++		if (sections.length === 0) {
++			page.st = prePageStartIndex + 1;
++			page.ed = prePageStartIndex;
++			page.width = page.height = 0;
++			continue;
++		}
+ 		const pageStartIndex = prePageStartIndex;
+ 		let preSectionStartIndex = pageStartIndex;
+ 		let maxContentWidth = Number.NEGATIVE_INFINITY;
+@@ -14528,7 +14539,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
  	const { st, ed } = textRun;
  	let { ts: textStyle = {} } = textRun;
  	const cache = fontCreateConfigCache.getValue(st, ed);
@@ -21,7 +54,7 @@ index cb8606f8fd6e17873cf7fe4df228353f4c067306..5b0dc1cd961f021664dcaeeb25853a42
  	const { snapToGrid = _univerjs_core.BooleanNumber.TRUE, namedStyleType } = paragraphStyle;
  	const bulletTextStyle = bullet ? getBulletParagraphTextStyle(bullet, viewModel) : null;
  	const namedStyle = namedStyleType ? _univerjs_core.NAMED_STYLE_MAP[namedStyleType] : null;
-@@ -14551,7 +14554,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+@@ -14551,7 +14562,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
  		snapToGrid,
  		pageWidth: pageSize.width || Number.POSITIVE_INFINITY - marginLeft - marginRight
  	};
@@ -30,7 +63,91 @@ index cb8606f8fd6e17873cf7fe4df228353f4c067306..5b0dc1cd961f021664dcaeeb25853a42
  	return result;
  }
  function getNullSkeleton() {
-@@ -16094,14 +16097,13 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
+@@ -14653,6 +14664,7 @@ function prepareSectionBreakConfig(ctx, nodeIndex) {
+ 		linePitch,
+ 		gridType,
+ 		pageNumberStart,
++		pageNumberFormat: sectionBreak.pageNumberFormat ?? "decimal",
+ 		pageSize,
+ 		pageOrient,
+ 		marginTop,
+@@ -14753,27 +14765,34 @@ function createSkeletonPage(ctx, sectionBreakConfig, skeletonResourceReference,
+ 	}
+ 	let header;
+ 	let footer;
++	const layoutSegment = (id, treeMap, cache, isHeader) => {
++		const view = treeMap?.get(id);
++		if (!view) return;
++		const fields = view.getBody().customRanges?.some((range) => range.properties?.bridgicKind === "pageField");
++		const key = fields ? `${pageWidth}:${marginLeft}:${marginRight}:${pageHeight}:${_marginHeader}:${_marginFooter}:${pageNumber}:${sectionBreakConfig.pageNumberFormat}` : pageWidth;
++		let variants = cache.get(id);
++		if (!variants) cache.set(id, variants = new Map());
++		if (variants.has(key)) return variants.get(key);
++		const previousNumber = ctx.pageFieldNumber;
++		const previousFormat = ctx.pageFieldNumberFormat;
++		ctx.pageFieldNumber = pageNumber;
++		ctx.pageFieldNumberFormat = sectionBreakConfig.pageNumberFormat;
++		if (fields) ctx.paragraphConfigCache.delete(id);
++		try {
++			const segment = _createSkeletonHeaderFooter(ctx, view, sectionBreakConfig, skeletonResourceReference, id, isHeader);
++			variants.set(key, segment);
++			return segment;
++		} finally { ctx.pageFieldNumber = previousNumber; ctx.pageFieldNumberFormat = previousFormat; }
++	};
+ 	if (headerId) {
+-		var _skeHeaders$get;
+-		if ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.has(pageWidth)) {
+-			var _skeHeaders$get2;
+-			header = (_skeHeaders$get2 = skeHeaders.get(headerId)) === null || _skeHeaders$get2 === void 0 ? void 0 : _skeHeaders$get2.get(pageWidth);
+-		} else if (headerTreeMap && headerTreeMap.has(headerId)) {
+-			header = _createSkeletonHeaderFooter(ctx, headerTreeMap.get(headerId), sectionBreakConfig, skeletonResourceReference, headerId, true);
+-			skeHeaders.set(headerId, new Map([[pageWidth, header]]));
+-		}
++		header = layoutSegment(headerId, headerTreeMap, skeHeaders, true);
+ 		page.headerId = headerId;
++		page.headerSkeleton = header;
+ 	}
+ 	if (footerId) {
+-		var _skeFooters$get;
+-		if ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.has(pageWidth)) {
+-			var _skeFooters$get2;
+-			footer = (_skeFooters$get2 = skeFooters.get(footerId)) === null || _skeFooters$get2 === void 0 ? void 0 : _skeFooters$get2.get(pageWidth);
+-		} else if (footerTreeMap && footerTreeMap.has(footerId)) {
+-			footer = _createSkeletonHeaderFooter(ctx, footerTreeMap.get(footerId), sectionBreakConfig, skeletonResourceReference, footerId, false);
+-			skeFooters.set(footerId, new Map([[pageWidth, footer]]));
+-		}
++		footer = layoutSegment(footerId, footerTreeMap, skeFooters, false);
+ 		page.footerId = footerId;
++		page.footerSkeleton = footer;
+ 	}
+ 	page.originMarginTop = marginTop;
+ 	page.originMarginBottom = marginBottom;
+@@ -16082,6 +16101,24 @@ function hyphenConfig(paragraphStyle, sectionBreakConfig) {
+ 	const { autoHyphenation = _univerjs_core.BooleanNumber.FALSE } = sectionBreakConfig;
+ 	return suppressHyphenation === _univerjs_core.BooleanNumber.FALSE && autoHyphenation === _univerjs_core.BooleanNumber.TRUE;
+ }
++function formatPageField(value, instruction, numberFormat) {
++	const format = instruction?.match(/\\\*\s+(Arabic|ARABIC|arabic|ROMAN|roman|ALPHABETIC|alphabetic)\b/)?.[1] ?? ({ lowerRoman: "roman", upperRoman: "ROMAN", lowerLetter: "alphabetic", upperLetter: "ALPHABETIC" }[numberFormat]);
++	let number = Math.max(1, Math.trunc(value));
++	if (format === "ROMAN" || format === "roman") {
++		if (number > 3999) return String(number);
++		let result = "";
++		for (const [amount, symbol] of [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]) {
++			while (number >= amount) { result += symbol; number -= amount; }
++		}
++		return format === "roman" ? result.toLowerCase() : result;
++	}
++	if (format === "ALPHABETIC" || format === "alphabetic") {
++		let result = "";
++		while (number > 0) { number--; result = String.fromCharCode(65 + number % 26) + result; number = Math.floor(number / 26); }
++		return format === "alphabetic" ? result.toLowerCase() : result;
++	}
++	return String(number);
++}
+ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, useOpenType = false) {
+ 	const { gridType = _univerjs_core.GridType.LINES, charSpace = 0, defaultTabStop = 10.5, drawings = {} } = sectionBreakConfig;
+ 	const shapedTextList = [];
+@@ -16094,14 +16131,13 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
  	let bk;
  	let lastGlyphIndex = 0;
  	const { hyphen, languageDetector } = ctx;
@@ -47,8 +164,157 @@ index cb8606f8fd6e17873cf7fe4df228353f4c067306..5b0dc1cd961f021664dcaeeb25853a42
  	const doNotHyphenateCaps = sectionBreakConfig.doNotHyphenateCaps === _univerjs_core.BooleanNumber.TRUE;
  	if (lang !== "unknown" && needHyphen) if (hyphen.hasPattern(lang)) breaker = new LineBreakerHyphenEnhancer(breaker, hyphen, lang, doNotHyphenateCaps);
  	else hyphen.loadPattern(lang);
+@@ -16139,6 +16175,19 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
+ 				var _src$match;
+ 				const char = (_src$match = src.match(/^[\s\S]/gu)) === null || _src$match === void 0 ? void 0 : _src$match[0];
+ 				if (char == null) break;
++				const field = char === "\uFFFC" ? viewModel.getBody().customRanges?.find((range) => range.startIndex === paragraphNode.startIndex + i && range.properties?.bridgicKind === "pageField") : null;
++				if (field) {
++					const properties = field.properties;
++					const value = properties.field === "PAGE" ? ctx.pageFieldNumber : ctx.pageFieldTotalPages;
++					const config = getFontCreateConfig(i, viewModel, paragraphNode, sectionBreakConfig, paragraph);
++					const glyph = createSkeletonLetterGlyph(value == null ? String(properties.cached ?? "1") : formatPageField(value, properties.instruction, properties.field === "PAGE" ? ctx.pageFieldNumberFormat : undefined), config);
++					glyph.count = 1;
++					glyph.raw = char;
++					shapedGlyphs.push(glyph);
++					i++;
++					src = src.substring(1);
++					continue;
++				}
+ 				if (char === _univerjs_core.DataStreamTreeTokenType.CUSTOM_BLOCK) {
+ 					const config = getFontCreateConfig(i, viewModel, paragraphNode, sectionBreakConfig, paragraph);
+ 					let newGlyph = null;
+@@ -16834,12 +16883,12 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 			const { headerId, footerId, pageWidth } = skePage;
+ 			if (pageType === 1) {
+ 				var _skeHeaders$get;
+-				const skeHeader = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++				const skeHeader = skePage.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 				if (skeHeader == null) return;
+ 				else skePage = skeHeader;
+ 			} else if (pageType === 2) {
+ 				var _skeFooters$get;
+-				const skeFooter = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++				const skeFooter = skePage.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 				if (skeFooter == null) return;
+ 				else skePage = skeFooter;
+ 			}
+@@ -16910,9 +16959,9 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 			let exactMatch = null;
+ 			if (editArea === "HEADER" || editArea === "FOOTER") {
+ 				var _skeHeaders$get2, _skeFooters$get2;
+-				const headerSke = (_skeHeaders$get2 = skeHeaders.get(headerId)) === null || _skeHeaders$get2 === void 0 ? void 0 : _skeHeaders$get2.get(pageWidth);
++				const headerSke = page.headerSkeleton ?? ((_skeHeaders$get2 = skeHeaders.get(headerId)) === null || _skeHeaders$get2 === void 0 ? void 0 : _skeHeaders$get2.get(pageWidth));
+ 				if (headerSke) exactMatch = this._collectNearestNode(headerSke, 1, page, headerId, pi, cache, x, y, pageLength);
+-				const footerSke = (_skeFooters$get2 = skeFooters.get(footerId)) === null || _skeFooters$get2 === void 0 ? void 0 : _skeFooters$get2.get(pageWidth);
++				const footerSke = page.footerSkeleton ?? ((_skeFooters$get2 = skeFooters.get(footerId)) === null || _skeFooters$get2 === void 0 ? void 0 : _skeFooters$get2.get(pageWidth));
+ 				if (footerSke) {
+ 					var _exactMatch;
+ 					exactMatch = (_exactMatch = exactMatch) !== null && _exactMatch !== void 0 ? _exactMatch : this._collectNearestNode(footerSke, 2, page, footerId, pi, cache, x, y, pageLength);
+@@ -16929,9 +16978,9 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 				const { headerId, footerId, pageWidth } = page;
+ 				if (segmentId !== "") {
+ 					var _skeHeaders$get3, _skeFooters$get3;
+-					const headerSke = (_skeHeaders$get3 = skeHeaders.get(headerId)) === null || _skeHeaders$get3 === void 0 ? void 0 : _skeHeaders$get3.get(pageWidth);
++					const headerSke = page.headerSkeleton ?? ((_skeHeaders$get3 = skeHeaders.get(headerId)) === null || _skeHeaders$get3 === void 0 ? void 0 : _skeHeaders$get3.get(pageWidth));
+ 					if (headerSke) exactMatch = this._collectNearestNode(headerSke, 1, page, headerId, pi, cache, x, y, pageLength);
+-					const footerSke = (_skeFooters$get3 = skeFooters.get(footerId)) === null || _skeFooters$get3 === void 0 ? void 0 : _skeFooters$get3.get(pageWidth);
++					const footerSke = page.footerSkeleton ?? ((_skeFooters$get3 = skeFooters.get(footerId)) === null || _skeFooters$get3 === void 0 ? void 0 : _skeFooters$get3.get(pageWidth));
+ 					if (footerSke) {
+ 						var _exactMatch2;
+ 						exactMatch = (_exactMatch2 = exactMatch) !== null && _exactMatch2 !== void 0 ? _exactMatch2 : this._collectNearestNode(footerSke, 2, page, footerId, pi, cache, x, y, pageLength);
+@@ -16949,7 +16998,7 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 						continue;
+ 					}
+ 					const { headerId, pageWidth } = page;
+-					const segmentSke = segmentId === headerId ? (_skeHeaders$get4 = skeHeaders.get(segmentId)) === null || _skeHeaders$get4 === void 0 ? void 0 : _skeHeaders$get4.get(pageWidth) : (_skeFooters$get4 = skeFooters.get(segmentId)) === null || _skeFooters$get4 === void 0 ? void 0 : _skeFooters$get4.get(pageWidth);
++					const segmentSke = segmentId === headerId ? page.headerSkeleton : page.footerSkeleton;
+ 					if (segmentSke) exactMatch = this._collectNearestNode(segmentSke, segmentId === headerId ? 1 : 2, page, segmentId, segmentPage, cache, x, y, pageLength);
+ 				} else exactMatch = this._collectNearestNode(page, 0, page, "", pi, cache, x, y, pageLength);
+ 				if (exactMatch) return exactMatch;
+@@ -17201,6 +17250,7 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 			viewModel,
+ 			dataModel,
+ 			skeleton,
++			hasTotalPageFields: [viewModel, ...headerTreeMap.values(), ...footerTreeMap.values()].some((view) => view.getBody().customRanges?.some((range) => range.properties?.bridgicKind === "pageField" && range.properties.field === "NUMPAGES")),
+ 			skeletonResourceReference: {
+ 				skeHeaders,
+ 				skeFooters,
+@@ -17264,14 +17314,26 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 			const { sectionType, columnProperties, columnSeparatorType, sectionTypeNext, pageNumberStart = 1 } = sectionBreakConfig;
+ 			let curSkeletonPage = getLastPage(allSkeletonPages);
+ 			let isContinuous = false;
++			// Section-first headers follow the section's first page, not the
++			// document's initial number. Keep that origin on floating-layout retries.
++			const previousConfig = ctx.sectionBreakConfigCache.get(sectionNode.endIndex);
++			const explicitStart = viewModel.getSectionBreak(sectionNode.endIndex)?.pageNumberStart;
++			sectionBreakConfig.pageNumberStart = previousConfig?.pageNumberStart ?? explicitStart ?? (curSkeletonPage == null ? pageNumberStart : curSkeletonPage.pageNumber + (sectionType === _univerjs_core.SectionType.CONTINUOUS ? 0 : 1));
+ 			ctx.sectionBreakConfigCache.set(sectionNode.endIndex, sectionBreakConfig);
+-			if (sectionType === _univerjs_core.SectionType.CONTINUOUS) {
++			if (sectionType === _univerjs_core.SectionType.CONTINUOUS && curSkeletonPage != null) {
+ 				updateBlockIndex(allSkeletonPages);
+ 				this._addNewSectionByContinuous(curSkeletonPage, columnProperties, columnSeparatorType);
+ 				isContinuous = true;
+ 			} else if (layoutAnchor == null || curSkeletonPage == null) {
+-				var _curSkeletonPage$page;
+-				curSkeletonPage = createSkeletonPage(ctx, sectionBreakConfig, skeletonResourceReference, (_curSkeletonPage$page = curSkeletonPage === null || curSkeletonPage === void 0 ? void 0 : curSkeletonPage.pageNumber) !== null && _curSkeletonPage$page !== void 0 ? _curSkeletonPage$page : pageNumberStart);
++				const parity = sectionType === _univerjs_core.SectionType.ODD_PAGE ? 1 : sectionType === _univerjs_core.SectionType.EVEN_PAGE ? 0 : null;
++				if (curSkeletonPage != null && parity != null && (allSkeletonPages.length + 1) % 2 !== parity) {
++					const precedingConfig = ctx.sectionBreakConfigCache.get(viewModel.getChildren()[i - 1]?.endIndex) ?? sectionBreakConfig;
++					const blankPage = createSkeletonPage(ctx, { ...precedingConfig, headerIds: {}, footerIds: {} }, skeletonResourceReference, curSkeletonPage.pageNumber + 1);
++					blankPage.sections = [];
++					allSkeletonPages.push(blankPage);
++					if (previousConfig == null && explicitStart == null) sectionBreakConfig.pageNumberStart++;
++				}
++				curSkeletonPage = createSkeletonPage(ctx, sectionBreakConfig, skeletonResourceReference, sectionBreakConfig.pageNumberStart);
+ 			}
+ 			const { pages } = dealWithSection(ctx, viewModel, sectionNode, curSkeletonPage, sectionBreakConfig, layoutAnchor);
+ 			if (sectionTypeNext === _univerjs_core.SectionType.CONTINUOUS && columnProperties.length > 0) {}
+@@ -17286,6 +17348,13 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 		} else {
+ 			this._iteratorCount = 0;
+ 			removeDupPages(ctx);
++			// Total-page fields require one bounded relayout after body pagination.
++			if (ctx.hasTotalPageFields && ctx.pageFieldTotalPages !== skeleton.pages.length && (ctx.pageFieldPass ?? 0) < 4) {
++				const next = this._prepareLayoutContext();
++				next.pageFieldTotalPages = skeleton.pages.length;
++				next.pageFieldPass = (ctx.pageFieldPass ?? 0) + 1;
++				return this._createSkeleton(next, _bounds);
++			}
+ 			updateBlockIndex(skeleton.pages);
+ 			updateInlineDrawingCoordsAndBorder(ctx, skeleton.pages);
+ 			for (const hSkeMap of skeleton.skeHeaders.values()) for (const page of hSkeMap.values()) updateInlineDrawingCoordsAndBorder(ctx, [page]);
+@@ -17316,8 +17385,8 @@ var DocumentSkeleton = class DocumentSkeleton extends _univerjs_core.Skeleton {
+ 			let segmentPage = page;
+ 			if (segmentId) {
+ 				var _skeHeaders$get5, _skeFooters$get5;
+-				const maybeHeaderSke = (_skeHeaders$get5 = skeHeaders.get(segmentId)) === null || _skeHeaders$get5 === void 0 ? void 0 : _skeHeaders$get5.get(pageWidth);
+-				const maybeFooterSke = (_skeFooters$get5 = skeFooters.get(segmentId)) === null || _skeFooters$get5 === void 0 ? void 0 : _skeFooters$get5.get(pageWidth);
++				const maybeHeaderSke = (page.headerId === segmentId ? page.headerSkeleton : undefined) ?? ((_skeHeaders$get5 = skeHeaders.get(segmentId)) === null || _skeHeaders$get5 === void 0 ? void 0 : _skeHeaders$get5.get(pageWidth));
++				const maybeFooterSke = (page.footerId === segmentId ? page.footerSkeleton : undefined) ?? ((_skeFooters$get5 = skeFooters.get(segmentId)) === null || _skeFooters$get5 === void 0 ? void 0 : _skeFooters$get5.get(pageWidth));
+ 				if (maybeHeaderSke) segmentPage = maybeHeaderSke;
+ 				else if (maybeFooterSke) segmentPage = maybeFooterSke;
+ 				else continue;
+@@ -21949,7 +22018,7 @@ var Documents = class Documents extends DocComponent {
+ 				continue;
+ 			}
+ 			if (skeTables.size > 0) this._drawTable(ctx, page, skeTables, extensions, backgroundExtension, glyphExtensionsExcludeBackground, alignOffsetNoAngle, centerAngle, vertexAngle, renderConfig, parentScale);
+-			const headerSkeletonPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++			const headerSkeletonPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 			const headerAlignOffsetNoAngle = Vector2.create(horizontalOffsetNoAngle, (_headerSkeletonPage$m = headerSkeletonPage === null || headerSkeletonPage === void 0 ? void 0 : headerSkeletonPage.marginTop) !== null && _headerSkeletonPage$m !== void 0 ? _headerSkeletonPage$m : 0);
+ 			if (headerSkeletonPage) this._drawHeaderFooter(headerSkeletonPage, ctx, extensions, backgroundExtension, glyphExtensionsExcludeBackground, headerAlignOffsetNoAngle, centerAngle, vertexAngle, renderConfig, parentScale, page, true);
+ 			this._startRotation(ctx, finalAngle);
+@@ -22044,7 +22113,7 @@ var Documents = class Documents extends DocComponent {
+ 				}
+ 			}
+ 			this._resetRotation(ctx, finalAngle);
+-			const footerSkeletonPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++			const footerSkeletonPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 			if (footerSkeletonPage) {
+ 				const footerAlignOffsetNoAngle = Vector2.create(horizontalOffsetNoAngle, page.pageHeight - (footerSkeletonPage === null || footerSkeletonPage === void 0 ? void 0 : footerSkeletonPage.height) - footerSkeletonPage.marginBottom);
+ 				this._drawHeaderFooter(footerSkeletonPage, ctx, extensions, backgroundExtension, glyphExtensionsExcludeBackground, footerAlignOffsetNoAngle, centerAngle, vertexAngle, renderConfig, parentScale, page, false);
 diff --git a/lib/es/index.js b/lib/es/index.js
-index e019b7aa38363406a32f74a29c6fd6a6262530e6..d204c5a857c4e597229e4b259638d80c728f3759 100644
+index e019b7aa38363406a32f74a29c6fd6a6262530e6..6f8e51a8b858308ebc590ec76ba385e4061bff09 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -362,6 +362,9 @@ function isEmojiGrapheme(grapheme) {
@@ -61,7 +327,40 @@ index e019b7aa38363406a32f74a29c6fd6a6262530e6..d204c5a857c4e597229e4b259638d80c
  	const first = getFirstGrapheme(text);
  	return first ? isEmojiGrapheme(first) : false;
  }
-@@ -14503,7 +14506,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+@@ -13668,8 +13671,8 @@ function _lineOperator(ctx, glyphGroup, pages, sectionBreakConfig, paragraphConf
+ 	if (!section) section = getLastSection(lastPage);
+ 	const lineTop = ((preLine === null || preLine === void 0 ? void 0 : preLine.lineHeight) || 0) + ((preLine === null || preLine === void 0 ? void 0 : preLine.top) || 0);
+ 	const { pageWidth, headerId, footerId, segmentId } = lastPage;
+-	const headerPage = skeHeaders === null || skeHeaders === void 0 || (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
+-	const footerPage = skeFooters === null || skeFooters === void 0 || (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++	const headerPage = lastPage.headerSkeleton ?? (skeHeaders === null || skeHeaders === void 0 || (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
++	const footerPage = lastPage.footerSkeleton ?? (skeFooters === null || skeFooters === void 0 || (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 	let needOpenNewPageByTableLayout = false;
+ 	if (preLine) {
+ 		const drawingsInLine = _getCustomBlockIdsInLine(preLine);
+@@ -14134,6 +14137,7 @@ function getCustomDecorationStyle(customDecoration) {
+ //#endregion
+ //#region src/components/docs/layout/style/custom-range.ts
+ function getCustomRangeStyle(customRange) {
++	if (customRange.properties?.bridgicKind === "pageField") return null;
+ 	if (customRange.rangeType === CustomRangeType.HYPERLINK || customRange.rangeType === CustomRangeType.MENTION || customRange.rangeType === CustomRangeType.CUSTOM) {
+ 		var _customRange$active;
+ 		return {
+@@ -14242,6 +14246,13 @@ function updateBlockIndex(pages, start = -1) {
+ 	let prePageStartIndex = start;
+ 	for (const page of pages) {
+ 		const { sections, skeTables } = page;
++		// Implicit odd/even section pages have no body and consume no text indexes.
++		if (sections.length === 0) {
++			page.st = prePageStartIndex + 1;
++			page.ed = prePageStartIndex;
++			page.width = page.height = 0;
++			continue;
++		}
+ 		const pageStartIndex = prePageStartIndex;
+ 		let preSectionStartIndex = pageStartIndex;
+ 		let maxContentWidth = Number.NEGATIVE_INFINITY;
+@@ -14503,7 +14514,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
  	const { st, ed } = textRun;
  	let { ts: textStyle = {} } = textRun;
  	const cache = fontCreateConfigCache.getValue(st, ed);
@@ -70,7 +369,7 @@ index e019b7aa38363406a32f74a29c6fd6a6262530e6..d204c5a857c4e597229e4b259638d80c
  	const { snapToGrid = BooleanNumber.TRUE, namedStyleType } = paragraphStyle;
  	const bulletTextStyle = bullet ? getBulletParagraphTextStyle(bullet, viewModel) : null;
  	const namedStyle = namedStyleType ? NAMED_STYLE_MAP[namedStyleType] : null;
-@@ -14526,7 +14529,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
+@@ -14526,7 +14537,7 @@ function getFontCreateConfig(index, viewModel, paragraphNode, sectionBreakConfig
  		snapToGrid,
  		pageWidth: pageSize.width || Number.POSITIVE_INFINITY - marginLeft - marginRight
  	};
@@ -79,7 +378,91 @@ index e019b7aa38363406a32f74a29c6fd6a6262530e6..d204c5a857c4e597229e4b259638d80c
  	return result;
  }
  function getNullSkeleton() {
-@@ -16069,14 +16072,13 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
+@@ -14628,6 +14639,7 @@ function prepareSectionBreakConfig(ctx, nodeIndex) {
+ 		linePitch,
+ 		gridType,
+ 		pageNumberStart,
++		pageNumberFormat: sectionBreak.pageNumberFormat ?? "decimal",
+ 		pageSize,
+ 		pageOrient,
+ 		marginTop,
+@@ -14728,27 +14740,34 @@ function createSkeletonPage(ctx, sectionBreakConfig, skeletonResourceReference,
+ 	}
+ 	let header;
+ 	let footer;
++	const layoutSegment = (id, treeMap, cache, isHeader) => {
++		const view = treeMap?.get(id);
++		if (!view) return;
++		const fields = view.getBody().customRanges?.some((range) => range.properties?.bridgicKind === "pageField");
++		const key = fields ? `${pageWidth}:${marginLeft}:${marginRight}:${pageHeight}:${_marginHeader}:${_marginFooter}:${pageNumber}:${sectionBreakConfig.pageNumberFormat}` : pageWidth;
++		let variants = cache.get(id);
++		if (!variants) cache.set(id, variants = new Map());
++		if (variants.has(key)) return variants.get(key);
++		const previousNumber = ctx.pageFieldNumber;
++		const previousFormat = ctx.pageFieldNumberFormat;
++		ctx.pageFieldNumber = pageNumber;
++		ctx.pageFieldNumberFormat = sectionBreakConfig.pageNumberFormat;
++		if (fields) ctx.paragraphConfigCache.delete(id);
++		try {
++			const segment = _createSkeletonHeaderFooter(ctx, view, sectionBreakConfig, skeletonResourceReference, id, isHeader);
++			variants.set(key, segment);
++			return segment;
++		} finally { ctx.pageFieldNumber = previousNumber; ctx.pageFieldNumberFormat = previousFormat; }
++	};
+ 	if (headerId) {
+-		var _skeHeaders$get;
+-		if ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.has(pageWidth)) {
+-			var _skeHeaders$get2;
+-			header = (_skeHeaders$get2 = skeHeaders.get(headerId)) === null || _skeHeaders$get2 === void 0 ? void 0 : _skeHeaders$get2.get(pageWidth);
+-		} else if (headerTreeMap && headerTreeMap.has(headerId)) {
+-			header = _createSkeletonHeaderFooter(ctx, headerTreeMap.get(headerId), sectionBreakConfig, skeletonResourceReference, headerId, true);
+-			skeHeaders.set(headerId, new Map([[pageWidth, header]]));
+-		}
++		header = layoutSegment(headerId, headerTreeMap, skeHeaders, true);
+ 		page.headerId = headerId;
++		page.headerSkeleton = header;
+ 	}
+ 	if (footerId) {
+-		var _skeFooters$get;
+-		if ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.has(pageWidth)) {
+-			var _skeFooters$get2;
+-			footer = (_skeFooters$get2 = skeFooters.get(footerId)) === null || _skeFooters$get2 === void 0 ? void 0 : _skeFooters$get2.get(pageWidth);
+-		} else if (footerTreeMap && footerTreeMap.has(footerId)) {
+-			footer = _createSkeletonHeaderFooter(ctx, footerTreeMap.get(footerId), sectionBreakConfig, skeletonResourceReference, footerId, false);
+-			skeFooters.set(footerId, new Map([[pageWidth, footer]]));
+-		}
++		footer = layoutSegment(footerId, footerTreeMap, skeFooters, false);
+ 		page.footerId = footerId;
++		page.footerSkeleton = footer;
+ 	}
+ 	page.originMarginTop = marginTop;
+ 	page.originMarginBottom = marginBottom;
+@@ -16057,6 +16076,24 @@ function hyphenConfig(paragraphStyle, sectionBreakConfig) {
+ 	const { autoHyphenation = BooleanNumber.FALSE } = sectionBreakConfig;
+ 	return suppressHyphenation === BooleanNumber.FALSE && autoHyphenation === BooleanNumber.TRUE;
+ }
++function formatPageField(value, instruction, numberFormat) {
++	const format = instruction?.match(/\\\*\s+(Arabic|ARABIC|arabic|ROMAN|roman|ALPHABETIC|alphabetic)\b/)?.[1] ?? ({ lowerRoman: "roman", upperRoman: "ROMAN", lowerLetter: "alphabetic", upperLetter: "ALPHABETIC" }[numberFormat]);
++	let number = Math.max(1, Math.trunc(value));
++	if (format === "ROMAN" || format === "roman") {
++		if (number > 3999) return String(number);
++		let result = "";
++		for (const [amount, symbol] of [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]) {
++			while (number >= amount) { result += symbol; number -= amount; }
++		}
++		return format === "roman" ? result.toLowerCase() : result;
++	}
++	if (format === "ALPHABETIC" || format === "alphabetic") {
++		let result = "";
++		while (number > 0) { number--; result = String.fromCharCode(65 + number % 26) + result; number = Math.floor(number / 26); }
++		return format === "alphabetic" ? result.toLowerCase() : result;
++	}
++	return String(number);
++}
+ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, useOpenType = false) {
+ 	const { gridType = GridType.LINES, charSpace = 0, defaultTabStop = 10.5, drawings = {} } = sectionBreakConfig;
+ 	const shapedTextList = [];
+@@ -16069,14 +16106,13 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
  	let bk;
  	let lastGlyphIndex = 0;
  	const { hyphen, languageDetector } = ctx;
@@ -96,3 +479,165 @@ index e019b7aa38363406a32f74a29c6fd6a6262530e6..d204c5a857c4e597229e4b259638d80c
  	const doNotHyphenateCaps = sectionBreakConfig.doNotHyphenateCaps === BooleanNumber.TRUE;
  	if (lang !== "unknown" && needHyphen) if (hyphen.hasPattern(lang)) breaker = new LineBreakerHyphenEnhancer(breaker, hyphen, lang, doNotHyphenateCaps);
  	else hyphen.loadPattern(lang);
+@@ -16114,6 +16150,19 @@ function shaping(ctx, content, viewModel, paragraphNode, sectionBreakConfig, use
+ 				var _src$match;
+ 				const char = (_src$match = src.match(/^[\s\S]/gu)) === null || _src$match === void 0 ? void 0 : _src$match[0];
+ 				if (char == null) break;
++				const field = char === "\uFFFC" ? viewModel.getBody().customRanges?.find((range) => range.startIndex === paragraphNode.startIndex + i && range.properties?.bridgicKind === "pageField") : null;
++				if (field) {
++					const properties = field.properties;
++					const value = properties.field === "PAGE" ? ctx.pageFieldNumber : ctx.pageFieldTotalPages;
++					const config = getFontCreateConfig(i, viewModel, paragraphNode, sectionBreakConfig, paragraph);
++					const glyph = createSkeletonLetterGlyph(value == null ? String(properties.cached ?? "1") : formatPageField(value, properties.instruction, properties.field === "PAGE" ? ctx.pageFieldNumberFormat : undefined), config);
++					glyph.count = 1;
++					glyph.raw = char;
++					shapedGlyphs.push(glyph);
++					i++;
++					src = src.substring(1);
++					continue;
++				}
+ 				if (char === DataStreamTreeTokenType.CUSTOM_BLOCK) {
+ 					const config = getFontCreateConfig(i, viewModel, paragraphNode, sectionBreakConfig, paragraph);
+ 					let newGlyph = null;
+@@ -16809,12 +16858,12 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 			const { headerId, footerId, pageWidth } = skePage;
+ 			if (pageType === 1) {
+ 				var _skeHeaders$get;
+-				const skeHeader = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++				const skeHeader = skePage.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 				if (skeHeader == null) return;
+ 				else skePage = skeHeader;
+ 			} else if (pageType === 2) {
+ 				var _skeFooters$get;
+-				const skeFooter = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++				const skeFooter = skePage.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 				if (skeFooter == null) return;
+ 				else skePage = skeFooter;
+ 			}
+@@ -16885,9 +16934,9 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 			let exactMatch = null;
+ 			if (editArea === "HEADER" || editArea === "FOOTER") {
+ 				var _skeHeaders$get2, _skeFooters$get2;
+-				const headerSke = (_skeHeaders$get2 = skeHeaders.get(headerId)) === null || _skeHeaders$get2 === void 0 ? void 0 : _skeHeaders$get2.get(pageWidth);
++				const headerSke = page.headerSkeleton ?? ((_skeHeaders$get2 = skeHeaders.get(headerId)) === null || _skeHeaders$get2 === void 0 ? void 0 : _skeHeaders$get2.get(pageWidth));
+ 				if (headerSke) exactMatch = this._collectNearestNode(headerSke, 1, page, headerId, pi, cache, x, y, pageLength);
+-				const footerSke = (_skeFooters$get2 = skeFooters.get(footerId)) === null || _skeFooters$get2 === void 0 ? void 0 : _skeFooters$get2.get(pageWidth);
++				const footerSke = page.footerSkeleton ?? ((_skeFooters$get2 = skeFooters.get(footerId)) === null || _skeFooters$get2 === void 0 ? void 0 : _skeFooters$get2.get(pageWidth));
+ 				if (footerSke) {
+ 					var _exactMatch;
+ 					exactMatch = (_exactMatch = exactMatch) !== null && _exactMatch !== void 0 ? _exactMatch : this._collectNearestNode(footerSke, 2, page, footerId, pi, cache, x, y, pageLength);
+@@ -16904,9 +16953,9 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 				const { headerId, footerId, pageWidth } = page;
+ 				if (segmentId !== "") {
+ 					var _skeHeaders$get3, _skeFooters$get3;
+-					const headerSke = (_skeHeaders$get3 = skeHeaders.get(headerId)) === null || _skeHeaders$get3 === void 0 ? void 0 : _skeHeaders$get3.get(pageWidth);
++					const headerSke = page.headerSkeleton ?? ((_skeHeaders$get3 = skeHeaders.get(headerId)) === null || _skeHeaders$get3 === void 0 ? void 0 : _skeHeaders$get3.get(pageWidth));
+ 					if (headerSke) exactMatch = this._collectNearestNode(headerSke, 1, page, headerId, pi, cache, x, y, pageLength);
+-					const footerSke = (_skeFooters$get3 = skeFooters.get(footerId)) === null || _skeFooters$get3 === void 0 ? void 0 : _skeFooters$get3.get(pageWidth);
++					const footerSke = page.footerSkeleton ?? ((_skeFooters$get3 = skeFooters.get(footerId)) === null || _skeFooters$get3 === void 0 ? void 0 : _skeFooters$get3.get(pageWidth));
+ 					if (footerSke) {
+ 						var _exactMatch2;
+ 						exactMatch = (_exactMatch2 = exactMatch) !== null && _exactMatch2 !== void 0 ? _exactMatch2 : this._collectNearestNode(footerSke, 2, page, footerId, pi, cache, x, y, pageLength);
+@@ -16924,7 +16973,7 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 						continue;
+ 					}
+ 					const { headerId, pageWidth } = page;
+-					const segmentSke = segmentId === headerId ? (_skeHeaders$get4 = skeHeaders.get(segmentId)) === null || _skeHeaders$get4 === void 0 ? void 0 : _skeHeaders$get4.get(pageWidth) : (_skeFooters$get4 = skeFooters.get(segmentId)) === null || _skeFooters$get4 === void 0 ? void 0 : _skeFooters$get4.get(pageWidth);
++					const segmentSke = segmentId === headerId ? page.headerSkeleton : page.footerSkeleton;
+ 					if (segmentSke) exactMatch = this._collectNearestNode(segmentSke, segmentId === headerId ? 1 : 2, page, segmentId, segmentPage, cache, x, y, pageLength);
+ 				} else exactMatch = this._collectNearestNode(page, 0, page, "", pi, cache, x, y, pageLength);
+ 				if (exactMatch) return exactMatch;
+@@ -17176,6 +17225,7 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 			viewModel,
+ 			dataModel,
+ 			skeleton,
++			hasTotalPageFields: [viewModel, ...headerTreeMap.values(), ...footerTreeMap.values()].some((view) => view.getBody().customRanges?.some((range) => range.properties?.bridgicKind === "pageField" && range.properties.field === "NUMPAGES")),
+ 			skeletonResourceReference: {
+ 				skeHeaders,
+ 				skeFooters,
+@@ -17239,14 +17289,26 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 			const { sectionType, columnProperties, columnSeparatorType, sectionTypeNext, pageNumberStart = 1 } = sectionBreakConfig;
+ 			let curSkeletonPage = getLastPage(allSkeletonPages);
+ 			let isContinuous = false;
++			// Section-first headers follow the section's first page, not the
++			// document's initial number. Keep that origin on floating-layout retries.
++			const previousConfig = ctx.sectionBreakConfigCache.get(sectionNode.endIndex);
++			const explicitStart = viewModel.getSectionBreak(sectionNode.endIndex)?.pageNumberStart;
++			sectionBreakConfig.pageNumberStart = previousConfig?.pageNumberStart ?? explicitStart ?? (curSkeletonPage == null ? pageNumberStart : curSkeletonPage.pageNumber + (sectionType === SectionType.CONTINUOUS ? 0 : 1));
+ 			ctx.sectionBreakConfigCache.set(sectionNode.endIndex, sectionBreakConfig);
+-			if (sectionType === SectionType.CONTINUOUS) {
++			if (sectionType === SectionType.CONTINUOUS && curSkeletonPage != null) {
+ 				updateBlockIndex(allSkeletonPages);
+ 				this._addNewSectionByContinuous(curSkeletonPage, columnProperties, columnSeparatorType);
+ 				isContinuous = true;
+ 			} else if (layoutAnchor == null || curSkeletonPage == null) {
+-				var _curSkeletonPage$page;
+-				curSkeletonPage = createSkeletonPage(ctx, sectionBreakConfig, skeletonResourceReference, (_curSkeletonPage$page = curSkeletonPage === null || curSkeletonPage === void 0 ? void 0 : curSkeletonPage.pageNumber) !== null && _curSkeletonPage$page !== void 0 ? _curSkeletonPage$page : pageNumberStart);
++				const parity = sectionType === SectionType.ODD_PAGE ? 1 : sectionType === SectionType.EVEN_PAGE ? 0 : null;
++				if (curSkeletonPage != null && parity != null && (allSkeletonPages.length + 1) % 2 !== parity) {
++					const precedingConfig = ctx.sectionBreakConfigCache.get(viewModel.getChildren()[i - 1]?.endIndex) ?? sectionBreakConfig;
++					const blankPage = createSkeletonPage(ctx, { ...precedingConfig, headerIds: {}, footerIds: {} }, skeletonResourceReference, curSkeletonPage.pageNumber + 1);
++					blankPage.sections = [];
++					allSkeletonPages.push(blankPage);
++					if (previousConfig == null && explicitStart == null) sectionBreakConfig.pageNumberStart++;
++				}
++				curSkeletonPage = createSkeletonPage(ctx, sectionBreakConfig, skeletonResourceReference, sectionBreakConfig.pageNumberStart);
+ 			}
+ 			const { pages } = dealWithSection(ctx, viewModel, sectionNode, curSkeletonPage, sectionBreakConfig, layoutAnchor);
+ 			if (sectionTypeNext === SectionType.CONTINUOUS && columnProperties.length > 0) {}
+@@ -17261,6 +17323,13 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 		} else {
+ 			this._iteratorCount = 0;
+ 			removeDupPages(ctx);
++			// Total-page fields require one bounded relayout after body pagination.
++			if (ctx.hasTotalPageFields && ctx.pageFieldTotalPages !== skeleton.pages.length && (ctx.pageFieldPass ?? 0) < 4) {
++				const next = this._prepareLayoutContext();
++				next.pageFieldTotalPages = skeleton.pages.length;
++				next.pageFieldPass = (ctx.pageFieldPass ?? 0) + 1;
++				return this._createSkeleton(next, _bounds);
++			}
+ 			updateBlockIndex(skeleton.pages);
+ 			updateInlineDrawingCoordsAndBorder(ctx, skeleton.pages);
+ 			for (const hSkeMap of skeleton.skeHeaders.values()) for (const page of hSkeMap.values()) updateInlineDrawingCoordsAndBorder(ctx, [page]);
+@@ -17291,8 +17360,8 @@ var DocumentSkeleton = class DocumentSkeleton extends Skeleton {
+ 			let segmentPage = page;
+ 			if (segmentId) {
+ 				var _skeHeaders$get5, _skeFooters$get5;
+-				const maybeHeaderSke = (_skeHeaders$get5 = skeHeaders.get(segmentId)) === null || _skeHeaders$get5 === void 0 ? void 0 : _skeHeaders$get5.get(pageWidth);
+-				const maybeFooterSke = (_skeFooters$get5 = skeFooters.get(segmentId)) === null || _skeFooters$get5 === void 0 ? void 0 : _skeFooters$get5.get(pageWidth);
++				const maybeHeaderSke = (page.headerId === segmentId ? page.headerSkeleton : undefined) ?? ((_skeHeaders$get5 = skeHeaders.get(segmentId)) === null || _skeHeaders$get5 === void 0 ? void 0 : _skeHeaders$get5.get(pageWidth));
++				const maybeFooterSke = (page.footerId === segmentId ? page.footerSkeleton : undefined) ?? ((_skeFooters$get5 = skeFooters.get(segmentId)) === null || _skeFooters$get5 === void 0 ? void 0 : _skeFooters$get5.get(pageWidth));
+ 				if (maybeHeaderSke) segmentPage = maybeHeaderSke;
+ 				else if (maybeFooterSke) segmentPage = maybeFooterSke;
+ 				else continue;
+@@ -21924,7 +21993,7 @@ var Documents = class Documents extends DocComponent {
+ 				continue;
+ 			}
+ 			if (skeTables.size > 0) this._drawTable(ctx, page, skeTables, extensions, backgroundExtension, glyphExtensionsExcludeBackground, alignOffsetNoAngle, centerAngle, vertexAngle, renderConfig, parentScale);
+-			const headerSkeletonPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++			const headerSkeletonPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 			const headerAlignOffsetNoAngle = Vector2.create(horizontalOffsetNoAngle, (_headerSkeletonPage$m = headerSkeletonPage === null || headerSkeletonPage === void 0 ? void 0 : headerSkeletonPage.marginTop) !== null && _headerSkeletonPage$m !== void 0 ? _headerSkeletonPage$m : 0);
+ 			if (headerSkeletonPage) this._drawHeaderFooter(headerSkeletonPage, ctx, extensions, backgroundExtension, glyphExtensionsExcludeBackground, headerAlignOffsetNoAngle, centerAngle, vertexAngle, renderConfig, parentScale, page, true);
+ 			this._startRotation(ctx, finalAngle);
+@@ -22019,7 +22088,7 @@ var Documents = class Documents extends DocComponent {
+ 				}
+ 			}
+ 			this._resetRotation(ctx, finalAngle);
+-			const footerSkeletonPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++			const footerSkeletonPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 			if (footerSkeletonPage) {
+ 				const footerAlignOffsetNoAngle = Vector2.create(horizontalOffsetNoAngle, page.pageHeight - (footerSkeletonPage === null || footerSkeletonPage === void 0 ? void 0 : footerSkeletonPage.height) - footerSkeletonPage.marginBottom);
+ 				this._drawHeaderFooter(footerSkeletonPage, ctx, extensions, backgroundExtension, glyphExtensionsExcludeBackground, footerAlignOffsetNoAngle, centerAngle, vertexAngle, renderConfig, parentScale, page, false);
+diff --git a/lib/types/basics/i-document-skeleton-cached.d.ts b/lib/types/basics/i-document-skeleton-cached.d.ts
+index d13323b1d8e6368e4fcd1a5bf527bb7c1d0d1811..fe9c9e81d261e8168f4524f61ae259a68a1b1d82 100644
+--- a/lib/types/basics/i-document-skeleton-cached.d.ts
++++ b/lib/types/basics/i-document-skeleton-cached.d.ts
+@@ -48,6 +48,8 @@ export interface IDocumentSkeletonPage {
+     sections: IDocumentSkeletonSection[];
+     headerId: string;
+     footerId: string;
++    headerSkeleton?: IDocumentSkeletonHeaderFooter;
++    footerSkeleton?: IDocumentSkeletonHeaderFooter;
+     pageWidth: number;
+     pageHeight: number;
+     pageOrient: PageOrientType;

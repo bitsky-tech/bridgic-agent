@@ -156,9 +156,16 @@ describe('presentation Insert runtime safeguards', () => {
         const group = await createPresentationFabricObject(fabric, table, () => undefined)
         if (!(group instanceof fabric.Group)) throw new Error('Missing table group')
         expect(group).toMatchObject({ left: 100, top: 100, width: 800, height: 400, scaleX: 1, scaleY: 1 })
-        const cells = group.getObjects().filter(object => object instanceof fabric.Rect && object.strokeWidth === 1)
+        // Cell fills and individual edge borders are separate canvas objects.
+        const cells = group.getObjects().filter(object => object instanceof fabric.Rect && object.fill !== 'transparent')
+        const borders = group.getObjects().filter(object => object instanceof fabric.Line)
         const texts = group.getObjects().filter(object => object instanceof fabric.Textbox)
         expect(cells).toHaveLength(4)
+        expect(borders).toHaveLength(16)
+        borders.forEach(border => {
+          expect(border.stroke).toBe(table.borderColor)
+          expect(border.strokeWidth).toBeCloseTo(96 / 72)
+        })
         expect(texts).toHaveLength(4)
         cells.forEach((cell, index) => {
           const center = cell.getCenterPoint()

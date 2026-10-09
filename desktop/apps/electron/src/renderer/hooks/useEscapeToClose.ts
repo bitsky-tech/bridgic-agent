@@ -23,7 +23,8 @@ export function useEscapeToClose(onClose: (() => void) | undefined): void {
   useEffect(() => {
     if (!onClose) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // Nested menus/dialogs consume Escape before it reaches this listener.
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         e.stopPropagation()
         onClose()
       }

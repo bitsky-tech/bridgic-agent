@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { IDocumentData } from '@univerjs/core'
+import { Univer, UniverInstanceType, type DocumentDataModel, type IDocumentData } from '@univerjs/core'
+import { UniverDocsHyperLinkPlugin } from '@univerjs/docs-hyper-link'
 import type { WordEditorNativeEngine } from '../wordEditorAdapter'
 
 GlobalRegistrator.register()
@@ -88,6 +89,52 @@ function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSu
 }
 
 describe('Word editor engine binding', () => {
+  it('reopens canonical hyperlink URLs without letting a stale native resource replace them', async () => {
+    const fixture = createFixture()
+    await fixture.store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '<p><a href="https://example.com/new">Website</a></p>' } })
+    const snapshot = structuredClone(fixture.store.getSnapshot().documents[0]!.snapshot)
+    const header = snapshot.headers![snapshot.documentStyle.defaultHeaderId!]!.body
+    snapshot.resources = [
+      { name: 'DOC_HYPER_LINK_PLUGIN', data: JSON.stringify({ links: [{ id: header.customRanges![0]!.rangeId, payload: 'https://example.com/old' }] }) },
+      { name: 'OTHER_PLUGIN', data: '{}' },
+    ]
+    fixture.store.commitEditorSnapshot(fixture.document.id, snapshot)
+    const before = fixture.store.getSnapshot()
+    const univer = new Univer()
+    univer.registerPlugin(UniverDocsHyperLinkPlugin)
+    let loaded!: DocumentDataModel
+    const adapter = createWordEditorAdapter({
+      container: window.document.createElement('div'), documentId: fixture.document.id,
+      language: 'en', snapshot: before.documents[0]!.snapshot, store: fixture.store, zoom: 100,
+      mountNative: (input) => {
+        expect(input.snapshot.resources).toEqual([{ name: 'OTHER_PLUGIN', data: '{}' }])
+        loaded = univer.createUnit(UniverInstanceType.UNIVER_DOC, input.snapshot)
+        fixture.native.document.getSnapshot = () => loaded.getSnapshot()
+        return fixture.native
+      },
+    })
+    try {
+      expect(loaded.getSnapshot().headers![snapshot.documentStyle.defaultHeaderId!]!.body.customRanges![0]!.properties?.url).toBe('https://example.com/new')
+      await adapter.flush()
+      expect(fixture.store.getSnapshot()).toBe(before)
+      expect(before.documents[0]!.snapshot.resources).toEqual(snapshot.resources)
+    } finally { adapter.dispose(); fixture.store.dispose(); univer.dispose() }
+  })
+
+  it('does not publish renderer normalization as an edit on open, flush or close', async () => {
+    const fixture = createFixture()
+    const adapter = fixture.mount()
+    const before = fixture.store.getSnapshot().documents[0]!
+    fixture.native.document.getSnapshot().settings = { zoomRatio: 0.5 }
+    fixture.native.document.getSnapshot().drawings!['layout-only'] = { drawingId: 'layout-only' } as NonNullable<IDocumentData['drawings']>[string]
+    fixture.emit('drawing.operation.set-drawing-selected')
+    fixture.emit('doc.operation.set-selections')
+    await adapter.flush()
+    adapter.dispose()
+    expect(fixture.store.getSnapshot().documents[0]!.snapshot).toEqual(before.snapshot)
+    expect(fixture.store.getSnapshot().documents[0]!.contentVersion).toBe(before.contentVersion)
+    fixture.store.dispose()
+  })
   it('commits in-place native image changes without aliasing mounted or replaced domain snapshots', async () => {
     const fixture = createFixture({ retainNativeInput: true })
     const adapter = fixture.mount()

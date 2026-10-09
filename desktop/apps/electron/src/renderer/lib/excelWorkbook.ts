@@ -9,6 +9,7 @@ import {
   type Worksheet,
 } from 'exceljs'
 import JSZip from 'jszip'
+import { importSheetTextBoxes } from './excelDrawingImport'
 import { prepareOfficeImage } from './office/officeImage'
 import { SaxesParser, type SaxesTagNS } from 'saxes'
 import {
@@ -17,6 +18,7 @@ import {
   CellValueType,
   CustomRangeType,
   DrawingTypeEnum,
+  ImageSourceType,
   HorizontalAlign,
   LocaleType,
   VerticalAlign,
@@ -39,7 +41,7 @@ const FILTER_RESOURCE = 'SHEET_FILTER_PLUGIN'
 const DATA_VALIDATION_RESOURCE = 'SHEET_DATA_VALIDATION_PLUGIN'
 const CONDITIONAL_FORMATTING_RESOURCE = 'SHEET_CONDITIONAL_FORMATTING_PLUGIN'
 const DRAWING_RESOURCE = 'SHEET_DRAWING_PLUGIN'
-const COMPATIBILITY_CUSTOM_KEY = 'bridgicXlsxUnsupportedFeatures'
+export const COMPATIBILITY_CUSTOM_KEY = 'bridgicXlsxUnsupportedFeatures'
 export const EXCEL_SHOW_ZEROS_CUSTOM_KEY = 'bridgicExcelShowZeros'
 const BRIDGIC_METADATA_MARKER = 'Bridgic Excel internal metadata v1'
 const BRIDGIC_METADATA_SHEET = '__BRIDGIC_INTERNAL__'
@@ -614,8 +616,20 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgre
   onProgress?.({ phase: 'reading' })
   const archive = await JSZip.loadAsync(bytes)
   const nativeViews = await readNativeSheetViews(archive)
+  const textBoxes = await importSheetTextBoxes(archive, nativeViews)
   const workbook = new Workbook()
-  const input = bytes.slice().buffer as ArrayBuffer
+  // ExcelJS rejects legal table filters it does not implement. Strip only those
+  // optional criteria from a decoder copy; keep the original for compatibility checks.
+  const decoderArchive = await JSZip.loadAsync(bytes)
+  let normalizedFilters = false
+  for (const entry of Object.values(decoderArchive.files)) {
+    if (!/^xl\/tables\/[^/]+\.xml$/.test(entry.name)) continue
+    const xml = await entry.async('text')
+    const normalized = xml.replace(/<((?:\w+:)?filterColumn)\b[^>]*>[\s\S]*?<\/\1\s*>/g, (column) =>
+      column.replace(/<(?:\w+:)?(?:iconFilter|colorFilter|dynamicFilter|top10|extLst)\b[^>]*(?:\/\s*>|>[\s\S]*?<\/(?:\w+:)?(?:iconFilter|colorFilter|dynamicFilter|top10|extLst)\s*>)/g, ''))
+    if (normalized !== xml) { decoderArchive.file(entry.name, normalized); normalizedFilters = true }
+  }
+  const input = normalizedFilters ? await decoderArchive.generateAsync({ type: 'arraybuffer' }) : bytes.slice().buffer as ArrayBuffer
   await workbook.xlsx.load(input)
   const bridgicMetadata = readBridgicMetadata(workbook)
   const snapshot = workbookSnapshot(locale, workbook.title || 'Workbook')
@@ -764,13 +778,14 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgre
     let imageIndex = 0
     for (const image of worksheet.getImages()) {
       const source = workbook.getImage(Number(image.imageId))
-      const extension = source.extension === 'jpeg' || source.extension === 'gif' ? source.extension : 'png'
+      const extension = String(source.extension).toLowerCase().replace(/^jpg$/, 'jpeg')
       const base64 = source.base64
         ?? (source.buffer ? bytesToBase64(new Uint8Array(source.buffer)) : null)
       if (!base64) continue
       const range = image.range as unknown as {
         tl: { col: number; row: number }
-        br: { col: number; row: number }
+        br?: { col: number; row: number }
+        ext?: { width: number; height: number }
       }
       const storedDrawings = bridgicMetadata?.drawingIds[sheetName] ?? []
       const anchored = storedDrawings.find((candidate) => candidate
@@ -786,12 +801,16 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgre
       usedDrawingIds.add(drawingId)
       const sheetTransform = {
         from: anchorPosition(range.tl),
-        to: anchorPosition(range.br),
+        to: range.br ? anchorPosition(range.br) : {
+          ...anchorPosition(range.tl),
+          columnOffset: anchorPosition(range.tl).columnOffset + (range.ext?.width ?? 320),
+          rowOffset: anchorPosition(range.tl).rowOffset + (range.ext?.height ?? 200),
+        },
       }
       sheetDrawings[drawingId] = {
         drawingId,
         drawingType: DrawingTypeEnum.DRAWING_IMAGE,
-        imageSourceType: 'BASE64',
+        imageSourceType: ImageSourceType.BASE64,
         source: base64.startsWith('data:') ? base64 : `data:image/${extension};base64,${base64}`,
         unitId: snapshot.id,
         subUnitId: sheetId,
@@ -799,7 +818,12 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgre
         axisAlignSheetTransform: sheetTransform,
       }
     }
-    if (Object.keys(sheetDrawings).length > 0) drawingResources[sheetId] = sheetDrawings
+    for (const box of textBoxes.get(worksheet.id) ?? []) {
+      const drawingId = crypto.randomUUID()
+      const sheetTransform = { from: box.from, to: box.to }
+      sheetDrawings[drawingId] = { drawingId, drawingType: DrawingTypeEnum.DRAWING_IMAGE, imageSourceType: ImageSourceType.BASE64, source: box.source, unitId: snapshot.id, subUnitId: sheetId, sheetTransform, axisAlignSheetTransform: sheetTransform }
+    }
+    if (Object.keys(sheetDrawings).length > 0) drawingResources[sheetId] = { data: sheetDrawings, order: Object.keys(sheetDrawings) }
     completed += 1
     onProgress?.({ phase: 'converting', completed, total })
   })
@@ -815,6 +839,7 @@ export async function importXlsx(bytes: Uint8Array, locale: LocaleType, onProgre
     }
   }
   const incompatible = await unsupportedFeatures(archive, workbook, nativeViews)
+  if (normalizedFilters && !incompatible.includes('active filter criteria')) incompatible.push('active filter criteria')
   if (incompatible.length > 0) {
     snapshot.custom = { ...snapshot.custom, [COMPATIBILITY_CUSTOM_KEY]: incompatible }
   }
@@ -830,14 +855,14 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-function anchorPosition(anchor: { col: number; row: number }) {
-  const column = Math.max(0, Math.floor(anchor.col))
-  const row = Math.max(0, Math.floor(anchor.row))
+function anchorPosition(anchor: { col: number; row: number; nativeCol?: number; nativeRow?: number; nativeColOff?: number; nativeRowOff?: number }) {
+  const column = Math.max(0, anchor.nativeCol ?? Math.floor(anchor.col))
+  const row = Math.max(0, anchor.nativeRow ?? Math.floor(anchor.row))
   return {
     column,
     row,
-    columnOffset: Math.max(0, anchor.col - column) * 64,
-    rowOffset: Math.max(0, anchor.row - row) * 20,
+    columnOffset: anchor.nativeColOff !== undefined ? Math.max(0, anchor.nativeColOff / 9525) : Math.max(0, anchor.col - column) * 64,
+    rowOffset: anchor.nativeRowOff !== undefined ? Math.max(0, anchor.nativeRowOff / 9525) : Math.max(0, anchor.row - row) * 20,
   }
 }
 
@@ -1041,10 +1066,12 @@ function hyperlinkFromCell(data: ICellData): { hyperlink: string; text: string }
   return { hyperlink, text }
 }
 
-function fractionalAnchor(value: ResourceRule | undefined): { col: number; row: number } {
+function nativeAnchor(value: ResourceRule | undefined) {
   return {
-    col: Math.max(0, Number(value?.column ?? 0) + Number(value?.columnOffset ?? 0) / 64),
-    row: Math.max(0, Number(value?.row ?? 0) + Number(value?.rowOffset ?? 0) / 20),
+    nativeCol: Math.max(0, Math.floor(Number(value?.column ?? 0))),
+    nativeRow: Math.max(0, Math.floor(Number(value?.row ?? 0))),
+    nativeColOff: Math.round(Math.max(0, Number(value?.columnOffset ?? 0)) * 9525),
+    nativeRowOff: Math.round(Math.max(0, Number(value?.rowOffset ?? 0)) * 9525),
   }
 }
 
@@ -1170,7 +1197,14 @@ export async function exportXlsx(
     const sheetDrawings = drawings[sheetId]
     if (sheetDrawings && typeof sheetDrawings === 'object' && !Array.isArray(sheetDrawings)) {
       const drawingIds: Array<{ column: number; id: string; row: number }> = []
-      for (const value of Object.values(sheetDrawings as ResourceMap)) {
+      const data = (sheetDrawings as ResourceMap).data ?? sheetDrawings
+      const order = (sheetDrawings as ResourceMap).order
+      const orderedIds = Array.isArray(order) ? order.filter((id): id is string => typeof id === 'string') : []
+      // Native arrange commands update order, not the insertion order of the data map.
+      const ids = [...new Set([...orderedIds, ...Object.keys(data as ResourceMap)])]
+      for (const id of ids) {
+        const value = (data as ResourceMap)[id]
+        if (!value) continue
         const drawing = value as ResourceRule
         if (drawing.drawingType !== DrawingTypeEnum.DRAWING_IMAGE) {
           conversionFailures.add('non-image drawing')
@@ -1190,8 +1224,8 @@ export async function exportXlsx(
           })
         }
         worksheet.addImage(imageId, {
-          tl: fractionalAnchor(transform.from as ResourceRule),
-          br: fractionalAnchor(transform.to as ResourceRule),
+          tl: nativeAnchor(transform.from as ResourceRule),
+          br: nativeAnchor(transform.to as ResourceRule),
           editAs: 'oneCell',
         } as never)
       }

@@ -1,0 +1,144 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index f0984ba88c2eaca1c26815e76310e72c84f5460d..95c93552f96668a3bf421dca13d03bfbaee6b678 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -884,13 +884,13 @@ const UpdateDocDrawingWrappingStyleCommand = {
+ 				switch (editArea) {
+ 					case _univerjs_engine_render.DocumentEditArea.HEADER: {
+ 						var _skeHeaders$get;
+-						const headerSke = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++						const headerSke = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 						if (headerSke != null) drawingAnchor = findDrawingAnchorInPage(headerSke, drawingId, headerSke.marginTop, marginLeft);
+ 						break;
+ 					}
+ 					case _univerjs_engine_render.DocumentEditArea.FOOTER: {
+ 						var _skeFooters$get;
+-						const footerSke = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++						const footerSke = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 						if (footerSke != null) drawingAnchor = findDrawingAnchorInPage(footerSke, drawingId, pageHeight - marginBottom + footerSke.marginTop, marginLeft);
+ 						break;
+ 					}
+@@ -1993,7 +1993,7 @@ let DocDrawingTransformUpdateController = class DocDrawingTransformUpdateControl
+ 			const { headerId, footerId, pageWidth } = page;
+ 			if (headerId) {
+ 				var _skeHeaders$get;
+-				const headerPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++				const headerPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 				if (headerPage) {
+ 					this._calculateDrawingPosition(unitId, headerPage, docsLeft, docsTop, updateDrawingMap, headerPage.marginTop, page.marginLeft);
+ 					this._calculateTableCellDrawingPositions(unitId, headerPage, docsLeft, docsTop, updateDrawingMap, headerPage.marginTop, page.marginLeft);
+@@ -2001,7 +2001,7 @@ let DocDrawingTransformUpdateController = class DocDrawingTransformUpdateControl
+ 			}
+ 			if (footerId) {
+ 				var _skeFooters$get;
+-				const footerPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++				const footerPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 				if (footerPage) {
+ 					const footerTop = page.pageHeight - page.marginBottom + footerPage.marginTop;
+ 					this._calculateDrawingPosition(unitId, footerPage, docsLeft, docsTop, updateDrawingMap, footerTop, page.marginLeft);
+@@ -2397,7 +2397,7 @@ let DocDrawingTransformerController = class DocDrawingTransformerController exte
+ 				switch (pageType) {
+ 					case _univerjs_engine_render.DocumentSkeletonPageType.HEADER: {
+ 						var _skeHeaders$get;
+-						const headerSke = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++						const headerSke = p.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 						if (headerSke) this._liquid.translatePagePadding({
+ 							marginTop: headerSke.marginTop,
+ 							marginLeft
+@@ -2407,7 +2407,7 @@ let DocDrawingTransformerController = class DocDrawingTransformerController exte
+ 					}
+ 					case _univerjs_engine_render.DocumentSkeletonPageType.FOOTER: {
+ 						var _skeFooters$get;
+-						const footerSke = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++						const footerSke = p.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 						if (footerSke) this._liquid.translatePagePadding({
+ 							marginTop: pageHeight - marginBottom + footerSke.marginTop,
+ 							marginLeft
+@@ -2794,13 +2794,13 @@ const DocDrawingPosition = (props) => {
+ 				pageMarginLeft = marginLeft;
+ 				break;
+ 			}
+-			const headerPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++			const headerPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 			if (headerPage === null || headerPage === void 0 ? void 0 : headerPage.skeDrawings.has(drawingId)) {
+ 				drawing = headerPage === null || headerPage === void 0 ? void 0 : headerPage.skeDrawings.get(drawingId);
+ 				pageMarginLeft = marginLeft;
+ 				break;
+ 			}
+-			const footerPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++			const footerPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 			if (footerPage === null || footerPage === void 0 ? void 0 : footerPage.skeDrawings.has(drawingId)) {
+ 				drawing = footerPage === null || footerPage === void 0 ? void 0 : footerPage.skeDrawings.get(drawingId);
+ 				pageMarginLeft = marginLeft;
+diff --git a/lib/es/index.js b/lib/es/index.js
+index a4dea4a634e645efc621d1f81e4902b5ae6336b4..b2ffe27dd49158bc58839a1d9dab11cd839595e8 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -883,13 +883,13 @@ const UpdateDocDrawingWrappingStyleCommand = {
+ 				switch (editArea) {
+ 					case DocumentEditArea.HEADER: {
+ 						var _skeHeaders$get;
+-						const headerSke = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++						const headerSke = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 						if (headerSke != null) drawingAnchor = findDrawingAnchorInPage(headerSke, drawingId, headerSke.marginTop, marginLeft);
+ 						break;
+ 					}
+ 					case DocumentEditArea.FOOTER: {
+ 						var _skeFooters$get;
+-						const footerSke = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++						const footerSke = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 						if (footerSke != null) drawingAnchor = findDrawingAnchorInPage(footerSke, drawingId, pageHeight - marginBottom + footerSke.marginTop, marginLeft);
+ 						break;
+ 					}
+@@ -1992,7 +1992,7 @@ let DocDrawingTransformUpdateController = class DocDrawingTransformUpdateControl
+ 			const { headerId, footerId, pageWidth } = page;
+ 			if (headerId) {
+ 				var _skeHeaders$get;
+-				const headerPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++				const headerPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 				if (headerPage) {
+ 					this._calculateDrawingPosition(unitId, headerPage, docsLeft, docsTop, updateDrawingMap, headerPage.marginTop, page.marginLeft);
+ 					this._calculateTableCellDrawingPositions(unitId, headerPage, docsLeft, docsTop, updateDrawingMap, headerPage.marginTop, page.marginLeft);
+@@ -2000,7 +2000,7 @@ let DocDrawingTransformUpdateController = class DocDrawingTransformUpdateControl
+ 			}
+ 			if (footerId) {
+ 				var _skeFooters$get;
+-				const footerPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++				const footerPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 				if (footerPage) {
+ 					const footerTop = page.pageHeight - page.marginBottom + footerPage.marginTop;
+ 					this._calculateDrawingPosition(unitId, footerPage, docsLeft, docsTop, updateDrawingMap, footerTop, page.marginLeft);
+@@ -2396,7 +2396,7 @@ let DocDrawingTransformerController = class DocDrawingTransformerController exte
+ 				switch (pageType) {
+ 					case DocumentSkeletonPageType.HEADER: {
+ 						var _skeHeaders$get;
+-						const headerSke = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++						const headerSke = p.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 						if (headerSke) this._liquid.translatePagePadding({
+ 							marginTop: headerSke.marginTop,
+ 							marginLeft
+@@ -2406,7 +2406,7 @@ let DocDrawingTransformerController = class DocDrawingTransformerController exte
+ 					}
+ 					case DocumentSkeletonPageType.FOOTER: {
+ 						var _skeFooters$get;
+-						const footerSke = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++						const footerSke = p.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 						if (footerSke) this._liquid.translatePagePadding({
+ 							marginTop: pageHeight - marginBottom + footerSke.marginTop,
+ 							marginLeft
+@@ -2793,13 +2793,13 @@ const DocDrawingPosition = (props) => {
+ 				pageMarginLeft = marginLeft;
+ 				break;
+ 			}
+-			const headerPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++			const headerPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 			if (headerPage === null || headerPage === void 0 ? void 0 : headerPage.skeDrawings.has(drawingId)) {
+ 				drawing = headerPage === null || headerPage === void 0 ? void 0 : headerPage.skeDrawings.get(drawingId);
+ 				pageMarginLeft = marginLeft;
+ 				break;
+ 			}
+-			const footerPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++			const footerPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 			if (footerPage === null || footerPage === void 0 ? void 0 : footerPage.skeDrawings.has(drawingId)) {
+ 				drawing = footerPage === null || footerPage === void 0 ? void 0 : footerPage.skeDrawings.get(drawingId);
+ 				pageMarginLeft = marginLeft;

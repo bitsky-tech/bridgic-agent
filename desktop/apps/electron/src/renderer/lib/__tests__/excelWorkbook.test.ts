@@ -14,6 +14,74 @@ import {
 } from '../excelWorkbook'
 
 describe('Excel workbook conversion', () => {
+  it('keeps native image stacking order through repeated save and reopen cycles', async () => {
+    const source = new Workbook()
+    const sheet = source.addWorksheet('Stacked images')
+    for (const offset of [0, 95250]) {
+      const image = source.addImage({ extension: 'png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=' })
+      sheet.addImage(image, { tl: { nativeCol: 0, nativeRow: 0, nativeColOff: offset, nativeRowOff: 0 }, br: { nativeCol: 3, nativeRow: 3, nativeColOff: offset, nativeRowOff: 0 } } as never)
+    }
+    let snapshot = await importXlsx(new Uint8Array(await source.xlsx.writeBuffer()), LocaleType.EN_US)
+    const resource = snapshot.resources!.find((entry) => entry.name === 'SHEET_DRAWING_PLUGIN')!
+    const drawings = JSON.parse(resource.data)
+    const imported = drawings[snapshot.sheetOrder[0]!]
+    imported.order.reverse()
+    imported.order.push('removed-image', imported.order[0])
+    resource.data = JSON.stringify(drawings)
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const bytes = await exportXlsx(snapshot)
+      const office = new Workbook()
+      await office.xlsx.load(bytes.slice().buffer)
+      expect(office.worksheets[0]!.getImages().map((image) => image.range.tl.nativeColOff / 9525)).toEqual([10, 0])
+      snapshot = await importXlsx(bytes, LocaleType.EN_US)
+    }
+  })
+  it('preserves native image offsets across custom row and column dimensions and repeated exports', async () => {
+    const source = new Workbook()
+    const sheet = source.addWorksheet('Images')
+    sheet.getColumn(3).width = 30
+    sheet.getRow(4).height = 45
+    const id = source.addImage({ extension: 'png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=' })
+    sheet.addImage(id, {
+      tl: { nativeCol: 2, nativeRow: 3, nativeColOff: 95250, nativeRowOff: 190500 },
+      br: { nativeCol: 5, nativeRow: 8, nativeColOff: 47625, nativeRowOff: 28575 },
+    } as never)
+    let snapshot = await importXlsx(new Uint8Array(await source.xlsx.writeBuffer()), LocaleType.EN_US)
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const resource = JSON.parse(snapshot.resources!.find((entry) => entry.name === 'SHEET_DRAWING_PLUGIN')!.data)[snapshot.sheetOrder[0]!]
+      expect(resource.data[resource.order[0]].sheetTransform).toEqual({
+        from: { column: 2, row: 3, columnOffset: 10, rowOffset: 20 },
+        to: { column: 5, row: 8, columnOffset: 5, rowOffset: 3 },
+      })
+      snapshot = await importXlsx(await exportXlsx(snapshot), LocaleType.EN_US)
+    }
+  })
+  it('opens table icon filters without changing original bytes or losing cells', async () => {
+    const source = new Workbook()
+    source.addWorksheet('Data').addTable({ name: 'DataTable', ref: 'A1', headerRow: true, columns: [{ name: 'Value', filterButton: true }], rows: [[10], [20]] })
+    const archive = await JSZip.loadAsync(await source.xlsx.writeBuffer())
+    const table = archive.file('xl/tables/table1.xml')!
+    archive.file(table.name, (await table.async('text')).replace(/<filterColumn\b[^>]*\/>/, '<filterColumn colId="0"><iconFilter iconSet="3TrafficLights1" iconId="1"/></filterColumn>'))
+    const bytes = await archive.generateAsync({ type: 'uint8array' })
+    const original = bytes.slice()
+    const snapshot = await importXlsx(bytes, LocaleType.EN_US)
+    const sheet = snapshot.sheets[snapshot.sheetOrder[0]!]!
+    expect(sheet.cellData![1]![0]!.v).toBe(10)
+    expect(sheet.cellData![2]![0]!.v).toBe(20)
+    expect(unsupportedWorkbookFeatures(snapshot)).toContain('active filter criteria')
+    expect(bytes).toEqual(original)
+  })
+
+  it('loads one-cell image anchors into the drawing plugin data and display order', async () => {
+    const source = new Workbook()
+    const sheet = source.addWorksheet('Images')
+    const id = source.addImage({ extension: 'png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=' })
+    sheet.addImage(id, { tl: { col: 2, row: 3 }, ext: { width: 120, height: 80 } })
+    const snapshot = await importXlsx(new Uint8Array(await source.xlsx.writeBuffer()), LocaleType.EN_US)
+    const resource = JSON.parse(snapshot.resources!.find((entry) => entry.name === 'SHEET_DRAWING_PLUGIN')!.data)[snapshot.sheetOrder[0]!]
+    expect(resource.order).toHaveLength(1)
+    expect(resource.data[resource.order[0]].sheetTransform.to).toMatchObject({ column: 2, row: 3, columnOffset: 120, rowOffset: 80 })
+  })
   it('keeps formulas, formatting and frozen panes through repeated save and reopen cycles', async () => {
     let workbook = createEmptyWorkbook(LocaleType.EN_US, 'Repeated edits')
     const sheet = workbook.sheets[workbook.sheetOrder[0]!]!
@@ -319,8 +387,9 @@ describe('Excel workbook conversion', () => {
     const imported = await importXlsx(new Uint8Array(await source.xlsx.writeBuffer()), LocaleType.EN_US)
     const sheetId = imported.sheetOrder[0]!
     const drawingResource = imported.resources?.find((resource) => resource.name === 'SHEET_DRAWING_PLUGIN')
-    const drawings = JSON.parse(drawingResource?.data ?? '{}') as Record<string, Record<string, unknown>>
-    const drawingId = Object.keys(drawings[sheetId] ?? {})[0]!
+    const drawings = JSON.parse(drawingResource?.data ?? '{}') as Record<string, { data: Record<string, unknown>; order: string[] }>
+    const drawingId = drawings[sheetId]!.order[0]!
+    expect(drawings[sheetId]!.data[drawingId]).toBeDefined()
     const liveAnalysis = {
       version: 1,
       bindings: [{
@@ -336,10 +405,11 @@ describe('Excel workbook conversion', () => {
     expect(officeWorkbook.worksheets.some((worksheet) => worksheet.state === 'veryHidden')).toBeTrue()
 
     const restored = await importXlsx(bytes, LocaleType.EN_US)
-    const restoredDrawings = JSON.parse(restored.resources?.find((resource) => resource.name === 'SHEET_DRAWING_PLUGIN')?.data ?? '{}') as Record<string, Record<string, unknown>>
+    const restoredDrawings = JSON.parse(restored.resources?.find((resource) => resource.name === 'SHEET_DRAWING_PLUGIN')?.data ?? '{}') as Record<string, { data: Record<string, unknown>; order: string[] }>
     expect(restored.sheetOrder[0]).toBe(sheetId)
     expect(restored.sheets[sheetId]?.name).toBe(name)
-    expect(Object.keys(restoredDrawings[sheetId] ?? {})).toContain(drawingId)
+    expect(restoredDrawings[sheetId]!.order).toContain(drawingId)
+    expect(Object.keys(restoredDrawings[sheetId]!.data)).toContain(drawingId)
     expect(restored.custom?.[EXCEL_LIVE_ANALYSIS_CUSTOM_KEY]).toEqual(liveAnalysis)
     expect(Object.values(restored.sheets).some((worksheet) => worksheet?.name?.startsWith('__BRIDGIC_INTERNAL__'))).toBeFalse()
   })

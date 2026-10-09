@@ -344,16 +344,17 @@ function shapeGeometry(
   const fallbackProperties = fallbackShape
     ? directChildrenByLocalName(fallbackShape, 'spPr')[0] ?? firstByLocalName(fallbackShape, 'spPr')
     : null
-  const transform = ownTransform ?? (fallbackProperties ? firstByLocalName(fallbackProperties, 'xfrm') : null)
-  const offset = transform ? firstByLocalName(transform, 'off') : null
-  const extent = transform ? firstByLocalName(transform, 'ext') : null
+  const fallbackTransform = fallbackProperties ? firstByLocalName(fallbackProperties, 'xfrm') : null
+  const transformAttribute = (name: string) => ownTransform?.getAttribute(name) || fallbackTransform?.getAttribute(name) || ''
+  const offset = (ownTransform ? firstByLocalName(ownTransform, 'off') : null) ?? (fallbackTransform ? firstByLocalName(fallbackTransform, 'off') : null)
+  const extent = (ownTransform ? firstByLocalName(ownTransform, 'ext') : null) ?? (fallbackTransform ? firstByLocalName(fallbackTransform, 'ext') : null)
   const scaleX = pageSize.width / slideSizeEmu.width
   const scaleY = pageSize.height / slideSizeEmu.height
   const sourceX = numberAttribute(offset, 'x')
   const sourceY = numberAttribute(offset, 'y')
   const sourceWidth = numberAttribute(extent, 'cx', EMU_PER_INCH)
   const sourceHeight = numberAttribute(extent, 'cy', EMU_PER_INCH)
-  const angle = numberAttribute(transform, 'rot') / 60_000 * Math.PI / 180
+  const angle = Number(transformAttribute('rot') || 0) / 60_000 * Math.PI / 180
   const cos = Math.cos(angle)
   const sin = Math.sin(angle)
   const matrix = coordinateTransform
@@ -373,8 +374,8 @@ function shapeGeometry(
     width: rounded(width),
     height: rounded(height),
     rotation: rounded(rotation * 180 / Math.PI),
-    ...(transform?.getAttribute('flipH') === '1' ? { flipHorizontal: true } : {}),
-    ...((transform?.getAttribute('flipV') === '1') !== mirrored ? { flipVertical: true } : {}),
+    ...(transformAttribute('flipH') === '1' ? { flipHorizontal: true } : {}),
+    ...((transformAttribute('flipV') === '1') !== mirrored ? { flipVertical: true } : {}),
   }
 }
 
@@ -1108,6 +1109,48 @@ function mimeTypeForPath(path: string): string {
   return 'image/png'
 }
 
+function inheritPlaceholderProperties(shape: Element, master?: Element): Element {
+  if (!master) return shape
+  const result = shape.cloneNode(true) as Element
+  const choices = [
+    ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'],
+    ['prstGeom', 'custGeom'],
+    ['srgbClr', 'scrgbClr', 'schemeClr', 'sysClr', 'hslClr', 'prstClr'],
+    ['effectLst', 'effectDag'],
+  ]
+  const merge = (target: Element, fallback: Element) => {
+    for (const attribute of Array.from(fallback.attributes)) {
+      if (!target.hasAttribute(attribute.name)) target.setAttribute(attribute.name, attribute.value)
+    }
+    for (const child of Array.from(fallback.childNodes)) {
+      if (child.nodeType !== 1) continue
+      const element = child as Element
+      const choice = choices.find((names) => names.includes(element.localName))
+      if (choice?.some((name) => name !== element.localName && directChildrenByLocalName(target, name).length)) continue
+      const own = directChildrenByLocalName(target, element.localName)[0]
+      if (own) merge(own, element)
+      else target.appendChild(element.cloneNode(true))
+    }
+  }
+  for (const name of ['spPr', 'style']) {
+    const fallback = directChildrenByLocalName(master, name)[0]
+    const own = directChildrenByLocalName(result, name)[0]
+    if (fallback && own) merge(own, fallback)
+    else if (fallback) result.appendChild(fallback.cloneNode(true))
+  }
+  const body = directChildrenByLocalName(result, 'txBody')[0]
+  const masterBody = directChildrenByLocalName(master, 'txBody')[0]
+  if (body && masterBody) {
+    for (const name of ['bodyPr', 'lstStyle']) {
+      const fallback = directChildrenByLocalName(masterBody, name)[0]
+      const own = directChildrenByLocalName(body, name)[0]
+      if (fallback && own) merge(own, fallback)
+      else if (fallback) body.appendChild(fallback.cloneNode(true))
+    }
+  }
+  return result
+}
+
 async function importSlide(archive: JSZip, projectId: string, slidePath: string, pageSize: PresentationPageSize, slideSizeEmu: { width: number; height: number }, index: number, imageSources: Map<string, Promise<PresentationFileSource>>, registerImageAsset: (source: PresentationFileSource, effects?: PresentationImageEffects) => PresentationAsset): Promise<PresentationSlide> {
   const slideFile = archive.file(slidePath)
   if (!slideFile) throw new Error(`Missing ${slidePath}`)
@@ -1147,29 +1190,32 @@ async function importSlide(archive: JSZip, projectId: string, slidePath: string,
   let elements: PresentationElement[] = []
   const sourceShapeIds = new Map<string, string>()
 
-  const placeholderKey = (shape: Element): { exact: string; type: string } | null => {
+  const placeholderKey = (shape: Element): { index: string; type: string } | null => {
     const placeholder = firstByLocalName(shape, 'ph')
     if (!placeholder) return null
-    const type = placeholder.getAttribute('type') || 'body'
-    const indexValue = placeholder.getAttribute('idx') || ''
-    return { exact: `${type}:${indexValue}`, type }
+    const type = placeholder.getAttribute('type') || 'obj'
+    return { index: placeholder.getAttribute('idx') || '0', type }
   }
-  const placeholderPrototypes = new Map<string, Element>()
-  const registerPlaceholderPrototypes = (source: Document | null) => {
-    if (!source) return
-    for (const shape of elementsByLocalName(source, 'sp')) {
-      const key = placeholderKey(shape)
-      if (!key) continue
-      if (!placeholderPrototypes.has(`type:${key.type}`)) placeholderPrototypes.set(`type:${key.type}`, shape)
-      placeholderPrototypes.set(`exact:${key.exact}`, shape)
-    }
+  const masterPlaceholders = new Map<string, Element>()
+  for (const shape of masterDocument ? elementsByLocalName(masterDocument, 'sp') : []) {
+    const key = placeholderKey(shape)
+    if (key && !masterPlaceholders.has(key.type)) masterPlaceholders.set(key.type, shape)
   }
-  registerPlaceholderPrototypes(masterDocument)
-  registerPlaceholderPrototypes(layoutDocument)
+  const layoutPlaceholders = new Map<string, Element>()
+  const masterPlaceholderFor = (type: string) => masterPlaceholders.get(type === 'obj' ? 'body' : type)
+    ?? (type === 'ctrTitle' ? masterPlaceholders.get('title') : undefined)
+  for (const shape of layoutDocument ? elementsByLocalName(layoutDocument, 'sp') : []) {
+    const key = placeholderKey(shape)
+    if (!key) continue
+    const master = masterPlaceholderFor(key.type)
+    layoutPlaceholders.set(key.index, inheritPlaceholderProperties(shape, master))
+  }
   const placeholderPrototypeFor = (shape: Element): Element | undefined => {
     const key = placeholderKey(shape)
     if (!key) return undefined
-    return placeholderPrototypes.get(`exact:${key.exact}`) ?? placeholderPrototypes.get(`type:${key.type}`)
+    // Slides inherit by index from their layout; layouts inherit by type from
+    // the master. A layout may deliberately omit every geometry attribute.
+    return layoutPlaceholders.get(key.index) ?? masterPlaceholderFor(key.type)
   }
 
   const withGroup = <T extends PresentationElement>(element: T, groupId?: string): T => (

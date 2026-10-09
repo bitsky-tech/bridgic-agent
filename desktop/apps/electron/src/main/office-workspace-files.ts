@@ -6,7 +6,7 @@ import type { PresentationMountedSource, PresentationSourceMount } from '../shar
 import { inspectOfficeFile, OFFICE_EXTENSIONS, officePath, saveOfficeFile, writeOfficeBytes } from './office-files'
 
 type Mount = PresentationSourceMount
-interface WriteReceipt { source: OfficeFileSource; fingerprint: string }
+interface WriteReceipt { source: OfficeFileSource; fingerprint: string; protectedSourcePath?: string | null }
 const fingerprint = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const isWithin = (root: string, path: string) => {
   const rel = relative(root, path)
@@ -90,19 +90,33 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
           if (!receipt?.source || typeof receipt.source.path !== 'string'
             || !isWithin(root, receipt.source.path)
             || (receipt.source.mtimeMs !== null && !Number.isFinite(receipt.source.mtimeMs))
-            || typeof receipt.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.fingerprint)) throw new Error('The Office write receipt is invalid')
+            || typeof receipt.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.fingerprint)
+            || (receipt.protectedSourcePath != null && typeof receipt.protectedSourcePath !== 'string')) throw new Error('The Office write receipt is invalid')
           officePath(input.kind, receipt.source.path)
+          if (receipt.protectedSourcePath) officePath(input.kind, receipt.protectedSourcePath)
           return receipt
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           throw error
         }
       }
-      let source = input.source
+      // A limited importer must never overwrite the original, even for managed files.
+      // Allocate a sibling on the first edit, then continue saving that editable copy.
+      let source = input.preserveSource ? undefined : input.source
       if (source && !isWithin(root, source.path)) source = await prepare(id, input.kind, source.path)
       let allocated: string | undefined
       const receipt = !source || (await inspectOfficeFile(input.kind, source.path)).mtimeMs !== source.mtimeMs ? await readReceipt() : null
-      if (!source && receipt) source = receipt.source
+      const reusableCopy = receipt && receipt.protectedSourcePath !== undefined && input.source
+        && (input.source.path === receipt.protectedSourcePath || input.source.path === receipt.source.path)
+      if (!source && receipt && (!input.preserveSource || reusableCopy)) {
+        // Once acknowledged, the renderer's source is the copy. Keep its expected
+        // mtime so external changes remain conflicts rather than being overwritten.
+        source = input.source?.path === receipt.source.path ? input.source : receipt.source
+      }
+      let protectedSourcePath: string | null | undefined
+      if (input.preserveSource) {
+        protectedSourcePath = reusableCopy ? receipt!.protectedSourcePath : input.source?.path ?? null
+      }
       if (!source) {
         const extension = OFFICE_EXTENSIONS[input.kind]
         const name = basename(input.suggestedName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || `Untitled${extension}`
@@ -128,7 +142,7 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
       // allocated name without making a duplicate or trusting a stale renderer mtime.
       try {
         await mkdir(dirname(receiptPath), { recursive: true })
-        await writeOfficeBytes(receiptPath, JSON.stringify({ source, fingerprint: fingerprint(input.bytes) } satisfies WriteReceipt))
+        await writeOfficeBytes(receiptPath, JSON.stringify({ source, fingerprint: fingerprint(input.bytes), protectedSourcePath } satisfies WriteReceipt))
       } catch (error) {
         if (allocated) await unlink(allocated).catch(() => undefined)
         throw error
