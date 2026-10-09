@@ -24,11 +24,16 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await act(async () => {
-    for (const root of mountedRoots) root.unmount()
-    mountedRoots.clear()
-  })
-  document.body.replaceChildren()
+  try {
+    await act(async () => {
+      for (const root of mountedRoots) root.unmount()
+      mountedRoots.clear()
+    })
+    document.body.replaceChildren()
+  } finally {
+    // English labels are local to these tests, not the next test file.
+    await i18n.changeLanguage('zh')
+  }
 })
 
 afterAll(async () => {
