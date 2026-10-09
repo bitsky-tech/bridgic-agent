@@ -11,6 +11,22 @@ const { IPC } = await import('../../shared/ipc-channels')
 const { registerExcelHostHandlers } = await import('../handlers/excel-host')
 
 describe('Excel host close requests', () => {
+  it('binds renderer state reports to the sending Excel target', async () => {
+    const calls: unknown[][] = []
+    const excel = {
+      reportState: (sender: number, state: unknown) => { calls.push([sender, state]) },
+    } as unknown as ExcelHost
+    testIpcHandlers.clear()
+    registerExcelHostHandlers(excel, {} as EmbeddedBrowserManager, () => undefined)
+
+    await testIpcHandlers.get(IPC.excelHost.reportState)?.(
+      { sender: { id: 17 } } as IpcMainInvokeEvent,
+      { documentCount: 0, dirty: false },
+    )
+
+    expect(calls).toEqual([[17, { documentCount: 0, dirty: false }]])
+  })
+
   it('resolves the owning Session from the sender and retracts its panel before deferred destruction', async () => {
     const events: unknown[][] = []
     const closed: number[] = []

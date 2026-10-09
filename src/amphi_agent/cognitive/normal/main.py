@@ -734,7 +734,6 @@ class MainThink(BaseThink):
                 "remove_workflow",
                 "request_build",
                 "request_human_choice",
-                "request_presentation",
                 "request_run_workflow",
                 "run_subagent",
                 "start_subagent",

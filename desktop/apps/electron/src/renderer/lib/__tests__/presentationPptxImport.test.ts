@@ -1,19 +1,154 @@
 import { describe, expect, it } from 'bun:test'
+import { DOMParser } from '@xmldom/xmldom'
 import JSZip from 'jszip'
-import { PRESENTATION_PAGE_SIZES, type PresentationDocument, type PresentationFileSource } from '@/atoms/presentation'
-import { createPresentationTestDocument as createInitialPresentationDocument } from '@/test-fixtures/presentation'
+import { PRESENTATION_PAGE_SIZES, type PresentationProject, type PresentationFileSource } from '@/atoms/presentation'
+import { createPresentationTestDocument as createInitialPresentationProject } from '@/test-fixtures/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 import { normalizePresentationProject, presentationElementSource } from '@/presentation/project'
-import { validatePresentationDocument } from '@/presentation/model/reducer'
+import { validatePresentationProject } from '@/presentation/model/reducer'
+import { materializePresentationProjectSources, presentationPptxSourceUrls } from '@/presentation/sources'
 
-function addImageAsset(document: PresentationDocument, id: string, source: PresentationFileSource): void {
-  document.assets.push({ id, kind: 'image', name: source.fileName, source })
+function addImageAsset(document: PresentationProject, id: string, source: PresentationFileSource): void {
+  document.assets.push({ id, kind: 'image', mimeType: source.mimeType, name: source.fileName, source: source.dataUrl })
 }
 
 describe('importPresentationPptx', () => {
+  it('inherits placeholder frames through empty layouts and matches master placeholders by type rather than index', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = []
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const placeholder = (id: number, type: string, index: number, properties: string, text = '') => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Placeholder ${id}"/><p:cNvSpPr/><p:nvPr><p:ph ${type ? `type="${type}"` : ''} idx="${index}"/></p:nvPr></p:nvSpPr><p:spPr>${properties}</p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+    for (const [path, shapes] of [
+      ['ppt/slideMasters/slideMaster1.xml', placeholder(2, 'title', 31, '<a:xfrm><a:off x="914400" y="457200"/><a:ext cx="7315200" cy="914400"/></a:xfrm>') + placeholder(3, 'body', 42, '<a:xfrm><a:off x="914400" y="1828800"/><a:ext cx="7315200" cy="3657600"/></a:xfrm>')],
+      ['ppt/slideLayouts/slideLayout1.xml', placeholder(2, 'title', 0, '') + placeholder(3, 'body', 1, '')],
+      ['ppt/slides/slide1.xml', placeholder(2, 'title', 0, '', 'Title') + placeholder(3, '', 1, '<a:xfrm><a:off x="1371600" y="1828800"/></a:xfrm>', 'Body')],
+    ] as const) {
+      const xml = await archive.file(path)!.async('text')
+      archive.file(path, xml.replace('</p:spTree>', `${shapes}</p:spTree>`))
+    }
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
+    const title = imported.slides.pages[0]!.elements.find((element) => element.type === 'text' && element.text === 'Title')!
+    const body = imported.slides.pages[0]!.elements.find((element) => element.type === 'text' && element.text === 'Body')!
+    expect(title.width).toBeGreaterThan(imported.pageSize!.width * 0.5)
+    expect(body.width).toBe(title.width)
+    expect(body.y).toBeGreaterThan(title.y + title.height)
+    expect(body.x).toBeGreaterThan(title.x)
+  })
+  it('keeps an explicitly non-bold table header non-bold after native PPTX export', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'plain-header-table', type: 'table', x: 80, y: 80, width: 400, height: 160, rotation: 0,
+      cells: [['Plain heading'], ['Body'], ['']], cellStyles: [[{ bold: false }], [{}], [{ bold: false, textColor: '#FF0000' }]],
+      headerRow: true, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(xml).toMatch(/<a:rPr[^>]*b="0"[^>]*>/)
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    expect(table.cellStyles?.[0]?.[0]?.bold).toBe(false)
+    expect(table.cellStyles?.[2]?.[0]).toMatchObject({ bold: false, textColor: '#FF0000' })
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
+  it('preserves independent table cell borders through native PPTX export and import', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'border-table', type: 'table', x: 80, y: 80, width: 400, height: 160, rotation: 0,
+      cells: [['Border']], cellStyles: [[{ borders: {
+        top: { color: '#FF0000', width: 4, type: 'solid' },
+        right: { color: '#0000FF', width: 2, type: 'dash' },
+        bottom: { color: '#00AA00', width: 1, type: 'solid' },
+        left: { color: 'transparent', width: 0, type: 'none' },
+      } }]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(xml).toContain('FF0000')
+    expect(xml).toContain('0000FF')
+    expect(xml).toContain('00AA00')
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    const borders = table.cellStyles?.[0]?.[0]?.borders
+    expect(borders?.top).toMatchObject({ color: '#FF0000', width: 4, type: 'solid' })
+    expect(borders?.right).toMatchObject({ color: '#0000FF', width: 2, type: 'dash' })
+    expect(borders?.bottom).toMatchObject({ color: '#00AA00', width: 1, type: 'solid' })
+    expect(borders?.left).toMatchObject({ width: 0, type: 'none' })
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
+  it('keeps mixed formatting within an editable table cell through native PPTX round trips', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'rich-table', type: 'table', x: 80, y: 80, width: 500, height: 180, rotation: 0,
+      cells: [['Red Blue']],
+      cellStyles: [[{ textRuns: [
+        { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700, fontSize: 24 } },
+        { start: 4, end: 8, style: { color: '#0000FF', italic: true, fontSize: 16 } },
+      ] }]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(xml).toContain('val="FF0000"')
+    expect(xml).toContain('val="0000FF"')
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    expect(table.cells).toEqual([['Red Blue']])
+    expect(table.cellStyles?.[0]?.[0]?.textRuns).toMatchObject([
+      { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700 } },
+      { start: 4, end: 8, style: { color: '#0000FF', italic: true } },
+    ])
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
+  it('keeps uneven table grids, merged cells and individual cell formatting editable across export and import', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const source = createInitialPresentationProject()
+    source.slides.pages[0]!.elements = [{
+      id: 'complex-table', type: 'table', x: 100, y: 100, width: 600, height: 300, rotation: 0,
+      cells: [['Merged', '', 'Top'], ['', '', 'Middle'], ['A', 'B', 'C']],
+      columnWidths: [1, 2, 3], rowHeights: [1, 2, 3],
+      cellStyles: [
+        [{ colSpan: 2, rowSpan: 2, fill: '#FF0000', textColor: '#FFFFFF', fontSize: 28, bold: true, align: 'center',
+          padding: { left: 2, right: 4, top: 6, bottom: 8 } }, { covered: true }, { fill: '#00FF00' }],
+        [{ covered: true }, { covered: true }, { fill: '#0000FF' }],
+        [{ fill: '#FFFF00' }, { fill: '#00FFFF' }, { fill: '#FF00FF' }],
+      ],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 16,
+    }]
+    const bytes = await createPresentationPptx(source)
+    const archive = await JSZip.loadAsync(bytes)
+    const slideXml = await archive.file('ppt/slides/slide1.xml')!.async('text')
+    expect(slideXml).toContain('gridSpan="2"')
+    expect(slideXml).toContain('rowSpan="2"')
+    const imported = await importPresentationPptx(bytes)
+    const table = imported.slides.pages[0]!.elements[0]
+    expect(table).toMatchObject({ type: 'table', cells: [['Merged', '', 'Top'], ['', '', 'Middle'], ['A', 'B', 'C']] })
+    if (table?.type !== 'table') throw new Error('Missing imported table')
+    if (!table.columnWidths || !table.rowHeights) throw new Error('Missing imported table grid')
+    expect(table.columnWidths[1]! / table.columnWidths[0]!).toBeCloseTo(2, 2)
+    expect(table.rowHeights[2]! / table.rowHeights[0]!).toBeCloseTo(3, 2)
+    expect(table.cellStyles?.[0]?.[0]).toMatchObject({ colSpan: 2, rowSpan: 2, fill: '#FF0000', textColor: '#FFFFFF', bold: true, align: 'center' })
+    expect(table.cellStyles?.[0]?.[0]?.padding?.left).toBeCloseTo(2, 1)
+    expect(table.cellStyles?.[0]?.[0]?.padding?.bottom).toBeCloseTo(8, 1)
+    expect(table.cellStyles?.[0]?.[1]).toMatchObject({ covered: true })
+    expect(table.cellStyles?.[1]?.[0]).toMatchObject({ covered: true })
+    expect(table.cellStyles?.[2]?.[1]).toMatchObject({ fill: '#00FFFF' })
+    expect(validatePresentationProject(imported)).toBe(imported)
+  })
+
   it('preserves the editable master and footer through repeated save and reopen cycles', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = normalizePresentationProject(createInitialPresentationDocument())
+    const source = normalizePresentationProject(createInitialPresentationProject())
     source.theme.footer = { text: 'Confidential', showDate: true, showSlideNumber: true }
     source.theme.bodyFontFamily = 'Arial'
     source.theme.titleFontFamily = 'Georgia'
@@ -22,26 +157,26 @@ describe('importPresentationPptx', () => {
       document = await importPresentationPptx(await createPresentationPptx(document), 'Report.pptx', { restoreEditorModel: true })
       expect(document.theme).toEqual(source.theme)
       expect(document.slides.pages).toEqual(source.slides.pages)
-      expect(document.sourceProtected).toBe(false)
+      expect(document).not.toHaveProperty('sourceProtected')
       document.slides.pages[0]!.notes = `Edited note ${cycle}`
       source.slides.pages[0]!.notes = `Edited note ${cycle}`
     }
   })
 
-  it('invalidates its embedded model after an external edit and protects that source', async () => {
+  it('invalidates its embedded model after an external edit without adding host metadata', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const slide = archive.file('ppt/slides/slide1.xml')!
     archive.file(slide.name, (await slide.async('string')).replace(/<a:t>[^<]*<\/a:t>/, '<a:t>Externally corrected</a:t>'))
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'Report.pptx', { restoreEditorModel: true })
     expect(JSON.stringify(imported.slides.pages)).toContain('Externally corrected')
-    expect(imported.sourceProtected).toBe(true)
+    expect(imported).not.toHaveProperty('sourceProtected')
   })
 
   it('falls back to native PPTX content when a matching embedded model is invalid', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const archive = await JSZip.loadAsync(await createPresentationPptx(source))
     const modelFile = archive.file('bridgic/editor-model.json')!
     const envelope = JSON.parse(await modelFile.async('string')) as Record<string, unknown>
@@ -57,7 +192,7 @@ describe('importPresentationPptx', () => {
       )
       expect(imported.slides.pages.length).toBeGreaterThan(0)
       expect(JSON.stringify(imported.slides.pages)).toContain('Primary message')
-      expect(imported.sourceProtected).toBe(true)
+      expect(imported).not.toHaveProperty('sourceProtected')
       expect(warnings[0]?.[0]).toContain('Ignoring an invalid embedded editor model')
     } finally {
       console.warn = originalWarn
@@ -66,7 +201,7 @@ describe('importPresentationPptx', () => {
 
   it('shares a master image across slides and preserves sharing through worker transfer', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const second = structuredClone(source.slides.pages[0]!)
     second.id = 'second-slide'
     source.slides.pages = [source.slides.pages[0]!, second]
@@ -81,19 +216,21 @@ describe('importPresentationPptx', () => {
     const rels = archive.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')!
     archive.file(rels.name, (await rels.async('text')).replace('</Relationships>', '<Relationship Id="sharedBackground" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shared.png"/></Relationships>'))
     archive.file('ppt/media/shared.png', new Uint8Array([137, 80, 78, 71]))
-    const imported = structuredClone(await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' })))
+    const bytes = await archive.generateAsync({ type: 'uint8array' })
+    const imported = structuredClone(await importPresentationPptx(bytes))
+    const sources = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
     const images = imported.slides.pages.map((slide) => slide.elements[0]!)
     expect(images).toHaveLength(2)
     expect(images.every((element) => element.type === 'image')).toBe(true)
     if (images[0]!.type !== 'image' || images[1]!.type !== 'image') throw new Error('Missing background')
     expect(images[0]!.sourceAssetId).toBe(images[1]!.sourceAssetId)
-    expect(presentationElementSource(imported, images[0]!)!.dataUrl).toBe('data:image/png;base64,iVBORw==')
+    expect(presentationElementSource(imported, images[0]!, sources)!.dataUrl).toBe('data:image/png;base64,iVBORw==')
     expect(images[0]!.id).not.toBe(images[1]!.id)
   })
 
   it('preserves slide, layout and master background images behind foreground elements', async () => {
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const bytes = await createPresentationPptx(createInitialPresentationDocument())
+    const bytes = await createPresentationPptx(createInitialPresentationProject())
     const owners = ['slides/slide1.xml', 'slideLayouts/slideLayout1.xml', 'slideMasters/slideMaster1.xml']
     for (const owner of owners) {
       const archive = await JSZip.loadAsync(bytes)
@@ -109,18 +246,42 @@ describe('importPresentationPptx', () => {
       archive.file(rels.name, (await rels.async('text')).replace('</Relationships>',
         '<Relationship Id="templateBackground" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/template-background.png"/></Relationships>'))
       archive.file('ppt/media/template-background.png', new Uint8Array([137, 80, 78, 71]))
-      const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
+      const modifiedBytes = await archive.generateAsync({ type: 'uint8array' })
+      const imported = await importPresentationPptx(modifiedBytes)
+      const sources = await presentationPptxSourceUrls(imported, Buffer.from(modifiedBytes).toString('base64'))
       const first = imported.slides.pages[0]!.elements[0]!
       expect(first.type).toBe('image')
       if (first.type !== 'image') throw new Error('Background missing')
-      expect(presentationElementSource(imported, first)!.fileName).toBe('template-background.png')
+      expect(presentationElementSource(imported, first, sources)!.fileName).toBe('template-background.png')
       expect([first.x, first.y, first.width, first.height]).toEqual([0, 0, imported.pageSize.width, imported.pageSize.height])
       expect(imported.slides.pages[0]!.elements.slice(1).some(element => element.type === 'text')).toBe(true)
     }
   })
 
+  it('imports a master gradient background as an editable shape behind slide content', async () => {
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const archive = await JSZip.loadAsync(await createPresentationPptx(createInitialPresentationProject()))
+    for (const part of ['slides/slide1.xml', 'slideLayouts/slideLayout1.xml', 'slideMasters/slideMaster1.xml']) {
+      const file = archive.file(`ppt/${part}`)!
+      archive.file(file.name, (await file.async('text')).replace(/<p:bg>.*?<\/p:bg>/s, ''))
+    }
+    const master = archive.file('ppt/slideMasters/slideMaster1.xml')!
+    const background = '<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs><a:gs pos="100000"><a:srgbClr val="F3EFE9"/></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill></p:bgPr></p:bg>'
+    archive.file(master.name, (await master.async('text')).replace(/(<p:cSld[^>]*>)/, `$1${background}`))
+    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }))
+    const first = imported.slides.pages[0]!.elements[0]!
+    expect(first).toMatchObject({
+      type: 'rect', x: 0, y: 0, width: imported.pageSize.width, height: imported.pageSize.height,
+      gradientFill: { type: 'radial', path: 'circle', fillToRect: { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 } },
+    })
+    if (first.type !== 'rect' || !first.gradientFill) throw new Error('Gradient background missing')
+    first.gradientFill.stops[1]!.color = '#E9DDCC'
+    const reopened = await importPresentationPptx(await createPresentationPptx(imported))
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ gradientFill: first.gradientFill })
+  })
+
   it('round-trips editable slides, geometry, notes and page size', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     source.theme.accentColors = ['#123456', '#ABCDEF', '#CC5500', '#118844', '#663399', '#DDCC22']
     source.theme.background = '#112233'
     source.theme.bodyFontFamily = 'Arial'
@@ -152,7 +313,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('imports only the requested source slides for lightweight template previews', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const first = source.slides.pages[0]!
     const second = structuredClone(first)
     second.id = 'preview-slide-2'
@@ -174,7 +335,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('cleans omitted page links and assets when restoring a page subset', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const [first, second] = source.slides.pages
     const firstText = first!.elements.find((element) => element.type === 'text')!
     firstText.hyperlink = { type: 'slide', slideId: second!.id }
@@ -203,11 +364,11 @@ describe('importPresentationPptx', () => {
     expect(imported.slides.pages).toHaveLength(1)
     expect(imported.slides.pages[0]!.elements.find((element) => element.id === firstText.id)).not.toHaveProperty('hyperlink')
     expect(imported.assets.map((asset) => asset.id)).toEqual(['retained-asset'])
-    expect(validatePresentationDocument(imported)).toBe(imported)
+    expect(validatePresentationProject(imported)).toBe(imported)
   })
 
   it('preserves mixed shape-picture z-order, source crop and text-box layout', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -283,7 +444,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('keeps color-keyed pictures visible and preserves picture mirroring', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -327,8 +488,85 @@ describe('importPresentationPptx', () => {
     }
   })
 
+  it('keeps an imported picture stretched to its non-square frame', async () => {
+    const source = createInitialPresentationProject()
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    addImageAsset(source, 'square-picture', {
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+      fileName: 'square.png', mimeType: 'image/png',
+    })
+    slide.elements = [{
+      id: 'stretched-picture', type: 'image', sourceAssetId: 'square-picture',
+      x: 20, y: 30, width: 200, height: 100, rotation: 0, altText: '', fit: 'stretch',
+    }]
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const bytes = await createPresentationPptx(source)
+    const imported = await importPresentationPptx(bytes, 'stretched.pptx')
+    expect(imported.slides.pages[0]!.elements.find(element => element.type === 'image')).toMatchObject({
+      type: 'image', fit: 'stretch', width: 200, height: 100,
+    })
+    const urls = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
+    const reopened = await importPresentationPptx(
+      await createPresentationPptx(await materializePresentationProjectSources(imported, urls)),
+      'stretched-round-trip.pptx',
+    )
+    expect(reopened.slides.pages[0]!.elements.find(element => element.type === 'image')).toMatchObject({ type: 'image', fit: 'stretch' })
+  })
+
+  it('keeps an editable patterned shape through native PPTX import and export', async () => {
+    const source = createInitialPresentationProject()
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    const patternFill = {
+      preset: 'wdUpDiag', foregroundColor: '#F8FCFE', foregroundOpacity: 1,
+      backgroundColor: '#FFFFFF', backgroundOpacity: 1,
+    }
+    slide.elements = [{
+      id: 'patterned-card', type: 'roundRect', x: 40, y: 50, width: 700, height: 360, rotation: 0,
+      fill: '#FFFFFF', borderColor: 'transparent', borderWidth: 0,
+      patternFill,
+    }]
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const bytes = await createPresentationPptx(source)
+    const imported = await importPresentationPptx(bytes, 'patterned.pptx')
+    expect(imported.slides.pages[0]!.elements[0]).toMatchObject({
+      type: 'roundRect', fill: '#FFFFFF', patternFill,
+    })
+    const reopenedBytes = await createPresentationPptx(imported)
+    const reopenedXml = await (await JSZip.loadAsync(reopenedBytes)).file('ppt/slides/slide1.xml')!.async('text')
+    expect(reopenedXml).toContain('<a:pattFill prst="wdUpDiag">')
+    expect((await importPresentationPptx(reopenedBytes, 'patterned-again.pptx')).slides.pages[0]!.elements[0]).toMatchObject({
+      type: 'roundRect', patternFill,
+    })
+  })
+
+  it('preserves an Office radial gradient path and fill rectangle', async () => {
+    const source = createInitialPresentationProject()
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    slide.elements = [{
+      id: 'radial-card', type: 'ellipse', x: 30, y: 40, width: 300, height: 300, rotation: 0,
+      fill: '#FFFFFF', borderColor: 'transparent', borderWidth: 0,
+      gradientFill: { type: 'radial', path: 'circle', fillToRect: { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 }, stops: [
+        { offset: 0, color: '#FFFFFF', opacity: 1 }, { offset: 1, color: '#004950', opacity: 1 },
+      ] },
+    }]
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const exported = await createPresentationPptx(source)
+    const imported = await importPresentationPptx(exported, 'radial.pptx')
+    expect(imported.slides.pages[0]!.elements[0]).toMatchObject({
+      type: 'ellipse', gradientFill: { type: 'radial', path: 'circle', fillToRect: { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 } },
+    })
+    const roundTrip = await JSZip.loadAsync(await createPresentationPptx(imported))
+    expect(await roundTrip.file('ppt/slides/slide1.xml')!.async('text')).toContain('<a:fillToRect l="50000" t="50000" r="50000" b="50000"/>')
+  })
+
   it('imports an ellipse shape with a picture fill as a clipped image instead of its theme fallback color', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -362,29 +600,83 @@ describe('importPresentationPptx', () => {
     archive.file('ppt/slides/slide1.xml', slideXml.replace(picture!, pictureFilledEllipse))
     const { importPresentationPptx } = await import('../presentationPptxImport')
 
-    const imported = await importPresentationPptx(
-      await archive.generateAsync({ type: 'uint8array' }),
-      'picture-filled-shape.pptx',
-    )
+    const bytes = await archive.generateAsync({ type: 'uint8array' })
+    const imported = await importPresentationPptx(bytes, 'picture-filled-shape.pptx')
+    const sources = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
     const image = imported.slides.pages[0]!.elements[0]
 
     expect(image?.type).toBe('image')
     if (image?.type === 'image') {
       expect(image.clipShape).toBe('ellipse')
-      expect(presentationElementSource(imported, image)!.mimeType).toBe('image/png')
-      expect(presentationElementSource(imported, image)!.dataUrl).toStartWith('data:image/png;base64,')
+      expect(presentationElementSource(imported, image, sources)!.mimeType).toBe('image/png')
+      expect(presentationElementSource(imported, image, sources)!.dataUrl).toStartWith('data:image/png;base64,')
       expect(image.altText).toBe('landscape')
     }
 
     const reimported = await importPresentationPptx(
-      await createPresentationPptx(imported),
+      await createPresentationPptx(await materializePresentationProjectSources(imported, sources)),
       'picture-filled-shape-round-trip.pptx',
     )
     expect(reimported.slides.pages[0]!.elements[0]).toMatchObject({ type: 'image', clipShape: 'ellipse' })
   })
 
+  it('keeps imported picture effects and their embedded Office layer through export', async () => {
+    const source = createInitialPresentationProject()
+    const slide = source.slides.pages[0]!
+    source.slides.pages = [slide]
+    source.slides.selectedPageId = slide.id
+    addImageAsset(source, 'picture-asset', {
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
+      fileName: 'picture.png', mimeType: 'image/png',
+    })
+    slide.elements = [{ id: 'picture', type: 'image', sourceAssetId: 'picture-asset',
+      x: 30, y: 40, width: 200, height: 150, rotation: 0, altText: '', fit: 'contain' }]
+    const archive = await JSZip.loadAsync(await createPresentationPptx(source))
+    const slideFile = archive.file('ppt/slides/slide1.xml')!
+    const effect = '<a:clrChange><a:clrFrom><a:srgbClr val="FFFFFF"/></a:clrFrom><a:clrTo><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:clrTo></a:clrChange>'
+      + '<a:extLst><a:ext uri="{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}"><a14:imgProps xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a14:imgLayer r:embed="rId77"><a14:imgEffect><a14:backgroundRemoval t="10" b="90000" l="20" r="80000"><a14:foregroundMark x1="1" y1="2" x2="3" y2="4"/><a14:backgroundMark x1="5" y1="6" x2="7" y2="8"/></a14:backgroundRemoval></a14:imgEffect><a14:imgEffect><a14:brightnessContrast bright="20000" contrast="-20000"/></a14:imgEffect><a14:imgEffect><a14:colorTemperature colorTemp="4700"/></a14:imgEffect></a14:imgLayer></a14:imgProps></a:ext></a:extLst>'
+    archive.file(slideFile.name, (await slideFile.async('text')).replace(/<a:blip (r:embed="[^"]+")><\/a:blip>/, `<a:blip $1>${effect}</a:blip>`))
+    const relationships = archive.file('ppt/slides/_rels/slide1.xml.rels')!
+    archive.file(relationships.name, (await relationships.async('text')).replace('</Relationships>',
+      '<Relationship Id="rId77" Type="http://schemas.microsoft.com/office/2007/relationships/hdphoto" Target="../media/layer.wdp"/></Relationships>'))
+    archive.file('ppt/media/layer.wdp', new Uint8Array([0x49, 0x49, 0x42, 0x43]))
+    const bytes = await archive.generateAsync({ type: 'uint8array' })
+    const { importPresentationPptx } = await import('../presentationPptxImport')
+    const imported = await importPresentationPptx(bytes, 'effects.pptx')
+    const asset = imported.assets.find(value => value.imageEffects)!
+    expect(asset).toBeDefined()
+    expect(asset.imageEffects).toMatchObject({
+      colorChange: { from: '#FFFFFF', to: '#FFFFFF', opacity: 0 },
+      officeLayer: { effects: [
+        { type: 'backgroundRemoval', bounds: { top: 10, bottom: 90000, left: 20, right: 80000 },
+          foregroundMarks: [{ x1: 1, y1: 2, x2: 3, y2: 4 }], backgroundMarks: [{ x1: 5, y1: 6, x2: 7, y2: 8 }] },
+        { type: 'brightnessContrast', bright: 20000, contrast: -20000 },
+        { type: 'colorTemperature', colorTemp: 4700 },
+      ] },
+    })
+    expect(asset.imageEffects?.officeLayer?.source).toStartWith(`bridgic-pptx:${imported.id}/`)
+    const image = imported.slides.pages[0]!.elements.find(value => value.type === 'image')!
+    image.x += 20
+    const brightness = asset.imageEffects?.officeLayer?.effects.find(value => value.type === 'brightnessContrast')
+    if (brightness?.type !== 'brightnessContrast') throw new Error('Brightness adjustment missing')
+    brightness.bright = 30000
+    const urls = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
+    const exported = await createPresentationPptx(await materializePresentationProjectSources(imported, urls))
+    const output = await JSZip.loadAsync(exported)
+    const outputXml = await output.file('ppt/slides/slide1.xml')!.async('text')
+    expect(outputXml).toContain('<a:clrChange>')
+    expect(outputXml).toContain('<a14:backgroundRemoval')
+    expect(outputXml).toContain('<a14:brightnessContrast bright="30000" contrast="-20000"/>')
+    expect(outputXml).toContain('<a14:colorTemperature colorTemp="4700"/>')
+    expect(outputXml).toContain('<a14:foregroundMark x1="1" y1="2" x2="3" y2="4"/>')
+    expect(Object.keys(output.files).some(path => path.endsWith('.wdp'))).toBe(true)
+    const reopened = await importPresentationPptx(exported, 'effects-export.pptx')
+    expect(reopened.assets.some(value => value.imageEffects?.officeLayer?.effects.length === 3)).toBe(true)
+    expect(reopened.slides.pages[0]!.elements.find(value => value.type === 'image')?.x).toBeCloseTo(image.x)
+  })
+
   it('imports East Asian vertical text and DrawingML preset colors', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -426,7 +718,7 @@ describe('importPresentationPptx', () => {
   })
 
   it('prefers the East Asian run font for CJK text', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -463,8 +755,8 @@ describe('importPresentationPptx', () => {
     if (text?.type === 'text') expect(text.fontFamily).toBe('East Asian Font')
   })
 
-  it('keeps custom geometry as a fidelity-preserving SVG object', async () => {
-    const source = createInitialPresentationDocument()
+  it('keeps custom geometry as a native editable shape through import and export', async () => {
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -489,15 +781,37 @@ describe('importPresentationPptx', () => {
     const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'custom-shape.pptx')
     const customShape = imported.slides.pages[0]!.elements[0]
 
-    expect(customShape?.type).toBe('image')
-    if (customShape?.type === 'image') {
-      expect(presentationElementSource(imported, customShape)!.mimeType).toBe('image/svg+xml')
-      expect(presentationElementSource(imported, customShape)!.dataUrl).toStartWith('data:image/svg+xml;base64,')
-    }
+    expect(customShape?.type).toBe('rect')
+    if (customShape?.type !== 'rect') throw new Error('Missing custom shape')
+    expect(customShape.customGeometry).toEqual({
+      paths: [{
+        width: 100,
+        height: 100,
+        fill: 'normal',
+        stroke: true,
+        commands: [
+          { type: 'moveTo', x: 0, y: 0 },
+          { type: 'lineTo', x: 100, y: 0 },
+          { type: 'lineTo', x: 100, y: 8 },
+          { type: 'lineTo', x: 0, y: 8 },
+          { type: 'close' },
+        ],
+      }],
+    })
+    expect(imported.assets).toHaveLength(0)
+
+    const exported = await JSZip.loadAsync(await createPresentationPptx(imported))
+    const exportedSlide = new DOMParser().parseFromString(await exported.file('ppt/slides/slide1.xml')!.async('text'), 'text/xml')
+    const exportedShape = Array.from(exportedSlide.getElementsByTagName('p:sp'))
+      .find(shape => shape.getElementsByTagName('p:cNvPr')[0]?.getAttribute('name') === customShape.id)
+    expect(exportedShape?.getElementsByTagName('a:custGeom')).toHaveLength(1)
+    expect(Array.from(exportedShape!.getElementsByTagName('a:pt')).map(point => [point.getAttribute('x'), point.getAttribute('y')])).toEqual([
+      ['0', '0'], ['100', '0'], ['100', '8'], ['0', '8'],
+    ])
   })
 
   it('imports an Office SVG extension when the picture has no raster fallback relationship', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id
@@ -527,18 +841,20 @@ describe('importPresentationPptx', () => {
     expect(extensionOnly).toContain('svgBlip')
     archive.file('ppt/slides/slide1.xml', extensionOnly)
     const { importPresentationPptx } = await import('../presentationPptxImport')
-    const imported = await importPresentationPptx(await archive.generateAsync({ type: 'uint8array' }), 'svg-extension.pptx')
+    const bytes = await archive.generateAsync({ type: 'uint8array' })
+    const imported = await importPresentationPptx(bytes, 'svg-extension.pptx')
+    const sources = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
     const image = imported.slides.pages[0]!.elements.find((element) => element.type === 'image')
 
     expect(image?.type).toBe('image')
     if (image?.type === 'image') {
-      expect(presentationElementSource(imported, image)!.mimeType).toBe('image/svg+xml')
+      expect(presentationElementSource(imported, image, sources)!.mimeType).toBe('image/svg+xml')
       expect(image.opacity).toBeCloseTo(0.1, 4)
     }
   })
 
   it('imports common editable tables and charts', async () => {
-    const source = createInitialPresentationDocument()
+    const source = createInitialPresentationProject()
     const slide = source.slides.pages[0]!
     source.slides.pages = [slide]
     source.slides.selectedPageId = slide.id

@@ -25,7 +25,7 @@ from ..runtime import (
     SessionService,
     SystemEventBroker,
 )
-from ...amphi_agent import AgentInvocation, BrowserHost, PowerPointHost
+from ...amphi_agent import AgentInvocation, BrowserHost
 from ..cache import ClientRegistry, LlmCache
 from ..runtime._debug_runs import DebugModelRuns
 from ...amphi_store import (
@@ -69,7 +69,6 @@ class ServiceState:
     system_events: SystemEventBroker
     sessions: SessionService
     browser_host: BrowserHost
-    powerpoint_host: PowerPointHost
     auth: TokenAuth
     clients: ClientRegistry
     gateway: GatewayMeta

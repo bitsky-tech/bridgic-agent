@@ -1,10 +1,10 @@
 import { importPresentationPptx } from './presentationPptxImport'
 import type { PresentationImportRequest } from './presentationImport'
-import type { PresentationDocument } from '@/atoms/presentation'
+import type { PresentationProject } from '@/atoms/presentation'
 import type { OfficeImportWorkerReply } from './office/officeImportWorker'
 
 self.onmessage = async ({ data }: MessageEvent<PresentationImportRequest>) => {
-  let response: OfficeImportWorkerReply<PresentationDocument>
+  let response: OfficeImportWorkerReply<PresentationProject>
   try {
     const bytes = typeof data.input === 'string'
       ? Uint8Array.from(atob(data.input), (character) => character.charCodeAt(0))

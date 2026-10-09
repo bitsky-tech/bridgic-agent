@@ -22,6 +22,7 @@ import {
   type PresentationTextStyle,
 } from '@/atoms/presentation'
 import { presentationElementSource } from '@/presentation/project'
+import { presentationTableCellAppearance, presentationTableCellSegments, presentationTableGrid } from '@/lib/presentationTable'
 import { cn } from '@/lib/cn'
 import type { PresentationAnimationDisplayState, PresentationAnimationScale, PresentationColorAnimation } from '@/lib/presentationAnimationPreview'
 import {
@@ -33,7 +34,13 @@ import {
   isPresentationTextElement,
   supportsPresentationElementHyperlink,
 } from '@/lib/presentationInsert'
-import { getPresentationShapePath, getPresentationShapeDefinition, isPresentationLineShape } from '@/lib/presentationShapes'
+import {
+  getPresentationShapePath,
+  getPresentationShapeDefinition,
+  isPresentationLineShape,
+  presentationCustomShapePathData,
+  presentationLinearGradientCoordinates,
+} from '@/lib/presentationShapes'
 import {
   PRESENTATION_TEXT_LINE_METRICS,
   presentationRenderingFontFamily,
@@ -166,6 +173,7 @@ interface PresentationSlidePreviewProps {
   theme?: PresentationTheme
   width: number
   selected: boolean
+  sources?: Readonly<Record<string, string>>
   presentation?: boolean
   suppressMediaPlayback?: boolean
   onActivateHyperlink?: (hyperlink: PresentationHyperlink) => void
@@ -184,6 +192,7 @@ export function PresentationSlidePreview({
   theme = DEFAULT_PRESENTATION_MASTER,
   width,
   selected,
+  sources = {},
   presentation = false,
   suppressMediaPlayback = false,
   onActivateHyperlink,
@@ -233,6 +242,7 @@ export function PresentationSlidePreview({
       aria-hidden={interactive ? undefined : 'true'}
       ref={previewRef}
       data-testid="presentation-slide-preview"
+      data-presentation-page-id={slide.id}
     >
       <span
         className="absolute left-0 top-0 block origin-top-left overflow-hidden"
@@ -250,7 +260,7 @@ export function PresentationSlidePreview({
             <Fragment key={element.id}>
               {elementReplacements?.get(element.id)}
               {visible && (
-                <PresentationElementPreview assets={assets} element={element} animationState={animationStates?.get(element.id)} interactive={interactive} suppressMediaPlayback={suppressMediaPlayback} />
+                <PresentationElementPreview assets={assets} element={element} animationState={animationStates?.get(element.id)} interactive={interactive} sources={sources} suppressMediaPlayback={suppressMediaPlayback} />
               )}
               {visible && interactive && element.hyperlink && supportsPresentationElementHyperlink(element) ? (
                 <HyperlinkOverlay
@@ -403,11 +413,12 @@ function PresentationPlaybackAudio({ element, scale, source }: { scale?: Present
   )
 }
 
-export function PresentationElementPreview({ assets = [], element: sourceElement, animationState, interactive, suppressMediaPlayback }: {
+export function PresentationElementPreview({ assets = [], element: sourceElement, animationState, interactive, sources = {}, suppressMediaPlayback }: {
   assets?: readonly PresentationAsset[]
   animationState?: PresentationAnimationDisplayState
   element: PresentationElement
   interactive: boolean
+  sources?: Readonly<Record<string, string>>
   suppressMediaPlayback: boolean
 }) {
   const element = animationState?.element ?? sourceElement
@@ -501,7 +512,7 @@ export function PresentationElementPreview({ assets = [], element: sourceElement
   }
   if (isPresentationShapeElement(element)) return <SlideShapePreview element={element} scale={scale} />
   if (isPresentationImageElement(element)) {
-    const source = presentationElementSource({ assets: [...assets] }, element)
+    const source = presentationElementSource({ assets: [...assets] }, element, sources)
     if (!source) return null
     const crop = element.crop
     if (crop) {
@@ -536,7 +547,7 @@ export function PresentationElementPreview({ assets = [], element: sourceElement
         src={source.dataUrl}
         style={{
           ...elementStyle(element, scale),
-          objectFit: element.fit,
+          objectFit: element.fit === 'stretch' ? 'fill' : element.fit,
           borderRadius: element.clipShape === 'ellipse' ? '50%' : undefined,
           filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
         }}
@@ -544,7 +555,7 @@ export function PresentationElementPreview({ assets = [], element: sourceElement
     )
   }
   if (isPresentationMediaElement(element)) {
-    const source = presentationElementSource({ assets: [...assets] }, element)
+    const source = presentationElementSource({ assets: [...assets] }, element, sources)
     if (!source) return null
     if (element.type === 'video' && interactive && !suppressMediaPlayback) {
       return <PresentationPlaybackVideo element={element} scale={scale} source={source} />
@@ -593,8 +604,40 @@ function presentationVerticalAlignment(alignment: PresentationTextElement['verti
 function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationScale; element: PresentationShapeElement }) {
   const definition = getPresentationShapeDefinition(element.type)
   const strokeOnly = definition.strokeOnly || isPresentationLineShape(element.type)
+  const gradientId = `presentation-shape-gradient-${element.id.replace(/[^\w-]/g, '-')}`
+  const patternId = `presentation-shape-pattern-${element.id.replace(/[^\w-]/g, '-')}`
+  const preset = element.patternFill?.preset
+  let patternPath: string | undefined
+  if (preset === 'lgGrid') patternPath = 'M 0 0 H 2 M 0 0 V 2'
+  else if (preset?.endsWith('DnDiag')) patternPath = 'M -2 0 L 2 4 M 0 -2 L 4 2 M 2 -2 L 6 2'
+  else if (preset?.endsWith('UpDiag')) patternPath = 'M -2 2 L 2 -2 M 0 4 L 4 0 M 2 4 L 6 0'
+  let shapeFill = element.fill
+  if (element.gradientFill) shapeFill = `url(#${gradientId})`
+  if (patternPath) shapeFill = `url(#${patternId})`
+  let patternStrokeWidth = 0.45
+  if (preset?.startsWith('dk')) patternStrokeWidth = 0.8
+  else if (preset?.startsWith('lt')) patternStrokeWidth = 0.2
+  const linearGradient = element.gradientFill?.type === 'linear'
+    ? presentationLinearGradientCoordinates(element.gradientFill.angle)
+    : null
   let shape: React.ReactNode
-  if (element.type === 'rect' || element.type === 'roundRect') shape = (
+  if (element.customGeometry) shape = element.customGeometry.paths.map((path, index) => (
+    <path
+      key={index}
+      d={presentationCustomShapePathData(path)}
+      transform={`scale(${100 / path.width} ${100 / path.height})`}
+      fill={path.fill === 'none' ? 'none' : shapeFill}
+      fillOpacity={element.fillOpacity ?? 1}
+      fillRule="evenodd"
+      stroke={path.stroke ? element.borderColor : 'none'}
+      strokeOpacity={element.borderOpacity ?? 1}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={element.borderWidth}
+      vectorEffect="non-scaling-stroke"
+    />
+  ))
+  else if (element.type === 'rect' || element.type === 'roundRect') shape = (
     <rect
       x="0"
       y="0"
@@ -602,22 +645,26 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
       height="100"
       rx={Math.min(50, ((element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0) / element.width) * 100)}
       ry={Math.min(50, ((element.type === 'roundRect' ? Math.min(element.width, element.height) * 0.12 : element.radius ?? 0) / element.height) * 100)}
-      fill={element.fill}
+      fill={shapeFill}
+      fillOpacity={element.fillOpacity ?? 1}
       stroke={element.borderColor}
+      strokeOpacity={element.borderOpacity ?? 1}
       strokeWidth={element.borderWidth}
       vectorEffect="non-scaling-stroke"
     />
   )
   else if (element.type === 'ellipse') shape = (
-    <ellipse cx="50" cy="50" rx="50" ry="50" fill={element.fill} stroke={element.borderColor}
-      strokeWidth={element.borderWidth} vectorEffect="non-scaling-stroke" />
+    <ellipse cx="50" cy="50" rx="50" ry="50" fill={shapeFill} fillOpacity={element.fillOpacity ?? 1} stroke={element.borderColor}
+      strokeOpacity={element.borderOpacity ?? 1} strokeWidth={element.borderWidth} vectorEffect="non-scaling-stroke" />
   )
   else shape = (
     <path
       d={getPresentationShapePath(element)}
-      fill={strokeOnly ? 'none' : element.fill}
+      fill={strokeOnly ? 'none' : shapeFill}
+      fillOpacity={element.fillOpacity ?? 1}
       fillRule="evenodd"
       stroke={element.borderColor}
+      strokeOpacity={element.borderOpacity ?? 1}
       strokeLinecap="round"
       strokeLinejoin="round"
       strokeWidth={strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth}
@@ -635,44 +682,83 @@ function SlideShapePreview({ element, scale }: { scale?: PresentationAnimationSc
         filter: element.shadow ? 'drop-shadow(5px 6px 6px rgba(20, 20, 32, 0.22))' : undefined,
       }}
     >
+      {element.gradientFill || (element.patternFill && patternPath) ? (
+        <defs>
+          {element.patternFill && patternPath ? (
+            <pattern id={patternId} patternUnits="userSpaceOnUse" width="2" height="2">
+              <rect width="2" height="2" fill={element.patternFill.backgroundColor} fillOpacity={element.patternFill.backgroundOpacity} />
+              <path d={patternPath} fill="none" stroke={element.patternFill.foregroundColor} strokeOpacity={element.patternFill.foregroundOpacity}
+                strokeWidth={patternStrokeWidth} />
+            </pattern>
+          ) : null}
+          {element.gradientFill?.type === 'linear' && linearGradient ? (
+            <linearGradient id={gradientId} x1={`${linearGradient.x1 * 100}%`} y1={`${linearGradient.y1 * 100}%`} x2={`${linearGradient.x2 * 100}%`} y2={`${linearGradient.y2 * 100}%`}>
+              {element.gradientFill.stops.map((stop, index) => <stop key={index} offset={`${stop.offset * 100}%`} stopColor={stop.color} stopOpacity={stop.opacity} />)}
+            </linearGradient>
+          ) : null}
+          {element.gradientFill?.type === 'radial' ? (
+            <radialGradient id={gradientId} cx="50%" cy="50%" r="71%">
+              {element.gradientFill.stops.map((stop, index) => <stop key={index} offset={`${stop.offset * 100}%`} stopColor={stop.color} stopOpacity={stop.opacity} />)}
+            </radialGradient>
+          ) : null}
+        </defs>
+      ) : null}
       {shape}
     </svg>
   )
 }
 
 function PresentationTablePreview({ element, scale }: { scale?: PresentationAnimationScale; element: PresentationTableElement }) {
-  const columns = Math.max(1, ...element.cells.map((row) => row.length))
-  const cellHeight = element.height / Math.max(1, element.cells.length)
+  const grid = presentationTableGrid(element)
   return (
     <table
       className="absolute table-fixed border-collapse overflow-hidden"
       style={{ ...elementStyle(element, scale), color: element.textColor, fontSize: element.fontSize }}
       data-testid="presentation-table-preview"
     >
+      <colgroup>{grid.columnWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
       <tbody>
         {element.cells.map((row, rowIndex) => (
-          <tr key={rowIndex} style={{ height: `${100 / Math.max(1, element.cells.length)}%` }}>
-            {Array.from({ length: columns }, (_, columnIndex) => (
-              <td
-                key={columnIndex}
-                className="overflow-hidden p-0 align-middle"
-                style={{
-                  width: `${100 / columns}%`,
-                  border: `1px solid ${element.borderColor}`,
-                  backgroundColor: element.headerRow && rowIndex === 0 ? element.headerFill : element.bodyFill,
-                  color: element.headerRow && rowIndex === 0 ? element.headerTextColor ?? '#FFFFFF' : element.textColor,
-                  fontWeight: element.headerRow && rowIndex === 0 ? 600 : 400,
-                }}
-              >
-                <div style={{ height: Math.max(0, cellHeight - 1), padding: '4px 10px', boxSizing: 'border-box',
-                  display: 'flex', flexDirection: 'column', justifyContent: 'safe center', overflow: 'hidden' }}>
-                  <div style={{ flexShrink: 0, whiteSpace: 'pre-wrap', lineHeight: PRESENTATION_TEXT_LINE_METRICS.height * 1.16,
-                    fontFamily: presentationRenderingFontFamily('Aptos', row[columnIndex] ?? '') }}>
-                    {row[columnIndex] ?? ''}
+          <tr key={rowIndex} style={{ height: grid.rowHeights[rowIndex] }}>
+            {Array.from({ length: grid.columns }, (_, columnIndex) => {
+              const cell = presentationTableCellAppearance(element, rowIndex, columnIndex)
+              if (cell.covered) return null
+              const cellHeight = grid.rowHeights.slice(rowIndex, rowIndex + cell.rowSpan).reduce((sum, size) => sum + size, 0)
+              let justifyContent = 'safe center'
+              if (cell.verticalAlign === 'top') justifyContent = 'flex-start'
+              if (cell.verticalAlign === 'bottom') justifyContent = 'flex-end'
+              const border = (edge: keyof typeof cell.borders) => {
+                const value = cell.borders[edge]
+                return value.type === 'none' || value.width === 0 ? 'none' : `${value.width}px ${value.type === 'dash' ? 'dashed' : 'solid'} ${value.color}`
+              }
+              return (
+                <td key={columnIndex} colSpan={cell.colSpan} rowSpan={cell.rowSpan} className="overflow-hidden p-0"
+                  style={{ borderTop: border('top'), borderRight: border('right'), borderBottom: border('bottom'), borderLeft: border('left'),
+                    backgroundColor: cell.fill, color: cell.textColor,
+                    fontWeight: cell.bold ? 600 : 400, fontSize: cell.fontSize, textAlign: cell.align,
+                    verticalAlign: cell.verticalAlign === 'middle' ? 'middle' : cell.verticalAlign }}>
+                  <div style={{ height: Math.max(0, cellHeight - 1), paddingTop: cell.padding.top, paddingRight: cell.padding.right,
+                    paddingBottom: cell.padding.bottom, paddingLeft: cell.padding.left, boxSizing: 'border-box',
+                    display: 'flex', flexDirection: 'column', justifyContent, overflow: 'hidden' }}>
+                    <div style={{ flexShrink: 0, whiteSpace: 'pre-wrap', lineHeight: PRESENTATION_TEXT_LINE_METRICS.height * 1.16,
+                      fontFamily: presentationRenderingFontFamily(cell.fontFamily, row[columnIndex] ?? '') }}>
+                      {presentationTableCellSegments(element, rowIndex, columnIndex).map((segment, index) => (
+                        <span key={index} style={{
+                          ...(segment.style.color ? { color: segment.style.color } : {}),
+                          ...(segment.style.fontSize ? { fontSize: segment.style.fontSize } : {}),
+                          ...(segment.style.fontFamily ? { fontFamily: presentationRenderingFontFamily(segment.style.fontFamily, segment.text) } : {}),
+                          ...(segment.style.fontWeight ? { fontWeight: segment.style.fontWeight } : {}),
+                          ...(segment.style.italic ? { fontStyle: 'italic' } : {}),
+                          ...(segment.style.underline || segment.style.strikethrough ? { textDecoration: [segment.style.underline && 'underline', segment.style.strikethrough && 'line-through'].filter(Boolean).join(' ') } : {}),
+                          ...(segment.style.opacity !== undefined ? { opacity: segment.style.opacity } : {}),
+                          ...(segment.style.highlightColor ? { backgroundColor: segment.style.highlightColor } : {}),
+                        }}>{segment.text}</span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </td>
-            ))}
+                </td>
+              )
+            })}
           </tr>
         ))}
       </tbody>

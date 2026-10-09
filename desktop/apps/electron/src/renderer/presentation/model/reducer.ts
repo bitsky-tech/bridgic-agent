@@ -1,10 +1,10 @@
-import type { PresentationDocument } from '@/atoms/presentation'
+import type { PresentationProject } from '@/atoms/presentation'
 import { normalizePresentationProject, presentationProjectOf } from '../project'
 import { presentationProjectSchema } from '../schema'
 
-export function validatePresentationDocument(document: PresentationDocument): PresentationDocument {
-  const normalized = normalizePresentationProject(document)
-  const parsed = presentationProjectSchema.safeParse(presentationProjectOf(normalized))
+export function validatePresentationProject(project: PresentationProject): PresentationProject {
+  const normalized = presentationProjectOf(normalizePresentationProject(project))
+  const parsed = presentationProjectSchema.safeParse(normalized)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
     const location = issue?.path.length ? ` at ${issue.path.join('.')}` : ''
@@ -14,11 +14,7 @@ export function validatePresentationDocument(document: PresentationDocument): Pr
 }
 
 /** The single content mutation gate shared by canvas edits and Agent commands. */
-export function editPresentationDocument(previous: PresentationDocument, next: PresentationDocument, contentChanged = true): PresentationDocument {
+export function editPresentationProject(previous: PresentationProject, next: PresentationProject): PresentationProject {
   if (next.id !== previous.id) throw new Error('A presentation edit cannot replace the active project identity')
-  const normalized = normalizePresentationProject({
-    ...next,
-    revision: contentChanged ? previous.revision + 1 : previous.revision,
-  })
-  return validatePresentationDocument(normalized)
+  return validatePresentationProject(normalizePresentationProject(next))
 }

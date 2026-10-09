@@ -50,6 +50,16 @@ function installDialogResult(result: DialogResult): () => void {
   return installDialogOpen(mock(async () => result))
 }
 
+function installMountReferences(methods: Record<string, unknown>): () => void {
+  const api = (globalThis.window as unknown as { api: { mountReferences?: Record<string, unknown> } }).api
+  const previous = api.mountReferences
+  api.mountReferences = { ...previous, ...methods }
+  return () => {
+    if (previous) api.mountReferences = previous
+    else delete api.mountReferences
+  }
+}
+
 function mount(
   id: string,
   name: string,
@@ -404,6 +414,103 @@ describe('pickAndMountAtom', () => {
       expect(store.get(rightPanelCollapsedAtom)).toBe(true)
       expect(store.get(filesNeedsAttentionFamily('session_picker_failed'))).toBe(false)
     } finally {
+      restoreDialog()
+    }
+  })
+})
+
+describe('mount reference safety', () => {
+  it('confirms referenced slide cleanup after backend deletion succeeds', async () => {
+    const { loadMountsAtom, mountsFamily, removeMountAtom } = await import('../mounts')
+    const { confirmRequestAtom, resolveConfirmAtom } = await import('../confirm')
+    const store = createStore()
+    const sessionId = 'session_referenced_presentation_mount'
+    const referenced = mount('mnt_referenced', 'source.png', '/Users/amphi/source.png')
+    const order: string[] = []
+    store.set(backendSnapshotAtom, {
+      state: BackendState.Ready,
+      endpoint: { baseUrl: 'http://127.0.0.1:7421', token: 'test-token', version: null, startedAt: null, wsPath: null },
+      lastError: null,
+    } as never)
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') { order.push('delete'); return new Response(null, { status: 204 }) }
+      return jsonResponse([referenced])
+    }) as never
+    const restoreReferences = installMountReferences({
+      usage: mock(async () => { order.push('usage'); return { assetCount: 1, elementCount: 2, projectCount: 1 } }),
+      remove: mock(async () => { order.push('cleanup'); return { assetCount: 1, elementCount: 2, projectCount: 1 } }),
+      refresh: mock(async () => { order.push('refresh') }),
+    })
+    try {
+      await store.set(loadMountsAtom, sessionId)
+      const pending = store.set(removeMountAtom, { sessionId, mountId: referenced.id })
+      while (!store.get(confirmRequestAtom)) await Promise.resolve()
+      expect(store.get(confirmRequestAtom)?.message).toContain('2')
+      store.set(resolveConfirmAtom, true)
+      await pending
+      expect(order).toEqual(['usage', 'delete', 'refresh', 'cleanup'])
+      expect(store.get(mountsFamily(sessionId))).toEqual([])
+    } finally {
+      restoreReferences()
+    }
+  })
+
+  it('keeps PowerPoint references and the mount row when backend deletion fails', async () => {
+    const { loadMountsAtom, mountsFamily, removeMountAtom } = await import('../mounts')
+    const { confirmRequestAtom, resolveConfirmAtom } = await import('../confirm')
+    const { toastAtom } = await import('../toast')
+    const store = createStore()
+    const sessionId = 'session_failed_presentation_mount_removal'
+    const referenced = mount('mnt_failed', 'source.png', '/Users/amphi/source.png')
+    const order: string[] = []
+    store.set(backendSnapshotAtom, {
+      state: BackendState.Ready,
+      endpoint: { baseUrl: 'http://127.0.0.1:7421', token: 'test-token', version: null, startedAt: null, wsPath: null },
+      lastError: null,
+    } as never)
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') { order.push('delete'); return jsonResponse({ detail: 'disk busy' }, 500) }
+      return jsonResponse([referenced])
+    }) as never
+    const restoreReferences = installMountReferences({
+      usage: mock(async () => { order.push('usage'); return { assetCount: 1, elementCount: 2, projectCount: 1 } }),
+      remove: mock(async () => { order.push('cleanup'); return { assetCount: 1, elementCount: 2, projectCount: 1 } }),
+      refresh: mock(async () => { order.push('refresh') }),
+    })
+    try {
+      await store.set(loadMountsAtom, sessionId)
+      const pending = store.set(removeMountAtom, { sessionId, mountId: referenced.id })
+      while (!store.get(confirmRequestAtom)) await Promise.resolve()
+      store.set(resolveConfirmAtom, true)
+      await pending
+      expect(order).toEqual(['usage', 'delete'])
+      expect(store.get(mountsFamily(sessionId))).toEqual([referenced])
+      expect(store.get(toastAtom)?.message).toBeTruthy()
+    } finally {
+      restoreReferences()
+    }
+  })
+
+  it('rebinds a stale mount in place after validating the replacement', async () => {
+    const { loadMountsAtom, mountsFamily, rebindMountAtom } = await import('../mounts')
+    const store = createStore()
+    const sessionId = 'session_relink_presentation_mount'
+    const stale = { ...mount('mnt_stale', 'old.png', '/Users/amphi/old.png'), exists: false }
+    const rebound = { ...stale, name: 'new.png', path: '/Users/amphi/new.png', exists: true }
+    store.set(backendSnapshotAtom, {
+      state: BackendState.Ready,
+      endpoint: { baseUrl: 'http://127.0.0.1:7421', token: 'test-token', version: null, startedAt: null, wsPath: null },
+      lastError: null,
+    } as never)
+    globalThis.fetch = mock(async () => jsonResponse([stale])) as never
+    const restoreDialog = installDialogResult({ canceled: false, filePaths: [rebound.path] })
+    const restoreReferences = installMountReferences({ rebind: mock(async () => ({ ok: true, mount: rebound })) })
+    try {
+      await store.set(loadMountsAtom, sessionId)
+      expect(await store.set(rebindMountAtom, { sessionId, mount: stale })).toBe(true)
+      expect(store.get(mountsFamily(sessionId))).toEqual([rebound])
+    } finally {
+      restoreReferences()
       restoreDialog()
     }
   })

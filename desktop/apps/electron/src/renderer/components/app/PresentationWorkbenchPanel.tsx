@@ -1,5 +1,5 @@
 import { OfficeSaveActions } from './OfficeSaveActions'
-import { isPresentationDirty } from '@/lib/presentationWorkspaceRuntime'
+import { isPresentationProjectDirty } from '@/lib/presentationFileController'
 import { presentationChartValueTicks, presentationChartHoleSize, presentationChartValue, presentationChartLineSegments, presentationLineLabelY, presentationPieLabels } from '@/lib/presentationCharts'
 import {
   useCallback,
@@ -8,17 +8,20 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent,
   type FormEvent,
   type ReactElement,
   type ReactNode,
 } from 'react'
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type {
   Canvas as FabricCanvas,
   FabricImage,
   FabricObject,
+  Gradient as FabricGradient,
+  Pattern as FabricPattern,
   Group as FabricGroup,
   Point as FabricPoint,
   TextStyle,
@@ -38,17 +41,12 @@ import {
 import {
   createBlankPresentationSlide,
   createPresentationId,
-  currentPresentationDocumentAtom,
-  currentPresentationWorkspaceAtom,
   formatPresentationText,
   getPresentationPageSize,
   layoutPresentationVerticalText,
   presentationSlideBackground,
   presentationSlideFooter,
-  presentationAgentChangeAtom,
   presentationExpandedAtom,
-  presentationSessionIdAtom,
-  presentationWorkspaceFamily,
   replacePresentationPages,
   selectPresentationPage,
   stripPresentationTextFormatting,
@@ -56,7 +54,7 @@ import {
   type PresentationAsset,
   type PresentationChartElement,
   type PresentationComment,
-  type PresentationDocument,
+  type PresentationProject,
   type PresentationElement,
   type PresentationFileSource,
   type PresentationHyperlink,
@@ -79,10 +77,10 @@ import { showToastAtom } from '@/atoms/toast'
 import { Tooltip } from '@/components/amphi/Tooltip'
 import { cn } from '@/lib/cn'
 import { rlog } from '@/lib/logger'
-import { presentationThemeTextColors, resizePresentationDocument } from '@/lib/presentationDesign'
+import { presentationThemeTextColors, resizePresentationProject } from '@/lib/presentationDesign'
+import { presentationTableCellAppearance, presentationTableCellSegments, presentationTableCellsPatch, presentationTableGrid } from '@/lib/presentationTable'
 import {
   clearPresentationHyperlinksToPages,
-  createPresentationAsset,
   detachPresentationCommentsFromElements,
   duplicatePresentationSlide,
   mergePresentationAssets,
@@ -151,14 +149,21 @@ import {
   supportsPresentationElementShadow,
 } from '@/lib/presentationInsert'
 import { normalizePresentationTransition } from '@/lib/presentationTransitions'
-import { createPresentationWorkspaceRuntime, type PresentationWorkspaceRuntime } from '@/lib/presentationWorkspaceRuntime'
 import { createOfficeEditorBinding, type OfficeEditorBinding, type OfficeEditorLease } from '@/lib/office/officeEditorBinding'
 import { bindPresentationNativeEdit, createPresentationEditorDriver, type PresentationEditingObject } from '@/lib/presentationEditorDriver'
+import {
+  PRESENTATION_HISTORY_MAX_BYTES,
+  estimatePresentationProjectBytes,
+} from '@/presentation/history'
+import type { PresentationStore } from '@/presentation/store'
 import {
   getPresentationShapePath,
   getPresentationShapeDefinition,
   getPresentationShapeSize,
   isPresentationLineShape,
+  presentationColorWithOpacity,
+  presentationCustomShapePathData,
+  presentationLinearGradientCoordinates,
 } from '@/lib/presentationShapes'
 import {
   PresentationInsertDialogs,
@@ -188,11 +193,9 @@ import {
 
 export interface PresentationWorkbenchPanelProps {
   active: boolean
-  workspaceRuntime?: PresentationWorkspaceRuntime
+  presentationStore: PresentationStore
   onClose?: () => void
   onExpandedChange?: (expanded: boolean) => void
-  onSave?: (documentId: string, saveAs: boolean) => Promise<boolean>
-  saveError?: string | null
 }
 
 interface SlideshowTransitionRun {
@@ -222,73 +225,8 @@ interface SlideshowTransitionView extends SlideshowTransitionRun {
   transition: PresentationTransition
 }
 
-export const PRESENTATION_HISTORY_MAX_ENTRIES = 50
-export const PRESENTATION_HISTORY_MAX_BYTES = 192 * 1024 * 1024
-
-export interface PresentationHistoryEntry {
-  document: PresentationDocument
-  estimatedBytes: number
-}
-
-/** Estimate retained JS heap without serializing large embedded data URLs. */
-export function estimatePresentationDocumentBytes(document: PresentationDocument): number {
-  const seen = new Set<object>()
-  let bytes = 0
-
-  const visit = (value: unknown) => {
-    if (value === null || value === undefined) {
-      bytes += 4
-      return
-    }
-    if (typeof value === 'string') {
-      // UTF-16 is deliberately conservative; data URLs are ASCII but can still be
-      // promoted internally, and the budget should remain safe across runtimes.
-      bytes += value.length * 2
-      return
-    }
-    if (typeof value === 'number' || typeof value === 'boolean') {
-      bytes += 8
-      return
-    }
-    if (typeof value !== 'object' || seen.has(value)) return
-    seen.add(value)
-    bytes += Array.isArray(value) ? 24 : 32
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item)
-      return
-    }
-    for (const [key, item] of Object.entries(value)) {
-      bytes += key.length * 2
-      visit(item)
-    }
-  }
-
-  visit(document)
-  return bytes
-}
-
-function cloneDocument(document: PresentationDocument): PresentationDocument {
-  // structuredClone would duplicate every Base64 payload for every undo step.
-  // Strip the immutable payloads while cloning the mutable model, then reattach
-  // the original strings by index so snapshots cannot mutate one another.
-  const payloads = document.assets.map((asset) => asset.source.dataUrl)
-  const payloadFreeDocument: PresentationDocument = {
-    ...document,
-    assets: document.assets.map((asset) => ({ ...asset, source: { ...asset.source, dataUrl: '' } })),
-  }
-  const cloned = structuredClone(payloadFreeDocument)
-  cloned.assets.forEach((asset, index) => { asset.source.dataUrl = payloads[index] ?? '' })
-  return cloned
-}
-
-export function createPresentationHistoryEntry(document: PresentationDocument, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry | null {
-  const estimatedBytes = estimatePresentationDocumentBytes(document)
-  if (estimatedBytes > maxBytes) return null
-  return { document: cloneDocument(document), estimatedBytes }
-}
-
 export function canAppendPresentationFileElement(
-  document: PresentationDocument,
+  document: PresentationProject,
   element: PresentationImageElement | PresentationMediaElement,
   asset: PresentationAsset,
   maxBytes = PRESENTATION_HISTORY_MAX_BYTES,
@@ -302,39 +240,13 @@ export function canAppendPresentationFileElement(
       ? { ...item, elements: [...item.elements, element] }
       : item)),
   }
-  return estimatePresentationDocumentBytes(nextDocument) <= maxBytes
+  return estimatePresentationProjectBytes(nextDocument) <= maxBytes
 }
 
 export function resolvePresentationNumberFieldValue(draft: string, min: number | undefined, fallback: number): number {
   const parsed = draft.trim() ? Number(draft) : Number.NaN
   if (!Number.isFinite(parsed)) return Math.round(fallback)
   return Math.round(min === undefined ? parsed : Math.max(min, parsed))
-}
-
-/** Keep the newest contiguous history segment within both entry and byte limits. */
-export function trimPresentationHistoryEntries(entries: readonly PresentationHistoryEntry[], maxEntries = PRESENTATION_HISTORY_MAX_ENTRIES, maxBytes = PRESENTATION_HISTORY_MAX_BYTES): PresentationHistoryEntry[] {
-  const kept: PresentationHistoryEntry[] = []
-  let retainedBytes = 0
-  for (let index = entries.length - 1; index >= 0 && kept.length < Math.max(0, maxEntries); index -= 1) {
-    const entry = entries[index]!
-    if (entry.estimatedBytes > maxBytes - retainedBytes) break
-    kept.unshift(entry)
-    retainedBytes += entry.estimatedBytes
-  }
-  return kept
-}
-
-function trimPresentationHistoryPair(past: PresentationHistoryEntry[], future: PresentationHistoryEntry[]): void {
-  let entryCount = past.length + future.length
-  let retainedBytes = [...past, ...future].reduce((sum, entry) => sum + entry.estimatedBytes, 0)
-  while (entryCount > PRESENTATION_HISTORY_MAX_ENTRIES || retainedBytes > PRESENTATION_HISTORY_MAX_BYTES) {
-    // Prefer discarding the oldest undo state. Once none remain, discard the
-    // farthest redo state (future[0]); the nearest redo lives at the end.
-    const removed = past.length > 0 ? past.shift() : future.shift()
-    if (!removed) break
-    entryCount -= 1
-    retainedBytes -= removed.estimatedBytes
-  }
 }
 
 export function isPresentationRotationLocked(element: PresentationElement): boolean {
@@ -1026,55 +938,99 @@ function createFixedGraphicGroup(fabric: FabricModule, element: PresentationTabl
 }
 
 function createTableFabricObject(fabric: FabricModule, element: PresentationTableElement): FabricObject {
-  const rows = Math.max(1, element.cells.length)
-  const columns = Math.max(1, ...element.cells.map((row) => row.length))
-  const cellWidth = element.width / columns
-  const cellHeight = element.height / rows
-  const objects: FabricObject[] = []
-  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
-    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
-      const header = element.headerRow && rowIndex === 0
-      objects.push(new fabric.Rect({
+  const grid = presentationTableGrid(element)
+  const fills: FabricObject[] = []
+  const borders: FabricObject[] = []
+  const texts: FabricObject[] = []
+  for (let rowIndex = 0; rowIndex < grid.rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < grid.columns; columnIndex += 1) {
+      const style = presentationTableCellAppearance(element, rowIndex, columnIndex)
+      if (style.covered) continue
+      const cellX = grid.columnOffsets[columnIndex]!
+      const cellY = grid.rowOffsets[rowIndex]!
+      const cellWidth = grid.columnWidths.slice(columnIndex, columnIndex + style.colSpan).reduce((sum, width) => sum + width, 0)
+      const cellHeight = grid.rowHeights.slice(rowIndex, rowIndex + style.rowSpan).reduce((sum, height) => sum + height, 0)
+      const contentWidth = Math.max(0, cellWidth - style.padding.left - style.padding.right)
+      const contentHeight = Math.max(0, cellHeight - style.padding.top - style.padding.bottom)
+      fills.push(new fabric.Rect({
         originX: 'left',
         originY: 'top',
-        left: columnIndex * cellWidth,
-        top: rowIndex * cellHeight,
-        width: cellWidth - 1,
-        height: cellHeight - 1,
-        strokeWidth: 1,
-        fill: header ? element.headerFill : element.bodyFill,
-        stroke: element.borderColor,
+        left: cellX,
+        top: cellY,
+        width: cellWidth,
+        height: cellHeight,
+        strokeWidth: 0,
+        fill: style.fill,
       }))
-      const text = new fabric.Textbox(element.cells[rowIndex]?.[columnIndex] ?? '', {
+      for (const edge of ['top', 'right', 'bottom', 'left'] as const) {
+        const border = style.borders[edge]
+        if (border.type === 'none' || border.width === 0) continue
+        const inset = border.width / 2
+        let points: [number, number, number, number]
+        if (edge === 'top') points = [cellX, cellY + inset, cellX + cellWidth, cellY + inset]
+        else if (edge === 'right') points = [cellX + cellWidth - inset, cellY, cellX + cellWidth - inset, cellY + cellHeight]
+        else if (edge === 'bottom') points = [cellX, cellY + cellHeight - inset, cellX + cellWidth, cellY + cellHeight - inset]
+        else points = [cellX + inset, cellY, cellX + inset, cellY + cellHeight]
+        borders.push(new fabric.Line(points, {
+          stroke: border.color, strokeWidth: border.width,
+          ...(border.type === 'dash' ? { strokeDashArray: [4 * border.width, 2 * border.width] } : {}),
+        }))
+      }
+      const cellText = element.cells[rowIndex]?.[columnIndex] ?? ''
+      const textStyles: TextStyle = {}
+      let textLine = 0
+      let character = 0
+      for (const segment of presentationTableCellSegments(element, rowIndex, columnIndex)) {
+        for (const glyph of fabric.Text.prototype.graphemeSplit(segment.text)) {
+          if (glyph === '\n') { textLine += 1; character = 0; continue }
+          if (Object.keys(segment.style).length > 0) {
+            textStyles[textLine] ??= {}
+            textStyles[textLine]![character] = {
+              ...(segment.style.color ? { fill: segment.style.color } : {}),
+              ...(segment.style.fontSize ? { fontSize: segment.style.fontSize } : {}),
+              ...(segment.style.fontFamily ? { fontFamily: presentationRenderingFontFamily(segment.style.fontFamily, glyph) } : {}),
+              ...(segment.style.fontWeight ? { fontWeight: segment.style.fontWeight } : {}),
+              ...(segment.style.italic !== undefined ? { fontStyle: segment.style.italic ? 'italic' : 'normal' } : {}),
+              ...(segment.style.underline !== undefined ? { underline: segment.style.underline } : {}),
+              ...(segment.style.strikethrough !== undefined ? { linethrough: segment.style.strikethrough } : {}),
+            }
+          }
+          character += 1
+        }
+      }
+      const text = new fabric.Textbox(cellText, {
         originX: 'left',
         originY: 'center',
         strokeWidth: 0,
-        left: (columnIndex * cellWidth) + 10,
-        top: (rowIndex + 0.5) * cellHeight,
-        width: Math.max(12, cellWidth - 20),
-        height: Math.max(12, cellHeight - 8),
-        fill: header ? element.headerTextColor ?? '#FFFFFF' : element.textColor,
-        fontFamily: presentationRenderingFontFamily('Aptos', element.cells[rowIndex]?.[columnIndex] ?? ''),
+        left: cellX + style.padding.left,
+        top: cellY + cellHeight / 2,
+        width: Math.max(1, contentWidth),
+        height: Math.max(1, contentHeight),
+        fill: style.textColor,
+        fontFamily: presentationRenderingFontFamily(style.fontFamily, element.cells[rowIndex]?.[columnIndex] ?? ''),
         splitByGrapheme: shouldSplitPresentationTextByGrapheme(element.cells[rowIndex]?.[columnIndex] ?? ''),
-        fontSize: element.fontSize,
-        fontWeight: header ? 600 : 400,
-        textAlign: 'left',
+        fontSize: style.fontSize,
+        fontWeight: style.bold ? 600 : 400,
+        textAlign: style.align,
+        styles: textStyles,
       })
-      const contentHeight = Math.max(0, cellHeight - 8)
+      let textOffset = 0
+      if (style.verticalAlign === 'middle') textOffset = Math.max(0, (contentHeight - text.height) / 2)
+      if (style.verticalAlign === 'bottom') textOffset = Math.max(0, contentHeight - text.height)
       // Clip each cell independently; overflowing text starts at the top of its own row.
       text.set({
-        top: rowIndex * cellHeight + 4 + Math.max(contentHeight, text.height) / 2,
+        top: cellY + style.padding.top + textOffset + text.height / 2,
         clipPath: new fabric.Rect({
-          width: Math.max(0, cellWidth - 20), height: contentHeight,
-          left: (cellWidth - 20 - text.width) / 2,
+          width: contentWidth, height: contentHeight,
+          left: (contentWidth - text.width) / 2,
           top: Math.min(0, (contentHeight - text.height) / 2),
           originX: 'center', originY: 'center', strokeWidth: 0,
         }),
       })
-      objects.push(text)
+      texts.push(text)
     }
   }
-  return createFixedGraphicGroup(fabric, element, objects)
+  return createFixedGraphicGroup(fabric, element, [...fills, ...borders, ...texts])
 }
 
 function createChartFabricObject(fabric: FabricModule, element: Extract<PresentationElement, { type: 'chart' }>): FabricObject {
@@ -1341,9 +1297,9 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
   const shadow = element.shadow
     ? new fabric.Shadow({ color: 'rgba(20, 20, 32, 0.22)', blur: 12, offsetX: 6, offsetY: 6 })
     : undefined
-  const frameShape = (shape: FabricObject) => {
+  const frameShape = (shape: FabricObject | FabricObject[]) => {
     const frame = new fabric.Rect({ left: 0, top: 0, width: element.width, height: element.height, originX: 'center', originY: 'center', fill: 'transparent', strokeWidth: 0 })
-    return new fabric.Group([frame, shape], {
+    return new fabric.Group([frame, ...(Array.isArray(shape) ? shape : [shape])], {
       left: element.x, top: element.y, width: element.width, height: element.height,
       originX: 'left', originY: 'top', angle: element.rotation,
       flipX: element.flipHorizontal, flipY: element.flipVertical,
@@ -1353,9 +1309,88 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
       layoutManager: new fabric.LayoutManager(new fabric.FixedLayout()),
     })
   }
+  const linearGradient = element.gradientFill?.type === 'linear'
+    ? presentationLinearGradientCoordinates(element.gradientFill.angle)
+    : null
+  let shapeFill: string | FabricGradient<'linear'> | FabricGradient<'radial'> | FabricPattern = presentationColorWithOpacity(element.fill, element.fillOpacity)
+  if (element.gradientFill?.type === 'linear' && linearGradient) {
+    shapeFill = new fabric.Gradient<'linear'>({
+      type: 'linear', gradientUnits: 'percentage', coords: linearGradient,
+      colorStops: element.gradientFill.stops.map(stop => ({ ...stop, opacity: stop.opacity * (element.fillOpacity ?? 1) })),
+    })
+  } else if (element.gradientFill?.type === 'radial') {
+    shapeFill = new fabric.Gradient<'radial'>({
+      type: 'radial', gradientUnits: 'percentage',
+      coords: { x1: 0.5, y1: 0.5, r1: 0, x2: 0.5, y2: 0.5, r2: 0.71 },
+      colorStops: element.gradientFill.stops.map(stop => ({ ...stop, opacity: stop.opacity * (element.fillOpacity ?? 1) })),
+    })
+  } else if (element.patternFill) {
+    const { patternFill } = element
+    const canvas = document.createElement('canvas')
+    canvas.width = 8
+    canvas.height = 8
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.globalAlpha = patternFill.backgroundOpacity * (element.fillOpacity ?? 1)
+      context.fillStyle = patternFill.backgroundColor
+      context.fillRect(0, 0, 8, 8)
+      context.globalAlpha = patternFill.foregroundOpacity * (element.fillOpacity ?? 1)
+      context.strokeStyle = patternFill.foregroundColor
+      let lineWidth = 1.2
+      if (patternFill.preset.startsWith('dk')) lineWidth = 2.5
+      else if (patternFill.preset.startsWith('lt')) lineWidth = 0.6
+      context.lineWidth = lineWidth
+      context.beginPath()
+      if (patternFill.preset === 'lgGrid') {
+        context.moveTo(0, 0)
+        context.lineTo(8, 0)
+        context.moveTo(0, 0)
+        context.lineTo(0, 8)
+      } else if (patternFill.preset.endsWith('DnDiag')) {
+        context.moveTo(-8, 0)
+        context.lineTo(8, 16)
+        context.moveTo(0, -8)
+        context.lineTo(16, 8)
+        context.moveTo(8, -8)
+        context.lineTo(24, 8)
+      } else if (patternFill.preset.endsWith('UpDiag')) {
+        context.moveTo(-8, 8)
+        context.lineTo(8, -8)
+        context.moveTo(0, 16)
+        context.lineTo(16, 0)
+        context.moveTo(8, 16)
+        context.lineTo(24, 0)
+      }
+      context.stroke()
+      shapeFill = new fabric.Pattern({ source: canvas, repeat: 'repeat' })
+    }
+  }
+  const shapeStroke = presentationColorWithOpacity(element.borderColor, element.borderOpacity)
   const shapeStyle = { left: 0, top: 0, originX: 'center', originY: 'center',
-    fill: element.fill, stroke: element.borderColor, strokeWidth: element.borderWidth,
+    fill: shapeFill, stroke: shapeStroke, strokeWidth: element.borderWidth,
   } as const
+  if (element.customGeometry) {
+    return frameShape(element.customGeometry.paths.map((customPath) => {
+      const path = new fabric.Path(presentationCustomShapePathData(customPath), {
+        originX: 'center',
+        originY: 'center',
+        fill: customPath.fill === 'none' ? 'transparent' : shapeFill,
+        fillRule: 'evenodd',
+        stroke: customPath.stroke ? shapeStroke : 'transparent',
+        strokeWidth: element.borderWidth,
+        strokeLineCap: 'round',
+        strokeLineJoin: 'round',
+        strokeUniform: true,
+      })
+      path.set({
+        left: (path.pathOffset.x - customPath.width / 2) * element.width / customPath.width,
+        top: (path.pathOffset.y - customPath.height / 2) * element.height / customPath.height,
+        scaleX: element.width / customPath.width,
+        scaleY: element.height / customPath.height,
+      })
+      return path
+    }))
+  }
   if (element.type === 'ellipse') {
     return frameShape(new fabric.Ellipse({ ...shapeStyle, rx: element.width / 2, ry: element.height / 2 }))
   }
@@ -1368,9 +1403,9 @@ function createShapeFabricObject(fabric: FabricModule, element: PresentationShap
   const path = new fabric.Path(getPresentationShapePath(element), {
     originX: 'center',
     originY: 'center',
-    fill: strokeOnly ? 'transparent' : element.fill,
+    fill: strokeOnly ? 'transparent' : shapeFill,
     fillRule: 'evenodd',
-    stroke: element.borderColor,
+    stroke: shapeStroke,
     strokeWidth: strokeOnly ? Math.max(3, element.borderWidth) : element.borderWidth,
     strokeLineCap: 'round',
     strokeLineJoin: 'round',
@@ -1758,6 +1793,8 @@ export async function createPresentationFabricObject(
           scaleX: element.width / cropWidth,
           scaleY: element.height / cropHeight,
         })
+      } else if (element.fit === 'stretch') {
+        image.set({ left: 0, top: 0, scaleX: element.width / naturalWidth, scaleY: element.height / naturalHeight })
       } else if (element.fit === 'cover') {
         const scale = Math.max(element.width / naturalWidth, element.height / naturalHeight)
         const cropWidth = element.width / scale
@@ -1841,25 +1878,18 @@ function createFooterFabricObjects(fabric: FabricModule, theme: PresentationMast
 }
 
 /** A focused PowerPoint-style editor embedded in the Session workbench. */
-export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, workspaceRuntime, onSave, saveError }: PresentationWorkbenchPanelProps) {
+export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, presentationStore }: PresentationWorkbenchPanelProps) {
   const { t } = useTranslation()
-  const sessionId = useAtomValue(presentationSessionIdAtom)
-  const agentChange = useAtomValue(presentationAgentChangeAtom)
-  const workspace = useAtomValue(currentPresentationWorkspaceAtom)
-  const document = useAtomValue(currentPresentationDocumentAtom)
-  const store = useStore()
-  const presentationRuntime = useMemo(() => {
-    if (workspaceRuntime) return workspaceRuntime
-    const workspaceAtom = presentationWorkspaceFamily(sessionId ?? '')
-    return createPresentationWorkspaceRuntime({
-      sessionId: sessionId ?? '',
-      read: () => store.get(workspaceAtom),
-      write: (next) => store.set(workspaceAtom, next),
-    })
-  }, [sessionId, store, workspaceRuntime])
-  useEffect(() => store.sub(presentationWorkspaceFamily(sessionId ?? ''), () => {
-    presentationRuntime.runtime.publish()
-  }), [presentationRuntime, sessionId, store])
+  const sessionId = presentationStore.sessionId
+  const presentationSnapshot = useSyncExternalStore(
+    presentationStore.subscribe,
+    presentationStore.getSnapshot,
+    presentationStore.getSnapshot,
+  )
+  const agentChange = presentationSnapshot.agentChange
+  const document = presentationSnapshot.project!
+  const documentMetadata = presentationSnapshot.projectMetadata[document.id]!
+  const documentRevision = documentMetadata.revision
   const pageSize = getPresentationPageSize(document)
   const [expanded, setExpanded] = useAtom(presentationExpandedAtom)
   const setRightCollapsed = useSetAtom(setRightPanelCollapsedAtom)
@@ -1867,6 +1897,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const showToast = useSetAtom(showToastAtom)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
   const [canvasGeneration, setCanvasGeneration] = useState(0)
+  const [canvasRenderState, setCanvasRenderState] = useState<{
+    key: string | null
+    status: 'error' | 'loading' | 'ready'
+  }>({ key: null, status: 'loading' })
   const [canvasScale, setCanvasScale] = useState(0.4)
   const [compact, setCompact] = useState(true)
   const [ribbonCollapsed, setRibbonCollapsed] = useState(false)
@@ -1887,7 +1921,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const [slideshowTransition, setSlideshowTransition] = useState<SlideshowTransitionRun | null>(null)
   const [animationPreviewRun, setAnimationPreviewRun] = useState<AnimationPreviewRun | null>(null)
   const [transitionPreviewRun, setTransitionPreviewRun] = useState<TransitionPreviewRun | null>(null)
-  const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false })
+  const historyStatus = { canUndo: presentationSnapshot.canUndo, canRedo: presentationSnapshot.canRedo }
   const [insertDialog, setInsertDialog] = useState<PresentationInsertDialogState | null>(null)
   const [masterDialogOpen, setMasterDialogOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -1901,8 +1935,8 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   const mediaRuntimeRef = useRef<PresentationMediaRuntime | null>(null)
   const objectIdsRef = useRef(new WeakMap<FabricObject, string>())
   const documentRef = useRef(document)
-  const editorBindingRef = useRef<OfficeEditorBinding<PresentationDocument> | null>(null)
-  const nativeCommitRef = useRef<(next: PresentationDocument) => void>(() => undefined)
+  const editorBindingRef = useRef<OfficeEditorBinding<PresentationProject> | null>(null)
+  const nativeCommitRef = useRef<(next: PresentationProject) => void>(() => undefined)
   const flushNativeEditRef = useRef<(() => void) | null>(null)
   const pendingCanvasEditRef = useRef<(() => void) | null>(null)
   const pageSizeRef = useRef(pageSize)
@@ -1917,8 +1951,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   })
   const suppressCanvasSelectionRef = useRef(false)
   const canvasSelectionFrameRef = useRef<number | null>(null)
-  const pastRef = useRef<PresentationHistoryEntry[]>([])
-  const futureRef = useRef<PresentationHistoryEntry[]>([])
   const animationRunIdRef = useRef(0)
   const transitionRunIdRef = useRef(0)
   const consumedAgentChangeIdRef = useRef(0)
@@ -1931,6 +1963,12 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const currentSlide = document.slides.pages.find((slide) => slide.id === document.slides.selectedPageId)
     ?? document.slides.pages[0]
+  const currentCanvasRenderKey = currentSlide
+    ? JSON.stringify([document.id, documentRevision, currentSlide.id, canvasGeneration, agentChange?.changeId ?? 0])
+    : null
+  const currentCanvasRenderStatus = canvasRenderState.key === currentCanvasRenderKey
+    ? canvasRenderState.status
+    : 'loading'
   const currentSlideBackground = currentSlide
     ? presentationSlideBackground(document.theme, currentSlide)
     : document.theme.background
@@ -1945,30 +1983,17 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     : []
   const selectedText = selectedElement && isPresentationTextElement(selectedElement) ? selectedElement : null
 
-  const commitDocument = useCallback((next: PresentationDocument, recordHistory = true) => {
+  const commitDocument = useCallback((next: PresentationProject, recordHistory = true) => {
     const current = documentRef.current
-    let versionedNext: PresentationDocument
+    let versionedNext: PresentationProject
     try {
-      versionedNext = presentationRuntime.commitDocument(current, next)
+      versionedNext = presentationStore.commitProject(current, next, true, recordHistory)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error))
       return
     }
-    if (recordHistory) {
-      const entry = createPresentationHistoryEntry(current)
-      // An oversized state is an undo barrier. Keeping older entries would make
-      // Undo skip the latest change and restore an unrelated document state.
-      pastRef.current = entry
-        ? trimPresentationHistoryEntries([...pastRef.current, entry])
-        : []
-      futureRef.current = []
-    }
     documentRef.current = versionedNext
-    setHistoryStatus({
-      canUndo: pastRef.current.length > 0,
-      canRedo: futureRef.current.length > 0,
-    })
-  }, [presentationRuntime, showToast])
+  }, [presentationStore, showToast])
 
   const replaceCurrentSlide = useCallback((nextSlide: PresentationSlide) => {
     const current = documentRef.current
@@ -2042,7 +2067,15 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
             }
             if (isPresentationShapeElement(element) && element.fill !== 'transparent') {
               const accent = colors[index % colors.length] ?? element.fill
-              return { ...element, fill: accent, borderColor: accent }
+              return {
+                ...element,
+                fill: accent,
+                fillOpacity: undefined,
+                gradientFill: undefined,
+                patternFill: undefined,
+                borderColor: accent,
+                borderOpacity: undefined,
+              }
             }
             return element
           }),
@@ -2170,8 +2203,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
   }, [syncFabricObject, syncFabricObjects])
 
   useEffect(() => {
-    pastRef.current = []
-    futureRef.current = []
     isolatedElementIdRef.current = null
     selectedElementIdRef.current = null
     const timer = window.setTimeout(() => {
@@ -2181,7 +2212,6 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       setTransitionPreviewRun(null)
       setInsertDialog(null)
       setSelectedElementId(null)
-      setHistoryStatus({ canUndo: false, canRedo: false })
     }, 0)
     return () => window.clearTimeout(timer)
   }, [document.id, sessionId])
@@ -2303,10 +2333,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   useEffect(() => {
     if (!active || !canvasElementRef.current) return
-    const binding = createOfficeEditorBinding<PresentationDocument>({
+    const binding = createOfficeEditorBinding<PresentationProject>({
       appKind: 'presentation', sessionId: sessionId ?? '', documentId: documentRef.current.id,
       onChange: (next, identity) => {
-        if (identity.documentId !== presentationRuntime.runtime.getSnapshot().activeDocumentId) return
+        if (identity.documentId !== presentationStore.runtime.getSnapshot().activeDocumentId) return
         nativeCommitRef.current(next)
       },
     })
@@ -2474,7 +2504,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         setInsertDialog({ kind: element.type, elementId: element.id })
       })
       const driver = createPresentationEditorDriver({
-        readSnapshot: () => store.get(presentationWorkspaceFamily(sessionId ?? '')).documents
+        readSnapshot: () => presentationStore.getSnapshot().projects
           .find((item) => item.id === binding.capture().identity.documentId) ?? null,
         readEditingObject: () => canvas.getActiveObject() as (FabricObject & PresentationEditingObject) | null,
         flushPendingEdit: () => {
@@ -2509,7 +2539,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       })
       if (!binding.attach(driver)) return
       flushNativeEditRef.current = () => { void driver.flush(binding.capture()) }
-      unregisterEditor = presentationRuntime.bindEditor(binding)
+      unregisterEditor = presentationStore.bindEditor(binding)
       setCanvasGeneration((value) => value + 1)
     })
     return () => {
@@ -2517,7 +2547,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       binding.dispose()
       if (editorBindingRef.current === binding) editorBindingRef.current = null
     }
-  }, [activateFabricElement, active, presentationRuntime, sessionId, store])
+  }, [activateFabricElement, active, presentationStore, sessionId])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -2526,6 +2556,19 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     if (!active || !canvas || !fabric || !mediaRuntime || !currentSlide) return
     const lease = editorBindingRef.current?.capture()
     let cancelled = false
+    const renderKey = JSON.stringify([document.id, documentRevision, currentSlide.id, canvasGeneration, agentChange?.changeId ?? 0])
+    let pendingElements = currentSlide.elements.length
+    let renderFailed = false
+    const finishElement = () => {
+      pendingElements -= 1
+      if (!cancelled && !renderFailed && pendingElements === 0) {
+        setCanvasRenderState({ key: renderKey, status: 'ready' })
+      }
+    }
+    const failRender = () => {
+      renderFailed = true
+      if (!cancelled) setCanvasRenderState({ key: renderKey, status: 'error' })
+    }
     const revealFrameIds = new Set<number>()
     const visibleAgentChange = agentChange
       && agentChange.slideId === currentSlide.id
@@ -2543,7 +2586,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       revealFrameIds.add(frameId)
     }
     const animateAgentObject = (object: FabricObject, element: PresentationElement, index: number) => {
-      if (!visibleAgentChange || reducedMotion || !revealedElementIds.has(element.id)) return
+      if (!visibleAgentChange || reducedMotion || !revealedElementIds.has(element.id)) {
+        finishElement()
+        return
+      }
       const delayMs = Math.min(240, index * 32)
       const targetOpacity = element.opacity ?? 1
       if (
@@ -2569,7 +2615,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
           object.setCoords()
           canvas.requestRenderAll()
           if (progress < 1) scheduleRevealFrame(tick)
-          else object.set({ text: fullText })
+          else {
+            object.set({ text: fullText })
+            canvas.requestRenderAll()
+            finishElement()
+          }
         }
         scheduleRevealFrame(tick)
         return
@@ -2588,7 +2638,11 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         object.set({ opacity: targetOpacity * eased })
         canvas.requestRenderAll()
         if (progress < 1) scheduleRevealFrame(tick)
-        else object.set({ opacity: targetOpacity })
+        else {
+          object.set({ opacity: targetOpacity })
+          canvas.requestRenderAll()
+          finishElement()
+        }
       }
       scheduleRevealFrame(tick)
     }
@@ -2608,10 +2662,15 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     const slideNumber = documentRef.current.slides.pages.findIndex((slide) => slide.id === currentSlide.id) + 1
     createFooterFabricObjects(fabric, document.theme, currentSlide, Math.max(1, slideNumber), pageSize).forEach((object) => canvas.add(object))
     canvas.requestRenderAll()
+    if (pendingElements === 0) {
+      scheduleRevealFrame(() => {
+        if (!cancelled) setCanvasRenderState({ key: renderKey, status: 'ready' })
+      })
+    }
 
     currentSlide.elements.forEach((element, index) => {
       const source = isPresentationImageElement(element) || isPresentationMediaElement(element)
-        ? presentationElementSource(documentRef.current, element)
+        ? presentationElementSource(documentRef.current, element, presentationSnapshot.sources)
         : undefined
       void createPresentationFabricObject(
         fabric,
@@ -2621,7 +2680,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         }) : () => undefined,
         source,
       ).then((object) => {
-        if (cancelled || !lease?.isCurrent() || canvasRef.current !== canvas) return
+        if (cancelled || (lease && !lease.isCurrent()) || canvasRef.current !== canvas) return
         let hoverCursor = 'move'
         if (isPresentationMediaElement(element)) hoverCursor = 'default'
         else if (element.hyperlink && supportsPresentationElementHyperlink(element)) hoverCursor = 'pointer'
@@ -2655,6 +2714,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         canvas.requestRenderAll()
       }).catch((error: unknown) => {
         if (cancelled || canvasRef.current !== canvas) return
+        failRender()
         rlog.warn('[presentation] canvas element render failed', {
           elementId: element.id,
           elementType: element.type,
@@ -2668,27 +2728,17 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       for (const frameId of revealFrameIds) window.cancelAnimationFrame(frameId)
       if (mediaRuntimeRef.current === mediaRuntime) mediaRuntime.reset()
     }
-  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.theme, pageSize])
+  }, [activateFabricElement, active, agentChange, canvasGeneration, currentSlide, currentSlideBackground, document.id, documentRevision, document.theme, pageSize, presentationSnapshot.sources])
 
   const undo = useCallback(() => {
-    const previous = pastRef.current.pop()
-    if (!previous) return
-    const current = createPresentationHistoryEntry(documentRef.current)
-    if (current) futureRef.current.push(current)
-    else futureRef.current = []
-    trimPresentationHistoryPair(pastRef.current, futureRef.current)
-    commitDocument(previous.document, false)
-  }, [commitDocument])
+    const previous = presentationStore.undo()
+    if (previous) documentRef.current = previous
+  }, [presentationStore])
 
   const redo = useCallback(() => {
-    const next = futureRef.current.pop()
-    if (!next) return
-    const current = createPresentationHistoryEntry(documentRef.current)
-    if (current) pastRef.current.push(current)
-    else pastRef.current = []
-    trimPresentationHistoryPair(pastRef.current, futureRef.current)
-    commitDocument(next.document, false)
-  }, [commitDocument])
+    const next = presentationStore.redo()
+    if (next) documentRef.current = next
+  }, [presentationStore])
 
   const deleteSelectedElement = useCallback(() => {
     const elementId = selectedElementIdRef.current
@@ -2804,7 +2854,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     if (current.slides.selectedPageId === slideId) return
     const selected = { ...current, slides: selectPresentationPage(current.slides, slideId) }
     try {
-      documentRef.current = presentationRuntime.commitDocument(current, selected, false)
+      documentRef.current = presentationStore.commitProject(current, selected, false, false)
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error))
     }
@@ -2812,12 +2862,13 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const [saving, setSaving] = useState(false)
   const savePresentation = useCallback((saveAs: boolean) => {
-    if (!onSave) return
     setSaving(true)
-    void onSave(document.id, saveAs).catch((error) => showToast(String(error))).finally(() => setSaving(false))
-  }, [document.id, onSave, showToast])
+    void presentationStore.save(document.id, saveAs).catch((error) => showToast(String(error))).finally(() => setSaving(false))
+  }, [document.id, presentationStore, showToast])
+  const retryPresentationWorkspace = useCallback(() => {
+    void presentationStore.retryPersistence().catch((error) => showToast(error instanceof Error ? error.message : String(error)))
+  }, [presentationStore, showToast])
   useEffect(() => {
-    if (!onSave) return
     const key = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
       event.preventDefault()
@@ -2825,33 +2876,34 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [onSave, savePresentation])
+  }, [savePresentation])
 
-  const selectPresentationDocument = (documentId: string) => {
-    void presentationRuntime.activateDocument(documentId).then((result) => {
-      if (!result.ok) showToast(result.error.message)
-    })
+  const selectPresentationProject = (documentId: string) => {
+    void presentationStore.selectProject(documentId).catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
-  const createPresentationDocument = () => {
-    void presentationRuntime.createDocument().then((result) => {
-      if (!result.ok) showToast(result.error.message)
-    })
+  const createPresentationProject = () => {
+    void presentationStore.createProject().catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
-  const closePresentationDocument = (documentId: string) => {
-    void presentationRuntime.closeDocument(documentId).then((result) => {
-      if (!result.ok) showToast(result.error.message)
-      else if (result.value.closeSurface) {
+  const closePresentationProject = (documentId: string) => {
+    if (presentationSnapshot.projects.length === 1) {
+      setExpanded(false)
+      if (onClose) onClose()
+      else setRightCollapsed(true)
+      return
+    }
+    void presentationStore.closeProject(documentId).then((result) => {
+      if (result.closeSurface) {
         setExpanded(false)
         if (onClose) onClose()
         else setRightCollapsed(true)
       }
-    })
+    }).catch((error) => showToast(error instanceof Error ? error.message : String(error)))
   }
 
   const closePresentationPanel = () => {
-    void presentationRuntime.flushEditor().then(() => {
+    void presentationStore.flushEditor().then(() => {
       setExpanded(false)
       if (onClose) onClose()
       else setRightCollapsed(true)
@@ -3084,13 +3136,21 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         showToast(t('session.common.cancelled'))
         return
       }
-      const asset = createPresentationAsset(kind, source, element.sourceAssetId)
+      const mountedAsset = await presentationStore.mountFileSource(
+        kind,
+        source,
+        window.api?.shell?.getPathForFile?.(file) || undefined,
+        file.size,
+        file.lastModified,
+      )
+      const asset = { ...mountedAsset, id: element.sourceAssetId }
       if (!canAppendPresentationFileElement(documentRef.current, element, asset)) {
         showToast(t('session.presentation.insertDialog.totalFileSizeTooLarge'))
         return
       }
       appendElement(element, asset)
-    } catch {
+    } catch (error) {
+      rlog.warn('[presentation] file insertion failed', { kind, error })
       showToast(t('session.presentation.insertDialog.fileReadError'))
     }
   }
@@ -3114,7 +3174,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
     if (value.kind === 'table') {
       if (existing && isPresentationTableElement(existing)) {
-        patchElement(existing.id, { cells: value.cells.map((row) => [...row]) } as Partial<PresentationTableElement>)
+        patchElement(existing.id, presentationTableCellsPatch(existing, value.cells))
       } else {
         appendElement(createPresentationTableElement(value.cells))
       }
@@ -3318,7 +3378,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const changePageSize = (preset: PresentationPageSizePreset) => {
     const current = documentRef.current
-    commitDocument(resizePresentationDocument(current, preset))
+    commitDocument(resizePresentationProject(current, preset))
   }
 
   const applyCurrentTransitionToAll = () => {
@@ -3492,7 +3552,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
 
   const previewWidth = compact ? 78 : 126
   const sessionTarget = sessionId ? sessionId.slice(0, 8).toUpperCase() : '—'
-  const documentFileName = (item: PresentationDocument) => {
+  const documentFileName = (item: PresentationProject) => {
     const title = item.title.trim() || t('session.presentation.untitled')
     return title.toLowerCase().endsWith('.pptx') ? title : `${title}.pptx`
   }
@@ -3590,21 +3650,22 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       </OfficeAppHeader>
 
       <OfficeDocumentTabs
-        actions={onSave ? <OfficeSaveActions dirty={isPresentationDirty(document)} error={saveError} disabled={saving} onSave={savePresentation} /> : undefined}
-        activeId={workspace.activeDocumentId}
+        actions={presentationSnapshot.persistenceError ? undefined : <OfficeSaveActions dirty={presentationSnapshot.saveStatus === 'saving'} error={presentationSnapshot.exportError} disabled={saving} onSave={savePresentation} />}
+        activeId={presentationSnapshot.activeProjectId}
         icon={<span className="shrink-0 text-[#D97706]"><PresentationMark /></span>}
         label={t('session.presentation.documentTabs')}
         newIcon={<PlusIcon />}
         newLabel={t('session.presentation.newPresentation')}
-        onClose={closePresentationDocument}
-        onCreate={createPresentationDocument}
-        onSelect={selectPresentationDocument}
-        tabs={workspace.documents.map((item) => {
-          const fileName = item.source?.path.split(/[\\/]/).at(-1) || documentFileName(item)
+        onClose={closePresentationProject}
+        onCreate={createPresentationProject}
+        onSelect={selectPresentationProject}
+        tabs={presentationSnapshot.projects.map((item) => {
+          const metadata = presentationSnapshot.projectMetadata[item.id]!
+          const fileName = metadata.source?.path.split(/[\\/]/).at(-1) || documentFileName(item)
           return {
             id: item.id,
             label: fileName,
-            dirtyLabel: isPresentationDirty(item) ? t('office.unsaved') : undefined,
+            dirtyLabel: isPresentationProjectDirty(metadata) ? t('office.unsaved') : undefined,
             closeLabel: t('session.presentation.closeDocument', { name: fileName }),
           }
         })}
@@ -3612,7 +3673,13 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
         tooltipOptions={{ appearance: 'presentation', delayMs: 0 }}
       />
 
-      {document.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
+      {presentationSnapshot.persistenceError ? (
+        <div className="flex items-center justify-between gap-3 border-b border-status-error/30 bg-status-error/10 px-3 py-2 text-xs text-status-error" role="alert">
+          <span title={presentationSnapshot.persistenceError}>{t('office.checkpointFailed')}</span>
+          <button className="shrink-0 rounded px-2 py-1 hover:bg-status-error/10" onClick={retryPresentationWorkspace} type="button">{t('office.retry')}</button>
+        </div>
+      ) : null}
+      {documentMetadata.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
       <PresentationRibbon
         activeTab={ribbonTab}
         animationTargetElements={selectedAnimationTargetElements}
@@ -3701,7 +3768,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                       aria-label={t('session.presentation.slideAria', { index: index + 1, name: slide.name })}
                     >
                       <span className={cn('w-4 shrink-0 pt-0.5 text-right text-2xs text-text-tertiary', slide.id === currentSlide?.id && 'font-semibold text-brand-purple')}>{index + 1}</span>
-                      <PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={slide} slideNumber={index + 1} theme={document.theme} width={previewWidth} selected={slide.id === currentSlide?.id} />
+                      <PresentationSlidePreview assets={document.assets} sources={presentationSnapshot.sources} pageSize={pageSize} slide={slide} slideNumber={index + 1} theme={document.theme} width={previewWidth} selected={slide.id === currentSlide?.id} />
                     </button>
                   ))}
                 </div>
@@ -3723,6 +3790,10 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
             <main ref={stageRef} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_36%,#F5F6F8_0%,#E4E6EB_78%)] dark:bg-[radial-gradient(circle_at_50%_36%,#35363D_0%,#25262C_82%)]">
               <div
                 className="relative shrink-0 overflow-hidden ring-1 ring-black/5 shadow-[0_24px_62px_rgba(30,27,48,0.18),0_3px_12px_rgba(30,27,48,0.1)] dark:ring-white/10"
+                data-testid="presentation-editing-canvas"
+                data-presentation-document-revision={documentRevision}
+                data-presentation-page-id={currentSlide?.id}
+                data-presentation-render-status={currentCanvasRenderStatus}
                 style={{ width: pageSize.width * canvasScale, height: pageSize.height * canvasScale }}
               >
                 <div className="absolute left-0 top-0 origin-top-left" style={{ width: pageSize.width, height: pageSize.height, transform: `scale(${canvasScale})` }}>
@@ -3773,6 +3844,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                   <div className="absolute inset-0 z-20">
                     <PresentationAnimationPlayer
                       assets={document.assets}
+                      sources={presentationSnapshot.sources}
                       className="size-full"
                       elementIds={animationPreviewRun.elementIds}
                       onComplete={() => setAnimationPreviewRun((run) => run?.runKey === animationPreviewRun.runKey ? null : run)}
@@ -3789,9 +3861,9 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
                   <div className="absolute inset-0 z-20">
                     <PresentationTransitionPlayer
                       previous={transitionPreviewPreviousSlide
-                        ? <PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />
+                        ? <PresentationSlidePreview assets={document.assets} sources={presentationSnapshot.sources} pageSize={pageSize} slide={transitionPreviewPreviousSlide} slideNumber={currentSlideIndex} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />
                         : <span className="block size-full bg-black" />}
-                      current={<PresentationSlidePreview assets={document.assets} pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />}
+                      current={<PresentationSlidePreview assets={document.assets} sources={presentationSnapshot.sources} pageSize={pageSize} slide={currentSlide} slideNumber={currentSlideIndex + 1} theme={document.theme} width={pageSize.width * canvasScale} selected={false} presentation />}
                       transition={transitionPreviewRun.transition}
                       runKey={transitionPreviewRun.runKey}
                       onComplete={() => setTransitionPreviewRun((run) => run?.runKey === transitionPreviewRun.runKey ? null : run)}
@@ -3916,6 +3988,7 @@ export function PresentationWorkbenchPanel({ active, onClose, onExpandedChange, 
       {slideshowOpen && slideshowSlide ? (
         <SlideshowOverlay
           assets={document.assets}
+          sources={presentationSnapshot.sources}
           key={slideshowSlide.id}
           current={slideshowTargetIndex + 1}
           pageSize={pageSize}
@@ -4024,7 +4097,7 @@ function StatusButton({ children, active, label, onClick = () => undefined }: {
   )
 }
 
-function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, theme, total, transitionRun }: {
+function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNext, onPrevious, onTransitionComplete, pageSize, slide, sources, theme, total, transitionRun }: {
   assets: readonly PresentationAsset[]
   current: number
   onActivateHyperlink: (hyperlink: PresentationHyperlink, completedTargetIds: ReadonlySet<string>) => void
@@ -4034,6 +4107,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
   onTransitionComplete: () => void
   pageSize: PresentationPageSize
   slide: PresentationSlide
+  sources: Readonly<Record<string, string>>
   theme: PresentationMaster
   total: number
   transitionRun: SlideshowTransitionView | null
@@ -4137,6 +4211,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
         previous={(
           <PresentationSlidePreview
             assets={assets}
+            sources={sources}
             pageSize={pageSize}
             animationStates={getPresentationAnimationDisplayStates(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
             hiddenElementIds={getPresentationAnimationHiddenElementIds(transitionRun.previousSlide.elements, transitionRun.previousCompletedTargetIds)}
@@ -4150,7 +4225,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
             onActivateHyperlink={activateHyperlink}
           />
         )}
-        current={<PresentationSlidePreview assets={assets} pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} theme={theme} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
+        current={<PresentationSlidePreview assets={assets} sources={sources} pageSize={pageSize} hiddenElementIds={hiddenElementIds} slide={transitionRun.currentSlide} slideNumber={transitionRun.toIndex + 1} theme={theme} width={slideshowWidth} selected={false} presentation suppressMediaPlayback onActivateHyperlink={activateHyperlink} />}
         transition={transitionRun.transition}
         runKey={transitionRun.runKey}
         direction={transitionRun.direction}
@@ -4163,6 +4238,7 @@ function SlideshowOverlay({ assets, current, onActivateHyperlink, onClose, onNex
     slideshowContent = (
       <PresentationAnimationPlayer
         assets={assets}
+        sources={sources}
         baseHiddenElementIds={hiddenElementIds}
         completedTargetIds={completedTargetIds}
         className="size-full"
@@ -4573,7 +4649,7 @@ function PresentationInspector({
             <ColorField
               label={t('session.presentation.fill')}
               value={selectedElement.fill}
-              onChange={(value) => onElementChange({ fill: value })}
+              onChange={(value) => onElementChange({ fill: value, gradientFill: undefined, patternFill: undefined })}
             />
           ) : null}
           {isPresentationTextElement(selectedElement) ? (
@@ -4613,6 +4689,7 @@ function PresentationInspector({
                 >
                   <option value="contain">{t('session.presentation.insertDialog.contain')}</option>
                   <option value="cover">{t('session.presentation.insertDialog.cover')}</option>
+                  <option value="stretch">{t('session.presentation.insertDialog.stretch')}</option>
                 </select>
               </label>
               <label className="block text-2xs font-medium text-text-tertiary">

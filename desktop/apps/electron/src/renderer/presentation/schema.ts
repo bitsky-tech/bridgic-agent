@@ -11,6 +11,7 @@ import {
   type PresentationProject,
 } from '@/atoms/presentation'
 import { PRESENTATION_NUMBER_FORMATS } from '@/lib/presentationText'
+import { isValidPresentationSource } from './sourceReference'
 import {
   MAX_PRESENTATION_TRANSITION_DURATION_MS,
   MIN_PRESENTATION_TRANSITION_DURATION_MS,
@@ -22,13 +23,38 @@ const finite = z.number().finite()
 const nonnegative = finite.nonnegative()
 const positive = finite.positive()
 
-const source = z.strictObject({
-  dataUrl: z.string().min(1),
-  fileName: z.string().min(1),
+const asset = z.strictObject({
+  id,
+  kind: z.enum(['image', 'audio', 'video', 'text']),
   mimeType: z.string().min(1),
-  path: z.string().optional(),
+  name: z.string().min(1),
+  source: z.string().min(1).refine(isValidPresentationSource, 'Invalid stored PowerPoint source'),
+  imageEffects: z.strictObject({
+    colorChange: z.strictObject({ from: z.string(), to: z.string(), opacity: finite.min(0).max(1) }).optional(),
+    grayscale: z.boolean().optional(),
+    biLevelThreshold: finite.min(0).max(1).optional(),
+    officeLayer: z.strictObject({
+      source: z.string().min(1).refine(isValidPresentationSource, 'Invalid Office image layer source'),
+      effects: z.array(z.discriminatedUnion('type', [
+        z.strictObject({
+          type: z.literal('backgroundRemoval'),
+          bounds: z.strictObject({ top: finite, bottom: finite, left: finite, right: finite }),
+          foregroundMarks: z.array(z.strictObject({ x1: finite, y1: finite, x2: finite, y2: finite })),
+          backgroundMarks: z.array(z.strictObject({ x1: finite, y1: finite, x2: finite, y2: finite })),
+        }),
+        z.strictObject({ type: z.literal('brightnessContrast'), bright: finite, contrast: finite }),
+        z.strictObject({ type: z.literal('colorTemperature'), colorTemp: finite }),
+        z.strictObject({ type: z.literal('saturation'), sat: finite }),
+        z.strictObject({ type: z.literal('artisticPhotocopy'), detail: finite.optional() }),
+        z.strictObject({ type: z.literal('sharpenSoften'), amount: finite }),
+        z.strictObject({ type: z.literal('artisticCrisscrossEtching') }),
+        z.strictObject({ type: z.literal('artisticBlur') }),
+      ])).min(1),
+    }).optional(),
+  }).optional(),
+  sourceModifiedAt: nonnegative.optional(),
+  sourceSize: finite.int().nonnegative().optional(),
 })
-const asset = z.strictObject({ id, kind: z.enum(['image', 'audio', 'video']), name: z.string().min(1), source })
 const hyperlink = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('url'), url: z.string().min(1), tooltip: z.string().optional() }),
   z.strictObject({ type: z.literal('slide'), slideId: id, tooltip: z.string().optional() }),
@@ -82,6 +108,7 @@ const paragraphStyle = z.strictObject({
 const textElement = z.strictObject({
   ...elementBase,
   type: z.literal('text'),
+  sourceAssetId: id.optional(),
   text: z.string(),
   textRuns: z.array(z.strictObject({ start: finite.int().nonnegative(), end: finite.int().nonnegative(), style: textStyle })).optional(),
   paragraphs: z.array(z.strictObject({
@@ -131,9 +158,47 @@ const shapeElement = z.strictObject({
   ...elementBase,
   type: z.enum(PRESENTATION_SHAPE_TYPES),
   fill: z.string(),
+  fillOpacity: finite.min(0).max(1).optional(),
+  gradientFill: z.discriminatedUnion('type', [
+    z.strictObject({
+      type: z.literal('linear'),
+      angle: finite,
+      stops: z.array(z.strictObject({ offset: finite.min(0).max(1), color: z.string(), opacity: finite.min(0).max(1) })).min(1),
+    }),
+    z.strictObject({
+      type: z.literal('radial'),
+      path: z.string().min(1).optional(),
+      fillToRect: z.strictObject({ left: finite, top: finite, right: finite, bottom: finite }).optional(),
+      stops: z.array(z.strictObject({ offset: finite.min(0).max(1), color: z.string(), opacity: finite.min(0).max(1) })).min(1),
+    }),
+  ]).optional(),
+  patternFill: z.strictObject({
+    preset: z.string().min(1),
+    foregroundColor: z.string(),
+    foregroundOpacity: finite.min(0).max(1),
+    backgroundColor: z.string(),
+    backgroundOpacity: finite.min(0).max(1),
+  }).optional(),
   borderColor: z.string(),
   borderWidth: nonnegative,
+  borderOpacity: finite.min(0).max(1).optional(),
   radius: nonnegative.optional(),
+  customGeometry: z.strictObject({
+    paths: z.array(z.strictObject({
+      width: positive,
+      height: positive,
+      fill: z.enum(['normal', 'none']),
+      stroke: z.boolean(),
+      commands: z.array(z.discriminatedUnion('type', [
+        z.strictObject({ type: z.literal('moveTo'), x: finite, y: finite }),
+        z.strictObject({ type: z.literal('lineTo'), x: finite, y: finite }),
+        z.strictObject({ type: z.literal('cubicBezierTo'), x1: finite, y1: finite, x2: finite, y2: finite, x: finite, y: finite }),
+        z.strictObject({ type: z.literal('quadraticBezierTo'), x1: finite, y1: finite, x: finite, y: finite }),
+        z.strictObject({ type: z.literal('arcTo'), widthRadius: nonnegative, heightRadius: nonnegative, startAngle: finite, sweepAngle: finite }),
+        z.strictObject({ type: z.literal('close') }),
+      ])).min(1),
+    })).min(1),
+  }).optional(),
   connectorPath: z.string().optional(),
 })
 const imageElement = z.strictObject({
@@ -141,7 +206,8 @@ const imageElement = z.strictObject({
   type: z.literal('image'),
   sourceAssetId: id,
   altText: z.string(),
-  fit: z.enum(['contain', 'cover']),
+  fit: z.enum(['contain', 'cover', 'stretch']),
+  softEdgeRadius: nonnegative.optional(),
   clipShape: z.literal('ellipse').optional(),
   crop: z.strictObject({
     left: finite.min(0).max(1),
@@ -173,6 +239,29 @@ const tableElement = z.strictObject({
   ...elementBase,
   type: z.literal('table'),
   cells: z.array(z.array(z.string())).min(1),
+  columnWidths: z.array(positive).optional(),
+  rowHeights: z.array(positive).optional(),
+  cellStyles: z.array(z.array(z.strictObject({
+    fill: z.string().optional(),
+    textColor: z.string().optional(),
+    borderColor: z.string().optional(),
+    borders: z.strictObject({
+      top: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+      right: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+      bottom: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+      left: z.strictObject({ color: z.string(), width: nonnegative, type: z.enum(['solid', 'dash', 'none']) }).optional(),
+    }).optional(),
+    fontSize: positive.optional(),
+    fontFamily: z.string().optional(),
+    bold: z.boolean().optional(),
+    align: z.enum(['left', 'center', 'right']).optional(),
+    verticalAlign: z.enum(['top', 'middle', 'bottom']).optional(),
+    padding: z.strictObject({ left: nonnegative, right: nonnegative, top: nonnegative, bottom: nonnegative }).optional(),
+    textRuns: z.array(z.strictObject({ start: finite.int().nonnegative(), end: finite.int().nonnegative(), style: textStyle })).optional(),
+    colSpan: positive.int().optional(),
+    rowSpan: positive.int().optional(),
+    covered: z.boolean().optional(),
+  }))).optional(),
   headerRow: z.boolean(),
   headerFill: z.string(),
   headerTextColor: z.string().optional(),
@@ -180,6 +269,17 @@ const tableElement = z.strictObject({
   textColor: z.string(),
   borderColor: z.string(),
   fontSize: positive,
+}).superRefine((value, context) => {
+  value.cellStyles?.forEach((row, rowIndex) => row.forEach((cell, columnIndex) => {
+    const length = value.cells[rowIndex]?.[columnIndex]?.length ?? 0
+    let previousEnd = 0
+    cell.textRuns?.forEach((run, runIndex) => {
+      if (run.start < previousEnd || run.end <= run.start || run.end > length) {
+        context.addIssue({ code: 'custom', path: ['cellStyles', rowIndex, columnIndex, 'textRuns', runIndex], message: 'Table text runs must be ordered, non-overlapping ranges inside the cell text' })
+      }
+      previousEnd = run.end
+    })
+  }))
 })
 const chartElement = z.strictObject({
   ...elementBase,
@@ -258,7 +358,9 @@ export const presentationProjectSchema = z.strictObject({
   const assetById = new Map(project.assets.map((value) => [value.id, value]))
   if (!unique(project.assets.map((value) => value.id))) issue(['assets'], 'Duplicate asset identity')
   project.assets.forEach((value, index) => {
-    if (!value.source.mimeType.startsWith(`${value.kind}/`)) issue(['assets', index, 'source', 'mimeType'], 'Asset media type must match its kind')
+    if (value.kind !== 'text' && !value.mimeType.startsWith(`${value.kind}/`)) issue(['assets', index, 'mimeType'], 'Asset media type must match its kind')
+    if (value.kind === 'text' && !value.mimeType.startsWith('text/')) issue(['assets', index, 'mimeType'], 'Text asset media type must be text')
+    if (value.imageEffects && value.kind !== 'image') issue(['assets', index, 'imageEffects'], 'Only images may carry picture effects')
   })
   const pages = project.slides.pages
   const pageIds = pages.map((value) => value.id)
@@ -277,9 +379,12 @@ export const presentationProjectSchema = z.strictObject({
       const path = ['slides', 'pages', pageIndex, 'elements', elementIndex]
       if (elementIds.has(item.id)) issue([...path, 'id'], 'Duplicate element identity')
       elementIds.add(item.id)
-      if (item.type === 'image' || item.type === 'audio' || item.type === 'video') {
-        const referenced = assetById.get(item.sourceAssetId)
-        if (!referenced || referenced.kind !== item.type) issue([...path, 'sourceAssetId'], 'Media element must reference an existing matching asset')
+      if (item.type === 'image' || item.type === 'audio' || item.type === 'video' || (item.type === 'text' && item.sourceAssetId)) {
+        const referenced = assetById.get(item.sourceAssetId!)
+        if (!referenced || referenced.kind !== item.type) issue([...path, 'sourceAssetId'], 'Source-backed element must reference an existing matching asset')
+      }
+      if ('gradientFill' in item && item.gradientFill && 'patternFill' in item && item.patternFill) {
+        issue([...path, 'patternFill'], 'A shape cannot have both a gradient and a pattern fill')
       }
       if (item.hyperlink?.type === 'slide' && !pageIds.includes(item.hyperlink.slideId)) {
         issue([...path, 'hyperlink', 'slideId'], 'Slide hyperlink refers to a missing page')

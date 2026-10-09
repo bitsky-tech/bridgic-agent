@@ -1,15 +1,15 @@
 import {
-  createBlankPresentationDocument,
+  createBlankPresentationProject,
   createBlankPresentationSlide,
   createPresentationId,
   replacePresentationPages,
-  type PresentationDocument,
+  type PresentationProject,
   type PresentationElement,
 } from '@/atoms/presentation'
 
 /** Rich content used only by presentation tests; production starts with a blank document. */
-export function createPresentationTestDocument(): PresentationDocument {
-  const document = createBlankPresentationDocument('Test presentation')
+export function createPresentationTestDocument(): PresentationProject {
+  const document = createBlankPresentationProject('Test presentation')
   const firstSlide = document.slides.pages[0]!
   const secondSlide = createBlankPresentationSlide('Supporting slide')
   const groupId = createPresentationId('group')

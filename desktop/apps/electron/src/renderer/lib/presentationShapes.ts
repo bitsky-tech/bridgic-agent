@@ -1,4 +1,4 @@
-import type { PresentationShapeElement, PresentationShapeType } from '@/atoms/presentation'
+import type { PresentationCustomShapePath, PresentationShapeElement, PresentationShapeType } from '@/atoms/presentation'
 import en from '@app/shared/i18n/locales/en.json'
 import zh from '@app/shared/i18n/locales/zh.json'
 
@@ -26,6 +26,64 @@ export function getPresentationShapePath(element: PresentationShapeElement): str
   if (isPresentationLineShape(element.type) && element.connectorPath && presentationConnectorCommands(element.connectorPath)) return element.connectorPath
   const definition = getPresentationShapeDefinition(element.type)
   return definition.drawingPath ?? definition.path
+}
+
+/** Convert native DrawingML path commands into browser/Fabric SVG path data. */
+export function presentationCustomShapePathData(path: PresentationCustomShapePath): string {
+  const commands: string[] = []
+  let currentX = 0
+  let currentY = 0
+  let startX = 0
+  let startY = 0
+  for (const command of path.commands) {
+    if (command.type === 'moveTo') {
+      currentX = command.x
+      currentY = command.y
+      startX = command.x
+      startY = command.y
+      commands.push(`M ${command.x} ${command.y}`)
+    } else if (command.type === 'lineTo') {
+      currentX = command.x
+      currentY = command.y
+      commands.push(`L ${command.x} ${command.y}`)
+    } else if (command.type === 'cubicBezierTo') {
+      currentX = command.x
+      currentY = command.y
+      commands.push(`C ${command.x1} ${command.y1} ${command.x2} ${command.y2} ${command.x} ${command.y}`)
+    } else if (command.type === 'quadraticBezierTo') {
+      currentX = command.x
+      currentY = command.y
+      commands.push(`Q ${command.x1} ${command.y1} ${command.x} ${command.y}`)
+    } else if (command.type === 'arcTo') {
+      const start = command.startAngle * Math.PI / 180
+      const end = (command.startAngle + command.sweepAngle) * Math.PI / 180
+      const centerX = currentX - Math.cos(start) * command.widthRadius
+      const centerY = currentY - Math.sin(start) * command.heightRadius
+      currentX = centerX + Math.cos(end) * command.widthRadius
+      currentY = centerY + Math.sin(end) * command.heightRadius
+      commands.push(`A ${command.widthRadius} ${command.heightRadius} 0 ${Math.abs(command.sweepAngle) > 180 ? 1 : 0} ${command.sweepAngle >= 0 ? 1 : 0} ${currentX} ${currentY}`)
+    } else {
+      currentX = startX
+      currentY = startY
+      commands.push('Z')
+    }
+  }
+  return commands.join(' ')
+}
+
+export function presentationLinearGradientCoordinates(angle: number): { x1: number; y1: number; x2: number; y2: number } {
+  const radians = angle * Math.PI / 180
+  const dx = Math.cos(radians)
+  const dy = Math.sin(radians)
+  return { x1: 0.5 - dx / 2, y1: 0.5 - dy / 2, x2: 0.5 + dx / 2, y2: 0.5 + dy / 2 }
+}
+
+export function presentationColorWithOpacity(color: string, opacity = 1): string {
+  const alpha = Math.max(0, Math.min(1, opacity))
+  if (alpha >= 1 || color === 'transparent') return color
+  const hex = /^#([\dA-F]{6})$/i.exec(color)?.[1]
+  if (!hex) return color
+  return `rgba(${Number.parseInt(hex.slice(0, 2), 16)}, ${Number.parseInt(hex.slice(2, 4), 16)}, ${Number.parseInt(hex.slice(4, 6), 16)}, ${alpha})`
 }
 
 export type PresentationShapeCategoryId = 'lines' | 'rectangles' | 'basic' | 'arrows' | 'equation' | 'flowchart'

@@ -32,6 +32,7 @@ it('buffers early Word runtime events and exposes only its narrow Session API', 
     emit(IPC.events.wordHostOpenFileRequested, { ...request, id: 'second-ticket' });
     exposed.api.onOpenFileRequested((value) => received.push(['replayed', value]));
     await exposed.api.readDocument('/tmp/a.docx');
+    await exposed.api.openDocument();
     await exposed.api.completeOpenFile('opaque-ticket');
     await exposed.api.completeFlush('flush-ticket', true);
     await exposed.api.reportState({ documentCount: 1, persistenceStatus: 'saved' });
@@ -46,13 +47,14 @@ it('buffers early Word runtime events and exposes only its narrow Session API', 
   const result = JSON.parse(stdout) as { name: string; keys: string[]; received: unknown[][]; invocations: unknown[][] }
   expect(result.name).toBe('wordHostApi')
   expect(result.keys.sort()).toEqual([
-    'completeFlush', 'completeOpenFile', 'getConfig', 'onConfigChanged', 'onExpandedChanged',
+    'completeFlush', 'completeOpenFile', 'getConfig', 'onConfigChanged', 'onExpandedChanged', 'openDocument',
     'onFlushRequested', 'onOpenFileRequested', 'readDocument', 'reportState', 'requestClose', 'setExpanded',
   ].sort())
   expect(result.received.map(([kind]) => kind)).toEqual(['open', 'flush', 'config', 'expanded', 'replayed'])
   expect(result.received[2]).toEqual(['config', { locale: 'zh' }])
   expect(result.invocations).toEqual([
     ['word:read-document', '/tmp/a.docx'],
+    ['word-host:openDocument'],
     ['word-host:completeOpenFile', 'opaque-ticket', null],
     ['word-host:completeFlush', 'flush-ticket', true],
     ['word-host:reportState', { documentCount: 1, persistenceStatus: 'saved' }],

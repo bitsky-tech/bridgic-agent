@@ -47,10 +47,11 @@ export interface WordEditorRuntime {
   commit(): boolean
 }
 
-interface WordEditorMountOptions {
+export interface WordEditorMountOptions {
   container: HTMLElement
   language: string
   snapshot: IDocumentData
+  toolbar?: boolean
 }
 
 export interface WordEditorAdapterOptions extends WordEditorMountOptions {
@@ -78,6 +79,10 @@ const NON_PERSISTED_UNIVER_COMMAND_IDS = new Set([
 
 export function shouldCommitUniverCommand(commandId: string): boolean {
   return !NON_PERSISTED_UNIVER_COMMAND_IDS.has(commandId)
+    && !commandId.includes('.operation.')
+    && (commandId.startsWith('doc.command') || commandId.startsWith('doc.mutation')
+      || commandId.startsWith('drawing.command') || commandId.startsWith('drawing.mutation')
+      || commandId === 'univer.command.undo' || commandId === 'univer.command.redo')
 }
 
 export async function replaceUniverSnapshotWithRetry(executor: UniverCommandExecutor, documentId: string, snapshot: IDocumentData, attempts = 2): Promise<boolean> {
@@ -107,6 +112,7 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
   let focusTimer: ReturnType<typeof setTimeout> | null = null
   let activeSelection: WordUniverSelection | null = null
   let zoom = options.zoom
+  let contentChanged = false
   const binding = createOfficeEditorBinding<IDocumentData>({
     appKind: 'word',
     sessionId: store.getSnapshot().sessionId,
@@ -118,7 +124,11 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
     },
   })
   // Univer mutates drawing maps in place; native edits must pass through commit().
-  const engine = (options.mountNative ?? mountWordUniverEngine)({ ...options, snapshot: structuredClone(snapshot) })
+  const nativeSnapshot = structuredClone(snapshot)
+  // Canonical custom ranges own link URLs. A stale plugin cache must not replace
+  // newly edited links when the document mounts again.
+  if (nativeSnapshot.resources) nativeSnapshot.resources = nativeSnapshot.resources.filter((resource) => resource.name !== 'DOC_HYPER_LINK_PLUGIN')
+  const engine = (options.mountNative ?? mountWordUniverEngine)({ ...options, snapshot: nativeSnapshot })
   const { document: nativeDocument, univerAPI } = engine
   const lease = binding.capture()
   lastSnapshotSignature = snapshotSignature(nativeDocument.getSnapshot())
@@ -133,8 +143,10 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
     if (!nextSnapshot) return false
     const signature = snapshotSignature(nextSnapshot)
     if (signature === lastSnapshotSignature) return false
+    if (!contentChanged) { lastSnapshotSignature = signature; return false }
     if (!binding.publishChange(nextSnapshot, lease)) return false
     lastSnapshotSignature = signature
+    contentChanged = false
     return true
   }
 
@@ -150,6 +162,7 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
       if (currentDocument()?.snapshot !== latest.snapshot) return false
       lastSnapshotSignature = snapshotSignature(nativeDocument.getSnapshot())
       lastDomainSignature = signature
+      contentChanged = false
       return true
     }
     const pending = snapshotSyncQueue.then(operation, operation)
@@ -222,6 +235,7 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
         }
       }
       if (!shouldCommitUniverCommand(commandInfo.id)) return
+      contentChanged = true
       if (commitTimer) clearTimeout(commitTimer)
       commitTimer = setTimeout(() => { commitTimer = null; commit() }, 40)
     })
@@ -238,7 +252,7 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
         onReferenceCommand: async (referenceCommand) => context.applyReferenceCommand(referenceCommand),
       } satisfies WordUniverCommandContext, command)
       if (!lease.isCurrent()) return false
-      if (applied && command.type !== 'editor.reference.remove' && command.type !== 'editor.reference.update') commit()
+      if (applied && command.type !== 'editor.reference.remove' && command.type !== 'editor.reference.update') { contentChanged = true; commit() }
       return applied
     }, binding.flush)
     options.onTableActiveChange?.(false)
@@ -266,7 +280,11 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
   }
 }
 
-function mountWordUniverEngine({ container, language, snapshot }: WordEditorMountOptions): WordEditorNativeEngine {
+export function mountWordUniverEngine({ container, language, snapshot, toolbar = false }: WordEditorMountOptions): WordEditorNativeEngine {
+  // The drawing plugin loads its resource, not just the document's drawing fields.
+  snapshot.resources = [...(snapshot.resources ?? []).filter((resource) => resource.name !== 'DOC_DRAWING_PLUGIN' && resource.name !== 'DOC_HYPER_LINK_PLUGIN'), {
+    name: 'DOC_DRAWING_PLUGIN', data: JSON.stringify({ data: snapshot.drawings ?? {}, order: snapshot.drawingsOrder ?? [] }),
+  }]
   const locale = language.toLocaleLowerCase().startsWith('zh') ? LocaleType.ZH_CN : LocaleType.EN_US
   const { univer, univerAPI } = createOpenSourceUniver({
     locale,
@@ -275,7 +293,7 @@ function mountWordUniverEngine({ container, language, snapshot }: WordEditorMoun
       [LocaleType.EN_US]: mergeLocales(docsCoreEnUS, docsDrawingEnUS, docsHyperLinkEnUS),
     },
     presets: [
-      UniverDocsCorePreset({ container, header: false, toolbar: false, footer: false, contextMenu: true }),
+      UniverDocsCorePreset({ container, header: toolbar, toolbar, footer: false, contextMenu: true }),
       UniverDocsDrawingPreset(),
       UniverDocsHyperLinkPreset(),
     ],

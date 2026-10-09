@@ -15,9 +15,11 @@ const input = {
 }
 const ppt = {
   sessionId: 'session-a', targetId: 'ppt-a', webContentsId: 1, loading: false, crashed: false,
+  documentCount: null,
 }
 const excel = {
   sessionId: 'session-a', targetId: 'excel-a', webContentsId: 2, ready: true, crashed: false, dirty: false,
+  documentCount: null,
 }
 
 const word = {
@@ -56,13 +58,24 @@ describe('Office shell status compatibility contract', () => {
     expect(hasOfficeBackgroundContent(crashed)).toBe(true)
   })
 
-  it('retains native background markers without fabricating PPT or Excel document counts', () => {
+  it('does not treat an empty or pending PPT or Excel target as background content', () => {
     const statuses = projectOfficeSurfaceStatuses({ ...input, powerPointSession: ppt, excelSession: excel })
-    for (const kind of ['presentation', 'excel'] as const) {
-      expect(hasOfficeBackgroundContent(statuses[kind])).toBe(true)
-      expect(statuses[kind].documentCount).toBeNull()
-      expect(statuses[kind].runtimeState).toBe('ready')
-    }
+    expect(statuses.presentation.documentInventory).toBe('pending')
+    expect(statuses.presentation.documentCount).toBeNull()
+    expect(hasOfficeBackgroundContent(statuses.presentation)).toBe(false)
+    const empty = projectOfficeSurfaceStatuses({ ...input, powerPointSession: { ...ppt, documentCount: 0 } }).presentation
+    expect(empty.documentInventory).toBe('ready')
+    expect(hasOfficeBackgroundContent(empty)).toBe(false)
+    const populated = projectOfficeSurfaceStatuses({ ...input, powerPointSession: { ...ppt, documentCount: 1 } }).presentation
+    expect(hasOfficeBackgroundContent(populated)).toBe(true)
+
+    expect(hasOfficeBackgroundContent(statuses.excel)).toBe(false)
+    expect(statuses.excel.documentCount).toBeNull()
+    expect(statuses.excel.documentInventory).toBe('pending')
+    const emptyExcel = projectOfficeSurfaceStatuses({ ...input, excelSession: { ...excel, documentCount: 0 } }).excel
+    expect(hasOfficeBackgroundContent(emptyExcel)).toBe(false)
+    const populatedExcel = projectOfficeSurfaceStatuses({ ...input, excelSession: { ...excel, documentCount: 1 } }).excel
+    expect(hasOfficeBackgroundContent(populatedExcel)).toBe(true)
   })
 
   it('rejects native inventories owned by a different Session', () => {
@@ -93,8 +106,8 @@ describe('Office shell status compatibility contract', () => {
   it('keeps failed native targets discoverable and gives crash state priority over loading', () => {
     const statuses = projectOfficeSurfaceStatuses({
       ...input,
-      powerPointSession: { ...ppt, loading: true, crashed: true },
-      excelSession: { ...excel, crashed: true },
+      powerPointSession: { ...ppt, loading: true, crashed: true, documentCount: 1 },
+      excelSession: { ...excel, crashed: true, documentCount: 1 },
     })
     for (const kind of ['presentation', 'excel'] as const) {
       expect(statuses[kind].runtimeState).toBe('crashed')

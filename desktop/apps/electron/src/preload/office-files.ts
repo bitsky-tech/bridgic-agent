@@ -10,6 +10,8 @@ export const officeFiles: OfficeFilesAPI = {
     ipcRenderer.on('office-files:changed', listener)
     return () => ipcRenderer.removeListener('office-files:changed', listener)
   },
+  listPresentationMounts: () => ipcRenderer.invoke('office-files:list-presentation-mounts'),
+  mountPresentationSource: (source) => ipcRenderer.invoke('office-files:mount-presentation-source', source),
   inspect: (kind, path) => ipcRenderer.invoke('office-files:inspect', kind, path),
   save: (request) => ipcRenderer.invoke('office-files:save', request),
   confirmClose: (name, locale) => ipcRenderer.invoke('office-files:confirm-close', name, locale),

@@ -5,10 +5,10 @@ import { PresentationSlidePreview } from '../../components/app/PresentationSlide
 import { importPresentationPptx } from '../presentationPptxImport'
 import { createPresentationPptx } from '../presentationPptx'
 import { presentationTextStyleAt, presentationTextDisplaySegments } from '../presentationText'
-import { createBlankPresentationDocument, layoutPresentationVerticalText } from '../../atoms/presentation'
+import { createBlankPresentationProject, layoutPresentationVerticalText, type PresentationProject } from '../../atoms/presentation'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
-import { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } from '../presentationMarkdown'
-import { presentationElementSource } from '@/presentation/project'
+import { editPresentationPage } from '@/presentation/agentCommands'
+import { materializePresentationProjectSources, presentationPptxSourceUrls } from '@/presentation/sources'
 
 const ns = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
 const emu = (px: number) => Math.round(px * 9525)
@@ -21,12 +21,16 @@ function textBody(direction = '', runs = '<a:r><a:rPr sz="1800"/><a:t>标题 Hea
   return `<p:txBody><a:bodyPr ${direction ? `vert="${direction}"` : ''} wrap="none"/><a:p>${runs}</a:p></p:txBody>`
 }
 
-async function readFixture(tree: string, height = 6858000, width = 12192000, extraFiles: Record<string, string> = {}, slideAttributes = '') {
+async function fixtureBytes(tree: string, height = 6858000, width = 12192000, extraFiles: Record<string, string> = {}, slideAttributes = '') {
   const zip = new JSZip()
   zip.file('ppt/presentation.xml', `<p:presentation ${ns}><p:sldSz cx="${width}" cy="${height}"/></p:presentation>`)
   zip.file('ppt/slides/slide1.xml', `<p:sld ${ns} ${slideAttributes}><p:cSld><p:spTree>${tree}</p:spTree></p:cSld></p:sld>`)
   for (const [path, content] of Object.entries(extraFiles)) zip.file(path, content)
-  return importPresentationPptx(await zip.generateAsync({ type: 'uint8array' }))
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+async function readFixture(tree: string, height = 6858000, width = 12192000, extraFiles: Record<string, string> = {}, slideAttributes = '') {
+  return importPresentationPptx(await fixtureBytes(tree, height, width, extraFiles, slideAttributes))
 }
 
 function preview(model: Awaited<ReturnType<typeof readFixture>>) {
@@ -39,9 +43,63 @@ function firstText(model: Awaited<ReturnType<typeof readFixture>>) {
   return text
 }
 
+function agentEdit(model: PresentationProject): PresentationProject {
+  const page = model.slides.pages[0]!
+  const element = page.elements[0]!
+  return editPresentationPage(model, page.id, [{ type: 'patch', id: element.id, element_type: element.type, patch: { x: element.x } }]).project
+}
+
 describe('PowerPoint display fidelity', () => {
+  it('previews mixed colors and emphasis inside one table cell', () => {
+    const model = createBlankPresentationProject('Rich table')
+    model.slides.pages[0]!.elements = [{
+      id: 'table', type: 'table', x: 80, y: 80, width: 500, height: 180, rotation: 0,
+      cells: [['Red Blue']],
+      cellStyles: [[{ textRuns: [
+        { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700 } },
+        { start: 4, end: 8, style: { color: '#0000FF', italic: true } },
+      ] }]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 20,
+    }]
+    const markup = preview(model)
+    expect(markup).toContain('color:#FF0000;font-weight:700')
+    expect(markup).toContain('color:#0000FF;font-style:italic')
+    expect(markup).toContain('Red ')
+    expect(markup).toContain('Blue')
+  })
+
+  it('previews imported table cell spans, grid dimensions and individual cell colors', () => {
+    const model = createBlankPresentationProject('Table grid')
+    model.slides.pages[0]!.elements = [{
+      id: 'table', type: 'table', x: 100, y: 100, width: 600, height: 240, rotation: 0,
+      cells: [['Merged', '', 'Right'], ['A', 'B', 'C']],
+      columnWidths: [1, 2, 3], rowHeights: [1, 2],
+      cellStyles: [[{ colSpan: 2, fill: '#FF0000', textColor: '#FFFFFF' }, { covered: true }, { fill: '#00FF00' }], [{}, {}, {}]],
+      headerRow: false, headerFill: '#FFFFFF', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#333333', fontSize: 16,
+    }]
+    const markup = preview(model)
+    expect(markup).toContain('colSpan="2"')
+    expect(markup).toContain('background-color:#FF0000')
+    expect(markup).toContain('background-color:#00FF00')
+    expect(markup).toContain('width:100px')
+    expect(markup).toContain('width:200px')
+    expect(markup).toContain('width:300px')
+  })
+
+  it('previews an imported patterned shape from its editable pattern data', async () => {
+    const tree = shape(1, 100).replace(
+      '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+      '<a:pattFill prst="wdDnDiag"><a:fgClr><a:srgbClr val="112233"/></a:fgClr><a:bgClr><a:srgbClr val="FFEEDD"/></a:bgClr></a:pattFill>',
+    )
+    const model = await readFixture(tree)
+    const markup = preview(model)
+    expect(markup).toContain('<pattern')
+    expect(markup).toContain('fill="#FFEEDD"')
+    expect(markup).toContain('stroke="#112233"')
+  })
+
   it('renders theme background and footer when a page has no local overrides', () => {
-    const model = createBlankPresentationDocument('Theme preview')
+    const model = createBlankPresentationProject('Theme preview')
     model.theme = {
       ...model.theme,
       background: '#17182B',
@@ -57,7 +115,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each([0, 1, 2])('keeps category/value indices when chart point %s is absent', async (missingIndex) => {
-    const model = createBlankPresentationDocument('Sparse data')
+    const model = createBlankPresentationProject('Sparse data')
     model.slides.pages[0]!.elements = [{ id: 'chart', type: 'chart', chartType: 'column', x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['Jan', 'Feb', 'Mar'], series: [{ name: 'North', values: [10, 20, 30] }, { name: 'South', values: [40, 50, 60] }], colors: ['#2266EE', '#00AA88'], showLegend: true }]
     const zip = await JSZip.loadAsync(await createPresentationPptx(model))
@@ -83,7 +141,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each(['', '<c:ptCount val="3"/>'])('retains sparse indices without relying on an ordered or complete cache (%s)', async (count) => {
-    const model = createBlankPresentationDocument('Unordered cache')
+    const model = createBlankPresentationProject('Unordered cache')
     model.slides.pages[0]!.elements = [{ id: 'chart', type: 'chart', chartType: 'line', x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['Jan', 'Feb', 'Mar'], series: [{ name: 'Sales', values: [10, 20, 30] }], colors: ['#2266EE'], showLegend: true }]
     const zip = await JSZip.loadAsync(await createPresentationPptx(model))
@@ -103,7 +161,7 @@ describe('PowerPoint display fidelity', () => {
     expect(original.connectorPath).toStartWith('M 0 0 L 100 100')
     expect(original.connectorPath!.match(/ M /g)?.length).toBe(ends === 'both' ? 2 : 1)
     for (let round = 0; round < 2; round++) {
-      model.slides.pages = [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]
+      model = agentEdit(model)
       model = await importPresentationPptx(await createPresentationPptx(model))
       const arrow = model.slides.pages[0]!.elements[0]!
       if (!('connectorPath' in arrow)) throw new Error('Lost arrow geometry')
@@ -127,7 +185,7 @@ describe('PowerPoint display fidelity', () => {
       if (headerRow) expect(table).toMatchObject({ headerTextColor: '#000000', headerFill: '#FFFFFF' })
       const markup = new DOMParser().parseFromString(preview(model), 'text/html')
       expect(markup.getElementsByTagName('td')[0]!.getAttribute('style')).toContain('color:#000000')
-      const edited = compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide
+      const edited = agentEdit(model).slides.pages[0]!
       expect(edited.elements[0]).toMatchObject({ headerRow, ...(headerRow ? { headerTextColor: '#000000' } : {}) })
       model.slides.pages = [edited]
       const bytes = await createPresentationPptx(model)
@@ -138,7 +196,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('retains the existing white-on-accent default header separately from black body text', async () => {
-    const model = createBlankPresentationDocument('Header colors')
+    const model = createBlankPresentationProject('Header colors')
     model.slides.pages[0]!.elements = [{ id: 'table', type: 'table', x: 80, y: 80, width: 600, height: 300, rotation: 0,
       cells: [['Header', 'Value'], ['Body', '10']], headerRow: true, headerFill: '#6957D9', bodyFill: '#FFFFFF', textColor: '#000000', borderColor: '#D8D9E0', fontSize: 24 }]
     const reopened = await importPresentationPptx(await createPresentationPptx(model))
@@ -146,7 +204,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each(['pie', 'doughnut'] as const)('retains per-category %s colors through repeated exports', async (chartType) => {
-    let model = createBlankPresentationDocument('Category colors')
+    let model = createBlankPresentationProject('Category colors')
     model.slides.pages[0]!.elements = [{ id: 'pie', type: 'chart', chartType, x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [50, 0, 20] }], colors: ['#FF0000', '#00AA00', '#0000FF'], showLegend: true }]
     for (let round = 0; round < 2; round++) {
@@ -158,7 +216,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each(['pie', 'doughnut'] as const)('matches sparse, unordered %s point overrides by index and retains single-series fallback', async (chartType) => {
-    const model = createBlankPresentationDocument('Point overrides')
+    const model = createBlankPresentationProject('Point overrides')
     model.slides.pages[0]!.elements = [{ id: 'pie', type: 'chart', chartType, x: 100, y: 100, width: 800, height: 400, rotation: 0,
       categories: ['A', 'B', 'C'], series: [{ name: 'Total', values: [50, 30, 20] }], colors: ['#FF0000', '#00AA00', '#0000FF'], showLegend: true }]
     const zip = await JSZip.loadAsync(await createPresentationPptx(model))
@@ -178,12 +236,15 @@ describe('PowerPoint display fidelity', () => {
       'ppt/slides/_rels/slide1.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/sample.svg"/></Relationships>',
     }
     const tree = `<p:sp><p:nvSpPr><p:cNvPr id="1" name="Cropped fill"/></p:nvSpPr><p:spPr><a:xfrm flipH="1"><a:off x="${emu(100)}" y="${emu(100)}"/><a:ext cx="${emu(800)}" cy="${emu(400)}"/></a:xfrm><a:prstGeom prst="${clipShape}"/><a:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="image1"><a:alphaModFix amt="50000"/></a:blip><a:srcRect l="50000" t="10000" r="5000" b="15000"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:spPr></p:sp>`
-    let model = await readFixture(tree, undefined, undefined, files)
+    let bytes = await fixtureBytes(tree, undefined, undefined, files)
+    let model = await importPresentationPptx(bytes)
     for (let round = 0; round < 2; round++) {
       const image = model.slides.pages[0]!.elements[0]!
       expect(image).toMatchObject({ type: 'image', crop: { left: 0.5, top: 0.1, right: 0.05, bottom: 0.15 }, opacity: 0.5, flipHorizontal: true })
       if (clipShape === 'ellipse') expect(image).toMatchObject({ clipShape: 'ellipse' })
-      model = await importPresentationPptx(await createPresentationPptx(model))
+      const sources = await presentationPptxSourceUrls(model, Buffer.from(bytes).toString('base64'))
+      bytes = await createPresentationPptx(await materializePresentationProjectSources(model, sources))
+      model = await importPresentationPptx(bytes)
     }
   })
 
@@ -213,27 +274,22 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('exports CSS-pixel stroke widths in DrawingML point units', async () => {
-    const model = createBlankPresentationDocument('Stroke units')
+    const model = createBlankPresentationProject('Stroke units')
     model.slides.pages[0]!.elements = [{ id: 'outline', type: 'rect', x: 100, y: 100, width: 400, height: 300, rotation: 0,
       fill: 'transparent', borderColor: '#000000', borderWidth: 4 }]
     const xml = await (await JSZip.loadAsync(await createPresentationPptx(model))).file('ppt/slides/slide1.xml')!.async('text')
     expect(new DOMParser().parseFromString(xml, 'text/xml').getElementsByTagName('a:ln')[0]!.getAttribute('w')).toBe('38100')
   })
 
-  it.each([0, 45, 90])('pads SVG strokes without moving the authored shape at %s degrees', async (rotation) => {
+  it.each([0, 45, 90])('keeps native translucent strokes on the authored shape at %s degrees', async (rotation) => {
     const tree = shape(1, 100).replace('<a:xfrm>', `<a:xfrm rot="${rotation * 60000}" flipH="1">`)
       .replace('</p:spPr>', '<a:ln w="304800"><a:solidFill><a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr></a:solidFill></a:ln></p:spPr>')
     const project = await readFixture(tree)
-    const image = project.slides.pages[0]!.elements[0]!
-    if (image.type !== 'image') throw new Error('Expected an SVG shape')
-    const svg = new DOMParser().parseFromString(atob(presentationElementSource(project, image)!.dataUrl.split(',')[1]!), 'image/svg+xml').documentElement
-    expect(svg.getAttribute('viewBox')).toBe('-64 -64 228 178')
-    expect(svg.getElementsByTagName('rect')[0]!.getAttribute('stroke-width')).toBe('32')
-    expect(image.flipHorizontal).toBe(true)
+    const element = project.slides.pages[0]!.elements[0]!
+    expect(element).toMatchObject({ type: 'rect', borderWidth: 32, borderOpacity: 0.5, flipHorizontal: true })
     const angle = rotation * Math.PI / 180
-    // Rotation is stored about the top-left corner; the padded frame must keep the original center.
-    expect(image.x + image.width / 2 * Math.cos(angle) - image.height / 2 * Math.sin(angle)).toBeCloseTo(150)
-    expect(image.y + image.width / 2 * Math.sin(angle) + image.height / 2 * Math.cos(angle)).toBeCloseTo(125)
+    expect(element.x + element.width / 2 * Math.cos(angle) - element.height / 2 * Math.sin(angle)).toBeCloseTo(150)
+    expect(element.y + element.width / 2 * Math.sin(angle) + element.height / 2 * Math.cos(angle)).toBeCloseTo(125)
   })
 
   it('preserves leading, consecutive and trailing blank paragraph formatting through Agent edits and PPTX export', async () => {
@@ -242,7 +298,7 @@ describe('PowerPoint display fidelity', () => {
     let model = await readFixture(shape(1, 100, `<p:txBody><a:bodyPr/>${paragraphs}</p:txBody>`))
     const text = firstText(model)
     expect(text.paragraphs?.map(paragraph => paragraph.endStyle?.fontSize)).toEqual([64, undefined, 128, 16, undefined, 80])
-    const slide = compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide
+    const slide = agentEdit(model).slides.pages[0]!
     expect(slide.elements.find(element => element.type === 'text')).toMatchObject({ paragraphs: text.paragraphs })
     model.slides.pages = [slide]
     for (let round = 0; round < 2; round++) {
@@ -257,7 +313,7 @@ describe('PowerPoint display fidelity', () => {
 
   it.each(['rect', 'line'] as const)('exports whole-object opacity on %s outlines as well as fills', async (type) => {
     for (const opacity of [0, 0.2, 0.65]) {
-      const model = createBlankPresentationDocument('Faded outline')
+      const model = createBlankPresentationProject('Faded outline')
       model.slides.pages[0]!.elements = [{ id: 'faded', type, x: 100, y: 100, width: 500, height: type === 'line' ? 1 : 300,
         rotation: 0, fill: 'transparent', borderColor: '#000000', borderWidth: 8, opacity }]
       const bytes = await createPresentationPptx(model)
@@ -271,7 +327,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('keeps outline interiors transparent and their borders visible through export and reopening', async () => {
-    let model = createBlankPresentationDocument('Outline')
+    let model = createBlankPresentationProject('Outline')
     model.slides.pages[0]!.background = '#152945'
     model.slides.pages[0]!.elements = [{ id: 'outline', type: 'rect', x: 80, y: 80, width: 500, height: 300, rotation: 0,
       fill: 'transparent', borderColor: '#FFCC00', borderWidth: 3 }]
@@ -283,7 +339,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('keeps matching fill and border opacity editable through repeated exports', async () => {
-    let model = createBlankPresentationDocument('Faded filled shape')
+    let model = createBlankPresentationProject('Faded filled shape')
     model.slides.pages[0]!.elements = [{ id: 'faded', type: 'rect', x: 100, y: 100, width: 400, height: 200, rotation: 0,
       fill: '#FF0000', borderColor: '#000000', borderWidth: 8, opacity: 0.25 }]
     for (let count = 0; count < 2; count++) {
@@ -342,7 +398,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it.each([0, 1])('keeps borderless ellipses borderless through repeated export/import with width=%s', async (borderWidth) => {
-    let model = createBlankPresentationDocument('Borderless')
+    let model = createBlankPresentationProject('Borderless')
     model.slides.pages[0]!.elements = [{ id: 'circle', type: 'ellipse', x: 40, y: 40, width: 200, height: 100, rotation: 0,
       fill: '#745ADD', borderColor: 'transparent', borderWidth }]
     for (let count = 0; count < 2; count++) {
@@ -351,28 +407,35 @@ describe('PowerPoint display fidelity', () => {
     }
   })
 
-  it.each([false, true])('honors explicit no-fill strokes over theme line references, including SVG shapes=%s', async (svg) => {
+  it.each([false, true])('honors explicit no-fill strokes over theme line references, including gradient shapes=%s', async (gradient) => {
     let tree = shape(1, 100).replace('</p:spPr>', `<a:ln w="12700"><a:noFill/></a:ln></p:spPr><p:style><a:lnRef idx="1"><a:srgbClr val="000000"/></a:lnRef></p:style>`)
-    if (svg) tree = tree.replace('<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>', '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst></a:gradFill>')
-    const project = await readFixture(tree)
+    if (gradient) tree = tree.replace('<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>', '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="5400000"/></a:gradFill>')
+    let project = await readFixture(tree)
     const element = project.slides.pages[0]!.elements[0]!
-    if (svg) {
-      if (element.type !== 'image') throw new Error('Expected SVG image')
-      expect(atob(presentationElementSource(project, element)!.dataUrl.split(',')[1]!)).toContain('stroke-width="0"')
-    } else expect(element).toMatchObject({ borderColor: 'transparent', borderWidth: 0 })
+    expect(element).toMatchObject({ type: 'rect', borderColor: 'transparent', borderWidth: 0 })
+    if (gradient && element.type === 'rect') {
+      const expected = {
+        type: 'linear' as const, angle: 90, stops: [
+          { offset: 0, color: '#FF0000', opacity: 1 },
+          { offset: 1, color: '#0000FF', opacity: 1 },
+        ],
+      }
+      expect(element.gradientFill).toEqual(expected)
+      project = await importPresentationPptx(await createPresentationPptx(project))
+      expect(project.slides.pages[0]!.elements[0]).toMatchObject({ type: 'rect', gradientFill: expected })
+    }
   })
 
   it('preserves partially transparent strokes without fading the fill', async () => {
     const tree = shape(1, 100).replace('</p:spPr>', '<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"><a:alpha val="25000"/></a:srgbClr></a:solidFill></a:ln></p:spPr>')
-    const project = await readFixture(tree)
-    const element = project.slides.pages[0]!.elements[0]!
-    if (element.type !== 'image') throw new Error('Expected SVG image')
-    const svg = atob(presentationElementSource(project, element)!.dataUrl.split(',')[1]!)
-    expect(svg).toContain('stroke-opacity="0.25"')
-    expect(svg).toContain('fill-opacity="1"')
+    let project = await readFixture(tree)
+    expect(project.slides.pages[0]!.elements[0]).toMatchObject({ type: 'rect', fill: '#FF0000', borderColor: '#000000', borderOpacity: 0.25 })
+    expect(preview(project)).toContain('stroke-opacity="0.25"')
+    project = await importPresentationPptx(await createPresentationPptx(project))
+    expect(project.slides.pages[0]!.elements[0]).toMatchObject({ type: 'rect', fill: '#FF0000', borderColor: '#000000', borderOpacity: 0.25 })
   })
   it('writes legal rich-text paragraphs, including soft breaks, blank paragraphs, and hyperlink relationships', async () => {
-    const model = createBlankPresentationDocument('Rich text')
+    const model = createBlankPresentationProject('Rich text')
     model.slides.pages[0]!.elements = [{
       id: 'rich', type: 'text', text: 'First\nSecond\n\nThird', x: 40, y: 40, width: 500, height: 250, rotation: 0,
       fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left',
@@ -428,6 +491,62 @@ describe('PowerPoint display fidelity', () => {
     expect(presentationTextStyleAt(text, 9).fontFamily).toBe('Courier New')
   })
 
+  it('applies theme tint to an editable shape instead of using its unmodified scheme color', async () => {
+    const theme = `<a:theme ${ns}><a:themeElements><a:clrScheme name="Custom"><a:dk2><a:srgbClr val="053D86"/></a:dk2></a:clrScheme></a:themeElements></a:theme>`
+    const style = '<p:style><a:fillRef idx="1"><a:schemeClr val="dk2"><a:tint val="40000"/></a:schemeClr></a:fillRef></p:style>'
+    const tree = shape(1, 100, style).replace('<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>', '')
+    const model = await readFixture(tree, undefined, undefined, { 'ppt/theme/theme1.xml': theme })
+    expect(model.slides.pages[0]!.elements[0]).toMatchObject({ fill: '#9BB1CF' })
+  })
+
+  it('resolves a grouped shape fill through the master color map', async () => {
+    const rel = (type: string, target: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ref" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`
+    const extras = {
+      'ppt/slides/_rels/slide1.xml.rels': rel('slideLayout', '../slideLayouts/slideLayout1.xml'),
+      'ppt/slideLayouts/slideLayout1.xml': `<p:sldLayout ${ns}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`,
+      'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rel('slideMaster', '../slideMasters/slideMaster1.xml'),
+      'ppt/slideMasters/slideMaster1.xml': `<p:sldMaster ${ns}><p:cSld><p:spTree/></p:cSld><p:clrMap tx2="dk2"/></p:sldMaster>`,
+      'ppt/slideMasters/_rels/slideMaster1.xml.rels': rel('theme', '../theme/theme1.xml'),
+      'ppt/theme/theme1.xml': `<a:theme ${ns}><a:themeElements><a:clrScheme name="Custom"><a:dk2><a:srgbClr val="4B778B"/></a:dk2></a:clrScheme></a:themeElements></a:theme>`,
+    }
+    const child = shape(1, 100).replace('<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>', '<a:grpFill/>')
+    const tree = `<p:grpSp><p:grpSpPr><a:solidFill><a:schemeClr val="tx2"/></a:solidFill></p:grpSpPr>${child}</p:grpSp>`
+    const model = await readFixture(tree, undefined, undefined, extras)
+    expect(model.slides.pages[0]!.elements[0]).toMatchObject({ type: 'rect', fill: '#4B778B' })
+    expect(preview(model)).toContain('fill="#4B778B"')
+    const reopened = await importPresentationPptx(await createPresentationPptx(model))
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ fill: '#4B778B' })
+  })
+
+  it('keeps an OLE object picture fallback visible as an editable image', async () => {
+    const tree = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="7" name="Embedded diagram"/></p:nvGraphicFramePr><p:xfrm><a:off x="${emu(100)}" y="${emu(80)}"/><a:ext cx="${emu(400)}" cy="${emu(300)}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj><p:pic><p:nvPicPr><p:cNvPr id="8" name="Preview"/></p:nvPicPr><p:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="image1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${emu(100)}" y="${emu(80)}"/><a:ext cx="${emu(400)}" cy="${emu(300)}"/></a:xfrm></p:spPr></p:pic></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
+    const extras = {
+      'ppt/slides/_rels/slide1.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/preview.svg"/></Relationships>',
+      'ppt/media/preview.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="blue"/></svg>',
+    }
+    const bytes = await fixtureBytes(tree, undefined, undefined, extras)
+    const model = await importPresentationPptx(bytes)
+    expect(model.slides.pages[0]!.elements[0]).toMatchObject({ type: 'image', x: 100, y: 80, width: 400, height: 300, fit: 'stretch' })
+    const sources = await presentationPptxSourceUrls(model, Buffer.from(bytes).toString('base64'))
+    const markup = renderToStaticMarkup(<PresentationSlidePreview assets={model.assets} sources={sources} slide={model.slides.pages[0]!} width={1280} selected={false} />)
+    expect(markup).toContain('data:image/svg+xml;base64,')
+    const reopened = await importPresentationPptx(await createPresentationPptx(await materializePresentationProjectSources(model, sources)))
+    expect(reopened.slides.pages[0]!.elements[0]).toMatchObject({ type: 'image', x: 100, y: 80 })
+  })
+
+  it('lets a shape font reference override an inherited master default color', async () => {
+    const rel = (type: string, target: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ref" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`
+    const extras = {
+      'ppt/slides/_rels/slide1.xml.rels': rel('slideLayout', '../slideLayouts/slideLayout1.xml'),
+      'ppt/slideLayouts/slideLayout1.xml': `<p:sldLayout ${ns}><p:cSld><p:spTree/></p:cSld></p:sldLayout>`,
+      'ppt/slideLayouts/_rels/slideLayout1.xml.rels': rel('slideMaster', '../slideMasters/slideMaster1.xml'),
+      'ppt/slideMasters/slideMaster1.xml': `<p:sldMaster ${ns}><p:cSld><p:spTree/></p:cSld><p:txStyles><p:otherStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:defRPr></a:lvl1pPr></p:otherStyle></p:txStyles></p:sldMaster>`,
+    }
+    const body = `<p:style><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>${textBody('', '<a:r><a:t>1</a:t></a:r>')}`
+    const text = firstText(await readFixture(shape(1, 100, body), undefined, undefined, extras))
+    expect(text.color).toBe('#FFFFFF')
+  })
+
   it.each(['0', 'false', '1'] as const)('honors showMasterSp="%s" on slides and layouts', async (flag) => {
     const rel = (type: string, target: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="ref" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`
     const extras = (layoutFlag: string) => ({
@@ -443,7 +562,7 @@ describe('PowerPoint display fidelity', () => {
   })
 
   it('draws ellipse and round-rectangle previews at the same bounds and radii as the canvas', () => {
-    const model = createBlankPresentationDocument('Shapes')
+    const model = createBlankPresentationProject('Shapes')
     model.slides.pages[0]!.elements = ['ellipse', 'roundRect'].map((type, index) => ({
       id: type, type: type as 'ellipse' | 'roundRect', x: index * 300, y: 0, width: 200, height: 100, rotation: 0,
       fill: '#FF0000', borderColor: 'transparent', borderWidth: 0,
@@ -454,6 +573,30 @@ describe('PowerPoint display fidelity', () => {
     const rounded = Array.from(xml.getElementsByTagName('rect')).find(node => node.hasAttribute('rx'))!
     expect(Number(rounded.getAttribute('rx')) / 100 * 200).toBeCloseTo(12)
     expect(Number(rounded.getAttribute('ry')) / 100 * 100).toBeCloseTo(12)
+  })
+
+  it('renders every native custom-geometry path without converting the shape to an image', () => {
+    const model = createBlankPresentationProject('Custom shape')
+    model.slides.pages[0]!.elements = [{
+      id: 'custom', type: 'rect', x: 0, y: 0, width: 200, height: 100, rotation: 0,
+      fill: '#FF0000', borderColor: '#0000FF', borderWidth: 2,
+      customGeometry: { paths: [
+        { width: 200, height: 100, fill: 'normal', stroke: true, commands: [
+          { type: 'moveTo', x: 0, y: 0 }, { type: 'lineTo', x: 200, y: 100 },
+        ] },
+        { width: 20, height: 10, fill: 'none', stroke: false, commands: [
+          { type: 'moveTo', x: 0, y: 10 }, { type: 'lineTo', x: 20, y: 0 },
+        ] },
+      ] },
+    }]
+
+    const xml = new DOMParser().parseFromString(preview(model), 'text/xml')
+    const paths = Array.from(xml.getElementsByTagName('path'))
+    expect(paths).toHaveLength(2)
+    expect(paths[0]!.getAttribute('d')).toBe('M 0 0 L 200 100')
+    expect(paths[0]!.getAttribute('transform')).toBe('scale(0.5 1)')
+    expect(paths[1]!.getAttribute('fill')).toBe('none')
+    expect(paths[1]!.getAttribute('stroke')).toBe('none')
   })
 
   it('applies auto-fit font scale and subtracts percentage line-spacing reduction', async () => {
@@ -543,8 +686,9 @@ describe('PowerPoint display fidelity', () => {
     model.assets.push({
       id: 'asymmetric-image-asset',
       kind: 'image',
+      mimeType: 'image/png',
       name: 'image.png',
-      source: { dataUrl: 'data:image/png;base64,AA==', fileName: 'image.png', mimeType: 'image/png' },
+      source: 'data:image/png;base64,AA==',
     })
     model.slides.pages[0]!.elements = [{ ...base, type: 'image', flipHorizontal: true, flipVertical: true, fit: 'cover',
       sourceAssetId: 'asymmetric-image-asset', altText: 'asymmetric image',
@@ -555,6 +699,8 @@ describe('PowerPoint display fidelity', () => {
     if (image.type !== 'image') throw new Error('Missing image')
     delete image.crop
     expect(preview(model)).toContain('translate(100px, 50px) scale(-1, -1)')
+    image.fit = 'stretch'
+    expect(preview(model)).toContain('object-fit:fill')
   })
 
   it.each([['vert', 90], ['vert270', -90]] as const)('lays out %s text in a rotated inner frame', async (direction, angle) => {

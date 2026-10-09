@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import JSZip from 'jszip'
 import { DOMParser } from '@xmldom/xmldom'
-import { createBlankPresentationDocument, createBlankPresentationSlide, type PresentationFileSource, type PresentationImageElement } from '@/atoms/presentation'
+import { createBlankPresentationProject, createBlankPresentationSlide, type PresentationFileSource, type PresentationImageElement } from '@/atoms/presentation'
 import { createPresentationPptx } from '../presentationPptx'
 import { importPresentationPptx } from '../presentationPptxImport'
+import { materializePresentationProjectSources, presentationPptxSourceUrls } from '@/presentation/sources'
 
 const pixel: PresentationFileSource = {
   dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9N8AAAAASUVORK5CYII=',
@@ -11,9 +12,9 @@ const pixel: PresentationFileSource = {
   mimeType: 'image/png',
 }
 
-function picture(document: ReturnType<typeof createBlankPresentationDocument>, id: string, source = pixel): PresentationImageElement {
+function picture(document: ReturnType<typeof createBlankPresentationProject>, id: string, source = pixel): PresentationImageElement {
   const sourceAssetId = `${id}-asset`
-  document.assets.push({ id: sourceAssetId, kind: 'image', name: source.fileName, source })
+  document.assets.push({ id: sourceAssetId, kind: 'image', mimeType: source.mimeType, name: source.fileName, source: source.dataUrl })
   return { id, type: 'image', sourceAssetId, altText: id, fit: 'contain', x: 10, y: 20, width: 200, height: 100, rotation: 0 }
 }
 
@@ -28,7 +29,7 @@ async function imageRelationships(archive: JSZip, slideNumber: number) {
 describe('PPTX shared image export', () => {
   it('deduplicates payloads across slides while keeping distinct images, frames, crops and links', async () => {
     const differentPixel = { ...pixel, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' }
-    const document = createBlankPresentationDocument('Shared images')
+    const document = createBlankPresentationProject('Shared images')
     const first = document.slides.pages[0]!
     const second = createBlankPresentationSlide('Second')
     document.slides.pages.push(second)
@@ -73,7 +74,7 @@ describe('PPTX shared image export', () => {
   })
 
   it('keeps repeated save and reopen cycles compact after editing an imported deck', async () => {
-    const document = createBlankPresentationDocument('Shared backgrounds')
+    const document = createBlankPresentationProject('Shared backgrounds')
     document.slides.pages = Array.from({ length: 30 }, (_, index) => ({ ...createBlankPresentationSlide(`Page ${index + 1}`), elements: [picture(document, `image-${index}`)] }))
     document.slides.selectedPageId = document.slides.pages[0]!.id
     let bytes = await createPresentationPptx(document)
@@ -82,7 +83,8 @@ describe('PPTX shared image export', () => {
       const imported = await importPresentationPptx(bytes, 'shared.pptx')
       imported.slides.pages[29]!.notes = `Edit ${cycle}`
       imported.slides.pages[29]!.elements[0]!.x = 120 + cycle
-      bytes = await createPresentationPptx(imported)
+      const sources = await presentationPptxSourceUrls(imported, Buffer.from(bytes).toString('base64'))
+      bytes = await createPresentationPptx(await materializePresentationProjectSources(imported, sources))
       const archive = await JSZip.loadAsync(bytes)
       const media = Object.keys(archive.files).filter((name) => name.startsWith('ppt/media/') && !name.endsWith('/'))
       expect(media).toHaveLength(1)
@@ -99,7 +101,7 @@ describe('PPTX shared image export', () => {
     const svg = (color: string): PresentationFileSource => ({ dataUrl: `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="${color}"/></svg>`)}`, fileName: 'shape.svg', mimeType: 'image/svg+xml' })
     const red = svg('red')
     const blue = svg('blue')
-    const document = createBlankPresentationDocument('SVG sharing')
+    const document = createBlankPresentationProject('SVG sharing')
     document.slides.pages[0]!.elements = [picture(document, 'red', red), picture(document, 'blue', blue)]
     document.slides.pages.push({ ...createBlankPresentationSlide('Scaled SVG'), elements: [{ ...picture(document, 'scaled-red', { ...red }), width: 400, height: 300 }] })
     const archive = await JSZip.loadAsync(await createPresentationPptx(document))

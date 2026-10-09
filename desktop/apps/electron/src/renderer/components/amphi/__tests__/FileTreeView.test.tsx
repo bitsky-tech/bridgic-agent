@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { DirTreeNode } from '@shared/dir-tree'
+import type { MountSummary } from '@/lib/amphiClient'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -8,6 +9,8 @@ GlobalRegistrator.register()
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { FileTreeView } = await import('../FileTreeView')
+const { MountRow } = await import('../MountRow')
+const { Provider, createStore } = await import('jotai')
 
 afterAll(async () => {
   await GlobalRegistrator.unregister()
@@ -19,6 +22,59 @@ const nodes: DirTreeNode[] = [
 ]
 
 describe('FileTreeView in-app file owners', () => {
+  it('opens mounted Excel files once on a single click even with the old PPT-only policy', async () => {
+    const onOpenRoot = mock(() => undefined)
+    const mount: MountSummary = { id: 'excel-click', name: 'Book.XLSX', path: '/qa/Book.XLSX', kind: 'file', exists: true, size_bytes: 10, item_count: null, created_at: '' }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const noop = () => undefined
+    try {
+      await act(async () => root.render(<Provider store={createStore()}><MountRow
+        mount={mount} sessionId="excel-click" menuOpen={false} onMenuToggle={noop}
+        onCopyPath={noop} onOpenInFileManager={noop} onMentionRoot={noop} onMentionChild={noop}
+        childMenuFor={null} onChildMenuToggle={noop} onCopyChildPath={noop} onRevealChild={noop}
+        onOpenRoot={onOpenRoot} onOpenChild={noop} openOnSingleClick={(name) => name.endsWith('.pptx')}
+      /></Provider>))
+      const row = host.querySelector<HTMLElement>('.group')!
+      await act(async () => row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })))
+      expect(onOpenRoot).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }))
+        row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }))
+      })
+      expect(onOpenRoot).toHaveBeenCalledTimes(1)
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
+  it('opens every supported Office format once on a single click without a custom policy', async () => {
+    const onOpen = mock((_node: DirTreeNode) => undefined)
+    const files: DirTreeNode[] = ['Book.XLSX', 'Report.docx', 'Slides.pptx', 'Legacy.xls'].map((name) => ({ name, relPath: name, kind: 'file', sizeBytes: 10 }))
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    try {
+      await act(async () => root.render(<FileTreeView nodes={files} expanded={new Set()} onToggle={() => undefined} onOpen={onOpen} />))
+      for (const [index, file] of files.entries()) {
+        const row = host.querySelector<HTMLElement>(`[data-file-tree-path="${file.relPath}"]`)!
+        await act(async () => row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })))
+        expect(onOpen).toHaveBeenCalledTimes(index < 3 ? index + 1 : index)
+        await act(async () => {
+          row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }))
+          row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }))
+        })
+        expect(onOpen).toHaveBeenCalledTimes(index + 1)
+        expect(onOpen).toHaveBeenLastCalledWith(file)
+      }
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+  })
+
   it('opens claimed PPTX files once on click and leaves ordinary files on double-click', async () => {
     const onOpen = mock((_node: DirTreeNode) => undefined)
     const host = document.createElement('div')

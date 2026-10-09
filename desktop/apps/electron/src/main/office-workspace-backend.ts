@@ -3,11 +3,11 @@ import { pythonClient } from './python-client'
 import { guiClientId } from './gui-client-id'
 
 /** Resolve workspace ownership through the same authenticated Session API as the file panel. */
-export async function officeWorkspaceRequest(path: string, body?: unknown): Promise<unknown> {
+export async function officeWorkspaceRequest(path: string, body?: unknown, method?: 'POST' | 'PATCH'): Promise<unknown> {
   const endpoint = pythonClient.snapshot().endpoint
   if (!endpoint?.token) throw new Error('The Session service is unavailable')
   const result = await fetch(`${endpoint.baseUrl}${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
+    method: body === undefined ? 'GET' : method ?? 'POST',
     headers: { [AUTH_HEADER_NAME]: `Bearer ${endpoint.token}`, [CLIENT_ID_HEADER]: guiClientId(), [CLIENT_TYPE_HEADER]: 'gui', 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),

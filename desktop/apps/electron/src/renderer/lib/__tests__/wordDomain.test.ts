@@ -19,6 +19,30 @@ afterAll(async () => {
 })
 
 describe('Word renderer domain', () => {
+  it('keeps unchanged and untargeted native header/footer content intact', async () => {
+    const store = createWordDomainStore(createWordWorkspace('rich-parts', 'Report'), { defaultTitle: 'Report' })
+    try {
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '<p><b>Brand</b></p>', footerHtml: '<p><i>Confidential</i></p>' } })
+      const initial = store.getSnapshot()
+      expect((await store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '<p><b>Brand</b></p>' } })).ok).toBe(true)
+      expect(store.getSnapshot()).toBe(initial)
+      const document = initial.documents[0]!
+      const native = structuredClone(document.snapshot)
+      const header = native.headers![native.documentStyle.defaultHeaderId!]!.body
+      header.textRuns![0]!.ts!.cl = { rgb: '#123456' }
+      store.commitEditorSnapshot(document.id, native)
+      expect((await store.dispatch({ type: 'document.headerFooter.update', settings: { footerHtml: '<p><i>Updated footer</i></p>' } })).ok).toBe(true)
+      const updated = store.getSnapshot().documents[0]!
+      expect(updated.snapshot.headers).toEqual(native.headers)
+      expect(updated.snapshot.body).toEqual(native.body)
+      expect(updated.snapshot.footers![updated.snapshot.documentStyle.defaultFooterId!]!.body.dataStream).toContain('Updated footer')
+      const beforeNumbering = updated.snapshot
+      await store.dispatch({ type: 'document.headerFooter.update', settings: { pageNumberStart: 3, showPageNumbers: true } })
+      expect(store.getSnapshot().documents[0]!.snapshot.headers).toEqual(beforeNumbering.headers)
+      expect(store.getSnapshot().documents[0]!.snapshot.footers).toEqual(beforeNumbering.footers)
+    } finally { store.dispose() }
+  })
+
   it('isolates one workspace to its Session and manages internal document tabs', async () => {
     const initial = createWordWorkspace('session-word', 'Untitled document')
     const store = createWordDomainStore(initial, { defaultTitle: 'Untitled document' })

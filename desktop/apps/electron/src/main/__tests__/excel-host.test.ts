@@ -131,6 +131,36 @@ function setup(openExternal?: (url: string) => void) {
 }
 
 describe('ExcelHost Session target ownership', () => {
+  it('publishes the renderer-owned workbook inventory only for its Session target', async () => {
+    const snapshots: Array<ReturnType<ExcelHost['snapshot']>> = []
+    const views: FakeView[] = []
+    const host = fakeHost()
+    const manager = new ExcelHost(
+      () => {
+        const view = new FakeView(new FakeWebContents(views.length + 1, `excel-target-${views.length + 1}`))
+        views.push(view)
+        return view as unknown as WebContentsView
+      },
+      '/dist/excel-host-preload.cjs',
+      'http://localhost:5173',
+      '/dist/renderer/excel.html',
+      (snapshot) => snapshots.push(snapshot),
+    )
+    manager.attachHost(host.window)
+    const session = await manager.ensureSession('session-a', {
+      sessionId: 'session-a', locale: 'en-US', theme: 'light',
+    }, false)
+
+    expect(session.documentCount).toBeNull()
+    manager.reportState(session.webContentsId, { documentCount: 0, dirty: false })
+    expect(manager.snapshot().sessions[0]?.documentCount).toBe(0)
+    manager.reportState(session.webContentsId, { documentCount: 2, dirty: true })
+    expect(manager.snapshot().sessions[0]).toMatchObject({ documentCount: 2, dirty: true })
+    expect(snapshots.at(-1)?.sessions[0]).toMatchObject({ documentCount: 2, dirty: true })
+    expect(() => manager.reportState(session.webContentsId, { documentCount: -1, dirty: false })).toThrow('Invalid Excel runtime')
+    expect(() => manager.reportState(-1, { documentCount: 0, dirty: false })).toThrow('does not own')
+  })
+
   it('keeps serialized recovery scoped to the owning Session renderer', async () => {
     const { manager } = setup()
     const first = await manager.ensureSession('session-a', { sessionId: 'session-a', locale: 'en-US', theme: 'light' })
@@ -227,7 +257,7 @@ describe('ExcelHost Session target ownership', () => {
     const config = { sessionId: 'session-a', locale: 'en-US' as const, theme: 'light' as const }
     const first = await manager.ensureSession('session-a', config)
     await manager.ensureSession('session-b', { ...config, sessionId: 'session-b' })
-    manager.setDirty(first.webContentsId, true)
+    manager.reportState(first.webContentsId, { documentCount: 1, dirty: true })
     manager.setRecoveryState(first.webContentsId, '{"version":1}')
     manager.activateSession('session-b')
     manager.setVisible(true)
@@ -251,7 +281,7 @@ describe('ExcelHost Session target ownership', () => {
     })
     const checkpoint = JSON.stringify({ version: 1, tabs: [{ tabId: 'tab-a' }] })
     manager.setRecoveryState(first.webContentsId, checkpoint)
-    manager.setDirty(first.webContentsId, true)
+    manager.reportState(first.webContentsId, { documentCount: 1, dirty: true })
 
     views[0]?.webContents.emit('render-process-gone', {}, { reason: 'crashed' })
     const recovered = await manager.ensureSession('session-a', {
@@ -270,7 +300,7 @@ describe('ExcelHost Session target ownership', () => {
     const { manager, views, host } = setup()
     for (const sessionId of ['session-a', 'session-b']) {
       const session = await manager.ensureSession(sessionId, { sessionId, locale: 'en-US', theme: 'light' })
-      manager.setDirty(session.webContentsId, true)
+      manager.reportState(session.webContentsId, { documentCount: 1, dirty: true })
     }
     manager.shutdown()
     expect(manager.snapshot().sessions).toEqual([])

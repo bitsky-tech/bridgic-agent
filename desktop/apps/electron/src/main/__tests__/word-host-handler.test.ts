@@ -10,6 +10,32 @@ const { IPC } = await import('../../shared/ipc-channels')
 const { registerWordHostHandlers } = await import('../handlers/word-host')
 
 describe('Word host IPC boundary', () => {
+  it('opens a picked DOCX only in the sending child renderer Session', async () => {
+    const originalShowOpenDialog = electronModuleMock.dialog.showOpenDialog
+    const opened: unknown[][] = []
+    electronModuleMock.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: ['/tmp/Agent Report.docx'] })
+    const word = {
+      sessionForContents: (sender: number) => {
+        expect(sender).toBe(17)
+        return 'session-a'
+      },
+      openFile: async (...args: unknown[]) => { opened.push(args) },
+    } as unknown as WordHost
+    testIpcHandlers.clear()
+    registerWordHostHandlers(word, () => undefined)
+    try {
+      await testIpcHandlers.get(IPC.wordHost.openDocument)?.({ sender: { id: 17 } } as IpcMainInvokeEvent)
+      expect(opened).toEqual([['session-a', {
+        id: 'renderer-open',
+        name: 'Agent Report.docx',
+        path: '/tmp/Agent Report.docx',
+        sessionId: 'session-a',
+      }]])
+    } finally {
+      electronModuleMock.dialog.showOpenDialog = originalShowOpenDialog
+    }
+  })
+
   it('uses the sending child identity for runtime reports, completion and close requests', async () => {
     const calls: unknown[][] = []
     const events: unknown[][] = []

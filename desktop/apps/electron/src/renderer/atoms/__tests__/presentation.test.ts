@@ -4,10 +4,8 @@ import { activeSessionIdAtom } from '../sessions'
 import {
   PRESENTATION_PAGE_SIZES,
   createBlankPresentationSlide,
-  createBlankPresentationDocument,
-  createInitialPresentationDocument,
-  currentPresentationDocumentAtom,
-  currentPresentationWorkspaceAtom,
+  createBlankPresentationProject,
+  createInitialPresentationProject,
   presentationExpandedAtom,
   purgePresentationSessionAtom,
   formatPresentationText,
@@ -20,8 +18,8 @@ import {
 
 describe('presentation atoms', () => {
   it('creates documents with an explicit widescreen page size', () => {
-    expect(createInitialPresentationDocument().pageSize).toEqual(PRESENTATION_PAGE_SIZES.wide)
-    expect(createBlankPresentationDocument('Blank').pageSize).toEqual(PRESENTATION_PAGE_SIZES.wide)
+    expect(createInitialPresentationProject().pageSize).toEqual(PRESENTATION_PAGE_SIZES.wide)
+    expect(createBlankPresentationProject('Blank').pageSize).toEqual(PRESENTATION_PAGE_SIZES.wide)
   })
 
   it('gives every generated slide an explicit no-transition default', () => {
@@ -29,7 +27,7 @@ describe('presentation atoms', () => {
     expect(blank.transition).toEqual({ effect: 'none', durationMs: 1_000 })
     expect(blank.background).toBeUndefined()
     expect(blank.footer).toBeUndefined()
-    const initialDocument = createInitialPresentationDocument()
+    const initialDocument = createInitialPresentationProject()
     expect(initialDocument.slides.pages.every((slide) => (
       slide.transition.effect === 'none' && slide.transition.durationMs === 1_000
     ))).toBe(true)
@@ -37,7 +35,7 @@ describe('presentation atoms', () => {
   })
 
   it('starts with one unnamed slide containing ordinary editable text boxes instead of bundled sample content', () => {
-    const document = createInitialPresentationDocument()
+    const document = createInitialPresentationProject()
     expect(document.title).toBe('')
     expect(document.slides.pages).toHaveLength(1)
     expect(document.slides.selectedPageId).toBe(document.slides.pages[0]!.id)
@@ -55,7 +53,7 @@ describe('presentation atoms', () => {
   })
 
   it('resolves global theme defaults while preserving page overrides', () => {
-    const document = createBlankPresentationDocument('Theme defaults')
+    const document = createBlankPresentationProject('Theme defaults')
     const slide = document.slides.pages[0]!
     document.theme = {
       ...document.theme,
@@ -236,67 +234,26 @@ describe('presentation atoms', () => {
     expect(stripPresentationTextFormatting(formatPresentationText(element), element)).toBe(element.text)
   })
 
-  it('keeps documents and expanded state independent between Sessions', () => {
+  it('keeps expanded state independent between Sessions', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-a')
-    const sessionADocument = {
-      ...createInitialPresentationDocument(),
-      title: 'Session A deck',
-    }
-    store.set(currentPresentationDocumentAtom, sessionADocument)
     store.set(presentationExpandedAtom, true)
 
     store.set(activeSessionIdAtom, 'session-b')
-    expect(store.get(currentPresentationDocumentAtom).title).not.toBe('Session A deck')
     expect(store.get(presentationExpandedAtom)).toBe(false)
 
     store.set(activeSessionIdAtom, 'session-a')
-    expect(store.get(currentPresentationDocumentAtom).title).toBe('Session A deck')
     expect(store.get(presentationExpandedAtom)).toBe(true)
   })
 
-  it('removes a deleted Session document and expansion state', () => {
+  it('removes a deleted Session expansion state', () => {
     const store = createStore()
     store.set(activeSessionIdAtom, 'session-delete')
-    store.set(currentPresentationDocumentAtom, {
-      ...createInitialPresentationDocument(),
-      title: 'Delete me',
-    })
     store.set(presentationExpandedAtom, true)
 
     store.set(purgePresentationSessionAtom, 'session-delete')
 
-    expect(store.get(currentPresentationDocumentAtom).title).not.toBe('Delete me')
     expect(store.get(presentationExpandedAtom)).toBe(false)
-  })
-
-  it('keeps multiple open presentations independent within one Session', () => {
-    const store = createStore()
-    store.set(activeSessionIdAtom, 'session-tabs')
-    const firstWorkspace = store.get(currentPresentationWorkspaceAtom)
-    const firstDocument = firstWorkspace.documents[0]!
-    const secondDocument = createBlankPresentationDocument('Second deck')
-
-    store.set(currentPresentationWorkspaceAtom, {
-      activeDocumentId: secondDocument.id,
-      documents: [...firstWorkspace.documents, secondDocument],
-    })
-    store.set(currentPresentationDocumentAtom, {
-      ...store.get(currentPresentationDocumentAtom),
-      title: 'Edited second deck',
-    })
-
-    const withEditedSecond = store.get(currentPresentationWorkspaceAtom)
-    store.set(currentPresentationWorkspaceAtom, {
-      ...withEditedSecond,
-      activeDocumentId: firstDocument.id,
-    })
-
-    expect(store.get(currentPresentationDocumentAtom).id).toBe(firstDocument.id)
-    expect(store.get(currentPresentationDocumentAtom).title).toBe(firstDocument.title)
-    expect(store.get(currentPresentationWorkspaceAtom).documents.find((item) => (
-      item.id === secondDocument.id
-    ))?.title).toBe('Edited second deck')
   })
 
 })

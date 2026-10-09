@@ -8,8 +8,9 @@ import type { WordDocumentReadResult } from '../../../../shared/types'
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const { act } = await import('react')
+const { act, useState } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { i18n } = await import('@/lib/i18n')
 const { installApiStub } = await import('@/lib/apiStub')
 installApiStub()
 const { SessionWordEditor } = await import('../SessionWordEditor')
@@ -118,16 +119,20 @@ describe('SessionWordEditor', () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
+    const onOpenDocument = mock(async () => undefined)
 
     await act(async () => {
-      root.render(<SessionWordEditor defaultTitle="Untitled" expanded={false} sessionId="session-launch" />)
+      root.render(<SessionWordEditor defaultTitle="Untitled" expanded={false} onOpenDocument={onOpenDocument} sessionId="session-launch" />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="word-open-file"]')).not.toBeNull()
     expect(await window.__bridgicWord?.dispatch({ type: 'workspace.get' })).toMatchObject({
       ok: true,
       state: { documents: [] },
     })
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-open-file"]')!.click())
+    expect(onOpenDocument).toHaveBeenCalledTimes(1)
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-testid="word-create-document"]')?.click()
@@ -146,6 +151,42 @@ describe('SessionWordEditor', () => {
 
     await act(async () => root.unmount())
     host.remove()
+  })
+
+  it('keeps an import failure visible after the opening state is dismissed', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const request = {
+      id: 'failed-open',
+      name: 'Broken.docx',
+      path: '/tmp/Broken.docx',
+      sessionId: 'session-open-failure',
+    }
+    function Harness() {
+      const [openFileRequest, setOpenFileRequest] = useState<typeof request | null>(null)
+      return <SessionWordEditor
+        defaultTitle="Untitled"
+        expanded={false}
+        onOpenDocument={() => setOpenFileRequest(request)}
+        onOpenFileRequestHandled={() => setOpenFileRequest(null)}
+        openFileRequest={openFileRequest}
+        readDocument={async () => { throw new Error('Broken document') }}
+        sessionId="session-open-failure"
+      />
+    }
+    try {
+      await act(async () => {
+        root.render(<Harness />)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-open-file"]')!.click())
+      await waitForElement(host, '[data-testid="word-launch-empty-state"] [role="alert"]')
+      expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      host.remove()
+    }
   })
 
   it('imports a clicked DOCX into the Session workspace and completes its request', async () => {
@@ -284,7 +325,7 @@ describe('SessionWordEditor', () => {
       await waitForElement(host, '[data-testid="word-document-header"] [role="alert"]')
       const before = attempts
       const writes = save.mock.calls.length
-      const retry = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === '重试')!
+      const retry = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === i18n.t('word.retry'))!
       expect(retry).toBeDefined()
       // A still-failing retry must remain visibly failed.
       await act(async () => { retry.click(); await new Promise((resolve) => setTimeout(resolve, 10)) })

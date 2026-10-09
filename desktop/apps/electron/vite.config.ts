@@ -48,6 +48,9 @@ const rendererConfig = defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   optimizeDeps: {
+    // Workers are outside Vite's HTML import crawl. Discover their dependencies
+    // at startup so the first Office import cannot reload every renderer.
+    entries: ['*.html', 'lib/**/*.worker.ts'],
     include: ['react', 'react-dom', 'jotai', 'pptxgenjs', 'jszip'],
     exclude: ['@app/ui'],
   },

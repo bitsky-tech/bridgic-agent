@@ -21,7 +21,6 @@ import { cn } from '@/lib/cn'
 import type {
   WordDomainStore,
   WordFormattingCommand,
-  WordHeaderFooterSettings,
   WordPageSettings,
   WordTableAction,
 } from '@/lib/wordDomain'
@@ -33,10 +32,12 @@ import {
   getUniverWordCount,
 } from '@/lib/wordUniverModel'
 import { createWordEditorAdapter, type WordEditorRuntime } from '@/lib/wordEditorAdapter'
+import { createWordHeaderFooterDraft, mergeWordHeaderFooterDraft, type WordHeaderFooterDraft } from '@/lib/wordHeaderFooter'
 
 export { replaceUniverSnapshotWithRetry, shouldCommitUniverCommand } from '@/lib/wordEditorAdapter'
 
 import { WordRibbon, type WordRibbonTab } from './WordRibbon'
+import { WordHeaderFooterDialog } from './WordHeaderFooterDialog'
 
 export interface StructuredWordEditorProps {
   expanded: boolean
@@ -75,6 +76,7 @@ export function StructuredWordEditor({
   const [zoomMode, setZoomMode] = useState<WordZoomMode>('fit')
   const [runtime, setRuntime] = useState<WordEditorRuntime | null>(null)
   const [imageError, setImageError] = useState<string | null>(null)
+  const [editingHeaderFooter, setEditingHeaderFooter] = useState<WordHeaderFooterDraft | null>(null)
 
   useLayoutEffect(() => {
     if (zoomMode !== 'fit') return
@@ -165,16 +167,10 @@ export function StructuredWordEditor({
       .catch((error) => setImageError(error instanceof Error ? error.message : String(error)))
   }
 
-  const updateHeaderFooter = (settings: Partial<WordHeaderFooterSettings>) => {
+  const editHeaderFooter = (field: 'headerHtml' | 'footerHtml') => {
     flushActiveSnapshot()
-    void store.dispatch({ type: 'document.headerFooter.update', documentId: activeDocument.id, settings })
-  }
-
-  const promptHeaderFooter = (field: 'headerHtml' | 'footerHtml') => {
-    const current = stripHtml(activeDocument.headerFooter[field])
-    const label = field === 'headerHtml' ? t('word.headerPrompt') : t('word.footerPrompt')
-    const value = window.prompt(label, current)
-    if (value !== null) updateHeaderFooter({ [field]: escapeHtml(value.trim()) })
+    const current = store.getSnapshot().documents.find((document) => document.id === activeDocument.id)
+    if (current) setEditingHeaderFooter(createWordHeaderFooterDraft(current.snapshot, field))
   }
 
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -193,6 +189,7 @@ export function StructuredWordEditor({
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+      if (editingHeaderFooter) return
       event.preventDefault()
       save(false)
     }
@@ -260,8 +257,8 @@ export function StructuredWordEditor({
         activeTab={activeRibbonTab}
         onActiveTabChange={setActiveRibbonTab}
         onCommand={runEditingCommand}
-        onEditFooter={() => promptHeaderFooter('footerHtml')}
-        onEditHeader={() => promptHeaderFooter('headerHtml')}
+        onEditFooter={() => editHeaderFooter('footerHtml')}
+        onEditHeader={() => editHeaderFooter('headerHtml')}
         onInlineStyle={(property, value) => {
           if (property === 'line-height') void store.dispatch({ type: 'editor.format', action: 'lineHeight', value })
           if (property === 'letter-spacing') void store.dispatch({ type: 'editor.format', action: 'letterSpacing', value })
@@ -286,6 +283,19 @@ export function StructuredWordEditor({
         tableActive={tableActive}
         zoom={zoom}
       />
+
+      {editingHeaderFooter ? <WordHeaderFooterDialog
+        draft={editingHeaderFooter}
+        title={t(editingHeaderFooter.field === 'headerHtml' ? 'word.header' : 'word.footer')}
+        onClose={() => setEditingHeaderFooter(null)}
+        onSave={async (snapshot) => {
+          const { documentId } = editingHeaderFooter
+          const current = store.getSnapshot().documents.find((document) => document.id === documentId)
+          if (!current) throw new Error(t('word.headerFooterUnavailable'))
+          const merged = mergeWordHeaderFooterDraft(current.snapshot, editingHeaderFooter, snapshot)
+          if (!store.commitEditorSnapshot(documentId, merged)) throw new Error(t('word.headerFooterUnavailable'))
+        }}
+      /> : null}
 
       <input accept="image/png,image/jpeg,image/gif,image/bmp,image/webp" className="sr-only" onChange={handleImageChange} ref={imageInputRef} type="file" />
       {rulerVisible ? <WordRuler page={activeDocument.page} zoom={zoom} /> : null}
@@ -433,12 +443,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Unable to read image.'))
     reader.readAsDataURL(file)
   })
-}
-
-function stripHtml(value: string): string {
-  const template = document.createElement('template')
-  template.innerHTML = value
-  return template.content.textContent ?? ''
 }
 
 function escapeHtml(value: string): string {

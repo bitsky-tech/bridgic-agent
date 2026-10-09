@@ -157,6 +157,7 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
         }}
         onFlushHandlerChange={onFlushHandlerChange}
         onOpenFileRequestHandled={onOpenFileRequestHandled}
+        onOpenDocument={api.openDocument}
         onStateChange={onStateChange}
         onToggleExpanded={() => { void api.setExpanded(!expanded).catch(reportError) }}
         openFileRequest={openFileRequest}

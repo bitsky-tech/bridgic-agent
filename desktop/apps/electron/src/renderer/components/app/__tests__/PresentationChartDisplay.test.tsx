@@ -2,39 +2,41 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { DOMParser } from '@xmldom/xmldom'
 import JSZip from 'jszip'
-import { presentationSlideBackground, replacePresentationPages, type PresentationChartElement, type PresentationDocument } from '@/atoms/presentation'
+import { presentationSlideBackground, type PresentationChartElement, type PresentationProject } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 const { renderToStaticMarkup } = await import('react-dom/server')
 const fabric = await import('fabric')
-const { createBlankPresentationDocument } = await import('@/atoms/presentation')
+const { createBlankPresentationProject } = await import('@/atoms/presentation')
 const { createPresentationChartElement, createPresentationTableElement } = await import('@/lib/presentationInsert')
+const { presentationTableCellAppearance } = await import('@/lib/presentationTable')
 const { createPresentationPptx } = await import('@/lib/presentationPptx')
 const { importPresentationPptx } = await import('@/lib/presentationPptxImport')
 const { applyPresentationDesign } = await import('@/lib/presentationDesign')
-const { compilePresentationSlideMarkdown, decompilePresentationSlideMarkdown } = await import('@/lib/presentationMarkdown')
+const { editPresentationPage } = await import('@/presentation/agentCommands')
 const { PresentationSlidePreview } = await import('../PresentationSlidePreview')
 const { createPresentationFabricObject } = await import('../PresentationWorkbenchPanel')
 const parse = (xml: string) => new DOMParser().parseFromString(xml, 'text/xml')
 const chartNs = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
 
-function documentFor(element: PresentationDocument['slides']['pages'][number]['elements'][number]) {
-  const model = createBlankPresentationDocument('Chart fidelity')
+function documentFor(element: PresentationProject['slides']['pages'][number]['elements'][number]) {
+  const model = createBlankPresentationProject('Chart fidelity')
   model.slides.pages[0]!.elements = [element]
   return model
 }
 
-function markup(model: PresentationDocument) {
+function markup(model: PresentationProject) {
   const host = document.createElement('div')
   host.innerHTML = renderToStaticMarkup(<PresentationSlidePreview slide={model.slides.pages[0]!} theme={model.theme} selected={false} width={1280} />)
   return host
 }
 
-function agentEdit(model: PresentationDocument): PresentationDocument {
-  return {
-    ...model,
-    slides: replacePresentationPages(model.slides, [compilePresentationSlideMarkdown(decompilePresentationSlideMarkdown(model.slides.pages[0]!), { document: model }).slide]),
-  }
+function agentEdit(model: PresentationProject): PresentationProject {
+  const page = model.slides.pages[0]!
+  const element = page.elements[0]!
+  return editPresentationPage(model, page.id, [{
+    type: 'patch', id: element.id, element_type: element.type, patch: { x: element.x },
+  }]).project
 }
 
 afterAll(() => GlobalRegistrator.unregister())
@@ -300,6 +302,7 @@ describe('chart and table display round trips', () => {
         fontSize: 24, flipHorizontal, flipVertical })
       for (let round = 0; round < 2; round++) {
         const element = model.slides.pages[0]!.elements[0]!
+        if (element.type !== 'table') throw new Error('Missing table')
         const td = markup(model).querySelectorAll('td')[3]!
         expect(td.textContent).toBe(cells[1]![1]!)
         expect(td.querySelector<HTMLElement>('[style*="white-space"]')!.style.whiteSpace).toBe('pre-wrap')
@@ -317,15 +320,57 @@ describe('chart and table display round trips', () => {
           const b = fabric.util.transformPoint(new fabric.Point(clip.width / 2, clip.height / 2), matrix)
           const column = flipHorizontal ? 1 - index % 2 : index % 2
           const row = flipVertical ? 2 - Math.floor(index / 2) : Math.floor(index / 2)
-          expect(Math.min(a.x, b.x)).toBeCloseTo(180 + column * 360 + 10)
-          expect(Math.max(a.x, b.x)).toBeCloseTo(180 + (column + 1) * 360 - 10)
-          expect(Math.min(a.y, b.y)).toBeCloseTo(140 + row * 80 + 4)
-          expect(Math.max(a.y, b.y)).toBeCloseTo(140 + (row + 1) * 80 - 4)
+          const padding = presentationTableCellAppearance(element, Math.floor(index / 2), index % 2).padding
+          expect(Math.min(a.x, b.x)).toBeCloseTo(180 + column * 360 + (flipHorizontal ? padding.right : padding.left))
+          expect(Math.max(a.x, b.x)).toBeCloseTo(180 + (column + 1) * 360 - (flipHorizontal ? padding.left : padding.right))
+          expect(Math.min(a.y, b.y)).toBeCloseTo(140 + row * 80 + (flipVertical ? padding.bottom : padding.top))
+          expect(Math.max(a.y, b.y)).toBeCloseTo(140 + (row + 1) * 80 - (flipVertical ? padding.top : padding.bottom))
         })
         group.dispose()
         model = await importPresentationPptx(await createPresentationPptx(agentEdit(model)))
       }
     }
+  })
+
+  it('renders individual table text runs with their own canvas styles', async () => {
+    const element = {
+      ...createPresentationTableElement([['Red Blue']]),
+      cellStyles: [[{ textRuns: [
+        { start: 0, end: 4, style: { color: '#FF0000', fontWeight: 700 as const } },
+        { start: 4, end: 8, style: { color: '#0000FF', italic: true } },
+      ] }]],
+    }
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing table group')
+    const text = group.getObjects().find(object => object instanceof fabric.Textbox)
+    if (!(text instanceof fabric.Textbox)) throw new Error('Missing table text')
+    expect(text.styles[0]?.[0]).toMatchObject({ fill: '#FF0000', fontWeight: 700 })
+    expect(text.styles[0]?.[4]).toMatchObject({ fill: '#0000FF', fontStyle: 'italic' })
+    group.dispose()
+  })
+
+  it('renders independent table cell borders in preview and editable canvas', async () => {
+    const element = {
+      ...createPresentationTableElement([['Border']]),
+      cellStyles: [[{ borders: {
+        top: { color: '#FF0000', width: 4, type: 'solid' as const },
+        right: { color: '#0000FF', width: 2, type: 'dash' as const },
+        bottom: { color: '#00AA00', width: 1, type: 'solid' as const },
+        left: { color: 'transparent', width: 0, type: 'none' as const },
+      } }]],
+    }
+    const td = markup(documentFor(element)).querySelector('td')!
+    expect(td.style.borderTop).toContain('4px solid')
+    expect(td.style.borderRight).toContain('2px dashed')
+    expect(td.style.borderBottom).toContain('1px solid')
+    expect(td.style.borderLeft).toContain('none')
+    const group = await createPresentationFabricObject(fabric, element, () => undefined)
+    if (!(group instanceof fabric.Group)) throw new Error('Missing table group')
+    const lines = group.getObjects().filter(object => object instanceof fabric.Line) as InstanceType<typeof fabric.Line>[]
+    expect(lines).toHaveLength(3)
+    expect(lines.map(line => [line.stroke, line.strokeWidth])).toEqual([['#FF0000', 4], ['#0000FF', 2], ['#00AA00', 1]])
+    expect(lines[1]?.strokeDashArray).toEqual([8, 4])
+    group.dispose()
   })
 
   it.each(['pie', 'doughnut'] as const)('separates crowded %s value labels without losing values or changing the frame', async chartType => {

@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import { mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
+import { mkdir, open, readFile, realpath, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, isAbsolute } from 'node:path'
 import type { OfficeFileKind, OfficeFileSaveRequest, OfficeFileSource } from '../shared/office-files'
+import type { PresentationMountedSource, PresentationSourceMount } from '../shared/presentation-host'
 import { inspectOfficeFile, OFFICE_EXTENSIONS, officePath, saveOfficeFile, writeOfficeBytes } from './office-files'
 
-type Mount = { path: string; kind: string; removable?: boolean }
-interface WriteReceipt { source: OfficeFileSource; fingerprint: string }
+type Mount = PresentationSourceMount
+interface WriteReceipt { source: OfficeFileSource; fingerprint: string; protectedSourcePath?: string | null }
 const fingerprint = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const isWithin = (root: string, path: string) => {
   const rel = relative(root, path)
@@ -15,17 +16,18 @@ const isWithin = (root: string, path: string) => {
 export function createOfficeWorkspaceFiles(request: (path: string, body?: unknown) => Promise<unknown>, changed: (sessionId: string) => void) {
   const imports = new Map<string, Promise<OfficeFileSource>>()
   const mountsPath = (id: string) => `/sessions/${encodeURIComponent(id)}/mounts`
-  const workDir = async (id: string) => {
+  const workMount = async (id: string) => {
     const mounts = await request(mountsPath(id)) as Mount[]
     const work = mounts.find((mount) => mount.kind === 'folder' && mount.removable === false && basename(mount.path) === '.work')
     if (!work) throw new Error('The Session workspace is unavailable')
-    return realpath(work.path)
+    return { mount: work, path: await realpath(work.path) }
   }
-  const register = async (id: string, path: string) => {
+  const workDir = async (id: string) => (await workMount(id)).path
+  const register = async (id: string, path: string): Promise<Mount> => {
     const mount = await request(mountsPath(id), { path }) as Mount
-    if (!mount || typeof mount.path !== 'string') throw new Error('The imported Office file was not registered')
+    if (!mount || typeof mount.id !== 'string' || typeof mount.path !== 'string') throw new Error('The imported Office file was not registered')
     changed(id)
-    return mount.path
+    return mount
   }
   const prepare = (id: string, kind: OfficeFileKind, path: string): Promise<OfficeFileSource> => {
     officePath(kind, path)
@@ -39,12 +41,39 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
           if (!isWithin(work, source.path)) throw new Error('New Office files must be created in the Session workspace')
           return source
         }
-        return inspectOfficeFile(kind, await register(id, source.path))
+        return inspectOfficeFile(kind, (await register(id, source.path)).path)
       })()
       imports.set(key, pending)
       void pending.finally(() => { if (imports.get(key) === pending) imports.delete(key) }).catch(() => undefined)
     }
     return pending
+  }
+  const writePresentationSource = async (id: string, input: { dataBase64: string; fileName: string; mimeType: string }): Promise<string> => {
+    if (!input || typeof input.fileName !== 'string' || !input.fileName.trim() || typeof input.mimeType !== 'string' || !input.mimeType.trim()) {
+      throw new TypeError('Invalid PowerPoint source')
+    }
+    const maximumBytes = 60 * 1024 * 1024
+    if (typeof input.dataBase64 !== 'string'
+      || input.dataBase64.length > Math.ceil(maximumBytes / 3) * 4
+      || input.dataBase64.length % 4 !== 0
+      || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.dataBase64)) {
+      throw new TypeError('PowerPoint embedded source data is invalid')
+    }
+    const bytes = Buffer.from(input.dataBase64, 'base64')
+    if (bytes.toString('base64') !== input.dataBase64) throw new TypeError('PowerPoint embedded source data is invalid')
+    if (bytes.byteLength > maximumBytes) throw new Error('PowerPoint source exceeds the size limit')
+    const workspace = await workMount(id)
+    const safeName = basename(input.fileName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'asset.bin'
+    const path = join(workspace.path, `${fingerprint(bytes)}-${safeName}`)
+    await mkdir(dirname(path), { recursive: true })
+    const file = await open(path, 'wx', 0o600).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'EEXIST') return null
+      throw error
+    })
+    if (file) {
+      try { await file.writeFile(bytes) } finally { await file.close() }
+    }
+    return path
   }
   return {
     prepare,
@@ -61,19 +90,33 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
           if (!receipt?.source || typeof receipt.source.path !== 'string'
             || !isWithin(root, receipt.source.path)
             || (receipt.source.mtimeMs !== null && !Number.isFinite(receipt.source.mtimeMs))
-            || typeof receipt.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.fingerprint)) throw new Error('The Office write receipt is invalid')
+            || typeof receipt.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.fingerprint)
+            || (receipt.protectedSourcePath != null && typeof receipt.protectedSourcePath !== 'string')) throw new Error('The Office write receipt is invalid')
           officePath(input.kind, receipt.source.path)
+          if (receipt.protectedSourcePath) officePath(input.kind, receipt.protectedSourcePath)
           return receipt
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           throw error
         }
       }
-      let source = input.source
+      // A limited importer must never overwrite the original, even for managed files.
+      // Allocate a sibling on the first edit, then continue saving that editable copy.
+      let source = input.preserveSource ? undefined : input.source
       if (source && !isWithin(root, source.path)) source = await prepare(id, input.kind, source.path)
       let allocated: string | undefined
       const receipt = !source || (await inspectOfficeFile(input.kind, source.path)).mtimeMs !== source.mtimeMs ? await readReceipt() : null
-      if (!source && receipt) source = receipt.source
+      const reusableCopy = receipt && receipt.protectedSourcePath !== undefined && input.source
+        && (input.source.path === receipt.protectedSourcePath || input.source.path === receipt.source.path)
+      if (!source && receipt && (!input.preserveSource || reusableCopy)) {
+        // Once acknowledged, the renderer's source is the copy. Keep its expected
+        // mtime so external changes remain conflicts rather than being overwritten.
+        source = input.source?.path === receipt.source.path ? input.source : receipt.source
+      }
+      let protectedSourcePath: string | null | undefined
+      if (input.preserveSource) {
+        protectedSourcePath = reusableCopy ? receipt!.protectedSourcePath : input.source?.path ?? null
+      }
       if (!source) {
         const extension = OFFICE_EXTENSIONS[input.kind]
         const name = basename(input.suggestedName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || `Untitled${extension}`
@@ -99,7 +142,7 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
       // allocated name without making a duplicate or trusting a stale renderer mtime.
       try {
         await mkdir(dirname(receiptPath), { recursive: true })
-        await writeOfficeBytes(receiptPath, JSON.stringify({ source, fingerprint: fingerprint(input.bytes) } satisfies WriteReceipt))
+        await writeOfficeBytes(receiptPath, JSON.stringify({ source, fingerprint: fingerprint(input.bytes), protectedSourcePath } satisfies WriteReceipt))
       } catch (error) {
         if (allocated) await unlink(allocated).catch(() => undefined)
         throw error
@@ -111,6 +154,24 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
         }
       }
       return result
+    },
+    async listPresentationMounts(id: string): Promise<PresentationSourceMount[]> {
+      return request(mountsPath(id)) as Promise<PresentationSourceMount[]>
+    },
+    async mountPresentationSource(id: string, input: { dataBase64?: string; fileName: string; mimeType: string; path?: string }): Promise<PresentationMountedSource> {
+      if (!input || typeof input.fileName !== 'string' || !input.fileName.trim() || typeof input.mimeType !== 'string' || !input.mimeType.trim()) {
+        throw new TypeError('Invalid PowerPoint source')
+      }
+      if (input.path) {
+        const workspace = await workMount(id)
+        const absolute = isAbsolute(input.path)
+        const candidate = absolute ? await realpath(input.path) : await realpath(join(workspace.path, input.path))
+        if (!absolute && !isWithin(workspace.path, candidate)) throw new Error('A relative PowerPoint source must stay inside the Session workspace')
+        if (!(await stat(candidate)).isFile()) throw new Error('A PowerPoint source must be a file')
+        return register(id, candidate)
+      }
+      if (typeof input.dataBase64 !== 'string') throw new TypeError('PowerPoint embedded source data is invalid')
+      return register(id, await writePresentationSource(id, { dataBase64: input.dataBase64, fileName: input.fileName, mimeType: input.mimeType }))
     },
   }
 }

@@ -122,6 +122,7 @@ export function installApiStub(): void {
         webContentsId: 0,
         loading: false,
         crashed: false,
+        documentCount: null,
       }),
       closeSession: async () => {},
       activateSession: async () => {},
@@ -129,7 +130,15 @@ export function installApiStub(): void {
       setVisible: async () => {},
       requestClose: async () => {},
       setExpanded: async () => {},
+      reportState: async () => {},
+      openDocument: async () => { throw new Error('Opening PowerPoint files requires Electron') },
       openFile: async () => { throw new Error('Opening PowerPoint files requires Electron') },
+    },
+    mountReferences: {
+      usage: async () => ({ assetCount: 0, elementCount: 0, projectCount: 0 }),
+      remove: async () => ({ assetCount: 0, elementCount: 0, projectCount: 0 }),
+      rebind: async () => { throw new Error('Session files require Electron') },
+      refresh: async () => {},
     },
     word: {
       readDocument: async () => {
@@ -155,6 +164,7 @@ export function installApiStub(): void {
         ready: false,
         crashed: false,
         dirty: false,
+        documentCount: null,
       }),
       openWorkbook: async () => {},
       closeSession: async () => {},

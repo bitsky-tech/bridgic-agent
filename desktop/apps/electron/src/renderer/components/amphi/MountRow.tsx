@@ -15,7 +15,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { cn } from '@/lib/cn'
-import { isDocxFileName } from '@/lib/fileTypes'
+import { isOfficePreviewFileName } from '@/lib/fileTypes'
 import { extColor, findNode, formatSize, pruneExpanded } from '@/lib/fileTree'
 import { APP_PRODUCT_NAME } from '@shared/app-meta'
 import type { DirListResult, DirTreeNode } from '@shared/dir-tree'
@@ -55,6 +55,7 @@ export interface MountRowProps {
   onOpenInFileManager: () => void
   /** Absent for system-owned roots such as the Session `.work` directory. */
   onRemove?: () => void
+  onRelink?: () => void
   onMentionRoot: () => void
   onMentionChild: (node: DirTreeNode) => void
   /** Child-row ⋯ menu (the single-open state lives in the panel, keyed by relPath; no "remove" — child items are not mounts). */
@@ -80,6 +81,7 @@ export function MountRow({
   onCopyPath,
   onOpenInFileManager,
   onRemove,
+  onRelink,
   onMentionRoot,
   onMentionChild,
   childMenuFor,
@@ -108,7 +110,7 @@ export function MountRow({
   const expandable = m.kind === 'folder' && m.exists
   // In-app file owners open on one click; other files retain the established double-click behaviour.
   const rootOpenable = m.kind === 'file' && m.exists
-  const rootOpensOnSingleClick = rootOpenable && (openOnSingleClick(m.name) || isDocxFileName(m.name))
+  const rootOpensOnSingleClick = rootOpenable && (isOfficePreviewFileName(m.name) || openOnSingleClick(m.name))
   const toggleRoot = (): void => {
     if (!expandable) return
     if (!open) {
@@ -236,6 +238,7 @@ export function MountRow({
             items={[
               { label: t('asset.common.copyPath'), onSelect: onCopyPath },
               { label: t('asset.common.revealInFileManager'), onSelect: onOpenInFileManager },
+              ...(onRelink ? [{ label: t('asset.mount.relink'), onSelect: onRelink }] : []),
               ...(onRemove
                 ? [{
                   label: (

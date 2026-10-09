@@ -505,13 +505,13 @@ describe('Pipeline', () => {
                 content: '',
                 toolCalls: [{
                   toolUseId: 'powerpoint-update',
-                  name: 'edit_ppt_page',
+                  name: 'ppt_edit_page',
                   input: { page_id: 'page-1', ref: 'title', replacement: '<PptText>Updated</PptText>' },
                 }],
                 blocks: [{
                   type: 'tool',
                   toolUseId: 'powerpoint-update',
-                  name: 'edit_ppt_page',
+                  name: 'ppt_edit_page',
                   input: { page_id: 'page-1', ref: 'title', replacement: '<PptText>Updated</PptText>' },
                 }],
                 startedAt: Date.now(),

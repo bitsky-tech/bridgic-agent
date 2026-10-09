@@ -113,7 +113,15 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(IPC.powerpoint.setVisible, visible, focusHost),
     requestClose: (sessionId) => ipcRenderer.invoke(IPC.powerpoint.requestClose, sessionId),
     setExpanded: (expanded) => ipcRenderer.invoke(IPC.powerpoint.setExpanded, expanded),
+    reportState: (state) => ipcRenderer.invoke(IPC.powerpoint.reportState, state),
+    openDocument: () => ipcRenderer.invoke(IPC.powerpoint.openDocument),
     openFile: (sessionId, absPath) => ipcRenderer.invoke(IPC.powerpoint.openFile, sessionId, absPath),
+  },
+  mountReferences: {
+    usage: (sessionId, mountId) => ipcRenderer.invoke(IPC.mountReferences.usage, sessionId, mountId),
+    remove: (sessionId, mountId) => ipcRenderer.invoke(IPC.mountReferences.remove, sessionId, mountId),
+    rebind: (sessionId, mountId, path) => ipcRenderer.invoke(IPC.mountReferences.rebind, sessionId, mountId, path),
+    refresh: (sessionId) => ipcRenderer.invoke(IPC.mountReferences.refresh, sessionId),
   },
   word: {
     readDocument: (path) => ipcRenderer.invoke(IPC.word.readDocument, path),

@@ -118,7 +118,8 @@ async def test_registered_normal_workers_keep_session_routing_and_prompts(is_chi
         assert worker.persona == cognitive.SubAgentThink.persona
         assert "This Session is a Child Agent" in messages[0].content
     else:
-        assert {"request_build", "request_presentation", "run_subagent", "start_subagent"} <= names
+        assert {"request_build", "run_subagent", "start_subagent"} <= names
+        assert "request_presentation" not in names
         assert worker.persona == cognitive.MainThink.persona
         assert "a general-purpose agent" in messages[0].content
     assert messages[0].role == Role.SYSTEM

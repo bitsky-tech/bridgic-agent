@@ -1,5 +1,30 @@
 import type { IWorkbookData, LocaleType } from '@univerjs/core'
-import type { ExcelImportProgress } from './excelWorkbook'
+import { COMPATIBILITY_CUSTOM_KEY, unsupportedWorkbookFeatures, type ExcelImportProgress } from './excelWorkbook'
+import { prepareOfficeImage } from './office/officeImage'
+
+async function prepareWorkbookImages(snapshot: IWorkbookData, signal?: AbortSignal): Promise<IWorkbookData> {
+  const resource = snapshot.resources?.find((value) => value.name === 'SHEET_DRAWING_PLUGIN')
+  if (!resource) return snapshot
+  const drawings = JSON.parse(resource.data) as Record<string, { data: Record<string, { source?: string }>; order: string[] }>
+  for (const sheet of Object.values(drawings)) {
+    for (const [id, drawing] of Object.entries(sheet.data)) {
+      if (signal?.aborted) throw new DOMException('Workbook import canceled.', 'AbortError')
+      if (!drawing.source) continue
+      try {
+        drawing.source = (await prepareOfficeImage(drawing.source, 'excel')).dataUrl
+      } catch {
+        // One unsupported image must not hide an otherwise readable workbook.
+        // Compatibility metadata prevents an automatic lossy overwrite of the source.
+        delete sheet.data[id]
+        sheet.order = sheet.order.filter((drawingId) => drawingId !== id)
+        snapshot.custom = { ...snapshot.custom, [COMPATIBILITY_CUSTOM_KEY]: [...new Set([...unsupportedWorkbookFeatures(snapshot), 'unrenderable embedded images'])] }
+      }
+    }
+  }
+  if (signal?.aborted) throw new DOMException('Workbook import canceled.', 'AbortError')
+  resource.data = JSON.stringify(drawings)
+  return snapshot
+}
 
 export type ExcelImportWorkerResponse =
   | { type: 'progress'; progress: ExcelImportProgress }
@@ -36,7 +61,7 @@ export function importExcelWorkbook(bytes: Uint8Array, locale: LocaleType, optio
       if (response.type === 'progress') onProgress?.(response.progress)
       else if (response.type === 'complete') {
         cleanup()
-        resolve(response.snapshot)
+        void prepareWorkbookImages(response.snapshot, signal).then(resolve, reject)
       } else fail(new Error(response.message))
     }
     worker.onerror = (event) => fail(new Error(event.message || 'Workbook import worker failed.'))

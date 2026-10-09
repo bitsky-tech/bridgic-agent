@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { BooleanNumber, DOC_RANGE_TYPE, NamedStyleType } from '@univerjs/core'
+import { BooleanNumber, CustomRangeType, DOC_RANGE_TYPE, NamedStyleType } from '@univerjs/core'
 
 GlobalRegistrator.register()
 
 const {
   appendTextBlockToSnapshot,
+  applyHeaderFooterToSnapshot,
   createUniverDocumentSnapshot,
   extractWordReferences,
   getUniverDocumentText,
@@ -13,6 +14,7 @@ const {
   getUniverPageCount,
   getUniverWordCount,
   htmlToUniverSnapshot,
+  normalizeUniverDocumentSnapshot,
   insertReferenceInSnapshot,
   removeReferenceFromSnapshot,
   updateReferenceInSnapshot,
@@ -33,6 +35,68 @@ const headerFooter = {
 }
 
 describe('Univer Word model', () => {
+  it('parses safe hyperlinks with exact inclusive ranges and retains nested formatting', () => {
+    const snapshot = htmlToUniverSnapshot('<p>Visit <a href="https://example.com/?q=one&amp;lang=en"><strong>our site</strong></a> or <a href="mailto:team@example.com">email us</a>.<a href="https://example.com/empty"></a><a href="javascript:alert(1)">Unsafe</a></p>', 'links', 'Links')
+    const body = snapshot.body!
+    expect(body.customRanges).toHaveLength(2)
+    expect(body.customRanges!.map((range) => ({ text: body.dataStream.slice(range.startIndex, range.endIndex + 1), type: range.rangeType, url: range.properties?.url }))).toEqual([
+      { text: 'our site', type: CustomRangeType.HYPERLINK, url: 'https://example.com/?q=one&lang=en' },
+      { text: 'email us', type: CustomRangeType.HYPERLINK, url: 'mailto:team@example.com' },
+    ])
+    expect(body.textRuns?.some((run) => run.st === 6 && run.ed === 14 && run.ts?.bl === BooleanNumber.TRUE)).toBe(true)
+  })
+
+  it('parses paragraph spacing in paragraphs, list items and table cells without inventing invalid values', () => {
+    const snapshot = htmlToUniverSnapshot('<p style="line-height:1.5;margin-top:9pt;margin-bottom:0px">Body</p><ul><li><p style="line-height:2;margin-top:12px;margin-bottom:18px">List</p></li></ul><table><tr><td><p style="line-height:1.25;margin-top:0px;margin-bottom:6pt">Cell</p></td></tr></table><p style="line-height:normal;margin-top:auto;margin-bottom:5%">Defaults</p>', 'spacing', 'Spacing')
+    expect(snapshot.body!.paragraphs!.map((paragraph) => paragraph.paragraphStyle)).toEqual([
+      { lineSpacing: 1.5, spaceAbove: { v: 12 }, spaceBelow: { v: 0 } },
+      { lineSpacing: 2, spaceAbove: { v: 12 }, spaceBelow: { v: 18 } },
+      { lineSpacing: 1.25, spaceAbove: { v: 0 }, spaceBelow: { v: 8 } },
+      undefined,
+    ])
+  })
+
+  it('keeps header/footer hyperlink identities stable and separate from the main body', () => {
+    const html = '<p><a href="https://example.com">Website</a></p>'
+    const settings = { ...headerFooter, headerHtml: html, footerHtml: html }
+    const snapshot = createUniverDocumentSnapshot('stable-links', 'Report', page, settings, html)
+    expect(applyHeaderFooterToSnapshot(snapshot, settings)).toEqual(snapshot)
+    const ranges = [snapshot.body!, snapshot.headers!['bridgic-word-header']!.body, snapshot.footers!['bridgic-word-footer']!.body].flatMap((body) => body.customRanges ?? [])
+    expect(new Set(ranges.map((range) => range.rangeId)).size).toBe(3)
+  })
+
+  it('keeps rich header/footer images, tables and lists stable without changing body assets', () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII='
+    const settings = { ...headerFooter,
+      headerHtml: `<p style="text-align:center"><img src="${png}" width="80" height="20"/><strong>Brand</strong></p><table><tr><td>Header table</td></tr></table><ul><li>Header list</li></ul>`,
+      footerHtml: `<p><img src="${png}" width="40" height="10"/><em>Footer</em></p>`,
+    }
+    const snapshot = createUniverDocumentSnapshot('rich-header', 'Report', page, settings, `<p><img src="${png}"/></p><table><tr><td>Body</td></tr></table><ul><li>Body list</li></ul>`)
+    const header = snapshot.headers!['bridgic-word-header']!.body
+    const footer = snapshot.footers!['bridgic-word-footer']!.body
+    const headerDrawing = snapshot.drawings![header.customBlocks![0]!.blockId]!
+    expect(headerDrawing.docTransform.size).toEqual({ width: 80, height: 20 })
+    expect(header.textRuns?.some((run) => run.ts?.bl === 1)).toBe(true)
+    expect(footer.textRuns?.some((run) => run.ts?.it === 1)).toBe(true)
+    expect(header.tables).toHaveLength(1)
+    expect(Object.keys(snapshot.drawings!)).toHaveLength(3)
+    expect(Object.keys(snapshot.tableSource!)).toHaveLength(2)
+    expect(Object.keys(snapshot.lists!)).toHaveLength(2)
+    expect(applyHeaderFooterToSnapshot(snapshot, settings)).toEqual(snapshot)
+    // Native header edits must survive the same normalization used for ordinary typing.
+    headerDrawing.docTransform.size.width = 90
+    header.dataStream = header.dataStream.replace('Brand', 'Updated brand')
+    expect(normalizeUniverDocumentSnapshot(snapshot, snapshot.id, snapshot.title!, page, settings)).toEqual(snapshot)
+    const withoutHeader = applyHeaderFooterToSnapshot(snapshot, { ...settings, headerHtml: '' })
+    expect(withoutHeader.headers).toEqual({})
+    expect(Object.keys(withoutHeader.drawings!)).toHaveLength(2)
+    expect(Object.keys(withoutHeader.tableSource!)).toHaveLength(1)
+    expect(Object.keys(withoutHeader.lists!)).toHaveLength(1)
+    expect(withoutHeader.body).toEqual(snapshot.body)
+    const imageOnly = applyHeaderFooterToSnapshot(withoutHeader, { ...settings, headerHtml: `<p><img src="${png}"/></p>` })
+    expect(imageOnly.documentStyle.defaultHeaderId).toBe('bridgic-word-header')
+    expect(imageOnly.headers!['bridgic-word-header']!.body.customBlocks).toHaveLength(1)
+  })
   it('converts legacy HTML into native paragraphs, text styles, lists, and headings', () => {
     const snapshot = htmlToUniverSnapshot(
       '<h1>Overview</h1><p><strong>Hello</strong> world</p><ul><li>First</li><li>Second</li></ul>',

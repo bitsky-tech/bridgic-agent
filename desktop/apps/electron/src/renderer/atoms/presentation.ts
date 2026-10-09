@@ -71,17 +71,42 @@ export interface PresentationFileSource {
   fileName: string
   mimeType: string
   path?: string
+  /** Durable logical reference when runtime bytes came from a containing document. */
+  source?: string
 }
 
-export type PresentationAssetKind = 'image' | 'audio' | 'video'
-export type PresentationAssetSource = Omit<PresentationFileSource, 'assetId'>
+export type PresentationAssetKind = 'image' | 'audio' | 'video' | 'text'
 
-/** One project-owned media resource referenced by slide elements. */
+export type PresentationOfficeImageEffect =
+  | { type: 'backgroundRemoval'; bounds: { top: number; bottom: number; left: number; right: number }; foregroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }>; backgroundMarks: Array<{ x1: number; y1: number; x2: number; y2: number }> }
+  | { type: 'brightnessContrast'; bright: number; contrast: number }
+  | { type: 'colorTemperature'; colorTemp: number }
+  | { type: 'saturation'; sat: number }
+  | { type: 'artisticPhotocopy'; detail?: number }
+  | { type: 'sharpenSoften'; amount: number }
+  | { type: 'artisticCrisscrossEtching' }
+  | { type: 'artisticBlur' }
+
+export interface PresentationImageEffects {
+  colorChange?: { from: string; to: string; opacity: number }
+  grayscale?: boolean
+  biLevelThreshold?: number
+  /** The Office image layer remains inside the imported PPTX, not in the Files mount list. */
+  officeLayer?: { source: string; effects: PresentationOfficeImageEffect[] }
+}
+
+/** One project-owned source resource referenced by slide elements. */
 export interface PresentationAsset {
   id: string
   kind: PresentationAssetKind
+  mimeType: string
   name: string
-  source: PresentationAssetSource
+  /** Durable source reference. Runtime URLs are resolved outside PPTProject. */
+  source: string
+  /** Non-destructive Office picture effects attached to this source instance. */
+  imageEffects?: PresentationImageEffects
+  sourceModifiedAt?: number
+  sourceSize?: number
 }
 
 export interface PresentationTransition {
@@ -111,6 +136,46 @@ export const PRESENTATION_SHAPE_TYPES = [
 
 export type PresentationShapeType = (typeof PRESENTATION_SHAPE_TYPES)[number]
 
+export type PresentationCustomShapeCommand =
+  | { type: 'moveTo'; x: number; y: number }
+  | { type: 'lineTo'; x: number; y: number }
+  | { type: 'cubicBezierTo'; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+  | { type: 'quadraticBezierTo'; x1: number; y1: number; x: number; y: number }
+  | { type: 'arcTo'; widthRadius: number; heightRadius: number; startAngle: number; sweepAngle: number }
+  | { type: 'close' }
+
+export interface PresentationCustomShapePath {
+  width: number
+  height: number
+  /** OOXML paths may independently opt out of their parent shape fill or stroke. */
+  fill: 'normal' | 'none'
+  stroke: boolean
+  commands: PresentationCustomShapeCommand[]
+}
+
+export interface PresentationCustomShapeGeometry {
+  /** Each path owns its source coordinate space, matching DrawingML custom geometry. */
+  paths: PresentationCustomShapePath[]
+}
+
+export interface PresentationShapeGradientStop {
+  offset: number
+  color: string
+  opacity: number
+}
+
+export type PresentationShapeGradientFill =
+  | { type: 'linear'; angle: number; stops: PresentationShapeGradientStop[] }
+  | { type: 'radial'; path?: string; fillToRect?: { left: number; top: number; right: number; bottom: number }; stops: PresentationShapeGradientStop[] }
+
+export interface PresentationShapePatternFill {
+  preset: string
+  foregroundColor: string
+  foregroundOpacity: number
+  backgroundColor: string
+  backgroundOpacity: number
+}
+
 export interface PresentationElementBase {
   id: string
   /** Elements sharing a group id behave as one visual object for selection and animation. */
@@ -137,6 +202,8 @@ export interface PresentationElementBase {
 
 export interface PresentationTextElement extends PresentationElementBase {
   type: 'text'
+  /** Present when this editable text originated from a mounted text asset. */
+  sourceAssetId?: string
   text: string
   /** Inline style ranges use UTF-16 offsets into text, excluding generated list markers. */
   textRuns?: PresentationTextRun[]
@@ -204,9 +271,15 @@ export interface PresentationTextParagraph {
 export interface PresentationShapeElement extends PresentationElementBase {
   type: PresentationShapeType
   fill: string
+  fillOpacity?: number
+  gradientFill?: PresentationShapeGradientFill
+  patternFill?: PresentationShapePatternFill
   borderColor: string
   borderWidth: number
+  borderOpacity?: number
   radius?: number
+  /** Native per-shape geometry imported from or exported to DrawingML a:custGeom. */
+  customGeometry?: PresentationCustomShapeGeometry
   /** Connector geometry in a 100 x 100 coordinate space. */
   connectorPath?: string
 }
@@ -215,7 +288,8 @@ export interface PresentationImageElement extends PresentationElementBase {
   type: 'image'
   sourceAssetId: string
   altText: string
-  fit: 'contain' | 'cover'
+  fit: 'contain' | 'cover' | 'stretch'
+  softEdgeRadius?: number
   /** Preserve an OOXML picture-filled shape as an editable image crop. */
   clipShape?: 'ellipse'
   /** Normalized source crop fractions copied from OOXML a:srcRect. */
@@ -245,9 +319,36 @@ export interface PresentationVideoElement extends PresentationElementBase {
 
 export type PresentationMediaElement = PresentationAudioElement | PresentationVideoElement
 
+export interface PresentationTableCellBorder {
+  color: string
+  width: number
+  type: 'solid' | 'dash' | 'none'
+}
+
+export interface PresentationTableCellStyle {
+  fill?: string
+  textColor?: string
+  borderColor?: string
+  borders?: Partial<Record<'top' | 'right' | 'bottom' | 'left', PresentationTableCellBorder>>
+  fontSize?: number
+  fontFamily?: string
+  bold?: boolean
+  align?: 'left' | 'center' | 'right'
+  verticalAlign?: 'top' | 'middle' | 'bottom'
+  padding?: { left: number; right: number; top: number; bottom: number }
+  /** UTF-16 ranges into the corresponding cells[row][column] string. */
+  textRuns?: PresentationTextRun[]
+  colSpan?: number
+  rowSpan?: number
+  covered?: boolean
+}
+
 export interface PresentationTableElement extends PresentationElementBase {
   type: 'table'
   cells: string[][]
+  columnWidths?: number[]
+  rowHeights?: number[]
+  cellStyles?: PresentationTableCellStyle[][]
   headerRow: boolean
   headerFill: string
   headerTextColor?: string
@@ -573,12 +674,7 @@ export function selectPresentationPage(slides: PresentationSlides, selectedPageI
   return { ...slides, selectedPageId }
 }
 
-/**
- * The authoritative, serializable PowerPoint model.
- *
- * File handles and save bookkeeping deliberately live on PresentationDocument,
- * while all deck content lives here.
- */
+/** The authoritative, serializable PowerPoint model. */
 export interface PresentationProject {
   schemaVersion: 1
   version: 1
@@ -590,28 +686,12 @@ export interface PresentationProject {
   slides: PresentationSlides
 }
 
-/** Renderer host metadata attached to a project without becoming deck content. */
-export interface PresentationDocument extends PresentationProject {
-  sourceProtected?: boolean
-  source?: import('../../shared/office-files').OfficeFileSource
-  savedRevision?: number
-  revision: number
-}
-
-export interface PresentationWorkspace {
-  activeDocumentId: string
-  documents: PresentationDocument[]
-}
-
 export interface PresentationAgentChange {
   changeId: number
   elementIds: string[]
   kind: 'content' | 'design'
   slideId: string
 }
-
-/** One renderer-local visual transition requested by an Agent domain command. */
-export const presentationAgentChangeAtom = atom<PresentationAgentChange | null>(null)
 
 type SessionStateUpdate<T> = T | ((current: T) => T)
 
@@ -632,9 +712,9 @@ export function createBlankPresentationSlide(name: string): PresentationSlide {
   }
 }
 
-export function createInitialPresentationDocument(): PresentationDocument {
-  const document = createBlankPresentationDocument('')
-  const slide = document.slides.pages[0]!
+export function createInitialPresentationProject(): PresentationProject {
+  const project = createBlankPresentationProject('')
+  const slide = project.slides.pages[0]!
   const createTextBox = (
     kind: 'body' | 'subtitle' | 'title',
     geometry: Pick<PresentationTextElement, 'height' | 'width' | 'x' | 'y'>,
@@ -653,7 +733,7 @@ export function createInitialPresentationDocument(): PresentationDocument {
       rotation: 0,
       text,
       fontSize,
-      fontFamily: isTitle ? document.theme.titleFontFamily : document.theme.bodyFontFamily,
+      fontFamily: isTitle ? project.theme.titleFontFamily : project.theme.bodyFontFamily,
       fontWeight: isTitle ? 700 : 400,
       italic: false,
       underline: false,
@@ -669,19 +749,18 @@ export function createInitialPresentationDocument(): PresentationDocument {
   }
   slide.layout = 'title'
   slide.elements = [
-    createTextBox('title', { x: 120, y: 105, width: document.pageSize.width - 240, height: 90 }),
-    createTextBox('subtitle', { x: 160, y: 220, width: document.pageSize.width - 320, height: 60 }),
-    createTextBox('body', { x: 120, y: 320, width: document.pageSize.width - 240, height: Math.max(180, document.pageSize.height - 425) }),
+    createTextBox('title', { x: 120, y: 105, width: project.pageSize.width - 240, height: 90 }),
+    createTextBox('subtitle', { x: 160, y: 220, width: project.pageSize.width - 320, height: 60 }),
+    createTextBox('body', { x: 120, y: 320, width: project.pageSize.width - 240, height: Math.max(180, project.pageSize.height - 425) }),
   ]
-  return document
+  return project
 }
 
-export function createBlankPresentationDocument(title: string, slideName = 'Slide 1'): PresentationDocument {
+export function createBlankPresentationProject(title: string, slideName = 'Slide 1'): PresentationProject {
   const slide = createBlankPresentationSlide(slideName)
   return {
     schemaVersion: 1,
     version: 1,
-    revision: 1,
     id: createPresentationId('presentation'),
     theme: {
       ...DEFAULT_PRESENTATION_MASTER,
@@ -699,69 +778,12 @@ export function createBlankPresentationDocument(title: string, slideName = 'Slid
   }
 }
 
-export function createInitialPresentationWorkspace(): PresentationWorkspace {
-  const document = createInitialPresentationDocument()
-  return {
-    activeDocumentId: document.id,
-    documents: [document],
-  }
-}
-
-const fallbackPresentationWorkspace = createInitialPresentationWorkspace()
-const fallbackPresentationDocument = fallbackPresentationWorkspace.documents[0]!
-const presentationWorkspacesBySessionAtom = atom<ReadonlyMap<string, PresentationWorkspace>>(new Map())
 const expandedPresentationSessionsAtom = atom<ReadonlySet<string>>(new Set<string>())
 /** Dedicated PowerPoint renderers pin their exact Session independently of main navigation. */
 export const powerPointSessionIdOverrideAtom = atom<string | null>(null)
 export const presentationSessionIdAtom = atom((get) => (
   get(powerPointSessionIdOverrideAtom) ?? get(viewedSessionIdAtom)
 ))
-
-/** Explicit Session ownership for commands that can outlive a navigation change. */
-export const presentationWorkspaceFamily = atomFamily((sessionId: string) => atom(
-  (get) => get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace,
-  (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
-    const current = get(presentationWorkspacesBySessionAtom).get(sessionId) ?? fallbackPresentationWorkspace
-    const next = typeof update === 'function' ? update(current) : update
-    const workspaces = new Map(get(presentationWorkspacesBySessionAtom))
-    workspaces.set(sessionId, next)
-    set(presentationWorkspacesBySessionAtom, workspaces)
-  },
-))
-
-/** Every open presentation tab owned by the viewed Session. */
-export const currentPresentationWorkspaceAtom = atom(
-  (get) => {
-    const sessionId = get(presentationSessionIdAtom)
-    return sessionId ? get(presentationWorkspaceFamily(sessionId)) : fallbackPresentationWorkspace
-  },
-  (get, set, update: SessionStateUpdate<PresentationWorkspace>) => {
-    const sessionId = get(presentationSessionIdAtom)
-    if (sessionId) set(presentationWorkspaceFamily(sessionId), update)
-  },
-)
-
-/** The active presentation tab's editable document. */
-export const currentPresentationDocumentAtom = atom(
-  (get) => {
-    const workspace = get(currentPresentationWorkspaceAtom)
-    return workspace.documents.find((document) => document.id === workspace.activeDocumentId)
-      ?? workspace.documents[0]
-      ?? fallbackPresentationDocument
-  },
-  (get, set, update: SessionStateUpdate<PresentationDocument>) => {
-    const workspace = get(currentPresentationWorkspaceAtom)
-    const current = get(currentPresentationDocumentAtom)
-    const next = typeof update === 'function' ? update(current) : update
-    const hasActiveDocument = workspace.documents.some((document) => document.id === current.id)
-    set(currentPresentationWorkspaceAtom, {
-      activeDocumentId: next.id,
-      documents: hasActiveDocument
-        ? workspace.documents.map((document) => document.id === current.id ? next : document)
-        : [...workspace.documents, next],
-    })
-  },
-)
 
 /** Whether the viewed Session's presentation owns the work area. */
 export const presentationExpandedAtom = atom(
@@ -784,14 +806,7 @@ export const presentationExpandedAtom = atom(
 
 /** Drop presentation state when its owning Session is deleted. */
 export const purgePresentationSessionAtom = atom(null, (get, set, sessionId: string) => {
-  presentationWorkspaceFamily.remove(sessionId)
   presentationPaneViewFamily.remove(sessionId)
-  const workspaces = get(presentationWorkspacesBySessionAtom)
-  if (workspaces.has(sessionId)) {
-    const nextWorkspaces = new Map(workspaces)
-    nextWorkspaces.delete(sessionId)
-    set(presentationWorkspacesBySessionAtom, nextWorkspaces)
-  }
   const expandedSessions = get(expandedPresentationSessionsAtom)
   if (expandedSessions.has(sessionId)) {
     const nextExpandedSessions = new Set(expandedSessions)

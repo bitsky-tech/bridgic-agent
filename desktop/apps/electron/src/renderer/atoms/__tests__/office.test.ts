@@ -75,9 +75,10 @@ describe('Session-scoped Office status projection', () => {
     store.set(activeSessionIdAtom, 'session-a')
     store.set(embeddedPowerPointSnapshotAtom, { sessions: [{
       sessionId: 'session-a', targetId: 'ppt-a', webContentsId: 1, loading: false, crashed: false,
+      documentCount: 0,
     }] })
     store.set(excelHostSnapshotAtom, { sessions: [{
-      sessionId: 'session-b', targetId: 'excel-b', webContentsId: 2, ready: true, crashed: false, dirty: true,
+      sessionId: 'session-b', targetId: 'excel-b', webContentsId: 2, ready: true, crashed: false, dirty: true, documentCount: 1,
     }] })
     store.set(setPowerPointNeedsAttentionAtom, { sessionId: 'session-a', needsAttention: true })
     let status = store.get(currentOfficeSurfaceStatusesAtom)

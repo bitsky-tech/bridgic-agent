@@ -360,8 +360,8 @@ export function WordRibbon({
               />
             </RibbonGroup>
             <RibbonGroup label={t('word.group.headerFooter')}>
-              <RibbonAction icon={PanelTop} label={t('word.header')} onClick={onEditHeader} />
-              <RibbonAction icon={PanelBottom} label={t('word.footer')} onClick={onEditFooter} />
+              <RibbonAction icon={PanelTop} label={t('word.header')} onClick={onEditHeader} testId="word-edit-header" />
+              <RibbonAction icon={PanelBottom} label={t('word.footer')} onClick={onEditFooter} testId="word-edit-footer" />
             </RibbonGroup>
           </>
         ) : null}

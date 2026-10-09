@@ -31,6 +31,7 @@ export interface PresentationAnimationPlayerProps {
   onComplete?: () => void
   onActivateHyperlink?: (hyperlink: PresentationHyperlink) => void
   suppressMediaPlayback?: boolean
+  sources?: Readonly<Record<string, string>>
   runKey: string | number
   pageSize?: PresentationPageSize
   slide: PresentationSlide
@@ -56,7 +57,7 @@ function applyFinalKeyframe(node: HTMLSpanElement, keyframes: Keyframe[]): void 
   if (final.clipPath !== undefined) node.style.clipPath = String(final.clipPath)
 }
 
-function PresentationAnimationPart({ assets, elements, pageSize, part, runKey }: { assets: readonly PresentationAsset[]; elements: readonly PresentationElement[]; pageSize: PresentationPageSize; part: PresentationAnimationPartSpec; runKey: string | number }) {
+function PresentationAnimationPart({ assets, elements, pageSize, part, runKey, sources }: { assets: readonly PresentationAsset[]; elements: readonly PresentationElement[]; pageSize: PresentationPageSize; part: PresentationAnimationPartSpec; runKey: string | number; sources?: Readonly<Record<string, string>> }) {
   const layerRef = useRef<HTMLSpanElement>(null)
 
   useLayoutEffect(() => {
@@ -84,7 +85,7 @@ function PresentationAnimationPart({ assets, elements, pageSize, part, runKey }:
     >
       {elements.map((element) => (
         <span key={element.id} data-animation-element-id={element.id}>
-          <PresentationElementPreview assets={assets} element={element} interactive={false} suppressMediaPlayback />
+          <PresentationElementPreview assets={assets} element={element} interactive={false} sources={sources} suppressMediaPlayback />
         </span>
       ))}
     </span>
@@ -92,7 +93,7 @@ function PresentationAnimationPart({ assets, elements, pageSize, part, runKey }:
 }
 
 /** PowerPoint-style element animation preview rendered independently from the editable Fabric canvas. */
-export function PresentationAnimationPlayer({ assets = [], baseHiddenElementIds, completedTargetIds, className, elementIds, onComplete, onActivateHyperlink, suppressMediaPlayback = true, pageSize = PRESENTATION_PAGE_SIZES.wide, runKey, slide, slideNumber, theme, width }: PresentationAnimationPlayerProps) {
+export function PresentationAnimationPlayer({ assets = [], baseHiddenElementIds, completedTargetIds, className, elementIds, onComplete, onActivateHyperlink, suppressMediaPlayback = true, sources, pageSize = PRESENTATION_PAGE_SIZES.wide, runKey, slide, slideNumber, theme, width }: PresentationAnimationPlayerProps) {
   const animationStates = useMemo(() => completedTargetIds ? getPresentationAnimationDisplayStates(slide.elements, completedTargetIds) : undefined, [completedTargetIds, slide.elements])
   const requestedIds = useMemo(() => elementIds ? new Set(elementIds) : null, [elementIds])
   const elements = useMemo(() => {
@@ -125,12 +126,12 @@ export function PresentationAnimationPlayer({ assets = [], baseHiddenElementIds,
       const members = slide.elements.slice(index, end)
       for (const member of members) replacements.set(member.id, null)
       replacements.set(element.id, parts.map(part => (
-        <PresentationAnimationPart key={part.id} assets={assets} elements={members} pageSize={pageSize} part={part} runKey={runKey} />
+        <PresentationAnimationPart key={part.id} assets={assets} elements={members} pageSize={pageSize} part={part} runKey={runKey} sources={sources} />
       )))
       index = end - 1
     }
     return replacements
-  }, [assets, pageSize, runKey, slide.elements, timeline])
+  }, [assets, pageSize, runKey, slide.elements, sources, timeline])
   const onCompleteRef = useRef(onComplete)
   const totalDuration = timeline.reduce((maximum, entry) => Math.max(maximum, entry.endsAt), 0)
 
@@ -166,6 +167,7 @@ export function PresentationAnimationPlayer({ assets = [], baseHiddenElementIds,
         slideNumber={slideNumber}
         theme={theme}
         suppressMediaPlayback={suppressMediaPlayback}
+        sources={sources}
         onActivateHyperlink={onActivateHyperlink}
         width={width}
         pageSize={pageSize}

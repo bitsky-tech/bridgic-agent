@@ -9,6 +9,7 @@ import path from 'node:path'
 import type {
   EmbeddedPowerPointBounds,
   EmbeddedPowerPointOpenFileResult,
+  EmbeddedPowerPointRendererState,
   EmbeddedPowerPointSessionInfo,
   EmbeddedPowerPointSnapshot,
 } from '../shared/types'
@@ -16,10 +17,12 @@ import { clampZoomLevel, type GuiSettings } from '@app/shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { windowLog } from './logger'
 import { OfficeSessionContainer, type OfficeSessionRecord } from './office-session-container'
+import type { PresentationMountReplacementValidation, PresentationMountUsage } from '../shared/presentation-host'
 
 const MAX_OPEN_PRESENTATION_BYTES = 250 * 1024 * 1024
 
 interface EmbeddedPowerPointSurface extends OfficeSessionRecord {
+  documentCount: number | null
   loading: boolean
   openingFilesByPath: Map<string, Promise<EmbeddedPowerPointOpenFileResult>>
 }
@@ -125,9 +128,30 @@ export class EmbeddedPowerPointManager {
   }
 
   sessionForContents(webContentsId: number): string {
+    const sessionId = this.ownedSessionForContents(webContentsId)
+    if (sessionId === null) throw new Error('PowerPoint Session does not own this renderer')
+    return sessionId
+  }
+
+  /** Resolve a child renderer without rejecting trusted host-window callers. */
+  ownedSessionForContents(webContentsId: number): string | null {
+    return this.container.forWebContents(webContentsId)?.sessionId ?? null
+  }
+
+  /** Accept authoritative project inventory only from the Session-owned renderer. */
+  reportState(webContentsId: number, value: unknown): void {
     const surface = this.container.forWebContents(webContentsId)
     if (!surface) throw new Error('PowerPoint Session does not own this renderer')
-    return surface.sessionId
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TypeError('Invalid PowerPoint runtime state')
+    }
+    const state = value as Partial<EmbeddedPowerPointRendererState>
+    if (!Number.isSafeInteger(state.documentCount) || state.documentCount! < 0) {
+      throw new TypeError('Invalid PowerPoint runtime document count')
+    }
+    if (surface.documentCount === state.documentCount) return
+    surface.documentCount = state.documentCount!
+    this.publishState()
   }
 
   /** A delayed close belongs to its sender, even if this Session has since reopened. */
@@ -147,6 +171,23 @@ export class EmbeddedPowerPointManager {
 
   closeAll(): void {
     this.container.closeAll()
+  }
+
+  async mountUsage(sessionId: string, mountId: string): Promise<PresentationMountUsage> {
+    return this.callWorkspace(sessionId, 'mountUsage', [mountId])
+  }
+
+  async validateMountReplacement(sessionId: string, mountId: string, path: string): Promise<PresentationMountReplacementValidation> {
+    return this.callWorkspace(sessionId, 'validateMountReplacement', [mountId, path])
+  }
+
+  async removeMountReferences(sessionId: string, mountId: string): Promise<PresentationMountUsage> {
+    return this.callWorkspace(sessionId, 'removeMountReferences', [mountId], true)
+  }
+
+  refreshSources(sessionId: string): void {
+    const surface = this.container.get(this.normalizeSessionId(sessionId))
+    if (surface && !surface.view.webContents.isDestroyed()) surface.view.webContents.send('office-files:changed', surface.sessionId)
   }
 
   /** Keep dedicated PPT renderers aligned with the main App theme, locale, and zoom. */
@@ -178,6 +219,7 @@ export class EmbeddedPowerPointManager {
       sessionId,
       view,
       targetId: null,
+      documentCount: null,
       loading: true,
       crashed: false,
       ready: Promise.resolve(),
@@ -186,6 +228,7 @@ export class EmbeddedPowerPointManager {
     view.webContents.setBackgroundThrottling(false)
     view.webContents.on('did-start-loading', () => {
       if (!this.container.owns(surface)) return
+      surface.documentCount = null
       surface.loading = true
       this.publishState()
     })
@@ -206,7 +249,7 @@ export class EmbeddedPowerPointManager {
   ): Promise<EmbeddedPowerPointOpenFileResult> {
     const content = await readFile(canonicalPath)
     const value = await this.dispatchToSurface(surface, {
-      method: 'view_ppt',
+      method: 'open',
       params: {
         target: canonicalPath,
         file_name: path.basename(canonicalPath),
@@ -217,26 +260,25 @@ export class EmbeddedPowerPointManager {
       throw new Error('PowerPoint renderer returned an invalid file-open result')
     }
     const result = value as Record<string, unknown>
-    const identity = result.identity
-    const meta = result.meta
-    if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
-      throw new Error('PowerPoint renderer returned an invalid file identity')
-    }
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    const deck = result.deck
+    if (!deck || typeof deck !== 'object' || Array.isArray(deck)) {
       throw new Error('PowerPoint renderer returned invalid file metadata')
     }
-    const identityValue = identity as Record<string, unknown>
-    const metaValue = meta as Record<string, unknown>
-    if (typeof identityValue.document_id !== 'string' || typeof metaValue.total_pages !== 'number') {
+    const deckValue = deck as Record<string, unknown>
+    if (
+      typeof result.document_id !== 'string'
+      || deckValue.id !== result.document_id
+      || typeof deckValue.total_pages !== 'number'
+    ) {
       throw new Error('PowerPoint renderer returned an incomplete file-open result')
     }
     return {
-      documentId: identityValue.document_id,
+      documentId: result.document_id,
       fileName: path.basename(canonicalPath),
       reused: result.reused === true,
-      slideCount: metaValue.total_pages,
-      title: typeof identityValue.name === 'string'
-        ? identityValue.name
+      slideCount: deckValue.total_pages,
+      title: typeof deckValue.title === 'string' && deckValue.title.trim()
+        ? deckValue.title
         : path.basename(canonicalPath, '.pptx'),
     }
   }
@@ -258,6 +300,17 @@ export class EmbeddedPowerPointManager {
     return response.value
   }
 
+  private async callWorkspace<T>(sessionId: string, method: 'mountUsage' | 'validateMountReplacement' | 'removeMountReferences', args: string[], flush = false): Promise<T> {
+    if (typeof args[0] !== 'string' || !args[0].trim()) throw new Error('A mount is required')
+    const id = this.normalizeSessionId(sessionId)
+    await this.ensureSession(id)
+    const surface = this.container.get(id)!
+    const serialized = args.map((value) => JSON.stringify(value)).join(', ')
+    return surface.ready.then(() => surface.view.webContents.executeJavaScript(
+      `(async () => { const workspace = window.__bridgicPowerPoint; if (!workspace || workspace.sessionId !== ${JSON.stringify(id)} || typeof workspace.${method} !== 'function') throw new Error('PowerPoint workspace unavailable'); const value = await workspace.${method}(${serialized}); ${flush ? 'await workspace.flush?.();' : ''} return value; })()`,
+    )) as Promise<T>
+  }
+
   private infoFor(surface: EmbeddedPowerPointSurface): EmbeddedPowerPointSessionInfo {
     return {
       sessionId: surface.sessionId,
@@ -265,6 +318,7 @@ export class EmbeddedPowerPointManager {
       webContentsId: surface.view.webContents.id,
       loading: surface.loading,
       crashed: surface.crashed,
+      documentCount: surface.documentCount,
     }
   }
 

@@ -7,10 +7,72 @@ GlobalRegistrator.register()
 const { createWordWorkspace, createEmptyWordWorkspace, createWordDomainStore, isWordDocumentDirty } = await import('../wordDomain')
 const { exportWordDocx } = await import('../wordDocxExport')
 const { importDocxToHtml } = await import('../wordDocxImport')
+const { createUniverDocumentSnapshot } = await import('../wordUniverModel')
 afterAll(() => GlobalRegistrator.unregister())
 const saved: OfficeFileSaveResult = { ok: true, source: { path: '/report.docx', mtimeMs: 42 }, fileName: 'report.docx' }
 
 describe('Word explicit saving', () => {
+  it('preserves landscape Letter geometry through two external file cycles', async () => {
+    const store = createWordDomainStore(createWordWorkspace('landscape-letter', 'Report'), { defaultTitle: 'Report' })
+    await store.dispatch({ type: 'document.update', html: '<p>Landscape report</p>' })
+    await store.dispatch({ type: 'document.page.update', page: { size: 'letter', orientation: 'landscape' } })
+    let current = store.getSnapshot().documents[0]!
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const zip = await JSZip.loadAsync(await exportWordDocx(current))
+      expect(await zip.file('word/document.xml')!.async('string')).toContain('w:w="15840" w:h="12240" w:orient="landscape"')
+      zip.remove('bridgic/editor-model.json')
+      const imported = await importDocxToHtml(await zip.generateAsync({ type: 'uint8array' }))
+      const { page, headerFooter } = imported.layout!
+      expect(page).toMatchObject({ size: 'letter', orientation: 'landscape' })
+      current = { ...current, page, headerFooter, snapshot: createUniverDocumentSnapshot(current.id, current.title, page, headerFooter, imported.html) }
+      expect(current.snapshot.documentStyle.pageSize).toEqual({ width: 816, height: 1056 })
+    }
+    store.dispose()
+  })
+
+  it('retains rich header/footer images and sizes through external import and repeated saving', async () => {
+    const logo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6T4cAAAAASUVORK5CYII='
+    const store = createWordDomainStore(createWordWorkspace('rich-header', 'Report'), { defaultTitle: 'Report' })
+    await store.dispatch({ type: 'document.update', html: '<p>Report body</p>' })
+    await store.dispatch({ type: 'document.headerFooter.update', settings: {
+      headerHtml: `<p><img src="${logo}" width="80" height="20" /><b>Brand</b></p>`,
+      footerHtml: `<p><img src="${logo}" width="40" height="10" /><i>Confidential</i></p>`,
+    } })
+    let bytes = await exportWordDocx(store.getSnapshot().documents[0]!)
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const zip = await JSZip.loadAsync(bytes)
+      const headerXml = await zip.file('word/header.xml')!.async('string')
+      expect(headerXml).toContain('cx="762000" cy="190500"')
+      expect(headerXml).toContain('<w:b/>')
+      expect(await zip.file('word/_rels/header.xml.rels')!.async('string')).toContain('relationships/image')
+      // Exercise ordinary external DOCX import, not the embedded native snapshot.
+      zip.remove('bridgic/editor-model.json')
+      const imported = await importDocxToHtml(await zip.generateAsync({ type: 'uint8array' }))
+      expect(imported.document).toBeUndefined()
+      expect(imported.layout!.headerFooter.headerHtml).toContain('<strong>Brand</strong>')
+      expect(imported.layout!.headerFooter.headerHtml).toContain('width="80" height="20"')
+      const { page, headerFooter } = imported.layout!
+      const reopened = createWordDomainStore(createEmptyWordWorkspace(`rich-header-${cycle}`), { defaultTitle: 'Report' })
+      try {
+        expect((await reopened.dispatch({ type: 'document.open', title: 'Report.docx', sourcePath: '/Report.docx', sourceMtimeMs: cycle + 1, ...imported, document: {
+          snapshot: createUniverDocumentSnapshot('imported', 'Report', page, headerFooter, imported.html),
+          page, headerFooter, footnotes: [], citations: [],
+        } })).ok).toBe(true)
+        const document = reopened.getSnapshot().documents[0]!
+        const header = document.snapshot.headers![document.snapshot.documentStyle.defaultHeaderId!]!.body
+        const footer = document.snapshot.footers![document.snapshot.documentStyle.defaultFooterId!]!.body
+        expect(header.customBlocks).toHaveLength(1)
+        expect(footer.customBlocks).toHaveLength(1)
+        expect(header.textRuns!.some((run) => run.ts?.bl === 1)).toBe(true)
+        expect(footer.textRuns!.some((run) => run.ts?.it === 1)).toBe(true)
+        expect(Object.values(document.snapshot.drawings!)).toHaveLength(2)
+        await reopened.dispatch({ type: 'document.append', text: `Correction ${cycle}` })
+        bytes = await exportWordDocx(reopened.getSnapshot().documents[0]!)
+      } finally { reopened.dispose() }
+    }
+    store.dispose()
+  })
+
   it('opens Save as when closing an edited source that requires protection', async () => {
     const save = mock(async (): Promise<OfficeFileSaveResult> => ({ ok: true, source: { path: '/Copy.docx', mtimeMs: 2 }, fileName: 'Copy.docx' }))
     const store = createWordDomainStore(createEmptyWordWorkspace('protected-close'), { defaultTitle: 'Report', confirmClose: async () => 'save', saveDocument: save })

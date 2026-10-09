@@ -1,0 +1,34 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index 17d6d0c3d3fd8f3e7dd4d64a811bba786bc2df52..80523265deffa68b7bd46e063c12219ed2b0d96c 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -6332,10 +6332,10 @@ var NodePositionConvertToCursor = class {
+ 			let segmentPage = page;
+ 			if (pageType === _univerjs_engine_render.DocumentSkeletonPageType.HEADER) {
+ 				var _skeHeaders$get;
+-				segmentPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++				segmentPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 			} else if (pageType === _univerjs_engine_render.DocumentSkeletonPageType.FOOTER) {
+ 				var _skeFooters$get;
+-				segmentPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++				segmentPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 			} else if (pageType === _univerjs_engine_render.DocumentSkeletonPageType.CELL) segmentPage = (0, _univerjs_engine_render.getPageFromPath)(skeletonData, path);
+ 			if (segmentPage == null) {
+ 				this._liquid.translatePage(page, pageLayoutType, pageMarginLeft, pageMarginTop);
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 2ba09078a3328a67f6d452d3b203360ea71b7e6e..512405b9710dac561714fe81bfe1a70b6fc68aeb 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -6331,10 +6331,10 @@ var NodePositionConvertToCursor = class {
+ 			let segmentPage = page;
+ 			if (pageType === DocumentSkeletonPageType.HEADER) {
+ 				var _skeHeaders$get;
+-				segmentPage = (_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth);
++				segmentPage = page.headerSkeleton ?? ((_skeHeaders$get = skeHeaders.get(headerId)) === null || _skeHeaders$get === void 0 ? void 0 : _skeHeaders$get.get(pageWidth));
+ 			} else if (pageType === DocumentSkeletonPageType.FOOTER) {
+ 				var _skeFooters$get;
+-				segmentPage = (_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth);
++				segmentPage = page.footerSkeleton ?? ((_skeFooters$get = skeFooters.get(footerId)) === null || _skeFooters$get === void 0 ? void 0 : _skeFooters$get.get(pageWidth));
+ 			} else if (pageType === DocumentSkeletonPageType.CELL) segmentPage = getPageFromPath(skeletonData, path);
+ 			if (segmentPage == null) {
+ 				this._liquid.translatePage(page, pageLayoutType, pageMarginLeft, pageMarginTop);

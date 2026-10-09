@@ -62,6 +62,7 @@ const excelHostApi: ElectronAPI['excelHost'] = {
       ready: true,
       crashed: false,
       dirty: false,
+      documentCount: 0,
     }
   },
   openWorkbook: async (sessionId, _config, request) => {
@@ -212,7 +213,7 @@ function startPowerPointTool(
   store: ReturnType<typeof createStore>,
   sessionId: string,
   toolUseId: string,
-  toolName = 'edit_ppt_page',
+  toolName = 'ppt_edit_page',
 ): void {
   startBrowserTool(store, sessionId, toolUseId, toolName, {
     page_id: 'page-1',
@@ -513,7 +514,7 @@ describe('SessionResourcePanel', () => {
     store.set(activeSessionIdAtom, sessionId)
     store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
     store.set(excelHostSnapshotAtom, {
-      sessions: [{ sessionId, targetId: 'excel-debug-target', webContentsId: 50, ready: true, crashed: false, dirty: false }],
+      sessions: [{ sessionId, targetId: 'excel-debug-target', webContentsId: 50, ready: true, crashed: false, dirty: false, documentCount: 1 }],
     })
     const roundsExtension: SessionWorkbenchExtension = {
       ...toolExtension,
@@ -683,7 +684,7 @@ describe('SessionResourcePanel', () => {
     }
   })
 
-  it('shows PPT as active without a background marker until a presentation is created', async () => {
+  it('distinguishes an empty PPT target from a created presentation', async () => {
     const store = createStore()
     const sessionId = 'session-ppt-lifecycle'
     store.set(activeSessionIdAtom, sessionId)
@@ -707,6 +708,25 @@ describe('SessionResourcePanel', () => {
           webContentsId: 42,
           loading: false,
           crashed: false,
+          documentCount: 0,
+        }],
+      })
+    })
+
+    expect(presentation.querySelector(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )).toBeNull()
+    expect(presentation.getAttribute('aria-label')).toBe('PPT')
+
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'ppt-target',
+          webContentsId: 42,
+          loading: false,
+          crashed: false,
+          documentCount: 1,
         }],
       })
     })
@@ -722,6 +742,22 @@ describe('SessionResourcePanel', () => {
     expect(presentation.querySelector<HTMLElement>(
       '[data-testid="session-workbench-presentation-status-indicator"]',
     )?.dataset.state).toBe('background-open')
+
+    await act(async () => {
+      store.set(setEmbeddedPowerPointSnapshotAtom, {
+        sessions: [{
+          sessionId,
+          targetId: 'ppt-target',
+          webContentsId: 42,
+          loading: false,
+          crashed: false,
+          documentCount: 0,
+        }],
+      })
+    })
+    expect(presentation.querySelector(
+      '[data-testid="session-workbench-presentation-status-indicator"]',
+    )).toBeNull()
 
     await act(async () => presentation.click())
     await act(async () => {
@@ -752,6 +788,7 @@ describe('SessionResourcePanel', () => {
           webContentsId: 43,
           loading: false,
           crashed: false,
+          documentCount: null,
         }],
       })
       await Promise.resolve()
@@ -774,10 +811,11 @@ describe('SessionResourcePanel', () => {
       sessions: [{
         sessionId,
         targetId: 'existing-ppt-target',
-        webContentsId: 44,
-        loading: false,
-        crashed: false,
-      }],
+          webContentsId: 44,
+          loading: false,
+          crashed: false,
+          documentCount: null,
+        }],
     })
     const { host, root } = await mountPanel(store)
 
@@ -813,6 +851,7 @@ describe('SessionResourcePanel', () => {
           ready: true,
           crashed: false,
           dirty: false,
+          documentCount: 1,
         }],
       })
       await Promise.resolve()
@@ -825,6 +864,34 @@ describe('SessionResourcePanel', () => {
     await act(async () => expandButton.click())
     expect(store.get(excelExpandedAtom)).toBe(true)
     expect(expandButton.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => root.unmount())
+  })
+
+  it('lets the native Excel launch surface own the only header while the workspace is empty', async () => {
+    const store = createStore()
+    const sessionId = 'session-excel-empty'
+    store.set(activeSessionIdAtom, sessionId)
+    store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
+    const { host, root } = await mountPanel(store)
+
+    await act(async () => {
+      store.set(excelHostSnapshotAtom, { sessions: [{
+        sessionId,
+        targetId: 'excel-target-empty',
+        webContentsId: 50,
+        ready: true,
+        crashed: false,
+        dirty: false,
+        documentCount: 0,
+      }] })
+      await Promise.resolve()
+    })
+
+    expect(host.querySelector('[data-testid="excel-native-canvas"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="excel-app-header"]')).toBeNull()
+    expect(host.querySelector('[data-testid="excel-toggle-expanded"]')).toBeNull()
+    expect(host.querySelector('[data-testid="session-workbench-excel-status-indicator"]')).toBeNull()
 
     await act(async () => root.unmount())
   })
@@ -864,7 +931,7 @@ describe('SessionResourcePanel', () => {
     store.set(activeSessionIdAtom, sessionId)
     store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
     store.set(setExcelHostSnapshotAtom, { sessions: [{
-      sessionId, targetId: 'excel-retained', webContentsId: 50, ready: true, crashed: false, dirty: true,
+      sessionId, targetId: 'excel-retained', webContentsId: 50, ready: true, crashed: false, dirty: true, documentCount: 1,
     }] })
     store.set(excelExpandedAtom, true)
     const { host, root } = await mountPanel(store)
@@ -888,7 +955,7 @@ describe('SessionResourcePanel', () => {
   it('closes Excel from its header without recreating its target on dirty-state updates', async () => {
     const store = createStore()
     const sessionId = 'session-excel-panel-close'
-    const session = { sessionId, targetId: 'excel-panel', webContentsId: 50, ready: true, crashed: false, dirty: false }
+    const session = { sessionId, targetId: 'excel-panel', webContentsId: 50, ready: true, crashed: false, dirty: false, documentCount: 1 }
     store.set(activeSessionIdAtom, sessionId)
     store.set(setSessionWorkbenchSurfaceAtom, SessionWorkbenchSurface.Excel)
     store.set(setExcelHostSnapshotAtom, { sessions: [session] })
@@ -919,6 +986,7 @@ describe('SessionResourcePanel', () => {
         ready: true,
         crashed: false,
         dirty: false,
+        documentCount: 1,
       }],
     })
     const { host, root } = await mountPanel(store)
@@ -2194,6 +2262,7 @@ describe('SessionResourcePanel', () => {
         ready: true,
         crashed: false,
         dirty: false,
+        documentCount: 1,
       }],
     })
     const { host, root } = await mountPanel(store)

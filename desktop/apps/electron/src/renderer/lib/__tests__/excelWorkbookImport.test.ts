@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { LocaleType, type IWorkbookData } from '@univerjs/core'
 import { importExcelWorkbook, type ExcelImportWorkerResponse } from '../excelWorkbookImport'
+import { unsupportedWorkbookFeatures } from '../excelWorkbook'
 
 const originalWorker = globalThis.Worker
 let workers: ImportWorker[] = []
@@ -26,6 +27,18 @@ beforeEach(() => {
 afterEach(() => { globalThis.Worker = originalWorker })
 
 describe('background workbook import', () => {
+  it('keeps readable cells and supported images when an embedded image cannot be previewed', async () => {
+    const png = 'data:image/png;base64,AAAA'
+    const resource = { name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ sheet: {
+      data: { good: { source: png }, bad: { source: 'data:image/tiff;base64,AAAA' } }, order: ['good', 'bad'],
+    } }) }
+    const snapshot = { id: 'imported', sheets: {}, sheetOrder: [], resources: [resource] } as unknown as IWorkbookData
+    const result = importExcelWorkbook(new Uint8Array(), LocaleType.EN_US)
+    workers[0]!.reply({ type: 'complete', snapshot })
+    expect(await result).toBe(snapshot)
+    expect(JSON.parse(resource.data).sheet).toEqual({ data: { good: { source: png } }, order: ['good'] })
+    expect(unsupportedWorkbookFeatures(snapshot)).toContain('unrenderable embedded images')
+  })
   it('transfers a copy of the input, reports progress, and releases the worker on success', async () => {
     const input = new Uint8Array([1, 2, 3])
     const onProgress = mock(() => {})

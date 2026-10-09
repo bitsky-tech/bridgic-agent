@@ -191,26 +191,27 @@ describe('toolLabel — 已登记工具族(spec 驱动)', () => {
     // Preserve unmapped enum values instead of dropping them.
     expect(toolLabel('generic', 'browser_scroll', { direction: 'sideways' }).subject).toBe('sideways')
   })
-  it('PPT 工具显示页面级动作和稳定页 id', () => {
-    expect(toolLabel('generic', 'view_ppt', { target: 'decks/review.pptx' })).toEqual({
+  it('PPT 工具显示精简事务和渲染动作', () => {
+    expect(toolLabel('generic', 'ppt_open', { target: 'decks/review.pptx' })).toEqual({
       verb: '打开 PPT',
       subject: 'review.pptx',
       subjectFull: 'decks/review.pptx',
     })
-    expect(toolLabel('generic', 'edit_ppt_page', { page_id: 'page-2', ref: 'title' })).toEqual({
+    expect(toolLabel('generic', 'ppt_edit_page', { document_id: 'deck', page_id: 'page-2', operations: [] })).toEqual({
       verb: '编辑 PPT 页',
       subject: 'page-2',
       subjectMono: true,
     })
-    expect(toolMeta('generic', 'edit_ppt_page', { page_id: 'page-2', ref: 'title' }, '').detail).toBe('title')
-    expect(toolLabel('generic', 'update_ppt_design', { theme: 'midnight' })).toEqual({
-      verb: '更新 PPT 设计',
-      subject: 'midnight',
+    expect(toolLabel('generic', 'ppt_inspect', { document_id: 'deck', query: { kind: 'render', page_ids: ['page-2'] } })).toEqual({
+      verb: '渲染 PPT',
+      subject: 'deck',
+      subjectMono: true,
     })
-    expect(toolMeta('generic', 'move_ppt_page', {
-      page_id: 'page-2',
-      target_page_id: 'page-4',
-    }, '').detail).toBe('page-4')
+    expect(toolLabel('generic', 'ppt_save', { document_id: 'deck' })).toEqual({
+      verb: '保存 PPT',
+      subject: 'deck',
+      subjectFull: 'deck',
+    })
   })
   it('无参工具只显示动词', () => {
     expect(toolLabel('generic', 'workspace_status', {})).toEqual({ verb: '查看工作区状态', subject: '' })

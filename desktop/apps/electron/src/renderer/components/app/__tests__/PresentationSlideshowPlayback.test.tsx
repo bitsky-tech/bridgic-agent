@@ -1,20 +1,21 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Root } from 'react-dom/client'
-import type { PresentationDocument, PresentationElement, PresentationFileSource, PresentationMediaElement, PresentationTextElement } from '@/atoms/presentation'
+import type { PresentationProject, PresentationElement, PresentationFileSource, PresentationMediaElement, PresentationTextElement } from '@/atoms/presentation'
 
 GlobalRegistrator.register()
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createStore, Provider } = await import('jotai')
-const { createBlankPresentationDocument, createBlankPresentationSlide, currentPresentationDocumentAtom, powerPointSessionIdOverrideAtom } = await import('@/atoms/presentation')
+const { createBlankPresentationProject, createBlankPresentationSlide, powerPointSessionIdOverrideAtom } = await import('@/atoms/presentation')
 const { activeSessionIdAtom } = await import('@/atoms/sessions')
 const { settingsAtom } = await import('@/atoms/settings')
 const { installApiStub } = await import('@/lib/apiStub')
 const { i18n } = await import('@/lib/i18n')
 const { createPresentationMediaElement } = await import('@/lib/presentationInsert')
 const { createPresentationAsset } = await import('@/presentation/project')
+const { createPresentationTestStore } = await import('@/test-fixtures/presentation-store')
 const { PresentationWorkbenchPanel } = await import('../PresentationWorkbenchPanel')
 const { PresentationAnimationPlayer } = await import('../PresentationAnimationPlayer')
 
@@ -24,11 +25,12 @@ let plays: HTMLMediaElement[]
 let pauses: HTMLMediaElement[]
 let animations: Array<{ node: Element; options?: KeyframeAnimationOptions; frames: Keyframe[]; finish: () => void }>
 let roots: Root[]
+let presentationStores: Awaited<ReturnType<typeof createPresentationTestStore>>[]
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh')
   installApiStub()
-  plays = []; pauses = []; animations = []; roots = []
+  plays = []; pauses = []; animations = []; roots = []; presentationStores = []
   const playing = new WeakSet<HTMLMediaElement>()
   Object.defineProperties(HTMLMediaElement.prototype, {
     paused: { configurable: true, get() { return !playing.has(this) } },
@@ -45,6 +47,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await act(async () => roots.forEach(root => root.unmount()))
+  for (const store of presentationStores) store.dispose()
   for (const [key, descriptor] of descriptors) {
     if (descriptor) Object.defineProperty(HTMLMediaElement.prototype, key, descriptor)
     else Reflect.deleteProperty(HTMLMediaElement.prototype, key)
@@ -60,22 +63,23 @@ function bullet(id: string, overrides: Partial<PresentationTextElement> = {}): P
     fontSize: 32, fontFamily: 'Arial', fontWeight: 400, color: '#111111', align: 'left', animation: 'appear', ...overrides }
 }
 
-function attachMedia(model: PresentationDocument, media: PresentationMediaElement, source: PresentationFileSource): void {
+function attachMedia(model: PresentationProject, media: PresentationMediaElement, source: PresentationFileSource): void {
   model.assets.push(createPresentationAsset(media.type, source, media.sourceAssetId))
 }
 
-async function mount(model: PresentationDocument) {
+async function mount(model: PresentationProject) {
   const store = createStore()
   const settings = store.get(settingsAtom)
   store.set(settingsAtom, { ...settings, ui: { ...settings.ui, lastNav: 'home' } })
   store.set(activeSessionIdAtom, 'slideshow-playback')
   store.set(powerPointSessionIdOverrideAtom, 'slideshow-playback')
-  store.set(currentPresentationDocumentAtom, model)
+  const presentationStore = await createPresentationTestStore('slideshow-playback', model)
+  presentationStores.push(presentationStore)
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   roots.push(root)
-  await act(async () => root.render(<Provider store={store}><PresentationWorkbenchPanel active={false} /></Provider>))
+  await act(async () => root.render(<Provider store={store}><PresentationWorkbenchPanel active={false} presentationStore={presentationStore} /></Provider>))
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
   await click(host, 'session.presentation.playFromCurrent')
   expect(host.textContent).toContain(model.title)
@@ -94,7 +98,7 @@ async function finishStep() {
 
 describe('slideshow playback interactions', () => {
   it.each(['fillColor', 'textColor', 'zoom'] as const)('holds %s through later steps and the outgoing transition, then resets on revisit', async effect => {
-    const model = createBlankPresentationDocument('Emphasis lifecycle')
+    const model = createBlankPresentationProject('Emphasis lifecycle')
     const originalShape = { id: 'emphasis', type: 'rect' as const, x: 320, y: 200, width: 320, height: 160, rotation: 0, fill: '#CC2222', borderColor: '#CC2222', borderWidth: 0 }
     const element: PresentationElement = {
       ...(effect === 'textColor' ? bullet('Emphasis', { color: '#CC2222', textRuns: [{ start: 0, end: 8, style: { color: '#FF8800', fontSize: 21 } }] }) : originalShape),
@@ -139,7 +143,7 @@ describe('slideshow playback interactions', () => {
   })
 
   it.each(['zoom', 'textColor'] as const)('keeps %s hyperlinks usable and carries the held state into a linked transition', async effect => {
-    const model = createBlankPresentationDocument('Emphasis link')
+    const model = createBlankPresentationProject('Emphasis link')
     const target = createBlankPresentationSlide('Linked')
     target.transition = { effect: 'fade', durationMs: 800 }
     model.slides.pages.push(target)
@@ -170,7 +174,7 @@ describe('slideshow playback interactions', () => {
   for (const type of ['audio', 'video'] as const) it.each([false, true])(`preserves ${type} with autoplay=%s through two unrelated animations and stops it on exit`, async autoplay => {
     const source = { dataUrl: type === 'audio' ? 'data:audio/wav;base64,UklGRg==' : 'data:video/mp4;base64,AAAAHGZ0eXBpc29t', fileName: 'Narration', mimeType: type === 'audio' ? 'audio/wav' : 'video/mp4' }
     const media = { ...createPresentationMediaElement(type, source), autoplay }
-    const model = createBlankPresentationDocument('Media lifecycle')
+    const model = createBlankPresentationProject('Media lifecycle')
     attachMedia(model, media, source)
     model.slides.pages[0]!.elements = [bullet('First'), media, bullet('Second')]
     model.slides.pages.push(createBlankPresentationSlide('Next'))
@@ -200,7 +204,7 @@ describe('slideshow playback interactions', () => {
   it('plays and pauses from SVG and path hit targets without advancing the slide', async () => {
     const source = { dataUrl: 'data:audio/wav;base64,UklGRg==', fileName: 'Narration', mimeType: 'audio/wav' }
     const media = { ...createPresentationMediaElement('audio', source), autoplay: false }
-    const model = createBlankPresentationDocument('Audio controls')
+    const model = createBlankPresentationProject('Audio controls')
     attachMedia(model, media, source)
     model.slides.pages[0]!.elements = [media, bullet('Pending')]
     const host = await mount(model)
@@ -221,7 +225,7 @@ describe('slideshow playback interactions', () => {
   })
 
   it.each(['withPrevious', 'afterPrevious'] as const)('starts an initial %s animation once while retaining click steps', async animationStart => {
-    const model = createBlankPresentationDocument('Automatic intro')
+    const model = createBlankPresentationProject('Automatic intro')
     model.slides.pages[0]!.elements = [bullet('Automatic', { animationStart, animationDelay: 80 }), bullet('Manual')]
     const host = await mount(model)
     const slideshow = host.querySelector<HTMLElement>('[data-testid="presentation-slideshow"]')!
@@ -240,7 +244,7 @@ describe('slideshow playback interactions', () => {
   })
 
   it('waits for the incoming transition and replays automatic content on revisiting the slide', async () => {
-    const model = createBlankPresentationDocument('Transition and auto intro')
+    const model = createBlankPresentationProject('Transition and auto intro')
     const incoming = createBlankPresentationSlide('Incoming')
     incoming.transition = { effect: 'fade', durationMs: 800 }
     incoming.elements = [bullet('Automatic', { animationStart: 'afterPrevious' })]
@@ -261,7 +265,7 @@ describe('slideshow playback interactions', () => {
   })
 
   it('keeps explicit element-click triggers manual even with an automatic start setting', async () => {
-    const model = createBlankPresentationDocument('Element trigger')
+    const model = createBlankPresentationProject('Element trigger')
     model.slides.pages[0]!.elements = [bullet('Triggered', { animationStart: 'withPrevious', animationTrigger: 'elementClick' })]
     const host = await mount(model)
     expect(animations).toHaveLength(0)
@@ -270,7 +274,7 @@ describe('slideshow playback interactions', () => {
   })
 
   it('keeps ribbon animation previews silent', async () => {
-    const model = createBlankPresentationDocument('Silent preview')
+    const model = createBlankPresentationProject('Silent preview')
     const source = { dataUrl: 'data:audio/wav;base64,UklGRg==', fileName: 'Narration', mimeType: 'audio/wav' }
     const media = { ...createPresentationMediaElement('audio', source), autoplay: true }
     attachMedia(model, media, source)

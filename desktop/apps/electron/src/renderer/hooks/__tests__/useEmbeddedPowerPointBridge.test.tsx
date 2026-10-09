@@ -32,6 +32,7 @@ function snapshot(sessionId: string): EmbeddedPowerPointSnapshot {
       webContentsId: 9,
       loading: false,
       crashed: false,
+      documentCount: null,
     }],
   }
 }
