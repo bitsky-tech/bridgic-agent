@@ -198,11 +198,25 @@ even if the build environment contains debug variables.
 | `bun run typecheck` | Strict TS check across all workspaces. |
 | `bun run lint` | ESLint over apps/packages/scripts. |
 | `bun run test` | bun:test unit tests (scoped to apps/packages/scripts). |
+| `bun run build:renderer` | Build the main, PowerPoint, Word, and Excel pages sequentially. |
 | `bun run start` | Build + run the production-bundled Electron. |
 | `bun run dist:mac` | Run prebuild + electron-builder → arm64 .pkg + updater .zip. |
 | `bun run dist:mac:x64` | The same for Intel; a release carries both architectures. |
 | `bun run dist:win` | Run prebuild + electron-builder → .exe (NSIS). |
 | `bun run dist:linux` | Run prebuild + electron-builder → .deb. |
+
+Renderer production builds run each page in a fresh Vite process. HTML files
+remain siblings under `dist/renderer/`, while each page's assets (including
+workers) live under `assets/<entry>/`. The build cleans the renderer output once
+before starting, so later pages preserve earlier output. Shared dependencies
+can appear in several page bundles. Development keeps one Vite server with all
+pages and Jotai's debug/HMR plugins; production skips those Babel transforms.
+
+The default build heap budgets are 2 GiB for the main, PowerPoint, and Word pages
+and 4 GiB for Excel's larger dependency graph. An explicit heap limit in
+`NODE_OPTIONS` takes precedence. These limits apply only to build subprocesses,
+not to the installed app. Source maps remain available for license collection
+and are excluded from the installer as before.
 
 ## Packaging the full installer (rare; CI / release path)
 

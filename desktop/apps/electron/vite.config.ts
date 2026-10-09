@@ -4,23 +4,11 @@ import tailwindcss from '@tailwindcss/vite'
 import { dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { debugViteSettings } from '../../scripts/debug/startup'
+import { parseRendererEntry, RENDERER_ENTRY_ENV, RENDERER_ENTRY_FILES } from '../../scripts/renderer-entries'
 
 const configDir = dirname(fileURLToPath(import.meta.url))
 
 const rendererConfig = defineConfig({
-  plugins: [
-    react({
-      babel: {
-        plugins: [
-          // Jotai HMR support: caches atom instances in globalThis.jotaiAtomCache
-          // so HMR re-execution returns stable atoms instead of orphaning data.
-          'jotai-babel/plugin-debug-label',
-          'jotai-babel/plugin-react-refresh',
-        ],
-      },
-    }),
-    tailwindcss(),
-  ],
   root: resolve(configDir, 'src/renderer'),
   base: './',
   build: {
@@ -28,12 +16,9 @@ const rendererConfig = defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
-      input: {
-        main: resolve(configDir, 'src/renderer/index.html'),
-        powerpoint: resolve(configDir, 'src/renderer/powerpoint.html'),
-        word: resolve(configDir, 'src/renderer/word.html'),
-        excel: resolve(configDir, 'src/renderer/excel.html'),
-      },
+      input: Object.fromEntries(Object.entries(RENDERER_ENTRY_FILES).map(
+        ([entry, file]) => [entry, resolve(configDir, 'src/renderer', file)],
+      )),
     },
   },
   resolve: {
@@ -63,8 +48,29 @@ const rendererConfig = defineConfig({
 
 export default defineConfig(({ command }) => {
   const debug = debugViteSettings(command, process.env)
+  const entry = command === 'build' ? parseRendererEntry(process.env[RENDERER_ENTRY_ENV]) : undefined
   return {
     ...rendererConfig,
+    plugins: [
+      // Production builds skip Babel; atom labels and HMR are development-only.
+      react(command === 'serve' ? { babel: { plugins: [
+        'jotai-babel/plugin-debug-label',
+        'jotai-babel/plugin-react-refresh',
+      ] } } : {}),
+      tailwindcss(),
+    ],
+    build: {
+      ...rendererConfig.build,
+      // Independent builds must not overwrite chunks (including workers) used
+      // by another page. Electron continues to load the sibling root HTML files.
+      assetsDir: entry ? `assets/${entry}` : 'assets',
+      emptyOutDir: !entry,
+      rollupOptions: {
+        input: entry
+          ? { [entry]: resolve(configDir, 'src/renderer', RENDERER_ENTRY_FILES[entry]) }
+          : rendererConfig.build!.rollupOptions!.input,
+      },
+    },
     define: { __DESKTOP_DEBUG__: JSON.stringify(debug.enabled) },
     server: {
       ...rendererConfig.server,

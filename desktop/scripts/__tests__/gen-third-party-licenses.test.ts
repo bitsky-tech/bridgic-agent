@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  collectFontEntries,
   collectRuntimeEntries,
   dedupeEntries,
   findLicenseText,
@@ -34,6 +35,40 @@ function tmpDir(): string {
 afterEach(() => {
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true })
   tmpDirs = []
+})
+
+describe('collectFontEntries', () => {
+  it('retains the OFL notice for fonts emitted into separate renderer entry folders', () => {
+    const assets = tmpDir()
+    for (const entry of ['main', 'powerpoint', 'word']) mkdirSync(path.join(assets, entry))
+    writeFileSync(path.join(assets, 'main', 'KaTeX_Main-Regular-hash.woff2'), 'font')
+    writeFileSync(path.join(assets, 'powerpoint', 'KaTeX_Main-Regular-hash.woff2'), 'font')
+    writeFileSync(path.join(assets, 'word', 'KaTeX_Math-Italic-other.woff2'), 'italic font')
+    writeFileSync(path.join(assets, 'KaTeX_Main-Regular-third.woff'), 'legacy font format')
+    writeFileSync(path.join(assets, 'main', 'KaTeX_Main-Regular-hash.woff2.map'), '{}')
+    writeFileSync(path.join(assets, 'word', 'other-font.woff2'), 'unrelated font')
+    mkdirSync(path.join(assets, 'KaTeX_NotAFont.woff2'))
+
+    const entries = collectFontEntries(assets)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.name).toBe('KaTeX fonts (3 files)')
+    expect(entries[0]?.origin).toBe('font')
+    expect(entries[0]?.license).toBe('OFL-1.1')
+    expect(entries[0]?.text).toContain('Copyright 1995, 2009 American Mathematical Society.')
+    expect(entries[0]?.text).toContain('SIL OPEN FONT LICENSE')
+  })
+
+  it('continues to discover fonts directly in the assets directory', () => {
+    const assets = tmpDir()
+    writeFileSync(path.join(assets, 'KaTeX_Main-Regular-hash.ttf'), 'font')
+    expect(collectFontEntries(assets)[0]?.name).toBe('KaTeX fonts (1 files)')
+  })
+
+  it('omits the notice when there are no bundled KaTeX fonts', () => {
+    const assets = tmpDir()
+    expect(collectFontEntries(assets)).toEqual([])
+    expect(collectFontEntries(path.join(assets, 'missing'))).toEqual([])
+  })
 })
 
 describe('collectRuntimeEntries', () => {

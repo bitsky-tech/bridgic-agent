@@ -576,20 +576,29 @@ const KATEX_FONT_COPYRIGHTS = [
  * shipping OFL.txt itself, and OFL-1.1 condition 2 requires each copy of the
  * font software to be distributed together with the license.
  */
-export function collectFontEntries(): LicenseEntry[] {
-  const assets = join(DIST_DIR, 'renderer/assets')
+export function collectFontEntries(assets = join(DIST_DIR, 'renderer/assets')): LicenseEntry[] {
   if (!existsSync(assets)) return []
 
-  const katexFonts = readdirSync(assets).filter(
-    (entry) => entry.startsWith('KaTeX_') && /\.(woff2?|ttf|otf)$/.test(entry),
-  )
-  if (katexFonts.length === 0) return []
+  const katexFonts = new Set<string>()
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        walk(join(dir, entry.name))
+      } else if (entry.isFile() && entry.name.startsWith('KaTeX_') && /\.(woff2?|ttf|otf)$/.test(entry.name)) {
+        // Independent renderer builds copy the same content-hashed font filename
+        // into separate entry folders. Count that font asset once for its notice.
+        katexFonts.add(entry.name)
+      }
+    }
+  }
+  walk(assets)
+  if (katexFonts.size === 0) return []
 
   const oflPath = join(import.meta.dir, 'license-texts/OFL-1.1.txt')
   const ofl = existsSync(oflPath) ? readFileSync(oflPath, 'utf-8').trimEnd() : null
   return [
     {
-      name: `KaTeX fonts (${katexFonts.length} files)`,
+      name: `KaTeX fonts (${katexFonts.size} files)`,
       version: 'bundled',
       license: 'OFL-1.1',
       text: ofl === null ? null : `${KATEX_FONT_COPYRIGHTS.join('\n')}\n\n${ofl}`,
