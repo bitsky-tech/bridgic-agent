@@ -17,11 +17,16 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (activeRoot) {
-    await act(async () => activeRoot?.unmount())
-    activeRoot = null
+  try {
+    if (activeRoot) {
+      await act(async () => activeRoot?.unmount())
+      activeRoot = null
+    }
+    document.body.replaceChildren()
+  } finally {
+    // English labels are local to these tests, not the next test file.
+    await i18n.changeLanguage('zh')
   }
-  document.body.replaceChildren()
 })
 
 afterAll(async () => {

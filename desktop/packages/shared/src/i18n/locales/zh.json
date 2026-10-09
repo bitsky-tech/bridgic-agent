@@ -3426,6 +3426,8 @@
     "hostFailed": "Word 编辑器暂时无法打开。",
     "hostLoading": "正在打开 Word…",
     "image": "图片",
+    "imagePreviewUnavailable": "[图片未能预览]",
+    "imagePreviewUnavailableWithAlt": "[图片未能预览：{{alt}}]",
     "increaseIndent": "增加缩进",
     "italic": "斜体",
     "justify": "两端对齐",

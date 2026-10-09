@@ -19,7 +19,7 @@
  * Loaded via `--preload` in package.json's `test` script so it runs before
  * any test file imports the logger.
  */
-import { mock } from 'bun:test'
+import { afterEach, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
 // Stub the image assets the renderer imports for their URL.
@@ -49,6 +49,11 @@ for (const asset of [
   mock.module(path, () => ({ default: path }))
 }
 import { i18n } from './apps/electron/src/renderer/lib/i18n'
+
+// Fetch mocks are per-test state. Restore the native implementation so a
+// previous daemon test cannot intercept later Office blob/data URL requests.
+const nativeFetch = globalThis.fetch
+afterEach(() => { globalThis.fetch = nativeFetch })
 
 // ── happy-dom: make the per-file register/unregister pairs collision-proof ──
 //

@@ -3426,6 +3426,8 @@
     "hostFailed": "Word could not be opened.",
     "hostLoading": "Opening Word…",
     "image": "Picture",
+    "imagePreviewUnavailable": "[Image could not be previewed]",
+    "imagePreviewUnavailableWithAlt": "[Image could not be previewed: {{alt}}]",
     "increaseIndent": "Increase indent",
     "italic": "Italic",
     "justify": "Justify",

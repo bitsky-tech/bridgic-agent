@@ -10,14 +10,20 @@ GlobalRegistrator.register()
 const { act, StrictMode } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { WordHostApp, createWordHostRequestQueue } = await import('../WordHostApp')
+const { i18n } = await import('@/lib/i18n')
 
 let restoreWorker: () => void
 beforeEach(() => { restoreWorker = installWordImportWorker() })
-afterEach(() => {
-  restoreWorker()
-  window.localStorage.clear()
-  delete window.__bridgicWord
-  document.body.replaceChildren()
+afterEach(async () => {
+  try {
+    restoreWorker()
+    window.localStorage.clear()
+    delete window.__bridgicWord
+    document.body.replaceChildren()
+  } finally {
+    // The host applies its locale to the shared translator; restore the suite baseline.
+    await i18n.changeLanguage('zh')
+  }
 })
 afterAll(async () => { await GlobalRegistrator.unregister() })
 

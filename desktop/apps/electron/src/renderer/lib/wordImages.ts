@@ -1,5 +1,6 @@
 import { ImageSourceType, type IDocumentData } from '@univerjs/core'
 import { prepareOfficeImage } from './office/officeImage'
+import { i18n } from './i18n'
 
 /** Run before committing a command, so an unavailable image cannot block later saves. */
 export async function prepareWordHtmlImages(html: string, onImportWarning?: (message: string) => void): Promise<string> {
@@ -18,7 +19,9 @@ export async function prepareWordHtmlImages(html: string, onImportWarning?: (mes
       onImportWarning(`An embedded image could not be previewed: ${error instanceof Error ? error.message : String(error)}`)
       const placeholder = document.createElement('span')
       const alt = image.getAttribute('alt')
-      placeholder.textContent = `[图片未能预览${alt ? `：${alt}` : ''}]`
+      placeholder.textContent = alt
+        ? i18n.t('word.imagePreviewUnavailableWithAlt', { alt })
+        : i18n.t('word.imagePreviewUnavailable')
       image.replaceWith(placeholder)
     }
   }

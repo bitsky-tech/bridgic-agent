@@ -7,6 +7,7 @@ import JSZip from 'jszip'
 GlobalRegistrator.register()
 const { prepareOfficeImage, normalizeLegacyEmfHeader } = await import('../office/officeImage')
 const { prepareWordHtmlImages } = await import('../wordImages')
+const { i18n } = await import('../i18n')
 const { createWordWorkspace, createWordDomainStore, isWordDocumentDirty, reduceWordCommand } = await import('../wordDomain')
 const { exportWordDocx } = await import('../wordDocxExport')
 const { importDocxToHtml } = await import('../wordDocxImport')
@@ -85,6 +86,19 @@ it('shows a warning placeholder for an unsupported imported image while explicit
   expect(preview).toContain(pngSource)
   expect(warnings).toHaveLength(1)
   await expect(prepareWordHtmlImages(html)).rejects.toThrow('Use an embedded')
+})
+
+it('localizes an unavailable imported image using the active UI language', async () => {
+  const previousLanguage = i18n.language
+  try {
+    await i18n.changeLanguage('en')
+    const withAlt = await prepareWordHtmlImages('<img alt="diagram" src="data:image/tiff;base64,AAAA"/>', () => undefined)
+    const withoutAlt = await prepareWordHtmlImages('<img src="data:image/tiff;base64,AAAA"/>', () => undefined)
+    expect(withAlt).toContain('[Image could not be previewed: diagram]')
+    expect(withoutAlt).toContain('[Image could not be previewed]')
+  } finally {
+    await i18n.changeLanguage(previousLanguage)
+  }
 })
 
 async function workbookWithImage(source: string) {
