@@ -36,11 +36,15 @@ name: Package
 # trips on first open). Either way forks and secret-less runs still produce
 # artifacts.
 #
-# Windows: always signed. The code-signing key lives on a hardware token that
-# cannot leave its USB port, so the Windows job runs on the self-hosted runner
-# (label `codesign`) the token is plugged into, and signs through
-# desktop/apps/electron/build/win-sign.cjs. When that machine is offline the
-# Windows job queues until it is back — it never falls back to an unsigned build.
+# Windows: signed for every real Release (tag push or `release_tag`) and for a
+# manual run with `sign` ticked. The code-signing key lives on a hardware token
+# that cannot leave its USB port, so a signed build runs on the self-hosted
+# runner (label `codesign`) the token is plugged into, and signs through
+# desktop/apps/electron/build/win-sign.cjs; when that machine is offline the job
+# queues until it is back — a Release never falls back to an unsigned build.
+# Every other manual run (a nightly) is unsigned and runs on a hosted
+# windows-latest runner, so an internal build does not need the signing machine
+# switched on. `meta` makes that call, so runner and signing cannot drift apart.
 #
 # PyInstaller cannot cross-compile, so each OS/arch needs its own runner and its
 # own invocation: build-pyinstaller.sh is POSIX-only, build-pyinstaller.ps1 is
@@ -101,6 +105,12 @@ on:
           electron-builder.yml changed. Tag pushes always run it regardless."
         type: boolean
         default: false
+      sign:
+        description: "Sign the Windows build on the self-hosted token runner
+          (needs that machine online). Tag pushes and release_tag always sign;
+          this only matters for a nightly."
+        type: boolean
+        default: false
       release_tag:
         description: "Publish a REAL release under this tag (bare semver, e.g.
           0.1.14) instead of a nightly prerelease. Use this to rehearse the
@@ -136,6 +146,8 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
+      windows_signed: ${{ steps.tag.outputs.windows_signed }}
+      windows_runs_on: ${{ steps.tag.outputs.windows_runs_on }}
     steps:
       # Needed only to read the version out of package.json for the guard below.
       - uses: actions/checkout@v4
@@ -209,8 +221,32 @@ jobs:
               ;;
           esac
 
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          # Step 3 — decide WHERE Windows builds. A real Release is signed, on
+          # the self-hosted machine holding the token; a nightly is unsigned on
+          # a hosted runner unless `sign` asks for the token machine, so an
+          # internal build never waits for that machine to be switched on.
+          # Emitted as JSON because `runs-on` takes either a label string or a
+          # label array, and fromJSON() in the job turns this back into one.
+          case "$tag" in
+            nightly-*)
+              if [ "${{ inputs.sign }}" = true ]; then windows_signed=true; else windows_signed=false; fi
+              ;;
+            *)
+              windows_signed=true
+              ;;
+          esac
+          if [ "$windows_signed" = true ]; then
+            windows_runs_on='["self-hosted", "windows", "codesign"]'
+          else
+            windows_runs_on='"windows-latest"'
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+            echo "windows_signed=$windows_signed"
+            echo "windows_runs_on=$windows_runs_on"
+          } >> "$GITHUB_OUTPUT"
 
   macos-arm64:
     needs: meta
@@ -526,14 +562,16 @@ jobs:
   windows-x64:
     needs: meta
     if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'windows' }}
-    # The machine holding the code-signing token (see the header comment).
-    runs-on: [self-hosted, windows, codesign]
+    # A signed build runs on the machine holding the code-signing token, an
+    # unsigned one on a hosted runner; `meta` picks (see the header comment).
+    runs-on: ${{ fromJSON(needs.meta.outputs.windows_runs_on) }}
     name: package (Windows x64)
     # Measured on the signing machine (2026-09-30): ~35 min to a signed
     # installer, signing included, then ~60 min for the nine installer smoke
     # scenarios, which run twice as slow as on a hosted runner because every
-    # install passes through antivirus. 90 cut the ninth scenario off.
-    timeout-minutes: 150
+    # install passes through antivirus. 90 cut the ninth scenario off. A hosted
+    # runner did the same work, unsigned, within 45 before signing existed.
+    timeout-minutes: ${{ needs.meta.outputs.windows_signed == 'true' && 150 || 45 }}
 
     steps:
       # Unlike a hosted runner this machine persists between runs. A daemon or app
@@ -587,6 +625,7 @@ jobs:
       # jsign and its JRE are provisioned on the signing machine under C:\codesign;
       # the JRE directory name carries its version, so resolve it rather than pin it.
       - name: Check the signing machine
+        if: ${{ needs.meta.outputs.windows_signed == 'true' }}
         shell: pwsh
         env:
           WIN_SIGN_HALT_FILE: C:\actions-runner\signing-halted.txt
@@ -605,6 +644,7 @@ jobs:
       # PyInstaller build never has. prebuild-fetch-amphi copies these files
       # as-is, so afterPack later finds them validly signed and skips them.
       - name: Sign the amphi bundle
+        if: ${{ needs.meta.outputs.windows_signed == 'true' }}
         env:
           WIN_SIGN_PIN: ${{ secrets.WIN_TOKEN_PIN }}
           WIN_SIGN_JSIGN_JAR: C:\codesign\jsign.jar
@@ -743,8 +783,10 @@ jobs:
         working-directory: desktop
         env:
           # Read by build/win-sign.cjs; without the PIN every file ships unsigned,
-          # which the audit step below then refuses.
-          WIN_SIGN_PIN: ${{ secrets.WIN_TOKEN_PIN }}
+          # which the audit step below then refuses. Withheld from an unsigned
+          # build on purpose: that is what makes it unsigned, and a hosted
+          # runner has no business holding the token PIN anyway.
+          WIN_SIGN_PIN: ${{ needs.meta.outputs.windows_signed == 'true' && secrets.WIN_TOKEN_PIN || '' }}
           WIN_SIGN_JSIGN_JAR: C:\codesign\jsign.jar
           # The token's key container name. It changes only if the token is reissued.
           WIN_SIGN_ALIAS: te-77823577-5786-46ba-aee7-111fbfd021bb
@@ -766,8 +808,10 @@ jobs:
       # Signing fails open by design (no PIN → no signature, so local builds work),
       # which makes this the only thing standing between a misconfiguration and an
       # unsigned release. Every PE image in the app plus the installer itself must
-      # carry a valid signature — ours, or its original publisher's.
+      # carry a valid signature — ours, or its original publisher's. An unsigned
+      # nightly is unsigned by decision, not by accident, so it skips the audit.
       - name: Audit Authenticode signatures
+        if: ${{ needs.meta.outputs.windows_signed == 'true' }}
         shell: pwsh
         working-directory: desktop/apps/electron/release
         run: |

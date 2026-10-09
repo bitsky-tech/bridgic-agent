@@ -300,10 +300,11 @@ Tags are bare semver with no `v` prefix:
 A tag push always builds the full matrix — macOS arm64, macOS x64, and Windows
 x64 — and always runs the Windows installer smoke suite.
 
-The Windows job runs on a self-hosted runner (label `codesign`): the
+A release's Windows job runs on a self-hosted runner (label `codesign`): the
 code-signing key sits on a USB hardware token plugged into that machine and
 cannot be copied off it. If the machine is offline, the Windows job waits in the
-queue instead of producing an unsigned build.
+queue instead of producing an unsigned build. A nightly does not need that
+machine at all — see `sign` below.
 
 ### Build without releasing
 
@@ -315,6 +316,7 @@ build:
 | `release_tag` | empty | Empty publishes a prerelease under `nightly-<UTC yyyymmdd-hhmm>`. A bare semver publishes a normal release under that tag instead. |
 | `platform` | `all` | `all`, `macos` (arm64 only), `macos-intel`, or `windows`. |
 | `smoke` | off | The Windows installer E2E suite (~25 min). Required when `installer.nsh`, `test-installer.ps1`, or `electron-builder.yml` changed. |
+| `sign` | off | Off builds Windows unsigned on a hosted `windows-latest` runner, so the signing machine can stay switched off. On runs it on the self-hosted token runner and signs, exactly as a release does — use it to exercise the signing pipeline without releasing. |
 
 A nightly skips both release guards. Setting `release_tag` does not: the
 version must match, and `platform` must stay `all`, because the two macOS
