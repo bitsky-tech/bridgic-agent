@@ -1,8 +1,8 @@
-import { app, BrowserWindow, dialog } from 'electron'
-import { basename, extname, join } from 'node:path'
+import { BrowserWindow, dialog } from 'electron'
+import { basename, extname } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
-import type { OfficeCloseDecision, OfficeFileKind, OfficeFileSaveRequest, OfficeRecoveryKind } from '../../shared/office-files'
-import { createOfficeRecoveryStore, inspectOfficeFile, OFFICE_EXTENSIONS, saveOfficeFile } from '../office-files'
+import type { OfficeCloseDecision, OfficeFileKind, OfficeFileSaveRequest } from '../../shared/office-files'
+import { inspectOfficeFile, OFFICE_EXTENSIONS, saveOfficeFile } from '../office-files'
 import { loggedHandle } from './logged-handle'
 import { createOfficeWorkspaceFiles } from '../office-workspace-files'
 import { officeWorkspaceRequest } from '../office-workspace-backend'
@@ -31,7 +31,6 @@ export function registerOfficeFileHandlers(owner: (kind: OfficeFileKind, content
   loggedHandle('office-files:mount-presentation-source', (event, source: { dataBase64?: string; fileName: string; mimeType: string; path?: string }) => {
     return workspace.mountPresentationSource(owner('presentation', event.sender.id), source)
   })
-  const recovery = createOfficeRecoveryStore(join(app.getPath('userData'), 'office-recovery'))
   loggedHandle('office-files:inspect', (event, kind: OfficeFileKind, path: string) => {
     owner(kind, event.sender.id)
     return inspectOfficeFile(kind, path)
@@ -67,14 +66,4 @@ export function registerOfficeFileHandlers(owner: (kind: OfficeFileKind, content
     const result = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options)
     return (['save', 'discard', 'cancel'] as const)[result.response] ?? 'cancel'
   })
-  loggedHandle('office-files:get-recovery', (event, kind: OfficeRecoveryKind, sessionId: string) => {
-    if (kind !== 'excel') throw new TypeError('Only Excel uses main-process Office recovery')
-    if (owner(kind, event.sender.id) !== sessionId) throw new Error('Office recovery belongs to another Session')
-    return recovery.read(kind, sessionId)
-  })
-  loggedHandle('office-files:set-recovery', (event, kind: OfficeRecoveryKind, sessionId: string, value: string) => {
-    if (kind !== 'excel') throw new TypeError('Only Excel uses main-process Office recovery')
-    if (owner(kind, event.sender.id) !== sessionId) throw new Error('Office recovery belongs to another Session')
-    return recovery.write(kind, sessionId, value)
-  }, { transformLogArgs: ([kind, sessionId, value]) => ({ kind, sessionId, bytes: typeof value === 'string' ? value.length : 0 }) })
 }

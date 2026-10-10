@@ -43,14 +43,6 @@ export function registerExcelHostHandlers(excelHost: ExcelHost, browser: Embedde
     excelHost.reportState(event.sender.id, state)
   })
 
-  loggedHandle(IPC.excelHost.getRecoveryState, (event) => {
-    return excelHost.getRecoveryState(event.sender.id)
-  })
-
-  loggedHandle(IPC.excelHost.setRecoveryState, (event, state: unknown) => {
-    excelHost.setRecoveryState(event.sender.id, state)
-  }, { transformLogArgs: ([state]) => ({ bytes: typeof state === 'string' ? state.length : 0 }) })
-
   loggedHandle(IPC.excelHost.activateSession, (_event, sessionId: string | null) => {
     excelHost.activateSession(sessionId)
   })

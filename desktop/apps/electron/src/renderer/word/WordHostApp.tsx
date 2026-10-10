@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DEFAULT_SETTINGS, type GuiSettings } from '@app/shared/types'
 import type { WordHostOpenRequest, WordHostPreloadAPI, WordHostRendererState } from '@shared/types'
@@ -59,7 +59,8 @@ const reportError = (error: unknown) => rlog.warn('[word-host] renderer operatio
 /** A persistent Session editor with only the narrow Word preload capability. */
 export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessionId: string }) {
   const { i18n, t } = useTranslation()
-  const [settings, setSettings] = useState<GuiSettings>(DEFAULT_SETTINGS)
+  // The first workspace inventory must follow the Session's actual theme and locale.
+  const [settings, setSettings] = useState<GuiSettings | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [openFileRequest, setOpenFileRequest] = useState<WordHostOpenRequest | null>(null)
   const activeImportRef = useRef<{ id: string; complete: (error?: string) => void } | null>(null)
@@ -68,6 +69,9 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
   const readyResolversRef = useRef<Array<() => void>>([])
   const mountedRef = useRef(false)
   const requestsRef = useRef<ReturnType<typeof createWordHostRequestQueue> | null>(null)
+  const localeSetting = settings?.locale
+  const themeMode = settings?.theme.mode
+  const themeAccent = settings?.theme.accent
 
   useEffect(() => {
     mountedRef.current = true
@@ -106,7 +110,11 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
     ]
     void api.getConfig().then((next) => {
       if (active && !receivedConfig) setSettings(next)
-    }).catch((error) => { if (active) reportError(error) })
+    }).catch((error) => {
+      if (!active) return
+      reportError(error)
+      if (!receivedConfig) setSettings(DEFAULT_SETTINGS)
+    })
     return () => {
       active = false
       mountedRef.current = false
@@ -114,23 +122,25 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
     }
   }, [api, sessionId])
 
-  useEffect(() => {
-    const locale = resolveLocale(settings.locale, navigator.language)
+  useLayoutEffect(() => {
+    if (localeSetting === undefined) return
+    const locale = resolveLocale(localeSetting, navigator.language)
     document.documentElement.lang = locale
     if (i18n.language !== locale) void i18n.changeLanguage(locale)
-  }, [i18n, settings.locale])
+  }, [i18n, localeSetting])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (themeMode === undefined || themeAccent === undefined) return
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const applyTheme = () => {
       const systemTheme = media.matches ? 'dark' : 'light'
-      document.documentElement.dataset.theme = settings.theme.mode === 'system' ? systemTheme : settings.theme.mode
-      document.documentElement.style.setProperty('--accent', settings.theme.accent)
+      document.documentElement.dataset.theme = themeMode === 'system' ? systemTheme : themeMode
+      document.documentElement.style.setProperty('--accent', themeAccent)
     }
     applyTheme()
     media.addEventListener('change', applyTheme)
     return () => media.removeEventListener('change', applyTheme)
-  }, [settings.theme.accent, settings.theme.mode])
+  }, [themeAccent, themeMode])
 
   const onFlushHandlerChange = useCallback((flush: WordWorkspaceFlush | null) => {
     flushRef.current = flush
@@ -149,7 +159,7 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
 
   return (
     <main className="h-screen w-screen overflow-hidden bg-bg-app">
-      <SessionWordEditor
+      {settings && <SessionWordEditor
         defaultTitle={t('word.untitled')}
         expanded={expanded}
         onClose={() => {
@@ -163,7 +173,7 @@ export function WordHostApp({ api, sessionId }: { api: WordHostPreloadAPI; sessi
         openFileRequest={openFileRequest}
         readDocument={api.readDocument}
         sessionId={sessionId}
-      />
+      />}
     </main>
   )
 }

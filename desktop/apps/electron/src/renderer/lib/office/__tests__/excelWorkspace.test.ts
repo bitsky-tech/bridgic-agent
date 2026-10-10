@@ -97,6 +97,21 @@ describe('Excel workspace adapter', () => {
     expect(workspace.getState().tabs[1]).toEqual(tab('b'))
   })
 
+  it('keeps stable document identity when explicit export updates the file binding', () => {
+    const original = { path: '/session/.work/Original.xlsx', mtimeMs: 1 }
+    const destination = { path: '/session/.work/Saved.xlsx', mtimeMs: 3 }
+    const current = { ...tab('a'), documentId: original.path, source: original }
+    const saved = completeExcelWorkbookSave(current, {
+      changeVersion: 0, documentId: destination.path, source: destination, fileName: 'Saved.xlsx', mtimeMs: 3, snapshot: current.snapshot,
+    })
+    expect(saved).toMatchObject({ tabId: 'a', source: destination })
+    const sameFile = completeExcelWorkbookSave(saved, {
+      changeVersion: 0, documentId: destination.path, source: destination, fileName: 'Saved.xlsx', mtimeMs: 3, snapshot: saved.snapshot,
+    })
+    expect(sameFile.tabId).toBe('a')
+    expect(sameFile.source).toEqual(destination)
+  })
+
   it('orders asynchronous imports before later document activation', async () => {
     const workspace = setup()
     const gate = deferred()

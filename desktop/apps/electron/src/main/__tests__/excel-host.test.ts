@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, spyOn } from 'bun:test'
-import type { BrowserWindow, Rectangle, WebContentsView } from 'electron'
+import type { BrowserWindow, Rectangle, WebContentsView, WebContentsViewConstructorOptions } from 'electron'
 import { ExcelHost } from '../excel-host'
 import { IPC } from '../../shared/ipc-channels'
 import { windowLog } from '../logger'
@@ -112,9 +112,11 @@ function fakeHost() {
 
 function setup(openExternal?: (url: string) => void) {
   const views: FakeView[] = []
+  const viewOptions: WebContentsViewConstructorOptions[] = []
   const host = fakeHost()
   const manager = new ExcelHost(
-    () => {
+    (options) => {
+      viewOptions.push(options)
       const ordinal = views.length + 1
       const view = new FakeView(new FakeWebContents(ordinal, `excel-target-${ordinal}`))
       views.push(view)
@@ -127,10 +129,18 @@ function setup(openExternal?: (url: string) => void) {
     openExternal,
   )
   manager.attachHost(host.window)
-  return { host, manager, views }
+  return { host, manager, views, viewOptions }
 }
 
 describe('ExcelHost Session target ownership', () => {
+  it('uses a persistent isolated partition for structured workbook recovery across application restarts', async () => {
+    const { manager, viewOptions } = setup()
+    await manager.ensureSession('session-a', { sessionId: 'session-a', locale: 'en-US', theme: 'light' }, false)
+    await manager.ensureSession('session-b', { sessionId: 'session-b', locale: 'en-US', theme: 'light' }, false)
+    expect(viewOptions.map((options) => options.webPreferences?.partition)).toEqual(['persist:excel-host', 'persist:excel-host'])
+    manager.closeAll()
+  })
+
   it('publishes the renderer-owned workbook inventory only for its Session target', async () => {
     const snapshots: Array<ReturnType<ExcelHost['snapshot']>> = []
     const views: FakeView[] = []
@@ -159,21 +169,6 @@ describe('ExcelHost Session target ownership', () => {
     expect(snapshots.at(-1)?.sessions[0]).toMatchObject({ documentCount: 2, dirty: true })
     expect(() => manager.reportState(session.webContentsId, { documentCount: -1, dirty: false })).toThrow('Invalid Excel runtime')
     expect(() => manager.reportState(-1, { documentCount: 0, dirty: false })).toThrow('does not own')
-  })
-
-  it('keeps serialized recovery scoped to the owning Session renderer', async () => {
-    const { manager } = setup()
-    const first = await manager.ensureSession('session-a', { sessionId: 'session-a', locale: 'en-US', theme: 'light' })
-    const second = await manager.ensureSession('session-b', { sessionId: 'session-b', locale: 'en-US', theme: 'light' })
-    const recovery = JSON.stringify({ version: 1, tabs: [{ snapshot: { sheets: {} } }] })
-    manager.setRecoveryState(first.webContentsId, recovery)
-    expect(manager.getRecoveryState(first.webContentsId)).toBe(recovery)
-    expect(manager.getRecoveryState(second.webContentsId)).toBeNull()
-    expect(() => manager.setRecoveryState(first.webContentsId, { tabs: [] })).toThrow('serialized JSON')
-    expect(() => manager.getRecoveryState(-1)).toThrow('does not own')
-    expect(() => manager.setRecoveryState(-1, recovery)).toThrow('does not own')
-    manager.closeSession('session-a')
-    expect(() => manager.getRecoveryState(first.webContentsId)).toThrow('does not own')
   })
 
   it('reuses exactly one WebContentsView/CDP target for every workbook tab in a Session', async () => {
@@ -258,7 +253,6 @@ describe('ExcelHost Session target ownership', () => {
     const first = await manager.ensureSession('session-a', config)
     await manager.ensureSession('session-b', { ...config, sessionId: 'session-b' })
     manager.reportState(first.webContentsId, { documentCount: 1, dirty: true })
-    manager.setRecoveryState(first.webContentsId, '{"version":1}')
     manager.activateSession('session-b')
     manager.setVisible(true)
     expect(manager.sessionForContents(first.webContentsId)).toBe('session-a')
@@ -267,20 +261,18 @@ describe('ExcelHost Session target ownership', () => {
     expect(views[1]!.visibilityHistory.at(-1)).toBe(true)
     expect(host.children.size).toBe(1)
     expect(manager.snapshot().sessions.map((session) => session.sessionId)).toEqual(['session-b'])
-    expect(() => manager.getRecoveryState(first.webContentsId)).toThrow('does not own')
+    expect(() => manager.sessionForContents(first.webContentsId)).toThrow('does not own')
     const replacement = await manager.ensureSession('session-a', config)
     manager.closeCurrentSession(first.webContentsId)
     expect(manager.sessionForContents(replacement.webContentsId)).toBe('session-a')
     expect(views[2]!.webContents.isDestroyed()).toBe(false)
   })
 
-  it('reloads a crashed renderer in place and retains its recovery snapshot', async () => {
+  it('reloads a crashed renderer in place and retains its Session inventory', async () => {
     const { manager, views } = setup()
     const first = await manager.ensureSession('session-a', {
       sessionId: 'session-a', locale: 'en-US', theme: 'light',
     })
-    const checkpoint = JSON.stringify({ version: 1, tabs: [{ tabId: 'tab-a' }] })
-    manager.setRecoveryState(first.webContentsId, checkpoint)
     manager.reportState(first.webContentsId, { documentCount: 1, dirty: true })
 
     views[0]?.webContents.emit('render-process-gone', {}, { reason: 'crashed' })
@@ -293,7 +285,6 @@ describe('ExcelHost Session target ownership', () => {
     expect(recovered.crashed).toBe(false)
     expect(recovered.dirty).toBe(true)
     expect(recovered.targetId).toBe('excel-target-1-recovered-2')
-    expect(manager.getRecoveryState(first.webContentsId)).toBe(checkpoint)
   })
 
   it('closes every dirty Session directly during shutdown', async () => {

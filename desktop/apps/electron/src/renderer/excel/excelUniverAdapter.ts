@@ -17,6 +17,7 @@ import { FormulaResultStatus, RegisterOtherFormulaService } from '@univerjs/engi
 import {
   INTERCEPTOR_POINT,
   SheetInterceptorService,
+  SheetsSelectionsService,
 } from '@univerjs/sheets'
 import {
   OpenConditionalFormattingOperator,
@@ -198,8 +199,12 @@ export function mountExcelUniverAdapter(options: {
     })
     sheetView.selectionChanged()
   }
+  // The facade delays SelectionChanged until Univer's Steady lifecycle stage.
+  // Listen to the selection model so the formula bar also follows early input.
+  const selectionSubscription = univer.__getInjector().get(SheetsSelectionsService)
+    .selectionChanged$.subscribe(publishSelection)
   const subscriptions = [
-    univerAPI.addEvent(univerAPI.Event.SelectionChanged, publishSelection),
+    { dispose: () => selectionSubscription.unsubscribe() },
     univerAPI.addEvent(univerAPI.Event.ActiveSheetChanged, publishSelection),
     univerAPI.addEvent(univerAPI.Event.SheetZoomChanged, () => {
       sheetView.publish()

@@ -23,7 +23,7 @@ const EXCEL_RENDERER_PATHNAME = '/excel.html'
 const WEB_PREFERENCES: NonNullable<WebContentsViewConstructorOptions['webPreferences']> = {
   // Isolate the trusted workbook renderer from both the main app renderer and
   // the persistent embedded-browser profile.
-  partition: 'excel-host',
+  partition: 'persist:excel-host',
   contextIsolation: true,
   nodeIntegration: false,
   sandbox: true,
@@ -39,7 +39,6 @@ interface ExcelHostRecord extends OfficeSessionRecord {
   config: ExcelHostConfig
   dirty: boolean
   documentCount: number | null
-  recoveryState: string | null
   workbookOpenRequests: Map<string, string>
   createInitialWorkbook: boolean
 }
@@ -178,21 +177,6 @@ export class ExcelHost {
     this.publishState()
   }
 
-  getRecoveryState(webContentsId: number): string | null {
-    const record = this.recordForWebContents(webContentsId)
-    if (!record) throw new Error('Excel Session does not own this renderer')
-    return record.recoveryState
-  }
-
-  setRecoveryState(webContentsId: number, state: unknown): void {
-    const record = this.recordForWebContents(webContentsId)
-    if (!record) throw new Error('Excel Session does not own this renderer')
-    if (typeof state !== 'string') {
-      throw new TypeError('Excel recovery state must be serialized JSON')
-    }
-    record.recoveryState = state
-  }
-
   activateSession(sessionId: string | null): void {
     const id = sessionId === null ? null : this.normalizeSessionId(sessionId)
     if (id !== null && !this.container.get(id)) throw new Error(`Excel Session does not exist: ${id}`)
@@ -228,7 +212,6 @@ export class ExcelHost {
       crashed: false,
       dirty: false,
       documentCount: null,
-      recoveryState: null,
       workbookOpenRequests: new Map(),
       createInitialWorkbook,
       ready: Promise.resolve(),

@@ -177,9 +177,6 @@ export interface ExcelHostPreloadAPI {
   /** Close the owning Session's panel and release its editor target. */
   requestClose(): Promise<void>
   reportState(state: ExcelHostRendererState): Promise<void>
-  /** JSON crosses contextBridge as one value, avoiding per-cell proxy copies. */
-  getRecoveryState(): Promise<string | null>
-  setRecoveryState(state: string): Promise<void>
   onConfigChanged(callback: (config: ExcelHostConfig) => void): () => void
   onWorkbookOpenRequested(callback: (ticket: ExcelWorkbookOpenTicket) => void): () => void
 }

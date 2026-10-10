@@ -257,7 +257,7 @@ describe('SessionWordEditor', () => {
       prepare: async () => ({ path: '/work/Report.docx', mtimeMs }),
       inspect: async () => ({ path: '/work/Report.docx', mtimeMs }),
       save: async () => ({ ok: true, source: { path: '/work/Report.docx', mtimeMs: ++mtimeMs }, fileName: 'Report.docx' }),
-      confirmClose: async () => 'cancel', getRecovery: async () => null, setRecovery: async () => undefined,
+      confirmClose: async () => 'cancel',
     }
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -314,7 +314,7 @@ describe('SessionWordEditor', () => {
       },
     } })
     const save = mock(async (): ReturnType<OfficeFilesAPI['save']> => ({ ok: true, fileName: 'Report.docx', source: { path: '/work/Report.docx', mtimeMs: 1 } }))
-    window.officeFiles = { save, prepare: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), inspect: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), confirmClose: async () => 'cancel', getRecovery: async () => null, setRecovery: async () => undefined }
+    window.officeFiles = { save, prepare: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), inspect: async () => ({ path: '/work/Report.docx', mtimeMs: 1 }), confirmClose: async () => 'cancel' }
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)

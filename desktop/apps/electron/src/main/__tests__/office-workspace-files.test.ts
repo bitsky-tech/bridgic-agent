@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { PresentationSourceMount } from '../../shared/presentation-host'
+import * as officeFiles from '../office-files'
 import { inspectOfficeFile } from '../office-files'
 import { createOfficeWorkspaceFiles } from '../office-workspace-files'
 
@@ -137,6 +139,266 @@ for (const [kind, extension] of [['word', 'docx'], ['excel', 'xlsx'], ['presenta
     fail = false
     expect(await createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)).toEqual({ ok: false, reason: 'conflict' })
     expect(await readFile(path, 'utf8')).toBe('different file content')
+  })
+
+  it(`${kind}: Save as allocates a sibling, retries it across restarts and rebinds subsequent saves`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    let failRegistration = false
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      if (failRegistration) throw new Error('registration unavailable')
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const createService = () => createOfficeWorkspaceFiles(backend, () => undefined)
+    const input = { kind, documentId: 'document', suggestedName: `Report.${extension}`, bytes: new TextEncoder().encode('original') }
+    const original = await createService().save('session', input)
+    if (!original.ok) throw new Error('original save failed')
+
+    const saveAs = { ...input, saveAs: true, source: original.source, bytes: new TextEncoder().encode('editable copy') }
+    failRegistration = true
+    await expect(createService().save('session', saveAs)).rejects.toThrow('file was saved')
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report.${extension}`])
+    failRegistration = false
+    const copy = await createService().save('session', saveAs)
+    if (!copy.ok) throw new Error('Save as retry failed')
+    expect(copy.source.path).toBe(join(work, `Report (2).${extension}`))
+    expect(await readFile(copy.source.path, 'utf8')).toBe('editable copy')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report.${extension}`])
+
+    const edit = { ...input, source: copy.source, bytes: new TextEncoder().encode('next edit') }
+    failRegistration = true
+    await expect(createService().save('session', edit)).rejects.toThrow('file was saved')
+    failRegistration = false
+    const updated = await createService().save('session', edit)
+    if (!updated.ok) throw new Error('normal save retry failed')
+    expect(updated.source.path).toBe(copy.source.path)
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+    expect(await readFile(copy.source.path, 'utf8')).toBe('next edit')
+
+    const secondCopy = await createService().save('session', { ...saveAs, source: updated.source, bytes: new TextEncoder().encode('another copy') })
+    if (!secondCopy.ok) throw new Error('second Save as failed')
+    expect(secondCopy.source.path).toBe(join(work, `Report (3).${extension}`))
+    expect(await readFile(updated.source.path, 'utf8')).toBe('next edit')
+    expect(await readFile(secondCopy.source.path, 'utf8')).toBe('another copy')
+
+    await writeFile(secondCopy.source.path, 'external change')
+    await utimes(secondCopy.source.path, new Date(), new Date(Date.now() + 10_000))
+    expect(await createService().save('session', { ...input, source: secondCopy.source })).toEqual({ ok: false, reason: 'conflict' })
+    expect(await readFile(secondCopy.source.path, 'utf8')).toBe('external change')
+  })
+
+  it(`${kind}: ordinary retries of a failed Save as keep the copy across repeated registration failures and restarts`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    let failRegistration = false
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      if (failRegistration) throw new Error('registration unavailable')
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const save = (input: Parameters<ReturnType<typeof createOfficeWorkspaceFiles>['save']>[1]) => createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)
+    const input = { kind, documentId: 'document', suggestedName: `Report.${extension}`, bytes: new TextEncoder().encode('original') }
+    const original = await save(input)
+    if (!original.ok) throw new Error('original save failed')
+    failRegistration = true
+    const edit = { ...input, source: original.source, bytes: new TextEncoder().encode('copy edit') }
+    await expect(save({ ...edit, saveAs: true })).rejects.toThrow('file was saved')
+    const copyPath = join(work, `Report (2).${extension}`)
+    expect(await readFile(copyPath, 'utf8')).toBe('copy edit')
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+
+    const retry = { ...edit, bytes: new TextEncoder().encode('newer copy edit') }
+    await expect(save(retry)).rejects.toThrow('file was saved')
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+    expect(await readFile(copyPath, 'utf8')).toBe('newer copy edit')
+    failRegistration = false
+    const acknowledged = await save(retry)
+    if (!acknowledged.ok) throw new Error('ordinary retry failed')
+    expect(acknowledged.source.path).toBe(copyPath)
+    const continued = await save({ ...retry, source: acknowledged.source, bytes: new TextEncoder().encode('continued copy edit') })
+    expect(continued.ok && continued.source.path).toBe(copyPath)
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+    expect(await readFile(copyPath, 'utf8')).toBe('continued copy edit')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report.${extension}`])
+  })
+
+  it(`${kind}: ordinary retry after failed Save as detects external copy changes`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    const originalPath = join(work, `Report.${extension}`)
+    await writeFile(originalPath, 'original')
+    let failRegistration = true
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      if (failRegistration) throw new Error('registration unavailable')
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const input = { kind, documentId: 'document', suggestedName: `Report.${extension}`, source: await inspectOfficeFile(kind, originalPath), bytes: new TextEncoder().encode('copy edit') }
+    await expect(createOfficeWorkspaceFiles(backend, () => undefined).save('session', { ...input, saveAs: true })).rejects.toThrow('file was saved')
+    const copyPath = join(work, `Report (2).${extension}`)
+    await writeFile(copyPath, 'external change')
+    await utimes(copyPath, new Date(), new Date(Date.now() + 10_000))
+    failRegistration = false
+    expect(await createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)).toEqual({ ok: false, reason: 'conflict' })
+    expect(await readFile(originalPath, 'utf8')).toBe('original')
+    expect(await readFile(copyPath, 'utf8')).toBe('external change')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report.${extension}`])
+  })
+
+  it(`${kind}: Save as retries use the newer ordinary retry intent for the same unacknowledged copy`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    let failRegistration = false
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      if (failRegistration) throw new Error('registration unavailable')
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const save = (input: Parameters<ReturnType<typeof createOfficeWorkspaceFiles>['save']>[1]) => createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)
+    const input = { kind, documentId: 'document', suggestedName: `Report.${extension}`, bytes: new TextEncoder().encode('original') }
+    const original = await save(input)
+    if (!original.ok) throw new Error('original save failed')
+    failRegistration = true
+    const firstEdit = { ...input, source: original.source, bytes: new TextEncoder().encode('first copy edit') }
+    await expect(save({ ...firstEdit, saveAs: true })).rejects.toThrow('file was saved')
+    const copyPath = join(work, `Report (2).${extension}`)
+    const newerEdit = { ...firstEdit, bytes: new TextEncoder().encode('newer copy edit') }
+    await expect(save(newerEdit)).rejects.toThrow('file was saved')
+    expect(await readFile(copyPath, 'utf8')).toBe('newer copy edit')
+    failRegistration = false
+    const retried = await save({ ...newerEdit, saveAs: true })
+    expect(retried.ok && retried.source.path).toBe(copyPath)
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+    expect(await readFile(copyPath, 'utf8')).toBe('newer copy edit')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report.${extension}`])
+  })
+
+  it(`${kind}: ordinary retry recovers the Save as target when promoting its receipt fails`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const input = { kind, documentId: 'document', suggestedName: `Report.${extension}`, bytes: new TextEncoder().encode('original') }
+    const service = createOfficeWorkspaceFiles(backend, () => undefined)
+    const original = await service.save('session', input)
+    if (!original.ok) throw new Error('original save failed')
+    const receiptPath = join(root, '.internal', 'office', 'writes', `${createHash('sha256').update(`session:${kind}:document`).digest('hex')}.json`)
+    const edit = { ...input, source: original.source, bytes: new TextEncoder().encode('copy edit') }
+    const writeBytes = officeFiles.writeOfficeBytes
+    const writer = spyOn(officeFiles, 'writeOfficeBytes').mockImplementation((path, bytes) => {
+      if (path === receiptPath) return Promise.reject(new Error('receipt promotion unavailable'))
+      return writeBytes(path, bytes)
+    })
+    try {
+      await expect(service.save('session', { ...edit, saveAs: true })).rejects.toThrow('receipt promotion unavailable')
+    } finally { writer.mockRestore() }
+    const copyPath = join(work, `Report (2).${extension}`)
+    expect(await readFile(copyPath, 'utf8')).toBe('copy edit')
+    const retried = await createOfficeWorkspaceFiles(backend, () => undefined).save('session', edit)
+    expect(retried.ok && retried.source.path).toBe(copyPath)
+    expect(await readFile(original.source.path, 'utf8')).toBe('original')
+    expect(await readFile(copyPath, 'utf8')).toBe('copy edit')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report.${extension}`])
+  })
+
+  it(`${kind}: an unpromoted Save as intent takes precedence over an earlier protected copy`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    const originalPath = join(work, `Report.${extension}`)
+    await writeFile(originalPath, 'protected original')
+    let failRegistration = true
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      if (failRegistration) throw new Error('registration unavailable')
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const save = (input: Parameters<ReturnType<typeof createOfficeWorkspaceFiles>['save']>[1]) => createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)
+    const input = { kind, documentId: 'document', suggestedName: `Report.${extension}`, source: await inspectOfficeFile(kind, originalPath), preserveSource: true, bytes: new TextEncoder().encode('protected copy edit') }
+    await expect(save(input)).rejects.toThrow('file was saved')
+    const earlierCopyPath = join(work, `Report (2).${extension}`)
+    const receiptPath = join(root, '.internal', 'office', 'writes', `${createHash('sha256').update(`session:${kind}:document`).digest('hex')}.json`)
+    const priorReceipt = await readFile(receiptPath, 'utf8')
+    failRegistration = false
+    const saveAsEdit = { ...input, bytes: new TextEncoder().encode('Save as copy edit') }
+    const writeBytes = officeFiles.writeOfficeBytes
+    const writer = spyOn(officeFiles, 'writeOfficeBytes').mockImplementation((path, bytes) => {
+      if (path === receiptPath) return Promise.reject(new Error('receipt promotion unavailable'))
+      return writeBytes(path, bytes)
+    })
+    try {
+      await expect(save({ ...saveAsEdit, saveAs: true })).rejects.toThrow('receipt promotion unavailable')
+    } finally { writer.mockRestore() }
+    const saveAsCopyPath = join(work, `Report (3).${extension}`)
+    expect(await readFile(saveAsCopyPath, 'utf8')).toBe('Save as copy edit')
+    expect(await readFile(receiptPath, 'utf8')).toBe(priorReceipt)
+    const retried = await save(saveAsEdit)
+    expect(retried.ok && retried.source.path).toBe(saveAsCopyPath)
+    expect(await readFile(originalPath, 'utf8')).toBe('protected original')
+    expect(await readFile(earlierCopyPath, 'utf8')).toBe('protected copy edit')
+    expect(await readFile(saveAsCopyPath, 'utf8')).toBe('Save as copy edit')
+    expect((await readdir(work)).sort()).toEqual([`Report (2).${extension}`, `Report (3).${extension}`, `Report.${extension}`])
+  })
+
+  it(`${kind}: protected Save as keeps ordinary saves on the acknowledged copy`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    const service = createOfficeWorkspaceFiles(async (_endpoint, body) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }, () => undefined)
+    const path = join(work, `Protected.${extension}`)
+    await writeFile(path, 'protected original')
+    const input = { kind, documentId: 'protected', source: await inspectOfficeFile(kind, path), suggestedName: `Protected.${extension}`, preserveSource: true, bytes: new TextEncoder().encode('copy') }
+    const copy = await service.save('session', { ...input, saveAs: true })
+    if (!copy.ok) throw new Error('protected Save as failed')
+    expect(copy.source.path).toBe(join(work, `Protected (2).${extension}`))
+    const updated = await service.save('session', { ...input, source: copy.source, bytes: new TextEncoder().encode('updated copy') })
+    expect(updated.ok && updated.source.path).toBe(copy.source.path)
+    expect(await readFile(path, 'utf8')).toBe('protected original')
+    expect(await readFile(copy.source.path, 'utf8')).toBe('updated copy')
+    expect((await readdir(work)).sort()).toEqual([`Protected (2).${extension}`, `Protected.${extension}`])
+  })
+
+  it(`${kind}: retrying Save as never overwrites external changes to its unacknowledged copy`, async () => {
+    const root = await realpath(await testRoot())
+    const work = join(root, '.work')
+    await mkdir(work)
+    let failRegistration = true
+    const backend = async (_endpoint: string, body?: unknown) => {
+      if (!body) return [{ id: 'work', name: '.work', kind: 'folder', removable: false, path: work, exists: true }]
+      if (failRegistration) throw new Error('registration unavailable')
+      const path = (body as { path: string }).path
+      return { id: basename(path), name: basename(path), kind: 'file', path, exists: true }
+    }
+    const input = { kind, documentId: 'new-protected', saveAs: true, preserveSource: true, suggestedName: `New.${extension}`, bytes: new TextEncoder().encode('first copy') }
+    await expect(createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)).rejects.toThrow('file was saved')
+    failRegistration = false
+    const restored = await createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)
+    if (!restored.ok) throw new Error('new Save as retry failed')
+    expect(await readdir(work)).toEqual([`New.${extension}`])
+    await writeFile(restored.source.path, 'external change')
+    await utimes(restored.source.path, new Date(), new Date(Date.now() + 10_000))
+    expect(await createOfficeWorkspaceFiles(backend, () => undefined).save('session', input)).toEqual({ ok: false, reason: 'conflict' })
+    expect(await readFile(restored.source.path, 'utf8')).toBe('external change')
+    expect(await readdir(work)).toEqual([`New.${extension}`])
   })
 }
 

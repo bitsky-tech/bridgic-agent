@@ -81,12 +81,16 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
       if (input.destination) throw new Error('Office edits save to the current Session file; a separate destination is not supported')
       if (!input.documentId) throw new Error('An Office file requires a document identity')
       if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength > 150 * 1024 * 1024) throw new TypeError('Invalid Office file payload')
-      const key = `${id}:${input.kind}:${input.documentId}`
+      const documentKey = `${id}:${input.kind}:${input.documentId}`
+      // Retries keep the original source until the renderer acknowledges the copy.
+      // The next Save as starts from that copy and therefore has a new intent.
+      const key = input.saveAs ? `${documentKey}:save-as:${input.source?.path ?? ''}` : documentKey
       const root = await workDir(id)
-      const receiptPath = join(dirname(root), '.internal', 'office', 'writes', `${fingerprint(new TextEncoder().encode(key))}.json`)
-      const readReceipt = async (): Promise<WriteReceipt | null> => {
+      const receiptPathFor = (value: string) => join(dirname(root), '.internal', 'office', 'writes', `${fingerprint(new TextEncoder().encode(value))}.json`)
+      const receiptPath = receiptPathFor(key)
+      const readReceipt = async (path: string): Promise<WriteReceipt | null> => {
         try {
-          const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as WriteReceipt
+          const receipt = JSON.parse(await readFile(path, 'utf8')) as WriteReceipt
           if (!receipt?.source || typeof receipt.source.path !== 'string'
             || !isWithin(root, receipt.source.path)
             || (receipt.source.mtimeMs !== null && !Number.isFinite(receipt.source.mtimeMs))
@@ -100,22 +104,37 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
           throw error
         }
       }
+      const redirectsSource = (value: WriteReceipt | null) => value?.protectedSourcePath === (input.source?.path ?? null)
+        && value?.source.path !== input.source?.path
+      const ordinaryReceipt = await readReceipt(receiptPathFor(documentKey))
+      const copyReceipt = await readReceipt(receiptPathFor(`${documentKey}:save-as:${input.source?.path ?? ''}`))
+      let receipt = input.saveAs ? copyReceipt : ordinaryReceipt
+      if (copyReceipt && redirectsSource(copyReceipt)) {
+        // Save as defines the pending target even if promoting its receipt failed.
+        // Ordinary retries may hold a newer write intent for that same copy.
+        receipt = ordinaryReceipt?.source.path === copyReceipt.source.path && redirectsSource(ordinaryReceipt)
+          ? ordinaryReceipt : copyReceipt
+      }
       // A limited importer must never overwrite the original, even for managed files.
       // Allocate a sibling on the first edit, then continue saving that editable copy.
-      let source = input.preserveSource ? undefined : input.source
-      if (source && !isWithin(root, source.path)) source = await prepare(id, input.kind, source.path)
+      let source = input.saveAs || input.preserveSource || redirectsSource(receipt) ? undefined : input.source
       let allocated: string | undefined
-      const receipt = !source || (await inspectOfficeFile(input.kind, source.path)).mtimeMs !== source.mtimeMs ? await readReceipt() : null
-      const reusableCopy = receipt && receipt.protectedSourcePath !== undefined && input.source
-        && (input.source.path === receipt.protectedSourcePath || input.source.path === receipt.source.path)
-      if (!source && receipt && (!input.preserveSource || reusableCopy)) {
+      const reusableCopy = receipt && receipt.protectedSourcePath !== undefined
+        && (input.source ? input.source.path === receipt.protectedSourcePath || input.source.path === receipt.source.path : receipt.protectedSourcePath === null)
+      if (!source && receipt && (input.saveAs || !input.preserveSource || reusableCopy)) {
         // Once acknowledged, the renderer's source is the copy. Keep its expected
         // mtime so external changes remain conflicts rather than being overwritten.
         source = input.source?.path === receipt.source.path ? input.source : receipt.source
       }
+      if (source && !isWithin(root, source.path)) source = await prepare(id, input.kind, source.path)
       let protectedSourcePath: string | null | undefined
-      if (input.preserveSource) {
-        protectedSourcePath = reusableCopy ? receipt!.protectedSourcePath : input.source?.path ?? null
+      if (input.saveAs) {
+        protectedSourcePath = input.source?.path ?? null
+      } else if (reusableCopy) {
+        // Keep the redirect through repeated registration failures and restarts.
+        protectedSourcePath = receipt!.protectedSourcePath
+      } else if (input.preserveSource) {
+        protectedSourcePath = input.source?.path ?? null
       }
       if (!source) {
         const extension = OFFICE_EXTENSIONS[input.kind]
@@ -149,6 +168,13 @@ export function createOfficeWorkspaceFiles(request: (path: string, body?: unknow
       }
       const result = await saveOfficeFile({ ...input, source, destination: undefined, preserveSource: false }, source.path)
       if (result.ok) {
+        if (input.saveAs) {
+          // A protected document may retain its importer warning after Save as.
+          // Its ordinary saves must continue writing this acknowledged copy.
+          await writeOfficeBytes(receiptPathFor(documentKey), JSON.stringify({
+            source: result.source, fingerprint: fingerprint(input.bytes), protectedSourcePath,
+          } satisfies WriteReceipt))
+        }
         try { await register(id, result.source.path) } catch (error) {
           throw new Error(`The Office file was saved, but its Session file entry could not be updated. Retry to finish registration: ${error instanceof Error ? error.message : String(error)}`)
         }

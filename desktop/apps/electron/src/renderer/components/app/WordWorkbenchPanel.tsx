@@ -13,6 +13,8 @@ import { rlog } from '@/lib/logger'
 import { OfficeAppHeader } from './OfficeWorkbenchChrome'
 
 const surfacePolicy: NativeOfficeSurfacePolicy = {
+  prepareSession: (sessionId) => window.api.wordHost.ensureSession(sessionId),
+  initialSync: 'animation-frame',
   deactivateOnDetach: true,
   onError: (error) => rlog.warn('[word-host] native surface sync failed', error),
 }
@@ -34,6 +36,10 @@ export function WordWorkbenchPanel({ active = false }: { active?: boolean }) {
   const [retryingSession, setRetryingSession] = useState<string | null>(null)
   const api = window.api.wordHost
   const restoration = useOfficeSessionRestore('word', sessionId, active, hostSession !== null, () => api.ensureSession(sessionId!))
+  // Initial inventory precedes renderer loading, settings, and workspace recovery.
+  // Reveal only the ready target, so its first CDP identity does not detach a visible loading view.
+  const rendererReady = Boolean(hostSession?.targetId && !hostSession.loading
+    && !hostSession.crashed && hostSession.documentCount !== null)
 
   useEffect(() => {
     if (!request || !api) return
@@ -59,7 +65,7 @@ export function WordWorkbenchPanel({ active = false }: { active?: boolean }) {
     client: api,
     policy: surfacePolicy,
     viewportRef,
-    sessionId: active && !blocked && hostSession && !hostSession.crashed ? sessionId : null,
+    sessionId: active && !blocked && !request && rendererReady ? sessionId : null,
     surfaceKey: hostSession ? `${hostSession.sessionId}:${hostSession.targetId}:${hostSession.crashed}` : null,
     publishBounds,
   })
@@ -86,7 +92,7 @@ export function WordWorkbenchPanel({ active = false }: { active?: boolean }) {
   }
   return (
     <div className="h-full min-h-0 w-full bg-bg-app" data-testid="word-native-viewport" ref={viewportRef}>
-      {(!hostSession || failed) && (
+      {(!rendererReady || request || failed) && (
         <section className="flex h-full flex-col bg-bg-surface" data-testid="word-host-status">
           <OfficeAppHeader icon={Icons.wordDocument(16)} iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-400" title="Word" />
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-xs text-text-secondary" role={failed ? 'alert' : 'status'}>

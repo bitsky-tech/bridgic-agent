@@ -32,8 +32,6 @@ it('renders and edits the project owned by PresentationStore', async () => {
     inspect: async (_kind, path) => ({ path, mtimeMs: 1 }),
     save: async () => ({ ok: true, fileName: 'Project.pptx', source: { path: '/Project.pptx', mtimeMs: 2 } }),
     confirmClose: async () => 'cancel',
-    getRecovery: async () => null,
-    setRecovery: async () => undefined,
   }
   const presentationStore = new PresentationStore('presentation-store-workbench', {
     workspacePersistence: workspaces.persistence,

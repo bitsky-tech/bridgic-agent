@@ -32,8 +32,6 @@ function setup(importPptx: (encoded: string, fileName: string) => Promise<Presen
     inspect: async (_kind, path) => ({ path, mtimeMs: 1 }),
     save,
     confirmClose,
-    getRecovery: async () => null,
-    setRecovery: async () => undefined,
     listPresentationMounts: async () => [mountedSource],
     mountPresentationSource,
   }
