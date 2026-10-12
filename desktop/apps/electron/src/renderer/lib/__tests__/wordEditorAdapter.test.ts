@@ -1,13 +1,18 @@
 import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { Univer, UniverInstanceType, type DocumentDataModel, type IDocumentData } from '@univerjs/core'
+import { FOCUSING_DOC, IContextService, ICommandService, IUndoRedoService, IUniverInstanceService, Univer, UniverInstanceType, type DocumentDataModel, type IDocumentData } from '@univerjs/core'
+import { DocSelectionManagerService, DocStateEmitService, RichTextEditingMutation } from '@univerjs/docs'
 import { UniverDocsHyperLinkPlugin } from '@univerjs/docs-hyper-link'
+import { DocStateChangeManagerService, ReplaceSnapshotCommand, SetDocZoomRatioCommand, SetDocZoomRatioOperation } from '@univerjs/docs-ui'
+import { IRenderManagerService } from '@univerjs/engine-render'
+import JSZip from 'jszip'
 import type { WordEditorNativeEngine } from '../wordEditorAdapter'
 
 GlobalRegistrator.register()
 
 const { createWordDomainStore, createWordWorkspace } = await import('../wordDomain')
-const { appendTextBlockToSnapshot, getUniverDocumentText } = await import('../wordUniverModel')
+const { appendTextBlockToSnapshot, getSnapshotShowPageNumbers, getUniverDocumentText } = await import('../wordUniverModel')
+const { exportWordDocx } = await import('../wordDocxExport')
 const { createWordEditorAdapter } = await import('../wordEditorAdapter')
 
 afterAll(async () => { await GlobalRegistrator.unregister() })
@@ -84,11 +89,185 @@ function createFixture(options: { beforeReplace?: () => Promise<boolean>; failSu
       nativeSnapshot = appendTextBlockToSnapshot(nativeSnapshot, text, 'paragraph')
       commandListener?.({ id: 'doc.command.insert-text' })
     },
-    emit(id: string) { commandListener?.({ id, params: {} }) },
+    emit(id: string, params: unknown = {}) { commandListener?.({ id, params }) },
   }
 }
 
 describe('Word editor engine binding', () => {
+  it('restores a valid body caret after a retained document receives shorter HTML', async () => {
+    const fixture = createFixture({ retainNativeInput: true })
+    await fixture.store.dispatch({ type: 'document.update', html: `<p>${'Long body '.repeat(12)}</p>` })
+    const adapter = fixture.mount()
+    try {
+      await Promise.resolve()
+      fixture.emit('doc.operation.set-selections', { segmentId: '', ranges: [{ startOffset: 80, endOffset: 90, isActive: true }] })
+      await fixture.store.dispatch({ type: 'document.create', title: 'Other document' })
+      adapter.setActive(false)
+      expect((await fixture.store.dispatch({ type: 'document.update', documentId: fixture.document.id, html: '<p>x</p>' })).ok).toBe(true)
+      expect(await adapter.reconcile(fixture.store.getSnapshot().documents.find((document) => document.id === fixture.document.id)!.snapshot)).toBe(true)
+      expect(fixture.native.document.getSnapshot().body?.dataStream).toBe('x\r\n')
+      expect((await fixture.store.dispatch({ type: 'document.activate', documentId: fixture.document.id })).ok).toBe(true)
+      expect(fixture.store.getSnapshot().activeDocumentId).toBe(fixture.document.id)
+      adapter.setActive(true)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(fixture.native.document.setSelection).toHaveBeenLastCalledWith(1, 1)
+    } finally { adapter.dispose(); fixture.store.dispose() }
+  })
+
+  it('keeps the active document editable after replacing a body shorter than its selection', async () => {
+    const fixture = createFixture({ retainNativeInput: true })
+    await fixture.store.dispatch({ type: 'document.update', html: `<p>${'Long body '.repeat(12)}</p>` })
+    const adapter = fixture.mount()
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      fixture.emit('doc.operation.set-selections', { segmentId: '', ranges: [{ startOffset: 80, endOffset: 90, isActive: true }] })
+      expect((await fixture.store.dispatch({ type: 'document.update', html: '<p>x</p>' })).ok).toBe(true)
+      expect(await adapter.reconcile(fixture.store.getSnapshot().documents[0]!.snapshot)).toBe(true)
+      expect(fixture.native.document.setSelection).toHaveBeenLastCalledWith(1, 1)
+      fixture.type('Still editable')
+      await adapter.flush()
+      expect(fixture.readText()).toContain('Still editable')
+    } finally { adapter.dispose(); fixture.store.dispose() }
+  })
+
+  it('retains real Univer mutation undo and redo histories while another document is active', async () => {
+    // Only rendering geometry is headless. Document mutation, history recording,
+    // undo and redo all use the installed Univer implementations.
+    const store = createWordDomainStore(createWordWorkspace(crypto.randomUUID(), 'First'), { defaultTitle: 'Untitled' })
+    const firstId = store.getSnapshot().activeDocumentId
+    await store.dispatch({ type: 'document.update', documentId: firstId, html: '<p><strong>Formatted original</strong></p>' })
+    await store.dispatch({ type: 'document.create', title: 'Second' })
+    const secondId = store.getSnapshot().activeDocumentId
+    const natives: Array<{ model: DocumentDataModel; history: IUndoRedoService; disposed: boolean }> = []
+    const mount = (documentId: string, active: boolean) => createWordEditorAdapter({
+      active, container: document.createElement('div'), documentId, language: 'en',
+      snapshot: store.getSnapshot().documents.find((item) => item.id === documentId)!.snapshot, store, zoom: 100,
+      mountNative: ({ snapshot }) => {
+        const rendering = { getRenderById: () => ({ with: () => ({ getViewModel: () => ({ reset() {} }) }) }) }
+        const univer = new Univer()
+        const injector = univer.__getInjector()
+        injector.add([IRenderManagerService, { useValue: rendering as unknown as IRenderManagerService }])
+        injector.add([DocSelectionManagerService])
+        injector.add([DocStateEmitService])
+        const model = univer.createUnit<IDocumentData, DocumentDataModel>(UniverInstanceType.UNIVER_DOC, snapshot)
+        const commands = injector.get(ICommandService)
+        const history = injector.get(IUndoRedoService)
+        const instances = injector.get(IUniverInstanceService)
+        const context = injector.get(IContextService)
+        const stateChanges = new DocStateChangeManagerService(history, commands, instances, injector.get(DocStateEmitService), rendering as never)
+        commands.registerCommand(RichTextEditingMutation)
+        commands.registerCommand(ReplaceSnapshotCommand)
+        commands.registerCommand(SetDocZoomRatioOperation)
+        commands.registerCommand(SetDocZoomRatioCommand)
+        const native = { model, history, disposed: false }
+        natives.push(native)
+        return {
+          document: {
+            getSnapshot: () => model.getSnapshot(),
+            setSelection() {},
+            appendText: async () => false,
+            insertParagraph: async () => false,
+            insertText: async () => false,
+            undo: () => commands.executeCommand('univer.command.undo'),
+            redo: () => commands.executeCommand('univer.command.redo'),
+          },
+          univerAPI: {
+            executeCommand: (id, params) => commands.executeCommand(id, params),
+            setLocale() {},
+            onCommandExecuted: (listener) => commands.onCommandExecuted(listener),
+          },
+          setActive(next) { instances.focusUnit(next ? documentId : null); context.setContextValue(FOCUSING_DOC, next) },
+          dispose() { native.disposed = true; stateChanges.dispose(); univer.dispose() },
+        }
+      },
+    })
+    const first = mount(firstId, false)
+    const second = mount(secondId, true)
+    try {
+      second.setActive(false)
+      await store.dispatch({ type: 'document.activate', documentId: firstId })
+      first.setActive(true)
+      first.setZoom(75)
+      await Promise.resolve()
+      expect(natives[0]!.model.getSnapshot().settings?.zoomRatio).toBe(0.75)
+      expect(natives[0]!.history.pitchTopUndoElement()).toBeNull()
+      expect(natives[1]!.history.pitchTopUndoElement()).toBeNull()
+      const original = structuredClone(natives[0]!.model.getSnapshot().body)
+      await store.dispatch({ type: 'document.append', documentId: firstId, text: 'First edit' })
+      await first.flush()
+      expect(natives[0]!.history.pitchTopUndoElement()).not.toBeNull()
+      expect((await store.dispatch({ type: 'editor.format', action: 'undo' })).ok).toBe(true)
+      expect(natives[0]!.model.getSnapshot().body).toEqual(original)
+
+      expect(natives[0]!.history.pitchTopRedoElement()).not.toBeNull()
+      const redoBeforeActivation = natives[0]!.history.pitchTopRedoElement()
+
+      first.setActive(false)
+      await store.dispatch({ type: 'document.activate', documentId: secondId })
+      second.setActive(true)
+      await store.dispatch({ type: 'document.append', documentId: secondId, text: 'Second edit' })
+      await second.flush()
+      second.setActive(false)
+      await store.dispatch({ type: 'document.activate', documentId: firstId })
+      first.setActive(true)
+      await Promise.resolve()
+      expect(natives[0]!.history.pitchTopUndoElement()).toBeNull()
+      expect(natives[0]!.history.pitchTopRedoElement()).toBe(redoBeforeActivation)
+
+      expect(natives).toHaveLength(2)
+      expect(natives.every((native) => !native.disposed)).toBe(true)
+      expect((await store.dispatch({ type: 'editor.format', action: 'redo' })).ok).toBe(true)
+      expect(getUniverDocumentText(natives[0]!.model.getSnapshot())).toContain('First edit')
+      expect(natives[0]!.model.getSnapshot().body?.textRuns).toEqual(original?.textRuns)
+      expect(getUniverDocumentText(natives[1]!.model.getSnapshot())).toContain('Second edit')
+      expect((await store.dispatch({ type: 'editor.format', action: 'undo' })).ok).toBe(true)
+      expect(natives[0]!.model.getSnapshot().body).toEqual(original)
+
+      await store.dispatch({ type: 'document.page.update', documentId: firstId, page: { orientation: 'landscape' } })
+      await first.flush()
+      expect(natives[0]!.model.getSnapshot().documentStyle.pageOrient).toBe(1)
+      expect((await store.dispatch({ type: 'editor.format', action: 'undo' })).ok).toBe(true)
+      expect(store.getSnapshot().documents.find((item) => item.id === firstId)!.page.orientation).toBe('portrait')
+      expect((await store.dispatch({ type: 'editor.format', action: 'redo' })).ok).toBe(true)
+      expect(store.getSnapshot().documents.find((item) => item.id === firstId)!.page.orientation).toBe('landscape')
+
+      await store.dispatch({ type: 'document.headerFooter.update', documentId: firstId, settings: { headerHtml: '<p>First header</p>' } })
+      await first.flush()
+      expect(store.getSnapshot().documents.find((item) => item.id === firstId)!.headerFooter.headerHtml).toContain('First header')
+      expect((await store.dispatch({ type: 'editor.format', action: 'undo' })).ok).toBe(true)
+      const undone = store.getSnapshot().documents.find((item) => item.id === firstId)!
+      expect(undone.headerFooter.headerHtml).toBe('')
+      expect(undone.snapshot.documentStyle.defaultHeaderId).toBe('')
+      expect((await store.dispatch({ type: 'editor.format', action: 'redo' })).ok).toBe(true)
+      expect(store.getSnapshot().documents.find((item) => item.id === firstId)!.headerFooter.headerHtml).toContain('First header')
+
+      const exportFooterXml = async () => {
+        const current = store.getSnapshot().documents.find((item) => item.id === firstId)!
+        const archive = await JSZip.loadAsync(await exportWordDocx(current))
+        return (await Promise.all(archive.file(/^word\/footer.*\.xml$/).map((part) => part.async('string')))).join('')
+      }
+      expect((await store.dispatch({ type: 'document.headerFooter.update', documentId: firstId, settings: { showPageNumbers: true } })).ok).toBe(true)
+      await first.flush()
+      expect(getSnapshotShowPageNumbers(natives[0]!.model.getSnapshot())).toBe(true)
+      expect(await exportFooterXml()).toContain('w:instr="PAGE"')
+      expect((await store.dispatch({ type: 'editor.format', action: 'undo' })).ok).toBe(true)
+      const numberingUndone = store.getSnapshot().documents.find((item) => item.id === firstId)!
+      expect(getSnapshotShowPageNumbers(natives[0]!.model.getSnapshot())).toBe(false)
+      expect(getSnapshotShowPageNumbers(numberingUndone.snapshot)).toBe(false)
+      expect(numberingUndone.headerFooter.showPageNumbers).toBe(false)
+      expect(await exportFooterXml()).not.toContain('w:instr="PAGE"')
+      expect((await store.dispatch({ type: 'editor.format', action: 'redo' })).ok).toBe(true)
+      const numberingRedone = store.getSnapshot().documents.find((item) => item.id === firstId)!
+      expect(getSnapshotShowPageNumbers(natives[0]!.model.getSnapshot())).toBe(true)
+      expect(getSnapshotShowPageNumbers(numberingRedone.snapshot)).toBe(true)
+      expect(numberingRedone.headerFooter.showPageNumbers).toBe(true)
+      expect(await exportFooterXml()).toContain('w:instr="PAGE"')
+    } finally {
+      first.dispose(); second.dispose(); store.dispose()
+      await Promise.resolve()
+      expect(natives.every((native) => native.disposed)).toBe(true)
+    }
+  })
   it('reopens canonical hyperlink URLs without letting a stale native resource replace them', async () => {
     const fixture = createFixture()
     await fixture.store.dispatch({ type: 'document.headerFooter.update', settings: { headerHtml: '<p><a href="https://example.com/new">Website</a></p>' } })
@@ -179,7 +358,8 @@ describe('Word editor engine binding', () => {
       expect(fixture.native.document.insertText).toHaveBeenCalledWith('\f')
       const replacements = fixture.executeCommand.mock.calls.filter(([id]) => id === 'doc.command-replace-snapshot')
       expect(replacements).toHaveLength(1)
-      expect(replacements[0]![1]).toMatchObject({ textRanges: undefined, options: { noHistory: true } })
+      expect(replacements[0]![1]).toMatchObject({ textRanges: undefined })
+      expect(replacements[0]![1]).not.toHaveProperty('options')
     } finally { adapter.dispose(); fixture.store.dispose() }
   })
 
@@ -279,7 +459,7 @@ describe('Word editor engine binding', () => {
       await new Promise((resolve) => setTimeout(resolve, 45))
       expect(fixture.store.getSnapshot()).toBe(snapshot)
       expect(fixture.native.univerAPI.setLocale).toHaveBeenCalledWith('zhCN')
-      expect(fixture.executeCommand).toHaveBeenCalledWith('doc.command.set-zoom-ratio', { documentId: fixture.document.id, zoomRatio: 0.75 })
+      expect(fixture.executeCommand).toHaveBeenCalledWith('doc.operation.set-zoom-ratio', { unitId: fixture.document.id, zoomRatio: 0.75 })
     } finally { adapter.dispose(); fixture.store.dispose() }
   })
 

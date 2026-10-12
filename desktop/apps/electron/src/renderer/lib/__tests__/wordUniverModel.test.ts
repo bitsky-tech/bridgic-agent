@@ -13,6 +13,7 @@ const {
   getUniverHeadings,
   getUniverPageCount,
   getUniverWordCount,
+  getSnapshotShowPageNumbers,
   htmlToUniverSnapshot,
   normalizeUniverDocumentSnapshot,
   insertReferenceInSnapshot,
@@ -35,6 +36,16 @@ const headerFooter = {
 }
 
 describe('Univer Word model', () => {
+  it('retains canonical numbering while filling imported header content with stale settings', () => {
+    const snapshot = createUniverDocumentSnapshot('canonical-numbering', 'Report', page, { ...headerFooter, showPageNumbers: true })
+    const settings = { ...headerFooter, headerHtml: '<p>Imported header</p>', showPageNumbers: false }
+    const normalized = normalizeUniverDocumentSnapshot(snapshot, snapshot.id, snapshot.title!, page, settings)
+    expect(normalized.headers!['bridgic-word-header']!.body.dataStream).toContain('Imported header')
+    expect(getSnapshotShowPageNumbers(normalized)).toBe(true)
+    const withoutFlag = htmlToUniverSnapshot('<p>Body</p>', snapshot.id, snapshot.title!)
+    expect(getSnapshotShowPageNumbers(normalizeUniverDocumentSnapshot(withoutFlag, snapshot.id, snapshot.title!, page, { ...settings, showPageNumbers: true }))).toBe(false)
+  })
+
   it('parses safe hyperlinks with exact inclusive ranges and retains nested formatting', () => {
     const snapshot = htmlToUniverSnapshot('<p>Visit <a href="https://example.com/?q=one&amp;lang=en"><strong>our site</strong></a> or <a href="mailto:team@example.com">email us</a>.<a href="https://example.com/empty"></a><a href="javascript:alert(1)">Unsafe</a></p>', 'links', 'Links')
     const body = snapshot.body!

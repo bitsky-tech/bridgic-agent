@@ -15,6 +15,4 @@ export const officeFiles: OfficeFilesAPI = {
   inspect: (kind, path) => ipcRenderer.invoke('office-files:inspect', kind, path),
   save: (request) => ipcRenderer.invoke('office-files:save', request),
   confirmClose: (name, locale) => ipcRenderer.invoke('office-files:confirm-close', name, locale),
-  getRecovery: (kind, sessionId) => ipcRenderer.invoke('office-files:get-recovery', kind, sessionId),
-  setRecovery: (kind, sessionId, value) => ipcRenderer.invoke('office-files:set-recovery', kind, sessionId, value),
 }

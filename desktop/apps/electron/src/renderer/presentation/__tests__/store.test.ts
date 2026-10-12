@@ -1,4 +1,5 @@
-import { describe, expect, it, mock } from 'bun:test'
+import { describe, expect, it, mock, spyOn } from 'bun:test'
+import JSZip from 'jszip'
 import { createBlankPresentationProject, type PresentationProject } from '@/atoms/presentation'
 import { createPresentationImageElement } from '@/lib/presentationInsert'
 import type { PresentationWorkspace } from '@/presentation/workspace'
@@ -32,8 +33,6 @@ function setup(importPptx: (encoded: string, fileName: string) => Promise<Presen
     inspect: async (_kind, path) => ({ path, mtimeMs: 1 }),
     save,
     confirmClose,
-    getRecovery: async () => null,
-    setRecovery: async () => undefined,
     listPresentationMounts: async () => [mountedSource],
     mountPresentationSource,
   }
@@ -205,6 +204,32 @@ describe('PresentationStore', () => {
     }
   })
 
+  it('preserves dirty content and history when reopening unchanged sources through the public protocol', async () => {
+    const importer = mock(async () => createBlankPresentationProject('Imported'))
+    const { files, store } = setup(importer)
+    const open = { method: 'open' as const, params: { target: '/Imported.pptx', file_name: 'Imported.pptx', content_base64: 'AQ==' } }
+    try {
+      await store.restore()
+      expect((await store.dispatch(structuredClone(open))).ok).toBe(true)
+      const imported = store.getSnapshot().project!
+      store.commitProject(imported, { ...imported, title: 'Unsaved live edit' })
+      const live = store.getSnapshot().project!
+      const metadata = store.getSnapshot().projectMetadata[live.id]
+      await store.createProject()
+      const reopened = await store.dispatch(structuredClone(open))
+      expect(reopened).toMatchObject({ ok: true, value: { reused: true } })
+      expect(store.getSnapshot().project).toBe(live)
+      expect(store.getSnapshot().projectMetadata[live.id]).toBe(metadata)
+      expect(store.getSnapshot().canUndo).toBe(true)
+      expect(importer).toHaveBeenCalledTimes(1)
+      files.inspect = async (_kind, path) => ({ path, mtimeMs: 2 })
+      expect((await store.dispatch(structuredClone(open))).ok).toBe(false)
+      expect(store.getSnapshot().project).toBe(live)
+      expect(importer).toHaveBeenCalledTimes(1)
+      expect(store.undo()?.title).toBe('Imported')
+    } finally { store.dispose() }
+  })
+
   it('keeps package references bound to the stable project identity when reopening a changed PPTX', async () => {
     let importCount = 0
     const { files, store } = setup(async () => {
@@ -262,6 +287,80 @@ describe('PresentationStore', () => {
       expect(store.undo()!.assets[0]!.source).toBe('bridgic-mount:source-mount')
     } finally {
       store.dispose()
+    }
+  })
+
+  it('retains native input and history during post-export materialization and package reads', async () => {
+    for (const [phase, buffered] of [['materialize', false], ['read', false], ['materialize', true], ['read', true]] as const) {
+      const project = createBlankPresentationProject('Before export')
+      const source = 'bridgic-mount:post-export-source'
+      project.assets = [{ id: 'image', kind: 'image', mimeType: 'image/png', name: 'image.png', source }]
+      const workspace: PresentationWorkspace = {
+        schemaVersion: 1, activeProjectId: project.id, projects: [project],
+        projectMetadata: { [project.id]: { revision: 1 } },
+      }
+      const workspaces = createMemoryWorkspacePersistence(workspace, 'post-export-native-input')
+      const archive = new JSZip()
+      archive.file('ppt/media/image99.png', 'cG5n', { base64: true })
+      const encoded = await archive.generateAsync({ type: 'base64' })
+      let enter!: () => void
+      let release!: () => void
+      const entered = new Promise<void>((resolve) => { enter = resolve })
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const fetchImageImplementation = Object.assign(async () => {
+        if (phase === 'materialize') { enter(); await gate }
+        return new Response(new Uint8Array([112, 110, 103]))
+      }, { preconnect: globalThis.fetch.preconnect })
+      const fetchImage = spyOn(globalThis, 'fetch').mockImplementation(fetchImageImplementation)
+      const files: OfficeFilesAPI = {
+        inspect: async (_kind, path) => ({ path, mtimeMs: 1 }),
+        confirmClose: async () => 'cancel',
+        save: async () => ({ ok: true, fileName: 'Exported.pptx', source: { path: '/Exported.pptx', mtimeMs: 2 } }),
+        readBase64: async () => {
+          if (phase === 'read') { enter(); await gate }
+          return encoded
+        },
+      }
+      const store = new PresentationStore('post-export-native-input', {
+        workspacePersistence: workspaces.persistence,
+        encode: async () => new Uint8Array([1, 2, 3]),
+        files, managedFiles: true,
+        importPptx: async () => createBlankPresentationProject('Imported'),
+        resolveSources: async () => ({ [source]: 'data:image/png;base64,cG5n' }),
+      })
+      let edited: PresentationProject | null = null
+      let pendingNativeInput = false
+      const applyInput = () => {
+        const previous = store.getSnapshot().project!
+        edited = store.commitProject(previous, { ...previous, title: 'Native input during export completion' })
+      }
+      const binding = createOfficeEditorBinding<PresentationProject>({ appKind: 'presentation', documentId: project.id, sessionId: 'post-export-native-input' })
+      binding.attach({
+        dispose: () => undefined,
+        readSnapshot: () => store.getSnapshot().project,
+        flush: () => { if (pendingNativeInput) { pendingNativeInput = false; applyInput() } },
+      })
+      try {
+        await store.restore()
+        store.bindEditor(binding)
+        const saving = store.save(project.id)
+        await entered
+        if (buffered) pendingNativeInput = true
+        else applyInput()
+        release()
+        expect(await saving).toBe(false)
+        expect(pendingNativeInput).toBe(false)
+        expect(store.getSnapshot().project).toBe(edited)
+        expect(store.getSnapshot().projectMetadata[project.id]).toMatchObject({
+          revision: 2, savedRevision: 1, source: { path: '/Exported.pptx', mtimeMs: 2 },
+        })
+        expect(store.getSnapshot().project!.assets[0]!.source).toBe(source)
+        expect(store.getSnapshot().canUndo).toBe(true)
+        await store.flush()
+        expect(workspaces.read()!.projects[0]!.title).toBe('Native input during export completion')
+        expect(store.undo()!.assets[0]!.source).toBe(source)
+        expect(store.redo()!.title).toBe('Native input during export completion')
+      } finally { release(); fetchImage.mockRestore(); binding.dispose(); store.dispose() }
     }
   })
 
@@ -336,6 +435,48 @@ describe('PresentationStore', () => {
     } finally {
       store.dispose()
     }
+  })
+
+  it('restores the latest durable inventory before rejecting input made during a close checkpoint', async () => {
+    for (const closeAll of [false, true]) {
+      const { workspaces, confirmClose, project, store } = setup()
+      confirmClose.mockResolvedValue('discard')
+      let injected = false
+      try {
+        await store.restore()
+        workspaces.setBeforeWrite((workspace) => {
+          if (workspace.projects.length || injected) return
+          injected = true
+          const current = store.getSnapshot().project!
+          store.commitProject(current, { ...current, title: 'Native input during checkpoint' })
+        })
+        await expect(closeAll ? store.closeAll() : store.closeProject(project.id)).rejects.toThrow()
+        expect(injected).toBe(true)
+        expect(store.getSnapshot().project!.title).toBe('Native input during checkpoint')
+        expect(workspaces.read()!.projects[0]!.title).toBe('Native input during checkpoint')
+        expect(store.getSnapshot().canUndo).toBe(true)
+      } finally { store.dispose() }
+    }
+  })
+
+  it('restores recovery after a post-checkpoint native flush fails', async () => {
+    const { workspaces, confirmClose, project, store } = setup()
+    confirmClose.mockResolvedValue('discard')
+    const binding = createOfficeEditorBinding<PresentationProject>({ appKind: 'presentation', documentId: project.id, sessionId: 'presentation-store-test' })
+    let checkpointWritten = false
+    binding.attach({
+      dispose: () => undefined,
+      readSnapshot: () => null,
+      flush: () => { if (checkpointWritten) throw new Error('Native flush failed') },
+    })
+    try {
+      await store.restore()
+      store.bindEditor(binding)
+      workspaces.setBeforeWrite((workspace) => { if (!workspace.projects.length) checkpointWritten = true })
+      await expect(store.closeAll()).rejects.toThrow('Native flush failed')
+      expect(store.getSnapshot().projects[0]!.id).toBe(project.id)
+      expect(workspaces.read()!.projects[0]!.id).toBe(project.id)
+    } finally { binding.dispose(); store.dispose() }
   })
 
   it('flushes the Store-bound native editor before changing projects', async () => {

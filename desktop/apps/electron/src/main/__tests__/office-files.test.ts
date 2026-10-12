@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile, utimes, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createOfficeRecoveryStore, inspectOfficeFile, saveOfficeFile } from '../office-files'
+import { inspectOfficeFile, saveOfficeFile } from '../office-files'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 async function root() { const path = await mkdtemp(join(tmpdir(), 'office-save-')); roots.push(path); return path }
 
-describe('Office source files and durable recovery', () => {
+describe('Office source files', () => {
   for (const [kind, extension] of [['word', 'docx'], ['excel', 'xlsx'], ['presentation', 'pptx']] as const) {
     it(`protects the ${kind} original even when Save as selects the same file or an alias`, async () => {
       const directory = await root()
@@ -54,12 +54,4 @@ describe('Office source files and durable recovery', () => {
       expect(await readFile(path, 'utf8')).toBe('external')
     })
   }
-  it('restores independent Excel Session drafts through a fresh store instance', async () => {
-    const directory = await root()
-    const first = createOfficeRecoveryStore(directory)
-    await Promise.all([first.write('excel', 'session-a', '{"draft":1}'), first.write('excel', 'session-b', '{"draft":2}')])
-    const next = createOfficeRecoveryStore(directory)
-    expect(await next.read('excel', 'session-a')).toBe('{"draft":1}')
-    expect(await next.read('excel', 'session-b')).toBe('{"draft":2}')
-  })
 })

@@ -94,7 +94,15 @@ function fixture() {
   return { api, calls, imports, store }
 }
 
-async function mount(state: ReturnType<typeof fixture>, active = true) {
+async function flushFrames() {
+  await act(async () => {
+    const pending = [...frames.values()]
+    frames.clear()
+    pending.forEach((callback) => callback(0))
+  })
+}
+
+async function mount(state: ReturnType<typeof fixture>, active = true, syncFrames = true) {
   const i18n = createInstance()
   await i18n.use(initReactI18next).init({
     lng: 'zh', fallbackLng: 'zh', initImmediate: false,
@@ -108,12 +116,79 @@ async function mount(state: ReturnType<typeof fixture>, active = true) {
     await act(async () => root.render(
       <I18nextProvider i18n={i18n}><Provider store={state.store}><WordWorkbenchPanel active={visible} /></Provider></I18nextProvider>,
     ))
+    if (syncFrames) await flushFrames()
   }
   await render(active)
   return { host, root, render }
 }
 
 describe('Word native workbench integration', () => {
+  it('keeps first-open loading and recovery snapshots hidden and reveals the ready target only once', async () => {
+    const state = fixture()
+    const prepared = deferred()
+    state.api.ensureSession = async (id) => {
+      state.calls.push(`ensure:${id}`)
+      await prepared.promise
+      return session(id)
+    }
+    state.store.set(wordHostSnapshotAtom, { sessions: [session('a', { targetId: null, loading: true, documentCount: null })] })
+    const { host } = await mount(state, true, false)
+    await flushFrames()
+    expect(host.querySelector('[data-testid="word-host-status"]')).not.toBeNull()
+    expect(state.calls).not.toContain('activate:a')
+    expect(state.calls).not.toContain('visible:true')
+
+    await act(async () => state.store.set(wordHostSnapshotAtom, { sessions: [session('a', { documentCount: null })] }))
+    await flushFrames()
+    expect(state.calls).not.toContain('visible:true')
+    await act(async () => state.store.set(wordHostSnapshotAtom, { sessions: [session('a')] }))
+    expect(state.calls).not.toContain('ensure:a')
+    await flushFrames()
+    expect(state.calls.at(-1)).toBe('ensure:a')
+    expect(state.calls).not.toContain('visible:true')
+    await act(async () => prepared.resolve())
+    expect(state.calls.slice(-3)).toEqual(['bounds:300:60:720:500', 'activate:a', 'visible:true'])
+    expect(host.querySelector('[data-testid="word-host-status"]')).toBeNull()
+
+    await act(async () => state.store.set(wordHostSnapshotAtom, { sessions: [session('a', { documentCount: 2 })] }))
+    await flushFrames()
+    expect(state.calls.filter((call) => call === 'visible:true')).toHaveLength(1)
+    expect(state.calls.at(-1)).toBe('visible:true')
+  })
+
+  it('keeps the initial empty Word surface hidden until the clicked file finishes importing', async () => {
+    const state = fixture()
+    const importing = deferred()
+    state.api.openFile = async () => importing.promise
+    state.store.set(wordHostSnapshotAtom, { sessions: [session('a', { documentCount: 0 })] })
+    state.store.set(requestWordFileOpenAtom, { name: 'document.docx', path: '/tmp/document.docx' })
+    const { host } = await mount(state)
+    expect(state.calls).not.toContain('visible:true')
+    expect(host.querySelector('[data-testid="word-host-status"]')).not.toBeNull()
+    await act(async () => importing.resolve())
+    await flushFrames()
+    expect(state.calls.at(-1)).toBe('visible:true')
+    expect(host.querySelector('[data-testid="word-host-status"]')).toBeNull()
+  })
+
+  it('does not reveal a first-open Session after navigation interrupts native preparation', async () => {
+    const state = fixture()
+    const preparedA = deferred()
+    state.api.ensureSession = async (id) => {
+      if (id === 'a') await preparedA.promise
+      return session(id)
+    }
+    state.store.set(wordHostSnapshotAtom, { sessions: [session('a'), session('b')] })
+    await mount(state)
+    expect(state.calls).not.toContain('visible:true')
+    await act(async () => state.store.set(activeSessionIdAtom, 'b'))
+    await flushFrames()
+    await act(async () => preparedA.resolve())
+    expect(state.calls).not.toContain('activate:a')
+    expect(state.calls).toContain('activate:b')
+    expect(state.calls.filter((call) => call === 'visible:true')).toHaveLength(1)
+  })
+
   it('restores the Session on activation without creating an extra Word document', async () => {
     const state = fixture()
     const restoring = deferred()
@@ -131,12 +206,13 @@ describe('Word native workbench integration', () => {
     expect(host.querySelector('[data-testid="office-session-restoring"]')).not.toBeNull()
     expect(state.calls.filter((call) => call.startsWith('create:'))).toEqual([])
     await act(async () => restoring.resolve())
+    await flushFrames()
     expect(state.store.get(wordHostSnapshotAtom).sessions[0]!.documentCount).toBe(2)
     expect(state.calls).toContain('visible:true')
     expect(host.querySelector('[data-testid="office-session-restoring"]')).toBeNull()
     await render(false)
     await render(true)
-    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual(['ensure:a'])
+    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual(['ensure:a', 'ensure:a', 'ensure:a'])
     expect(state.calls.filter((call) => call.startsWith('create:'))).toEqual([])
   })
 
@@ -163,9 +239,10 @@ describe('Word native workbench integration', () => {
     expect(state.calls.at(-1)).toBe('visible:false')
     expect(state.store.get(nativeSurfaceRectAtom)).toBeNull()
     await act(async () => state.store.set(setBrowserSurfaceBlockerAtom, { source: 'test-modal', blocked: false }))
+    await flushFrames()
     expect(state.calls.at(-1)).toBe('visible:true')
     expect(state.calls.filter((call) => call.startsWith('close:'))).toEqual([])
-    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual([])
+    expect(state.calls.filter((call) => call.startsWith('ensure:'))).toEqual(['ensure:a', 'ensure:a'])
   })
 
   it('completes an imported file in its original Session without clearing the newly viewed Session request', async () => {
@@ -240,6 +317,7 @@ describe('Word native workbench integration', () => {
     expect(retry.disabled).toBe(true)
     expect(state.calls).toEqual(['close:a'])
     await act(async () => closing.resolve())
+    await flushFrames()
     expect(state.calls.indexOf('close:a')).toBeLessThan(state.calls.indexOf('ensure:a'))
     expect(state.calls.at(-1)).toBe('visible:true')
     expect(host.querySelector('[data-testid="word-host-retry"]')).toBeNull()
@@ -262,6 +340,7 @@ describe('Word native workbench integration', () => {
       return session(id)
     }
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="office-session-restoring"] button')!.click())
+    await flushFrames()
     expect(host.querySelector('[data-testid="office-session-restoring"]')).toBeNull()
     expect(state.calls).toContain('ensure:a')
     expect(state.calls).not.toContain('create:a')
@@ -282,6 +361,16 @@ describe('Word native workbench integration', () => {
     await render(false)
     await render(true)
     expect(state.calls.at(-1)).toBe('visible:true')
+  })
+
+  it('reveals a ready target with failed recovery so the child can show its recovery error and retry', async () => {
+    const state = fixture()
+    state.store.set(wordHostSnapshotAtom, { sessions: [session('a', { documentCount: 0, persistenceStatus: 'error' })] })
+    const { host } = await mount(state)
+    expect(state.calls.slice(-3)).toEqual(['bounds:300:60:720:500', 'activate:a', 'visible:true'])
+    expect(host.querySelector('[data-testid="word-host-status"]')).toBeNull()
+    expect(state.store.get(nativeSurfaceRectAtom)).toEqual({ x: 300, y: 60, width: 720, height: 500 })
+    expect(state.calls.some((call) => call.startsWith('create:') || call.startsWith('close:'))).toBe(false)
   })
 
 })

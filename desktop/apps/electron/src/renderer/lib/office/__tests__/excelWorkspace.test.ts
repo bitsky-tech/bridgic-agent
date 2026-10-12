@@ -27,6 +27,94 @@ function deferred() {
 }
 
 describe('Excel workspace adapter', () => {
+  it('reuses the same source and preserves inactive unsaved content without importing again', async () => {
+    const workspace = setup()
+    const source = { path: '/session/Report.xlsx', mtimeMs: 42 }
+    const draft = { id: 'native-a', value: 7 }
+    workspace.updateTab('a', (current) => ({ ...current, documentId: source.path, source, mtimeMs: 42, dirty: true, changeVersion: 3, snapshot: draft }))
+    workspace.activate('b')
+    const result = await workspace.runtime.execute({ sessionId: 'session-a', capability: 'document.open' }, (context) => workspace.openWorkbook({
+      document: { documentId: source.path, source, mtimeMs: 42, fileName: 'Report.xlsx' },
+      importSnapshot: async () => { throw new Error('An unchanged source must not be imported') },
+      flushEditor: async () => undefined, assertCurrent: context.assertCurrent, conflictMessage: 'Source changed',
+    }))
+    expect(result).toEqual({ ok: true, value: { documentId: 'a', reused: true } })
+    expect(workspace.getState().tabs).toHaveLength(2)
+    expect(workspace.getState().activeTabId).toBe('a')
+    expect(workspace.getState().tabs[0]).toMatchObject({ snapshot: draft, dirty: true, changeVersion: 3 })
+    expect(workspace.getState().tabs[0]!.snapshot).toBe(draft)
+  })
+
+  it.each([false, true])('refreshes only a clean changed source in place: dirty=%s', async (dirty) => {
+    const workspace = setup()
+    const source = { path: '/session/Report.xlsx', mtimeMs: 42 }
+    workspace.updateTab('a', (current) => ({ ...current, documentId: source.path, source, mtimeMs: 42, dirty }))
+    let imports = 0
+    const result = await workspace.runtime.execute({ sessionId: 'session-a', capability: 'document.open' }, (context) => workspace.openWorkbook({
+      document: { documentId: source.path, source: { ...source, mtimeMs: 99 }, mtimeMs: 99, fileName: 'Report.xlsx' },
+      importSnapshot: async () => { imports++; return { id: 'native-updated', value: 9 } },
+      flushEditor: async () => undefined, assertCurrent: context.assertCurrent, conflictMessage: 'Source changed',
+    }))
+    expect(result).toMatchObject(dirty ? { ok: false, error: { code: 'source_conflict' } } : { ok: true, value: { documentId: 'a', reused: false } })
+    expect(imports).toBe(dirty ? 0 : 1)
+    expect(workspace.getState().tabs).toHaveLength(2)
+    expect(workspace.getState().tabs[0]).toMatchObject(dirty
+      ? { tabId: 'a', dirty: true, mtimeMs: 42, revision: 0 }
+      : { tabId: 'a', dirty: false, mtimeMs: 99, revision: 1, snapshot: { value: 9 } })
+  })
+
+  it('rejects edits accepted during parsing and preserves the source owner', async () => {
+    const workspace = setup()
+    const source = { path: '/session/Report.xlsx', mtimeMs: 42 }
+    workspace.updateTab('a', (current) => ({ ...current, documentId: source.path, source, mtimeMs: 42 }))
+    const result = await workspace.runtime.execute({ sessionId: 'session-a', capability: 'document.open' }, (context) => workspace.openWorkbook({
+      document: { documentId: source.path, source: { ...source, mtimeMs: 99 }, mtimeMs: 99, fileName: 'Report.xlsx' },
+      importSnapshot: async () => {
+        workspace.updateTab('a', (current) => ({ ...current, dirty: true, changeVersion: 1, snapshot: { id: 'native-a', value: 10 } }))
+        return { id: 'imported', value: 9 }
+      },
+      flushEditor: async () => undefined, assertCurrent: context.assertCurrent, conflictMessage: 'Source changed',
+    }))
+    expect(result).toMatchObject({ ok: false, error: { code: 'source_conflict' } })
+    expect(workspace.getState().tabs[0]).toMatchObject({ tabId: 'a', dirty: true, mtimeMs: 42, snapshot: { value: 10 } })
+  })
+
+  it('restores a completed close checkpoint before reporting a native flush failure', async () => {
+    const workspace = setup()
+    const approved = workspace.getState()
+    let checkpoint = approved
+    const result = await workspace.runtime.execute({ sessionId: 'session-a', capability: 'document.close' }, (context) => workspace.commitClose({
+      tabs: [], activeTabId: null,
+      persist: async (tabs, activeTabId) => { checkpoint = structuredClone({ tabs, activeTabId }) },
+      flushEditor: async () => { throw new Error('Native flush failed') },
+      assertCurrent: context.assertCurrent, changedMessage: 'New input',
+    }))
+    expect(result).toMatchObject({ ok: false, error: { message: 'Native flush failed' } })
+    expect(workspace.getState()).toBe(approved)
+    expect(checkpoint).toEqual(approved)
+  })
+
+  it('waits for durable recovery of input accepted during close and during checkpoint restoration', async () => {
+    const workspace = setup()
+    let checkpoint = workspace.getState()
+    let writes = 0
+    const edit = (value: number) => workspace.updateTab('a', (current) => ({ ...current, dirty: true, changeVersion: value, snapshot: { id: 'native-a', value } }))
+    const result = await workspace.runtime.execute({ sessionId: 'session-a', capability: 'document.close' }, (context) => workspace.commitClose({
+      tabs: [], activeTabId: null,
+      persist: async (tabs, activeTabId) => {
+        checkpoint = structuredClone({ tabs, activeTabId })
+        writes++
+        if (writes <= 2) edit(writes)
+      },
+      flushEditor: async () => undefined,
+      assertCurrent: context.assertCurrent, changedMessage: 'New input',
+    }))
+    expect(result).toMatchObject({ ok: false, error: { code: 'document_changed' } })
+    expect(writes).toBe(3)
+    expect(checkpoint).toEqual(workspace.getState())
+    expect(checkpoint.tabs[0]).toMatchObject({ dirty: true, changeVersion: 2, snapshot: { value: 2 } })
+  })
+
   it('reports blank workbook identities without exposing file handles or native payloads', () => {
     const workspace = setup()
     const metadata = workspace.runtime.getSnapshot()
@@ -95,6 +183,21 @@ describe('Excel workspace adapter', () => {
     }))
     expect(workspace.getState().tabs[0]).toMatchObject({ tabId: 'a', snapshot, dirty: false })
     expect(workspace.getState().tabs[1]).toEqual(tab('b'))
+  })
+
+  it('keeps stable document identity when explicit export updates the file binding', () => {
+    const original = { path: '/session/.work/Original.xlsx', mtimeMs: 1 }
+    const destination = { path: '/session/.work/Saved.xlsx', mtimeMs: 3 }
+    const current = { ...tab('a'), documentId: original.path, source: original }
+    const saved = completeExcelWorkbookSave(current, {
+      changeVersion: 0, documentId: destination.path, source: destination, fileName: 'Saved.xlsx', mtimeMs: 3, snapshot: current.snapshot,
+    })
+    expect(saved).toMatchObject({ tabId: 'a', source: destination })
+    const sameFile = completeExcelWorkbookSave(saved, {
+      changeVersion: 0, documentId: destination.path, source: destination, fileName: 'Saved.xlsx', mtimeMs: 3, snapshot: saved.snapshot,
+    })
+    expect(sameFile.tabId).toBe('a')
+    expect(sameFile.source).toEqual(destination)
   })
 
   it('orders asynchronous imports before later document activation', async () => {

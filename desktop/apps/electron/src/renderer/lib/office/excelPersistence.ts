@@ -2,81 +2,77 @@ import type { OfficeFilesAPI } from '../../../shared/office-files'
 import type { ExcelHostPreloadAPI, ExcelSaveResult } from '../../../shared/types'
 import type { ExcelWorkspaceTab } from './excelWorkspace'
 import {
-  createOfficePersistenceScheduler,
   loadOfficeRecovery,
   OfficePersistenceError,
   runOfficePersistenceOperation,
   type OfficePersistenceSnapshot,
 } from './officePersistence'
 import { OfficeOperationError } from './officeWorkspaceRuntime'
+import { createIndexedDbWorkspacePersistence, type WorkspacePersistence } from './workspacePersistence'
 
-export interface ExcelRecoveryState<TSnapshot> {
-  version: 1
+export interface ExcelWorkspaceState<TSnapshot> {
+  schemaVersion: 1
   tabs: ExcelWorkspaceTab<TSnapshot>[]
   activeTabId: string | null
   nextWorkbookOrdinal: number
 }
 
-function recoveryState<TSnapshot>(value: unknown): ExcelRecoveryState<TSnapshot> | null {
+function readExcelWorkspace<TSnapshot>(value: unknown): ExcelWorkspaceState<TSnapshot> | null {
   if (value === null) return null
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new OfficePersistenceError('invalid_recovery', 'The Excel recovery state is invalid.')
   }
-  const candidate = value as Partial<ExcelRecoveryState<TSnapshot>>
-  if (candidate.version !== 1 || !Array.isArray(candidate.tabs) || !candidate.tabs.every((tab) => tab
+  const candidate = value as Partial<ExcelWorkspaceState<TSnapshot>>
+  if (candidate.schemaVersion !== 1
+    || !Array.isArray(candidate.tabs) || !candidate.tabs.every((tab) => tab
     && typeof tab === 'object'
     && typeof tab.tabId === 'string'
     && typeof tab.fileName === 'string'
     && tab.snapshot
-    && typeof tab.snapshot === 'object')) {
+    && typeof tab.snapshot === 'object'
+    && (tab.source === undefined || (tab.source && typeof tab.source === 'object'
+      && typeof tab.source.path === 'string' && Boolean(tab.source.path)
+      && (tab.source.mtimeMs === null || (Number.isFinite(tab.source.mtimeMs) && tab.source.mtimeMs >= 0)))))
+    || (candidate.activeTabId !== null && typeof candidate.activeTabId !== 'string')
+    || !Number.isInteger(candidate.nextWorkbookOrdinal) || candidate.nextWorkbookOrdinal! < 1) {
     throw new OfficePersistenceError('invalid_recovery', 'The Excel recovery state is invalid.')
   }
-  return {
-    version: 1,
-    tabs: candidate.tabs,
-    activeTabId: typeof candidate.activeTabId === 'string' ? candidate.activeTabId : null,
-    nextWorkbookOrdinal: Number.isInteger(candidate.nextWorkbookOrdinal)
-      ? Math.max(1, candidate.nextWorkbookOrdinal!)
-      : candidate.tabs.length + 1,
-  }
+  return candidate as ExcelWorkspaceState<TSnapshot>
 }
 
-/** Private recovery survives renderer reload, Session release and application restart. */
-export function createExcelRecoveryPersistence<TSnapshot>(options: {
+/** Structured Session persistence is independent of the explicit XLSX export boundary. */
+export function createExcelWorkspacePersistence<TSnapshot>(options: {
   sessionId: string
-  files?: OfficeFilesAPI
-  api: Pick<ExcelHostPreloadAPI, 'getRecoveryState' | 'setRecoveryState'>
+  workspacePersistence?: WorkspacePersistence<ExcelWorkspaceState<TSnapshot>>
+  indexedDB?: IDBFactory
   onStatusChange?: (state: OfficePersistenceSnapshot) => void
 }) {
   let ready = false
   let disposed = false
-  let restoring: ReturnType<typeof loadOfficeRecovery<ExcelRecoveryState<TSnapshot>>> | null = null
-  const scheduler = createOfficePersistenceScheduler<ExcelRecoveryState<TSnapshot>>({
-    policy: {
-      appKind: 'excel',
-      sessionId: options.sessionId,
-      kind: 'recovery',
-      storage: options.files ? 'recovery-file' : 'session-memory',
-      automatic: true,
-    },
-    delayMs: 250,
-    // Serialize BEFORE contextBridge. Passing the nested cell graph directly
-    // makes Electron recursively proxy/freeze millions of objects on the UI thread.
-    write: (value) => options.files ? options.files.setRecovery('excel', options.sessionId, JSON.stringify(value)) : options.api.setRecoveryState(JSON.stringify(value)),
-    onStatusChange: options.onStatusChange,
+  let restoring: ReturnType<typeof loadOfficeRecovery<ExcelWorkspaceState<TSnapshot>>> | null = null
+  const persistence = options.workspacePersistence ?? createIndexedDbWorkspacePersistence<ExcelWorkspaceState<TSnapshot>>({
+    appKind: 'excel',
+    databaseName: 'bridgic-excel-workbench-v1',
+    sessionId: options.sessionId,
+    storeName: 'workbooks',
+    indexedDB: options.indexedDB,
   })
+  const unsubscribeStatus = options.onStatusChange ? persistence.subscribe(options.onStatusChange) : () => undefined
+  const assertAvailable = () => {
+    if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel workspace controller is unavailable.')
+  }
 
   return {
-    getSnapshot: scheduler.getSnapshot,
-    subscribe: scheduler.subscribe,
+    getSnapshot: persistence.getSnapshot,
+    subscribe: persistence.subscribe,
     restore() {
       if (restoring) return restoring
       ready = false
       restoring = loadOfficeRecovery(async () => {
-        if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel recovery controller is unavailable.')
-        const stored = options.files ? await options.files.getRecovery('excel', options.sessionId) : await options.api.getRecoveryState()
-        if (disposed) throw new OfficePersistenceError('persistence_disposed', 'The Excel recovery controller is unavailable.')
-        return recoveryState<TSnapshot>(stored === null ? null : JSON.parse(stored))
+        assertAvailable()
+        const workspace = await persistence.load()
+        assertAvailable()
+        return readExcelWorkspace<TSnapshot>(workspace)
       }).then((result) => {
         if (disposed) {
           return {
@@ -89,19 +85,26 @@ export function createExcelRecoveryPersistence<TSnapshot>(options: {
       }).finally(() => { restoring = null })
       return restoring
     },
-    schedule(value: ExcelRecoveryState<TSnapshot>) {
+    schedule(value: ExcelWorkspaceState<TSnapshot>) {
       // Never overwrite an unreadable checkpoint with the default blank workbook.
-      return ready && !disposed && scheduler.schedule(value)
+      return ready && !disposed && persistence.schedule(value)
+    },
+    persist(value: ExcelWorkspaceState<TSnapshot>) {
+      if (!ready || disposed) {
+        return Promise.reject(new OfficePersistenceError('recovery_unavailable', 'The Excel workspace must be restored before updating its stored state.'))
+      }
+      return persistence.persist(value)
     },
     flush() {
       if (!ready || disposed) {
         return Promise.reject(new OfficePersistenceError('recovery_unavailable', 'The Excel workspace must be restored before updating its recovery state.'))
       }
-      return scheduler.flush()
+      return persistence.flush()
     },
     dispose() {
       disposed = true
-      scheduler.dispose()
+      unsubscribeStatus()
+      persistence.dispose()
     },
   }
 }

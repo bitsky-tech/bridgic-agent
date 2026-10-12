@@ -1,7 +1,6 @@
 import type { PresentationMountedSource, PresentationSourceMount } from './presentation-host'
 
 export type OfficeFileKind = 'word' | 'excel' | 'presentation'
-export type OfficeRecoveryKind = 'excel'
 export type OfficeCloseDecision = 'save' | 'discard' | 'cancel'
 export interface OfficeFileSource { path: string; mtimeMs: number | null }
 export interface OfficeFileSaveRequest {
@@ -28,8 +27,6 @@ export interface OfficeFilesAPI {
   inspect(kind: OfficeFileKind, path: string): Promise<OfficeFileSource>
   save(request: OfficeFileSaveRequest): Promise<OfficeFileSaveResult>
   confirmClose(fileName: string, locale: string): Promise<OfficeCloseDecision>
-  getRecovery(kind: OfficeRecoveryKind, sessionId: string): Promise<string | null>
-  setRecovery(kind: OfficeRecoveryKind, sessionId: string, value: string): Promise<void>
 }
 
 declare global { interface Window { officeFiles?: OfficeFilesAPI } }

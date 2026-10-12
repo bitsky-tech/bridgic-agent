@@ -24,7 +24,6 @@ export async function createPresentationTestStore(sessionId: string, project: Pr
   let mountedSourceOrdinal = 0
   const files: OfficeFilesAPI = {
     confirmClose: async () => 'discard',
-    getRecovery: async () => null,
     inspect: async (_kind, path) => ({ path, mtimeMs: null }),
     listPresentationMounts: async () => [],
     mountPresentationSource: async ({ fileName }) => ({
@@ -39,7 +38,6 @@ export async function createPresentationTestStore(sessionId: string, project: Pr
       created_at: new Date(0).toISOString(),
     }),
     save: async () => ({ ok: false, reason: 'canceled' }),
-    setRecovery: async () => undefined,
   }
   const store = new PresentationStore(sessionId, {
     workspacePersistence: workspaces.persistence,

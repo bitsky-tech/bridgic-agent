@@ -1,5 +1,6 @@
-import { afterAll, afterEach, describe, expect, it, mock } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { createWordIndexedDbMemory } from '../../../test-fixtures/wordIndexedDb'
 import type { WordDomainStore } from '@/lib/wordDomain'
 
 GlobalRegistrator.register()
@@ -37,6 +38,12 @@ async function waitForElement(host: HTMLElement, selector: string) {
   throw new Error(`Missing ${selector}`)
 }
 
+const originalIndexedDb = Object.getOwnPropertyDescriptor(window, 'indexedDB')
+let indexed: ReturnType<typeof createWordIndexedDbMemory>
+beforeEach(() => {
+  indexed = createWordIndexedDbMemory()
+  Object.defineProperty(window, 'indexedDB', { configurable: true, value: indexed.factory })
+})
 afterEach(() => {
   commitOnCleanup = false
   window.localStorage.clear()
@@ -44,14 +51,16 @@ afterEach(() => {
 })
 afterAll(async () => {
   mock.module('../WordEditor', () => ({ WordEditor: originalWordEditor }))
+  if (originalIndexedDb) Object.defineProperty(window, 'indexedDB', originalIndexedDb)
+  else Reflect.deleteProperty(window, 'indexedDB')
   await GlobalRegistrator.unregister()
 })
 
 describe('Word recovery lifecycle', () => {
   it('preserves unreadable storage, rejects flush, and restores the existing documents after retry', async () => {
-    const key = 'bridgic.word.workspace.session-recovery-retry'
+    const key = 'session-recovery-retry'
     const original = '{incomplete json'
-    window.localStorage.setItem(key, original)
+    indexed.records.set(key, original)
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -64,7 +73,7 @@ describe('Word recovery lifecycle', () => {
         root.render(<SessionWordEditor defaultTitle="Untitled" expanded={false} sessionId="session-recovery-retry" onFlushHandlerChange={receiveFlush} onStateChange={receiveState} />)
       })
       await waitForElement(host, '[data-testid="word-recovery-error-state"]')
-      expect(window.localStorage.getItem(key)).toBe(original)
+      expect(indexed.records.get(key)).toBe(original)
       expect(window.__bridgicWord).toBeUndefined()
       expect(host.querySelector('[data-testid="word-launch-empty-state"]')).toBeNull()
       expect(states.at(-1)).toEqual({ documentCount: 0, persistenceStatus: 'error' })
@@ -72,7 +81,7 @@ describe('Word recovery lifecycle', () => {
       await expect((flush as unknown as () => Promise<void>)()).rejects.toThrow()
 
       const recovered = createWordWorkspace('session-recovery-retry', 'Existing document')
-      window.localStorage.setItem(key, JSON.stringify(recovered))
+      indexed.records.set(key, recovered)
       await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="word-retry-recovery"]')!.click())
       await waitForElement(host, '[data-testid="recovered-word-editor"]')
       expect(window.__bridgicWord?.workspace.getSnapshot().documents[0]?.title).toBe('Existing document')
@@ -85,9 +94,9 @@ describe('Word recovery lifecycle', () => {
   })
 
   it('rejects an import while recovery has failed instead of replacing saved data with an empty workspace', async () => {
-    const key = 'bridgic.word.workspace.session-recovery-import'
+    const key = 'session-recovery-import'
     const original = '{corrupt'
-    window.localStorage.setItem(key, original)
+    indexed.records.set(key, original)
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -101,7 +110,7 @@ describe('Word recovery lifecycle', () => {
       await waitForElement(host, '[data-testid="word-recovery-error-state"]')
       expect(completed).toEqual([{ id: 'open-failed', error: expect.any(String) }])
       expect(readDocument).not.toHaveBeenCalled()
-      expect(window.localStorage.getItem(key)).toBe(original)
+      expect(indexed.records.get(key)).toBe(original)
     } finally {
       await act(async () => root.unmount())
       host.remove()
@@ -110,8 +119,8 @@ describe('Word recovery lifecycle', () => {
 
   it('accepts the child editor final native snapshot before disposing the shared persistence scheduler', async () => {
     const state = createWordWorkspace('session-cleanup-save', 'Original')
-    const key = 'bridgic.word.workspace.session-cleanup-save'
-    window.localStorage.setItem(key, JSON.stringify(state))
+    const key = 'session-cleanup-save'
+    indexed.records.set(key, state)
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -121,7 +130,7 @@ describe('Word recovery lifecycle', () => {
       await waitForElement(host, '[data-testid="recovered-word-editor"]')
       await act(async () => {
         root.unmount()
-        await new Promise((resolve) => setTimeout(resolve, 0))
+        await new Promise((resolve) => setTimeout(resolve, 10))
       })
       const persisted = await loadPersistedWordWorkspace(state.sessionId) as typeof state
       expect(getUniverDocumentText(persisted.documents[0]!.snapshot)).toContain('Final native input')

@@ -1,18 +1,17 @@
-import { createOfficeAutoSave } from '../lib/office/officeAutoSave'
 import { confirmOfficeClose } from '../lib/office/officeFileClient'
 import { OfficeSaveActions } from '../components/app/OfficeSaveActions'
 import { OfficeLaunchEmptyState } from '../components/app/OfficeLaunchEmptyState'
 import { useTranslation } from 'react-i18next'
 import { i18n } from '../lib/i18n'
 import {
-  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore,
 } from 'react'
 import type { IWorkbookData } from '@univerjs/core'
 import type { ExcelDocumentHandle, ExcelHostConfig, ExcelWorkbookOpenTicket } from '../../shared/types'
 import { Icons } from '../components/amphi/Icons'
 import { OfficeDocumentTabs } from '../components/app/OfficeWorkbenchChrome'
 import { createExcelWorkspace, type ExcelWorkspaceTab } from '../lib/office/excelWorkspace'
-import { createExcelRecoveryPersistence, writeExcelWorkbookSource } from '../lib/office/excelPersistence'
+import { createExcelWorkspacePersistence, writeExcelWorkbookSource } from '../lib/office/excelPersistence'
 import { OfficeOperationError, type OfficeOperationContext } from '../lib/office/officeWorkspaceRuntime'
 import {
   clearUnsupportedWorkbookFeatures, createEmptyWorkbook, exportXlsx, unsupportedWorkbookFeatures,
@@ -41,6 +40,15 @@ interface FormulaDialogState {
 }
 type OperationNotice = { id: number; message: string } | null
 type RecoveryFailure = { kind: 'restore' | 'write'; message: string } | null
+interface ExcelDomainCommand {
+  type: string
+  sessionId?: string
+  documentId?: string
+  expectedRevision?: number
+  expectedDocumentRevision?: number
+  sourcePath?: string
+  destination?: string
+}
 const RECENT_FORMULAS_STORAGE_KEY = 'bridgic.excel.recent-formulas'
 
 function loadRecentFormulas(): string[] {
@@ -95,22 +103,10 @@ function newWorkbookTab(config: ExcelHostConfig, ordinal: number): WorkbookTab {
   }
 }
 
-function openedWorkbookTab(document: ExcelDocumentHandle, snapshot: IWorkbookData): WorkbookTab {
-  return {
-    tabId: crypto.randomUUID(),
-    documentId: document.documentId,
-    source: document.source,
-    fileName: document.fileName,
-    snapshot,
-    mtimeMs: document.mtimeMs,
-    dirty: false,
-    changeVersion: 0,
-    revision: 0,
-  }
-}
-
-function isPristineInitialWorkbook(tab: WorkbookTab): boolean {
-  return tab.documentId === null && tab.changeVersion === 0
+function normalizeEditorCompatibility(tab: WorkbookTab, snapshot: IWorkbookData): IWorkbookData {
+  // Importer warnings belong to the original package. A successful lossy export
+  // acknowledges them without rebuilding the native editor or its undo history.
+  return unsupportedWorkbookFeatures(tab.snapshot).length === 0 ? clearUnsupportedWorkbookFeatures(snapshot) : snapshot
 }
 
 /** Workbook tabs for one Agent Session, all inside this single CDP target. */
@@ -132,10 +128,8 @@ export function ExcelHostApp() {
   const [recoveryFailure, setRecoveryFailure] = useState<RecoveryFailure>(null)
   const [recoveryAttempt, setRecoveryAttempt] = useState(0)
   const [recoveryRestoring, setRecoveryRestoring] = useState(true)
-  const [recovery] = useState(() => createExcelRecoveryPersistence<IWorkbookData>({
+  const [recovery] = useState(() => createExcelWorkspacePersistence<IWorkbookData>({
     sessionId: config.sessionId,
-    files: window.officeFiles,
-    api,
     onStatusChange: (state) => {
       if (state.status === 'error') {
         setRecoveryFailure({ kind: 'write', message: state.error?.message ?? 'Recovery write failed.' })
@@ -155,10 +149,9 @@ export function ExcelHostApp() {
   const [importProgress, setImportProgress] = useState<ExcelImportProgress | null>(null)
   const importControllerRef = useRef<AbortController | null>(null)
   const [pendingWorkbookOpenTickets, setPendingWorkbookOpenTickets] = useState<ExcelWorkbookOpenTicket[]>([])
-  const [autoSaveError, setAutoSaveError] = useState<string | null>(null)
-  const autoSaveRef = useRef<ReturnType<typeof createOfficeAutoSave> | null>(null)
-  const persistRef = useRef<(context: OfficeOperationContext) => Promise<void>>(async () => undefined)
-  const automatic = Boolean(window.officeFiles?.prepare)
+  const persistenceStatus = useSyncExternalStore(recovery.subscribe, recovery.getSnapshot)
+  const [failedExport, setFailedExport] = useState<{ tabId: string; saveAs: boolean; destination?: string; message: string } | null>(null)
+  const retryingExportRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<OperationNotice>(null)
   const [viewPreferences, setViewPreferences] = useState<ExcelViewPreferences>({
@@ -173,7 +166,10 @@ export function ExcelHostApp() {
   })
   const nextNoticeId = useRef(1)
   const externalWorkbookOpenPendingRef = useRef(false)
-  const editorRef = useRef<SheetEditorHandle>(null)
+  const [editors] = useState(() => new Map<string, SheetEditorHandle>())
+  const editorRef = useMemo(() => ({
+    get current() { return editors.get(workspace.getState().activeTabId ?? '') ?? null },
+  }), [editors, workspace])
   const { t } = useTranslation(undefined, { i18n, lng: config.locale })
   const copy = t('excel.host', { returnObjects: true }) as Copy
   const activeTab = useMemo(
@@ -198,7 +194,7 @@ export function ExcelHostApp() {
     if (workspace.getState().activeTabId !== activeId || editorRef.current !== editor) {
       throw new OfficeOperationError('document_not_ready', 'The workbook editor was replaced while committing its current cell.')
     }
-  }, [workspace])
+  }, [editorRef, workspace])
 
   useEffect(() => {
     const lifetime = ++workspaceLifetimeRef.current
@@ -213,6 +209,16 @@ export function ExcelHostApp() {
         }
       })
     }
+  }, [recovery, runtime])
+
+  useEffect(() => {
+    const release = () => {
+      runtime.dispose()
+      recovery.dispose()
+      importControllerRef.current?.abort()
+    }
+    window.addEventListener('pagehide', release)
+    return () => window.removeEventListener('pagehide', release)
   }, [recovery, runtime])
 
   useEffect(() => api.onConfigChanged((next) => {
@@ -276,7 +282,7 @@ export function ExcelHostApp() {
     const scheduleRecovery = () => {
       const state = workspace.getState()
       recovery.schedule({
-        version: 1,
+        schemaVersion: 1,
         tabs: state.tabs,
         activeTabId: state.activeTabId,
         nextWorkbookOrdinal: nextWorkbookOrdinal.current,
@@ -288,17 +294,15 @@ export function ExcelHostApp() {
     return () => { queueMicrotask(unsubscribe) }
   }, [recovery, recoveryLoaded, workspace])
 
-  const activeRevision = activeTab?.revision
-  const handleEditorChange = useCallback((snapshot: IWorkbookData) => {
-    if (!activeTabId) return
+  const handleEditorChange = useCallback((tabId: string, revision: number, snapshot: IWorkbookData) => {
     // A replaced native editor can emit its final snapshot while unmounting.
-    updateTab(activeTabId, (current) => current.revision !== activeRevision ? current : ({
+    updateTab(tabId, (current) => current.revision !== revision ? current : ({
       ...current,
-      snapshot,
+      snapshot: normalizeEditorCompatibility(current, snapshot),
       dirty: true,
       changeVersion: current.changeVersion + 1,
     }))
-  }, [activeRevision, activeTabId, updateTab])
+  }, [updateTab])
 
   const importOpenedWorkbook = useCallback(async (
     document: ExcelDocumentHandle,
@@ -306,77 +310,47 @@ export function ExcelHostApp() {
     context: OfficeOperationContext,
   ) => {
     const { assertCurrent } = context
-    await flushActiveEditor(assertCurrent)
-    await persistRef.current(context)
     if (window.officeFiles?.prepare && document.source) {
       const source = await window.officeFiles.prepare('excel', document.source.path)
-      const bytes = window.officeFiles.readBase64
-        ? Uint8Array.from(atob(await window.officeFiles.readBase64('excel', source.path)), (character) => character.charCodeAt(0))
-        : document.bytes
-      document = { ...document, source, bytes, documentId: source.path, mtimeMs: source.mtimeMs!, fileName: source.path.split(/[\\/]/).pop()! }
+      if (source.mtimeMs === null) throw new OfficeOperationError('document_not_found', 'The workbook source is unavailable.')
+      document = { ...document, source, documentId: source.path, mtimeMs: source.mtimeMs, fileName: source.path.split(/[\\/]/).pop()! }
       assertCurrent()
     }
-    const existing = workspace.getState().tabs.find((tab) => (tab.documentId === document.documentId || (document.source && tab.source?.path === document.source.path)))
-    if (existing) {
-      if (existing.mtimeMs === document.mtimeMs) {
-        workspace.activate(existing.tabId)
-        return
-      }
-      if (existing.dirty) {
-        workspace.activate(existing.tabId)
-        throw new OfficeOperationError('source_conflict', copy.saveConflict)
-      }
-    }
-    const controller = new AbortController()
-    importControllerRef.current = controller
-    setImportProgress({ phase: 'reading' })
-    let snapshot: IWorkbookData
-    try {
-      snapshot = await importExcelWorkbook(document.bytes, univerLocale(config), {
-        signal: controller.signal,
-        onProgress: setImportProgress,
-      })
-    } catch (error) {
-      if (controller.signal.aborted) return
-      throw error
-    } finally {
-      importControllerRef.current = null
-      setImportProgress(null)
-    }
-    assertCurrent()
-    await flushActiveEditor(assertCurrent)
-    if (existing) {
-      const current = workspace.getState().tabs.find((tab) => tab.tabId === existing.tabId)!
-      // Native typing is not queued behind parsing; recheck after its final flush.
-      if (current.dirty) {
-        workspace.activate(current.tabId)
-        throw new OfficeOperationError('source_conflict', copy.saveConflict)
-      }
-      updateTab(current.tabId, (tab) => ({
-        ...tab, snapshot, fileName: document.fileName, mtimeMs: document.mtimeMs, source: document.source,
-        revision: tab.revision + 1, changeVersion: tab.changeVersion + 1,
-      }))
-      workspace.activate(current.tabId)
-      return
-    }
-    const tab = openedWorkbookTab(document, snapshot)
-    const current = workspace.getState().tabs
-    workspace.replace(
-      replaceInitialBlank
-      && current.length === 1
-      && current[0] !== undefined
-      && isPristineInitialWorkbook(current[0])
-        ? [tab]
-        : [...current, tab],
-      tab.tabId,
-    )
-  }, [config, copy.saveConflict, flushActiveEditor, updateTab, workspace])
+    return workspace.openWorkbook({
+      document,
+      replaceInitialBlank,
+      expectedDocumentId: context.documentId,
+      assertCurrent,
+      conflictMessage: copy.saveConflict,
+      flushEditor: () => flushActiveEditor(assertCurrent),
+      importSnapshot: async () => {
+        const controller = new AbortController()
+        importControllerRef.current = controller
+        setImportProgress({ phase: 'reading' })
+        try {
+          const bytes = window.officeFiles?.readBase64 && document.source
+            ? Uint8Array.from(atob(await window.officeFiles.readBase64('excel', document.source.path)), (character) => character.charCodeAt(0))
+            : document.bytes
+          assertCurrent()
+          return await importExcelWorkbook(bytes, univerLocale(config), {
+            signal: controller.signal,
+            onProgress: setImportProgress,
+          })
+        } catch (cause) {
+          if (controller.signal.aborted) return null
+          throw cause
+        } finally {
+          importControllerRef.current = null
+          setImportProgress(null)
+        }
+      },
+    })
+  }, [config, copy.saveConflict, flushActiveEditor, workspace])
 
   const addBlankTab = () => {
     setError(null)
     return executeWorkspaceOperation('document.create', null, async (context) => {
       await flushActiveEditor(context.assertCurrent)
-      await persistRef.current(context)
       setFormulaDialog(null)
       setInsertDialog(null)
       const tab = newWorkbookTab(config, nextWorkbookOrdinal.current)
@@ -401,7 +375,6 @@ export function ExcelHostApp() {
       setBusy(null)
     }
   })
-
 
   useEffect(() => {
     if (!recoveryLoaded || busy !== null || pendingWorkbookOpenTickets.length === 0) return
@@ -438,112 +411,110 @@ export function ExcelHostApp() {
     recoveryLoaded,
   ])
 
-  const persistWorkbookNow = useCallback(async (requestedTab: WorkbookTab, saveAs: boolean, context: OfficeOperationContext, destination?: string, background = false): Promise<boolean> => {
-      if (!background && workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
-      const state = workspace.getState()
-      const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)!
-      const snapshot = !background && tab.tabId === state.activeTabId && editorRef.current?.documentId === tab.tabId
-        ? editorRef.current?.snapshot() ?? tab.snapshot
-        : tab.snapshot
-      const savedChangeVersion = tab.changeVersion
-      if (!background) setBusy((current) => current ?? 'saving')
-      setError(null)
-      try {
-        const incompatible = unsupportedWorkbookFeatures(snapshot)
-        const outcome = await writeExcelWorkbookSource({
-          api,
-          files: window.officeFiles,
-          tab,
-          saveAs,
-          destination,
-          preserveSource: incompatible.length > 0,
-          protectedSourceMessage: t('office.protectedSave'),
-          conflictMessage: copy.saveConflict,
-          assertCurrent: context.assertCurrent,
-          prepare: async () => {
-            const featureList = incompatible.join(', ')
-            if (incompatible.length > 0 && !saveAs && !automatic) {
-              throw new OfficeOperationError('unsupported_format', t('excel.host.lossyOverwrite', { features: featureList }))
-            }
-            if (incompatible.length > 0 && saveAs && !destination && !automatic
-              && !window.confirm(t('excel.host.lossySaveAs', { features: featureList }))) return null
-            return exportXlsx(snapshot, { allowLossy: automatic || saveAs })
-          },
-        })
-        if (outcome.status === 'canceled') return false
-        if (outcome.status === 'conflict') throw new OfficeOperationError('source_conflict', outcome.message)
-        if (outcome.status === 'failed') {
-          const message = outcome.error.code === 'unsupported_format'
-            ? outcome.error.message
-            : `${copy.saveFailed}: ${outcome.error.message}`
-          throw new OfficeOperationError(outcome.error.code, message)
-        }
-        const result = outcome.value
-        context.assertCurrent()
-        // Background saves never finish a cell the user is still typing.
-        if (!background) await flushActiveEditor(context.assertCurrent)
-        const retainedDrafts = workspace.completeSave(tab.tabId, {
-          changeVersion: savedChangeVersion,
-          documentId: result.documentId,
-          source: result.source,
-          fileName: result.fileName,
-          mtimeMs: result.mtimeMs,
-          snapshot: incompatible.length > 0 && (automatic || saveAs)
-            ? clearUnsupportedWorkbookFeatures(snapshot)
-            : snapshot,
-        }, (fileName) => t('excel.host.unsavedCopyName', { name: fileName.replace(/\.xlsx$/i, '') }))
-        if (retainedDrafts.length > 0) {
-          setNotice({ id: nextNoticeId.current++, message: t('excel.host.savedDraftsPreserved', { names: retainedDrafts.join(', ') }) })
-        }
-        return !workspace.getState().tabs.find((current) => current.tabId === tab.tabId)?.dirty
-      } catch (cause) {
-        if (cause instanceof OfficeOperationError) throw cause
-        throw new Error(`${copy.saveFailed}: ${errorMessage(cause)}`)
-      } finally {
-        if (!background) setBusy((current) => current === 'saving' ? null : current)
-      }
-  }, [
-    api,
-    automatic,
-    t,
-    copy.saveConflict,
-    copy.saveFailed,
-    flushActiveEditor,
-    workspace,
-  ])
+  const persistWorkspace = useCallback(async () => {
+    recovery.schedule({ schemaVersion: 1, ...workspace.getState(), nextWorkbookOrdinal: nextWorkbookOrdinal.current })
+    await recovery.flush()
+  }, [recovery, workspace])
 
-  useLayoutEffect(() => { persistRef.current = async (context) => {
-    if (!automatic) return
-    for (const tab of workspace.getState().tabs.filter((item) => item.dirty)) {
-      if (!await persistWorkbookNow(tab, false, context)) throw new OfficeOperationError('save_incomplete', t('office.changedDuringClose'))
-    }
-  } }, [automatic, persistWorkbookNow, t, workspace])
-
-  useEffect(() => {
-    if (!automatic || !recoveryLoaded) return
-    const autoSave = createOfficeAutoSave(async () => {
-      const result = await runtime.execute({ sessionId: config.sessionId, capability: 'document.save' }, async (context) => {
-        for (const tab of workspace.getState().tabs.filter((item) => item.dirty)) await persistWorkbookNow(tab, false, context, undefined, true)
+  // File export is explicit; edits and tab changes only persist the structured workspace.
+  const persistWorkbookNow = useCallback(async (requestedTab: WorkbookTab, saveAs: boolean, context: OfficeOperationContext, destination?: string): Promise<boolean> => {
+    if (workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
+    const state = workspace.getState()
+    const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)
+    if (!tab) throw new OfficeOperationError('document_not_ready', 'The workbook is no longer open.')
+    setFailedExport(null)
+    if (!saveAs && !tab.dirty) return true
+    const nativeSnapshot = tab.tabId === state.activeTabId && editorRef.current?.documentId === tab.tabId
+      ? editorRef.current.snapshot() ?? tab.snapshot
+      : tab.snapshot
+    const snapshot = normalizeEditorCompatibility(tab, nativeSnapshot)
+    const savedChangeVersion = tab.changeVersion
+    setBusy((current) => current ?? 'saving')
+    setError(null)
+    let exported = false
+    try {
+      const incompatible = unsupportedWorkbookFeatures(snapshot)
+      const outcome = await writeExcelWorkbookSource({
+        api,
+        files: window.officeFiles,
+        tab,
+        saveAs,
+        destination,
+        preserveSource: incompatible.length > 0,
+        protectedSourceMessage: t('office.protectedSave'),
+        conflictMessage: copy.saveConflict,
+        assertCurrent: context.assertCurrent,
+        prepare: async () => {
+          if (incompatible.length > 0 && !saveAs) {
+            throw new OfficeOperationError('unsupported_format', t('excel.host.lossyOverwrite', { features: incompatible.join(', ') }))
+          }
+          if (incompatible.length > 0 && saveAs && !destination
+            && !window.confirm(t('excel.host.lossySaveAs', { features: incompatible.join(', ') }))) return null
+          return exportXlsx(snapshot, { allowLossy: saveAs })
+        },
       })
-      if (!result.ok) throw new Error(result.error.message)
-    }, (status, message) => setAutoSaveError(status === 'error' ? message ?? t('office.saveFailed') : null))
-    autoSaveRef.current = autoSave
-    const schedule = () => autoSave.schedule(workspace.getState().tabs.filter((tab) => tab.dirty).map((tab) => `${tab.tabId}:${tab.changeVersion}`).join('|'))
-    const unsubscribe = workspace.subscribe(schedule)
-    schedule()
-    return () => { unsubscribe(); autoSave.dispose(); if (autoSaveRef.current === autoSave) autoSaveRef.current = null }
-  }, [automatic, config.sessionId, persistWorkbookNow, recoveryLoaded, runtime, t, workspace])
+      if (outcome.status === 'canceled') return false
+      if (outcome.status === 'conflict') throw new OfficeOperationError('source_conflict', outcome.message)
+      if (outcome.status === 'failed') throw new OfficeOperationError(outcome.error.code, outcome.error.message)
+      const result = outcome.value
+      context.assertCurrent()
+      await flushActiveEditor(context.assertCurrent)
+      const retainedDrafts = workspace.completeSave(tab.tabId, {
+        changeVersion: savedChangeVersion,
+        documentId: result.documentId,
+        source: result.source,
+        fileName: result.fileName,
+        mtimeMs: result.mtimeMs,
+        snapshot: incompatible.length > 0 ? clearUnsupportedWorkbookFeatures(snapshot) : snapshot,
+      }, (fileName) => t('excel.host.unsavedCopyName', { name: fileName.replace(/\.xlsx$/i, '') }))
+      if (incompatible.length > 0) {
+        // Newer edits still need saving, but now target the exported copy. Only
+        // clear importer metadata; retain their content, revision and dirty state.
+        workspace.updateTab(tab.tabId, (current) => ({ ...current, snapshot: clearUnsupportedWorkbookFeatures(current.snapshot) }))
+      }
+      exported = true
+      await persistWorkspace()
+      context.assertCurrent()
+      if (retainedDrafts.length > 0) {
+        setNotice({ id: nextNoticeId.current++, message: t('excel.host.savedDraftsPreserved', { names: retainedDrafts.join(', ') }) })
+      }
+      return !workspace.getState().tabs.find((current) => current.tabId === tab.tabId)?.dirty
+    } catch (cause) {
+      if (!exported) setFailedExport({ tabId: tab.tabId, saveAs, destination, message: errorMessage(cause) })
+      if (cause instanceof OfficeOperationError) throw cause
+      throw new Error(`${copy.saveFailed}: ${errorMessage(cause)}`)
+    } finally {
+      setBusy((current) => current === 'saving' ? null : current)
+    }
+  }, [api, t, copy.saveConflict, copy.saveFailed, editorRef, flushActiveEditor, persistWorkspace, workspace])
 
-  const persistWorkbook = useCallback((tab: WorkbookTab, saveAs: boolean) => executeWorkspaceOperation(saveAs ? 'document.saveAs' : 'document.save', tab.tabId, async (context) => { await persistWorkbookNow(tab, saveAs, context) }), [executeWorkspaceOperation, persistWorkbookNow])
+  const persistWorkbook = useCallback((tab: WorkbookTab, saveAs: boolean, destination?: string) => executeWorkspaceOperation(saveAs ? 'document.saveAs' : 'document.save', tab.tabId, async (context) => { await persistWorkbookNow(tab, saveAs, context, destination) }), [executeWorkspaceOperation, persistWorkbookNow])
+  const retryFailedExport = useCallback(() => {
+    if (!failedExport || retryingExportRef.current) return
+    const state = workspace.getState()
+    if (state.activeTabId !== failedExport.tabId) return
+    const tab = state.tabs.find((candidate) => candidate.tabId === failedExport.tabId)
+    if (!tab) return
+    retryingExportRef.current = true
+    void persistWorkbook(tab, failedExport.saveAs, failedExport.destination).finally(() => { retryingExportRef.current = false })
+  }, [failedExport, persistWorkbook, workspace])
+
+  const commitClosedWorkspace = useCallback(async (remaining: WorkbookTab[], activeId: string | null, context: OfficeOperationContext) => {
+    await workspace.commitClose({
+      tabs: remaining,
+      activeTabId: activeId,
+      persist: (tabs, activeTabId) => recovery.persist({ schemaVersion: 1, tabs, activeTabId, nextWorkbookOrdinal: nextWorkbookOrdinal.current }),
+      flushEditor: () => flushActiveEditor(context.assertCurrent),
+      assertCurrent: context.assertCurrent,
+      changedMessage: t('office.changedDuringClose'),
+    })
+  }, [flushActiveEditor, recovery, t, workspace])
 
   useEffect(() => {
     const flush = async () => {
       await runtime.whenIdle()
       await flushActiveEditor(() => undefined)
-      await autoSaveRef.current?.flush()
-      const state = workspace.getState()
-      recovery.schedule({ version: 1, ...state, nextWorkbookOrdinal: nextWorkbookOrdinal.current })
-      await recovery.flush()
+      await persistWorkspace()
     }
     const close = () => executeWorkspaceOperation('document.close', null, async (context) => {
       await flushActiveEditor(context.assertCurrent)
@@ -552,41 +523,70 @@ export function ExcelHostApp() {
         await flushActiveEditor(context.assertCurrent)
         const tab = workspace.getState().tabs.find((item) => item.tabId === candidate.tabId)
         if (!tab) continue
-        if (tab.dirty && !(automatic ? await persistWorkbookNow(tab, false, context) : await confirmOfficeClose(tab.fileName, () => persistWorkbookNow(tab, unsupportedWorkbookFeatures(tab.snapshot).length > 0, context)))) return
-        approved.set(tab.tabId, workspace.getState().tabs.find((item) => item.tabId === tab.tabId)?.changeVersion ?? tab.changeVersion)
+        if (tab.dirty && !await confirmOfficeClose(tab.fileName, () => persistWorkbookNow(tab, unsupportedWorkbookFeatures(tab.snapshot).length > 0, context))) return
+        const current = workspace.getState().tabs.find((item) => item.tabId === tab.tabId)
+        if (current?.dirty && current.changeVersion !== tab.changeVersion) throw new Error(t('office.changedDuringClose'))
+        approved.set(tab.tabId, current?.changeVersion ?? tab.changeVersion)
         context.assertCurrent()
       }
       await flushActiveEditor(context.assertCurrent)
       if (workspace.getState().tabs.some((tab) => tab.dirty && approved.get(tab.tabId) !== tab.changeVersion)) throw new Error(t('office.changedDuringClose'))
-      workspace.replace([], null)
-      recovery.schedule({ version: 1, tabs: [], activeTabId: null, nextWorkbookOrdinal: nextWorkbookOrdinal.current })
-      await recovery.flush()
+      await commitClosedWorkspace([], null, context)
       await api.requestClose()
     })
     const domain = {
       sessionId: config.sessionId,
       workspace: { getSnapshot: runtime.getSnapshot, subscribe: runtime.subscribe, supports: runtime.supports },
       flush, close,
-      dispatch: async (command: { type: string; documentId?: string; destination?: string }) => {
-        if (!command || !['document.save', 'document.saveAs'].includes(command.type)) return { ok: false, error: { code: 'unsupported_command', message: 'Unsupported Excel command' } }
+      dispatch: async (command: ExcelDomainCommand) => {
+        if (!command || !['document.open', 'document.activate', 'document.save', 'document.saveAs'].includes(command.type)) return { ok: false, error: { code: 'unsupported_command', message: 'Unsupported Excel command' } }
+        if (!recoveryLoaded) return { ok: false, error: { code: 'document_not_ready', message: 'The Excel workspace is still restoring' } }
+        if (command.documentId !== undefined && (typeof command.documentId !== 'string' || !command.documentId)) return { ok: false, error: { code: 'invalid_document_id', message: 'Document id must be a non-empty string' } }
+        if (command.type === 'document.activate' && command.documentId === undefined) return { ok: false, error: { code: 'invalid_document_id', message: 'Activation requires an explicit document id' } }
+        if (command.sessionId !== undefined && typeof command.sessionId !== 'string') return { ok: false, error: { code: 'invalid_session_id', message: 'Session id must be a string' } }
         if (command.destination !== undefined && (command.type !== 'document.saveAs' || typeof command.destination !== 'string' || !command.destination)) return { ok: false, error: { code: 'invalid_destination', message: 'Only Save as accepts a destination path' } }
+        const operation = {
+          sessionId: command.sessionId ?? config.sessionId,
+          capability: command.type,
+          documentId: command.documentId,
+          expectedRevision: command.expectedRevision,
+          expectedDocumentRevision: command.expectedDocumentRevision,
+        }
+        if (command.type === 'document.open') {
+          if (typeof command.sourcePath !== 'string' || !command.sourcePath.trim()) return { ok: false, error: { code: 'invalid_source_path', message: 'A workbook source path is required' } }
+          if (!window.officeFiles?.prepare || !window.officeFiles.readBase64) return { ok: false, error: { code: 'open_unavailable', message: 'Workbook source access is unavailable' } }
+          const sourcePath = command.sourcePath.trim()
+          return runtime.execute(operation, (context) => importOpenedWorkbook({
+            documentId: sourcePath, source: { path: sourcePath, mtimeMs: null },
+            fileName: sourcePath.split(/[\\/]/).pop()!, mtimeMs: 0, bytes: new Uint8Array(),
+          }, false, context))
+        }
         const tab = workspace.getState().tabs.find((item) => item.tabId === (command.documentId ?? workspace.getState().activeTabId))
         if (!tab) return { ok: false, error: { code: 'document_not_found', message: 'The workbook is not open' } }
-        return runtime.execute({ sessionId: config.sessionId, capability: command.type, documentId: tab.tabId }, async (context) => {
-          if (!await persistWorkbookNow(tab, command.type === 'document.saveAs', context, command.destination)) throw new OfficeOperationError('save_incomplete', 'The save was canceled or newer edits remain unsaved')
+        const saveAs = command.type === 'document.saveAs'
+        const destination = command.destination
+        return runtime.execute({ ...operation, documentId: tab.tabId }, async (context) => {
+          if (operation.capability === 'document.activate') {
+            await flushActiveEditor(context.assertCurrent)
+            setFormulaDialog(null)
+            setInsertDialog(null)
+            workspace.activate(tab.tabId)
+            return { activated: true }
+          }
+          if (!await persistWorkbookNow(tab, saveAs, context, destination)) throw new OfficeOperationError('save_incomplete', 'The save was canceled or newer edits remain unsaved')
           return { saved: true }
         })
       },
     }
     window.__bridgicExcel = domain
     return () => { if (window.__bridgicExcel === domain) delete window.__bridgicExcel }
-  }, [api, automatic, config.sessionId, executeWorkspaceOperation, flushActiveEditor, persistWorkbookNow, recovery, runtime, t, workspace])
+  }, [api, commitClosedWorkspace, config.sessionId, executeWorkspaceOperation, flushActiveEditor, importOpenedWorkbook, persistWorkbookNow, persistWorkspace, recoveryLoaded, runtime, t, workspace])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 's' || !activeTab || !recoveryLoaded) return
       event.preventDefault()
-      void persistWorkbook(activeTab, false)
+      void persistWorkbook(activeTab, event.shiftKey)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -597,23 +597,25 @@ export function ExcelHostApp() {
       if (workspace.getState().activeTabId === requestedTab.tabId) await flushActiveEditor(context.assertCurrent)
       let state = workspace.getState()
       const tab = state.tabs.find((candidate) => candidate.tabId === requestedTab.tabId)!
-      if (tab.dirty && !(automatic ? await persistWorkbookNow(tab, false, context) : await confirmOfficeClose(tab.fileName, () => persistWorkbookNow(tab, unsupportedWorkbookFeatures(tab.snapshot).length > 0, context)))) return
+      if (tab.dirty && !await confirmOfficeClose(tab.fileName, () => persistWorkbookNow(tab, unsupportedWorkbookFeatures(tab.snapshot).length > 0, context))) return
+      await flushActiveEditor(context.assertCurrent)
       context.assertCurrent()
       state = workspace.getState()
+      const current = state.tabs.find((candidate) => candidate.tabId === tab.tabId)
+      if (current?.dirty && current.changeVersion !== tab.changeVersion) throw new Error(t('office.changedDuringClose'))
       setFormulaDialog(null)
       setInsertDialog(null)
       if (state.tabs.length === 1) {
-        workspace.replace([], null)
-        recovery.schedule({ version: 1, tabs: [], activeTabId: null, nextWorkbookOrdinal: nextWorkbookOrdinal.current })
-        await recovery.flush()
+        await commitClosedWorkspace([], null, context)
         await api.requestClose()
         return
       }
       const index = state.tabs.findIndex((candidate) => candidate.tabId === tab.tabId)
       const nextActive = state.tabs[index + 1] ?? state.tabs[index - 1] ?? null
-      workspace.replace(
+      await commitClosedWorkspace(
         workspace.getState().tabs.filter((candidate) => candidate.tabId !== tab.tabId),
         state.activeTabId === tab.tabId ? nextActive?.tabId ?? null : state.activeTabId,
+        context,
       )
     })
   }
@@ -653,7 +655,7 @@ export function ExcelHostApp() {
       }
       return result
     })
-  }, [reportActionFailure, workspace])
+  }, [editorRef, reportActionFailure, workspace])
   const rememberRecentFunction = useCallback((name: string) => {
     setRecentFunctions((current) => {
       const next = rememberFormula(current, name)
@@ -704,7 +706,7 @@ export function ExcelHostApp() {
       (editor) => editor.run(action, value),
       action === 'undo' || action === 'redo' ? `document.${action}` : 'document.edit',
     )
-  }, [activeTabId, runEditorOperation, selection])
+  }, [activeTabId, editorRef, runEditorOperation, selection])
   const selectFormulaRange = useCallback((address: string) => {
     void runEditorOperation((editor) => editor.selectRange(address))
   }, [runEditorOperation])
@@ -716,10 +718,12 @@ export function ExcelHostApp() {
     return <OfficeLaunchEmptyState errorMessage={error} kind="excel" onCreate={addBlankTab} onOpen={openWorkbook} />
   }
 
+  const activeExportFailure = failedExport?.tabId === activeTab?.tabId ? failedExport : null
+
   return (
     <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-bg-surface text-text-primary">
       <OfficeDocumentTabs
-        actions={activeTab ? <OfficeSaveActions error={autoSaveError} dirty={activeTab.dirty} disabled={!recoveryLoaded || busy !== null} onSave={(saveAs) => { void persistWorkbook(activeTab, saveAs) }} /> : undefined}
+        actions={activeTab && !recoveryFailure ? <OfficeSaveActions error={activeExportFailure?.message} dirty={persistenceStatus.status === 'pending' || persistenceStatus.status === 'saving'} disabled={!recoveryLoaded || busy !== null} onSave={retryFailedExport} /> : undefined}
         activeId={activeTabId}
         icon={<span className="flex shrink-0 text-emerald-600 dark:text-emerald-400">{Icons.spreadsheet(16)}</span>}
         label={copy.documentTabs}
@@ -735,7 +739,6 @@ export function ExcelHostApp() {
             if (workspace.getState().activeTabId !== id) await flushActiveEditor(context.assertCurrent)
             setFormulaDialog(null)
             setInsertDialog(null)
-            await persistRef.current(context)
             setActiveTabId(id)
           })
         }}
@@ -820,20 +823,21 @@ export function ExcelHostApp() {
         </div>
       ) : null}
 
-      {activeTab && recoveryLoaded ? (
-        <UniverSheetEditor
-          key={`${activeTab.tabId}:${activeTab.revision}`}
-          ref={editorRef}
+      {recoveryLoaded ? tabs.map((tab) => (
+        <WorkbookEditorSurface
+          key={`${tab.tabId}:${tab.revision}`}
+          active={tab.tabId === activeTabId}
           config={effectiveConfig}
-          documentId={activeTab.tabId}
+          editors={editors}
+          tab={tab}
+          workspace={workspace}
           onActionFailure={reportActionFailure}
           onChange={handleEditorChange}
           onSelectionChange={setSelection}
           onViewStateChange={handleViewStateChange}
-          snapshot={activeTab.snapshot}
           viewPreferences={viewPreferences}
         />
-      ) : null}
+      )) : null}
       {!activeTab && recoveryLoaded && (busy === 'opening' || pendingWorkbookOpenTickets.length > 0) ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-text-tertiary" role="status">
           {t('excel.host.importReading')}
@@ -892,6 +896,56 @@ export function ExcelHostApp() {
   )
 }
 
+function WorkbookEditorSurface({ active, config, editors, tab, workspace, onActionFailure, onChange, onSelectionChange, onViewStateChange, viewPreferences }: {
+  active: boolean
+  config: ExcelHostConfig
+  editors: Map<string, SheetEditorHandle>
+  tab: WorkbookTab
+  workspace: ReturnType<typeof createExcelWorkspace<IWorkbookData>>
+  onActionFailure: (cause: unknown) => void
+  onChange: (tabId: string, revision: number, snapshot: IWorkbookData) => void
+  onSelectionChange: (selection: SheetSelectionState) => void
+  onViewStateChange: (state: ExcelViewState) => void
+  viewPreferences: ExcelViewPreferences
+}) {
+  const owned = useRef<SheetEditorHandle | null>(null)
+  const { tabId, revision } = tab
+  const registerEditor = useCallback((editor: SheetEditorHandle | null) => {
+    if (editor) editors.set(tabId, editor)
+    else if (editors.get(tabId) === owned.current) editors.delete(tabId)
+    owned.current = editor
+  }, [editors, tabId])
+  const publishChange = useCallback((snapshot: IWorkbookData) => onChange(tabId, revision, snapshot), [onChange, revision, tabId])
+  const publishSelection = useCallback((selection: SheetSelectionState) => {
+    if (workspace.getState().activeTabId === tabId) onSelectionChange(selection)
+  }, [onSelectionChange, tabId, workspace])
+  const publishViewState = useCallback((state: ExcelViewState) => {
+    if (workspace.getState().activeTabId === tabId) onViewStateChange(state)
+  }, [onViewStateChange, tabId, workspace])
+  return (
+    <div
+      aria-hidden={!active}
+      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+      data-excel-document-id={tabId}
+      ref={(element) => { if (element) element.inert = !active }}
+      style={{ display: active ? 'flex' : 'none' }}
+    >
+      <UniverSheetEditor
+        ref={registerEditor}
+        active={active}
+        config={config}
+        documentId={tabId}
+        onActionFailure={onActionFailure}
+        onChange={publishChange}
+        onSelectionChange={publishSelection}
+        onViewStateChange={publishViewState}
+        snapshot={tab.snapshot}
+        viewPreferences={viewPreferences}
+      />
+    </div>
+  )
+}
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
@@ -903,7 +957,7 @@ declare global {
       workspace: import('../lib/office/officeWorkspaceRuntime').OfficeWorkspaceReader
       flush(): Promise<void>
       close(): Promise<unknown>
-      dispatch(command: { type: string; documentId?: string; destination?: string }): Promise<unknown>
+      dispatch(command: ExcelDomainCommand): Promise<unknown>
     }
   }
 }

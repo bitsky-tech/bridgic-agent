@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { installWordImportWorker } from '../../test-fixtures/wordImportWorker'
+import { createWordIndexedDbMemory } from '../../test-fixtures/wordIndexedDb'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { resolve } from 'node:path'
 import { DEFAULT_SETTINGS, type GuiSettings } from '@app/shared/types'
@@ -12,8 +13,14 @@ const { createRoot } = await import('react-dom/client')
 const { WordHostApp, createWordHostRequestQueue } = await import('../WordHostApp')
 const { i18n } = await import('@/lib/i18n')
 
+const originalIndexedDb = Object.getOwnPropertyDescriptor(window, 'indexedDB')
+let indexed: ReturnType<typeof createWordIndexedDbMemory>
 let restoreWorker: () => void
-beforeEach(() => { restoreWorker = installWordImportWorker() })
+beforeEach(() => {
+  restoreWorker = installWordImportWorker()
+  indexed = createWordIndexedDbMemory()
+  Object.defineProperty(window, 'indexedDB', { configurable: true, value: indexed.factory })
+})
 afterEach(async () => {
   try {
     restoreWorker()
@@ -25,7 +32,11 @@ afterEach(async () => {
     await i18n.changeLanguage('zh')
   }
 })
-afterAll(async () => { await GlobalRegistrator.unregister() })
+afterAll(async () => {
+  if (originalIndexedDb) Object.defineProperty(window, 'indexedDB', originalIndexedDb)
+  else Reflect.deleteProperty(window, 'indexedDB')
+  await GlobalRegistrator.unregister()
+})
 
 const request = (id: string, sessionId = 'word-session'): WordHostOpenRequest => ({ id, sessionId, name: `${id}.docx`, path: `/tmp/${id}.docx` })
 
@@ -88,6 +99,55 @@ describe('Word host request ordering', () => {
 })
 
 describe('WordHostApp', () => {
+  it('waits for actual settings and applies the theme before reporting a ready workspace', async () => {
+    let resolveConfig!: (settings: GuiSettings) => void
+    let configChanged!: (settings: GuiSettings) => void
+    const config = new Promise<GuiSettings>((resolve) => { resolveConfig = resolve })
+    const reported: Array<{ theme: string | undefined; accent: string; locale: string }> = []
+    const api: WordHostPreloadAPI = {
+      getConfig: async () => config,
+      openDocument: async () => undefined,
+      readDocument: async () => { throw new Error('No file requested') },
+      reportState: async () => {
+        reported.push({
+          theme: document.documentElement.dataset.theme,
+          accent: document.documentElement.style.getPropertyValue('--accent'),
+          locale: document.documentElement.lang,
+        })
+      },
+      requestClose: async () => undefined,
+      setExpanded: async () => undefined,
+      onConfigChanged: (callback) => { configChanged = callback; return () => undefined },
+      onExpandedChanged: () => () => undefined,
+      onOpenFileRequested: () => () => undefined,
+      completeOpenFile: async () => undefined,
+      onFlushRequested: () => () => undefined,
+      completeFlush: async () => undefined,
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    document.documentElement.dataset.theme = 'light'
+    try {
+      await act(async () => root.render(<StrictMode><WordHostApp api={api} sessionId="word-session" /></StrictMode>))
+      expect(window.__bridgicWord).toBeUndefined()
+      expect(host.querySelector('[data-testid="word-launch-empty-state"]')).toBeNull()
+      expect(reported).toEqual([])
+      await act(async () => configChanged({ ...DEFAULT_SETTINGS, locale: 'en', theme: { mode: 'dark', accent: '#8844ff' } }))
+      for (let attempt = 0; attempt < 50 && !reported.length; attempt += 1) {
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 5)))
+      }
+      expect(reported.length).toBeGreaterThan(0)
+      expect(reported.every((state) => state.theme === 'dark' && state.accent === '#8844ff' && state.locale === 'en')).toBe(true)
+      expect(host.querySelector('[data-testid="word-launch-empty-state"]')).not.toBeNull()
+      await act(async () => resolveConfig(DEFAULT_SETTINGS))
+      expect(document.documentElement.dataset.theme).toBe('dark')
+      expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#8844ff')
+    } finally {
+      await act(async () => root.unmount())
+    }
+  })
+
   it('accepts buffered imports before workspace initialization and checkpoints their final state', async () => {
     const fixture = resolve(import.meta.dir, '../../../../../../node_modules/mammoth/test/test-data/single-paragraph.docx')
     const bytes = new Uint8Array(await Bun.file(fixture).arrayBuffer())
@@ -218,8 +278,8 @@ describe('WordHostApp', () => {
   })
 
   it('acknowledges failed restoration promptly without importing over the saved workspace', async () => {
-    const storageKey = 'bridgic.word.workspace.word-session'
-    window.localStorage.setItem(storageKey, '{unreadable')
+    const storageKey = 'word-session'
+    indexed.records.set(storageKey, '{unreadable')
     const reported: WordHostRendererState[] = []
     const acknowledgements: Array<{ id: string; error?: string; success?: boolean }> = []
     let reads = 0
@@ -248,7 +308,7 @@ describe('WordHostApp', () => {
       expect(reported.at(-1)).toEqual({ documentCount: 0, persistenceStatus: 'error' })
       expect(acknowledgements).toEqual([{ id: 'buffered', error: expect.any(String) }, { id: 'close-failed', success: false }])
       expect(reads).toBe(0)
-      expect(window.localStorage.getItem(storageKey)).toBe('{unreadable')
+      expect(indexed.records.get(storageKey)).toBe('{unreadable')
       expect(window.__bridgicWord).toBeUndefined()
       expect(host.querySelector('[data-testid="word-recovery-error-state"]')).not.toBeNull()
     } finally {

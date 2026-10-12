@@ -14,8 +14,8 @@ function setup() {
   }
   const save = mock(async () => ({ ok: true as const, fileName: 'Deck.pptx', source: { path: '/Deck.pptx', mtimeMs: 2 } }))
   const files: OfficeFilesAPI = {
-    confirmClose: async () => 'cancel', getRecovery: async () => null,
-    inspect: async (_kind, path) => ({ path, mtimeMs: null }), save, setRecovery: async () => undefined,
+    confirmClose: async () => 'cancel',
+    inspect: async (_kind, path) => ({ path, mtimeMs: null }), save,
   }
   const controller = createPresentationFileController({
     files, read: () => workspace, encode: async () => new Uint8Array([1, 2, 3]), flushEditor: async () => undefined, managed: false,

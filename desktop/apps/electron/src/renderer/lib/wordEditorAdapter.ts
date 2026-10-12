@@ -1,4 +1,12 @@
 import {
+  EDITOR_ACTIVATED,
+  FOCUSING_COMMON_DRAWINGS,
+  FOCUSING_DOC,
+  FOCUSING_EDITOR_STANDALONE,
+  FOCUSING_UNIVER_EDITOR,
+  ICommandService,
+  IContextService,
+  IUniverInstanceService,
   LocaleType,
   LogLevel,
   Univer,
@@ -9,6 +17,8 @@ import {
   type PluginCtor,
 } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
+import { DocSelectionManagerService, SetTextSelectionsOperation } from '@univerjs/docs'
+import { ICanvasPopupService, IContextMenuService, IDialogService } from '@univerjs/ui'
 import { UniverDocsCorePreset } from '@univerjs/preset-docs-core'
 import docsCoreEnUS from '@univerjs/preset-docs-core/locales/en-US'
 import docsCoreZhCN from '@univerjs/preset-docs-core/locales/zh-CN'
@@ -18,7 +28,7 @@ import docsDrawingZhCN from '@univerjs/preset-docs-drawing/locales/zh-CN'
 import { UniverDocsHyperLinkPreset } from '@univerjs/preset-docs-hyper-link'
 import docsHyperLinkEnUS from '@univerjs/preset-docs-hyper-link/locales/en-US'
 import docsHyperLinkZhCN from '@univerjs/preset-docs-hyper-link/locales/zh-CN'
-import { ReplaceSnapshotCommand, SetDocZoomRatioCommand } from '@univerjs/docs-ui'
+import { ReplaceSnapshotCommand, SetDocZoomRatioCommand, SetDocZoomRatioOperation } from '@univerjs/docs-ui'
 import '@univerjs/preset-docs-core/lib/index.css'
 import '@univerjs/preset-docs-drawing/lib/index.css'
 import '@univerjs/preset-docs-hyper-link/lib/index.css'
@@ -38,6 +48,7 @@ import { createOfficeEditorBinding, type OfficeEditorLease } from './office/offi
 export interface WordEditorNativeEngine {
   document: WordUniverDocumentFacade
   univerAPI: Pick<FUniver, 'executeCommand' | 'setLocale' | 'onCommandExecuted'>
+  setActive?(active: boolean): void
   dispose(): void
 }
 
@@ -55,6 +66,7 @@ export interface WordEditorMountOptions {
 }
 
 export interface WordEditorAdapterOptions extends WordEditorMountOptions {
+  active?: boolean
   documentId: string
   store: WordDomainStore
   zoom: number
@@ -93,7 +105,8 @@ export async function replaceUniverSnapshotWithRetry(executor: UniverCommandExec
         snapshot: structuredClone(snapshot),
         // Univer skips metadata-only snapshot changes when textRanges is truthy, including an empty array.
         textRanges: undefined,
-        options: { noHistory: true },
+        // Accepted domain edits enter the same native undo history as typing.
+        // Univer reads noHistory on the mutation, not inside selection options.
       })) return true
     } catch {
       // Retry transient renderer command failures before surfacing the editor error state.
@@ -111,8 +124,10 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
   let commitTimer: ReturnType<typeof setTimeout> | null = null
   let focusTimer: ReturnType<typeof setTimeout> | null = null
   let activeSelection: WordUniverSelection | null = null
+  let activeSelectionSegmentId = ''
   let zoom = options.zoom
   let contentChanged = false
+  let active = options.active ?? true
   const binding = createOfficeEditorBinding<IDocumentData>({
     appKind: 'word',
     sessionId: store.getSnapshot().sessionId,
@@ -133,6 +148,16 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
   const lease = binding.capture()
   lastSnapshotSignature = snapshotSignature(nativeDocument.getSnapshot())
   const currentDocument = () => store.getSnapshot().documents.find((item) => item.id === documentId)
+  const clampSavedBodySelection = (): boolean => {
+    if (!activeSelection || activeSelectionSegmentId) return false
+    const endOffset = Math.max(0, (nativeDocument.getSnapshot().body?.dataStream.length ?? 2) - 2)
+    const start = Math.min(endOffset, Math.max(0, activeSelection.startOffset))
+    const end = Math.min(endOffset, Math.max(0, activeSelection.endOffset))
+    if (start === activeSelection.startOffset && end === activeSelection.endOffset) return false
+    // A replacement can shorten the body and invalidate cached node positions.
+    activeSelection = { startOffset: start, endOffset: end }
+    return true
+  }
 
   const commit = (): boolean => {
     if (!lease.isCurrent()) return false
@@ -163,6 +188,9 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
       lastSnapshotSignature = snapshotSignature(nativeDocument.getSnapshot())
       lastDomainSignature = signature
       contentChanged = false
+      if (clampSavedBodySelection() && active && store.getSnapshot().activeDocumentId === documentId) {
+        nativeDocument.setSelection(activeSelection!.startOffset, activeSelection!.endOffset)
+      }
       return true
     }
     const pending = snapshotSyncQueue.then(operation, operation)
@@ -180,18 +208,19 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
   }
 
   const focusInitialCaret = async (attempt = 0) => {
-    if (!lease.isCurrent()) return
+    if (!active || !lease.isCurrent() || store.getSnapshot().activeDocumentId !== documentId) return
     const editorInput = container.querySelector<HTMLElement>('[data-u-comp="editor"]')
     const selectionBounds = editorInput?.parentElement?.parentElement?.getBoundingClientRect()
     const caretIsReady = window.document.activeElement === editorInput
       && selectionBounds !== undefined && selectionBounds.left > -1_000 && selectionBounds.top > -1_000
     if (caretIsReady) return
-    await univerAPI.executeCommand(SetDocZoomRatioCommand.id, { documentId, zoomRatio: zoom / 100 }).catch(() => undefined)
-    if (!lease.isCurrent()) return
+    await univerAPI.executeCommand(SetDocZoomRatioOperation.id, { unitId: documentId, zoomRatio: zoom / 100 }).catch(() => undefined)
+    if (!active || !lease.isCurrent() || store.getSnapshot().activeDocumentId !== documentId) return
     const activeElement = window.document.activeElement
     if (activeElement instanceof HTMLElement && !container.contains(activeElement)) activeElement.blur()
+    clampSavedBodySelection()
     const caretOffset = Math.max(0, (nativeDocument.getSnapshot().body?.dataStream.length ?? 2) - 2)
-    nativeDocument.setSelection(caretOffset, caretOffset)
+    nativeDocument.setSelection(activeSelection?.startOffset ?? caretOffset, activeSelection?.endOffset ?? caretOffset)
     if (attempt < 20) focusTimer = setTimeout(() => { void focusInitialCaret(attempt + 1) }, 50)
   }
 
@@ -222,16 +251,17 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
     commandSubscription = univerAPI.onCommandExecuted((commandInfo) => {
       if (!lease.isCurrent()) return
       if (commandInfo.id === 'doc.operation.set-selections') {
-        const params = commandInfo.params as { ranges?: Array<Partial<WordUniverSelection> & { isActive?: boolean }> }
+        const params = commandInfo.params as { segmentId?: string; ranges?: Array<Partial<WordUniverSelection> & { isActive?: boolean }> }
         const range = params.ranges?.find((item) => item.isActive) ?? params.ranges?.[0]
         if (typeof range?.startOffset === 'number' && typeof range.endOffset === 'number') {
+          activeSelectionSegmentId = params.segmentId ?? ''
           activeSelection = {
             startOffset: range.startOffset,
             endOffset: range.endOffset,
             ...(range.rangeType ? { rangeType: range.rangeType } : {}),
             ...(range.startNodePosition !== undefined ? { startNodePosition: range.startNodePosition } : {}),
           }
-          options.onTableActiveChange?.(isUniverSelectionInsideTable(activeSelection))
+          if (active) options.onTableActiveChange?.(isUniverSelectionInsideTable(activeSelection))
         }
       }
       if (!shouldCommitUniverCommand(commandInfo.id)) return
@@ -240,10 +270,10 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
       commitTimer = setTimeout(() => { commitTimer = null; commit() }, 40)
     })
 
-    unregisterCommandHandler = store.registerEditorCommandHandler(documentId, async (command, context) => {
+    const handleCommand: Parameters<WordDomainStore['registerEditorCommandHandler']>[1] = async (command, context) => {
       await binding.flush()
       context.assertCurrent()
-      if (!lease.isCurrent()) return false
+      if (!active || !lease.isCurrent()) return false
       const applied = await executeUniverWordCommand({
         document: nativeDocument,
         getSelection: () => activeSelection,
@@ -251,33 +281,56 @@ export function createWordEditorAdapter(options: WordEditorAdapterOptions) {
         univerAPI,
         onReferenceCommand: async (referenceCommand) => context.applyReferenceCommand(referenceCommand),
       } satisfies WordUniverCommandContext, command)
-      if (!lease.isCurrent()) return false
+      if (!active || !lease.isCurrent()) return false
       if (applied && command.type !== 'editor.reference.remove' && command.type !== 'editor.reference.update') { contentChanged = true; commit() }
       return applied
-    }, binding.flush)
-    options.onTableActiveChange?.(false)
-    void focusInitialCaret()
+    }
+    const activate = () => {
+      engine.setActive?.(true)
+      unregisterCommandHandler = store.registerEditorCommandHandler(documentId, handleCommand, binding.flush)
+      options.onTableActiveChange?.(activeSelection ? isUniverSelectionInsideTable(activeSelection) : false)
+      void focusInitialCaret()
+    }
+    if (active) activate()
+    else engine.setActive?.(false)
+
+    return {
+      runtime: { documentId, document: nativeDocument, commit } satisfies WordEditorRuntime,
+      reconcile: synchronize,
+      flush: binding.flush,
+      setActive(nextActive: boolean) {
+        if (!lease.isCurrent() || active === nextActive) return
+        if (!nextActive) {
+          commit()
+          active = false
+          if (focusTimer) clearTimeout(focusTimer)
+          focusTimer = null
+          unregisterCommandHandler?.()
+          unregisterCommandHandler = null
+          engine.setActive?.(false)
+          options.onTableActiveChange?.(false)
+        } else {
+          active = true
+          activate()
+        }
+      },
+      setLanguage(language: string) {
+        if (lease.isCurrent()) univerAPI.setLocale(language.toLocaleLowerCase().startsWith('zh') ? LocaleType.ZH_CN : LocaleType.EN_US)
+      },
+      setZoom(nextZoom: number) {
+        zoom = nextZoom
+        if (lease.isCurrent()) void univerAPI.executeCommand(SetDocZoomRatioOperation.id, { unitId: documentId, zoomRatio: zoom / 100 }).catch(() => undefined)
+      },
+      dispose() {
+        // The final synchronous native edit must be accepted before the lease is invalidated.
+        try { commit() } finally { binding.dispose() }
+      },
+    }
   } catch (error) {
     binding.dispose()
     throw error
   }
 
-  return {
-    runtime: { documentId, document: nativeDocument, commit } satisfies WordEditorRuntime,
-    reconcile: synchronize,
-    flush: binding.flush,
-    setLanguage(language: string) {
-      if (lease.isCurrent()) univerAPI.setLocale(language.toLocaleLowerCase().startsWith('zh') ? LocaleType.ZH_CN : LocaleType.EN_US)
-    },
-    setZoom(nextZoom: number) {
-      zoom = nextZoom
-      if (lease.isCurrent()) void univerAPI.executeCommand(SetDocZoomRatioCommand.id, { documentId, zoomRatio: zoom / 100 }).catch(() => undefined)
-    },
-    dispose() {
-      // The final synchronous native edit must be accepted before the lease is invalidated.
-      try { commit() } finally { binding.dispose() }
-    },
-  }
 }
 
 export function mountWordUniverEngine({ container, language, snapshot, toolbar = false }: WordEditorMountOptions): WordEditorNativeEngine {
@@ -299,7 +352,38 @@ export function mountWordUniverEngine({ container, language, snapshot, toolbar =
     ],
   })
   try {
-    return { document: univerAPI.createUniverDoc(snapshot), univerAPI, dispose: () => univer.dispose() }
+    const document = univerAPI.createUniverDoc(snapshot)
+    const injector = univer.__getInjector()
+    const instances = injector.get(IUniverInstanceService)
+    const context = injector.get(IContextService)
+    const commands = injector.get(ICommandService)
+    const selections = injector.get(DocSelectionManagerService)
+    const popups = injector.get(ICanvasPopupService)
+    const contextMenus = injector.get(IContextMenuService)
+    const dialogs = injector.get(IDialogService)
+    return {
+      document,
+      univerAPI,
+      setActive(active) {
+        if (!active) {
+          // Clear both rendered ranges and the manager's cache so zoom/resize cannot
+          // restore an inactive selection. The adapter retains its own caret for activation.
+          selections.replaceDocRanges([], { unitId: snapshot.id, subUnitId: snapshot.id }, false, { shouldFocus: false })
+          // Also reset popup caches before the native renderer has finished mounting.
+          // Floating views live outside the retained document's hidden container.
+          commands.syncExecuteCommand(SetTextSelectionsOperation.id, { unitId: snapshot.id, subUnitId: snapshot.id, segmentId: '', ranges: [], isEditing: false })
+          popups.removeAll()
+          contextMenus.hideContextMenu()
+          dialogs.closeAll()
+          const focused = window.document.activeElement
+          if (focused instanceof HTMLElement && container.contains(focused)) focused.blur()
+          for (const key of [EDITOR_ACTIVATED, FOCUSING_COMMON_DRAWINGS, FOCUSING_EDITOR_STANDALONE, FOCUSING_UNIVER_EDITOR]) context.setContextValue(key, false)
+        }
+        instances.focusUnit(active ? snapshot.id : null)
+        context.setContextValue(FOCUSING_DOC, active)
+      },
+      dispose: () => univer.dispose(),
+    }
   } catch (error) {
     univer.dispose()
     throw error

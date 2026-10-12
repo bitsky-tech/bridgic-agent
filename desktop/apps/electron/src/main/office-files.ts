@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join } from 'node:path'
-import type { OfficeFileKind, OfficeFileSaveRequest, OfficeFileSaveResult, OfficeFileSource, OfficeRecoveryKind } from '../shared/office-files'
+import type { OfficeFileKind, OfficeFileSaveRequest, OfficeFileSaveResult, OfficeFileSource } from '../shared/office-files'
 
 export const OFFICE_EXTENSIONS = { word: '.docx', excel: '.xlsx', presentation: '.pptx' } as const
 
@@ -48,34 +48,4 @@ export async function saveOfficeFile(request: OfficeFileSaveRequest, destination
   }
   await writeOfficeBytes(current.path, request.bytes)
   return { ok: true, source: await inspectOfficeFile(request.kind, current.path), fileName: basename(current.path) }
-}
-
-/** Excel private recovery files are separate from user documents and survive application restart. */
-export function createOfficeRecoveryStore(root: string) {
-  const pending = new Map<string, Promise<void>>()
-  const pathFor = (kind: OfficeRecoveryKind, sessionId: string) => {
-    if (kind !== 'excel' || typeof sessionId !== 'string' || !sessionId) throw new TypeError('Invalid Office recovery owner')
-    return join(root, kind, `${createHash('sha256').update(sessionId).digest('hex')}.json`)
-  }
-  return {
-    async read(kind: OfficeRecoveryKind, sessionId: string): Promise<string | null> {
-      const path = pathFor(kind, sessionId)
-      await pending.get(path)
-      try { return await readFile(path, 'utf8') } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-        throw error
-      }
-    },
-    write(kind: OfficeRecoveryKind, sessionId: string, value: string): Promise<void> {
-      if (typeof value !== 'string' || value.length > 400 * 1024 * 1024) return Promise.reject(new TypeError('Invalid Office recovery payload'))
-      const path = pathFor(kind, sessionId)
-      const write = (pending.get(path) ?? Promise.resolve()).catch(() => undefined).then(async () => {
-        await mkdir(dirname(path), { recursive: true })
-        await writeOfficeBytes(path, value)
-      })
-      pending.set(path, write)
-      void write.finally(() => { if (pending.get(path) === write) pending.delete(path) }).catch(() => undefined)
-      return write
-    },
-  }
 }

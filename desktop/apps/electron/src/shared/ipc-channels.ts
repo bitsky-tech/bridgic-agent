@@ -44,8 +44,6 @@ export const IPC = {
     setBounds: 'excel-host:setBounds',
     setVisible: 'excel-host:setVisible',
     reportState: 'excel-host:reportState',
-    getRecoveryState: 'excel-host:getRecoveryState',
-    setRecoveryState: 'excel-host:setRecoveryState',
   },
   /**
    * GuiSettings (single JSON blob at ~/.bridgic/amphi/gui-settings.json).

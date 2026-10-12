@@ -3,6 +3,7 @@ import { isWordDocumentDirty } from '@/lib/wordDomain'
 import type { IDocumentData } from '@univerjs/core'
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -46,11 +47,13 @@ export interface StructuredWordEditorProps {
   onFlushHandlerChange?: (flush: (() => Promise<void>) | null) => void
   onToggleExpanded: () => void
   persistenceStatus?: WordPersistenceStatus
+  operationError?: string | null
   showExpandControl?: boolean
   store: WordDomainStore
 }
 
 type WordZoomMode = 'fit' | 'manual'
+type WordExportIntent = { documentId: string; saveAs: boolean; destination?: string }
 
 /** Univer OSS-backed Word frontend shared by the right dock and Session-owned renderer target. */
 export function StructuredWordEditor({
@@ -60,6 +63,7 @@ export function StructuredWordEditor({
   onFlushHandlerChange,
   onToggleExpanded,
   persistenceStatus = 'saved',
+  operationError,
   showExpandControl = true,
   store,
 }: StructuredWordEditorProps) {
@@ -75,8 +79,27 @@ export function StructuredWordEditor({
   const [zoom, setZoom] = useState(expanded ? 100 : 75)
   const [zoomMode, setZoomMode] = useState<WordZoomMode>('fit')
   const [runtime, setRuntime] = useState<WordEditorRuntime | null>(null)
+  const editorFlushRef = useRef<{ documentId: string; flush: () => Promise<void> } | null>(null)
   const [imageError, setImageError] = useState<string | null>(null)
   const [editingHeaderFooter, setEditingHeaderFooter] = useState<WordHeaderFooterDraft | null>(null)
+
+  const setEditorRuntime = useCallback((next: WordEditorRuntime | null, documentId: string) => {
+    if (next && store.getSnapshot().activeDocumentId !== documentId) return
+    setRuntime((current) => next ?? (current?.documentId === documentId ? null : current))
+  }, [store])
+  const setEditorFlush = useCallback((flush: (() => Promise<void>) | null, documentId: string) => {
+    if (flush) {
+      if (store.getSnapshot().activeDocumentId !== documentId) return
+      editorFlushRef.current = { documentId, flush }
+      onFlushHandlerChange?.(flush)
+    } else if (editorFlushRef.current?.documentId === documentId) {
+      editorFlushRef.current = null
+      onFlushHandlerChange?.(null)
+    }
+  }, [onFlushHandlerChange, store])
+  const setEditorTableActive = useCallback((active: boolean, documentId: string) => {
+    if (store.getSnapshot().activeDocumentId === documentId) setTableActive(active)
+  }, [store])
 
   useLayoutEffect(() => {
     if (zoomMode !== 'fit') return
@@ -174,24 +197,48 @@ export function StructuredWordEditor({
   }
 
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [tabError, setTabError] = useState<string | null>(null)
+  const [checkpointError, setCheckpointError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const save = (saveAs: boolean) => {
+  const savingRef = useRef(false)
+  const failedExportRef = useRef<WordExportIntent | null>(null)
+  const save = (saveAs: boolean, retry = false) => {
+    if (savingRef.current) return
+    const intent = retry && failedExportRef.current
+      ? failedExportRef.current
+      : { documentId: activeDocument.id, saveAs }
+    savingRef.current = true
     setSaving(true)
     setSaveError(null)
-    void store.dispatch({ type: saveAs ? 'document.saveAs' : 'document.save', documentId: activeDocument.id }).then(async (result) => {
-      if (!result.ok && result.error.code !== 'save_incomplete') {
-        setSaveError(result.error.message)
+    setCheckpointError(null)
+    void store.dispatch({ type: intent.saveAs ? 'document.saveAs' : 'document.save', documentId: intent.documentId, ...(intent.destination ? { destination: intent.destination } : {}) }).then(async (result) => {
+      if (!result.ok) {
+        failedExportRef.current = result.error.code === 'save_incomplete' ? null : intent
+        if (result.error.code !== 'save_incomplete') setSaveError(result.error.message)
         return
       }
-      await onSaveRequested?.()
-    }).catch((error) => setSaveError(String(error))).finally(() => setSaving(false))
+      failedExportRef.current = null
+      try { await onSaveRequested?.() } catch (error) { setCheckpointError(error instanceof Error ? error.message : String(error)) }
+    }).catch((error) => {
+      failedExportRef.current = intent
+      setSaveError(error instanceof Error ? error.message : String(error))
+    }).finally(() => { savingRef.current = false; setSaving(false) })
+  }
+  const retryCheckpoint = () => {
+    if (savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setCheckpointError(null)
+    void Promise.resolve().then(() => onSaveRequested?.()).catch((error) => {
+      setCheckpointError(error instanceof Error ? error.message : String(error))
+    }).finally(() => { savingRef.current = false; setSaving(false) })
   }
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
       if (editingHeaderFooter) return
       event.preventDefault()
-      save(false)
+      save(event.shiftKey)
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
@@ -220,7 +267,11 @@ export function StructuredWordEditor({
         />
       </OfficeAppHeader>
       <OfficeDocumentTabs
-        actions={<><OfficeSaveActions dirty={isWordDocumentDirty(activeDocument)} error={saveError || (persistenceStatus === 'error' ? t('office.saveFailed') : null)} disabled={saving} onSave={save} />{persistenceStatus === 'error' ? (
+        actions={<>
+          <button className="rounded px-2 py-1 text-xs hover:bg-bg-hover disabled:opacity-50" data-testid="word-save" disabled={saving} onClick={() => save(false)} type="button">{t('office.save')}</button>
+          <button className="rounded px-2 py-1 text-xs hover:bg-bg-hover disabled:opacity-50" data-testid="word-save-as" disabled={saving} onClick={() => save(true)} type="button">{t('office.saveAs')}</button>
+          <OfficeSaveActions dirty={persistenceStatus === 'saving'} error={saveError} disabled={saving} onSave={() => save(false, true)} />
+          {persistenceStatus === 'error' || checkpointError ? (
           <span className="max-w-28 truncate text-[10px] text-status-error" role="alert">
             {t('word.persistence.error')}
           </span>
@@ -230,15 +281,18 @@ export function StructuredWordEditor({
         label={t('word.documentTabs')}
         newLabel={t('word.newDocument')}
         onClose={(documentId) => {
+          setTabError(null)
           flushActiveSnapshot()
           if (!onClose) {
-            void store.dispatch({ type: 'document.close', documentId })
+            void store.dispatch({ type: 'document.close', documentId }).then((result) => {
+              if (!result.ok) setTabError(result.error.message)
+            }).catch((error) => setTabError(error instanceof Error ? error.message : String(error)))
             return
           }
           void store.closeDocumentTab(documentId).then((result) => {
-            if (!result.ok) setSaveError(result.error.message)
+            if (!result.ok) setTabError(result.error.message)
             else if (result.value.closeSurface) onClose()
-          })
+          }).catch((error) => setTabError(error instanceof Error ? error.message : String(error)))
         }}
         onCreate={() => { flushActiveSnapshot(); void store.dispatch({ type: 'document.create' }) }}
         onSelect={(documentId) => { flushActiveSnapshot(); void store.dispatch({ type: 'document.activate', documentId }) }}
@@ -251,6 +305,11 @@ export function StructuredWordEditor({
       />
 
       {saveError ? <div role="alert" className="px-3 py-2 text-sm text-status-error">{saveError}</div> : null}
+      {operationError || tabError ? <div role="alert" className="px-3 py-2 text-sm text-status-error">{operationError ?? tabError}</div> : null}
+      {persistenceStatus === 'error' || checkpointError ? <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-status-error" role="alert">
+        <span>{checkpointError ?? t('word.persistence.error')}</span>
+        <button className="shrink-0 rounded px-2 py-1 hover:bg-status-error/10 disabled:opacity-50" disabled={saving} onClick={retryCheckpoint} type="button">{t('office.retry')}</button>
+      </div> : null}
       {imageError ? <div role="alert" className="px-3 py-2 text-sm text-status-error">{imageError}</div> : null}
       {activeDocument.sourceProtected ? <div className="px-3 py-2 text-xs text-text-secondary" role="status">{t('office.importedCopyNotice')}</div> : null}
       <WordRibbon
@@ -300,18 +359,20 @@ export function StructuredWordEditor({
       <input accept="image/png,image/jpeg,image/gif,image/bmp,image/webp" className="sr-only" onChange={handleImageChange} ref={imageInputRef} type="file" />
       {rulerVisible ? <WordRuler page={activeDocument.page} zoom={zoom} /> : null}
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[#eef0f4] dark:bg-[#20201e]" data-testid="word-canvas" ref={canvasRef}>
-        <UniverDocumentSurface
-          documentId={activeDocument.id}
+        {workspace.documents.map((document) => <UniverDocumentSurface
+          active={document.id === activeDocument.id}
+          documentId={document.id}
           editorLabel={t('word.coreEditor')}
           errorLabel={t('word.coreError')}
           language={i18n.language}
-          onRuntimeChange={setRuntime}
-          onTableActiveChange={setTableActive}
-          snapshot={activeDocument.snapshot}
-          onFlushHandlerChange={onFlushHandlerChange}
+          key={document.id}
+          onRuntimeChange={setEditorRuntime}
+          onTableActiveChange={setEditorTableActive}
+          snapshot={document.snapshot}
+          onFlushHandlerChange={setEditorFlush}
           store={store}
           zoom={zoom}
-        />
+        />)}
       </div>
 
       <footer className="flex h-7 shrink-0 items-center justify-between border-t border-border-subtle bg-bg-surface px-3 text-2xs text-text-tertiary">
@@ -343,14 +404,15 @@ function WordRuler({ page, zoom }: { page: WordPageSettings; zoom: number }) {
   )
 }
 
-function UniverDocumentSurface({ documentId, editorLabel, errorLabel, language, onFlushHandlerChange, onRuntimeChange, onTableActiveChange, snapshot, store, zoom }: {
+function UniverDocumentSurface({ active, documentId, editorLabel, errorLabel, language, onFlushHandlerChange, onRuntimeChange, onTableActiveChange, snapshot, store, zoom }: {
+  active: boolean
   documentId: string
   editorLabel: string
   errorLabel: string
   language: string
-  onFlushHandlerChange?: (flush: (() => Promise<void>) | null) => void
-  onRuntimeChange: (runtime: WordEditorRuntime | null) => void
-  onTableActiveChange: (active: boolean) => void
+  onFlushHandlerChange?: (flush: (() => Promise<void>) | null, documentId: string) => void
+  onRuntimeChange: (runtime: WordEditorRuntime | null, documentId: string) => void
+  onTableActiveChange: (active: boolean, documentId: string) => void
   snapshot: IDocumentData
   store: WordDomainStore
   zoom: number
@@ -367,38 +429,48 @@ function UniverDocumentSurface({ documentId, editorLabel, errorLabel, language, 
   useLayoutEffect(() => { languageRef.current = language; adapterRef.current?.setLanguage(language) }, [language])
 
   useEffect(() => {
+    if (!active || adapterRef.current) return
     const container = hostRef.current
     if (!container || !canvasIsAvailable()) return
-    let adapter: ReturnType<typeof createWordEditorAdapter> | null = null
     const initializationTimer = setTimeout(() => {
       try {
-        adapter = createWordEditorAdapter({
+        const adapter = createWordEditorAdapter({
+          active: true,
           container,
           documentId,
           language: languageRef.current,
-          onTableActiveChange,
+          onTableActiveChange: (value) => onTableActiveChange(value, documentId),
           snapshot: snapshotRef.current,
           store,
           zoom: zoomRef.current,
         })
         adapterRef.current = adapter
-        onRuntimeChange(adapter.runtime)
-        onFlushHandlerChange?.(adapter.flush)
+        onRuntimeChange(adapter.runtime, documentId)
+        onFlushHandlerChange?.(adapter.flush, documentId)
         setInitializationError(false)
       } catch {
-        adapter?.dispose()
         setInitializationError(true)
-        onRuntimeChange(null)
+        onRuntimeChange(null, documentId)
       }
     }, 0)
-    return () => {
-      clearTimeout(initializationTimer)
+    return () => { clearTimeout(initializationTimer) }
+  }, [active, documentId, onFlushHandlerChange, onRuntimeChange, onTableActiveChange, store])
+
+  useLayoutEffect(() => {
+    const adapter = adapterRef.current
+    if (!adapter) return
+    adapter.setActive(active)
+    onRuntimeChange(active ? adapter.runtime : null, documentId)
+    onFlushHandlerChange?.(active ? adapter.flush : null, documentId)
+  }, [active, documentId, onFlushHandlerChange, onRuntimeChange])
+
+  useEffect(() => () => {
+      const adapter = adapterRef.current
       if (!adapter) return
       adapter.dispose()
       if (adapterRef.current === adapter) adapterRef.current = null
-      onFlushHandlerChange?.(null)
-      onRuntimeChange(null)
-    }
+      onFlushHandlerChange?.(null, documentId)
+      onRuntimeChange(null, documentId)
   }, [documentId, onFlushHandlerChange, onRuntimeChange, onTableActiveChange, store])
 
   useEffect(() => {
@@ -412,8 +484,8 @@ function UniverDocumentSurface({ documentId, editorLabel, errorLabel, language, 
   }, [documentId, snapshot, store])
 
   return (
-    <div className="size-full">
-      <div aria-label={editorLabel} className="word-univer-host size-full" data-testid="word-editor" ref={hostRef} />
+    <div {...(!active ? { inert: '' } : {})} aria-hidden={!active} className={cn('absolute inset-0', !active && 'invisible pointer-events-none')} data-word-document-id={documentId} data-word-active={active}>
+      <div aria-label={editorLabel} className="word-univer-host size-full" data-testid={active ? 'word-editor' : undefined} ref={hostRef} />
       {initializationError ? <div className="absolute inset-0 grid place-items-center text-sm text-text-tertiary">{errorLabel}</div> : null}
     </div>
   )

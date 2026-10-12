@@ -30,8 +30,6 @@ const api: ExcelHostPreloadAPI = {
   saveAs: (request) => ipcRenderer.invoke(IPC.excel.saveAs, request),
   requestClose: () => ipcRenderer.invoke(IPC.excelHost.requestClose),
   reportState: (state) => ipcRenderer.invoke(IPC.excelHost.reportState, state),
-  getRecoveryState: () => ipcRenderer.invoke(IPC.excelHost.getRecoveryState),
-  setRecoveryState: (state) => ipcRenderer.invoke(IPC.excelHost.setRecoveryState, state),
   onConfigChanged: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, config: ExcelHostConfig) => callback(config)
     ipcRenderer.on(IPC.events.excelHostConfigChanged, listener)
